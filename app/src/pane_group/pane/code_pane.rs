@@ -66,13 +66,13 @@ impl PaneContent for CodePane {
 
     fn pre_attach(&self, group: &PaneGroup, ctx: &mut ViewContext<PaneGroup>) -> bool {
         let source = self.file_view(ctx).as_ref(ctx).source().clone();
-        let Some(path) = source.path() else {
+        let Some(location) = source.location() else {
             return true;
         };
         let pane_group_id = ctx.view_id();
 
         let existing_locator = CodeManager::handle(ctx).read(ctx, |manager, _ctx| {
-            manager.get_locator_for_path_in_tab(pane_group_id, path.as_path())
+            manager.get_locator_for_location_in_tab(pane_group_id, &location)
         });
 
         // If the file is already open in the same tab, don't restore it, just focus it (and jump).
@@ -83,7 +83,7 @@ impl PaneContent for CodePane {
                     _ => None,
                 };
                 code_pane.file_view(ctx).update(ctx, |code_view, ctx| {
-                    code_view.open_or_focus_existing(Some(path.clone()), line_col, ctx);
+                    code_view.open_or_focus_existing(Some(location.clone()), line_col, ctx);
                 });
             }
 
@@ -93,16 +93,16 @@ impl PaneContent for CodePane {
             return false;
         }
 
-        #[cfg(feature = "local_fs")]
+        #[cfg(any(feature = "local_fs", feature = "local_tty"))]
         self.file_view(ctx).update(ctx, |code_view, ctx| {
-            if let Some(path) = source.path() {
-                let line_col = match &source {
-                    CodeSource::Link { range_start, .. } => *range_start,
-                    _ => None,
-                };
-                code_view.open_or_focus_existing(Some(path), line_col, ctx);
-            }
+            let line_col = match &source {
+                CodeSource::Link { range_start, .. } => *range_start,
+                _ => None,
+            };
+            code_view.open_or_focus_existing(Some(location), line_col, ctx);
         });
+        #[cfg(not(any(feature = "local_fs", feature = "local_tty")))]
+        let _ = location;
 
         true
     }

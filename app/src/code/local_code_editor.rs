@@ -136,6 +136,13 @@ pub enum LocalCodeEditorEvent {
 enum LoadedFileMetadata {
     /// Normal file with both FileId and path (for files that are actually opened)
     LocalFile { id: FileId, path: PathBuf },
+    /// 远端 buffer:文件位于 SSH 主机上,通过 buffer-sync 协议同步,
+    /// 本地没有对应路径。
+    #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
+    RemoteFile {
+        id: FileId,
+        remote_path: crate::code::buffer_location::RemotePath,
+    },
 }
 
 pub use super::diff_viewer::DisplayMode;
@@ -276,6 +283,21 @@ impl LocalCodeEditorView {
     fn perform_save(&mut self, file_id: FileId, ctx: &mut ViewContext<Self>) {
         self.base_content_version = Some(self.editor.as_ref(ctx).version(ctx));
 
+        // 远端 SSH 文件:走 buffer-sync 的 `SaveBuffer` 协议落盘。不能用下面的本地
+        // `FileModel` 路径 —— Remote buffer 没有本地路径,会得到 `NoFilePath`。
+        // 用户的编辑已通过 `BufferEdit` 实时同步到 daemon,这里只触发 daemon 落盘。
+        #[cfg(feature = "local_tty")]
+        {
+            let is_remote = GlobalBufferModel::handle(ctx)
+                .as_ref(ctx)
+                .is_remote(file_id);
+            if is_remote {
+                GlobalBufferModel::handle(ctx)
+                    .update(ctx, |model, ctx| model.save_remote_buffer(file_id, ctx));
+                return;
+            }
+        }
+
         let result = match self.diff() {
             Some(DiffType::Update {
                 rename: Some(new_path),
@@ -360,8 +382,12 @@ impl LocalCodeEditorView {
     where
         T: FnOnce(BufferState, &mut ViewContext<Self>) -> ViewHandle<CodeEditorView>,
     {
-        let buffer_state = GlobalBufferModel::handle(ctx)
-            .update(ctx, |model, ctx| model.open(path.to_path_buf(), ctx));
+        let buffer_state = GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
+            model.open(
+                crate::code::buffer_location::BufferLocation::Local(path.to_path_buf()),
+                ctx,
+            )
+        });
         let file_id = buffer_state.file_id;
         let editor = editor_constructor(buffer_state, ctx);
 
@@ -379,6 +405,52 @@ impl LocalCodeEditorView {
         local_editor.metadata = Some(LoadedFileMetadata::LocalFile {
             id: file_id,
             path: path.to_path_buf(),
+        });
+
+        Self::subscribe_to_global_buffer_events(file_id, ctx);
+
+        local_editor
+    }
+
+    /// 构造一个绑定到远端 buffer 的编辑器视图。
+    ///
+    /// 通过 [`GlobalBufferModel::open`] 以 [`BufferLocation::Remote`] 打开远端文件,
+    /// 内容由 buffer-sync 协议异步填充。语言识别复用远端路径的后缀。
+    #[cfg(feature = "local_tty")]
+    pub fn new_with_remote_buffer<T>(
+        remote_path: crate::code::buffer_location::RemotePath,
+        editor_constructor: T,
+        enable_diff_nav_by_default: bool,
+        display_mode: Option<DisplayMode>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self
+    where
+        T: FnOnce(BufferState, &mut ViewContext<Self>) -> ViewHandle<CodeEditorView>,
+    {
+        // 远端路径用于语言识别(后缀)。
+        let language_path = std::path::PathBuf::from(remote_path.path.as_str());
+        let buffer_state = GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
+            model.open(
+                crate::code::buffer_location::BufferLocation::Remote(remote_path.clone()),
+                ctx,
+            )
+        });
+        let file_id = buffer_state.file_id;
+        let editor = editor_constructor(buffer_state, ctx);
+
+        editor.update(ctx, |editor, ctx| {
+            editor.set_language_with_path(&language_path, ctx);
+            editor.model.update(ctx, |model, ctx| {
+                model.rebuild_layout_with_syntax_highlighting(ctx)
+            });
+        });
+
+        let mut local_editor =
+            Self::new(editor, None, enable_diff_nav_by_default, display_mode, ctx);
+
+        local_editor.metadata = Some(LoadedFileMetadata::RemoteFile {
+            id: file_id,
+            remote_path,
         });
 
         Self::subscribe_to_global_buffer_events(file_id, ctx);
@@ -516,6 +588,10 @@ impl LocalCodeEditorView {
                         error: error.clone(),
                     });
                 }
+                // 远端 buffer 同步事件由 GlobalBufferModel / ServerModel 内部消费,
+                // 本地编辑器视图不关心。
+                GlobalBufferModelEvent::RemoteBufferConflict { .. }
+                | GlobalBufferModelEvent::ServerLocalBufferUpdated { .. } => {}
             }
         });
     }
@@ -645,14 +721,17 @@ impl LocalCodeEditorView {
 
     pub fn file_id(&self) -> Option<FileId> {
         self.metadata.as_ref().map(|metadata| match metadata {
-            LoadedFileMetadata::LocalFile { id, .. } => *id,
+            LoadedFileMetadata::LocalFile { id, .. }
+            | LoadedFileMetadata::RemoteFile { id, .. } => *id,
         })
     }
 
     pub fn file_path(&self) -> Option<&Path> {
-        self.metadata.as_ref().map(|metadata| match metadata {
-            LoadedFileMetadata::LocalFile { path, .. } => path.as_path(),
-        })
+        match self.metadata.as_ref()? {
+            LoadedFileMetadata::LocalFile { path, .. } => Some(path.as_path()),
+            // 远端文件没有本地路径。
+            LoadedFileMetadata::RemoteFile { .. } => None,
+        }
     }
 
     /// Update this editor's file identity after a `GlobalBufferModel::rename`.

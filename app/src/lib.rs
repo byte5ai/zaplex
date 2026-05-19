@@ -1512,7 +1512,17 @@ fn initialize_app(
     );
     #[cfg(feature = "local_fs")]
     ctx.add_singleton_model(FileModel::new);
-    ctx.add_singleton_model(GlobalBufferModel::new);
+    ctx.add_singleton_model(|ctx| {
+        let model = GlobalBufferModel::new(ctx);
+        // 客户端 app:订阅 RemoteServerManager 的 buffer push 事件。daemon 不做
+        // 这一步(daemon 不注册 RemoteServerManager),所以这段不能放进
+        // GlobalBufferModel::new。RemoteServerManager 已在前面注册过。
+        #[cfg(feature = "local_tty")]
+        if FeatureFlag::SshRemoteServer.is_enabled() {
+            GlobalBufferModel::subscribe_to_remote_server_manager(ctx);
+        }
+        model
+    });
     #[cfg(windows)]
     ctx.add_singleton_model(util::traffic_lights::windows::RendererState::new);
 
@@ -2247,6 +2257,15 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
     if ChannelState::is_release_bundle() {
         flags.extend(features::RELEASE_FLAGS);
     }
+
+    // SSH remote-server:release bundle 走 RELEASE_FLAGS 启用,但 dev 源码构建
+    // (`cargo run`)不是 release bundle,该 flag 会一直关闭 —— 于是 SSH 会话
+    // 永远退回 legacy 路径,remote-server transport 不激活,dev 模式自动构建并
+    // 上传二进制(见 ssh_transport.rs)也就没有机会触发。这里在 debug 构建里
+    // 显式开启,保证开发时能联调远端文件打开 / buffer-sync。Windows 暂不支持
+    // remote-server 二进制,与 RELEASE_FLAGS 的 cfg 保持一致排除掉。
+    #[cfg(all(debug_assertions, not(windows)))]
+    flags.insert(FeatureFlag::SshRemoteServer);
 
     // Issue #72: HTTP 代理设置页面。不走 channel 判断,所有 channel 含 warp-oss
     // 默认启用,作为企业 VPN / 公司代理场景的基本能力。

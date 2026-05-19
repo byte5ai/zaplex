@@ -162,10 +162,16 @@ impl LeafContents {
             // SSH server editor:数据(host/user/...)持久化在 ssh_servers 表里,
             // pane 本身只是 view,关掉再打开没差别。
             LeafContents::SshServer { .. } => false,
+            // 远端文件代码 pane:远端 buffer 依赖活跃 SSH 连接,`RemoteFileTree`
+            // source 不可恢复(`is_restorable() == false`)。若写入持久化会留下
+            // 一条 restore 阶段被跳过的孤儿 `Code` 行,导致整个 tab 丢失 ——
+            // 因此带远端 source 的代码 pane 整体不持久化。
+            LeafContents::Code(CodePaneSnapShot::Local { source, .. }) => {
+                source.as_ref().map(|s| s.is_restorable()).unwrap_or(true)
+            }
             LeafContents::Terminal(_)
             | LeafContents::Notebook(_)
             | LeafContents::AIDocument(_)
-            | LeafContents::Code(_)
             | LeafContents::EnvVarCollection(_)
             | LeafContents::Workflow(_)
             | LeafContents::Settings(_)

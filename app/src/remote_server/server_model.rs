@@ -26,6 +26,20 @@ use super::proto::{
     WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 
+// Buffer-sync 相关:依赖 GlobalBufferModel,后者的 server-local 操作只在
+// `local_fs` 下可用,因此整套服务端 buffer 处理都按 `local_fs` 门控。
+#[cfg(feature = "local_fs")]
+use super::proto::{
+    list_directory_response, resolve_conflict_response, save_buffer_response, BufferEdit,
+    BufferUpdatedPush, CloseBuffer, DirEntry, ListDirectory, ListDirectoryResponse,
+    ListDirectorySuccess, OpenBuffer, OpenBufferResponse, ResolveConflict, ResolveConflictResponse,
+    ResolveConflictSuccess, SaveBuffer, SaveBufferResponse, SaveBufferSuccess, TextEdit,
+};
+#[cfg(feature = "local_fs")]
+use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
+#[cfg(feature = "local_fs")]
+use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
+
 /// How long the daemon waits with no connections before exiting.
 pub const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
@@ -164,6 +178,10 @@ pub struct ServerModel {
     executors: HashMap<SessionId, Arc<LocalCommandExecutor>>,
     /// Tracks in-flight file write/delete operations and handles cleanup.
     pending_file_ops: PendingFileOps,
+    /// Tracks open server-local buffers, their connections, and pending
+    /// buffer requests (OpenBuffer, SaveBuffer, ResolveConflict).
+    #[cfg(feature = "local_fs")]
+    buffers: ServerBufferTracker,
     /// Daemon-wide bearer credential for the identity-scoped daemon.
     ///
     /// The token is written by Initialize when the client supplies a
@@ -195,6 +213,8 @@ impl ServerModel {
             host_id,
             executors: HashMap::new(),
             pending_file_ops: PendingFileOps::new(),
+            #[cfg(feature = "local_fs")]
+            buffers: ServerBufferTracker::new(),
             auth_token: None,
         };
         // Subscribe to FileModel and RepoMetadataModel events
@@ -298,6 +318,176 @@ impl ServerModel {
                 } => {}
             });
         }
+        // Subscribe to GlobalBufferModel events for server-local buffers.
+        #[cfg(feature = "local_fs")]
+        {
+            let gbm = GlobalBufferModel::handle(ctx);
+            ctx.subscribe_to_model(&gbm, |me, event, ctx| match event {
+                GlobalBufferModelEvent::BufferLoaded { file_id, .. } => {
+                    // Complete all pending OpenBuffer requests for this file.
+                    let pending = me
+                        .buffers
+                        .take_pending_by_kind(file_id, PendingBufferRequestKind::OpenBuffer);
+                    if !pending.is_empty() {
+                        let gbm = GlobalBufferModel::handle(ctx);
+                        let content = gbm.as_ref(ctx).content_for_file(*file_id, ctx);
+                        let server_version = gbm
+                            .as_ref(ctx)
+                            .sync_clock_for_server_local(*file_id)
+                            .map(|c| c.server_version.as_u64());
+
+                        for (request_id, conn_id) in pending {
+                            let message = match (&content, server_version) {
+                                (Some(content), Some(sv)) => {
+                                    server_message::Message::OpenBufferResponse(
+                                        OpenBufferResponse {
+                                            content: content.clone(),
+                                            server_version: sv,
+                                        },
+                                    )
+                                }
+                                _ => server_message::Message::Error(ErrorResponse {
+                                    code: ErrorCode::Internal.into(),
+                                    message: format!(
+                                        "Buffer loaded but content or sync clock unavailable for file {file_id:?}"
+                                    ),
+                                }),
+                            };
+                            me.send_server_message(Some(conn_id), Some(&request_id), message);
+                        }
+                    }
+                }
+                GlobalBufferModelEvent::ServerLocalBufferUpdated {
+                    file_id,
+                    edits,
+                    new_server_version,
+                    expected_client_version,
+                } => {
+                    // Push incremental edits to all connections that have this buffer open.
+                    let Some(conns) = me.buffers.connections_for_buffer(file_id) else {
+                        return;
+                    };
+                    // Find the path for this file_id; abort the push if tracker
+                    // state is inconsistent (空 path 会破坏 path↔buffer 契约)。
+                    let Some(path) = me.buffers.path_for_file_id(*file_id) else {
+                        log::error!(
+                            "Missing path mapping for server-local buffer file_id={file_id:?}"
+                        );
+                        return;
+                    };
+
+                    let proto_edits: Vec<TextEdit> = edits
+                        .iter()
+                        .map(|edit| TextEdit {
+                            start_offset: edit.start.as_usize() as u64,
+                            end_offset: edit.end.as_usize() as u64,
+                            text: edit.text.clone(),
+                        })
+                        .collect();
+
+                    let conns: Vec<_> = conns.iter().copied().collect();
+                    for conn_id in conns {
+                        me.send_server_message(
+                            Some(conn_id),
+                            None,
+                            server_message::Message::BufferUpdated(BufferUpdatedPush {
+                                path: path.clone(),
+                                new_server_version: new_server_version.as_u64(),
+                                expected_client_version: expected_client_version.as_u64(),
+                                edits: proto_edits.clone(),
+                            }),
+                        );
+                    }
+                }
+                GlobalBufferModelEvent::FileSaved { file_id } => {
+                    for (request_id, conn_id) in me
+                        .buffers
+                        .take_pending_by_kind(file_id, PendingBufferRequestKind::SaveBuffer)
+                    {
+                        me.send_server_message(
+                            Some(conn_id),
+                            Some(&request_id),
+                            server_message::Message::SaveBufferResponse(SaveBufferResponse {
+                                result: Some(save_buffer_response::Result::Success(
+                                    SaveBufferSuccess {},
+                                )),
+                            }),
+                        );
+                    }
+                    for (request_id, conn_id) in me
+                        .buffers
+                        .take_pending_by_kind(file_id, PendingBufferRequestKind::ResolveConflict)
+                    {
+                        me.send_server_message(
+                            Some(conn_id),
+                            Some(&request_id),
+                            server_message::Message::ResolveConflictResponse(
+                                ResolveConflictResponse {
+                                    result: Some(resolve_conflict_response::Result::Success(
+                                        ResolveConflictSuccess {},
+                                    )),
+                                },
+                            ),
+                        );
+                    }
+                }
+                GlobalBufferModelEvent::FailedToSave { file_id, error } => {
+                    for (request_id, conn_id) in me
+                        .buffers
+                        .take_pending_by_kind(file_id, PendingBufferRequestKind::SaveBuffer)
+                    {
+                        me.send_server_message(
+                            Some(conn_id),
+                            Some(&request_id),
+                            server_message::Message::SaveBufferResponse(SaveBufferResponse {
+                                result: Some(save_buffer_response::Result::Error(
+                                    FileOperationError {
+                                        message: format!("{error}"),
+                                    },
+                                )),
+                            }),
+                        );
+                    }
+                    for (request_id, conn_id) in me
+                        .buffers
+                        .take_pending_by_kind(file_id, PendingBufferRequestKind::ResolveConflict)
+                    {
+                        me.send_server_message(
+                            Some(conn_id),
+                            Some(&request_id),
+                            server_message::Message::ResolveConflictResponse(
+                                ResolveConflictResponse {
+                                    result: Some(resolve_conflict_response::Result::Error(
+                                        FileOperationError {
+                                            message: format!("{error}"),
+                                        },
+                                    )),
+                                },
+                            ),
+                        );
+                    }
+                }
+                GlobalBufferModelEvent::FailedToLoad { file_id, error } => {
+                    for (request_id, conn_id) in me
+                        .buffers
+                        .take_pending_by_kind(file_id, PendingBufferRequestKind::OpenBuffer)
+                    {
+                        me.send_server_message(
+                            Some(conn_id),
+                            Some(&request_id),
+                            server_message::Message::Error(ErrorResponse {
+                                code: ErrorCode::Internal.into(),
+                                message: format!("Failed to load buffer: {error}"),
+                            }),
+                        );
+                    }
+                }
+                GlobalBufferModelEvent::BufferUpdatedFromFileEvent { .. }
+                | GlobalBufferModelEvent::RemoteBufferConflict { .. } => {
+                    // Not relevant for server-local buffers.
+                }
+            });
+        }
         // Start the grace timer immediately so the daemon exits if no proxy
         // connects within GRACE_PERIOD. In practice the spawning proxy connects
         // within milliseconds, so the risk of premature shutdown is negligible;
@@ -339,6 +529,10 @@ impl ServerModel {
         if self.connection_senders.remove(&conn_id).is_none() {
             return;
         }
+        // Drop this connection from all open server-local buffers; orphaned
+        // buffers (no remaining connections) are deallocated by the tracker.
+        #[cfg(feature = "local_fs")]
+        self.buffers.remove_connection(conn_id, ctx);
         let remaining = self.connection_senders.len();
         log::info!("Daemon: connection {conn_id} deregistered — {remaining} active remaining");
         if remaining == 0 {
@@ -418,6 +612,43 @@ impl ServerModel {
             Some(client_message::Message::ReadFileContext(msg)) => {
                 self.handle_read_file_context(msg, &request_id, conn_id, ctx)
             }
+            #[cfg(feature = "local_fs")]
+            Some(client_message::Message::OpenBuffer(msg)) => {
+                self.handle_open_buffer(msg, &request_id, conn_id, ctx)
+            }
+            #[cfg(feature = "local_fs")]
+            Some(client_message::Message::BufferEdit(msg)) => {
+                self.handle_buffer_edit(msg, ctx);
+                return; // fire-and-forget notification
+            }
+            #[cfg(feature = "local_fs")]
+            Some(client_message::Message::CloseBuffer(msg)) => {
+                self.handle_close_buffer(msg, conn_id, ctx);
+                return; // fire-and-forget notification
+            }
+            #[cfg(feature = "local_fs")]
+            Some(client_message::Message::SaveBuffer(msg)) => {
+                self.handle_save_buffer(msg, &request_id, conn_id, ctx)
+            }
+            #[cfg(feature = "local_fs")]
+            Some(client_message::Message::ResolveConflict(msg)) => {
+                self.handle_resolve_conflict(msg, &request_id, conn_id, ctx)
+            }
+            // OpenWarp:远端终端文件链接的目录列举(校验路径形态用)。
+            #[cfg(feature = "local_fs")]
+            Some(client_message::Message::ListDirectory(msg)) => self.handle_list_directory(msg),
+            #[cfg(not(feature = "local_fs"))]
+            Some(
+                client_message::Message::OpenBuffer(_)
+                | client_message::Message::BufferEdit(_)
+                | client_message::Message::CloseBuffer(_)
+                | client_message::Message::SaveBuffer(_)
+                | client_message::Message::ResolveConflict(_)
+                | client_message::Message::ListDirectory(_),
+            ) => HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "Buffer syncing requires the local_fs feature".to_string(),
+            })),
             None => {
                 log::warn!(
                     "Received ClientMessage with no message variant (request_id={request_id})"
@@ -1059,6 +1290,244 @@ impl ServerModel {
         );
 
         HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Handles `OpenBuffer` by opening the file via `GlobalBufferModel`.
+    /// The response is sent asynchronously when `BufferLoaded` fires.
+    #[cfg(feature = "local_fs")]
+    fn handle_open_buffer(
+        &mut self,
+        msg: OpenBuffer,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        log::info!(
+            "Handling OpenBuffer path={path} (request_id={request_id})",
+            path = msg.path
+        );
+
+        let path = PathBuf::from(&msg.path);
+        let gbm = GlobalBufferModel::handle(ctx);
+        let buffer_state = gbm.update(ctx, |gbm, ctx| gbm.open_server_local(path, ctx));
+        let file_id = buffer_state.file_id;
+
+        // Track path → FileId mapping and connection。track_open_buffer 同时持有
+        // buffer 的强引用 —— daemon 没有编辑器 view,不持有的话 buffer 会在
+        // FileModel 异步加载完成前被回收(见 ServerBufferTracker::buffer_handles)。
+        self.buffers
+            .track_open_buffer(msg.path.clone(), file_id, buffer_state.buffer);
+        self.buffers.add_connection(file_id, conn_id);
+
+        // If already loaded, respond immediately.
+        if gbm.as_ref(ctx).buffer_loaded(file_id) {
+            let content = gbm
+                .as_ref(ctx)
+                .content_for_file(file_id, ctx)
+                .unwrap_or_default();
+            let server_version = gbm
+                .as_ref(ctx)
+                .sync_clock_for_server_local(file_id)
+                .map(|c| c.server_version.as_u64())
+                .unwrap_or(1);
+            return HandlerOutcome::Sync(server_message::Message::OpenBufferResponse(
+                OpenBufferResponse {
+                    content,
+                    server_version,
+                },
+            ));
+        }
+
+        // Not yet loaded — stash request info so the GlobalBufferModelEvent
+        // subscription can send the response when content arrives.
+        self.buffers.insert_pending(
+            file_id,
+            request_id.clone(),
+            conn_id,
+            PendingBufferRequestKind::OpenBuffer,
+        );
+        HandlerOutcome::Async(None)
+    }
+
+    /// Handles `BufferEdit` notification (fire-and-forget).
+    /// Delegates to `GlobalBufferModel::apply_client_edit`. On rejection
+    /// (stale server version), the edit is silently dropped.
+    #[cfg(feature = "local_fs")]
+    fn handle_buffer_edit(&mut self, msg: BufferEdit, ctx: &mut ModelContext<Self>) {
+        let Some(file_id) = self.buffers.file_id_for_path(&msg.path) else {
+            log::warn!("BufferEdit for unknown buffer: {path}", path = msg.path);
+            return;
+        };
+
+        let expected_sv = ContentVersion::from_wire_u64(msg.expected_server_version);
+        let new_cv = ContentVersion::from_wire_u64(msg.new_client_version);
+
+        // Per spec: if the edit is rejected (stale server version),
+        // the server silently drops it.
+        GlobalBufferModel::handle(ctx).update(ctx, |gbm, ctx| {
+            gbm.apply_client_edit(file_id, &msg.edits, expected_sv, new_cv, ctx);
+        });
+    }
+
+    /// Handles `SaveBuffer` by persisting the buffer to disk.
+    #[cfg(feature = "local_fs")]
+    fn handle_save_buffer(
+        &mut self,
+        msg: SaveBuffer,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        log::info!(
+            "Handling SaveBuffer path={path} (request_id={request_id})",
+            path = msg.path
+        );
+
+        let Some(file_id) = self.buffers.file_id_for_path(&msg.path) else {
+            return HandlerOutcome::Sync(server_message::Message::SaveBufferResponse(
+                SaveBufferResponse {
+                    result: Some(save_buffer_response::Result::Error(FileOperationError {
+                        message: format!("Buffer not open: {path}", path = msg.path),
+                    })),
+                },
+            ));
+        };
+
+        let result = GlobalBufferModel::handle(ctx)
+            .update(ctx, |gbm, ctx| gbm.save_server_local(file_id, ctx));
+
+        match result {
+            Ok(()) => {
+                // Response will come via the FileSaved event subscription.
+                // Track the file_id → (request_id, conn_id) so the event
+                // handler can correlate.
+                self.buffers.insert_pending(
+                    file_id,
+                    request_id.clone(),
+                    conn_id,
+                    PendingBufferRequestKind::SaveBuffer,
+                );
+                HandlerOutcome::Async(None)
+            }
+            Err(err) => HandlerOutcome::Sync(server_message::Message::SaveBufferResponse(
+                SaveBufferResponse {
+                    result: Some(save_buffer_response::Result::Error(FileOperationError {
+                        message: format!("Failed to save: {err}"),
+                    })),
+                },
+            )),
+        }
+    }
+
+    /// Handles `ResolveConflict` by replacing the server buffer with the
+    /// client's content and persisting to disk. Returns an async
+    /// `HandlerOutcome` — the response is sent when `FileSaved` or
+    /// `FailedToSave` fires.
+    #[cfg(feature = "local_fs")]
+    fn handle_resolve_conflict(
+        &mut self,
+        msg: ResolveConflict,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        log::info!(
+            "Handling ResolveConflict path={path} (request_id={request_id})",
+            path = msg.path
+        );
+
+        let Some(file_id) = self.buffers.file_id_for_path(&msg.path) else {
+            return HandlerOutcome::Sync(server_message::Message::ResolveConflictResponse(
+                ResolveConflictResponse {
+                    result: Some(resolve_conflict_response::Result::Error(
+                        FileOperationError {
+                            message: format!("Buffer not open: {path}", path = msg.path),
+                        },
+                    )),
+                },
+            ));
+        };
+
+        let ack_sv = ContentVersion::from_wire_u64(msg.acknowledged_server_version);
+        let current_cv = ContentVersion::from_wire_u64(msg.current_client_version);
+        let result = GlobalBufferModel::handle(ctx).update(ctx, |gbm, ctx| {
+            gbm.resolve_conflict(file_id, ack_sv, current_cv, &msg.client_content, ctx)
+        });
+
+        match result {
+            Ok(()) => {
+                self.buffers.insert_pending(
+                    file_id,
+                    request_id.clone(),
+                    conn_id,
+                    PendingBufferRequestKind::ResolveConflict,
+                );
+                HandlerOutcome::Async(None)
+            }
+            Err(err) => HandlerOutcome::Sync(server_message::Message::ResolveConflictResponse(
+                ResolveConflictResponse {
+                    result: Some(resolve_conflict_response::Result::Error(
+                        FileOperationError {
+                            message: format!("Failed to resolve conflict: {err}"),
+                        },
+                    )),
+                },
+            )),
+        }
+    }
+
+    /// OpenWarp:处理 `ListDirectory` —— 同步列举一个目录下的直接子项。
+    ///
+    /// 给远端终端文件链接检测做精确校验用:客户端缓存某个 cwd 下的
+    /// 真实目录项,链接检测器据此从 `ls -l` 整行里切出正确的文件名。
+    /// `std::fs::read_dir` 在 daemon 端是廉价的同步调用,故直接返回
+    /// `HandlerOutcome::Sync`,不走异步 spawn。
+    #[cfg(feature = "local_fs")]
+    fn handle_list_directory(&self, msg: ListDirectory) -> HandlerOutcome {
+        log::info!("Handling ListDirectory path={}", msg.path);
+
+        let result = match std::fs::read_dir(&msg.path) {
+            Ok(read_dir) => {
+                let mut entries = Vec::new();
+                for entry in read_dir.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    // 优先用 `file_type()`(不跟随符号链接、无需额外 stat);
+                    // 失败时回退到 `metadata()`(会跟随符号链接)。
+                    let is_dir = match entry.file_type() {
+                        Ok(ft) => ft.is_dir(),
+                        Err(_) => entry.metadata().map(|m| m.is_dir()).unwrap_or(false),
+                    };
+                    entries.push(DirEntry { name, is_dir });
+                }
+                list_directory_response::Result::Success(ListDirectorySuccess { entries })
+            }
+            Err(err) => list_directory_response::Result::Error(FileOperationError {
+                message: format!("Failed to list directory {}: {err}", msg.path),
+            }),
+        };
+
+        HandlerOutcome::Sync(server_message::Message::ListDirectoryResponse(
+            ListDirectoryResponse {
+                result: Some(result),
+            },
+        ))
+    }
+
+    /// Handles `CloseBuffer` notification (fire-and-forget).
+    /// Removes the connection from the buffer's connection set.
+    /// Deallocates the buffer if no connections remain.
+    #[cfg(feature = "local_fs")]
+    fn handle_close_buffer(
+        &mut self,
+        msg: CloseBuffer,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        log::info!(
+            "Handling CloseBuffer path={path} conn={conn_id}",
+            path = msg.path
+        );
+        self.buffers.close_buffer(&msg.path, conn_id, ctx);
     }
 }
 

@@ -313,6 +313,16 @@ pub enum RemoteServerManagerEvent {
         host_id: HostId,
         update: RepoMetadataUpdate,
     },
+    /// A remote buffer was updated on the server (file changed on disk).
+    /// Forwarded from the client's `ClientEvent::BufferUpdated` push channel
+    /// so `GlobalBufferModel` can apply the incremental edits.
+    BufferUpdated {
+        host_id: HostId,
+        path: String,
+        new_server_version: u64,
+        expected_client_version: u64,
+        edits: Vec<crate::proto::TextEdit>,
+    },
 
     // --- Setup events ---
     /// Intermediate state change during the binary check/install flow.
@@ -387,7 +397,8 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::HostDisconnected { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
-            | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. } => None,
+            | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
+            | RemoteServerManagerEvent::BufferUpdated { .. } => None,
         }
     }
 }
@@ -1232,6 +1243,20 @@ impl RemoteServerManager {
             ClientEvent::RepoMetadataUpdated { update } => {
                 ctx.emit(RemoteServerManagerEvent::RepoMetadataUpdated { host_id, update });
             }
+            ClientEvent::BufferUpdated {
+                path,
+                new_server_version,
+                expected_client_version,
+                edits,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::BufferUpdated {
+                    host_id,
+                    path,
+                    new_server_version,
+                    expected_client_version,
+                    edits,
+                });
+            }
             ClientEvent::MessageDecodingError => {
                 ctx.emit(RemoteServerManagerEvent::ServerMessageDecodingError { session_id });
             }
@@ -1372,11 +1397,28 @@ impl RemoteServerManager {
             let exit_status = Self::capture_exit_status(&mut _child, session_id);
             // Drop the old child process explicitly before reconnecting.
             drop(_child);
-            let Some(auth_context) = self.auth_context.clone() else {
-                log::warn!(
-                    "Spontaneous disconnect for session {session_id:?}, \
-                     but no auth context is available for reconnect"
-                );
+            // 如果子进程已经退出(`exit_status.is_some()`),说明对端 daemon 已经
+            // 真的不在了 —— 例如用户在远端 shell 内 `exit`,ssh ControlMaster
+            // 把所有 slave channel 一起收掉,`remote-server-proxy` 也跟着退出。
+            // 这种情况下立刻重连大概率失败,反而会让 terminal pane 卡 2~4 秒
+            // 才彻底结束;因此跳过自动重连,直接走 Disconnected 路径。
+            // 只有 `exit_status.is_none()`(child 仍在跑但 reader 收到 EOF)
+            // 这种"真·瞬时网络抖动"才保留重连逻辑。
+            let child_already_exited = exit_status.is_some();
+            let Some(auth_context) = self.auth_context.clone().filter(|_| !child_already_exited)
+            else {
+                if child_already_exited {
+                    log::info!(
+                        "Spontaneous disconnect for session {session_id:?}: \
+                         child already exited (exit_status={exit_status:?}), \
+                         skipping reconnect"
+                    );
+                } else {
+                    log::warn!(
+                        "Spontaneous disconnect for session {session_id:?}, \
+                         but no auth context is available for reconnect"
+                    );
+                }
                 self.sessions
                     .insert(session_id, RemoteSessionState::Disconnected);
                 self.remove_from_host_index(&host_id, session_id);

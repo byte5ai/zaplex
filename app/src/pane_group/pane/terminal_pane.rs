@@ -753,6 +753,17 @@ fn handle_terminal_view_event(
                     line_col: *line_col,
                 });
             }
+            // OpenWarp:把终端发出的"打开远端文件"事件透传给 pane_group → workspace。
+            #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+            Event::OpenRemoteFileFromTerminal {
+                remote_path,
+                line_col,
+            } => {
+                ctx.emit(pane_group::Event::OpenRemoteFileFromTerminal {
+                    remote_path: remote_path.clone(),
+                    line_col: *line_col,
+                });
+            }
             Event::CopyFileToRemote { command, upload_id } => {
                 let new_pane_id = group.insert_terminal_pane(
                     Direction::Right,

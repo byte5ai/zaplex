@@ -634,6 +634,13 @@ pub enum Event {
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
     },
+    /// OpenWarp:在终端里 Ctrl/Cmd+点击远端 SSH 会话输出中的文件路径时发出,
+    /// 由 workspace 走 buffer-sync 协议在编辑器中打开远端文件。
+    #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+    OpenRemoteFileFromTerminal {
+        remote_path: crate::code::buffer_location::RemotePath,
+        line_col: Option<LineAndColumnArg>,
+    },
     /// File was renamed in the file tree
     #[cfg(feature = "local_fs")]
     FileRenamed {

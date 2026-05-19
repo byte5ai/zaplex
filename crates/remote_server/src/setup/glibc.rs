@@ -4,6 +4,11 @@
 //! This is split into its own submodule so the libc-specific logic
 //! (version parsing, family classification) can evolve independently
 //! from the rest of [`crate::setup`].
+//!
+//! 注意:remote-server 二进制现在是静态 musl 链接(见 `preinstall_check.sh`),
+//! 不依赖宿主 libc。这里解析出的 libc family / version 已不再用于安装门禁,
+//! 仅作为遥测/诊断信息保留。`RemoteLibc` 与 `GlibcVersion` 继续被
+//! [`crate::setup::PreinstallCheckResult`] 和 `UnsupportedReason` 使用。
 
 use std::fmt;
 

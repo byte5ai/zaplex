@@ -67,7 +67,6 @@ use crate::{
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::{color::internal_colors, Fill};
 use warp_core::HostId;
-use warpui::ui_components::components::UiComponent;
 
 mod editing;
 mod render;
@@ -1931,7 +1930,6 @@ impl FileTreeView {
         let is_selected = self.selected_item.as_ref() == Some(id);
         let is_expanded = self.is_item_expanded(&id.root, item);
         let render_state = item.to_render_state(is_expanded, appearance);
-        let is_remote_file = root_dir.is_remote() && matches!(item, FileTreeItem::File { .. });
 
         let item_display_name = render_state.display_name.clone();
         let item_position_id = format!("file_tree_item:{item_display_name}");
@@ -1950,34 +1948,15 @@ impl FileTreeView {
         let id_for_context = id.clone();
         let id_for_drop = id.clone();
         let id_for_drag = id.clone();
-        let ui_builder = appearance.ui_builder();
         let hoverable = Hoverable::new(render_state.mouse_state.clone(), move |mouse_state| {
             let item_highlight_state = ItemHighlightState::new(is_selected, mouse_state);
-            let element = Self::render_item_with_hover(
+            // 远端文件已支持通过 buffer-sync 协议打开,不再显示「无法打开」提示。
+            Self::render_item_with_hover(
                 render_state,
                 appearance,
                 item_highlight_state,
                 editor_view,
-            );
-
-            if is_remote_file && mouse_state.is_hovered() {
-                let tooltip = ui_builder
-                    .tool_tip(crate::t!("code-open-file-unavailable-remote-tooltip"))
-                    .build()
-                    .finish();
-                let offset = OffsetPositioning::offset_from_parent(
-                    Vector2F::new(0., 4.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::BottomLeft,
-                    ChildAnchor::TopLeft,
-                );
-                Stack::new()
-                    .with_child(element)
-                    .with_positioned_overlay_child(tooltip, offset)
-                    .finish()
-            } else {
-                element
-            }
+            )
         })
         .on_click(
             move |event_ctx: &mut EventContext, _app_ctx: &AppContext, _position| {
@@ -2000,12 +1979,8 @@ impl FileTreeView {
                 });
             },
         )
-        // Remote files can't be opened in the editor, so use the default cursor.
-        .with_cursor(if is_remote_file {
-            Cursor::Arrow
-        } else {
-            Cursor::PointingHand
-        })
+        // 本地和远端文件都可点击打开,统一用手型光标。
+        .with_cursor(Cursor::PointingHand)
         .finish();
 
         let draggable = Draggable::new(draggable_state, hoverable)
@@ -2226,10 +2201,19 @@ impl FileTreeView {
 
         match item {
             FileTreeItem::File { metadata, .. } => {
-                // Remote file trees don't support opening files in the editor.
                 if !is_remote {
                     let path = metadata.path.to_local_path_lossy();
                     self.open_file(&path, None, ctx);
+                } else {
+                    // 远端文件:走 buffer-sync 协议打开。
+                    #[cfg(feature = "local_tty")]
+                    if let Some(host_id) = root_dir.remote_host_id.clone() {
+                        let remote_path = crate::code::buffer_location::RemotePath::new(
+                            host_id,
+                            (*metadata.path).clone(),
+                        );
+                        ctx.emit(FileTreeEvent::OpenRemoteFile { remote_path });
+                    }
                 }
             }
             FileTreeItem::DirectoryHeader { directory, .. } => {
@@ -2866,6 +2850,11 @@ pub enum FileTreeEvent {
     CDToDirectory { path: PathBuf },
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     OpenDirectoryInNewTab { path: PathBuf },
+    /// 在远端文件树里点击一个文件时发出,请求以远端 buffer 方式打开它。
+    #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
+    OpenRemoteFile {
+        remote_path: crate::code::buffer_location::RemotePath,
+    },
 }
 
 impl Entity for FileTreeView {

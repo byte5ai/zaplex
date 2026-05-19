@@ -433,6 +433,141 @@ impl super::TerminalView {
 // where we can spawn a local tty.
 #[cfg(feature = "local_fs")]
 impl super::TerminalView {
+    /// OpenWarp:判断给定会话是否是 remote-server(SSH)会话。
+    ///
+    /// 当 `local_tty` 未启用 / 在 wasm 上 / `SshRemoteServer` feature flag 关闭时,
+    /// 一律返回 `false`,即保持本地行为完全不变。
+    fn session_is_remote(
+        &self,
+        session_id: Option<crate::terminal::model::session::SessionId>,
+        ctx: &warpui::AppContext,
+    ) -> bool {
+        #[cfg(all(feature = "local_tty", not(target_family = "wasm")))]
+        {
+            use warpui::SingletonEntity as _;
+
+            use crate::features::FeatureFlag;
+            use crate::remote_server::manager::RemoteServerManager;
+
+            if FeatureFlag::SshRemoteServer.is_enabled() {
+                if let Some(session_id) = session_id {
+                    return RemoteServerManager::handle(ctx)
+                        .as_ref(ctx)
+                        .host_id_for_session(session_id)
+                        .is_some();
+                }
+            }
+        }
+
+        let _ = (session_id, ctx);
+        false
+    }
+
+    /// OpenWarp:取得远端会话某个 cwd 的目录列表校验上下文。
+    ///
+    /// 命中缓存则直接返回 `Remote(Some(..))`;未命中则异步发起 daemon
+    /// `ListDirectory` RPC 拉取该目录列表,本轮返回 `Remote(None)`(不高亮),
+    /// 拉取完成后写入缓存并 `ctx.notify()` 触发 re-render 把链接点亮。
+    ///
+    /// 缓存保持有界:拉取新 cwd 时清掉所有旧条目,只保留当前 cwd。
+    #[cfg(all(
+        feature = "local_tty",
+        feature = "local_fs",
+        not(target_family = "wasm")
+    ))]
+    fn remote_dir_listing_context(
+        &mut self,
+        session_id: crate::terminal::model::session::SessionId,
+        cwd: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> crate::util::file::LinkValidationContext {
+        use std::path::PathBuf;
+        use std::sync::Arc;
+
+        use warpui::SingletonEntity as _;
+
+        use crate::remote_server::manager::RemoteServerManager;
+        use crate::util::file::{LinkValidationContext, RemoteDirListing};
+
+        let cwd_path = PathBuf::from(cwd);
+        // 缓存按 (会话, cwd) 复合键索引,避免不同 host 的相同路径互相串扰。
+        let cache_key = (session_id, cwd_path.clone());
+
+        // 命中缓存(已就绪或拉取中)直接返回。
+        if let Some(entry) = self.remote_dir_listing_cache.get(&cache_key) {
+            return LinkValidationContext::Remote(entry.clone());
+        }
+
+        // 取该会话的 daemon 客户端。
+        let Some(client) = RemoteServerManager::handle(ctx)
+            .as_ref(ctx)
+            .client_for_session(session_id)
+            .cloned()
+        else {
+            return LinkValidationContext::Remote(None);
+        };
+
+        // 拉取新 cwd:超出容量上限时按插入顺序 FIFO 淘汰最旧条目,
+        // 然后插入 `None` 占位(标记拉取中)。`MAX_ENTRIES` 选 8 足够覆盖
+        // 用户在终端里常切的几个工作目录,避免每次切回都要 RPC。
+        const MAX_ENTRIES: usize = 8;
+        while self.remote_dir_listing_cache.len() >= MAX_ENTRIES {
+            // shift_remove_index 保持插入顺序;FIFO 头部是最旧的。
+            self.remote_dir_listing_cache.shift_remove_index(0);
+        }
+        self.remote_dir_listing_cache
+            .insert(cache_key.clone(), None);
+
+        let cwd_for_request = cwd.to_string();
+        let cwd_for_store = cwd_path.clone();
+        let key_for_store = cache_key.clone();
+        ctx.spawn(
+            async move { client.list_directory(cwd_for_request).await },
+            move |me, result, ctx| {
+                use crate::remote_server::proto::list_directory_response;
+
+                // 拉取期间用户可能已经切换 cwd / 清空缓存,只有占位还在才写入。
+                if !me.remote_dir_listing_cache.contains_key(&key_for_store) {
+                    return;
+                }
+                match result {
+                    Ok(resp) => match resp.result {
+                        Some(list_directory_response::Result::Success(success)) => {
+                            let entries = success
+                                .entries
+                                .into_iter()
+                                .map(|e| (e.name, e.is_dir))
+                                .collect();
+                            let listing =
+                                Arc::new(RemoteDirListing::new(cwd_for_store.clone(), entries));
+                            me.remote_dir_listing_cache
+                                .insert(key_for_store.clone(), Some(listing));
+                            // 列表到达,触发 re-render 让链接重新扫描并点亮。
+                            ctx.notify();
+                        }
+                        Some(list_directory_response::Result::Error(err)) => {
+                            log::warn!(
+                                "远端 ListDirectory 失败 {cwd_for_store:?}: {}",
+                                err.message
+                            );
+                            // 拉取失败:移除占位,下次悬停时会重试。
+                            me.remote_dir_listing_cache.shift_remove(&key_for_store);
+                        }
+                        None => {
+                            me.remote_dir_listing_cache.shift_remove(&key_for_store);
+                        }
+                    },
+                    Err(err) => {
+                        log::warn!("远端 ListDirectory RPC 出错 {cwd_for_store:?}: {err}");
+                        me.remote_dir_listing_cache.shift_remove(&key_for_store);
+                    }
+                }
+            },
+        );
+
+        LinkValidationContext::Remote(None)
+    }
+
     /// Scans the terminal model at the given position to see if it is
     /// contained within a path that should be linkified.
     fn scan_for_file_path(
@@ -441,17 +576,51 @@ impl super::TerminalView {
         from_editor: TerminalEditor,
         ctx: &mut ViewContext<Self>,
     ) {
-        // For AltScreen we scan for relative path with the current working directory.
-        // For BlockList we scan for relative path with the pwd of the hovered block.
-        let pwd_to_scan_for = match position {
-            WithinModel::AltScreen(_) => self.pwd_if_local(ctx),
+        use crate::util::file::LinkValidationContext;
+
+        // OpenWarp:判断被悬停 block 所属会话是否是 remote-server 会话。
+        // 远端会话的文件不在本地磁盘上,需要用 `LinkValidationContext::Remote`
+        // 携带 daemon 拉取来的真实目录列表做精确校验。
+        let block_session_id = match position {
+            WithinModel::AltScreen(_) => self.active_block_session_id(),
             WithinModel::BlockList(inner) => self
                 .model
                 .lock()
                 .block_list()
                 .block_at(inner.block_index)
-                .filter(|block| !self.is_block_considered_remote(block.session_id(), None, ctx)) // Don't scan for file links if the block is on remote sessions
+                .and_then(|block| block.session_id()),
+        };
+        let is_remote = self.session_is_remote(block_session_id, ctx);
+
+        // For AltScreen we scan for relative path with the current working directory.
+        // For BlockList we scan for relative path with the pwd of the hovered block.
+        //
+        // OpenWarp:远端会话的 block `pwd()` 是 shell-integration 上报的远端 cwd,
+        // 拼接后即得到正确的远端绝对路径,因此远端 block 也参与扫描(不再跳过)。
+        let pwd_to_scan_for = match position {
+            WithinModel::AltScreen(_) => {
+                if is_remote {
+                    // 远端会话:`pwd()` 返回的是 shell-integration 上报的远端活动 cwd。
+                    self.pwd()
+                } else {
+                    self.pwd_if_local(ctx)
+                }
+            }
+            WithinModel::BlockList(inner) => self
+                .model
+                .lock()
+                .block_list()
+                .block_at(inner.block_index)
                 .and_then(|block| block.pwd().map(String::from)),
+        };
+
+        // OpenWarp:远端会话用缓存的 cwd 目录列表精确校验;本地会话保持 `Local`。
+        let validation_ctx = match (&pwd_to_scan_for, block_session_id) {
+            #[cfg(all(feature = "local_tty", not(target_family = "wasm")))]
+            (Some(cwd), Some(session_id)) if is_remote => {
+                self.remote_dir_listing_context(session_id, cwd, ctx)
+            }
+            _ => LinkValidationContext::Local,
         };
 
         match pwd_to_scan_for {
@@ -460,10 +629,11 @@ impl super::TerminalView {
             Some(path) if matches!(from_editor, TerminalEditor::No) => {
                 let possible_paths = self.model.lock().possible_file_paths_at_point(position);
                 let max_columns = self.size_info.columns;
-                let shell_launch_data = self
-                    .active_block_session_id()
-                    .and_then(|active_session_id| self.sessions.as_ref(ctx).get(active_session_id))
-                    .and_then(|active_session| active_session.launch_data().cloned());
+                // 用被悬停 block 自己的 launch data,避免跨会话/host/WSL 时
+                // 用错 shell 规则解析路径。
+                let shell_launch_data = block_session_id
+                    .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
+                    .and_then(|session| session.launch_data().cloned());
 
                 // Using the thread builder instead of ctx.spawn here so that the previous
                 // scanning job will be dropped once there is a new scanning job created.
@@ -476,6 +646,7 @@ impl super::TerminalView {
                             possible_paths,
                             max_columns,
                             shell_launch_data,
+                            validation_ctx,
                         );
                         let _ = tx.send(paths);
                     })
@@ -502,6 +673,7 @@ impl super::TerminalView {
         possible_paths: impl Iterator<Item = WithinModel<grid_handler::PossiblePath>>,
         max_columns: usize,
         shell_launch_data: Option<ShellLaunchData>,
+        validation_ctx: crate::util::file::LinkValidationContext,
     ) -> Option<GridHighlightedLink> {
         let mut link = None;
         'path_loop: for within_model_possible_path in possible_paths {
@@ -512,6 +684,7 @@ impl super::TerminalView {
                 &possible_path.path,
                 ShellPathType::ShellNative(working_directory.to_string()),
                 shell_launch_data.as_ref(),
+                &validation_ctx,
             );
 
             if let Some(absolute_path) = absolute_path {
@@ -534,6 +707,7 @@ impl super::TerminalView {
                         &new_possible_cleaned_path,
                         ShellPathType::ShellNative(working_directory.to_string()),
                         shell_launch_data.as_ref(),
+                        &validation_ctx,
                     );
 
                     // check if new_possible_path is valid
@@ -566,6 +740,7 @@ impl super::TerminalView {
                         &new_possible_cleaned_path,
                         ShellPathType::ShellNative(working_directory.to_string()),
                         shell_launch_data.as_ref(),
+                        &validation_ctx,
                     );
 
                     // check if new_possible_path is valid

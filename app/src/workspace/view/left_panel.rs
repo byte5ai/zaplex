@@ -101,6 +101,11 @@ pub enum LeftPanelEvent {
     OpenSkillFile {
         source: CodeSource,
     },
+    /// 用户在远端文件树里点击一个文件 → 主窗口应以远端 buffer 方式打开它。
+    #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
+    OpenRemoteFile {
+        remote_path: crate::code::buffer_location::RemotePath,
+    },
     NewConversationInNewTab,
     ShowDeleteConfirmationDialog {
         conversation_id: AIConversationId,
@@ -871,6 +876,14 @@ impl LeftPanelView {
                 ctx.emit(LeftPanelEvent::FileTree(
                     pane_group::Event::OpenDirectoryInNewTab { path: path.clone() },
                 ));
+            }
+            FileTreeEvent::OpenRemoteFile { remote_path } => {
+                #[cfg(feature = "local_tty")]
+                ctx.emit(LeftPanelEvent::OpenRemoteFile {
+                    remote_path: remote_path.clone(),
+                });
+                #[cfg(not(feature = "local_tty"))]
+                let _ = remote_path;
             }
         }
     }

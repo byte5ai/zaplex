@@ -163,6 +163,9 @@ pub async fn scp_upload(
 ) -> Result<()> {
     let output = async {
         Command::new("scp")
+            // -C:压缩传输。dev 模式上传的 remote-server 二进制有数百 MB,
+            // 压缩能大幅缩短上传时间、降低超时风险。
+            .arg("-C")
             .arg("-o")
             .arg(format!("ControlPath={}", socket_path.display()))
             .arg("-o")

@@ -176,6 +176,14 @@ keyring = { version = "3.6", features = [
     "linux-native",
     "linux-native-sync-persistent",
     "crypto-rust",
+    # vendored:让 dbus-secret-service → dbus → libdbus-sys 从 C 源码编译 dbus,
+    # 不再依赖系统 `libdbus-1-dev` + pkg-config。这样:
+    #   1. 把 warp 交叉编译到 x86_64-unknown-linux-musl(dev 自动上传 remote-server、
+    #      release CI 的 musl CLI 产物)时,libdbus-sys 不会因 pkg-config 不支持
+    #      cross 而失败;
+    #   2. 普通 Linux 构建也不再需要预装 dbus 开发包。
+    # 代价是每次 clean build 多编译一个小 C 库(可缓存),换来构建自洽。
+    "vendored",
 ] }
 lasso = { version = "0.7.3", features = ["multi-threaded"] }
 lazy_static = "1.4.0"

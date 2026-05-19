@@ -2909,7 +2909,7 @@ pub(crate) fn resolve_absolute_file_path(
 ) -> Option<PathBuf> {
     use warp_util::path::CleanPathResult;
 
-    use crate::util::file::{absolute_path_if_valid, ShellPathType};
+    use crate::util::file::{absolute_path_if_valid, LinkValidationContext, ShellPathType};
 
     let clean_path = CleanPathResult::with_line_and_column_number(&path.to_string_lossy());
 
@@ -2918,6 +2918,7 @@ pub(crate) fn resolve_absolute_file_path(
         &clean_path,
         ShellPathType::PlatformNative(home_dir.clone()),
         shell_launch_data,
+        &LinkValidationContext::Local,
     ) {
         return Some(resolved);
     }
@@ -2930,6 +2931,7 @@ pub(crate) fn resolve_absolute_file_path(
             &clean_joined_path,
             ShellPathType::PlatformNative(home_dir),
             shell_launch_data,
+            &LinkValidationContext::Local,
         )
     })
 }

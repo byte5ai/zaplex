@@ -10,10 +10,12 @@ use futures::io::{AsyncRead, AsyncWrite};
 use warpui::r#async::{executor, FutureExt as _};
 
 use crate::proto::{
-    client_message, server_message, Abort, Authenticate, ClientMessage, DeleteFile, ErrorCode,
-    Initialize, InitializeResponse, LoadRepoMetadataDirectoryResponse,
-    NavigatedToDirectoryResponse, ReadFileContextRequest, ReadFileContextResponse,
-    RunCommandRequest, RunCommandResponse, ServerMessage, SessionBootstrapped, WriteFile,
+    client_message, server_message, Abort, Authenticate, BufferEdit, ClientMessage, CloseBuffer,
+    DeleteFile, ErrorCode, Initialize, InitializeResponse, ListDirectory, ListDirectoryResponse,
+    LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, OpenBuffer,
+    OpenBufferResponse, ReadFileContextRequest, ReadFileContextResponse, ResolveConflict,
+    ResolveConflictResponse, RunCommandRequest, RunCommandResponse, SaveBuffer, SaveBufferResponse,
+    ServerMessage, SessionBootstrapped, TextEdit, WriteFile,
 };
 
 use crate::protocol::{self, ProtocolError, RequestId};
@@ -66,6 +68,13 @@ pub enum ClientEvent {
     /// An incremental repo metadata update was pushed by the server.
     RepoMetadataUpdated {
         update: repo_metadata::RepoMetadataUpdate,
+    },
+    /// A buffer was updated on the server (file changed on disk).
+    BufferUpdated {
+        path: String,
+        new_server_version: u64,
+        expected_client_version: u64,
+        edits: Vec<TextEdit>,
     },
     /// A server message could not be decoded and had no parseable request_id.
     MessageDecodingError,
@@ -363,6 +372,126 @@ impl RemoteServerClient {
         }
     }
 
+    /// OpenWarp:列举远端主机上某个目录的直接子项。
+    ///
+    /// 终端文件链接检测用它精确校验远端路径形态(本地会话靠
+    /// `fs::metadata` 做这件事,远端文件不在本地磁盘上)。
+    pub async fn list_directory(&self, path: String) -> Result<ListDirectoryResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::ListDirectory(ListDirectory {
+                path,
+            })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::ListDirectoryResponse(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for ListDirectory: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Opens a buffer on the remote host for bidirectional syncing.
+    pub async fn open_buffer(&self, path: String) -> Result<OpenBufferResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::OpenBuffer(OpenBuffer { path })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::OpenBufferResponse(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for OpenBuffer: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Sends a buffer edit notification to the remote host.
+    ///
+    /// OpenWarp:与其它 fire-and-forget 通知不同,buffer 编辑投递失败必须上报。
+    /// `outbound_tx` 关闭(连接已死)时若静默吞掉,本地 buffer 会继续推进而
+    /// daemon 收不到编辑,造成不可见的失步。失败返回 `Err` 让调用方处理。
+    pub fn send_buffer_edit(
+        &self,
+        path: String,
+        expected_server_version: u64,
+        new_client_version: u64,
+        edits: Vec<TextEdit>,
+    ) -> Result<(), ClientError> {
+        let msg = ClientMessage {
+            request_id: String::new(), // notification — no response expected
+            message: Some(client_message::Message::BufferEdit(BufferEdit {
+                path,
+                expected_server_version,
+                new_client_version,
+                edits,
+            })),
+        };
+        self.outbound_tx.try_send(msg).map_err(|e| {
+            log::error!("Failed to enqueue buffer edit: {e}");
+            ClientError::Disconnected
+        })
+    }
+
+    /// Tells the remote host to close a buffer (stop watching).
+    pub fn close_buffer(&self, path: String) {
+        let msg = ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::CloseBuffer(CloseBuffer { path })),
+        };
+        self.send_notification(msg);
+    }
+
+    /// Persists the current in-memory buffer to disk on the remote host.
+    pub async fn save_buffer(&self, path: String) -> Result<SaveBufferResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::SaveBuffer(SaveBuffer { path })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::SaveBufferResponse(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for SaveBuffer: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Resolves a buffer conflict by accepting the client's content.
+    pub async fn resolve_conflict(
+        &self,
+        path: String,
+        acknowledged_server_version: u64,
+        client_content: String,
+        current_client_version: u64,
+    ) -> Result<ResolveConflictResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::ResolveConflict(ResolveConflict {
+                path,
+                acknowledged_server_version,
+                client_content,
+                current_client_version,
+            })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::ResolveConflictResponse(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for ResolveConflict: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
     /// Converts a server push message (empty request_id) into a domain event.
     fn push_message_to_event(msg: ServerMessage) -> Option<ClientEvent> {
         match msg.message? {
@@ -374,6 +503,12 @@ impl RemoteServerClient {
                 let update = crate::repo_metadata_proto::proto_to_repo_metadata_update(&push)?;
                 Some(ClientEvent::RepoMetadataUpdated { update })
             }
+            server_message::Message::BufferUpdated(push) => Some(ClientEvent::BufferUpdated {
+                path: push.path,
+                new_server_version: push.new_server_version,
+                expected_client_version: push.expected_client_version,
+                edits: push.edits,
+            }),
             other => {
                 log::warn!("Unhandled push message variant: {other:?}");
                 None

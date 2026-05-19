@@ -152,37 +152,21 @@ impl PreinstallCheckResult {
 fn parse_status(
     status: Option<&str>,
     reason: Option<&str>,
-    libc: &RemoteLibc,
-    required_glibc: Option<&str>,
+    _libc: &RemoteLibc,
+    _required_glibc: Option<&str>,
 ) -> PreinstallStatus {
+    // remote-server 现在是静态 musl 二进制(见 `preinstall_check.sh` 顶部
+    // 注释),不链接宿主的动态 libc。因此 `glibc_too_old` / `non_glibc`
+    // 已不再是「不支持」的理由 —— 任意 glibc 版本与 musl/uclibc 宿主都能
+    // 运行该二进制。新版脚本不会再发出这两个 reason;但旧版 remote 端可能
+    // 仍缓存着老脚本,所以这里把这些 libc 门禁理由一并当作 `Supported`,
+    // 而不是 `Unsupported`,保持新旧脚本的判定一致。
     match status {
         Some("supported") => PreinstallStatus::Supported,
         Some("unsupported") => match reason {
-            Some("glibc_too_old") => {
-                let detected = match libc {
-                    RemoteLibc::Glibc(v) => Some(*v),
-                    _ => None,
-                };
-                let required = required_glibc.and_then(GlibcVersion::parse);
-                match (detected, required) {
-                    (Some(detected), Some(required)) => PreinstallStatus::Unsupported {
-                        reason: UnsupportedReason::GlibcTooOld { detected, required },
-                    },
-                    // The script said `unsupported` + `glibc_too_old` but we
-                    // can't recover the numbers — fail open rather than
-                    // surface a malformed reason.
-                    _ => PreinstallStatus::Unknown,
-                }
-            }
-            Some("non_glibc") => {
-                let name = match libc {
-                    RemoteLibc::NonGlibc { name } => name.clone(),
-                    _ => "unknown".to_string(),
-                };
-                PreinstallStatus::Unsupported {
-                    reason: UnsupportedReason::NonGlibc { name },
-                }
-            }
+            // 旧脚本残留的 libc 门禁理由:静态二进制下已失效,视为支持。
+            Some("glibc_too_old") | Some("non_glibc") => PreinstallStatus::Supported,
+            // 其他无法识别的 unsupported 理由:保守起见 fail open。
             _ => PreinstallStatus::Unknown,
         },
         // status=unknown, missing, or anything else → fail open.
@@ -404,6 +388,44 @@ pub fn download_tarball_url(platform: &RemotePlatform) -> String {
     )
 }
 
+/// OpenWarp fork:开发模式(DEBUG 源码构建,无 release tag)下,
+/// SSH transport 不再从 GitHub 下载陈旧的发行版,而是本地交叉编译
+/// 当前 `warp` 二进制并上传。下面这些常量集中描述该交叉编译产物,
+/// 与 `script/deploy_remote_server` 保持一致(同 profile / 同 features /
+/// 同 target),避免两处分叉。
+///
+/// 交叉编译目标三元组。
+pub const DEV_MUSL_TARGET: &str = "x86_64-unknown-linux-musl";
+
+/// 交叉编译使用的 cargo profile。对应 `Cargo.toml` 的 `[profile.dev-remote]`,
+/// 它继承 `dev` 并 strip 符号以减小体积、加快上传。
+pub const DEV_REMOTE_PROFILE: &str = "dev-remote";
+
+/// 交叉编译启用的 features,与 `script/deploy_remote_server` 一致。
+pub const DEV_REMOTE_FEATURES: &str = "release_bundle,crash_reporting,standalone,agent_mode_debug";
+
+/// 判断当前是否处于「开发模式 remote-server 安装」路径。
+///
+/// 默认条件:DEBUG 构建(`debug_assertions`)且没有注入 `GIT_RELEASE_TAG`
+/// (`app_version().is_none()`,即源码本地构建,非发行版)。这与
+/// `remote_server_binary()` / `download_url()` 中对「无 release tag」的
+/// 判定保持同一标准。release 构建恒为 `false`,行为完全不变。
+///
+/// 显式覆盖:设置 `WARP_REMOTE_SERVER_FROM_LOCAL=1` 强制走本地交叉编译路径
+/// (`0`/未设视为关闭)。用于 release 构建里临时联调本地 remote-server。
+pub fn is_dev_source_build() -> bool {
+    if let Some(raw) = std::env::var_os("WARP_REMOTE_SERVER_FROM_LOCAL") {
+        let lossy = raw.to_string_lossy();
+        let trimmed = lossy.trim();
+        let disabled =
+            trimmed.is_empty() || trimmed == "0" || trimmed.eq_ignore_ascii_case("false");
+        if !disabled {
+            return true;
+        }
+    }
+    cfg!(debug_assertions) && ChannelState::app_version().is_none()
+}
+
 /// 检查二进制是否存在的超时。
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -412,6 +434,14 @@ pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// SCP fallback 包含本地下载、上传和远端解压,给它更宽松的超时。
 pub const SCP_INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// 开发模式交叉编译可能要从头编译整个 crate 图,给它一个很宽松的超时。
+pub const DEV_CROSS_COMPILE_TIMEOUT: Duration = Duration::from_secs(900);
+
+/// 开发模式上传本地交叉编译产物的超时。dev 二进制(未优化 + 调试信息)有
+/// 数百 MB,即便 scp 开了 `-C` 压缩,跨公网上传也可能要数分钟,因此给一个
+/// 远超 `SCP_INSTALL_TIMEOUT` 的宽松上限。
+pub const DEV_UPLOAD_TIMEOUT: Duration = Duration::from_secs(1800);
 
 #[cfg(test)]
 #[path = "setup_tests.rs"]

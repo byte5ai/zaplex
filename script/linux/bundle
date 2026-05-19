@@ -27,6 +27,11 @@ BUILD="true"
 BUILD_ARCH="$(uname -m)"
 DEBUG=false
 ARTIFACT="app"
+# Optional Rust target triple override. When set (e.g. via --target or the
+# BUNDLE_TARGET env var), cargo builds for that target instead of the host
+# default. Used to produce a static musl CLI/remote-server binary that runs
+# on any Linux x86_64 host regardless of its glibc version.
+BUILD_TARGET="${BUNDLE_TARGET:-}"
 
 # Cache all params so we can pass them to downstream scripts.
 ALL_PARAMS=$@
@@ -103,6 +108,17 @@ while (( "$#" )); do
         exit 1
       fi
       ;;
+    --target)
+      # Rust target triple override (e.g. x86_64-unknown-linux-musl).
+      # Lets the CLI/remote-server artifact build as a static musl binary.
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        BUILD_TARGET="$2"
+        shift 2
+      else
+        echo "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
     *) # preserve positional arguments
       PARAMS="$PARAMS $1"
       shift
@@ -131,10 +147,17 @@ else
   fi
 fi
 
-if [[ "$CARGO_PROFILE" == "dev" ]]; then
-  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_DIR/debug"
+# When building for an explicit target triple (e.g. musl), cargo nests the
+# output under target/<triple>/<profile>/ instead of target/<profile>/.
+if [[ -n "$BUILD_TARGET" ]]; then
+  CARGO_TARGET_PREFIX="$CARGO_TARGET_DIR/$BUILD_TARGET"
 else
-  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_DIR/$CARGO_PROFILE"
+  CARGO_TARGET_PREFIX="$CARGO_TARGET_DIR"
+fi
+if [[ "$CARGO_PROFILE" == "dev" ]]; then
+  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_PREFIX/debug"
+else
+  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_PREFIX/$CARGO_PROFILE"
 fi
 # NOTE: if you change this path, update the "Clean stale bundle output"
 # steps in .github/workflows/create_release.yml so they continue to wipe
@@ -214,18 +237,37 @@ DEBUG_EXECUTABLE_PATH="$EXECUTABLE_PATH.debug"
 # expected name of the AppImage when downloading updates).
 export APPIMAGE_NAME="$APP_NAME-$BUILD_ARCH.AppImage"
 
+# Optional `--target <triple>` passthrough for cargo. Empty when building for
+# the host (the default for the GUI AppImage/deb); set to a musl triple for
+# the static CLI/remote-server artifact.
+CARGO_TARGET_ARG=()
+if [[ -n "$BUILD_TARGET" ]]; then
+  echo "Building for Rust target $BUILD_TARGET"
+  CARGO_TARGET_ARG=(--target "$BUILD_TARGET")
+fi
+
 # If we only want to check that compilation will succeed, perform the checks
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
 # using the same feature flags and profile that we would be using in production.
 if [[ "$CHECK_ONLY" == "true" ]]; then
-  cargo check -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES"
+  cargo check -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
   exit 0
 fi
 
 # Build the binary.
+#
+# `USE_ZIGBUILD=true` 时改用 `cargo zigbuild`:zig 自带完整 C/C++ 交叉工具链,
+# musl 目标下不需要手工准备 `musl-gcc`/`musl-g++`,也不需要给 cc-rs 装
+# `<triple>-{gcc,g++}` 符号链接。CI 的静态 musl CLI build 走这条路。
+# 本地不设置该变量时维持原有 `cargo build` 行为(host glibc 路径不受影响)。
 if [[ "$BUILD" == "true" ]]; then
   echo "Building and bundling Warp for channel $RELEASE_CHANNEL and bundle id $BUNDLE_ID"
-  cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES"
+  if [[ "${USE_ZIGBUILD:-false}" == "true" ]]; then
+    echo "Using cargo zigbuild (zig-backed cross toolchain)"
+    cargo zigbuild -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
+  else
+    cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
+  fi
   echo "Making debug copy of '$EXECUTABLE_PATH' at '$DEBUG_EXECUTABLE_PATH'"
   cp "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"
 
@@ -277,7 +319,8 @@ export \
   BUILD_ARCH \
   ARTIFACT \
   CARGO_PROFILE \
-  FEATURES
+  FEATURES \
+  BUILD_TARGET
 
 # Build the AppImage bundle.
 if [[ ${PACKAGES[@]} =~ "appimage" ]]; then

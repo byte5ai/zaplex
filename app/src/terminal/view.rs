@@ -1791,6 +1791,13 @@ pub enum Event {
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
     },
+    /// OpenWarp:终端里 Ctrl/Cmd+点击远端 SSH 会话输出中的文件路径时发出。
+    /// 走 buffer-sync 协议在编辑器里打开远端文件,而不是本地 `OpenFileWithTarget`。
+    #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+    OpenRemoteFileFromTerminal {
+        remote_path: crate::code::buffer_location::RemotePath,
+        line_col: Option<LineAndColumnArg>,
+    },
     /// Emitted when a file in the file tree is renamed.
     #[cfg(feature = "local_fs")]
     FileRenamed {
@@ -2406,6 +2413,23 @@ pub struct TerminalView {
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     file_link_scanning_join_handle: Option<JoinHandle<()>>,
+
+    /// OpenWarp:远端 SSH 会话的 cwd 目录列表缓存,用于精确校验终端文件链接。
+    ///
+    /// 键是 `(session_id, cwd 绝对路径)`,值为该目录的真实子项列表;`None`
+    /// 表示该 cwd 的列表正在异步拉取中(daemon `ListDirectory` RPC)。
+    /// 用 `IndexMap` 保持插入顺序,容量上限定义在
+    /// `link_detection::remote_dir_listing_context` 中的 `MAX_ENTRIES`,
+    /// 拉取新 cwd 触发 FIFO 淘汰。本地会话永不写入此缓存。
+    #[cfg(all(
+        feature = "local_tty",
+        feature = "local_fs",
+        not(target_family = "wasm")
+    ))]
+    remote_dir_listing_cache: indexmap::IndexMap<
+        (warp_core::SessionId, PathBuf),
+        Option<std::sync::Arc<crate::util::file::RemoteDirListing>>,
+    >,
 
     last_focus_ts: Option<NaiveDateTime>,
     tips_completed: ModelHandle<TipsCompleted>,
@@ -3818,6 +3842,12 @@ impl TerminalView {
             inline_banners_state: Default::default(),
             bookmarked_blocks: Default::default(),
             file_link_scanning_join_handle: None,
+            #[cfg(all(
+                feature = "local_tty",
+                feature = "local_fs",
+                not(target_family = "wasm")
+            ))]
+            remote_dir_listing_cache: indexmap::IndexMap::new(),
             last_focus_ts: None,
             tips_completed: resources.tips_completed.clone(),
             was_ever_visible: false,
@@ -4141,6 +4171,7 @@ impl TerminalView {
                     | RemoteServerManagerEvent::HostDisconnected { .. }
                     | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
                     | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
+                    | RemoteServerManagerEvent::BufferUpdated { .. }
                     | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. } => {}
                 }
             });
@@ -15829,6 +15860,82 @@ impl TerminalView {
         }
     }
 
+    /// OpenWarp:若当前活动 block 所属会话是 remote-server 会话,返回其 `HostId`。
+    ///
+    /// 用于在终端里 Ctrl/Cmd+点击文件路径时,判断应当走本地还是远端 buffer-sync
+    /// 打开流程。非 remote-server 会话返回 `None`(保持本地行为不变)。
+    #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+    fn active_session_remote_host_id(&self, ctx: &AppContext) -> Option<warp_core::HostId> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if !FeatureFlag::SshRemoteServer.is_enabled() {
+                return None;
+            }
+            let session_id = self.active_block_session_id()?;
+            let mgr = RemoteServerManager::handle(ctx);
+            mgr.as_ref(ctx).host_id_for_session(session_id).cloned()
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = ctx;
+            None
+        }
+    }
+
+    /// OpenWarp:把终端文件链接里已解析出的绝对路径当作远端路径,构造 `RemotePath`。
+    /// 远端 SSH 主机均为 Unix,路径字符串由 shell-integration 上报的远端 cwd 拼接而来。
+    #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+    fn remote_path_from_terminal_path(
+        host_id: warp_core::HostId,
+        path: &std::path::Path,
+    ) -> Option<crate::code::buffer_location::RemotePath> {
+        let path_str = path.to_str()?;
+        let standardized = warp_util::standardized_path::StandardizedPath::try_new(path_str)
+            .map_err(|e| {
+                log::warn!("无法将终端文件路径转换为远端路径 {path_str:?}: {e}");
+            })
+            .ok()?;
+        Some(crate::code::buffer_location::RemotePath::new(
+            host_id,
+            standardized,
+        ))
+    }
+
+    /// OpenWarp:判断终端文件链接里的远端路径是否指向目录。
+    ///
+    /// 依据是缓存下来的远端 cwd 目录列表(由 `link_detection.rs` 拉取并写入)。
+    /// 未缓存或非目录返回 `false`(按文件处理)。
+    #[cfg(all(
+        feature = "local_tty",
+        feature = "local_fs",
+        not(target_family = "wasm")
+    ))]
+    fn remote_clicked_path_is_dir(
+        &self,
+        session_id: warp_core::SessionId,
+        path: &std::path::Path,
+    ) -> bool {
+        path.parent().is_some_and(|parent| {
+            self.remote_dir_listing_cache
+                .get(&(session_id, parent.to_path_buf()))
+                .and_then(|entry| entry.as_ref())
+                .is_some_and(|listing| crate::util::file::remote_path_is_dir(path, listing))
+        })
+    }
+
+    /// OpenWarp:在当前(远端)终端会话里 `cd` 进指定目录。
+    ///
+    /// 与本地点击目录链接的行为对齐 —— 远端目录无法在编辑器里打开,改为
+    /// 在该远端 shell 会话中执行 `cd <dir>`。
+    #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+    fn cd_into_remote_directory(&mut self, path: &std::path::Path, ctx: &mut ViewContext<Self>) {
+        // 对路径做 shell 转义,防止包含 `"`、`$(...)`、反引号等字符时被远端 shell 执行注入命令。
+        let quoted_dir = shell_words::quote(&path.to_string_lossy()).into_owned();
+        self.input.update(ctx, |input, ctx| {
+            input.try_execute_command(format!("cd -- {quoted_dir}").as_str(), ctx);
+        });
+    }
+
     #[cfg(feature = "local_fs")]
     fn open_file_path(
         &mut self,
@@ -15837,6 +15944,26 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         ctx.notify();
+
+        // OpenWarp:远端 SSH 会话走 buffer-sync 协议打开远端文件。
+        #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+        if let Some(host_id) = self.active_session_remote_host_id(ctx) {
+            // 远端目录点击:不在编辑器里打开,改为在该远端会话里 `cd` 进去。
+            #[cfg(not(target_family = "wasm"))]
+            if let Some(session_id) = self.active_block_session_id() {
+                if self.remote_clicked_path_is_dir(session_id, &path) {
+                    self.cd_into_remote_directory(&path, ctx);
+                    return;
+                }
+            }
+            if let Some(remote_path) = Self::remote_path_from_terminal_path(host_id, &path) {
+                ctx.emit(Event::OpenRemoteFileFromTerminal {
+                    remote_path,
+                    line_col: line_and_column_num,
+                });
+            }
+            return;
+        }
 
         let settings = EditorSettings::as_ref(ctx);
         let target = resolve_file_target(&path, settings, None);
@@ -15857,6 +15984,28 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         ctx.notify();
+
+        // OpenWarp:远端 SSH 会话走 buffer-sync 协议打开远端文件。
+        // 远端文件统一在内嵌代码编辑器打开,忽略 `target`(外部编辑器无法访问远端文件)。
+        #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+        if let Some(host_id) = self.active_session_remote_host_id(ctx) {
+            // 远端目录点击:不在编辑器里打开,改为在该远端会话里 `cd` 进去。
+            #[cfg(not(target_family = "wasm"))]
+            if let Some(session_id) = self.active_block_session_id() {
+                if self.remote_clicked_path_is_dir(session_id, &path) {
+                    self.cd_into_remote_directory(&path, ctx);
+                    return;
+                }
+            }
+            if let Some(remote_path) = Self::remote_path_from_terminal_path(host_id, &path) {
+                ctx.emit(Event::OpenRemoteFileFromTerminal {
+                    remote_path,
+                    line_col: line_and_column_num,
+                });
+            }
+            return;
+        }
+
         ctx.emit(Event::OpenFileWithTarget {
             path,
             target,

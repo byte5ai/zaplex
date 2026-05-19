@@ -302,7 +302,7 @@ fn compute_valid_file_path(
     files_and_folders_in_working_directory: &HashSet<PathBuf>,
     shell_launch_data: Option<&crate::terminal::ShellLaunchData>,
 ) -> Option<DetectedLinkType> {
-    use crate::util::file::{absolute_path_if_valid, ShellPathType};
+    use crate::util::file::{absolute_path_if_valid, LinkValidationContext, ShellPathType};
     // Scan for line and column number in the current word (left + right).
     let cleaned_path = CleanPathResult::with_line_and_column_number(expanded_path);
 
@@ -325,6 +325,7 @@ fn compute_valid_file_path(
         &cleaned_path,
         ShellPathType::PlatformNative(working_directory.to_owned()),
         shell_launch_data,
+        &LinkValidationContext::Local,
     );
 
     absolute_path.map(|absolute_path| DetectedLinkType::FilePath {

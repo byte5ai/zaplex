@@ -1,6 +1,6 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use crate::ai::skills::SkillOpenOrigin;
@@ -16,6 +16,7 @@ use crate::{
     workspace::PaneViewLocator,
 };
 
+use super::buffer_location::BufferLocation;
 use super::view::CodeView;
 
 pub struct CodeEditorSummary<'a> {
@@ -120,6 +121,12 @@ pub enum CodeSource {
     ProjectRules { path: PathBuf },
     /// Opened from file tree.
     FileTree { path: PathBuf },
+    /// 从远端文件树点击打开的远端文件(openWarp 独有)。通过 buffer-sync 协议
+    /// 与 SSH daemon 同步内容,本地没有对应路径,因此 tab 身份用 [`RemotePath`]
+    /// 标识。pane 不持久化 —— 远端 buffer 依赖活跃 SSH 连接。
+    RemoteFileTree {
+        remote_path: super::buffer_location::RemotePath,
+    },
     /// Opened from macOS Finder via "Open With".
     Finder { path: PathBuf },
     /// Opened from a skill.
@@ -140,19 +147,40 @@ impl CodeSource {
             | Self::AIAction { .. }
             | Self::ProjectRules { .. }
             | Self::FileTree { .. }
+            | Self::RemoteFileTree { .. }
             | Self::Finder { .. }
             | Self::Skill { .. } => None,
         }
     }
 
+    /// 本地文件路径。**不包含远端文件** —— 远端文件没有本地路径,用
+    /// [`Self::location`] 取统一身份。
     pub fn path(&self) -> Option<PathBuf> {
         match self {
-            Self::New { .. } | Self::AIAction { .. } => None,
+            Self::New { .. } | Self::AIAction { .. } | Self::RemoteFileTree { .. } => None,
             Self::Link { path, .. }
             | Self::ProjectRules { path }
             | Self::FileTree { path }
             | Self::Finder { path }
             | Self::Skill { path, .. } => Some(path.clone()),
+        }
+    }
+
+    /// 该 source 对应文件的统一身份(本地路径或远端 `RemotePath`)。
+    ///
+    /// 本地文件与远端文件统一走 `CodeView` 的多文件分组逻辑,tab 去重 / 聚焦
+    /// 都用 [`BufferLocation`] 作为 key。
+    pub fn location(&self) -> Option<BufferLocation> {
+        match self {
+            Self::New { .. } | Self::AIAction { .. } => None,
+            Self::RemoteFileTree { remote_path } => {
+                Some(BufferLocation::Remote(remote_path.clone()))
+            }
+            Self::Link { path, .. }
+            | Self::ProjectRules { path }
+            | Self::FileTree { path }
+            | Self::Finder { path }
+            | Self::Skill { path, .. } => Some(BufferLocation::Local(path.clone())),
         }
     }
 
@@ -187,6 +215,7 @@ impl CodeSource {
             Self::AIAction { .. } => "ai_action",
             Self::ProjectRules { .. } => "project_rules",
             Self::FileTree { .. } => "file_tree",
+            Self::RemoteFileTree { .. } => "remote_file_tree",
             Self::Finder { .. } => "finder",
             Self::Skill { .. } => "skill",
         }
@@ -195,9 +224,9 @@ impl CodeSource {
     /// Returns `true` if this source should be restored across app restarts.
     ///
     /// `AIAction` is ephemeral (tied to a live conversation) and should not
-    /// be restored.
+    /// be restored. `RemoteFileTree` 依赖活跃 SSH 连接,同样不恢复。
     pub fn is_restorable(&self) -> bool {
-        !matches!(self, Self::AIAction { .. })
+        !matches!(self, Self::AIAction { .. } | Self::RemoteFileTree { .. })
     }
 }
 
@@ -249,17 +278,18 @@ impl CodeManager {
     pub fn deregister_pane(&mut self, source: &CodeSource) {
         self.source_to_pane_data.remove(&source.omit_line_col());
     }
-    /// Returns the locator for a code pane that already has `path` open in the given pane group.
-    pub fn get_locator_for_path_in_tab(
+    /// Returns the locator for a code pane that already has `location` open in
+    /// the given pane group. `location` 统一覆盖本地与远端文件。
+    pub fn get_locator_for_location_in_tab(
         &self,
         pane_group_id: EntityId,
-        path: &Path,
+        location: &BufferLocation,
     ) -> Option<PaneViewLocator> {
         self.source_to_pane_data
             .iter()
             .find(|(source, data)| {
                 data.locator.pane_group_id == pane_group_id
-                    && source.path().is_some_and(|p| p.as_path() == path)
+                    && source.location().as_ref() == Some(location)
             })
             .map(|(_, data)| data.locator)
     }

@@ -127,47 +127,60 @@ fn parse_preinstall_supported_glibc() {
 }
 
 #[test]
-fn parse_preinstall_unsupported_glibc_too_old() {
-    let stdout = "required_glibc=2.31\n\
+fn parse_preinstall_legacy_glibc_too_old_now_supported() {
+    // remote-server 现在是静态 musl 二进制,旧脚本的 `glibc_too_old` 门禁
+    // 已失效。即使老 remote 端缓存着旧脚本并报出该理由,客户端也应把它当
+    // 作支持处理,而不是回退到 ControlMaster。
+    let stdout = "required_glibc=2.17\n\
                   libc_family=glibc\n\
                   libc_version=2.17\n\
                   status=unsupported\n\
                   reason=glibc_too_old\n";
     let result = PreinstallCheckResult::parse(stdout);
-    assert_eq!(
-        result.status,
-        PreinstallStatus::Unsupported {
-            reason: UnsupportedReason::GlibcTooOld {
-                detected: GlibcVersion::new(2, 17),
-                required: GlibcVersion::new(2, 31),
-            }
-        }
-    );
-    assert!(!result.is_supported());
+    assert_eq!(result.status, PreinstallStatus::Supported);
+    assert!(result.is_supported());
 }
 
 #[test]
-fn parse_preinstall_unsupported_non_glibc() {
-    let stdout = "required_glibc=2.31\n\
+fn parse_preinstall_legacy_non_glibc_now_supported() {
+    // 同理:musl/uclibc 宿主在静态二进制下也能运行。旧脚本的 `non_glibc`
+    // 不再触发 fall-back。
+    let stdout = "required_glibc=2.17\n\
                   libc_family=musl\n\
                   status=unsupported\n\
                   reason=non_glibc\n";
     let result = PreinstallCheckResult::parse(stdout);
-    assert_eq!(
-        result.status,
-        PreinstallStatus::Unsupported {
-            reason: UnsupportedReason::NonGlibc {
-                name: "musl".to_string()
-            }
-        }
-    );
+    assert_eq!(result.status, PreinstallStatus::Supported);
     assert_eq!(
         result.libc,
         RemoteLibc::NonGlibc {
             name: "musl".to_string()
         }
     );
-    assert!(!result.is_supported());
+    assert!(result.is_supported());
+}
+
+#[test]
+fn parse_preinstall_musl_host_supported() {
+    // 新版脚本在 musl 宿主上直接报 `status=supported`。
+    let stdout = "required_glibc=2.17\n\
+                  libc_family=musl\n\
+                  status=supported\n";
+    let result = PreinstallCheckResult::parse(stdout);
+    assert_eq!(result.status, PreinstallStatus::Supported);
+    assert!(result.is_supported());
+}
+
+#[test]
+fn parse_preinstall_old_glibc_host_supported() {
+    // 新版脚本在旧 glibc(< 2.35)宿主上也直接报 `status=supported`。
+    let stdout = "required_glibc=2.17\n\
+                  libc_family=glibc\n\
+                  libc_version=2.17\n\
+                  status=supported\n";
+    let result = PreinstallCheckResult::parse(stdout);
+    assert_eq!(result.status, PreinstallStatus::Supported);
+    assert!(result.is_supported());
 }
 
 #[test]

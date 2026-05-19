@@ -23,6 +23,12 @@ message ClientMessage {
     RunCommandRequest run_command = 9;
     ReadFileContextRequest read_file_context = 10;
     Authenticate authenticate = 11;
+    OpenBuffer open_buffer = 13;
+    BufferEdit buffer_edit = 14;
+    CloseBuffer close_buffer = 15;
+    SaveBuffer save_buffer = 16;
+    ResolveConflict resolve_conflict = 17;
+    ListDirectory list_directory = 18;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -41,6 +47,11 @@ message ServerMessage {
     DeleteFileResponse delete_file_response = 9;
     RunCommandResponse run_command_response = 10;
     ReadFileContextResponse read_file_context_response = 11;
+    OpenBufferResponse open_buffer_response = 14;
+    BufferUpdatedPush buffer_updated = 15;
+    SaveBufferResponse save_buffer_response = 16;
+    ResolveConflictResponse resolve_conflict_response = 17;
+    ListDirectoryResponse list_directory_response = 18;
   }
 }
 
@@ -309,4 +320,130 @@ message RepoMetadataUpdatePush {
   string repo_path = 1;
   repeated string remove_entries = 2;
   repeated RepoMetadataEntryUpdate update_entries = 3;
+}
+
+// ── Buffer syncing ────────────────────────────────────────────────
+
+// Client → server: open a buffer for bidirectional syncing.
+// The server reads the file, starts watching it, and returns the content.
+message OpenBuffer {
+  string path = 1;
+}
+
+// Server → client: response to OpenBuffer with the initial file content.
+message OpenBufferResponse {
+  string content = 1;
+  uint64 server_version = 2;
+}
+
+// Client → server: push an incremental edit (fire-and-forget notification).
+// If the server accepts (expected_server_version matches its local version),
+// it applies the edit silently — no response needed since the client already
+// has the edit applied locally.
+// If the server rejects (version mismatch), the edit is silently dropped;
+// the client discovers the divergence on the next file-watcher
+// BufferUpdatedPush that carries the server's current state. (The earlier
+// "server pushes BufferUpdatedPush on reject" wording did not match the
+// implementation and has been removed.)
+//
+// V0 limitation (single-client per buffer): when buffer B is open on
+// connections A and C, an accepted BufferEdit from A is NOT forwarded to
+// C. SyncClock.client_version is daemon-wide rather than per-connection,
+// so there is no safe expected_client_version to put in a push targeted
+// at C. Multi-client push is tracked as follow-up work; until then, only
+// one client should hold a writable view of a remote buffer at a time.
+message BufferEdit {
+  string path = 1;
+  uint64 expected_server_version = 2;
+  uint64 new_client_version = 3;
+  repeated TextEdit edits = 4;
+}
+
+// A single text edit within a buffer, using 1-indexed character offsets (matching CharOffset).
+message TextEdit {
+  uint64 start_offset = 1;
+  uint64 end_offset = 2;
+  string text = 3;
+}
+
+// Server → client push: file changed on disk.
+// The client uses expected_client_version to detect conflicts.
+// Carries only incremental edits — full content is served by OpenBufferResponse.
+message BufferUpdatedPush {
+  string path = 1;
+  uint64 new_server_version = 2;
+  uint64 expected_client_version = 3;
+  repeated TextEdit edits = 4;
+}
+
+// Client → server: close a buffer (stop watching).
+message CloseBuffer {
+  string path = 1;
+}
+
+// Client → server: persist the current in-memory buffer to disk.
+message SaveBuffer {
+  string path = 1;
+}
+
+// Server → client: result of a SaveBuffer request.
+message SaveBufferResponse {
+  oneof result {
+    SaveBufferSuccess success = 1;
+    FileOperationError error = 2;
+  }
+}
+
+message SaveBufferSuccess {}
+
+// Client → server: resolve a conflict by accepting the client's content.
+// The server replaces its in-memory buffer with client_content,
+// updates the clock to {acknowledged_server_version, current_client_version},
+// and persists to disk (updates base_content_version to avoid re-triggering).
+// For "accept server", the client simply re-sends OpenBuffer instead.
+message ResolveConflict {
+  string path = 1;
+  uint64 acknowledged_server_version = 2;
+  string client_content = 3;
+  uint64 current_client_version = 4;
+}
+
+// Server → client: result of a ResolveConflict request.
+message ResolveConflictResponse {
+  oneof result {
+    ResolveConflictSuccess success = 1;
+    FileOperationError error = 2;
+  }
+}
+
+message ResolveConflictSuccess {}
+
+// ── ListDirectory ─────────────────────────────────────────────────
+// OpenWarp:终端文件链接的远端精确校验。客户端在远端 SSH 会话里
+// Ctrl/Cmd+点击文件路径时,需要知道某个 cwd 下的真实目录项,
+// 才能从 `ls -l` 这类整行输出里准确切出文件名(本地会话靠
+// `fs::metadata` 存在性校验做这件事,远端文件不在本地磁盘上)。
+
+// Client → server: list the immediate entries of a directory.
+message ListDirectory {
+  string path = 1;
+}
+
+// A single directory entry returned by ListDirectory.
+message DirEntry {
+  string name = 1;
+  bool is_dir = 2;
+}
+
+// Server → client: the entries contained directly in the requested directory.
+message ListDirectorySuccess {
+  repeated DirEntry entries = 1;
+}
+
+// Server → client: result of a ListDirectory request.
+message ListDirectoryResponse {
+  oneof result {
+    ListDirectorySuccess success = 1;
+    FileOperationError error = 2;
+  }
 }

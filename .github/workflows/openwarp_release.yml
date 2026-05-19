@@ -278,14 +278,52 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Build CLI
+      # CLI/remote-server tarball 用静态 musl 链接,产物不依赖宿主 glibc,
+      # 可在任意 Linux x86_64 主机(含 CentOS 7 / Amazon Linux 2 等旧 glibc
+      # 以及 Alpine 等 musl 发行版)上运行。GUI AppImage/deb 仍走上面的
+      # glibc 链接构建,不受影响。
+      #
+      # 用 `cargo zigbuild` 做 musl 交叉编译:zig 自带完整的 C/C++ musl
+      # 工具链(`zig cc` / `zig c++`),不依赖宿主的 `musl-gcc` 或手写的
+      # `musl-g++` wrapper —— 历史上为 freetype-sys / harfbuzz-sys 等 *-sys
+      # 依赖准备的「宿主 g++ + musl specs」hack 因此整条移除。
+      # 本地 dev 自动构建路径(`ssh_transport.rs`)也优先用 zigbuild,两边
+      # 工具链统一。
+      - name: Install zig + cargo-zigbuild for static musl CLI build
+        run: |
+          set -euo pipefail
+          rustup target add x86_64-unknown-linux-musl
+          # zig:用官方预编译 tarball,固定版本以保证构建可复现。
+          # 0.13.0 与 cargo-zigbuild >= 0.19 兼容。
+          ZIG_VERSION="0.13.0"
+          ZIG_DIR="$HOME/.local/zig-${ZIG_VERSION}"
+          if [ ! -x "${ZIG_DIR}/zig" ]; then
+            mkdir -p "${ZIG_DIR}"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+              | tar -xJ -C "${ZIG_DIR}" --strip-components=1
+          fi
+          echo "${ZIG_DIR}" >> "$GITHUB_PATH"
+          # cargo-zigbuild:走 cargo install,首次安装在缓存里之后会复用。
+          cargo install --locked cargo-zigbuild --version ^0.19
+        shell: bash
+
+      - name: Build CLI (static musl via zigbuild)
         id: bundle_cli
         run: |
-          script/bundle --channel "$CHANNEL" --arch x86_64 --artifact cli --packages none
+          script/bundle --channel "$CHANNEL" --arch x86_64 --artifact cli --packages none \
+            --target x86_64-unknown-linux-musl
         shell: bash
         env:
           GIT_RELEASE_TAG: ${{ needs.prepare_metadata.outputs.release_tag }}
           APPIMAGE_EXTRACT_AND_RUN: 1
+          # 让 script/linux/bundle 把 `cargo build` 切到 `cargo zigbuild`。
+          USE_ZIGBUILD: "true"
+          # libc(musl)被 +crt-static 静态链接进二进制 —— 这是让产物摆脱
+          # 宿主 glibc 下限的关键。`libdbus-sys` 现在通过 keyring 的
+          # `vendored` feature 从源码内嵌编译(见 Cargo.toml),不再用 pkg-config
+          # 探测宿主 `dbus-1`;`PKG_CONFIG_ALLOW_CROSS=1` 保留作兜底,
+          # 万一某个新引入的 -sys crate 还在用 pkg-config 也不会卡。
+          PKG_CONFIG_ALLOW_CROSS: 1
 
       - name: Package CLI tarball
         run: |

@@ -5,6 +5,8 @@ pub use remote_server::*;
 #[cfg(not(target_family = "wasm"))]
 pub mod auth_context;
 #[cfg(not(target_family = "wasm"))]
+pub mod server_buffer_tracker;
+#[cfg(not(target_family = "wasm"))]
 pub mod server_model;
 #[cfg(not(target_family = "wasm"))]
 pub mod ssh_transport;
@@ -70,6 +72,12 @@ pub(super) fn run_daemon_app(
         ctx.add_singleton_model(|_ctx| DetectedRepositories::default());
         ctx.add_singleton_model(RepoMetadataModel::new_with_incremental_updates);
         ctx.add_singleton_model(warp_files::FileModel::new);
+        // GlobalBufferModel 必须在 ServerModel 之前注册:buffer-sync 的服务端
+        // 处理(server_model.rs / server_buffer_tracker.rs)通过
+        // `GlobalBufferModel::handle(ctx)` 访问它,未注册会在 daemon 启动时
+        // panic「Cannot get singleton model ... never registered」。它自身
+        // 在 `new()` 里订阅 FileModel,所以排在 FileModel 之后。
+        ctx.add_singleton_model(crate::code::global_buffer_model::GlobalBufferModel::new);
         ctx.add_singleton_model(server_model_init);
     })?;
     Ok(())

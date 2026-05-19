@@ -182,6 +182,7 @@ impl NotebookLinks {
                                     &clean_path,
                                     crate::util::file::ShellPathType::PlatformNative(base_directory.to_path_buf()),
                                     Some(launch_data),
+                                    &crate::util::file::LinkValidationContext::Local,
                                 ) else {
                                     return Either::Right(future::ready(Err(ResolveError::FileNotFound)));
                                 };
