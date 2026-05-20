@@ -62,11 +62,15 @@ cleanup() {
 trap cleanup EXIT
 
 # Construct a directory that contains the build tree.
+# rpmbuild 在 _topdir 下需要 SPEC/RPMS/BUILD/BUILDROOT/SOURCES/SRPMS 六个目录,
+# 部分版本不会自动创建,事先建好避免「No such file or directory」。
 rm -rf "$RPMBUILD_DIR"
-mkdir -p "$RPMBUILD_DIR"/{SPEC,RPMS}
+mkdir -p "$RPMBUILD_DIR"/{SPEC,RPMS,BUILD,BUILDROOT,SOURCES,SRPMS}
 
 # Move the RPM-specific package metadata into the package directory.
-VERSION="$GIT_RELEASE_TAG"
+# 去掉标签的前导 `v`,与 deb 保持一致;RPM 的 Version 字段按惯例不带 `v` 前缀,
+# 同时也避免下游 `RPM_NAME` 拼接时混入 `v` 让文件名不规范。
+VERSION="${GIT_RELEASE_TAG#v}"
 RELEASE="1"
 sed \
     "s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; \

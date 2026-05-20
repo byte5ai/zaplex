@@ -1,10 +1,10 @@
 # OpenWarp 发布流水线 — 在 openWarp 分支上 push tag (v*) 即触发
 #
 # 与上游 create_release.yml 的差异:
-# - 仅 macOS arm64 + macOS Intel + Windows x64 + Linux x86_64(AppImage),
-#   Web/CLI/Universal/Win-arm64/Linux 的 rpm/arch 全砍
-#   (macOS 双架构分别产单架构 DMG 与 CLI tarball;Linux 只产 AppImage/deb,
-#    不发布上游 Warp 仓库源或签名 key)
+# - 仅 macOS arm64 + macOS Intel + Windows x64 + Linux x86_64,
+#   Web/CLI/Universal/Win-arm64 全砍
+#   (macOS 双架构分别产单架构 DMG 与 CLI tarball;Linux 产 AppImage/deb/rpm
+#    以及尽力而为的 Arch 包,不发布上游 Warp 仓库源或签名 key)
 # - 单 channel: preview(由 release_configurations.json 提供配置)
 # - 不签名:不传 --read-passwords-from-env(macOS) / 不设 SIGN_TOOL_CMD(Windows)
 # - 不上传 GCS / 第三方 crash 平台 / Slack / changelog,不调 channel-versions repository_dispatch
@@ -236,10 +236,11 @@ jobs:
           is_self_hosted: false
           install_release_deps: true
 
-      - name: Install extra dependencies for deb and build
+      - name: Install extra dependencies for deb/rpm and build
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev fakeroot
+          # `rpm` 包提供 /usr/bin/rpmbuild,给后面的 RPM 打包步骤用。
+          sudo apt-get install -y libdbus-1-dev fakeroot rpm
         shell: bash
 
       - name: Ensure rust target is installed
@@ -269,6 +270,19 @@ jobs:
           # ubuntu-22.04 默认有 libfuse2 但 24.04 没有;统一开 EXTRACT_AND_RUN
           # 让 linuxdeploy/appimagetool 不依赖 FUSE 内核模块,跨 runner 版本都稳。
           APPIMAGE_EXTRACT_AND_RUN: 1
+
+      # RPM 包:复用上一步 release-lto 已经 strip 过的 `target/release-lto/warp-oss`,
+      # 不重新 `cargo build`。`--skip-build` 让 `script/bundle` 跳过编译与 strip,
+      # 直接进入 staging(`bundle_install` → 复制二进制 + resources)+ rpmbuild。
+      # 与 deb 同一台 ubuntu-22.04 runner 上跑,共享 host glibc 链接的产物;
+      # 用 Fedora 26+ / RHEL 8+ 上的 RPM 4.13+ 安装(spec 用了 boolean dep 语法)。
+      # continue-on-error: 即便 rpmbuild 失败也不应阻塞 AppImage/deb 已经成功的发布。
+      - name: Build RPM package (reuse release-lto binary)
+        continue-on-error: true
+        run: script/bundle --skip-build --channel "$CHANNEL" --arch x86_64 --packages rpm
+        shell: bash
+        env:
+          GIT_RELEASE_TAG: ${{ needs.prepare_metadata.outputs.release_tag }}
 
       # Arch 包:复用上一步 release-lto 已经 strip 过的 `target/release-lto/warp-oss`,
       # 不重新 `cargo build` 主二进制 —— `--skip-build` 让 `script/bundle` 跳过编译与 strip,
