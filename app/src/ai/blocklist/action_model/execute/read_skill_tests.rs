@@ -140,3 +140,158 @@ fn test_read_skill_executor_file_not_found() {
         });
     });
 }
+
+/// Issue #99 兜底:cache 未命中时,若 SkillReference::Path 指向合法形状的 skill 文件,
+/// 直接读盘并成功返回(走 Async 分支)。
+#[test]
+fn test_read_skill_executor_fallback_reads_disk_on_cache_miss() {
+    let temp_dir = TempDir::new().unwrap();
+    let skill_path = create_test_skill_file(&temp_dir, "fallback-skill", "Read from disk");
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        // 注意:不调用 add_skill_for_testing,模拟 cache miss。
+        let executor_handle = app.add_model(|_| ReadSkillExecutor::new());
+
+        let action = AIAgentAction {
+            id: AIAgentActionId::from("fallback-action".to_string()),
+            action: AIAgentActionType::ReadSkill(ReadSkillRequest {
+                skill: SkillReference::Path(skill_path.clone()),
+            }),
+            task_id: TaskId::new("fallback-task".to_string()),
+            requires_result: false,
+        };
+
+        let input = ExecuteActionInput {
+            action: &action,
+            conversation_id: AIConversationId::new(),
+        };
+
+        let execution = executor_handle.update(&mut app, |executor, ctx| {
+            let result: AnyActionExecution = executor.execute(input, ctx).into();
+            result
+        });
+
+        let AnyActionExecution::Async {
+            execute_future,
+            on_complete,
+        } = execution
+        else {
+            panic!("Cache miss with valid skill path should produce Async execution");
+        };
+
+        let async_result = execute_future.await;
+        let result = app.update(|ctx| on_complete(async_result, ctx));
+
+        match result {
+            AIAgentActionResultType::ReadSkill(ReadSkillResult::Success { content }) => {
+                assert_eq!(content.file_name, skill_path.to_string_lossy().to_string());
+                let body = match &content.content {
+                    ai::agent::action_result::AnyFileContent::StringContent(s) => s.clone(),
+                    ai::agent::action_result::AnyFileContent::BinaryContent(_) => {
+                        panic!("SKILL.md should be parsed as text")
+                    }
+                };
+                assert!(body.contains("fallback-skill"));
+            }
+            other => panic!("Fallback should return Success, got: {other:?}"),
+        }
+    });
+}
+
+/// Issue #99 兜底失败路径:cache 未命中时,若路径形状合法但磁盘上文件不存在
+///(例如校验后被删的竞态),Async 分支的 parse_skill 失败,on_complete 应返回 Error。
+#[test]
+fn test_read_skill_executor_fallback_returns_error_when_file_missing() {
+    let temp_dir = TempDir::new().unwrap();
+    // 路径形状合法,但 SKILL.md 从未被创建。
+    let skill_path = temp_dir
+        .path()
+        .join(".agents/skills/missing-skill/SKILL.md");
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let executor_handle = app.add_model(|_| ReadSkillExecutor::new());
+
+        let action = AIAgentAction {
+            id: AIAgentActionId::from("missing-action".to_string()),
+            action: AIAgentActionType::ReadSkill(ReadSkillRequest {
+                skill: SkillReference::Path(skill_path),
+            }),
+            task_id: TaskId::new("missing-task".to_string()),
+            requires_result: false,
+        };
+
+        let input = ExecuteActionInput {
+            action: &action,
+            conversation_id: AIConversationId::new(),
+        };
+
+        let execution = executor_handle.update(&mut app, |executor, ctx| {
+            let result: AnyActionExecution = executor.execute(input, ctx).into();
+            result
+        });
+
+        let AnyActionExecution::Async {
+            execute_future,
+            on_complete,
+        } = execution
+        else {
+            panic!("Legal-shaped skill path should still produce Async execution before disk check");
+        };
+
+        let async_result = execute_future.await;
+        let result = app.update(|ctx| on_complete(async_result, ctx));
+
+        match result {
+            AIAgentActionResultType::ReadSkill(ReadSkillResult::Error(msg)) => {
+                assert!(msg.starts_with("Skill not found"));
+            }
+            other => panic!("Missing file should resolve to Error, got: {other:?}"),
+        }
+    });
+}
+
+/// Issue #99 安全门:cache 未命中时,若路径不匹配 skill 文件形状,
+/// 直接走 Sync Error 分支,不触发任何磁盘读取。
+#[test]
+fn test_read_skill_executor_rejects_non_skill_path_on_cache_miss() {
+    let temp_dir = TempDir::new().unwrap();
+    // 一个不在 `.<provider>/skills/<name>/SKILL.md` 结构里的随机 markdown 文件。
+    // 即使该文件存在,fallback 也不应读取它 —— extract_skill_parent_directory 会拒绝。
+    let non_skill_path = temp_dir.path().join("random.md");
+    fs::write(&non_skill_path, "not a skill").unwrap();
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let executor_handle = app.add_model(|_| ReadSkillExecutor::new());
+
+        let action = AIAgentAction {
+            id: AIAgentActionId::from("non-skill-action".to_string()),
+            action: AIAgentActionType::ReadSkill(ReadSkillRequest {
+                skill: SkillReference::Path(non_skill_path),
+            }),
+            task_id: TaskId::new("non-skill-task".to_string()),
+            requires_result: false,
+        };
+
+        let input = ExecuteActionInput {
+            action: &action,
+            conversation_id: AIConversationId::new(),
+        };
+
+        executor_handle.update(&mut app, |executor, ctx| {
+            let result: AnyActionExecution = executor.execute(input, ctx).into();
+            match result {
+                AnyActionExecution::Sync(AIAgentActionResultType::ReadSkill(
+                    ReadSkillResult::Error(msg),
+                )) => {
+                    assert!(msg.starts_with("Skill not found"));
+                }
+                _ => panic!(
+                    "Non-skill path on cache miss should return Sync Error, not Async fallback"
+                ),
+            }
+        });
+    });
+}

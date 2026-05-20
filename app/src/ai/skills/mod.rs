@@ -31,7 +31,8 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         mod skill_manager;
         pub use skill_manager::{
-            SkillInventoryDuplicate, SkillInventoryItem, SkillManager, SkillManagerEvent,
+            extract_skill_parent_directory, SkillInventoryDuplicate, SkillInventoryItem,
+            SkillManager, SkillManagerEvent,
         };
         #[allow(unused_imports)]
         pub use skill_manager::SkillWatcher;
