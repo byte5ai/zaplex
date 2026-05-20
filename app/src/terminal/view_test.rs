@@ -3652,6 +3652,29 @@ fn cli_agent_rich_input_hint_text_mentions_active_cli_agent() {
 }
 
 #[test]
+fn cli_agent_rich_input_open_sets_terminal_keymap_context() {
+    use crate::settings::import::model::ImportedConfigModel;
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(ImportedConfigModel::new);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        let terminal = open_cli_agent_rich_input_for_agent(&mut app, CLIAgent::Claude);
+        terminal.read(&app, |view, ctx| {
+            let keymap_context = <TerminalView as warpui::View>::keymap_context(view, ctx);
+            assert!(
+                keymap_context
+                    .set
+                    .contains(crate::settings_view::flags::CLI_AGENT_RICH_INPUT_OPEN),
+                "terminal keymap context should expose open CLI agent rich input"
+            );
+        });
+    })
+}
+
+#[test]
 fn cli_agent_rich_input_shell_mode_uses_run_commands_hint_text() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
