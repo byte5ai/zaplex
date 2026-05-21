@@ -104,7 +104,11 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
           plugins: "code-review@claude-code-plugins"
-          prompt: "/code-review:code-review ${{ github.repository }}/pull/${{ steps.ctx.outputs.number }}"
+          # 必须传 `--comment`，否则 code-review plugin 默认只在 workflow log
+          # 里输出 review 结果，不会 post 到 PR；anthropic 官方模板里漏掉了
+          # 这个参数，导致历史上很多 "成功" 的 run 实际上没在 PR 留下任何
+          # 评论。
+          prompt: "/code-review:code-review ${{ github.repository }}/pull/${{ steps.ctx.outputs.number }} --comment"
           additional_permissions: |
             actions: read
 
