@@ -83,8 +83,14 @@ pub fn main() -> Result<()> {
                 "Integration test binary should have set an ORIGINAL_HOME environment variable",
             );
             assert_ne!(home, original_home, "HOME should not be the same as ORIGINAL_HOME!");
-        } else {
-            unimplemented!("Need to add support for hermetic integration tests for the current platform!");
+        } else if #[cfg(windows)] {
+            let userprofile = std::env::var("USERPROFILE").expect(
+                "Should have a value for the USERPROFILE environment variable",
+            );
+            let original_userprofile = std::env::var("ORIGINAL_USERPROFILE").expect(
+                "Integration test binary should have set an ORIGINAL_USERPROFILE environment variable",
+            );
+            assert_ne!(userprofile, original_userprofile, "USERPROFILE should not be the same as ORIGINAL_USERPROFILE!");
         }
     }
 
@@ -417,6 +423,27 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_goto_line_jumps_to_line);
     register_test!(test_goto_line_with_column);
     register_test!(test_goto_line_clamps_out_of_range);
+
+    // SFTP browser popup tests
+    register_test!(test_sftp_pane_opens_in_workspace);
+    register_test!(test_sftp_pane_focus_and_keyboard);
+    register_test!(test_sftp_pane_close);
+    register_test!(test_sftp_pane_tab_switch);
+    register_test!(test_sftp_pane_disconnected_render);
+    // SFTP mock backend UI integration tests
+    register_test!(test_sftp_mock_backend_connected);
+    register_test!(test_sftp_toolbar_refresh);
+    register_test!(test_sftp_toolbar_new_folder);
+    register_test!(test_sftp_toolbar_upload);
+    register_test!(test_sftp_toolbar_up);
+    register_test!(test_sftp_click_file_row_selects);
+    register_test!(test_sftp_right_click_opens_menu);
+    register_test!(test_sftp_ctx_menu_delete);
+    register_test!(test_sftp_ctx_menu_rename);
+    register_test!(test_sftp_breadcrumb_root_click);
+    register_test!(test_sftp_keyboard_backspace_up);
+    register_test!(test_sftp_keyboard_delete);
+    register_test!(test_sftp_keyboard_escape_close_dialog);
 
     // Keyboard protocol tests
     register_test!(test_keyboard_protocol_disabled_shift_enter);

@@ -338,4 +338,26 @@ integration_tests! {
     // Video recording test — requires real display, run manually
     #[ignore = "Manual test: requires real display for frame capture"]
     test_video_recording,
+
+    // SFTP browser popup tests
+    test_sftp_pane_opens_in_workspace,
+    test_sftp_pane_focus_and_keyboard,
+    test_sftp_pane_close,
+    test_sftp_pane_tab_switch,
+    test_sftp_pane_disconnected_render,
+
+    // SFTP browser UI integration tests (mock backend)
+    test_sftp_mock_backend_connected,
+    test_sftp_toolbar_refresh,
+    test_sftp_toolbar_new_folder,
+    test_sftp_toolbar_upload,
+    test_sftp_toolbar_up,
+    test_sftp_click_file_row_selects,
+    test_sftp_right_click_opens_menu,
+    test_sftp_ctx_menu_delete,
+    test_sftp_ctx_menu_rename,
+    test_sftp_breadcrumb_root_click,
+    test_sftp_keyboard_backspace_up,
+    test_sftp_keyboard_delete,
+    test_sftp_keyboard_escape_close_dialog,
 }

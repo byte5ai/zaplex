@@ -2669,6 +2669,7 @@ workspace-left-panel-ssh-manager-menu-new-folder = 新建文件夹
 workspace-left-panel-ssh-manager-menu-new-server = 新建 SSH 服务器
 workspace-left-panel-ssh-manager-menu-edit = 编辑
 workspace-left-panel-ssh-manager-menu-connect = 连接
+workspace-left-panel-ssh-manager-menu-sftp = 文件管理
 workspace-left-panel-ssh-manager-menu-clone = 克隆
 workspace-left-panel-ssh-manager-menu-delete = 删除
 workspace-left-panel-ssh-manager-pane-hint = 字段编辑与「连接」按钮将在下一迭代加入。目前此面板仅展示已保存的配置。

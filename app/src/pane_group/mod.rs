@@ -1809,6 +1809,13 @@ impl PaneGroup {
                     "SSH server pane should not have been persisted, as it cannot be restored"
                 ))
             }
+            LeafContents::Sftp { .. } => {
+                // SFTP 浏览器 pane 不持久化,远端文件系统依赖活跃 SSH 连接,
+                // 无法在重启后恢复。
+                Err(anyhow::anyhow!(
+                    "SFTP pane should not have been persisted, as it cannot be restored"
+                ))
+            }
             LeafContents::GetStarted => {
                 if !FeatureFlag::GetStartedTab.is_enabled() {
                     Err(anyhow::anyhow!("GetStarted pane not supported"))

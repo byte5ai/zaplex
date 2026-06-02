@@ -2752,6 +2752,7 @@ workspace-left-panel-ssh-manager-menu-new-folder = New folder
 workspace-left-panel-ssh-manager-menu-new-server = New SSH server
 workspace-left-panel-ssh-manager-menu-edit = Edit
 workspace-left-panel-ssh-manager-menu-connect = Connect
+workspace-left-panel-ssh-manager-menu-sftp = File Manager
 workspace-left-panel-ssh-manager-menu-clone = Clone
 workspace-left-panel-ssh-manager-menu-delete = Delete
 workspace-left-panel-ssh-manager-pane-hint = Editing fields and "Connect" will arrive in the next iteration. For now this pane shows the saved configuration; tweak it via the SQLite store or the upcoming editor.

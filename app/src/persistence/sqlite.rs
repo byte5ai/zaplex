@@ -1279,6 +1279,14 @@ fn save_pane_state(
             );
             return Ok(());
         }
+        LeafContents::Sftp { .. } => {
+            // SFTP 浏览器 pane 不持久化,逻辑同 SshServer。
+            debug_assert!(
+                false,
+                "save_pane_state called for non-persisted LeafContents variant"
+            );
+            return Ok(());
+        }
     };
 
     let leaf = model::NewPane {
@@ -1505,6 +1513,9 @@ fn save_pane_state(
                 .execute(conn)?;
         }
         LeafContents::SshServer { .. } => {
+            // Unreachable: filtered by `is_persisted` in `save_app_state`.
+        }
+        LeafContents::Sftp { .. } => {
             // Unreachable: filtered by `is_persisted` in `save_app_state`.
         }
     }

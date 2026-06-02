@@ -65,5 +65,6 @@ nix = { workspace = true, features = ["user", "signal"] }
 
 [features]
 run_on_linux = []
+run_on_windows = []
 drag_tabs_to_windows = ["warp/drag_tabs_to_windows"]
 default = ["run_on_linux"]

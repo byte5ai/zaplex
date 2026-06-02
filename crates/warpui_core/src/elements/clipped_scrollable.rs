@@ -378,7 +378,7 @@ impl Element for ClippedScrollable {
     fn paint(&mut self, origin: Vector2F, ctx: &mut PaintContext, app: &AppContext) {
         let size = self.size().expect("size should be set by paint time");
         ctx.scene
-            .draw_rect_with_hit_recording(RectF::new(origin, size));
+            .draw_rect_without_hit_recording(RectF::new(origin, size));
 
         let scroll_target = self
             .state

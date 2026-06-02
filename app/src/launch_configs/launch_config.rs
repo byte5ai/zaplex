@@ -159,6 +159,7 @@ impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
                 // Zap Wave 7-3:`EnvironmentManagement` arm 随 ambient-agent UI
                 // 子系统物理删。
                 | LeafContents::SshServer { .. }
+                | LeafContents::Sftp { .. }
                 | LeafContents::AmbientAgent(_) => {
                     // TODO: Handle AIDocument in launch config
                     Err(())

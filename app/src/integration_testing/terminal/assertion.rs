@@ -371,10 +371,10 @@ pub fn assert_bootstrapping_result(
     app: &App,
     window_id: WindowId,
     tab_index: usize,
-    pane_index: usize,
+    _pane_index: usize,
     expect_bootstrapped: bool,
 ) -> AssertionOutcome {
-    let terminal_view = terminal_view(app, window_id, tab_index, pane_index);
+    let terminal_view = single_terminal_view_for_tab(app, window_id, tab_index);
     let bootstrapped = terminal_view.read(app, |view, ctx| {
         let model = view.model.lock();
         let input_visible = view.is_input_box_visible(&model, ctx);

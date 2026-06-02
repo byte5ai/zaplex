@@ -235,7 +235,13 @@ impl Element for Stack {
         self.origin = Some(Point::from_vec2f(origin, ctx.scene.z_index()));
         let parent_rect = self.bounds().unwrap();
         for child in &mut self.children {
-            ctx.scene.start_layer(ClipBounds::ActiveLayer);
+            // Overlay 子元素使用 overlay 层，使其获得 Overlay z-index，
+            // 避免事件分发时 is_covered 将自身子元素的 hit rect 误判为遮挡。
+            if child.element.is_overlay() {
+                ctx.scene.start_overlay_layer(ClipBounds::None);
+            } else {
+                ctx.scene.start_layer(ClipBounds::ActiveLayer);
+            }
             ctx.position_cache.start();
             let child_origin = if let Some(offset_positioning) = child
                 .element

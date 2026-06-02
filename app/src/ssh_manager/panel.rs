@@ -54,7 +54,7 @@ const PANEL_HORIZONTAL_PADDING: f32 = 8.0;
 const CONTEXT_MENU_WIDTH: f32 = 200.0;
 const CONTEXT_MENU_ITEM_PADDING_V: f32 = 7.0;
 const CONTEXT_MENU_ITEM_PADDING_H: f32 = 12.0;
-const MAX_CONTEXT_MENU_ITEMS: usize = 4;
+const MAX_CONTEXT_MENU_ITEMS: usize = 5;
 const SSH_PANEL_POSITION_ID: &str = "ssh_manager_panel_root";
 
 #[derive(Clone, Debug)]
@@ -88,6 +88,8 @@ pub enum SshManagerPanelAction {
     ToggleAllFolders,
     /// 双击 server 行 = 连接(开新 tab)。Folder 双击 = 两次 toggle 抵消 no-op。
     DoubleClick(String),
+    /// 右键 server → "文件管理":打开 SFTP 文件浏览器 pane。
+    OpenSftp,
     /// "Candidates" 区段:把 `~/.ssh/config` 的一条候选拷贝进保存树。
     ImportCandidate {
         alias: String,
@@ -108,6 +110,11 @@ pub enum SshManagerPanelEvent {
     /// 用户单击 server 或右键 "连接",请求开 terminal pane 跑 ssh +
     /// SecretInjector。
     OpenSshTerminal {
+        node_id: String,
+        server: SshServerInfo,
+    },
+    /// 用户右键 "SFTP 浏览",请求开 SFTP 文件浏览器 pane。
+    OpenSftpPane {
         node_id: String,
         server: SshServerInfo,
     },
@@ -489,6 +496,26 @@ impl SshManagerPanel {
             return;
         };
         self.dispatch_connect_for(&id, ctx);
+    }
+
+    /// 右键 "SFTP 浏览":emit OpenSftpPane 事件。
+    fn on_open_sftp(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(id) = self.selected_id.clone() else {
+            return;
+        };
+        let kind = self.nodes.iter().find(|n| n.id == id).map(|n| n.kind);
+        if !matches!(kind, Some(NodeKind::Server)) {
+            return;
+        }
+        let server = warp_ssh_manager::with_conn(|c| Ok(SshRepository::get_server(c, &id)?))
+            .ok()
+            .flatten();
+        if let Some(server) = server {
+            ctx.emit(SshManagerPanelEvent::OpenSftpPane {
+                node_id: id,
+                server,
+            });
+        }
     }
 
     fn dispatch_connect_for(&self, id: &str, ctx: &mut ViewContext<Self>) {
@@ -1587,6 +1614,10 @@ impl SshManagerPanel {
                             SshManagerPanelAction::Connect,
                         ),
                         (
+                            crate::t!("workspace-left-panel-ssh-manager-menu-sftp"),
+                            SshManagerPanelAction::OpenSftp,
+                        ),
+                        (
                             crate::t!("workspace-left-panel-ssh-manager-menu-clone"),
                             SshManagerPanelAction::CloneServer(id.clone()),
                         ),
@@ -1693,6 +1724,7 @@ impl TypedActionView for SshManagerPanel {
             }
             SshManagerPanelAction::ToggleAllFolders => self.on_toggle_all_folders(ctx),
             SshManagerPanelAction::DoubleClick(id) => self.on_double_click(id.clone(), ctx),
+            SshManagerPanelAction::OpenSftp => self.on_open_sftp(ctx),
             SshManagerPanelAction::ImportCandidate { alias } => {
                 self.on_import_candidate(alias.clone(), ctx)
             }

@@ -5282,6 +5282,9 @@ impl Workspace {
             LeftPanelEvent::OpenSshTerminal { node_id, server } => {
                 self.open_ssh_terminal(node_id.clone(), server.clone(), ctx);
             }
+            LeftPanelEvent::OpenSftpPane { node_id, server: _ } => {
+                self.open_sftp_pane(node_id.clone(), ctx);
+            }
         }
     }
 
@@ -5292,6 +5295,22 @@ impl Workspace {
         use crate::pane_group::pane::ssh_server_pane::SshServerPane;
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             let pane = SshServerPane::new(node_id, ctx);
+            let smart_split_direction =
+                pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
+            pane_group.add_pane_with_direction(
+                smart_split_direction,
+                pane,
+                true, /* focus_new_pane */
+                ctx,
+            );
+        });
+    }
+
+    /// 在中央区域打开给定 SSH 节点的 SFTP 文件浏览器 pane。
+    pub fn open_sftp_pane(&mut self, node_id: String, ctx: &mut ViewContext<Self>) {
+        use crate::pane_group::pane::sftp_pane::SftpPane;
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            let pane = SftpPane::new(node_id, ctx);
             let smart_split_direction =
                 pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
             pane_group.add_pane_with_direction(

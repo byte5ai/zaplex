@@ -143,6 +143,11 @@ pub enum LeafContents {
     SshServer {
         node_id: String,
     },
+    /// SFTP 文件浏览器 pane。引用 `ssh_servers.node_id` 主键关联远端服务器。
+    /// **不持久化** — 重启后用户从左侧 SSH 管理器树重新打开。
+    Sftp {
+        node_id: String,
+    },
 }
 
 #[cfg(feature = "local_fs")]
@@ -162,6 +167,8 @@ impl LeafContents {
             // SSH server editor:数据(host/user/...)持久化在 ssh_servers 表里,
             // pane 本身只是 view,关掉再打开没差别。
             LeafContents::SshServer { .. } => false,
+            // SFTP 浏览器:远端文件系统依赖活跃 SSH 连接,pane 不可恢复。
+            LeafContents::Sftp { .. } => false,
             // 远端文件代码 pane:远端 buffer 依赖活跃 SSH 连接,`RemoteFileTree`
             // source 不可恢复(`is_restorable() == false`)。若写入持久化会留下
             // 一条 restore 阶段被跳过的孤儿 `Code` 行,导致整个 tab 丢失 ——

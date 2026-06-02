@@ -204,6 +204,7 @@ warp_core.workspace = true
 warp_editor.workspace = true
 warp_js = { workspace = true, optional = true }
 warp_ssh_manager.workspace = true
+zap_sftp = { path = "../crates/zap_sftp" }
 warp_util.workspace = true
 warpui = { workspace = true, features = ["schema_gen", "settings_value"] }
 voice_input = { workspace = true, optional = true }

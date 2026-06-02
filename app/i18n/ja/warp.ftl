@@ -2633,6 +2633,7 @@ workspace-left-panel-ssh-manager-menu-new-folder = 新しいフォルダ
 workspace-left-panel-ssh-manager-menu-new-server = 新しい SSH サーバー
 workspace-left-panel-ssh-manager-menu-edit = 編集
 workspace-left-panel-ssh-manager-menu-connect = 接続
+workspace-left-panel-ssh-manager-menu-sftp = ファイル管理
 workspace-left-panel-ssh-manager-menu-clone = 複製
 workspace-left-panel-ssh-manager-menu-delete = 削除
 workspace-left-panel-ssh-manager-pane-hint = フィールドの編集と「接続」は次のイテレーションで提供されます。現状このペインは保存済み設定を表示するだけです。SQLite ストアか、まもなく登場するエディタで調整してください。

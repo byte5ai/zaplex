@@ -129,6 +129,11 @@ pub enum LeftPanelEvent {
         node_id: String,
         server: warp_ssh_manager::SshServerInfo,
     },
+    /// 用户从 SSH 管理器右键 "SFTP 浏览" → 主窗口开 SFTP 文件浏览器 pane。
+    OpenSftpPane {
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,6 +271,12 @@ impl LeftPanelView {
                 }
                 SshManagerPanelEvent::OpenSshTerminal { node_id, server } => {
                     ctx.emit(LeftPanelEvent::OpenSshTerminal {
+                        node_id: node_id.clone(),
+                        server: server.clone(),
+                    });
+                }
+                SshManagerPanelEvent::OpenSftpPane { node_id, server } => {
+                    ctx.emit(LeftPanelEvent::OpenSftpPane {
                         node_id: node_id.clone(),
                         server: server.clone(),
                     });

@@ -75,6 +75,7 @@ mod server_time;
 mod session_management;
 mod shell_indicator;
 mod skill_manager;
+mod sftp_manager;
 mod ssh_manager;
 mod suggestions;
 mod system;

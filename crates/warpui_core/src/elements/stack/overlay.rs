@@ -1,6 +1,7 @@
 use crate::{
-    elements::Point, event::DispatchedEvent, geometry::vector::Vector2F, AfterLayoutContext,
-    AppContext, ClipBounds, Element, EventContext, LayoutContext, PaintContext, SizeConstraint,
+    elements::Point, event::DispatchedEvent, geometry::vector::Vector2F, scene::ZIndex,
+    AfterLayoutContext, AppContext, ClipBounds, Element, EventContext, LayoutContext, PaintContext,
+    SizeConstraint,
 };
 
 /// Internal elements used to support the `add_overlay_child` and `add_positioned_overlay_child`
@@ -31,9 +32,16 @@ impl Element for Overlay {
     }
 
     fn paint(&mut self, origin: Vector2F, ctx: &mut PaintContext, app: &AppContext) {
-        ctx.scene.start_overlay_layer(ClipBounds::None);
-        self.child.paint(origin, ctx, app);
-        ctx.scene.stop_layer();
+        // 如果已在 overlay 层中（由 Stack 通过 start_overlay_layer 创建），
+        // 直接绘制子元素，避免嵌套 overlay 层导致 is_covered 误判。
+        let already_in_overlay = matches!(ctx.scene.z_index(), ZIndex::Overlay(_));
+        if already_in_overlay {
+            self.child.paint(origin, ctx, app);
+        } else {
+            ctx.scene.start_overlay_layer(ClipBounds::None);
+            self.child.paint(origin, ctx, app);
+            ctx.scene.stop_layer();
+        }
     }
 
     fn dispatch_event(
@@ -51,5 +59,9 @@ impl Element for Overlay {
 
     fn origin(&self) -> Option<Point> {
         self.child.origin()
+    }
+
+    fn is_overlay(&self) -> bool {
+        true
     }
 }
