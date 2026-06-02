@@ -3203,6 +3203,9 @@ pub async fn generate_byop_output(
     } = input;
 
     let force_echo_reasoning = super::reasoning::model_requires_reasoning_echo(api_type, &model_id);
+    // 仅对已知把 reasoning 夹在 <think> 标签里的模型(如 MiniMax M3)激活流式提取。
+    // 其他模型保持原始 Chunk 输出行为,避免误吞含字面量 <think> 的正常文本。
+    let use_think_extraction = super::reasoning::model_uses_think_tags_in_content(&model_id);
     let chat_req = build_chat_request(&params, force_echo_reasoning, api_type, attachment_caps)?;
     let conversation_id = params
         .conversation_token
@@ -3545,6 +3548,10 @@ pub async fn generate_byop_output(
         // 之后的 chunk 走 AppendToMessageContent 增量追加。
         let mut text_msg_id: Option<String> = None;
         let mut reasoning_msg_id: Option<String> = None;
+        // <think>...</think> 流式提取状态:仅当 `use_think_extraction` 为 true 时有意义。
+        // 已知把 reasoning 夹在 <think> 标签里的模型(如 MiniMax M3)用此提取。
+        let mut think_active = false;
+        let mut think_buf = String::new();
         // tool_call 按 call_id 累积 — genai 流式发的 ToolCallChunk 已带完整 ToolCall
         // (since 0.4.0 行为),但跨 chunk 同一 call_id 可能多次出现 args 增量,
         // 用 HashMap 按 id 累积后在流末统一 emit。
@@ -3629,14 +3636,89 @@ pub async fn generate_byop_output(
                 ChatStreamEvent::Chunk(c) if !c.content.is_empty() => {
                     chunk_count += 1;
                     chunk_bytes += c.content.len();
-                    if let Some(id) = text_msg_id.clone() {
-                        yield Ok(make_append_event(&current_task_id, &id, AppendKind::Text(c.content)));
+                    if use_think_extraction {
+                        // <think> 标签流式提取:仅对 THINK_TAG_IN_CONTENT_MODELS 白名单内的模型激活。
+                        // 把 /delta/content 中的 <think>...</think> 段路由到 reasoning 通道,
+                        // 其余内容照常走文本通道。支持标签内容跨 chunk 边界。
+                        //
+                        // known limitation: `<think>` 标签字符串本身跨 chunk 截断时(如
+                        // chunk1 末尾为 `<thi`、chunk2 开头为 `nk>`)无法识别,残余字符串
+                        // 作为普通文本输出。大多数推理模型会把 `<think>` 作为完整 token 输出,
+                        // 实际触发概率极低。
+                        let mut rest: &str = &c.content;
+                        loop {
+                            if think_active {
+                                match rest.find("</think>") {
+                                    Some(end) => {
+                                        think_buf.push_str(&rest[..end]);
+                                        let reasoning = std::mem::take(&mut think_buf);
+                                        think_active = false;
+                                        rest = &rest[end + "</think>".len()..];
+                                        if !reasoning.is_empty() {
+                                            reasoning_count += 1;
+                                            reasoning_bytes += reasoning.len();
+                                            if let Some(id) = reasoning_msg_id.clone() {
+                                                yield Ok(make_append_event(&current_task_id, &id, AppendKind::Reasoning(reasoning)));
+                                            } else {
+                                                let new_id = Uuid::new_v4().to_string();
+                                                let mut msg = make_reasoning_message(&current_task_id, &request_id, reasoning);
+                                                msg.id = new_id.clone();
+                                                reasoning_msg_id = Some(new_id);
+                                                yield Ok(make_add_messages_event(&current_task_id, vec![msg]));
+                                            }
+                                        }
+                                    }
+                                    None => {
+                                        think_buf.push_str(rest);
+                                        break;
+                                    }
+                                }
+                            } else {
+                                match rest.find("<think>") {
+                                    Some(start) => {
+                                        let before = rest[..start].to_owned();
+                                        think_active = true;
+                                        rest = &rest[start + "<think>".len()..];
+                                        if !before.is_empty() {
+                                            if let Some(id) = text_msg_id.clone() {
+                                                yield Ok(make_append_event(&current_task_id, &id, AppendKind::Text(before)));
+                                            } else {
+                                                let new_id = Uuid::new_v4().to_string();
+                                                let mut msg = make_agent_output_message(&current_task_id, &request_id, before);
+                                                msg.id = new_id.clone();
+                                                text_msg_id = Some(new_id);
+                                                yield Ok(make_add_messages_event(&current_task_id, vec![msg]));
+                                            }
+                                        }
+                                    }
+                                    None => {
+                                        let text = rest.to_owned();
+                                        if !text.is_empty() {
+                                            if let Some(id) = text_msg_id.clone() {
+                                                yield Ok(make_append_event(&current_task_id, &id, AppendKind::Text(text)));
+                                            } else {
+                                                let new_id = Uuid::new_v4().to_string();
+                                                let mut msg = make_agent_output_message(&current_task_id, &request_id, text);
+                                                msg.id = new_id.clone();
+                                                text_msg_id = Some(new_id);
+                                                yield Ok(make_add_messages_event(&current_task_id, vec![msg]));
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     } else {
-                        let new_id = Uuid::new_v4().to_string();
-                        let mut msg = make_agent_output_message(&current_task_id, &request_id, c.content);
-                        msg.id = new_id.clone();
-                        text_msg_id = Some(new_id);
-                        yield Ok(make_add_messages_event(&current_task_id, vec![msg]));
+                        if let Some(id) = text_msg_id.clone() {
+                            yield Ok(make_append_event(&current_task_id, &id, AppendKind::Text(c.content)));
+                        } else {
+                            let new_id = Uuid::new_v4().to_string();
+                            let mut msg = make_agent_output_message(&current_task_id, &request_id, c.content);
+                            msg.id = new_id.clone();
+                            text_msg_id = Some(new_id);
+                            yield Ok(make_add_messages_event(&current_task_id, vec![msg]));
+                        }
                     }
                 }
                 ChatStreamEvent::Chunk(_) => {}
