@@ -503,6 +503,12 @@ pub(super) struct EventLoop {
     state: State,
     proxy: EventLoopProxy<CustomEvent>,
     ime_enabled: bool,
+    /// The most recently handled IME preedit `(text, cursor range)`, used to drop duplicate preedit
+    /// events. Some Wayland compositors (notably KDE Plasma 6) re-send an identical preedit in
+    /// response to the `set_ime_cursor_area` commit we issue while repositioning the candidate
+    /// window, which would otherwise spin into a preedit <-> reposition feedback loop (see upstream
+    /// warpdotdev/warp#11013). Reset whenever IME is enabled, committed, or disabled.
+    last_preedit: Option<(String, Option<(usize, usize)>)>,
     /// Whether to downrank non-NVIDIA vulkan adapters. This is set to true when we detect a DRI3
     /// error that occurs when trying to present against a non-NVIDIA Vulkan adapter when the
     /// PRIME Profile is set to "Performance" mode.  It's not fully clear why this error occurs. Our
@@ -532,6 +538,7 @@ impl EventLoop {
             state: Default::default(),
             proxy,
             ime_enabled: false,
+            last_preedit: None,
             downrank_non_nvidia_vulkan_adapters: false,
             #[cfg(target_family = "wasm")]
             soft_keyboard_manager: None,
@@ -1528,6 +1535,8 @@ impl EventLoop {
         match event {
             winit::event::Ime::Enabled => {
                 self.ime_enabled = true;
+                // 新一轮 composition 上下文,清掉上次 preedit 的去重基准。
+                self.last_preedit = None;
                 self.ui_app
                     .update(|ctx| ctx.report_active_cursor_position_update());
             }
@@ -1535,6 +1544,20 @@ impl EventLoop {
                 if !self.ime_enabled {
                     return;
                 }
+
+                // KDE Plasma 6 (Wayland) 下,update_ime_position 发出的 set_ime_cursor_area commit
+                // 会促使输入法重新回送同一段(焦点切换时通常为空)的 preedit;若每次都派发
+                // SetMarkedText 并重定位,就会形成 preedit <-> 重定位的自激循环(上游
+                // warpdotdev/warp#11013:SetMarkedText 被刷屏约 7 万次后崩溃)。对与上一次完全
+                // 相同的 preedit 直接早退,断开这个环。
+                if self
+                    .last_preedit
+                    .as_ref()
+                    .is_some_and(|(text, range)| text == &preedit_text && *range == cursor_position)
+                {
+                    return;
+                }
+                self.last_preedit = Some((preedit_text.clone(), cursor_position));
 
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
                     return;
@@ -1561,6 +1584,9 @@ impl EventLoop {
                 self.update_ime_position();
             }
             winit::event::Ime::Commit(chars) => {
+                // composition 已提交,清掉去重基准,避免下一轮起始 preedit 被误判为重复。
+                self.last_preedit = None;
+
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
                     return;
                 };
@@ -1579,6 +1605,7 @@ impl EventLoop {
             }
             winit::event::Ime::Disabled => {
                 self.ime_enabled = false;
+                self.last_preedit = None;
             }
         };
     }
