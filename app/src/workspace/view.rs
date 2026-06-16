@@ -218,6 +218,7 @@ use crate::network::{NetworkStatus, NetworkStatusEvent};
 use crate::notebooks::manager::{NotebookManager, NotebookSource};
 #[cfg(feature = "local_fs")]
 use crate::pane_group::FilePane;
+use crate::pane_group::ImagePane;
 use crate::pane_group::{
     self, AnyPaneContent, CodeDiffPane, CodePane, Direction, NewTerminalOptions, PanesLayout,
     TabBarHoverIndex,
@@ -5191,6 +5192,9 @@ impl Workspace {
                 let open_as_preview = false;
                 self.open_code(code_source, layout, line_col, open_as_preview, &[], ctx);
             }
+            FileTarget::ImageViewer(layout) => {
+                self.open_image(path.clone(), self.get_active_session(ctx), layout, ctx);
+            }
             FileTarget::ExternalEditor(editor) => {
                 crate::util::file::open_file_path_with_editor(
                     line_col,
@@ -5251,6 +5255,12 @@ impl Workspace {
             }
             #[cfg(not(feature = "local_tty"))]
             LeftPanelEvent::OpenRemoteFile { .. } => {}
+            #[cfg(feature = "local_tty")]
+            LeftPanelEvent::OpenRemoteImage { remote_path } => {
+                self.open_remote_image(remote_path.clone(), ctx);
+            }
+            #[cfg(not(feature = "local_tty"))]
+            LeftPanelEvent::OpenRemoteImage { .. } => {}
             LeftPanelEvent::OpenSkillFile { source } => {
                 #[cfg(feature = "local_fs")]
                 {
@@ -6942,6 +6952,105 @@ impl Workspace {
                 });
             }
         }
+    }
+
+    fn open_image(
+        &mut self,
+        path: PathBuf,
+        session: Option<Arc<Session>>,
+        layout: EditorLayout,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let pane = ImagePane::new(Some(path), session, ctx);
+        self.insert_image_pane(pane, layout, ctx);
+    }
+
+    /// Insert an already-constructed [`ImagePane`] using the editor layout (new tab
+    /// vs. split). Shared by local [`Self::open_image`] and remote
+    /// [`Self::open_remote_image`].
+    fn insert_image_pane(
+        &mut self,
+        pane: ImagePane,
+        layout: EditorLayout,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match layout {
+            EditorLayout::NewTab => {
+                let new_tab_placement_setting = TabSettings::as_ref(ctx).new_tab_placement;
+                let new_idx = match new_tab_placement_setting {
+                    NewTabPlacement::AfterAllTabs => self.tab_count(),
+                    NewTabPlacement::AfterCurrentTab => self.active_tab_index + 1,
+                };
+                self.add_tab_from_existing_pane(Box::new(pane), new_idx, ctx);
+            }
+            EditorLayout::SplitPane => {
+                self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                    pane_group.add_pane_with_direction(
+                        Direction::Right,
+                        pane,
+                        true, /* focus_new_pane */
+                        ctx,
+                    );
+                });
+            }
+        }
+    }
+
+    /// Open a remote image in an image viewer pane. Creates the pane immediately
+    /// (showing a loading spinner with the filename), then fetches the raw bytes
+    /// over the remote-server `ReadFileChunk` RPC and fills them in on completion.
+    #[cfg(feature = "local_tty")]
+    fn open_remote_image(
+        &mut self,
+        remote_path: crate::code::buffer_location::RemotePath,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        log::info!(
+            "Opening remote image: host={host} path={path}",
+            host = remote_path.host_id,
+            path = remote_path.path.as_str()
+        );
+
+        let host_id = remote_path.host_id.clone();
+        let Some(client) = RemoteServerManager::handle(ctx)
+            .as_ref(ctx)
+            .client_for_host(&host_id)
+            .cloned()
+        else {
+            log::warn!("No remote server client for host {host_id:?}; cannot open remote image");
+            return;
+        };
+
+        // 先建带 loading spinner 的空 pane,再异步抓字节填充(spinner-first UX)。
+        let layout = *EditorSettings::as_ref(ctx).open_file_layout.value();
+        let pane = ImagePane::new_remote(remote_path.clone(), ctx);
+        let image_view = pane.image_view(ctx);
+        self.insert_image_pane(pane, layout, ctx);
+
+        let path_str = remote_path.path.as_str().to_string();
+        ctx.spawn(
+            async move {
+                client
+                    .read_file_bytes(path_str)
+                    .await
+                    .map_err(|e| format!("{e}"))
+            },
+            move |_me, result, ctx| match result {
+                Ok(bytes) => {
+                    image_view.update(ctx, |view, ctx| {
+                        view.open_remote(&remote_path, &bytes, ctx);
+                    });
+                }
+                Err(error) => {
+                    // 不开空白 pane —— pane 已显示 loading,这里只记录失败,避免像
+                    // `open_remote_buffer` 那样把所有错误抹成 DoesNotExist。
+                    log::warn!(
+                        "Failed to load remote image {path}: {error}",
+                        path = remote_path.path.as_str()
+                    );
+                }
+            },
+        );
     }
 
     fn attach_path_as_context(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {

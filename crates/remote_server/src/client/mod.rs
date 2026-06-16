@@ -14,7 +14,8 @@ use crate::proto::{
     CreateDirectory, CreateDirectoryResponse, DeleteFile, ErrorCode, Initialize,
     InitializeResponse, ListDirectory, ListDirectoryResponse, LoadRepoMetadataDirectoryResponse,
     NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileChunk,
-    ReadFileChunkResponse, ReadFileContextRequest, ReadFileContextResponse, ResolveConflict,
+    read_file_chunk_response, ReadFileChunkResponse, ReadFileContextRequest,
+    ReadFileContextResponse, ResolveConflict,
     ResolveConflictResponse, ResolvePath, ResolvePathResponse, RunCommandRequest,
     RunCommandResponse, SaveBuffer, SaveBufferResponse, ServerMessage, SessionBootstrapped,
     TextEdit, WriteFile, WriteFileChunk, WriteFileChunkResponse,
@@ -459,6 +460,36 @@ impl RemoteServerClient {
                 Err(ClientError::UnexpectedResponse)
             }
         }
+    }
+
+    /// Reads an entire remote file by looping [`Self::read_file_chunk`] until EOF.
+    ///
+    /// Accumulates each chunk into a single buffer, advancing `offset` by the
+    /// server-reported `next_offset`, until a chunk signals `eof`. Used by the
+    /// in-app image viewer to fetch raw image bytes for `AssetSource::Raw`.
+    pub async fn read_file_bytes(&self, path: String) -> Result<Vec<u8>, ClientError> {
+        // 服务端单块上限 8 MiB(`handle_read_file_chunk`)。客户端按 4 MiB 请求,
+        // 远低于 64 MiB 消息上限,给 framing 留足余量。
+        const CHUNK_SIZE: u64 = 4 * 1024 * 1024;
+
+        let mut bytes = Vec::new();
+        let mut offset = 0u64;
+        loop {
+            let response = self.read_file_chunk(path.clone(), offset, CHUNK_SIZE).await?;
+            let success = match response.result {
+                Some(read_file_chunk_response::Result::Success(success)) => success,
+                Some(read_file_chunk_response::Result::Error(err)) => {
+                    return Err(ClientError::FileOperationFailed(err.message));
+                }
+                None => return Err(ClientError::UnexpectedResponse),
+            };
+            bytes.extend_from_slice(&success.bytes);
+            offset = success.next_offset;
+            if success.eof {
+                break;
+            }
+        }
+        Ok(bytes)
     }
 
     /// Writes a byte range to a remote file.

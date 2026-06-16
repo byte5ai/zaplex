@@ -2,6 +2,7 @@ pub mod active_notebook_data;
 mod context_menu;
 pub mod editor;
 pub mod file;
+pub mod image;
 pub mod link;
 pub mod manager;
 pub mod notebook;

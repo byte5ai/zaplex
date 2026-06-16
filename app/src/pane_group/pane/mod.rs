@@ -19,6 +19,7 @@ pub(super) mod execution_profile_editor_pane;
 pub(super) mod file_pane;
 pub(super) mod get_started_pane;
 pub(super) mod get_started_view;
+pub(super) mod image_pane;
 #[cfg(not(target_family = "wasm"))]
 pub(super) mod local_harness_launch;
 pub(super) mod notebook_pane;
@@ -47,7 +48,7 @@ use crate::{
     code::view::CodeView,
     env_vars::view::env_var_collection::EnvVarCollectionView,
     menu::MenuItem,
-    notebooks::{file::FileNotebookView, notebook::NotebookView},
+    notebooks::{file::FileNotebookView, image::ImageViewerView, notebook::NotebookView},
     settings::PaneSettings,
     settings_view::SettingsView,
     terminal::{available_shells::AvailableShell, TerminalView},
@@ -139,6 +140,7 @@ pub(crate) enum IPaneType {
     Terminal,
     Notebook,
     File,
+    ImageViewer,
     Code,
     CodeDiff,
     EnvVarCollection,
@@ -165,6 +167,7 @@ impl Display for IPaneType {
             IPaneType::Terminal => write!(f, "Terminal"),
             IPaneType::Notebook => write!(f, "Notebook"),
             IPaneType::File => write!(f, "File"),
+            IPaneType::ImageViewer => write!(f, "Image Viewer"),
             IPaneType::Code => write!(f, "Code"),
             IPaneType::CodeDiff => write!(f, "Code Diff"),
             IPaneType::EnvVarCollection => write!(f, "Environment Variable Collection"),
@@ -208,6 +211,11 @@ impl PaneId {
     /// Creates a [`PaneId`] from a [`ViewContext<PaneView<FileNotebookView>>`]
     pub fn from_file_pane_ctx(ctx: &ViewContext<PaneView<FileNotebookView>>) -> Self {
         Self::new_from_ctx(IPaneType::File, ctx)
+    }
+
+    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<ImageViewerView>>`]
+    pub fn from_image_pane_ctx(ctx: &ViewContext<PaneView<ImageViewerView>>) -> Self {
+        Self::new_from_ctx(IPaneType::ImageViewer, ctx)
     }
 
     /// Creates a [`PaneId`] from a [`ViewContext<PaneView<NotebookView>>`]
@@ -296,6 +304,11 @@ impl PaneId {
     /// Creates a [`PaneId`] from a [`PaneView<FileNotebookView>`] entity ID.
     pub fn from_file_pane_view(file_pane_view: &ViewHandle<PaneView<FileNotebookView>>) -> Self {
         Self::new(IPaneType::File, file_pane_view)
+    }
+
+    /// Creates a [`PaneId`] from a [`PaneView<ImageViewerView>`] entity ID.
+    pub fn from_image_pane_view(image_pane_view: &ViewHandle<PaneView<ImageViewerView>>) -> Self {
+        Self::new(IPaneType::ImageViewer, image_pane_view)
     }
 
     /// Creates a [`PaneId`] from a [`PaneView<TextView>`] entity ID.
@@ -461,6 +474,9 @@ impl PaneId {
             }
             IPaneType::File => {
                 ChildView::<PaneView<FileNotebookView>>::with_id(self.0.pane_view_id).finish()
+            }
+            IPaneType::ImageViewer => {
+                ChildView::<PaneView<ImageViewerView>>::with_id(self.0.pane_view_id).finish()
             }
             IPaneType::Code => {
                 ChildView::<PaneView<CodeView>>::with_id(self.0.pane_view_id).finish()

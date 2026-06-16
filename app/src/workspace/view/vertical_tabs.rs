@@ -3244,7 +3244,8 @@ impl PaneGroup {
             IPaneType::AIFact => TypedPane::AIFact,
             IPaneType::AIDocument => TypedPane::AIDocument,
             IPaneType::ExecutionProfileEditor => TypedPane::ExecutionProfileEditor,
-            IPaneType::GetStarted
+            IPaneType::ImageViewer
+            | IPaneType::GetStarted
             | IPaneType::SshServer
             | IPaneType::Sftp
             | IPaneType::Welcome

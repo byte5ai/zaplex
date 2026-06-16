@@ -2204,14 +2204,23 @@ impl FileTreeView {
                     let path = metadata.path.to_local_path_lossy();
                     self.open_file(&path, None, ctx);
                 } else {
-                    // 远端文件:走 buffer-sync 协议打开。
+                    // 远端文件:图片走图片查看器,其余走 buffer-sync 协议打开。
                     #[cfg(feature = "local_tty")]
                     if let Some(host_id) = root_dir.remote_host_id.clone() {
                         let remote_path = crate::code::buffer_location::RemotePath::new(
                             host_id,
                             (*metadata.path).clone(),
                         );
-                        ctx.emit(FileTreeEvent::OpenRemoteFile { remote_path });
+                        // `is_supported_image_file` 接受 `impl AsRef<Path>`,而
+                        // `metadata.path` 是 `StandardizedPath`(无 `AsRef<Path>`)——
+                        // 转成本地 PathBuf 仅为取扩展名,远端语义无关。
+                        if crate::util::openable_file_type::is_supported_image_file(
+                            metadata.path.to_local_path_lossy(),
+                        ) {
+                            ctx.emit(FileTreeEvent::OpenRemoteImage { remote_path });
+                        } else {
+                            ctx.emit(FileTreeEvent::OpenRemoteFile { remote_path });
+                        }
                     }
                 }
             }
@@ -2852,6 +2861,11 @@ pub enum FileTreeEvent {
     /// 在远端文件树里点击一个文件时发出,请求以远端 buffer 方式打开它。
     #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
     OpenRemoteFile {
+        remote_path: crate::code::buffer_location::RemotePath,
+    },
+    /// 在远端文件树里点击一个图片文件时发出,请求以远端图片查看器打开它。
+    #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
+    OpenRemoteImage {
         remote_path: crate::code::buffer_location::RemotePath,
     },
 }

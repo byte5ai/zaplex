@@ -120,6 +120,10 @@ pub struct LeafSnapshot {
 pub enum LeafContents {
     Terminal(TerminalPaneSnapshot),
     Notebook(NotebookPaneSnapshot),
+    /// A read-only image viewer pane backed by a local file.
+    Image {
+        path: Option<PathBuf>,
+    },
     AIDocument(AIDocumentPaneSnapshot),
     Code(CodePaneSnapShot),
     EnvVarCollection(EnvVarCollectionPaneSnapshot),
@@ -169,6 +173,9 @@ impl LeafContents {
             LeafContents::SshServer { .. } => false,
             // SFTP 浏览器:远端文件系统依赖活跃 SSH 连接,pane 不可恢复。
             LeafContents::Sftp { .. } => false,
+            // Image viewer panes are intentionally not persisted: they render in-session but
+            // are not restored after restart.
+            LeafContents::Image { .. } => false,
             // 远端文件代码 pane:远端 buffer 依赖活跃 SSH 连接,`RemoteFileTree`
             // source 不可恢复(`is_restorable() == false`)。若写入持久化会留下
             // 一条 restore 阶段被跳过的孤儿 `Code` 行,导致整个 tab 丢失 ——

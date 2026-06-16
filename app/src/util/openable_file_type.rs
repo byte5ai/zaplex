@@ -45,6 +45,8 @@ pub enum FileTarget {
     MarkdownViewer(EditorLayout),
     /// Open in Zap's Code Editor.
     CodeEditor(EditorLayout),
+    /// Open in Zap's in-app image viewer.
+    ImageViewer(EditorLayout),
     /// Open in an external editor (e.g. VS Code, Emacs).
     #[cfg(feature = "local_fs")]
     ExternalEditor(Editor),
@@ -219,6 +221,11 @@ pub fn resolve_file_target_with_editor_choice(
         return FileTarget::EnvEditor;
     }
 
+    // 3.5 Image files -> in-app image viewer (before binary fallback)
+    if is_supported_image_file(path) {
+        return FileTarget::ImageViewer(layout);
+    }
+
     // 4. Binary files -> System Default
     if !is_openable_in_warp {
         return FileTarget::SystemGeneric;
@@ -290,7 +297,7 @@ mod tests {
     #[cfg(feature = "local_fs")]
     fn test_resolve_file_target_binary_is_system_generic() {
         let target = resolve_file_target_with_editor_choice(
-            Path::new("image.png"),
+            Path::new("video.mp4"),
             EditorChoice::Zap,
             true, /* prefer_markdown_viewer */
             EditorLayout::SplitPane,
@@ -298,6 +305,20 @@ mod tests {
         );
 
         assert_eq!(target, FileTarget::SystemGeneric);
+    }
+
+    #[test]
+    #[cfg(feature = "local_fs")]
+    fn test_resolve_file_target_image_uses_image_viewer() {
+        let target = resolve_file_target_with_editor_choice(
+            Path::new("photo.png"),
+            EditorChoice::Zap,
+            true, /* prefer_markdown_viewer */
+            EditorLayout::NewTab,
+            None,
+        );
+
+        assert_eq!(target, FileTarget::ImageViewer(EditorLayout::NewTab));
     }
 
     #[test]
