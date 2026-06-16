@@ -10,11 +10,15 @@ use warpui::{fonts::Weight, rendering::ThinStrokes, AppContext, SingletonEntity}
 use settings::{
     macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
 };
-use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
+use warpui::elements::{HeadingFontSizeMultipliers, DEFAULT_UI_LINE_HEIGHT_RATIO};
 
 use super::EnforceMinimumContrast as EnforceMinimumContrastEnum;
 
 pub const DEFAULT_MONOSPACE_FONT_NAME: &str = "Hack";
+
+// Markdown 标题字号倍率的合法区间（与 UI 层 clamp 保持一致）
+pub const MARKDOWN_HEADING_SCALE_MIN: f32 = 0.1;
+pub const MARKDOWN_HEADING_SCALE_MAX: f32 = 5.0;
 pub const DEFAULT_MONOSPACE_FONT_SIZE: f32 = 13.0;
 pub const DEFAULT_MONOSPACE_FONT_WEIGHT: Weight = Weight::Normal;
 
@@ -137,6 +141,60 @@ define_settings_group!(FontSettings,
             toml_path: "appearance.text.ui_font_size",
             description: "The base font size for UI elements.",
         },
+        markdown_heading_h1_scale: MarkdownHeadingH1Scale {
+            type: f32,
+            default: 2.0,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            private: false,
+            toml_path: "appearance.text.markdown_heading_h1_scale",
+            description: "The font size multiplication ratio for markdown heading level 1.",
+        },
+        markdown_heading_h2_scale: MarkdownHeadingH2Scale {
+            type: f32,
+            default: 1.5,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            private: false,
+            toml_path: "appearance.text.markdown_heading_h2_scale",
+            description: "The font size multiplication ratio for markdown heading level 2.",
+        },
+        markdown_heading_h3_scale: MarkdownHeadingH3Scale {
+            type: f32,
+            default: 1.17,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            private: false,
+            toml_path: "appearance.text.markdown_heading_h3_scale",
+            description: "The font size multiplication ratio for markdown heading level 3.",
+        },
+        markdown_heading_h4_scale: MarkdownHeadingH4Scale {
+            type: f32,
+            default: 1.0,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            private: false,
+            toml_path: "appearance.text.markdown_heading_h4_scale",
+            description: "The font size multiplication ratio for markdown heading level 4.",
+        },
+        markdown_heading_h5_scale: MarkdownHeadingH5Scale {
+            type: f32,
+            default: 0.83,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            private: false,
+            toml_path: "appearance.text.markdown_heading_h5_scale",
+            description: "The font size multiplication ratio for markdown heading level 5.",
+        },
+        markdown_heading_h6_scale: MarkdownHeadingH6Scale {
+            type: f32,
+            default: 0.75,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            private: false,
+            toml_path: "appearance.text.markdown_heading_h6_scale",
+            description: "The font size multiplication ratio for markdown heading level 6.",
+        },
     ]
 );
 
@@ -166,5 +224,20 @@ pub fn derived_notebook_font_size(font_settings: &FontSettings) -> f32 {
         *font_settings.monospace_font_size
     } else {
         *font_settings.notebook_font_size
+    }
+}
+
+pub fn heading_font_size_multipliers_from_settings(
+    font_settings: &FontSettings,
+) -> HeadingFontSizeMultipliers {
+    // 数据层兜底：防止直接编辑 TOML 或云同步注入 0/负数/超大值，与 UI 层 clamp 区间一致
+    let clamp = |v: f32| v.clamp(MARKDOWN_HEADING_SCALE_MIN, MARKDOWN_HEADING_SCALE_MAX);
+    HeadingFontSizeMultipliers {
+        h1: clamp(*font_settings.markdown_heading_h1_scale),
+        h2: clamp(*font_settings.markdown_heading_h2_scale),
+        h3: clamp(*font_settings.markdown_heading_h3_scale),
+        h4: clamp(*font_settings.markdown_heading_h4_scale),
+        h5: clamp(*font_settings.markdown_heading_h5_scale),
+        h6: clamp(*font_settings.markdown_heading_h6_scale),
     }
 }
