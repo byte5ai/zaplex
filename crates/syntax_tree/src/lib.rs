@@ -160,6 +160,12 @@ impl SyntaxTreeState {
             .map(|s| s.as_str())
     }
 
+    pub fn language_display_name(&self) -> Option<&str> {
+        self.language_queries
+            .as_ref()
+            .map(|queries| queries.language.display_name())
+    }
+
     /// Given multiple character ranges, return their corresponding highlight colors.
     /// If the tree is not ready or the buffer model has been deallocated, this returns None.
     pub fn highlights_in_ranges(

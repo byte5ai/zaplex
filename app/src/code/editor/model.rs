@@ -131,6 +131,18 @@ enum IndentMode {
     Enter,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VueCommentKind {
+    Script,
+    Template,
+    Style,
+}
+
+struct VueCommentLineBody {
+    range: Range<CharOffset>,
+    text: String,
+}
+
 struct IndentResult {
     /// The indentation to insert before the cursor
     insert_before_cursor: String,
@@ -1981,6 +1993,12 @@ impl CodeEditorModel {
     }
 
     pub fn toggle_comments(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.syntax_tree.as_ref(ctx).language_display_name() == Some("Vue")
+            && self.toggle_vue_comments(ctx)
+        {
+            return;
+        }
+
         let Some(prefix) = self.syntax_tree.as_ref(ctx).comment_prefix() else {
             return;
         };
@@ -2017,6 +2035,158 @@ impl CodeEditorModel {
             ctx,
         );
         self.validate(ctx)
+    }
+
+    fn toggle_vue_comments(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        let buffer = self.content().as_ref(ctx);
+        let selection_model = self.selection_model.as_ref(ctx);
+        let lines = selection_model.selected_lines(ctx);
+        let kinds = Self::vue_comment_kinds_by_line(buffer.text().as_str());
+
+        let actionable_lines = lines
+            .iter()
+            .filter_map(|line| {
+                let kind = kinds.get(line.saturating_sub(&1)).copied().flatten()?;
+                let body = Self::line_body_for_comment(buffer, *line)?;
+                Some((*line, kind, body))
+            })
+            .collect_vec();
+
+        if actionable_lines.is_empty() {
+            return false;
+        }
+
+        let remove = actionable_lines
+            .iter()
+            .all(|(_, kind, body)| Self::vue_line_is_commented(*kind, &body.text));
+
+        let edits = actionable_lines
+            .into_iter()
+            .filter_map(|(_, kind, body)| {
+                let replacement = if remove {
+                    Self::uncomment_vue_line(kind, &body.text)?
+                } else {
+                    Self::comment_vue_line(kind, &body.text)
+                };
+                Some((replacement, body.range))
+            })
+            .collect_vec();
+
+        let Ok(edits) = Vec1::try_from_vec(edits) else {
+            return false;
+        };
+
+        let selection_model = self.selection_model.clone();
+        self.update_content(
+            |mut content, ctx| {
+                content.apply_edit(
+                    BufferEditAction::InsertAtCharOffsetRanges { edits: &edits },
+                    EditOrigin::UserInitiated,
+                    selection_model,
+                    ctx,
+                );
+            },
+            ctx,
+        );
+        self.validate(ctx);
+        true
+    }
+
+    fn vue_comment_kinds_by_line(text: &str) -> Vec<Option<VueCommentKind>> {
+        let mut current = None;
+
+        text.lines()
+            .map(|line| {
+                let lower = line.to_ascii_lowercase();
+                let trimmed = lower.trim_start();
+                let opens_template = trimmed.starts_with("<template");
+                let opens_script = trimmed.starts_with("<script");
+                let opens_style = trimmed.starts_with("<style");
+                let closes_current = matches!(
+                    (current, trimmed),
+                    (Some(VueCommentKind::Template), t) if t.starts_with("</template")
+                ) || matches!(
+                    (current, trimmed),
+                    (Some(VueCommentKind::Script), t) if t.starts_with("</script")
+                ) || matches!(
+                    (current, trimmed),
+                    (Some(VueCommentKind::Style), t) if t.starts_with("</style")
+                );
+
+                let kind = if opens_template || opens_script || opens_style || closes_current {
+                    None
+                } else {
+                    current
+                };
+
+                if opens_template {
+                    current = Some(VueCommentKind::Template);
+                } else if opens_script {
+                    current = Some(VueCommentKind::Script);
+                } else if opens_style {
+                    current = Some(VueCommentKind::Style);
+                } else if closes_current {
+                    current = None;
+                }
+
+                kind
+            })
+            .collect()
+    }
+
+    fn line_body_for_comment(buffer: &Buffer, line: usize) -> Option<VueCommentLineBody> {
+        let line_start = Point::new(line as u32, 0).to_buffer_char_offset(buffer);
+        let line_end = buffer
+            .containing_line_end(line_start)
+            .saturating_sub(&1.into());
+        let line_text = buffer.text_in_range(line_start..line_end).into_string();
+
+        if line_text.trim().is_empty() {
+            return None;
+        }
+
+        let indent_chars = line_text.chars().take_while(|c| c.is_whitespace()).count();
+        let body_start = line_start + CharOffset::from(indent_chars);
+        let body_text = line_text.chars().skip(indent_chars).collect::<String>();
+
+        Some(VueCommentLineBody {
+            range: body_start..line_end,
+            text: body_text,
+        })
+    }
+
+    fn vue_line_is_commented(kind: VueCommentKind, text: &str) -> bool {
+        let trimmed = text.trim();
+        match kind {
+            VueCommentKind::Script => text.starts_with("//"),
+            VueCommentKind::Template => trimmed.starts_with("<!--") && trimmed.ends_with("-->"),
+            VueCommentKind::Style => trimmed.starts_with("/*") && trimmed.ends_with("*/"),
+        }
+    }
+
+    fn comment_vue_line(kind: VueCommentKind, text: &str) -> String {
+        match kind {
+            VueCommentKind::Script => format!("// {text}"),
+            VueCommentKind::Template => format!("<!-- {} -->", text.trim()),
+            VueCommentKind::Style => format!("/* {} */", text.trim()),
+        }
+    }
+
+    fn uncomment_vue_line(kind: VueCommentKind, text: &str) -> Option<String> {
+        match kind {
+            VueCommentKind::Script => text
+                .strip_prefix("// ")
+                .or_else(|| text.strip_prefix("//"))
+                .map(str::to_string),
+            VueCommentKind::Template => Self::unwrap_vue_comment(text, "<!--", "-->"),
+            VueCommentKind::Style => Self::unwrap_vue_comment(text, "/*", "*/"),
+        }
+    }
+
+    fn unwrap_vue_comment(text: &str, open: &str, close: &str) -> Option<String> {
+        let trimmed = text.trim();
+        let inner = trimmed.strip_prefix(open)?.strip_suffix(close)?;
+        Some(inner.trim().to_string())
     }
 
     /// Whether the given range is wrapped in the supported bracket pairs of the active language.

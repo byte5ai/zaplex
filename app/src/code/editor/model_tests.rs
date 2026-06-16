@@ -4,7 +4,7 @@ use vec1::vec1;
 use warp_editor::content::buffer::{InitialBufferState, SelectionOffsets};
 use warp_editor::multiline::MultilineString;
 use warp_util::content_version::ContentVersion;
-use warpui::App;
+use warpui::{text::point::Point, App};
 
 use crate::{
     code::editor::line::EditorLineLocation, code::editor::view::code_text_styles,
@@ -19,12 +19,21 @@ fn initialize_deps(app: &mut App) {
 }
 
 fn mock_model(app: &mut App, text: &str, version: ContentVersion) -> ModelHandle<CodeEditorModel> {
+    mock_model_with_path(app, text, version, "test.rs")
+}
+
+fn mock_model_with_path(
+    app: &mut App,
+    text: &str,
+    version: ContentVersion,
+    path: &str,
+) -> ModelHandle<CodeEditorModel> {
     app.add_model(|ctx| {
         let styles = code_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), None);
         let mut model = CodeEditorModel::new(styles, None, false, None, ctx);
         let state = InitialBufferState::plain_text(text).with_version(version);
         model.reset_content(state, ctx);
-        model.set_language_with_path(Path::new("test.rs"), ctx);
+        model.set_language_with_path(Path::new(path), ctx);
         model
     })
 }
@@ -155,6 +164,60 @@ fn test_toggle_comment() {
             assert_eq!(
                 editor.content.as_ref(ctx).text().as_str(),
                 "    // // First\n    Second"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_toggle_vue_comments_by_block() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = mock_model_with_path(
+            &mut app,
+            "<template>\n  <div>hello</div>\n</template>\n<script>\n  const count = 1\n</script>\n<style>\n  .title { color: red; }\n</style>",
+            ContentVersion::new(),
+            "Component.vue",
+        );
+        layout_model(&mut app, &editor).await;
+
+        for (line, expected) in [
+            (
+                2,
+                "<template>\n  <!-- <div>hello</div> -->\n</template>\n<script>\n  const count = 1\n</script>\n<style>\n  .title { color: red; }\n</style>",
+            ),
+            (
+                5,
+                "<template>\n  <div>hello</div>\n</template>\n<script>\n  // const count = 1\n</script>\n<style>\n  .title { color: red; }\n</style>",
+            ),
+            (
+                8,
+                "<template>\n  <div>hello</div>\n</template>\n<script>\n  const count = 1\n</script>\n<style>\n  /* .title { color: red; } */\n</style>",
+            ),
+        ] {
+            editor.update(&mut app, |editor, ctx| {
+                let start = Point::new(line, 0).to_buffer_char_offset(editor.content.as_ref(ctx));
+                editor.cursor_at(start, ctx);
+                editor.select_to_line_end(ctx);
+                editor.toggle_comments(ctx);
+            });
+
+            editor.read(&app, |editor, ctx| {
+                assert_eq!(editor.content.as_ref(ctx).text().as_str(), expected);
+            });
+
+            editor.update(&mut app, |editor, ctx| {
+                let start = Point::new(line, 0).to_buffer_char_offset(editor.content.as_ref(ctx));
+                editor.cursor_at(start, ctx);
+                editor.select_to_line_end(ctx);
+                editor.toggle_comments(ctx);
+            });
+        }
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(
+                editor.content.as_ref(ctx).text().as_str(),
+                "<template>\n  <div>hello</div>\n</template>\n<script>\n  const count = 1\n</script>\n<style>\n  .title { color: red; }\n</style>"
             );
         });
     })
