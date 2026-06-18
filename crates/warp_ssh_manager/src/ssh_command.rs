@@ -33,12 +33,13 @@ pub fn build_ssh_args(server: &SshServerInfo) -> Vec<String> {
         args.push("-p".into());
         args.push(server.port.to_string());
     }
-    if server.auth_type == AuthType::Key
-        && let Some(path) = server.key_path.as_deref()
-        && !path.is_empty()
-    {
-        args.push("-i".into());
-        args.push(path.to_string());
+    if matches!(server.auth_type, AuthType::Key | AuthType::OneKey) {
+        if let Some(path) = server.key_path.as_deref() {
+            if !path.is_empty() {
+                args.push("-i".into());
+                args.push(path.to_string());
+            }
+        }
     }
     let target = if server.username.is_empty() {
         server.host.clone()
@@ -73,7 +74,7 @@ pub async fn test_connection(
 
     let result = match server.auth_type {
         AuthType::Key => test_key_auth(server).await,
-        AuthType::Password => test_password_auth(server, password).await,
+        AuthType::Password | AuthType::OneKey => test_password_auth(server, password).await,
     };
 
     let latency = start.elapsed().as_millis() as u64;
@@ -180,8 +181,7 @@ async fn test_password_auth_windows(
     cmd_args: Vec<String>,
     password: &Zeroizing<String>,
 ) -> Result<(), String> {
-    let askpass = AskpassSession::new(password)
-        .map_err(|e| format!("准备 askpass 失败: {e}"))?;
+    let askpass = AskpassSession::new(password).map_err(|e| format!("准备 askpass 失败: {e}"))?;
 
     let mut cmd = command::r#async::Command::new("ssh");
     cmd.args(&cmd_args)

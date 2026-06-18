@@ -1,4 +1,7 @@
-use super::{PASSWORD_PROMPT_REGEX, SU_ROOT_CMD_REGEX, is_su_to_root};
+use super::{
+    is_su_to_root, should_spawn_su_password_injector, PASSWORD_PROMPT_REGEX, SU_ROOT_CMD_REGEX,
+};
+use zeroize::Zeroizing;
 
 fn pw_matches(input: &str) -> bool {
     PASSWORD_PROMPT_REGEX.is_match(input.as_bytes())
@@ -90,4 +93,15 @@ fn full_pipeline_su_root_with_password_prompt() {
     let buf = b"alice@kylin:~$ su -\r\n\xe5\xaf\x86\xe7\xa0\x81\xef\xbc\x9a";
     assert!(PASSWORD_PROMPT_REGEX.is_match(buf));
     assert!(is_su_to_root(buf));
+}
+
+#[test]
+fn should_spawn_su_password_injector_requires_non_empty_root_password() {
+    assert!(!should_spawn_su_password_injector(None));
+
+    let empty_password = Zeroizing::new(String::new());
+    assert!(!should_spawn_su_password_injector(Some(&empty_password)));
+
+    let password = Zeroizing::new("root-password".to_string());
+    assert!(should_spawn_su_password_injector(Some(&password)));
 }

@@ -5417,9 +5417,33 @@ impl Workspace {
         server: warp_ssh_manager::SshServerInfo,
         ctx: &mut ViewContext<Self>,
     ) {
-        use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshSecretStore};
+        use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshRepository, SshSecretStore};
 
-        let cmd = warp_ssh_manager::build_ssh_command_line(&server);
+        let (server_for_connection, secret_lookup_id, secret_kind) =
+            match warp_ssh_manager::with_conn(|conn| {
+                let resolved_auth = SshRepository::resolve_server_auth(conn, &server)?;
+                let mut server_for_connection = server.clone();
+                server_for_connection.username = resolved_auth.username;
+                server_for_connection.auth_type = resolved_auth.auth_type;
+                server_for_connection.key_path = resolved_auth.key_path;
+                Ok((
+                    server_for_connection,
+                    resolved_auth.secret_lookup_id,
+                    resolved_auth.secret_kind,
+                ))
+            }) {
+                Ok(resolved) => resolved,
+                Err(e) => {
+                    log::warn!("ssh auth resolution failed (will continue without injection): {e}");
+                    let fallback_kind = match server.auth_type {
+                        warp_ssh_manager::AuthType::Password => SecretKind::Password,
+                        warp_ssh_manager::AuthType::Key => SecretKind::Passphrase,
+                        warp_ssh_manager::AuthType::OneKey => SecretKind::OneKeyPassword,
+                    };
+                    (server.clone(), node_id.clone(), fallback_kind)
+                }
+            };
+        let cmd = warp_ssh_manager::build_ssh_command_line(&server_for_connection);
         let window_id = ctx.window_id();
 
         // 开新 tab(不分屏 — 之前用 add_terminal_pane(Direction::Right) 会切左/右
@@ -5451,12 +5475,8 @@ impl Workspace {
             });
         }
 
-        // 1. 同步读 keychain(主线程 OK)。auth_type 决定查 password 还是 passphrase。
-        let secret_kind = match server.auth_type {
-            warp_ssh_manager::AuthType::Password => SecretKind::Password,
-            warp_ssh_manager::AuthType::Key => SecretKind::Passphrase,
-        };
-        let secret = match KeychainSecretStore.get(&node_id, secret_kind) {
+        // 1. 同步读 keychain(主线程 OK)。OneKey server 会使用共享凭据 id。
+        let secret = match KeychainSecretStore.get(&secret_lookup_id, secret_kind) {
             Ok(opt) => opt.unwrap_or_else(|| zeroize::Zeroizing::new(String::new())),
             Err(e) => {
                 log::warn!("ssh keychain read failed (will continue without injection): {e}");
@@ -5494,11 +5514,13 @@ impl Workspace {
                 None
             }
         };
-        if let Some(root_pw) = root_secret {
+        if crate::ssh_manager::su_password_injector::should_spawn_su_password_injector(
+            root_secret.as_ref(),
+        ) {
             crate::ssh_manager::su_password_injector::spawn_su_password_injector(
                 terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c)),
                 terminal_view.downgrade(),
-                root_pw,
+                root_secret,
                 ctx,
             );
         }

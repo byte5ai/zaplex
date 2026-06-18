@@ -23,6 +23,7 @@ fn server() -> SshServerInfo {
         username: "alice".into(),
         auth_type: AuthType::Password,
         key_path: None,
+        credential_id: None,
         startup_command: None,
         notes: None,
         last_connected_at: None,
@@ -97,7 +98,35 @@ fn test_connection_requires_password_for_password_auth() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(test_connection(&s, None));
     assert_eq!(result.status, ConnectionStatus::Offline);
-    assert!(result.error_message.unwrap().contains("Password not provided"));
+    assert!(result
+        .error_message
+        .unwrap()
+        .contains("Password not provided"));
+}
+
+#[test]
+fn test_connection_requires_password_for_onekey_auth() {
+    let mut s = server();
+    s.auth_type = AuthType::OneKey;
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(test_connection(&s, None));
+    assert_eq!(result.status, ConnectionStatus::Offline);
+    assert!(result
+        .error_message
+        .unwrap()
+        .contains("Password not provided"));
+}
+
+#[test]
+fn onekey_key_auth_emits_dash_i_when_key_path_is_resolved() {
+    let mut s = server();
+    s.auth_type = AuthType::OneKey;
+    s.key_path = Some("/home/u/.ssh/shared_ed25519".into());
+
+    assert_eq!(
+        build_ssh_args(&s),
+        vec!["ssh", "-i", "/home/u/.ssh/shared_ed25519", "alice@1.2.3.4"]
+    );
 }
 
 #[test]
@@ -263,7 +292,9 @@ fn password_auth_args_destination_before_echo_ok_and_after_options() {
 
     // destination 必须出现在所有 -o 选项之后
     // 找最后一个 -o 选项的位置
-    let last_o_pos = joined.rfind("-o ").expect("expected at least one -o option");
+    let last_o_pos = joined
+        .rfind("-o ")
+        .expect("expected at least one -o option");
     assert!(
         last_o_pos < dest_pos,
         "all -o options must come before destination; got joined: {joined}"
@@ -303,7 +334,9 @@ fn key_auth_args_destination_comes_after_options() {
     let echo_pos = joined
         .find("echo ok")
         .expect("`echo ok` must appear in args");
-    let last_o_pos = joined.rfind("-o ").expect("expected at least one -o option");
+    let last_o_pos = joined
+        .rfind("-o ")
+        .expect("expected at least one -o option");
 
     assert!(
         last_o_pos < dest_pos,

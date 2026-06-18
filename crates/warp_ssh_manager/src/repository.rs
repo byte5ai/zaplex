@@ -11,9 +11,16 @@ use diesel::sqlite::SqliteConnection;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::types::{AuthType, NodeKind, SshNode, SshServerInfo};
-use persistence::model::{NewSshNode, NewSshServer, NewSyncMeta, SshNodeRow, SshServerRow, SyncMetaRow};
-use persistence::schema::{ssh_nodes, ssh_servers, sync_meta};
+use crate::secrets::SecretKind;
+use crate::types::{
+    AuthType, NodeKind, OneKeyCredentialKind, ResolvedSshAuth, SshNode, SshOneKeyCredential,
+    SshServerInfo,
+};
+use persistence::model::{
+    NewSshNode, NewSshOneKeyCredential, NewSshServer, NewSyncMeta, SshNodeRow,
+    SshOneKeyCredentialRow, SshServerRow, SyncMetaRow,
+};
+use persistence::schema::{ssh_nodes, ssh_onekey_credentials, ssh_servers, sync_meta};
 
 #[derive(Debug, Error)]
 pub enum SshRepositoryError {
@@ -94,6 +101,7 @@ impl SshRepository {
                     key_path: info.key_path.as_deref(),
                     startup_command: info.startup_command.as_deref(),
                     notes: info.notes.as_deref(),
+                    credential_id: info.credential_id.as_deref(),
                 })
                 .execute(conn)?;
             Ok(())
@@ -133,6 +141,7 @@ impl SshRepository {
                 ssh_servers::key_path.eq(info.key_path.as_deref()),
                 ssh_servers::startup_command.eq(info.startup_command.as_deref()),
                 ssh_servers::notes.eq(info.notes.as_deref()),
+                ssh_servers::credential_id.eq(info.credential_id.as_deref()),
             ))
             .execute(conn)?;
         if n == 0 {
@@ -199,6 +208,124 @@ impl SshRepository {
             .set(ssh_servers::last_connected_at.eq(Some(Utc::now().naive_utc())))
             .execute(conn)?;
         Ok(())
+    }
+
+    pub fn list_onekey_credentials(
+        conn: &mut SqliteConnection,
+    ) -> Result<Vec<SshOneKeyCredential>, SshRepositoryError> {
+        let rows: Vec<SshOneKeyCredentialRow> = ssh_onekey_credentials::table
+            .order(ssh_onekey_credentials::label.asc())
+            .load(conn)?;
+        rows.into_iter().map(onekey_from_row).collect()
+    }
+
+    pub fn get_onekey_credential(
+        conn: &mut SqliteConnection,
+        credential_id: &str,
+    ) -> Result<Option<SshOneKeyCredential>, SshRepositoryError> {
+        let row: Option<SshOneKeyCredentialRow> = ssh_onekey_credentials::table
+            .find(credential_id)
+            .first(conn)
+            .optional()?;
+        row.map(onekey_from_row).transpose()
+    }
+
+    pub fn create_onekey_credential(
+        conn: &mut SqliteConnection,
+        label: &str,
+        username: &str,
+        kind: OneKeyCredentialKind,
+        key_path: Option<&str>,
+    ) -> Result<SshOneKeyCredential, SshRepositoryError> {
+        let id = new_uuid();
+        diesel::insert_into(ssh_onekey_credentials::table)
+            .values(NewSshOneKeyCredential {
+                id: &id,
+                label,
+                username,
+                kind: kind.as_db_str(),
+                key_path,
+            })
+            .execute(conn)?;
+        let _ = Self::increment_sync_version(conn);
+        Self::get_onekey_credential(conn, &id)?.ok_or_else(|| SshRepositoryError::NotFound(id))
+    }
+
+    pub fn update_onekey_credential(
+        conn: &mut SqliteConnection,
+        credential: &SshOneKeyCredential,
+    ) -> Result<(), SshRepositoryError> {
+        let n = diesel::update(ssh_onekey_credentials::table.find(&credential.id))
+            .set((
+                ssh_onekey_credentials::label.eq(&credential.label),
+                ssh_onekey_credentials::username.eq(&credential.username),
+                ssh_onekey_credentials::kind.eq(credential.kind.as_db_str()),
+                ssh_onekey_credentials::key_path.eq(credential.key_path.as_deref()),
+                ssh_onekey_credentials::updated_at.eq(Utc::now().naive_utc()),
+            ))
+            .execute(conn)?;
+        if n == 0 {
+            return Err(SshRepositoryError::NotFound(credential.id.clone()));
+        }
+        let _ = Self::increment_sync_version(conn);
+        Ok(())
+    }
+
+    pub fn delete_onekey_credential(
+        conn: &mut SqliteConnection,
+        credential_id: &str,
+    ) -> Result<(), SshRepositoryError> {
+        let n = diesel::delete(ssh_onekey_credentials::table.find(credential_id)).execute(conn)?;
+        if n == 0 {
+            return Err(SshRepositoryError::NotFound(credential_id.to_string()));
+        }
+        let _ = Self::increment_sync_version(conn);
+        Ok(())
+    }
+
+    pub fn resolve_server_auth(
+        conn: &mut SqliteConnection,
+        server: &SshServerInfo,
+    ) -> Result<ResolvedSshAuth, SshRepositoryError> {
+        match server.auth_type {
+            AuthType::Password => Ok(ResolvedSshAuth {
+                username: server.username.clone(),
+                auth_type: AuthType::Password,
+                key_path: None,
+                secret_lookup_id: server.node_id.clone(),
+                secret_kind: SecretKind::Password,
+            }),
+            AuthType::Key => Ok(ResolvedSshAuth {
+                username: server.username.clone(),
+                auth_type: AuthType::Key,
+                key_path: server.key_path.clone(),
+                secret_lookup_id: server.node_id.clone(),
+                secret_kind: SecretKind::Passphrase,
+            }),
+            AuthType::OneKey => {
+                let Some(credential_id) = server.credential_id.as_deref() else {
+                    return Err(SshRepositoryError::NotFound(
+                        "onekey credential".to_string(),
+                    ));
+                };
+                let Some(credential) = Self::get_onekey_credential(conn, credential_id)? else {
+                    return Err(SshRepositoryError::NotFound(credential_id.to_string()));
+                };
+                Ok(ResolvedSshAuth {
+                    username: credential.username,
+                    auth_type: match credential.kind {
+                        OneKeyCredentialKind::Password => AuthType::Password,
+                        OneKeyCredentialKind::Key => AuthType::Key,
+                    },
+                    key_path: credential.key_path,
+                    secret_lookup_id: credential_id.to_string(),
+                    secret_kind: match credential.kind {
+                        OneKeyCredentialKind::Password => SecretKind::OneKeyPassword,
+                        OneKeyCredentialKind::Key => SecretKind::Passphrase,
+                    },
+                })
+            }
+        }
     }
 
     /// 更新单个 folder 的折叠状态。Server 节点也允许设(虽然 UI 不用),
@@ -325,6 +452,24 @@ fn server_from_row(r: SshServerRow) -> Result<SshServerInfo, SshRepositoryError>
         startup_command: r.startup_command,
         notes: r.notes,
         last_connected_at: r.last_connected_at,
+        credential_id: r.credential_id,
+    })
+}
+
+fn onekey_from_row(r: SshOneKeyCredentialRow) -> Result<SshOneKeyCredential, SshRepositoryError> {
+    let kind =
+        OneKeyCredentialKind::parse(&r.kind).ok_or_else(|| SshRepositoryError::InvalidEnum {
+            column: "ssh_onekey_credentials.kind",
+            value: r.kind.clone(),
+        })?;
+    Ok(SshOneKeyCredential {
+        id: r.id,
+        label: r.label,
+        username: r.username,
+        kind,
+        key_path: r.key_path,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
     })
 }
 
@@ -356,7 +501,10 @@ impl SyncMetaRepository {
     }
 
     /// 设置同步版本号
-    pub fn set_sync_version(conn: &mut SqliteConnection, version: i64) -> Result<(), SshRepositoryError> {
+    pub fn set_sync_version(
+        conn: &mut SqliteConnection,
+        version: i64,
+    ) -> Result<(), SshRepositoryError> {
         let val = version.to_string();
         diesel::replace_into(sync_meta::table)
             .values(NewSyncMeta {
@@ -377,7 +525,9 @@ impl SyncMetaRepository {
     }
 
     /// 获取上次同步平台
-    pub fn get_last_sync_platform(conn: &mut SqliteConnection) -> Result<String, SshRepositoryError> {
+    pub fn get_last_sync_platform(
+        conn: &mut SqliteConnection,
+    ) -> Result<String, SshRepositoryError> {
         let row: Option<SyncMetaRow> = sync_meta::table
             .find("last_sync_platform")
             .first(conn)
@@ -393,8 +543,14 @@ impl SyncMetaRepository {
     ) -> Result<(), SshRepositoryError> {
         diesel::replace_into(sync_meta::table)
             .values(&[
-                NewSyncMeta { key: "last_sync_time", value: last_time },
-                NewSyncMeta { key: "last_sync_platform", value: last_platform },
+                NewSyncMeta {
+                    key: "last_sync_time",
+                    value: last_time,
+                },
+                NewSyncMeta {
+                    key: "last_sync_platform",
+                    value: last_platform,
+                },
             ])
             .execute(conn)?;
         Ok(())
@@ -418,8 +574,12 @@ pub(crate) fn setup_in_memory() -> SqliteConnection {
         include_str!(
             "../../persistence/migrations/2026-05-23-140000_add_startup_command_and_notes/up.sql"
         ),
+        include_str!("../../persistence/migrations/2026-05-24-150000_add_sync_meta/up.sql"),
         include_str!(
-            "../../persistence/migrations/2026-05-24-150000_add_sync_meta/up.sql"
+            "../../persistence/migrations/2026-06-08-120000_add_ssh_onekey_credentials/up.sql"
+        ),
+        include_str!(
+            "../../persistence/migrations/2026-06-09-160000_add_ssh_onekey_key_type/up.sql"
         ),
     ] {
         conn.batch_execute(up).unwrap();
@@ -439,6 +599,7 @@ mod tests {
             username: "root".into(),
             auth_type: AuthType::Password,
             key_path: None,
+            credential_id: None,
             startup_command: None,
             notes: None,
             last_connected_at: None,
@@ -521,6 +682,130 @@ mod tests {
         assert_eq!(got.port, 2222);
         assert_eq!(got.auth_type, AuthType::Key);
         assert_eq!(got.key_path.as_deref(), Some("/k"));
+    }
+
+    #[test]
+    fn create_list_and_update_onekey_credential() {
+        let mut conn = setup_in_memory();
+        let credential = SshRepository::create_onekey_credential(
+            &mut conn,
+            "prod-root",
+            "root",
+            OneKeyCredentialKind::Password,
+            None,
+        )
+        .unwrap();
+        assert_eq!(credential.label, "prod-root");
+        assert_eq!(credential.username, "root");
+        assert_eq!(credential.kind, OneKeyCredentialKind::Password);
+        assert_eq!(credential.key_path, None);
+
+        let listed = SshRepository::list_onekey_credentials(&mut conn).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, credential.id);
+
+        let mut updated = credential.clone();
+        updated.label = "prod-admin".into();
+        updated.username = "admin".into();
+        updated.kind = OneKeyCredentialKind::Key;
+        updated.key_path = Some("/home/admin/.ssh/id_ed25519".into());
+        SshRepository::update_onekey_credential(&mut conn, &updated).unwrap();
+
+        let got = SshRepository::get_onekey_credential(&mut conn, &credential.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.label, "prod-admin");
+        assert_eq!(got.username, "admin");
+        assert_eq!(got.kind, OneKeyCredentialKind::Key);
+        assert_eq!(got.key_path.as_deref(), Some("/home/admin/.ssh/id_ed25519"));
+    }
+
+    #[test]
+    fn server_can_reference_onekey_credential() {
+        let mut conn = setup_in_memory();
+        let credential = SshRepository::create_onekey_credential(
+            &mut conn,
+            "shared",
+            "deploy",
+            OneKeyCredentialKind::Password,
+            None,
+        )
+        .unwrap();
+        let mut info = sample_server("edge");
+        info.auth_type = AuthType::OneKey;
+        info.username = "ignored-local-user".into();
+        info.credential_id = Some(credential.id.clone());
+        let node = SshRepository::create_server(&mut conn, None, "edge", &info).unwrap();
+
+        let got = SshRepository::get_server(&mut conn, &node.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.auth_type, AuthType::OneKey);
+        assert_eq!(got.credential_id.as_deref(), Some(credential.id.as_str()));
+
+        let resolved = SshRepository::resolve_server_auth(&mut conn, &got).unwrap();
+        assert_eq!(resolved.username, "deploy");
+        assert_eq!(resolved.auth_type, AuthType::Password);
+        assert_eq!(resolved.key_path, None);
+        assert_eq!(resolved.secret_lookup_id, credential.id);
+        assert_eq!(resolved.secret_kind, SecretKind::OneKeyPassword);
+    }
+
+    #[test]
+    fn onekey_key_credential_resolves_to_key_auth() {
+        let mut conn = setup_in_memory();
+        let credential = SshRepository::create_onekey_credential(
+            &mut conn,
+            "shared-key",
+            "deploy",
+            OneKeyCredentialKind::Key,
+            Some("/home/deploy/.ssh/id_ed25519"),
+        )
+        .unwrap();
+        let mut info = sample_server("edge");
+        info.auth_type = AuthType::OneKey;
+        info.credential_id = Some(credential.id.clone());
+        let node = SshRepository::create_server(&mut conn, None, "edge", &info).unwrap();
+        let got = SshRepository::get_server(&mut conn, &node.id)
+            .unwrap()
+            .unwrap();
+
+        let resolved = SshRepository::resolve_server_auth(&mut conn, &got).unwrap();
+
+        assert_eq!(resolved.username, "deploy");
+        assert_eq!(resolved.auth_type, AuthType::Key);
+        assert_eq!(
+            resolved.key_path.as_deref(),
+            Some("/home/deploy/.ssh/id_ed25519")
+        );
+        assert_eq!(resolved.secret_lookup_id, credential.id);
+        assert_eq!(resolved.secret_kind, SecretKind::Passphrase);
+    }
+
+    #[test]
+    fn deleting_onekey_credential_clears_server_reference() {
+        let mut conn = setup_in_memory();
+        let credential = SshRepository::create_onekey_credential(
+            &mut conn,
+            "shared",
+            "deploy",
+            OneKeyCredentialKind::Password,
+            None,
+        )
+        .unwrap();
+        let mut info = sample_server("edge");
+        info.auth_type = AuthType::OneKey;
+        info.credential_id = Some(credential.id.clone());
+        let node = SshRepository::create_server(&mut conn, None, "edge", &info).unwrap();
+
+        SshRepository::delete_onekey_credential(&mut conn, &credential.id).unwrap();
+
+        let got = SshRepository::get_server(&mut conn, &node.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.auth_type, AuthType::OneKey);
+        assert_eq!(got.credential_id, None);
+        assert!(SshRepository::resolve_server_auth(&mut conn, &got).is_err());
     }
 
     #[test]
@@ -609,8 +894,14 @@ mod tests {
     fn sync_meta_update_and_read() {
         let mut conn = setup_in_memory();
         SyncMetaRepository::update_sync_meta(&mut conn, "2026-05-26T10:00:00Z", "github").unwrap();
-        assert_eq!(SyncMetaRepository::get_last_sync_time(&mut conn).unwrap(), "2026-05-26T10:00:00Z");
-        assert_eq!(SyncMetaRepository::get_last_sync_platform(&mut conn).unwrap(), "github");
+        assert_eq!(
+            SyncMetaRepository::get_last_sync_time(&mut conn).unwrap(),
+            "2026-05-26T10:00:00Z"
+        );
+        assert_eq!(
+            SyncMetaRepository::get_last_sync_platform(&mut conn).unwrap(),
+            "github"
+        );
     }
 
     #[test]
@@ -618,8 +909,14 @@ mod tests {
         let mut conn = setup_in_memory();
         SyncMetaRepository::update_sync_meta(&mut conn, "t1", "gitee").unwrap();
         SyncMetaRepository::update_sync_meta(&mut conn, "t2", "github").unwrap();
-        assert_eq!(SyncMetaRepository::get_last_sync_time(&mut conn).unwrap(), "t2");
-        assert_eq!(SyncMetaRepository::get_last_sync_platform(&mut conn).unwrap(), "github");
+        assert_eq!(
+            SyncMetaRepository::get_last_sync_time(&mut conn).unwrap(),
+            "t2"
+        );
+        assert_eq!(
+            SyncMetaRepository::get_last_sync_platform(&mut conn).unwrap(),
+            "github"
+        );
     }
 
     #[test]
@@ -640,10 +937,17 @@ mod tests {
         SyncMetaRepository::set_sync_version(&mut conn, 0).unwrap();
 
         SshRepository::set_collapsed(&mut conn, &folder.id, true).unwrap();
-        assert_eq!(SyncMetaRepository::get_sync_version(&mut conn).unwrap(), 0,
-            "set_collapsed 不应递增 sync_version");
+        assert_eq!(
+            SyncMetaRepository::get_sync_version(&mut conn).unwrap(),
+            0,
+            "set_collapsed 不应递增 sync_version"
+        );
 
-        let node = SshRepository::list_nodes(&mut conn).unwrap().into_iter().next().unwrap();
+        let node = SshRepository::list_nodes(&mut conn)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         assert!(node.is_collapsed);
     }
 
@@ -655,8 +959,11 @@ mod tests {
         SyncMetaRepository::set_sync_version(&mut conn, 0).unwrap();
 
         SshRepository::set_collapsed(&mut conn, &folder.id, false).unwrap();
-        assert_eq!(SyncMetaRepository::get_sync_version(&mut conn).unwrap(), 0,
-            "set_collapsed(false) 不应递增 sync_version");
+        assert_eq!(
+            SyncMetaRepository::get_sync_version(&mut conn).unwrap(),
+            0,
+            "set_collapsed(false) 不应递增 sync_version"
+        );
     }
 
     #[test]
@@ -667,8 +974,11 @@ mod tests {
         SyncMetaRepository::set_sync_version(&mut conn, 0).unwrap();
 
         SshRepository::set_all_folders_collapsed(&mut conn, true).unwrap();
-        assert_eq!(SyncMetaRepository::get_sync_version(&mut conn).unwrap(), 0,
-            "set_all_folders_collapsed 不应递增 sync_version");
+        assert_eq!(
+            SyncMetaRepository::get_sync_version(&mut conn).unwrap(),
+            0,
+            "set_all_folders_collapsed 不应递增 sync_version"
+        );
 
         let nodes = SshRepository::list_nodes(&mut conn).unwrap();
         assert!(nodes.iter().all(|n| n.is_collapsed));
@@ -703,13 +1013,9 @@ mod tests {
         let mut conn = setup_in_memory();
         let a = SshRepository::create_folder(&mut conn, None, "A").unwrap();
         let b = SshRepository::create_folder(&mut conn, None, "B").unwrap();
-        let srv = SshRepository::create_server(
-            &mut conn,
-            Some(&a.id),
-            "srv1",
-            &sample_server("srv1"),
-        )
-        .unwrap();
+        let srv =
+            SshRepository::create_server(&mut conn, Some(&a.id), "srv1", &sample_server("srv1"))
+                .unwrap();
 
         SshRepository::move_node_to_end(&mut conn, &srv.id, Some(&b.id)).unwrap();
 
@@ -735,27 +1041,22 @@ mod tests {
 
         let nodes = SshRepository::list_nodes(&mut conn).unwrap();
         let moved = nodes.iter().find(|n| n.id == srv.id).unwrap();
-        assert!(moved.parent_id.is_none(), "移到 root 后 parent_id 应为 None");
+        assert!(
+            moved.parent_id.is_none(),
+            "移到 root 后 parent_id 应为 None"
+        );
     }
 
     #[test]
     fn move_node_to_end_appends_after_existing_children() {
         let mut conn = setup_in_memory();
         let folder = SshRepository::create_folder(&mut conn, None, "F").unwrap();
-        let _s1 = SshRepository::create_server(
-            &mut conn,
-            Some(&folder.id),
-            "s1",
-            &sample_server("s1"),
-        )
-        .unwrap();
-        let _s2 = SshRepository::create_server(
-            &mut conn,
-            Some(&folder.id),
-            "s2",
-            &sample_server("s2"),
-        )
-        .unwrap();
+        let _s1 =
+            SshRepository::create_server(&mut conn, Some(&folder.id), "s1", &sample_server("s1"))
+                .unwrap();
+        let _s2 =
+            SshRepository::create_server(&mut conn, Some(&folder.id), "s2", &sample_server("s2"))
+                .unwrap();
 
         let other = SshRepository::create_folder(&mut conn, None, "Other").unwrap();
         let srv = SshRepository::create_server(
@@ -770,7 +1071,10 @@ mod tests {
 
         let nodes = SshRepository::list_nodes(&mut conn).unwrap();
         let moved = nodes.iter().find(|n| n.id == srv.id).unwrap();
-        assert_eq!(moved.sort_order, 2, "F 下已有 2 个子节点,新节点 sort_order 应为 2");
+        assert_eq!(
+            moved.sort_order, 2,
+            "F 下已有 2 个子节点,新节点 sort_order 应为 2"
+        );
         assert_eq!(moved.parent_id.as_deref(), Some(folder.id.as_str()));
     }
 
@@ -778,13 +1082,8 @@ mod tests {
     fn move_node_to_end_empty_target_folder() {
         let mut conn = setup_in_memory();
         let folder = SshRepository::create_folder(&mut conn, None, "Empty").unwrap();
-        let srv = SshRepository::create_server(
-            &mut conn,
-            None,
-            "srv1",
-            &sample_server("srv1"),
-        )
-        .unwrap();
+        let srv =
+            SshRepository::create_server(&mut conn, None, "srv1", &sample_server("srv1")).unwrap();
 
         SshRepository::move_node_to_end(&mut conn, &srv.id, Some(&folder.id)).unwrap();
 

@@ -6,10 +6,10 @@
 use std::sync::{Arc, Mutex};
 
 use warp_ssh_manager::{SshRepository, SshServerInfo};
-use warpui::integration::TestStep;
-use warpui::windowing::WindowManager;
 use warpui::SingletonEntity;
 use warpui::TypedActionView;
+use warpui::integration::TestStep;
+use warpui::windowing::WindowManager;
 
 use crate::ssh_manager::server_view::SshServerAction;
 use crate::workspace::{Workspace, WorkspaceAction};
@@ -28,7 +28,10 @@ pub fn open_ssh_manager_panel() -> TestStep {
             .views_of_type::<Workspace>(window_id)
             .and_then(|views| views.first().map(|view| view.id()))
             .expect("no workspace view");
-        log::info!("dispatching ToggleSshManager to workspace view {}", workspace_view_id);
+        log::info!(
+            "dispatching ToggleSshManager to workspace view {}",
+            workspace_view_id
+        );
         app.dispatch_typed_action(
             window_id,
             &[workspace_view_id],
@@ -60,6 +63,7 @@ pub fn create_server_via_db(name: &str, parent_id: Option<&str>) -> String {
             username: "root".into(),
             auth_type: warp_ssh_manager::AuthType::Password,
             key_path: None,
+            credential_id: None,
             startup_command: None,
             notes: None,
             last_connected_at: None,
@@ -84,9 +88,9 @@ pub fn select_group_by_id(folder_id: Arc<Mutex<Option<String>>>) -> TestStep {
         let view = ssh_server_view(app, window_id);
         let gid = folder_id.lock().unwrap().clone();
         view.update(app, |v, ctx| {
-            let index = gid.as_ref().and_then(|gid| {
-                v.folders().iter().position(|(id, _)| id == gid)
-            });
+            let index = gid
+                .as_ref()
+                .and_then(|gid| v.folders().iter().position(|(id, _)| id == gid));
             v.handle_action(&SshServerAction::SelectGroup(index), ctx);
         });
     })

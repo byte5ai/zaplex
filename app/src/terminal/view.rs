@@ -56,7 +56,7 @@ use crate::ai::predict::prompt_suggestions::{
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
 use crate::search::slash_command_menu::static_commands::commands;
-use crate::ssh_manager::onekey::load_saved_ssh_credentials;
+use crate::ssh_manager::onekey::{load_saved_ssh_credentials, OneKeyCredentialKind};
 use crate::ssh_manager::password_prompt::bytes_look_like_password_prompt;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
@@ -2274,6 +2274,7 @@ struct OneKeyPromptCandidate {
     label: String,
     subtitle: String,
     secret: zeroize::Zeroizing<String>,
+    kind: OneKeyCredentialKind,
 }
 
 pub struct TerminalView {
@@ -2333,6 +2334,7 @@ pub struct TerminalView {
     ssh_secret_auto_injection_in_flight: bool,
     /// 检测到 su root 密码提示时暂存 root 密码,等待用户确认后注入。
     pub(crate) su_root_password: Option<zeroize::Zeroizing<String>>,
+    su_root_onekey_candidates: Vec<usize>,
 
     /// The search bar at the top of the terminal view.
     find_bar: ViewHandle<Find<TerminalFindModel>>,
@@ -3833,6 +3835,7 @@ impl TerminalView {
             onekey_query: String::new(),
             ssh_secret_auto_injection_in_flight: false,
             su_root_password: None,
+            su_root_onekey_candidates: Vec::new(),
             context_menu,
             hovered_secret: None,
             open_secret_tool_tip: None,
@@ -15351,6 +15354,7 @@ impl TerminalView {
                     label: credential.label,
                     subtitle: credential.subtitle,
                     secret: credential.secret,
+                    kind: credential.kind,
                 })
                 .collect();
             view.onekey_query.clear();
@@ -15569,36 +15573,143 @@ impl TerminalView {
         if self.context_menu_state.is_some() {
             return;
         }
-        let items = vec![
+        self.su_root_onekey_candidates.clear();
+        if self.su_root_password.is_some() {
+            let items = self.build_su_root_password_menu_items();
+            self.show_context_menu(
+                ContextMenuState {
+                    menu_type: ContextMenuType::SuRootPasswordConfirm,
+                },
+                items,
+                ctx,
+            );
+        }
+
+        let future = async move {
+            tokio::task::spawn_blocking(load_saved_ssh_credentials)
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("onekey: join error: {e}")))
+        };
+        ctx.spawn(future, move |view, result, ctx| {
+            let credentials = match result {
+                Ok(credentials) => credentials,
+                Err(e) => {
+                    log::warn!("onekey: failed to load su password candidates: {e:?}");
+                    return;
+                }
+            };
+            if view.context_menu_state.is_some()
+                && !matches!(
+                    view.context_menu_state.map(|state| state.menu_type),
+                    Some(ContextMenuType::SuRootPasswordConfirm)
+                )
+            {
+                return;
+            }
+            view.onekey_prompt_candidates = credentials
+                .into_iter()
+                .map(|credential| OneKeyPromptCandidate {
+                    label: credential.label,
+                    subtitle: credential.subtitle,
+                    secret: credential.secret,
+                    kind: credential.kind,
+                })
+                .collect();
+            view.su_root_onekey_candidates = view
+                .onekey_prompt_candidates
+                .iter()
+                .enumerate()
+                .filter_map(|(index, candidate)| {
+                    matches!(candidate.kind, OneKeyCredentialKind::Password).then_some(index)
+                })
+                .collect();
+            if view.su_root_password.is_none() && view.su_root_onekey_candidates.is_empty() {
+                return;
+            }
+            let items = view.build_su_root_password_menu_items();
+            if matches!(
+                view.context_menu_state.map(|state| state.menu_type),
+                Some(ContextMenuType::SuRootPasswordConfirm)
+            ) {
+                ctx.update_view(&view.context_menu, |context_menu, ctx| {
+                    context_menu.set_items(items, ctx);
+                    context_menu.select_next(ctx);
+                });
+            } else if view.context_menu_state.is_none() {
+                view.show_context_menu(
+                    ContextMenuState {
+                        menu_type: ContextMenuType::SuRootPasswordConfirm,
+                    },
+                    items,
+                    ctx,
+                );
+                ctx.update_view(&view.context_menu, |context_menu, ctx| {
+                    context_menu.select_next(ctx);
+                });
+            }
+            ctx.notify();
+        });
+    }
+
+    fn build_su_root_password_menu_items(&self) -> Vec<MenuItem<TerminalAction>> {
+        let mut items = Vec::new();
+        if self.su_root_password.is_some() {
+            items.push(
+                MenuItemFields::new_with_stacked_label(
+                    crate::t!("terminal-su-root-password-confirm"),
+                    crate::t!("terminal-su-root-password-confirm-subtitle"),
+                )
+                .with_icon(icons::Icon::Key)
+                .with_on_select_action(TerminalAction::SuRootFillRootPassword)
+                .into_item(),
+            );
+        }
+        items.extend(self.su_root_onekey_candidates.iter().map(|index| {
+            let candidate = &self.onekey_prompt_candidates[*index];
             MenuItemFields::new_with_stacked_label(
-                crate::t!("terminal-su-root-password-confirm"),
-                crate::t!("terminal-su-root-password-confirm-subtitle"),
+                candidate.label.clone(),
+                candidate.subtitle.clone(),
             )
             .with_icon(icons::Icon::Key)
-            .with_on_select_action(TerminalAction::SuRootFillRootPassword)
-            .into_item(),
+            .with_on_select_action(TerminalAction::SuRootFillOneKeyPassword { index: *index })
+            .into_item()
+        }));
+        items.push(
             MenuItemFields::new(crate::t!("terminal-su-root-password-cancel"))
                 .with_on_select_action(TerminalAction::CloseContextMenu)
                 .into_item(),
-        ];
-        self.show_context_menu(
-            ContextMenuState {
-                menu_type: ContextMenuType::SuRootPasswordConfirm,
-            },
-            items,
-            ctx,
         );
+        items
     }
 
     /// 用户确认后注入暂存的 root 密码。
     fn fill_su_root_password(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(password) = self.su_root_password.take() {
-            let mut bytes: zeroize::Zeroizing<Vec<u8>> =
-                zeroize::Zeroizing::new(password.as_bytes().to_vec());
-            bytes.push(b'\n');
-            self.write_to_pty(bytes.to_vec(), ctx);
+            self.fill_su_password(&password, ctx);
         }
         self.close_context_menu(ctx, true);
+    }
+
+    fn fill_su_root_onekey_password(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        if let Some(password) = self
+            .onekey_prompt_candidates
+            .get(index)
+            .map(|candidate| candidate.secret.clone())
+        {
+            self.fill_su_password(&password, ctx);
+        }
+        self.close_context_menu(ctx, true);
+    }
+
+    fn fill_su_password(
+        &mut self,
+        password: &zeroize::Zeroizing<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let mut bytes: zeroize::Zeroizing<Vec<u8>> =
+            zeroize::Zeroizing::new(password.as_bytes().to_vec());
+        bytes.push(b'\n');
+        self.write_to_pty(bytes.to_vec(), ctx);
     }
 
     fn alt_mouse_action(&mut self, mouse_state: &MouseState, ctx: &mut ViewContext<Self>) {
@@ -18491,6 +18602,8 @@ impl TerminalView {
             }
             if matches!(state.menu_type, ContextMenuType::SuRootPasswordConfirm) {
                 self.su_root_password = None;
+                self.su_root_onekey_candidates.clear();
+                self.onekey_prompt_candidates.clear();
             }
             ctx.notify();
             if should_redetermine_focus {
@@ -23206,6 +23319,8 @@ impl TypedActionView for TerminalView {
             | BlockListContextMenu(_)
             | CloseContextMenu
             | OneKeyFillSecret { .. }
+            | SuRootFillOneKeyPassword { .. }
+            | SuRootFillRootPassword
             | Paste
             | MiddleClickOnGrid { .. }
             | MiddleClickOnInput
@@ -23358,7 +23473,6 @@ impl TypedActionView for TerminalView {
             | RevealChildAgent { .. }
             | OpenCLIAgentRichInput
             | ToggleSessionRecording => Empty,
-            SuRootFillRootPassword => Empty,
         }
     }
 
@@ -23499,6 +23613,7 @@ impl TypedActionView for TerminalView {
             CloseContextMenu => self.close_context_menu(ctx, true),
             OneKeyFillSecret { index } => self.fill_onekey_secret(*index, ctx),
             SuRootFillRootPassword => self.fill_su_root_password(ctx),
+            SuRootFillOneKeyPassword { index } => self.fill_su_root_onekey_password(*index, ctx),
             Paste => self.paste(false, ctx),
             Copy => self.copy(ctx),
             CopyOutputs => self.copy_outputs(ctx),

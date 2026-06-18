@@ -9,9 +9,7 @@ use warp_ssh_manager::{NodeKind, SshNode};
 // --- 测试辅助 --------------------------------------------------------------
 
 fn ts() -> NaiveDateTime {
-    chrono::DateTime::from_timestamp(0, 0)
-        .unwrap()
-        .naive_utc()
+    chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc()
 }
 
 fn folder(id: &str, parent_id: Option<&str>, name: &str, sort_order: i32) -> SshNode {
@@ -78,7 +76,10 @@ fn parent_server_under_folder_selected_returns_folder_id() {
 #[test]
 fn parent_invalid_selected_id_returns_none() {
     let nodes = vec![folder("f1", None, "Root", 0)];
-    assert_eq!(resolve_parent_for_new_node(Some("nonexistent"), &nodes), None);
+    assert_eq!(
+        resolve_parent_for_new_node(Some("nonexistent"), &nodes),
+        None
+    );
 }
 
 #[test]
@@ -181,11 +182,25 @@ fn sort_respects_parent_child_order() {
 }
 
 #[test]
-fn sort_multiple_roots_by_sort_order() {
+fn sort_preserves_existing_folder_children_in_tree_order() {
     let nodes = vec![
-        folder("f2", None, "B", 1),
-        folder("f1", None, "A", 0),
+        server("s2", Some("f2"), "db", 1),
+        folder("f2", None, "Stage", 1),
+        server("s1", Some("f1"), "web", 0),
+        folder("f1", None, "Prod", 0),
     ];
+    let depths = compute_depths(&nodes);
+    let sorted = sort_for_display(nodes, &depths);
+    let ids: Vec<&str> = sorted.iter().map(|n| n.id.as_str()).collect();
+
+    assert_eq!(ids, &["f1", "s1", "f2", "s2"]);
+    assert_eq!(depths["s1"], 1);
+    assert_eq!(depths["s2"], 1);
+}
+
+#[test]
+fn sort_multiple_roots_by_sort_order() {
+    let nodes = vec![folder("f2", None, "B", 1), folder("f1", None, "A", 0)];
     let depths = compute_depths(&nodes);
     let sorted = sort_for_display(nodes, &depths);
     assert_eq!(sorted[0].id, "f1");
@@ -219,4 +234,21 @@ fn sort_multiple_roots_with_children() {
     let ids: Vec<&str> = sorted.iter().map(|n| n.id.as_str()).collect();
     // f1(Prod) 及其子节点在前，f2(Stage) 及其子节点在后
     assert_eq!(ids, &["f1", "s1", "f2", "s2"]);
+}
+
+#[test]
+fn sort_keeps_orphaned_existing_nodes_visible_as_roots() {
+    let nodes = vec![
+        server("s1", Some("missing-folder"), "legacy", 0),
+        folder("f1", None, "New folder", 1),
+    ];
+    let depths = compute_depths(&nodes);
+    let sorted = sort_for_display(nodes, &depths);
+    let ids: Vec<&str> = sorted.iter().map(|n| n.id.as_str()).collect();
+
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&"s1"));
+    assert!(ids.contains(&"f1"));
+    assert_eq!(depths["s1"], 0);
+    assert_eq!(depths["f1"], 0);
 }
