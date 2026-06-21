@@ -5201,8 +5201,10 @@ impl Workspace {
                 let open_as_preview = false;
                 self.open_code(code_source, layout, line_col, open_as_preview, &[], ctx);
             }
-            FileTarget::ImageViewer(layout) => {
-                self.open_image(path.clone(), self.get_active_session(ctx), layout, ctx);
+            FileTarget::ImageViewer(_layout) => {
+                // 图片始终在新标签页打开,见 `insert_image_pane`。target 携带的
+                // layout 在此被故意忽略。
+                self.open_image(path.clone(), self.get_active_session(ctx), ctx);
             }
             FileTarget::ExternalEditor(editor) => {
                 crate::util::file::open_file_path_with_editor(
@@ -6995,42 +6997,27 @@ impl Workspace {
         &mut self,
         path: PathBuf,
         session: Option<Arc<Session>>,
-        layout: EditorLayout,
         ctx: &mut ViewContext<Self>,
     ) {
         let pane = ImagePane::new(Some(path), session, ctx);
-        self.insert_image_pane(pane, layout, ctx);
+        self.insert_image_pane(pane, ctx);
     }
 
-    /// Insert an already-constructed [`ImagePane`] using the editor layout (new tab
-    /// vs. split). Shared by local [`Self::open_image`] and remote
-    /// [`Self::open_remote_image`].
-    fn insert_image_pane(
-        &mut self,
-        pane: ImagePane,
-        layout: EditorLayout,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match layout {
-            EditorLayout::NewTab => {
-                let new_tab_placement_setting = TabSettings::as_ref(ctx).new_tab_placement;
-                let new_idx = match new_tab_placement_setting {
-                    NewTabPlacement::AfterAllTabs => self.tab_count(),
-                    NewTabPlacement::AfterCurrentTab => self.active_tab_index + 1,
-                };
-                self.add_tab_from_existing_pane(Box::new(pane), new_idx, ctx);
-            }
-            EditorLayout::SplitPane => {
-                self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-                    pane_group.add_pane_with_direction(
-                        Direction::Right,
-                        pane,
-                        true, /* focus_new_pane */
-                        ctx,
-                    );
-                });
-            }
-        }
+    /// Insert an already-constructed [`ImagePane`] as its own workspace tab. Shared by
+    /// local [`Self::open_image`] and remote [`Self::open_remote_image`].
+    ///
+    /// Images always open in a new tab rather than honoring `open_file_layout` (which
+    /// defaults to `SplitPane`). Unlike the code editor — whose `CodeView` stacks files
+    /// as internal tabs — an `ImagePane` holds a single image, so a `SplitPane` layout
+    /// would subdivide the window for every image opened. A new tab per image gives the
+    /// expected tab-stacking behavior instead.
+    fn insert_image_pane(&mut self, pane: ImagePane, ctx: &mut ViewContext<Self>) {
+        let new_tab_placement_setting = TabSettings::as_ref(ctx).new_tab_placement;
+        let new_idx = match new_tab_placement_setting {
+            NewTabPlacement::AfterAllTabs => self.tab_count(),
+            NewTabPlacement::AfterCurrentTab => self.active_tab_index + 1,
+        };
+        self.add_tab_from_existing_pane(Box::new(pane), new_idx, ctx);
     }
 
     /// Open a remote image in an image viewer pane. Creates the pane immediately
@@ -7059,10 +7046,9 @@ impl Workspace {
         };
 
         // 先建带 loading spinner 的空 pane,再异步抓字节填充(spinner-first UX)。
-        let layout = *EditorSettings::as_ref(ctx).open_file_layout.value();
         let pane = ImagePane::new_remote(remote_path.clone(), ctx);
         let image_view = pane.image_view(ctx);
-        self.insert_image_pane(pane, layout, ctx);
+        self.insert_image_pane(pane, ctx);
 
         let path_str = remote_path.path.as_str().to_string();
         ctx.spawn(
