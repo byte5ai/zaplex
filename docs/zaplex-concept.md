@@ -20,13 +20,18 @@ Aus dem bestehenden Bun-TUI (claudeplex) wird **Zaplex** — ein nativer Teil vo
 - die **Agent-Hälfte** liefert (Multi-Account-Orchestrierung über **mehrere Provider — Claude und Codex —**, Fleet, Conductor) — die fehlende Schicht, die wir beitragen,
 - und **Session-Bedienung + Prompting** als first-class-Erlebnis vereint — der eigentliche Wow-Moment.
 
-Es ersetzt das standalone claudeplex-TUI und Marcels Electron-App (`byte5ai/claudeplex-desktop`) — beide haben bisher einen Terminal-/SSH-Unterbau nachgebaut, den Zap fertig mitbringt. Diese Redundanz schneiden wir weg.
+**Der Nordstern:** ein **integriertes Premium-Terminal** für anspruchsvolle Devs, die mit **Claude Code** und **Codex** auf einem oder mehreren Remote-Hosts entwickeln — oft mit **vielen Sessions/Agents parallel**. Es löst drei Versprechen ein:
+1. **Kein Tool-Wechsel** — Sessions, Files, Accounts, Kosten an einem Ort; die CLIs bleiben voll direkt nutzbar, zaplex gibt den Überblick *obendrauf* (was braucht wo Aufmerksamkeit? Tokenverbrauch/Kosten? Subscription-Auslastung?).
+2. **Nichts bricht ab** — Verbindungsabbruch, leerer Akku oder das Ausschalten des lokalen Rechners unterbrechen die Agenten **nicht** (nativer Session-Daemon, §3.5).
+3. **Mentale Last runter** — das große Problem der „Vibecoder": sofort sichtbar, *was wo* gerade Eingreifen braucht; **Multi-Subscription-Balancing über Claude und Codex** gegen Rate-Limits; **kein Overwhelming** selbst bei vielen Projekten/Sessions/Agents.
+
+Es ersetzt das standalone claudeplex-TUI und die Electron-App `iret77/claudeplex-desktop` (Fork der Team-App von Marcel) — beide haben bisher einen Terminal-/SSH-Unterbau nachgebaut, den Zap fertig mitbringt. Diese Redundanz schneiden wir weg. Beide bleiben **Referenzquellen** (`~/projects/zaplex/claudeplex`, `~/projects/zaplex/claudeplex-desktop`): alles, was sinnvoll passt, übernehmen wir.
 
 **Provider-Gleichwertigkeit:** Claude (Claude Max) und Codex (ChatGPT-Subscription) sind keine Sonderfälle voneinander, sondern zwei Instanzen derselben Abstraktion. Discovery, Budget-/Heat-Tracking, „launch on freest" und das Session-Inventar funktionieren für beide identisch. Wo die zugrundeliegende CLI eine Fähigkeit nicht bietet (siehe Capability-Matrix §3.4), degradiert das Feature ehrlich — wir täuschen keine Parität vor, die das CLI nicht hergibt.
 
 **Subscription zuerst (Must-Have):** Zaplex' Orchestrierung ist um **Subscription-Accounts** herum gebaut — genau deren rollende Rate-Fenster (5h + Woche) machen Heat-Tracking und „launch on freest" überhaupt sinnvoll. Subscription-Support ist nicht verhandelbar. API-Key-/BYOP-Nutzung wird pro Token abgerechnet und hat diese Fenster-Semantik nicht; sie ist deshalb nicht der Dreh- und Angelpunkt — aber Zap bringt sie bereits mit, und wir reißen sie **nicht** heraus. API-Key-Accounts dürfen koexistieren (z. B. im Account-Dock sichtbar, nur ohne Heat-Fenster); sie zu unterstützen kostet uns nichts, weil der Pfad schon da ist. Fokus von Discovery, Heat und Routing bleibt die Subscription-Seite.
 
-**Zielgruppe:** der User selbst. Kein Produkt für Dritte. Das heißt: kompromisslos „geil" statt „skalierbar". Wenn ein Feature den Workflow nicht spürbar verbessert, fliegt es raus.
+**Zielgruppe:** **anspruchsvolle Devs, die mit Claude Code und Codex auf Remote-Hosts entwickeln oder vibecoden** — **nicht** auf den User oder sein Team beschränkt (auch wenn wir das Tool zunächst für uns selbst bauen). Das heißt: kompromisslos auf Erlebnis und Politur statt auf vorzeitige Breite optimiert — jedes Feature muss den Workflow spürbar verbessern, sonst fliegt es raus. **Erfolgskriterium:** schon die bisherigen claudeplex-/Desktop-User wechseln **freiwillig und gern** (vermissen nichts, gewinnen viel dazu) — und darüber hinaus jede:r anspruchsvolle Remote-Dev mit Claude/Codex (siehe §12).
 
 ---
 
@@ -92,7 +97,7 @@ Die Schicht, die Zap aus konzeptionellem Grund weglässt (Roadmap: „single acc
 - **Account-Routing** — „launch on freest" als Default beim Agent-Start, **innerhalb des gewählten Providers**.
 - **Cross-Account-Session-Inventar** — alle laufenden/wartenden/recent Sessions über alle Accounts/Provider/Hosts.
 - **„Needs me"-Bubbling** — „● N waiting" + Hotkey-Jump (provider-gemischt).
-- **Persistente Remote-Fleet** — remote-control-Server in tmux auf SSH-Hosts (überlebt Lid-Close). *Provider-abhängig:* für Claude via `claude remote-control` (bedient auch die Claude-Mobile-App); für Codex über generische tmux-Persistenz (kein eigenes Serverprotokoll — siehe §3.4).
+- **Persistente Remote-Fleet** — Agent-Server laufen als Sessions im **nativen zaplex-Session-Daemon** (§3.5; überlebt Lid-Close **und** App-Restart, **kein** tmux). *Provider-abhängig:* für Claude zusätzlich `claude remote-control` (bedient auch die Claude-Mobile-App); für Codex liefert der Daemon die generische Persistenz (kein eigenes Serverprotokoll — siehe §3.4). **Eine** gemeinsame Persistenz-Primitive für interaktive Shells und Fleet, nicht zwei Mechanismen.
 - **RAM-Governor für die Fleet** — harter Ceiling, pro Session (~330 MB für Claude; Codex-Footprint bei Umsetzung messen, eigener Wert).
 - **Adopt-by-session-id** — Session, die in einer anderen Shell gestartet wurde, hier weiterführen (beide Provider).
 - **MC-style Dual-Pane File Manager** — Host↔Host-Copy ohne scp, weil `warp_files` Single-Pane ist. *(Provider-unabhängig — gehört zur MC-Hälfte.)*
@@ -125,10 +130,11 @@ Die Schicht, die Zap aus konzeptionellem Grund weglässt (Roadmap: „single acc
 | Als Zap-Block spawnbar | ✅ (Zap fertig) | ✅ (Zap fertig) |
 | Adopt / Resume by id | ✅ `claude --resume <id>` | ✅ Codex-Resume (Flag bei Bau verifizieren) |
 | Steer (stdin → Block) | ✅ | ✅ |
-| Persistenter remote-control-Server (Mobile-App) | ✅ `claude remote-control` | ❌ kein Serverprotokoll → generische tmux-Persistenz |
+| Session-Persistenz (Remote) | ✅ nativer zaplex-Daemon (§3.5) | ✅ nativer zaplex-Daemon (§3.5) |
+| Persistenter remote-control-Server (Mobile-App) | ✅ `claude remote-control` | ❌ kein Serverprotokoll → keine Codex-Mobile-App |
 | RAM-Governor | ✅ (~330 MB) | ✅ (Footprint messen) |
 
-Die rot markierte Zelle ist der einzige bewusste Asymmetrie-Punkt: Codex hat kein dem `claude remote-control` äquivalentes Serverprotokoll. Codex-Sessions laufen auf Remote-Hosts in tmux und sind adopt-bar, aber es gibt keine Codex-Mobile-App-Anbindung. Das wird in der UI nicht verschleiert.
+Die rot markierte Zelle ist der einzige bewusste Asymmetrie-Punkt: Codex hat kein dem `claude remote-control` äquivalentes Serverprotokoll und damit **keine Mobile-App-Anbindung**. Die **Session-Persistenz** ist hingegen für beide Provider gleich — sie kommt vom **nativen zaplex-Daemon** (§3.5), nicht vom CLI: Codex-Sessions laufen also persistent und adopt-bar, nur ohne Mobile-App. Das wird in der UI nicht verschleiert.
 
 ### 3.5 Sicheres Remote-Entwickeln — Multiplexer-kompatible Shell-Integration + Session-Resilienz
 
@@ -266,9 +272,11 @@ Aktionen rufen entweder existierenden claudeplex-Code auf (über CLI, Claude-Sei
 | Steer (prompt senden)   | stdin des Block-Subprocesses, exakt wie Zap es heute schon macht   | identisch — stdin des Block-Subprocesses                    |
 | PR-review               | `claudeplex` CLI als Subprocess (existierende headless `-p` Logik) | Codex headless (analog; bei Bedarf später)                  |
 | Fleet control           | Bun-CLI als Subprocess (existierender `--json` Output)             | nativ über `zaplex_fleet`                                   |
-| Remote-fleet-Server     | `ssh <host> claude remote-control …` (existierender Code)         | `ssh <host> tmux … codex …` (generische Persistenz, §3.4)   |
+| Remote-fleet-Server     | Agent-Session im nativen zaplex-Daemon (§3.5); zusätzl. `claude remote-control` für Mobile-App | Agent-Session im nativen zaplex-Daemon (§3.5)               |
 
 **Wichtig:** Wir bauen keinen eigenen `send-to-pty`-Layer. Zap hat den schon. Wir hängen uns dran. Der Steer-Pfad ist für beide Provider identisch, weil beide ganz normale Block-Subprocesses sind.
+
+**Persistenz-Substrat (verbindlich, Architektur-Entscheidung §3.5):** Die Remote-Fleet persistiert über den **nativen zaplex-Session-Daemon**, **nicht** über tmux. Aus claudeplex übernehmen wir das **Fleet-*Modell*** (Discovery, Reuse je Account×Projekt, RAM-Governor, „~N Sessions passen noch") — **nicht** den tmux-*Mechanismus*. Solange der Daemon (Plan `docs/superpowers/plans/2026-06-24-native-remote-session-layer.md`, Stufen B2→B3) noch nicht steht, laufen Remote-Agents **ohne** Persistenz-Garantie (ehrlich degradiert, §2.3) — wir ziehen **keine** tmux-Krücke ein.
 
 ---
 
@@ -332,7 +340,11 @@ Alles klein, nicht aufdringlich. Hover gibt mehr Details. Click auf den Account-
 
 **Beide Panes können auf verschiedenen Hosts sein.** Das ist die Killer-Feature der MC-Hälfte — links macmini, rechts devhost, F5 copy → SFTP-Transfer. *(Provider-unabhängig.)*
 
-**Verhalten zum Restsystem:** Wenn man in einem File-Block einen `.jsonl`-Transcript (Claude oder Codex) markiert und Enter drückt → öffnet als read-only Viewer mit dem Markdown-Renderer. Das ist die einzige Stelle, wo MC und Agent-Schicht direkt verzahnt sind.
+**Verhalten zum Restsystem:** Wenn man in einem File-Block einen `.jsonl`-Transcript (Claude oder Codex) markiert und Enter drückt → öffnet als read-only Viewer mit dem Markdown-Renderer.
+
+**Drag & Drop (User → Agent):** Eine vom Desktop/lokalen Filesystem in eine **aktive Session** gezogene Datei wird automatisch per scp auf den richtigen Host in deren cwd übertragen und der Pfad in die Prompt-Zeile eingefügt — ein Handgriff statt „scp-Kommando bauen". Bilder werden (analog claudeplex-desktop) inline angehängt. Zwischen den Panes (lokal↔lokal, lokal↔remote, remote↔remote) ebenfalls per Drag oder F5/F6.
+
+**Agent → User (Rückkanal, mit Consent):** Das Gegenstück — ein Agent kann dem User eine Datei schicken oder etwas ins Clipboard legen. Das läuft über die MCP-Tools mit **Bestätigungs-Modal** (Vertrauensgrenze bei zaplex, nie beim Agenten) — Details §7. Diese und der Transcript-Viewer sind die Stellen, an denen MC- und Agent-Schicht direkt verzahnt sind.
 
 ### 5.6 Hotkey-Map (Vorschlag, an Zap anzupassen)
 
@@ -350,6 +362,20 @@ Alles klein, nicht aufdringlich. Hover gibt mehr Details. Click auf den Account-
 | Adopt session under cursor      | `Enter` in Agent Tree     |
 
 Der Provider wird **nicht** per Hotkey gewählt — er ist erstes Feld im Launch Wizard. (Falls sich im Alltag ein Bedarf für „neuer Codex-Agent" / „neuer Claude-Agent" als direkte Hotkeys zeigt, später ergänzen — nicht vorbeugend.)
+
+### 5.7 Mentale-Last-Reduktion & Premium-Politur (Calm by default)
+
+Die UX-Direktive (§2.1) konkret: **absolut aufgeräumt, ästhetisch, intuitiv — kein „ugly dev design", kein Noise, keine hässlichen Elemente.** Optik erbt durchgängig Zaps Theme-System; aus claudeplex-desktop übernehmen wir die *Muster*, nicht das CSS.
+
+- **Calm by default.** Die Standardansicht zeigt **nur, was Aufmerksamkeit braucht**; alles andere kollabiert. Anti-Overwhelm ist Designprinzip, nicht Filter-Option — auch bei vielen Projekten/Sessions/Agents bleibt der Screen ruhig.
+- **„Needs-me"-Router.** Ein Hotkey (`Cmd-Shift-W`, §5.6) springt zur **nächsten Session, die auf *dich* wartet** — priorisiert über alle Hosts/Accounts/Provider. Die direkteste Antwort auf „mentale Last". Status-Glyphen (● aktiv · ◐ läuft-woanders · ◷ wartet · ○ stale) für Sofort-Scan (claudeplex/-desktop-Muster).
+- **Ruhiges Cost/Heat-HUD.** Dezente, glanceable Kopfzeile: Sub-Auslastung (5h + Woche) je Claude/Codex mit Heat-Coloring, Gesamt-Spend, und *welcher Account die aktive Session fährt*. Reset-Countdown. Nie blinkend, nie aufdringlich.
+- **Command-Palette (`Cmd-K`).** Universeller Fuzzy-Sprung: Session/Host/Account/Datei/Aktion. Maus optional, nie Pflicht (Tastatur-first, §2.2).
+- **Watch & Adopt.** Read-only-Mitlesen einer woanders laufenden Session; Tippen in die Intake-Zeile adoptiert sie in-place (gleiche Session-id). Senkt „ist es schon fertig?"-Anspannung (Desktop-Muster).
+- **Resume everywhere.** Laptop morgens auf → alle Agents laufen noch, sofort re-attached **mit Historie** (Persistenz-Layer §3.5 + Output-Replay). Kein „blank on reopen".
+- **Per-Projekt-Gruppierung.** Sessions nach Projekt/Repo/Host gruppiert und kollabierbar — viele Sessions erdrücken nicht.
+
+Jedes Element muss **wirksame Entlastung** bringen; was nur „nett" ist, fliegt (§2.3).
 
 ---
 
@@ -384,19 +410,31 @@ Falls nicht: private Fork läuft weiter, kein Drama.
 
 ## 7. MCP — ergänzende Rolle
 
-MCP ist **nicht** Ersatz für UI (siehe §2.3), aber sinnvolle Beigabe.
+MCP ist **nicht** Ersatz für UI (siehe §2.3), aber sinnvolle Beigabe. zaplex stellt einen eigenen MCP-Server bereit (Namespace `zaplex.*`, provider-aware), über den **Claude Code und Codex an zaplex gekoppelt** werden — **bidirektional**: der Chat erreicht zaplex, und der *im Agenten laufende* Claude/Codex koppelt sich an zaplex zurück.
 
-**Was als MCP-Server Sinn ergibt** (Namespace `zaplex.*`, provider-aware):
-
-- `zaplex.list_accounts` → strukturierte Liste für den Agent, jeder Eintrag mit `provider`
+**Read-mostly / Orchestrierung (aus dem Chat heraus):**
+- `zaplex.list_accounts` → strukturierte Liste, jeder Eintrag mit `provider`
 - `zaplex.get_usage(account)` → Detail-Heat
 - `zaplex.list_sessions(filter)` → alles über alle Hosts/Provider
 - `zaplex.launch_agent(provider, account, cwd, prompt)` → Agent startet (Block öffnet im UI)
 - `zaplex.adopt_session(id)` → öffnet als Block
 
+**Agent → zaplex (der im Agenten laufende CLI koppelt zurück):**
+- `zaplex.signal_attention(session, reason)` → der Agent meldet „brauche Input / bin fertig" → speist den **Needs-me-Router** (§5.7)
+- `zaplex.copy_path(from, to)` → Datei über den MC-Layer holen/schieben (lokal↔remote↔remote)
+
+**Agent → User (Rückkanal, bestätigungspflichtig):**
+- `zaplex.send_to_clipboard(content)` → der Agent legt Text/Snippet ins **Clipboard des Users**
+- `zaplex.send_file_to_user(path)` → der Agent schickt eine **Datei** vom Remote-Host an den User (Gegenstück zum User→Agent-Drag&Drop, §5.5)
+
+**Consent-Modell (verbindlich):** Die **Vertrauensgrenze sitzt bei zaplex, nicht beim Agenten.** Der Agent *bittet* nur; zaplex *entscheidet und zeigt das Modal*:
+- Clipboard-Write → Toast/Bestätigung mit Vorschau („Agent *X* möchte ins Clipboard schreiben: «…» — übernehmen?").
+- Datei-Eingang → Annahme-Modal („Agent *X*, Host *h* sendet `datei.ext` (Größe) — annehmen nach *~/Downloads* / in die aktive Pane?"); Transfer in eine **Staging-Area**, erst nach OK sichtbar.
+- Gegen Reibung ohne Noise: optionales „für diese Session/diesen Agenten immer erlauben" — **Default bleibt fragen**. So ist es Entlastung, nicht Überrumpelung (§2.3).
+
 Das macht Zaplex-Daten/Aktionen aus dem Chat heraus erreichbar — *zusätzlich* zur UI, nicht als Ersatz. Ein Slash-Command im Chat („starte einen neuen Codex-Agenten auf dem freisten Account") ruft das MCP-Tool auf, der Agent öffnet im UI als Block. Schöne Symmetrie.
 
-**Implementation:** als eigener kleiner Rust-Binary (`zaplex-mcp`), der wiederum auf `zaplex_accounts`/`zaplex_sessions` zugreift. Kein UI, nur stdio MCP server. Kommt nach v1.
+**Implementation:** als eigener kleiner Rust-Binary (`zaplex-mcp`), der auf `zaplex_accounts`/`zaplex_sessions` (und für den Rückkanal auf den Session-/MC-Layer) zugreift. Kein UI, nur stdio MCP server; die Consent-Modals rendert die zaplex-App. Kommt nach v1.
 
 ---
 
@@ -506,7 +544,7 @@ Die neue Session soll dieses Dokument lesen und dann **in dieser Reihenfolge**:
 Für Kontext, damit die neue Session nicht in dieselbe Diskussion zurückfällt:
 
 - **MCP-only-Ansatz:** verworfen (siehe §2.3 — fehlende visuelle Permanenz)
-- **Marcels Electron-App** (`byte5ai/claudeplex-desktop`): nicht weiterverfolgt (Electron baut Terminal-Unterbau redundant nach; Zap liefert ihn fertig)
+- **Electron-App als Produkt** (`iret77/claudeplex-desktop`, Fork der Team-App von Marcel): als *Auslieferungsform* nicht weiterverfolgt (Electron baut Terminal-Unterbau redundant nach; Zap liefert ihn fertig) — bleibt aber **Referenzquelle** für UI/UX-Muster und Implementierungsideen (§1, §5.7).
 - **Standalone claudeplex weiterführen:** ja, parallel, als Bun-CLI für Headless-/Server-Nutzung. Aber das Cockpit-UI lebt zukünftig im Zap-Fork (zaplex).
 - **Warp (upstream) forken statt Zap:** Zap gewinnt wegen Local-first + bereits verdrahteter CLI-Agent-Integration (Claude **und** Codex) + Maintainer-Zugänglichkeit.
 - **Eigene Bun-Implementierung für Codex:** verworfen — keine getestete Vorlage vorhanden, Symmetrie-um-der-Symmetrie-willen wäre eine Krücke. Codex wird direkt nativ in Rust gebaut (§3.3).
@@ -544,5 +582,7 @@ Wie wir wissen, dass es geil geworden ist:
 - Beim Multi-Tasking über mehrere Accounts **und beide Provider** hat man jederzeit den Heat-Status im peripheren Blickfeld, ohne hinzuschauen.
 - Ein neuer Agent ist in unter 5 Sekunden gestartet — Provider wählen, freester Account ist vorausgewählt, Prompt rein, läuft.
 - Eine wartende Session ist nie länger als 5 Sekunden unbemerkt — egal welcher Provider.
+- Ein Verbindungsabbruch / zugeklapptes Notebook unterbricht **keinen** laufenden Agenten — beim nächsten Connect ist alles nahtlos wieder da.
+- Ein anspruchsvoller Remote-Dev **außerhalb** des Teams, der zaplex zum ersten Mal sieht, will es sofort nutzen — nicht „nett", sondern „das nehme ich ab jetzt".
 
 Wenn diese Punkte nach v1 stehen, hat sich der Fork gelohnt.
