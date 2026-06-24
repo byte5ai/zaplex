@@ -275,8 +275,7 @@ impl SshServerView {
                         ctx.notify();
                     }
                 }
-                    // When losing focus, clear own selection too, to prevent
-                    // "old editor still highlighted/selected after clicking another editor".
+                EditorEvent::Blurred => {
                     // When losing focus, clear own selection too, to prevent
                     // "old editor still highlighted/selected after clicking another editor".
                     source.update(ctx, |e, ctx| e.clear_selections(ctx));

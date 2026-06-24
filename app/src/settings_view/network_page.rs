@@ -36,7 +36,7 @@ use crate::view_components::dropdown::{Dropdown, DropdownItem};
 
 /// Public URL used for outbound connectivity probing in System / Off modes.
 /// `generate_204` is proxy-friendly, returns no body, and consistently returns 204.
-const PUBLIC_PROBE_URL: &str = “https://www.google.com/generate_204”;
+const PUBLIC_PROBE_URL: &str = "https://www.google.com/generate_204";
 
 /// Maximum wait time for a single connection test.
 const TEST_CONNECTION_TIMEOUT_SECS: u64 = 8;
@@ -518,10 +518,10 @@ fn parse_host_port(raw: &str) -> Option<(String, u16)> {
         return None;
     }
     // If there's a scheme, parse directly; otherwise, prepend `http://` and then parse.
-    let normalized: String = if trimmed.contains(“://”) {
+    let normalized: String = if trimmed.contains("://") {
         trimmed.to_string()
     } else {
-        format!(“http://{trimmed}”)
+        format!("http://{trimmed}")
     };
     let url = url::Url::parse(&normalized).ok()?;
     let host = url.host_str()?.to_string();

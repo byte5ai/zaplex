@@ -1,6 +1,6 @@
 //! User interface language settings (persisted via settings.toml, applied to i18n loader on startup).
 //!
-//! Currently supports English, Simplified Chinese, and Japanese. To add a new language:
+//! Currently supports English (plus "System default"). To add a new language:
 //!   1. Add a variant to `Language`
 //!   2. Create translation file in `app/i18n/<locale>/warp.ftl`
 //!   3. Add a case for `Display` + `to_locale_str`
@@ -37,10 +37,6 @@ pub enum Language {
     System,
     #[schemars(description = "English")]
     English,
-    #[schemars(description = "Simplified Chinese")]
-    SimplifiedChinese,
-    #[schemars(description = "Japanese")]
-    Japanese,
 }
 
 impl std::fmt::Display for Language {
@@ -48,8 +44,6 @@ impl std::fmt::Display for Language {
         let value = match self {
             Language::System => "System default",
             Language::English => "English",
-            Language::SimplifiedChinese => "简体中文",
-            Language::Japanese => "日本語",
         };
         write!(f, "{value}")
     }
@@ -61,8 +55,6 @@ impl Language {
         match self {
             Language::System => None,
             Language::English => Some("en"),
-            Language::SimplifiedChinese => Some("zh-CN"),
-            Language::Japanese => Some("ja"),
         }
     }
 }

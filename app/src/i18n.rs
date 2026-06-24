@@ -272,10 +272,10 @@ mod tests {
 
     #[test]
     fn fallback_chain_works() {
-        init(Some("zh-CN"));
+        // A locale with no bundle (e.g. "de") falls back to the en bundle.
+        init(Some("de"));
         let loader = loader().unwrap();
-        // common-ok is already translated to Chinese
-        assert_eq!(loader.get("common-ok"), "确定");
+        assert_eq!(loader.get("common-ok"), "OK");
         // Non-existent key — fluent will return the key itself or a string with a marker
         let missing = loader.get("definitely-does-not-exist");
         assert!(missing.contains("definitely-does-not-exist"));
@@ -283,15 +283,15 @@ mod tests {
 
     #[test]
     fn requested_languages_keep_preferred_order() {
-        let languages = ["ja", "zh-CN"]
+        let languages = ["de", "fr"]
             .into_iter()
             .filter_map(parse_language_identifier)
             .collect();
 
         let languages = languages_or_fallback(languages);
 
-        assert_eq!(languages[0].to_string(), "ja");
-        assert_eq!(languages[1].to_string(), "zh-CN");
+        assert_eq!(languages[0].to_string(), "de");
+        assert_eq!(languages[1].to_string(), "fr");
     }
 
     #[test]

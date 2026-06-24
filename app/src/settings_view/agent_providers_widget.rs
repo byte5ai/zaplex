@@ -488,7 +488,7 @@ impl AgentProvidersWidget {
             let options = single_line_editor_options(appearance, false);
             let mut editor = EditorView::single_line(options, ctx);
             editor
-                .set_placeholder_text(crate::t!(“settings-agent-providers-name-placeholder”), ctx);
+                .set_placeholder_text(crate::t!("settings-agent-providers-name-placeholder"), ctx);
             if !initial_name.is_empty() {
                 editor.set_buffer_text(&initial_name, ctx);
             }

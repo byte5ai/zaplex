@@ -1489,7 +1489,7 @@ impl GlobalBufferModel {
 
         let manager = remote_server::manager::RemoteServerManager::handle(ctx);
         let Some(client) = manager.as_ref(ctx).client_for_host(&host_id).cloned() else {
-            log::warn!(“save_remote_buffer: host {host_id:?} has no remote server client”);
+            log::warn!("save_remote_buffer: host {host_id:?} has no remote server client");
             // Notify editor of save failure to avoid staying in false “saved” state.
             ctx.emit(GlobalBufferModelEvent::FailedToSave {
                 file_id,
