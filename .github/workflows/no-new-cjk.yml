@@ -6,20 +6,20 @@ name: no-new-cjk
 # separate pass) does not trip it — only newly added Chinese does, including
 # Chinese pulled in via an upstream merge.
 #
-# Make this a required status check (Repo Settings → Rulesets) to block merges.
+# Make this a required status check (Repo Settings → Rules → Rulesets) to block
+# merges. It runs on every pull request (no paths filter) so that, as a required
+# check, it always reports a status — a PR touching no .rs/.proto simply passes
+# trivially instead of hanging on a never-started check.
 
 on:
   pull_request:
-    paths:
-      - '**/*.rs'
-      - '**/*.proto'
 
 permissions:
   contents: read
 
 jobs:
   no-new-cjk:
-    name: block-new-chinese
+    name: no-new-cjk
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
