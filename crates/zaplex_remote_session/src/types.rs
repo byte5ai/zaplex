@@ -60,12 +60,18 @@ impl std::fmt::Display for SessionId {
 /// Returns the set of capabilities this daemon binary actually supports, used
 /// to populate `InitializeResponse.features`.
 ///
-/// Stage 0 is scaffold only: the session host is not implemented yet, so this
-/// returns an empty set (honest advertisement — never advertise a capability we
-/// cannot fulfil). Once Stage 1 lands the PTY host, add [`FEATURE_SESSION_HOST`]
-/// here.
+/// Unix daemons advertise [`FEATURE_SESSION_HOST`] (Stage 1 PTY session host).
+/// Non-unix targets do not own PTYs, so they advertise nothing — honest
+/// advertisement: never claim a capability we cannot fulfil.
 pub fn supported_features() -> Vec<String> {
-    Vec::new()
+    #[cfg(unix)]
+    {
+        vec![FEATURE_SESSION_HOST.to_string()]
+    }
+    #[cfg(not(unix))]
+    {
+        Vec::new()
+    }
 }
 
 /// Returns whether `feature` appears in the daemon-advertised `features` list.

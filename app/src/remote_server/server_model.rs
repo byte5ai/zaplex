@@ -26,6 +26,13 @@ use super::proto::{
     WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 use zaplex_remote_session::types::supported_features;
+#[cfg(unix)]
+use super::proto::{
+    CloseSession, OpenSession, ResizeSession, SessionExited, SessionInput, SessionOpened,
+    SessionOutput,
+};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 
 // Buffer-sync related: depends on GlobalBufferModel, which server-local operations are only
 // available under `local_fs`, so the entire server-side buffer handling is gated by `local_fs`.
@@ -205,6 +212,9 @@ pub struct ServerModel {
     /// intentionally retained across proxy connection teardown and cleared
     /// only by daemon process exit.
     auth_token: Option<String>,
+    /// Live daemon-hosted terminal sessions, keyed by their daemon-assigned id.
+    #[cfg(unix)]
+    sessions: HashMap<String, super::session_host::Session>,
 }
 
 impl Entity for ServerModel {
@@ -232,6 +242,8 @@ impl ServerModel {
             #[cfg(feature = "local_fs")]
             buffers: ServerBufferTracker::new(),
             auth_token: None,
+            #[cfg(unix)]
+            sessions: HashMap::new(),
         };
         // Subscribe to FileModel and RepoMetadataModel events
         // file operation results and repo metadata pushes are forwarded to all
@@ -662,21 +674,47 @@ impl ServerModel {
             #[cfg(feature = "local_fs")]
             Some(client_message::Message::WriteFileChunk(msg)) => self.handle_write_file_chunk(msg),
             // zaplex native session host (see remote_server.proto, "Native
-            // Remote Session Layer"). Stage 0 defines the wire format only; the
-            // daemon-side handlers land from Stage 1. Until then, reject these
-            // honestly rather than silently dropping them — no client sends them
-            // yet because the daemon does not advertise FEATURE_SESSION_HOST.
+            // Remote Session Layer"). Stage 1 implements the per-session PTY
+            // host on unix; attach/detach/list land in Stages 3-4.
+            #[cfg(unix)]
+            Some(client_message::Message::OpenSession(msg)) => {
+                self.handle_open_session(conn_id, msg, ctx)
+            }
+            #[cfg(unix)]
+            Some(client_message::Message::SessionInput(msg)) => {
+                self.handle_session_input(msg);
+                return;
+            }
+            #[cfg(unix)]
+            Some(client_message::Message::ResizeSession(msg)) => {
+                self.handle_resize_session(msg);
+                return;
+            }
+            #[cfg(unix)]
+            Some(client_message::Message::CloseSession(msg)) => {
+                self.handle_close_session(msg);
+                return;
+            }
+            // Attach/detach/list are not implemented yet (Stages 3-4) — reject
+            // honestly on all platforms.
             Some(
-                client_message::Message::OpenSession(_)
-                | client_message::Message::AttachSession(_)
+                client_message::Message::AttachSession(_)
                 | client_message::Message::DetachSession(_)
-                | client_message::Message::SessionInput(_)
-                | client_message::Message::ResizeSession(_)
-                | client_message::Message::CloseSession(_)
                 | client_message::Message::ListSessions(_),
             ) => HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                 code: ErrorCode::InvalidRequest.into(),
-                message: "zaplex session host is not implemented in this daemon yet".to_string(),
+                message: "session attach/detach/list is not implemented yet".to_string(),
+            })),
+            // Non-unix daemons have no session host (PTY ownership is unix-only).
+            #[cfg(not(unix))]
+            Some(
+                client_message::Message::OpenSession(_)
+                | client_message::Message::SessionInput(_)
+                | client_message::Message::ResizeSession(_)
+                | client_message::Message::CloseSession(_),
+            ) => HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "zaplex session host requires a unix daemon".to_string(),
             })),
             #[cfg(not(feature = "local_fs"))]
             Some(
@@ -1822,6 +1860,182 @@ fn file_context_result_to_proto(result: ReadFileContextResult) -> ReadFileContex
     ReadFileContextResponse {
         file_contexts,
         failed_files,
+    }
+}
+
+/// Daemon-side session-host handlers (Stage 1). Unix-only: the daemon owns the
+/// PTYs. The per-session state and async tasks live in `super::session_host`.
+#[cfg(unix)]
+impl ServerModel {
+    /// Opens a new daemon-hosted session: allocates a PTY, spawns a login
+    /// shell, registers the session, and starts its reader + writer tasks.
+    fn handle_open_session(
+        &mut self,
+        conn_id: ConnectionId,
+        msg: OpenSession,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let (rows, cols) = msg
+            .size
+            .as_ref()
+            .map(|s| (s.rows.max(1) as usize, s.cols.max(1) as usize))
+            .unwrap_or((24, 80));
+        let shell = msg
+            .shell
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("SHELL").ok())
+            .unwrap_or_else(|| "/bin/bash".to_string());
+        let cwd = msg.cwd.filter(|c| !c.is_empty());
+
+        let (leader_fd, child) = match crate::terminal::local_tty::spawn_session_pty(
+            cwd.as_deref().map(std::path::Path::new),
+            &shell,
+            &msg.env,
+            rows,
+            cols,
+        ) {
+            Ok(pair) => pair,
+            Err(e) => {
+                log::warn!("Daemon: OpenSession failed: {e:#}");
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::Internal.into(),
+                    message: format!("failed to open session: {e:#}"),
+                }));
+            }
+        };
+
+        let async_leader = match async_io::Async::new(std::fs::File::from(leader_fd)) {
+            Ok(a) => std::sync::Arc::new(a),
+            Err(e) => {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::Internal.into(),
+                    message: format!("failed to wrap session pty: {e}"),
+                }));
+            }
+        };
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let (input_tx, input_rx) = async_channel::unbounded::<Vec<u8>>();
+        self.sessions.insert(
+            session_id.clone(),
+            super::session_host::Session {
+                leader: async_leader.clone(),
+                child,
+                ring: zaplex_remote_session::server::output_ring::OutputRing::new(
+                    super::session_host::RING_CEILING_BYTES,
+                ),
+                rows,
+                cols,
+                attached: conn_id,
+                input_tx,
+            },
+        );
+
+        let spawner = ctx.spawner();
+        let exec = ctx.background_executor();
+        exec.spawn(super::session_host::run_session_reader(
+            session_id.clone(),
+            async_leader.clone(),
+            spawner,
+        ))
+        .detach();
+        exec.spawn(super::session_host::run_session_writer(async_leader, input_rx))
+            .detach();
+
+        log::info!("Daemon: opened session {session_id} ({rows}x{cols}, shell={shell})");
+        HandlerOutcome::Sync(server_message::Message::SessionOpened(SessionOpened {
+            session_id,
+        }))
+    }
+
+    /// Queues input bytes for the session's ordered writer task.
+    fn handle_session_input(&mut self, msg: SessionInput) {
+        if let Some(session) = self.sessions.get(&msg.session_id) {
+            if let Err(e) = session.input_tx.try_send(msg.bytes) {
+                log::warn!("Daemon: dropping input for session {}: {e}", msg.session_id);
+            }
+        }
+    }
+
+    /// Applies a window resize to the session's PTY (TIOCSWINSZ).
+    fn handle_resize_session(&mut self, msg: ResizeSession) {
+        let Some(session) = self.sessions.get_mut(&msg.session_id) else {
+            return;
+        };
+        let Some(size) = msg.size else {
+            return;
+        };
+        session.rows = size.rows.max(1) as usize;
+        session.cols = size.cols.max(1) as usize;
+        let win = libc::winsize {
+            ws_row: session.rows as libc::c_ushort,
+            ws_col: session.cols as libc::c_ushort,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let fd = session.leader.as_raw_fd();
+        // SAFETY: `fd` is a live PTY master; TIOCSWINSZ takes a `*const winsize`.
+        unsafe {
+            libc::ioctl(fd, libc::TIOCSWINSZ, &win as *const libc::winsize);
+        }
+    }
+
+    /// Closes a session: kills + reaps the shell and emits `SessionExited`.
+    fn handle_close_session(&mut self, msg: CloseSession) {
+        let Some(mut session) = self.sessions.remove(&msg.session_id) else {
+            return;
+        };
+        let _ = session.child.kill();
+        let exit_code = session.child.wait().ok().and_then(|s| s.code());
+        let conn = session.attached;
+        self.send_server_message(
+            Some(conn),
+            None,
+            server_message::Message::SessionExited(SessionExited {
+                session_id: msg.session_id,
+                exit_code,
+            }),
+        );
+        // Dropping `session` drops `input_tx` (writer task ends) and the last
+        // app-side Arc; the reader task ends once it observes PTY EOF.
+    }
+
+    /// Reader-task callback: append output to the ring and push it to the
+    /// attached connection with the chunk's start seq.
+    pub(super) fn on_session_output(&mut self, session_id: &str, bytes: Vec<u8>) {
+        let Some((seq, conn)) = self
+            .sessions
+            .get_mut(session_id)
+            .map(|s| (s.ring.append(&bytes), s.attached))
+        else {
+            return;
+        };
+        self.send_server_message(
+            Some(conn),
+            None,
+            server_message::Message::SessionOutput(SessionOutput {
+                session_id: session_id.to_string(),
+                seq,
+                bytes,
+            }),
+        );
+    }
+
+    /// Reader-task callback on PTY EOF: reap the shell and emit `SessionExited`.
+    pub(super) fn on_session_reader_eof(&mut self, session_id: &str) {
+        let Some(mut session) = self.sessions.remove(session_id) else {
+            return;
+        };
+        let exit_code = session.child.wait().ok().and_then(|s| s.code());
+        let conn = session.attached;
+        self.send_server_message(
+            Some(conn),
+            None,
+            server_message::Message::SessionExited(SessionExited {
+                session_id: session_id.to_string(),
+                exit_code,
+            }),
+        );
     }
 }
 

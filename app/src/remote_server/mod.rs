@@ -11,6 +11,8 @@ pub mod server_model;
 #[cfg(not(target_family = "wasm"))]
 pub mod ssh_transport;
 #[cfg(unix)]
+pub mod session_host;
+#[cfg(unix)]
 pub mod unix;
 
 /// Run the `remote-server-proxy` subcommand.
