@@ -25,6 +25,7 @@ use super::proto::{
     RunCommandRequest, RunCommandResponse, RunCommandSuccess, ServerMessage, SessionBootstrapped,
     WriteFile, WriteFileResponse, WriteFileSuccess,
 };
+use zaplex_remote_session::types::supported_features;
 
 // Buffer-sync related: depends on GlobalBufferModel, which server-local operations are only
 // available under `local_fs`, so the entire server-side buffer handling is gated by `local_fs`.
@@ -660,6 +661,23 @@ impl ServerModel {
             Some(client_message::Message::ReadFileChunk(msg)) => self.handle_read_file_chunk(msg),
             #[cfg(feature = "local_fs")]
             Some(client_message::Message::WriteFileChunk(msg)) => self.handle_write_file_chunk(msg),
+            // zaplex native session host (see remote_server.proto, "Native
+            // Remote Session Layer"). Stage 0 defines the wire format only; the
+            // daemon-side handlers land from Stage 1. Until then, reject these
+            // honestly rather than silently dropping them — no client sends them
+            // yet because the daemon does not advertise FEATURE_SESSION_HOST.
+            Some(
+                client_message::Message::OpenSession(_)
+                | client_message::Message::AttachSession(_)
+                | client_message::Message::DetachSession(_)
+                | client_message::Message::SessionInput(_)
+                | client_message::Message::ResizeSession(_)
+                | client_message::Message::CloseSession(_)
+                | client_message::Message::ListSessions(_),
+            ) => HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "zaplex session host is not implemented in this daemon yet".to_string(),
+            })),
             #[cfg(not(feature = "local_fs"))]
             Some(
                 client_message::Message::OpenBuffer(_)
@@ -785,6 +803,10 @@ impl ServerModel {
             InitializeResponse {
                 server_version,
                 host_id: self.host_id.clone(),
+                // Capabilities this daemon advertises. Stage 0 is empty (the
+                // native session host is not implemented yet); Stage 1 adds
+                // FEATURE_SESSION_HOST via supported_features().
+                features: supported_features(),
             },
         ))
     }

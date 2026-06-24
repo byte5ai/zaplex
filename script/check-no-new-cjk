@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Fails if changed lines in code files introduce CJK (Han) characters.
+#
+# Repo policy (AGENTS.md §5.1): the code language is English. The codebase
+# inherits a large body of Chinese comments from upstream `zerx-lab/zap`; those
+# are migrated to English in a separate pass. This guard is DIFF-SCOPED — it
+# only inspects lines ADDED on top of the base ref, so pre-existing Chinese
+# never trips it. It exists to stop NEW Chinese from being introduced (whether
+# hand-written or pulled in via an upstream merge).
+#
+# Usage:
+#   script/check-no-new-cjk [BASE_REF]
+#
+# BASE_REF defaults to origin/main (falling back to main). In CI, pass the PR
+# base SHA. The guard compares HEAD against the merge-base of BASE_REF and HEAD.
+
+set -euo pipefail
+
+BASE_REF="${1:-}"
+if [ -z "$BASE_REF" ]; then
+  if git rev-parse --verify -q origin/main >/dev/null; then
+    BASE_REF="origin/main"
+  else
+    BASE_REF="main"
+  fi
+fi
+
+# Only compare what this branch added on top of the base.
+if MERGE_BASE="$(git merge-base "$BASE_REF" HEAD 2>/dev/null)"; then
+  :
+else
+  # Unrelated histories: fall back to a direct comparison against the ref.
+  MERGE_BASE="$BASE_REF"
+fi
+
+# CJK ideograph ranges: Unified, Ext-A, Compatibility Ideographs, and the
+# supplementary-plane extensions (Ext-B and beyond). We match these explicit
+# ranges rather than PCRE \p{Han}, because \p{Han} also matches U+00B7 MIDDLE
+# DOT (·) — a common separator — via its script extensions, which would be a
+# false positive on legitimate English/German text.
+CJK_IDEOGRAPHS='[\x{3400}-\x{4DBF}\x{4E00}-\x{9FFF}\x{F900}-\x{FAFF}\x{20000}-\x{2A6DF}\x{2A700}-\x{2EBEF}]'
+
+# Code files only — docs and commit messages are out of scope by policy.
+changed_files="$(git diff --name-only --diff-filter=ACMR "$MERGE_BASE" HEAD -- '*.rs' '*.proto')"
+
+found=0
+while IFS= read -r file; do
+  [ -n "$file" ] || continue
+  # Added lines (diff '+' lines), minus the '+++ ' file header, that contain a
+  # CJK ideograph.
+  hits="$(
+    git diff --unified=0 "$MERGE_BASE" HEAD -- "$file" \
+      | grep -P '^\+' \
+      | grep -vP '^\+\+\+ ' \
+      | grep -P "$CJK_IDEOGRAPHS" \
+      || true
+  )"
+  if [ -n "$hits" ]; then
+    if [ "$found" -eq 0 ]; then
+      echo "no-new-cjk: new Chinese (Han) characters found in changed code:" >&2
+      echo "" >&2
+    fi
+    found=1
+    echo "  $file" >&2
+    printf '%s\n' "$hits" | sed -E 's/^\+/    + /' >&2
+    echo "" >&2
+  fi
+done <<< "$changed_files"
+
+if [ "$found" -ne 0 ]; then
+  echo "Repo policy (AGENTS.md §5.1): the code language is English." >&2
+  echo "Translate the comments above to English before merging." >&2
+  echo "Inherited Chinese is migrated separately; this guard only blocks NEW Chinese." >&2
+  exit 1
+fi
+
+echo "no-new-cjk: OK — no new Han characters in changed .rs/.proto lines."

@@ -1,0 +1,32 @@
+name: no-new-cjk
+
+# Repo policy (AGENTS.md §5.1): the code language is English. This guard fails a
+# pull request that ADDS Chinese (Han) characters to .rs/.proto files. It is
+# diff-scoped, so the large body of inherited Chinese (migrated to English in a
+# separate pass) does not trip it — only newly added Chinese does, including
+# Chinese pulled in via an upstream merge.
+#
+# Make this a required status check (Repo Settings → Rules → Rulesets) to block
+# merges. It runs on every pull request (no paths filter) so that, as a required
+# check, it always reports a status — a PR touching no .rs/.proto simply passes
+# trivially instead of hanging on a never-started check.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  no-new-cjk:
+    name: no-new-cjk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check changed lines for Han characters
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: script/check-no-new-cjk "$BASE_SHA"
