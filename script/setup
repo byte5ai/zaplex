@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+echo "Installing dependencies..."
+# Rust workspace — platform bootstrap lives in script/bootstrap.
+if [ -x script/bootstrap ]; then
+  script/bootstrap "$@"
+else
+  cargo fetch
+fi
+
+echo "Configuring git hooks..."
+git config core.hooksPath .hooks
+
+echo "Done."

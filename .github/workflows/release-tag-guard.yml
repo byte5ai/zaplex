@@ -1,0 +1,83 @@
+name: release-tag-guard
+
+# Enforces the engineering-standards rule: stable release tags must point at
+# commits reachable from main. Pre-release tags (containing -alpha/-beta/-rc/
+# -dev or .devN/.rcN suffix) are exempt and can be cut from any branch.
+#
+# Installed as .github/workflows/release-tag-guard.yml in any repo that adopts
+# the engineering-standards. Triggers on every `v*` tag push; fails fast if
+# the tag was cut from a non-main commit.
+#
+# What this CATCHES:
+#   - Agent or human pushes a stable tag from a feature branch
+#   - Tag exists but tag commit is not in main's history
+#
+# What this does NOT catch (out of scope for a workflow):
+#   - The release itself (PyPI / npm / ClawHub upload, GitHub Release
+#     creation) — those happen elsewhere. This workflow only validates the
+#     tag; downstream release steps should depend on this workflow's success.
+#
+# To make the validation blocking for downstream release flows, gate your
+# release workflow on `needs: validate` against this one, or make this
+# workflow a required status check on tag protection (Repo Settings →
+# Rulesets).
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate-tag-on-main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify tag and validate
+        env:
+          TAG_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          TAG="${TAG_REF#refs/tags/}"
+          echo "Validating tag: $TAG"
+
+          # Pre-release patterns we allow off-main:
+          #   vX.Y.Z-rcN, vX.Y.Z-alphaN, vX.Y.Z-betaN, vX.Y.Z-devN
+          #   vX.Y.rcN, vX.Y.devN  (PEP-440 dev style)
+          if echo "$TAG" | grep -qE -- '-(rc|alpha|beta|dev)\.?[0-9]*$|\.(dev|rc|a|b)[0-9]+$'; then
+            echo "Pre-release tag detected — main-only rule does not apply."
+            exit 0
+          fi
+
+          # Stable tag: must be reachable from origin/main
+          TAG_SHA=$(git rev-parse "$TAG^{commit}")
+          echo "Tag points at commit: $TAG_SHA"
+
+          if git merge-base --is-ancestor "$TAG_SHA" origin/main; then
+            echo "OK: stable tag $TAG ($TAG_SHA) is reachable from origin/main."
+            exit 0
+          fi
+
+          echo "" >&2
+          echo "FAIL: stable tag $TAG points at $TAG_SHA, which is NOT" >&2
+          echo "      reachable from origin/main." >&2
+          echo "" >&2
+          echo "Engineering-standards rule: stable releases are cut from main only." >&2
+          echo "Pre-release tags (matching -rc / -alpha / -beta / -dev suffix or" >&2
+          echo ".devN / .rcN) can come from any branch." >&2
+          echo "" >&2
+          echo "Resolution: delete the tag, merge the source branch to main via PR," >&2
+          echo "then re-create the tag on the merge commit:" >&2
+          echo "  git push origin :refs/tags/$TAG" >&2
+          echo "  git tag -d $TAG" >&2
+          echo "  # after PR merge:" >&2
+          echo "  git checkout main && git pull --ff-only" >&2
+          echo "  git tag -a $TAG -m \"release notes\"" >&2
+          echo "  git push origin $TAG" >&2
+          exit 1

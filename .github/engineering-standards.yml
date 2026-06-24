@@ -1,0 +1,9 @@
+# Engineering-Standards-Status dieses Repos.
+# Single source of truth, gilt host- und agent-übergreifend.
+# Schema: siehe <org>/engineering-standards (byte5ai, iret77, high5-ventures).
+
+status: applied          # applied | exempt
+source: byte5ai/engineering-standards
+decided_on: 2026-06-24
+reviewed_on: 2026-06-24
+reason: "Zap-Fork: Standards additiv angewandt; upstream-Dateien (AGENTS.md-Codemap, CONTRIBUTING, CI) bleiben unangetastet (Touchpoint-Disziplin, docs/zaplex-concept.md §8.3)."
