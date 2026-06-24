@@ -351,3 +351,57 @@ app/  (主二进制:装配、入口、平台粘合、持久化迁移、UI 视图
 9. 改动的每一行能否一一对应到用户请求?顺手做的"小重构"是否应该回滚?
 
 把上面 9 条都过一遍,再交付。
+
+---
+
+## 8. Engineering Standards (byte5ai) — Git-Workflow für alle Agenten
+
+> Diese Sektion ist zaplex-spezifisch (kein Upstream-Zap-Inhalt). Sie ergänzt die obige
+> Code-Map um die verbindlichen Workflow-Regeln. Status & Quelle:
+> `.github/engineering-standards.yml` (`status: applied`, Quelle `byte5ai/engineering-standards`).
+> Diese Regeln gelten für **alle** Agenten (Claude, Codex, Copilot) und für Menschen.
+
+- **Nie direkt auf `main` pushen.** Jede Änderung läuft über Feature-Branch + Pull Request.
+- **Branch-Naming:** `feat/` · `fix/` · `refactor/` · `docs/` · `chore/` · `test/` · `release/vX.Y` · `dev/vX.Y.devN`.
+- **Conventional Commits:** `feat:` · `fix:` · `docs:` · `chore:` · `refactor:` · `test:` · `release:` · `dev:`.
+- **Keine `Co-Authored-By:`-Trailer** für Claude oder andere KI-Agenten. Commits unter der konfigurierten Git-Identität, ohne Model-Attribution-Footer.
+- **Nie force-push** auf geteilte Branches. **Nie Secrets committen** (`.env`, Tokens, Keys). **Nie `--no-verify`.**
+
+### Worktree-Disziplin (durchgesetzt via `.hooks/pre-commit`)
+
+Der Haupt-Klon empfängt **keine** Commits. Jede Änderung — auch ein Einzeiler — landet in einem
+Worktree. Branch-agnostisch: fängt auch den Fall, dass eine parallele Session den HEAD des
+Haupt-Klons verschoben hat.
+
+~~~bash
+git worktree add ../zaplex-<feature> -b <branch> main   # neu mit Branch
+git worktree add ../zaplex-<feature> <existing-branch>  # oder bestehenden anhängen
+git worktree remove ../zaplex-<feature>                 # nach Merge/Discard
+git branch -D <feature>                                 # Branch-Ref entfernen
+~~~
+
+Auf diesem Host liegen Worktrees als Sibling unter `<repo>.worktrees/<branch>/` (Host-Konvention).
+Orphans aufräumen: `script/prune-worktrees` (dry-run; `--yes` zum Anwenden).
+
+**Bypass-Stufen** (aufsteigende Persistenz): `ALLOW_MAIN_TREE_BRANCH=1 git commit …` (einmalig) ·
+`git config engineering-standards.main-tree-discipline false` (pro Repo) ·
+`status: exempt` in `.github/engineering-standards.yml` (alles aus).
+
+### Pre-push Hook
+
+`.hooks/pre-push` blockiert direkte Pushes auf `main`/`master`. Override nur auf explizite
+Anweisung: `ALLOW_PUSH_TO_MAIN=1 git push origin main`.
+
+### Releases
+
+- **Stable-Tags (`vX.Y`, `vX.Y.Z`) nur aus `main`** — Merge-Commit auf `main` taggen, nie den
+  HEAD eines Feature/Dev-Branches. Durchgesetzt via `.github/workflows/release-tag-guard.yml`.
+- **Pre-Release-Tags** (`vX.Y.Z-rc1`, `vX.Y.devN`, …) dürfen aus Feature/Dev-Branches kommen.
+- **Nie eigenmächtig releasen** — nur auf explizite User-Anweisung.
+
+### Hooks aktivieren (frischer Klon)
+
+~~~bash
+script/setup            # installiert Deps via script/bootstrap + setzt core.hooksPath
+# oder nur:  git config core.hooksPath .hooks
+~~~

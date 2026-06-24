@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# Identify and remove worktrees whose work is done.
+#
+# A worktree is a candidate for removal when ALL of:
+#   - it is not the main worktree
+#   - it has no uncommitted changes and no untracked files
+#   - it is on a named branch (not detached HEAD)
+#   - the branch is either (a) gone from the remote, or (b) fully merged
+#     into the remote's base branch (default: origin/main)
+#
+# Squash-merged branches whose remote ref still exists are NOT detected (their
+# squash commit on main has a different SHA). The reliable signal is the remote
+# branch being deleted post-merge — which is the standard squash-and-delete flow.
+#
+# Default mode: dry-run (report only, change nothing).
+# Pass --yes to actually remove. Pass --yes --batch to skip per-item confirmation.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+REMOTE="origin"
+BASE="${BASE_BRANCH:-main}"
+YES=0
+BATCH=0
+for arg in "$@"; do
+  case "$arg" in
+    --yes) YES=1 ;;
+    --batch) BATCH=1 ;;
+    --base=*) BASE="${arg#--base=}" ;;
+    --remote=*) REMOTE="${arg#--remote=}" ;;
+    -h|--help)
+      cat <<EOF
+Usage: $(basename "$0") [--yes] [--batch] [--base=<branch>] [--remote=<name>]
+
+Without --yes, only reports candidates (dry-run).
+With --yes, prompts per candidate; add --batch to skip prompts.
+EOF
+      exit 0
+      ;;
+    *)
+      echo "unknown arg: $arg" >&2
+      exit 2
+      ;;
+  esac
+done
+
+echo "Fetching from $REMOTE (with --prune)..." >&2
+git fetch --prune "$REMOTE" >/dev/null 2>&1 || {
+  echo "warn: fetch failed — using stale remote-tracking refs" >&2
+}
+
+main_tree=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
+
+# Parse worktrees
+wt_paths=()
+wt_branches=()
+while IFS= read -r line; do
+  case "$line" in
+    "worktree "*)
+      wt_paths+=("${line#worktree }")
+      wt_branches+=("__PENDING__")
+      ;;
+    "branch refs/heads/"*)
+      wt_branches[${#wt_branches[@]}-1]="${line#branch refs/heads/}"
+      ;;
+    "detached")
+      wt_branches[${#wt_branches[@]}-1]="__DETACHED__"
+      ;;
+  esac
+done < <(git worktree list --porcelain)
+
+candidates_path=()
+candidates_branch=()
+candidates_reason=()
+preserved=()
+
+n=${#wt_paths[@]}
+for ((i=0; i<n; i++)); do
+  p="${wt_paths[$i]}"
+  b="${wt_branches[$i]}"
+
+  if [ "$p" = "$main_tree" ]; then
+    continue
+  fi
+  if [ "$b" = "__DETACHED__" ] || [ "$b" = "__PENDING__" ]; then
+    preserved+=("$p — detached HEAD")
+    continue
+  fi
+
+  # Uncommitted check (status --porcelain covers tracked changes AND untracked files)
+  if [ -n "$(git -C "$p" status --porcelain 2>/dev/null)" ]; then
+    preserved+=("$p ($b) — uncommitted changes or untracked files")
+    continue
+  fi
+
+  if git show-ref --verify --quiet "refs/remotes/$REMOTE/$b"; then
+    # Remote branch still exists. Is its tip merged into the base?
+    if git merge-base --is-ancestor "refs/remotes/$REMOTE/$b" "refs/remotes/$REMOTE/$BASE" 2>/dev/null; then
+      candidates_path+=("$p")
+      candidates_branch+=("$b")
+      candidates_reason+=("merged into $REMOTE/$BASE")
+    else
+      preserved+=("$p ($b) — remote branch exists and is not merged")
+    fi
+  else
+    candidates_path+=("$p")
+    candidates_branch+=("$b")
+    candidates_reason+=("remote branch gone")
+  fi
+done
+
+# Report preserved
+if [ ${#preserved[@]} -gt 0 ]; then
+  echo ""
+  echo "Preserved (${#preserved[@]}):"
+  for p in "${preserved[@]}"; do echo "  $p"; done
+fi
+
+# Report candidates
+if [ ${#candidates_path[@]} -eq 0 ]; then
+  echo ""
+  echo "No worktrees to prune."
+  exit 0
+fi
+
+echo ""
+echo "Candidates (${#candidates_path[@]}):"
+for ((i=0; i<${#candidates_path[@]}; i++)); do
+  printf "  %s  branch %s  (%s)\n" "${candidates_path[$i]}" "${candidates_branch[$i]}" "${candidates_reason[$i]}"
+done
+
+if [ "$YES" -eq 0 ]; then
+  echo ""
+  echo "Dry-run. Pass --yes to act."
+  exit 0
+fi
+
+# Act
+echo ""
+for ((i=0; i<${#candidates_path[@]}; i++)); do
+  p="${candidates_path[$i]}"
+  b="${candidates_branch[$i]}"
+
+  if [ "$BATCH" -eq 0 ]; then
+    printf "Remove %s (branch %s)? [y/N] " "$p" "$b"
+    read -r ans
+    case "$ans" in
+      y|Y|yes|YES) ;;
+      *) echo "  skipped"; continue ;;
+    esac
+  fi
+
+  echo "Removing $p ($b)..."
+  git worktree remove "$p"
+  git branch -D "$b" 2>/dev/null || true
+done
+
+echo "Done."
