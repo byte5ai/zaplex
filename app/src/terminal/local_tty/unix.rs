@@ -509,6 +509,39 @@ fn spawn_command_in_pty(
     })
 }
 
+/// Spawns a login shell on a freshly-allocated PTY for a daemon-hosted remote
+/// session, reusing the shared `spawn_command_in_pty` fork/`pre_exec` setup
+/// (controlling tty, signal reset, fd hygiene). Returns the owned PTY leader
+/// (master) fd and the spawned shell child.
+///
+/// Unlike the interactive client path this skips the Warp shell-integration
+/// wrapper (`build_host_shell_command`): the daemon session host just needs a
+/// real login shell on a PTY it owns, so the session outlives the SSH channel.
+#[cfg(unix)]
+pub(crate) fn spawn_session_pty(
+    cwd: Option<&Path>,
+    shell: &str,
+    env: &HashMap<String, String>,
+    rows: usize,
+    cols: usize,
+) -> Result<(std::os::fd::OwnedFd, std::process::Child)> {
+    let mut command = Command::new(shell);
+    // Login shell so the user's profile (PATH etc.) is loaded.
+    command.arg("-l");
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    command.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    if !env.contains_key("TERM") {
+        command.env("TERM", "xterm-256color");
+    }
+    let size = SizeInfo::new_without_font_metrics(rows, cols);
+    let info = spawn_command_in_pty(command, &size, true)?;
+    // SAFETY: `leader_fd` is a freshly-opened PTY master fd that we now own.
+    let leader = unsafe { std::os::fd::OwnedFd::from_raw_fd(info.result.leader_fd) };
+    Ok((leader, info.child))
+}
+
 impl Pty {
     /// Create a new pty and return a handle to interact with it.
     pub fn new(
