@@ -53,7 +53,7 @@ impl ArtifactButtonsRow {
 }
 
 pub enum ArtifactButtonsRowEvent {
-    /// openWarp 本地化:点击 plan 按钮走本地 AIDocumentId,不再依赖云 notebook 镜像。
+    /// openWarp localization: clicking plan button uses local AIDocumentId, no longer depends on cloud notebook mirror.
     OpenPlan {
         document_uid: AIDocumentId,
     },
@@ -129,11 +129,11 @@ fn collect_buttons(
         match artifact {
             Artifact::Plan {
                 title,
-                notebook_uid: _, // openWarp 不再依赖云 notebook_uid;本地走 document_uid
+                notebook_uid: _, // openWarp no longer depends on cloud notebook_uid; uses local document_uid
                 document_uid,
             } => {
-                // openWarp 本地化:只要能解析出本地 AIDocumentId 就显示按钮,
-                // 点击打开本地 AIDocument pane;不再依赖云 notebook 镜像。
+                // openWarp localization: display button whenever local AIDocumentId can be parsed,
+                // click opens local AIDocument pane; no longer depends on cloud notebook mirror.
                 if let Ok(document_uid) = AIDocumentId::try_from(document_uid.as_str()) {
                     let button_text = title.clone().unwrap_or("Untitled Plan".to_string());
                     let theme = theme.clone();
@@ -177,8 +177,8 @@ fn collect_buttons(
                 description: _,
                 size_bytes: _,
             } => {
-                // Zap no longer has cloud artifact storage, so file and screenshot
-                // artifacts cannot be fetched. Keep deserialization for legacy history,
+                // Zap no longer has cloud artifact storage; file and screenshot artifacts
+                // cannot be fetched. Keep deserialization for legacy history support,
                 // but do not render buttons that can only fail.
             }
         }

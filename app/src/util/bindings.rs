@@ -86,8 +86,8 @@ pub enum CustomAction {
     CopyBlock,
     CopyBlockCommand,
     CopyBlockOutput,
-    // Zap Wave 6-8:`ViewSharedBlocks` 随 `ShowBlocksView` 设置页与
-    // `workspace:show_settings_shared_blocks_page` keybinding 一同物理删。
+    // Zap Wave 6-8: `ViewSharedBlocks` physically deleted along with `ShowBlocksView` settings page
+    // and `workspace:show_settings_shared_blocks_page` keybinding.
     CloseTab,
     CloseOtherTabs,
     CloseTabsRight,

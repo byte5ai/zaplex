@@ -710,7 +710,7 @@ pub enum FeaturesPageAction {
     ToggleShowAutosuggestionIgnoreButton,
     ToggleAtContextMenuInTerminalMode,
     ToggleSlashCommandsInTerminalMode,
-    // Zap:`ToggleOutlineCodebaseSymbolsForAtContextMenu` 随 outline / RAG 下线删除。
+    // Zap: `ToggleOutlineCodebaseSymbolsForAtContextMenu` deleted when outline / RAG went offline.
     ToggleAutoOpenCodeReviewPane,
     ToggleShowTerminalInputMessageLine,
     ToggleAgentInAppNotifications,
@@ -1188,8 +1188,8 @@ impl FeaturesPageAction {
                         .value(),
                 ),
             },
-            // Zap:ToggleOutlineCodebaseSymbolsForAtContextMenu 已下线,
-            // telemetry 分支一并删除。
+            // Zap: ToggleOutlineCodebaseSymbolsForAtContextMenu went offline,
+            // telemetry branch deleted together.
             Self::MakeWarpDefaultTerminal => TelemetryEvent::FeaturesPageAction {
                 action: "MakeWarpDefaultTerminal".to_string(),
                 value: to_string(DefaultTerminal::as_ref(ctx).is_warp_default()),
@@ -1923,8 +1923,7 @@ impl TypedActionView for FeaturesPageView {
                         .toggle_and_save_value(ctx));
                 });
             }
-            // Zap:`ToggleOutlineCodebaseSymbolsForAtContextMenu` action 随 outline
-            // 下线推退删除。
+            // Zap: `ToggleOutlineCodebaseSymbolsForAtContextMenu` action deleted when outline went offline.
             ToggleAutoOpenCodeReviewPane => {
                 GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
@@ -3373,7 +3372,7 @@ impl FeaturesPageView {
                     .filter(|val| {
                         *val != DefaultSessionMode::DockerSandbox || docker_sandbox_enabled
                     })
-                    // 去中心化分支:不再展示 Oz / Agent 选项。
+                    // Decentralized branch: no longer show Oz / Agent options.
                     .filter(|val| *val != DefaultSessionMode::AmbientAgent)
                     .map(|val| {
                         DropdownItem::new(

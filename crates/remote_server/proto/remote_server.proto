@@ -449,10 +449,9 @@ message ResolveConflictResponse {
 message ResolveConflictSuccess {}
 
 // ── ListDirectory ─────────────────────────────────────────────────
-// Zap:终端文件链接的远端精确校验。客户端在远端 SSH 会话里
-// Ctrl/Cmd+点击文件路径时,需要知道某个 cwd 下的真实目录项,
-// 才能从 `ls -l` 这类整行输出里准确切出文件名(本地会话靠
-// `fs::metadata` 存在性校验做这件事,远端文件不在本地磁盘上)。
+// Zap: terminal file link remote precise verification. When client Ctrl/Cmd+clicks file path in remote SSH session,
+// needs to know true directory entries under some cwd to accurately extract filename from `ls -l` full-line output
+// (local session uses `fs::metadata` existence check to do this; remote files not on local disk).
 
 // Client → server: list the immediate entries of a directory.
 message ListDirectory {

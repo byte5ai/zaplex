@@ -78,9 +78,9 @@ pub fn test_session_restoration() -> Builder {
         )
 }
 
-/// Saved blocks run on different hosts/shells should NOT get added to History::session_commands
-/// during session restoration. However, if we have NULL for the shell/host information, it should
-/// always get added. The mock data for this case looks like this:
+/// Saved blocks run on different hosts/shells should NOT be added to History::session_commands
+/// during session restoration. However, if shell/host information is NULL, they should
+/// always be added. Mock data for this case:
 /// | command            | output       | shell | user       | host          |
 /// | ------------------ | ------------ | ----- | ---------- | ------------- |
 /// | echo $TERM_PROGRAM | WarpTerminal | zsh   | local:user | local:host    |
@@ -258,9 +258,9 @@ pub fn test_session_restoration_with_multiple_shells() -> Builder {
 }
 
 /// Background output should be restored inline with regular command blocks.
-/// The session being restored is:
+/// The session being restored:
 /// ```shell
-/// $ (sleep 5l echo "background output") &
+/// $ (sleep 5; echo "background output") &
 /// [1] 1512
 /// $ echo foreground 1
 /// foreground 1
@@ -515,7 +515,7 @@ pub fn test_restore_snapshot_with_code_file() -> Builder {
 ///
 /// The snapshot has a single window with one tab, containing:
 /// * A terminal pane
-/// * 设置面板,保存的是已移除的旧 "Referrals" 页面。
+/// * A settings pane, storing the old removed "Referrals" page.
 pub fn test_restore_snapshot_with_settings_page() -> Builder {
     new_builder()
         .with_setup(|_utils| {
@@ -530,7 +530,7 @@ pub fn test_restore_snapshot_with_settings_page() -> Builder {
             TestStep::new("Verify settings pane restoration")
                 .add_assertion(assert_pane_title(0, 1, "Settings"))
                 .add_assertion(move |app, window_id| {
-                    // 验证设置视图存在,并已回退到默认页面。
+                    // Verify settings view exists and has fallen back to default page.
                     let settings_views: Vec<ViewHandle<SettingsView>> = app
                         .views_of_type(window_id)
                         .expect("Settings view must exist");

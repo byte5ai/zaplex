@@ -2,6 +2,6 @@
 //!
 //! Voice is used for voice input within Zap.
 
-// Zap Wave 6-1:`pub(crate) mod transcribe` 随 `ServerApi::transcribe` 一同物理删。
-// 原子模块 `transcribe/api/{request,response}` 仅为已删除的云端 `/ai/transcribe` 端点
-// 的 wire 类型。本地语音走 `voice/transcriber.rs::Transcriber` trait + `TranscribeError`。
+// Zap Wave 6-1: `pub(crate) mod transcribe` to be deleted physically together with `ServerApi::transcribe`.
+// The atomic module `transcribe/api/{request,response}` is wire type only for the deleted cloud
+// `/ai/transcribe` endpoint. Local voice uses `voice/transcriber.rs::Transcriber` trait + `TranscribeError`.

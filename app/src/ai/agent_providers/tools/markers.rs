@@ -1,11 +1,13 @@
-//! UI 信号 marker 类工具:执行即"通知前端做某事",result 是固定 ack。
+//! UI signal marker class tools: executing signals "notify the frontend to do something",
+//! result is a fixed ack.
 //!
-//! - `open_code_review`: 打开 Code Review 面板
-//! - `transfer_shell_command_control_to_user`: 把长运行命令的 PTY 控制权交给用户
+//! - `open_code_review`: Open the Code Review panel
+//! - `transfer_shell_command_control_to_user`: Transfer PTY control of a long-running
+//!   command to the user
 //!
-//! 这些工具的 protobuf 字段都很少(空 message 或一个字段),executor 大多是
-//! 直接转固定 result 的 marker 路径,client 端的实际副作用由 UI/Terminal
-//! 监听对应 ToolCall message 后触发。
+//! These tools have minimal protobuf fields (empty message or one field), and the executor
+//! mostly maps to a fixed result path for markers. The actual side effects on the client are
+//! triggered when the UI/Terminal listens for the corresponding ToolCall message.
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -44,8 +46,9 @@ fn open_code_review_result_to_json(
 
 pub static OPEN_CODE_REVIEW: OpenAiTool = OpenAiTool {
     name: "open_code_review",
-    description: "打开当前项目的 Code Review 面板(client UI 信号,无参数)。\
-                  当用户明确要求开 code review,或上下文显示要开始审查阶段时使用。",
+    description: "Open the Code Review panel for the current project (client UI signal, \
+                  no parameters). Use when the user explicitly requests opening code review, \
+                  or when the context indicates starting a review phase.",
     parameters: empty_parameters,
     from_args: open_code_review_from_args,
     result_to_json: open_code_review_result_to_json,
@@ -57,7 +60,7 @@ pub static OPEN_CODE_REVIEW: OpenAiTool = OpenAiTool {
 
 #[derive(Debug, Deserialize)]
 struct TransferArgs {
-    /// 给用户看的解释:为什么要交还控制权。
+    /// Explanation shown to the user: why control is being transferred.
     #[serde(default)]
     reason: String,
 }
@@ -68,7 +71,8 @@ fn transfer_parameters() -> Value {
         "properties": {
             "reason": {
                 "type": "string",
-                "description": "向用户解释为什么需要把控制权交还(例如「现在需要你手动登录交互」)。"
+                "description": "Explain to the user why control needs to be transferred \
+                                (e.g., \"Manual login interaction is now required\")."
             }
         },
         "additionalProperties": false
@@ -120,10 +124,11 @@ fn transfer_result_to_json(result: &api::message::tool_call_result::Result) -> O
 
 pub static TRANSFER_SHELL_CONTROL: OpenAiTool = OpenAiTool {
     name: "transfer_shell_command_control_to_user",
-    description: "把当前长运行 shell 命令的 PTY 控制权交还给用户。\
-                  适用场景:命令需要用户手动交互且场景不适合用 write_to_long_running_shell_command\
-                  (如交互式登录、需要看终端实时回显才能决定下一步操作等)。\
-                  reason 字段会展示给用户,用于解释为什么要交还。",
+    description: "Transfer PTY control of the current long-running shell command to the \
+                  user. Appropriate when the command requires manual user interaction and the \
+                  scenario is not suitable for write_to_long_running_shell_command (e.g., \
+                  interactive login, needing to see real-time terminal output to decide next \
+                  steps). The reason field will be shown to the user to explain the transfer.",
     parameters: transfer_parameters,
     from_args: transfer_from_args,
     result_to_json: transfer_result_to_json,

@@ -1,14 +1,15 @@
-//! 摘要 prompt — 字节级拷自 opencode `packages/opencode/src/session/compaction.ts:40-75, 121-132`。
+//! Summary prompt — byte-level copy from opencode `packages/opencode/src/session/compaction.ts:40-75, 121-132`.
 //!
-//! 不要"优化"模板文字 — 这是与 opencode 互可移植的契约,任何修改都需要双向同步。
+//! Do not "optimize" template text — this is a bi-directional sync contract with opencode,
+//! any modification requires synchronization both ways.
 
-/// 直接对应 `compaction.ts:40-75 SUMMARY_TEMPLATE`。
+/// Directly corresponds to `compaction.ts:40-75 SUMMARY_TEMPLATE`.
 pub const SUMMARY_TEMPLATE: &str = "Output exactly the Markdown structure shown inside <template> and keep the section order unchanged. Do not include the <template> tags in your response.\n<template>\n## Goal\n- [single-sentence task summary]\n\n## Constraints & Preferences\n- [user constraints, preferences, specs, or \"(none)\"]\n\n## Progress\n### Done\n- [completed work or \"(none)\"]\n\n### In Progress\n- [current work or \"(none)\"]\n\n### Blocked\n- [blockers or \"(none)\"]\n\n## Key Decisions\n- [decision and why, or \"(none)\"]\n\n## Next Steps\n- [ordered next actions or \"(none)\"]\n\n## Critical Context\n- [important technical facts, errors, open questions, or \"(none)\"]\n\n## Relevant Files\n- [file or directory path: why it matters, or \"(none)\"]\n</template>\n\nRules:\n- Keep every section, even when empty.\n- Use terse bullets, not prose paragraphs.\n- Preserve exact file paths, commands, error strings, and identifiers when known.\n- Do not mention the summary process or that context was compacted.";
 
-/// 拼最终 user prompt — 对齐 `compaction.ts:121-132 buildPrompt`。
+/// Assemble final user prompt — aligned with `compaction.ts:121-132 buildPrompt`.
 ///
-/// `previous_summary = Some(...)` → 走"更新"分支,把已有摘要作为 `<previous-summary>` 锚;
-/// `None` → 走"全新"分支。`context` 来自 plugin hook(本地实装暂为空 vec)。
+/// `previous_summary = Some(...)` → take "update" branch, use existing summary as `<previous-summary>` anchor;
+/// `None` → take "create new" branch. `context` comes from plugin hook (local implementation currently empty vec).
 pub fn build_prompt(previous_summary: Option<&str>, context: &[String]) -> String {
     let anchor = match previous_summary {
         Some(prev) => format!(
@@ -25,10 +26,10 @@ pub fn build_prompt(previous_summary: Option<&str>, context: &[String]) -> Strin
     parts.join("\n\n")
 }
 
-/// `replay=false` + `auto=true` 路径下合成 user "Continue..." synthetic message —
-/// 字节级对齐 `compaction.ts:533-537`。
+/// Synthesize user "Continue..." synthetic message on `replay=false` + `auto=true` path —
+/// byte-level aligned with `compaction.ts:533-537`.
 ///
-/// `overflow=true` 时前面会拼一段额外的 "previous request exceeded ... attachments were too large" 解释。
+/// When `overflow=true`, prepend additional explanation "previous request exceeded ... attachments were too large".
 pub fn build_continue_message(overflow: bool) -> String {
     let prefix = if overflow {
         "The previous request exceeded the provider's size limit due to large media attachments. \

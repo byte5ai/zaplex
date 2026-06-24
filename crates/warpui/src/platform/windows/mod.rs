@@ -30,11 +30,11 @@ pub trait AppBuilderExt {
 
 impl AppBuilderExt for super::AppBuilder {
     fn set_app_user_model_id(&mut self, app_id: String) {
-        // 先把 AUMID 注册到 HKCU\Software\Classes\AppUserModelId\<aumid>,
-        // 这样即使没有 Start Menu 快捷方式(`cargo run` 开发模式 / 解压版),
-        // Windows ToastNotificationManager 也能找到该 AUMID,Toast 才会真正弹出。
-        // 否则 `Toast::show()` 会被系统层静默吞掉,API 不报错。
-        // 参考: https://learn.microsoft.com/en-us/windows/apps/design/shell/tiles-and-notifications/send-local-toast-other-apps
+        // First register AUMID to HKCU\Software\Classes\AppUserModelId\<aumid>,
+        // so even without Start Menu shortcuts (`cargo run` dev mode / portable distribution),
+        // Windows ToastNotificationManager can find the AUMID and toasts actually pop up.
+        // Otherwise `Toast::show()` is silently swallowed by the system layer with no API error.
+        // Reference: https://learn.microsoft.com/en-us/windows/apps/design/shell/tiles-and-notifications/send-local-toast-other-apps
         if let Err(err) = register_aumid_in_registry(&app_id) {
             log::warn!("Unable to register Windows AppUserModel ID in registry: {err:?}");
         }
@@ -62,18 +62,18 @@ unsafe fn set_app_user_model_id(app_id: String) -> Result<(), windows::core::Err
     ))
 }
 
-/// 把 AUMID 注册到 `HKCU\Software\Classes\AppUserModelId\<aumid>`,
-/// 这是 Windows 10/11 「unpackaged app」发送本地 toast 的官方注册路径。
+/// Register AUMID to `HKCU\Software\Classes\AppUserModelId\<aumid>`,
+/// the official registration path for Windows 10/11 "unpackaged app" to send local toast.
 ///
-/// `DisplayName` 决定 toast 上方显示的来源名;`IconBackgroundColor` 让
-/// Windows 用更干净的纯色背景替代默认灰底。Icon 暂不写(需要绝对路径,
-/// 且在 `cargo run` 与正式安装两种场景下路径不一样,留给 installer 处理)。
+/// `DisplayName` determines the source name shown above the toast; `IconBackgroundColor` lets
+/// Windows use a cleaner solid-color background instead of the default gray. Icon is not written
+/// (requires absolute path, and paths differ between `cargo run` and official installation; left to installer).
 fn register_aumid_in_registry(app_id: &str) -> std::io::Result<()> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let subkey = format!("Software\\Classes\\AppUserModelId\\{app_id}");
     let (key, _) = hkcu.create_subkey(&subkey)?;
 
-    // 从 AUMID 末段推导一个体面的展示名(e.g. dev.zap.Zap → Zap)。
+    // Derive a presentable display name from the AUMID suffix (e.g. dev.zap.Zap → Zap).
     let display_name = app_id.rsplit('.').next().unwrap_or(app_id);
     key.set_value("DisplayName", &display_name.to_string())?;
     Ok(())

@@ -328,8 +328,8 @@ impl WarpTheme {
         color_fill
     }
 
-    // 文本选区颜色。优先使用 ui_colors.text_selection，其次回退到 ui_colors.selection，
-    // 最后使用硬编码默认值 rgba(118, 167, 250, 0.4)。
+    // Text selection color. Prioritizes ui_colors.text_selection, then falls back to ui_colors.selection,
+    // finally uses hardcoded default rgba(118, 167, 250, 0.4).
     pub fn text_selection_color(&self) -> Fill {
         if let Some(ref ui) = self.ui_colors {
             if let Some(color) = ui.text_selection {

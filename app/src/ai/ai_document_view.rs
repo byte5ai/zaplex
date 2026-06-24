@@ -542,8 +542,9 @@ impl AIDocumentView {
     }
 
     fn update_header_buttons(&mut self, ctx: &mut ViewContext<Self>) {
-        // openWarp 本地化:plan 不再同步到云 notebook,原本这里从 sync_id
-        // 取 server_id 传给 sharing UI;sync_id 已删,这里仅重发 header overflow menu。
+        // openWarp localization: plan no longer syncs to cloud notebook. Originally,
+        // we retrieved server_id from sync_id to pass to sharing UI; sync_id is deleted.
+        // Now we only re-emit header overflow menu.
         self.pane_configuration.update(ctx, |pc, ctx| {
             pc.refresh_pane_header_overflow_menu_items(ctx);
         });
@@ -600,14 +601,14 @@ impl AIDocumentView {
         app: &AppContext,
     ) -> Box<dyn Element> {
         match save_status {
-            // openWarp 不使用云端同步，Plan 已自动保存到本地 SQLite，
-            // 文档存在时始终为 Saved；此处显示"已本地保存"静态图标。
+            // openWarp does not use cloud sync. Plan is automatically saved to local SQLite;
+            // always Saved when document exists. Display static "locally saved" icon here.
             AIDocumentSaveStatus::Saved => {
                 let appearance = Appearance::as_ref(app);
                 let theme = appearance.theme();
                 let color = theme.nonactive_ui_detail().into_solid();
                 let ui_builder = appearance.ui_builder().clone();
-                let tooltip_text = "计划已自动保存到本地。".to_string();
+                let tooltip_text = "Plan automatically saved locally.".to_string();
                 let synced_status_mouse_state = self.synced_status_mouse_state.clone();
                 Container::new(
                     ConstrainedBox::new(
@@ -652,7 +653,8 @@ impl AIDocumentView {
                 )
                 .finish()
             }
-            // openWarp 中 NotSaved 仅表示文档不存在(调用侧占位),不画任何 UI。
+            // In openWarp, NotSaved only indicates document doesn't exist (placeholder from caller),
+            // draw no UI.
             AIDocumentSaveStatus::NotSaved => Empty::new().finish(),
         }
     }
@@ -892,8 +894,9 @@ impl AIDocumentView {
     }
 
     fn create_warp_drive_notebook(&self, _ctx: &mut ViewContext<Self>) {
-        // openWarp 本地化:plan 不再推送到云 notebook,菜单中这条入口已下架,
-        // 仅保留 enum 变体以防旧 keybinding 配置恶性反序列化;这里 no-op。
+        // openWarp localization: plan no longer pushed to cloud notebook. Menu entry
+        // has been removed, kept enum variant only to guard against malformed old keybinding
+        // configs deserializing. This is a no-op.
         log::debug!("AIDocumentAction::CreateWarpDriveNotebook is a no-op in openWarp");
     }
 
@@ -1112,9 +1115,10 @@ impl TypedActionView for AIDocumentView {
                 self.update_header_buttons(ctx);
             }
             AIDocumentAction::ShowInWarpDrive => {
-                // openWarp 本地化:plan 不再同步到云 Drive,原本发 ViewInWarpDrive
-                // 事件跳到云 notebook 步路已完全不可达。仅保留 enum 变体防旧
-                // keybinding 反序列化崩,这里 no-op。
+                // openWarp localization: plan no longer syncs to cloud Drive.
+                // Originally emitted ViewInWarpDrive event to jump to cloud notebook,
+                // path now completely unreachable. Keep enum variant only to guard against
+                // malformed old keybinding deserialization. This is a no-op.
                 log::debug!("AIDocumentAction::ShowInWarpDrive is a no-op in openWarp");
             }
             AIDocumentAction::AttachToActiveSession => {
@@ -1159,8 +1163,8 @@ impl BackingView for AIDocumentView {
     ) -> Vec<MenuItem<Self::PaneHeaderOverflowMenuAction>> {
         let mut menu_items = vec![];
 
-        // openWarp 本地化:云菜单项 "Copy Link" / "Show in Zap Drive"
-        // 原本仅在云同步成功后才显示,本地路径完全不可达,直接删除。
+        // openWarp localization: cloud menu items "Copy Link" / "Show in Zap Drive"
+        // were only shown after successful cloud sync. Local path is unreachable, remove directly.
 
         #[cfg(feature = "local_fs")]
         {

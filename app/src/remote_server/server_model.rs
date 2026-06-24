@@ -27,8 +27,8 @@ use super::proto::{
 };
 use zaplex_remote_session::types::supported_features;
 
-// Buffer-sync 相关:依赖 GlobalBufferModel,后者的 server-local 操作只在
-// `local_fs` 下可用,因此整套服务端 buffer 处理都按 `local_fs` 门控。
+// Buffer-sync related: depends on GlobalBufferModel, which server-local operations are only
+// available under `local_fs`, so the entire server-side buffer handling is gated by `local_fs`.
 #[cfg(feature = "local_fs")]
 use super::proto::{
     create_directory_response, list_directory_response, read_file_chunk_response,
@@ -384,7 +384,7 @@ impl ServerModel {
                         return;
                     };
                     // Find the path for this file_id; abort the push if tracker
-                    // state is inconsistent (空 path 会破坏 path↔buffer 契约)。
+                    // state is inconsistent (empty path would violate path↔buffer contract).
                     let Some(path) = me.buffers.path_for_file_id(*file_id) else {
                         log::error!(
                             "Missing path mapping for server-local buffer file_id={file_id:?}"
@@ -650,7 +650,7 @@ impl ServerModel {
             Some(client_message::Message::ResolveConflict(msg)) => {
                 self.handle_resolve_conflict(msg, &request_id, conn_id, ctx)
             }
-            // Zap:远端终端文件链接的目录列举(校验路径形态用)。
+            // Zap: Remote terminal file link directory listing (for path form validation).
             #[cfg(feature = "local_fs")]
             Some(client_message::Message::ListDirectory(msg)) => self.handle_list_directory(msg),
             #[cfg(feature = "local_fs")]
@@ -1361,9 +1361,9 @@ impl ServerModel {
         let buffer_state = gbm.update(ctx, |gbm, ctx| gbm.open_server_local(path, ctx));
         let file_id = buffer_state.file_id;
 
-        // Track path → FileId mapping and connection。track_open_buffer 同时持有
-        // buffer 的强引用 —— daemon 没有编辑器 view,不持有的话 buffer 会在
-        // FileModel 异步加载完成前被回收(见 ServerBufferTracker::buffer_handles)。
+        // Track path → FileId mapping and connection. track_open_buffer holds a strong reference
+        // to the buffer — daemon has no editor view, so without holding it the buffer would be
+        // reclaimed before FileModel async load completes (see ServerBufferTracker::buffer_handles).
         self.buffers
             .track_open_buffer(msg.path.clone(), file_id, buffer_state.buffer);
         self.buffers.add_connection(file_id, conn_id);
@@ -1525,12 +1525,12 @@ impl ServerModel {
         }
     }
 
-    /// Zap:处理 `ListDirectory` —— 同步列举一个目录下的直接子项。
+    /// Zap: Handle `ListDirectory` — sync listing of direct children in a directory.
     ///
-    /// 给远端终端文件链接检测做精确校验用:客户端缓存某个 cwd 下的
-    /// 真实目录项,链接检测器据此从 `ls -l` 整行里切出正确的文件名。
-    /// `std::fs::read_dir` 在 daemon 端是廉价的同步调用,故直接返回
-    /// `HandlerOutcome::Sync`,不走异步 spawn。
+    /// For precise validation by remote terminal file link detection: client caches real directory
+    /// entries under a cwd, link detector uses this to extract correct filenames from `ls -l` lines.
+    /// `std::fs::read_dir` is a cheap sync call on daemon, so directly returns
+    /// `HandlerOutcome::Sync`, not spawning async.
     #[cfg(feature = "local_fs")]
     fn handle_list_directory(&self, msg: ListDirectory) -> HandlerOutcome {
         log::info!("Handling ListDirectory path={}", msg.path);
@@ -1541,8 +1541,8 @@ impl ServerModel {
                 let mut entries = Vec::new();
                 for entry in read_dir.flatten() {
                     let name = entry.file_name().to_string_lossy().into_owned();
-                    // 优先用 `file_type()`(不跟随符号链接、无需额外 stat);
-                    // 失败时回退到 `metadata()`(会跟随符号链接)。
+                    // Prefer `file_type()` (doesn't follow symlinks, no extra stat needed);
+                    // fall back to `metadata()` on failure (follows symlinks).
                     let file_type = entry.file_type().ok();
                     let metadata = entry.metadata().ok();
                     let kind = entry_kind(file_type.as_ref(), metadata.as_ref());

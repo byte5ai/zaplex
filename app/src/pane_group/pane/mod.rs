@@ -14,7 +14,7 @@ pub(super) mod code_diff_pane;
 pub(super) mod code_diff_pane_model;
 pub(super) mod code_pane;
 pub(super) mod env_var_collection_pane;
-// Zap Wave 7-3:`environment_management_pane` 随 ambient-agent UI 子系统物理删。
+// Zap Wave 7-3: `environment_management_pane` physically removed with ambient-agent UI subsystem.
 pub(super) mod execution_profile_editor_pane;
 pub(super) mod file_pane;
 pub(super) mod get_started_pane;
@@ -144,8 +144,7 @@ pub(crate) enum IPaneType {
     Code,
     CodeDiff,
     EnvVarCollection,
-    // Zap Wave 7-3:`EnvironmentManagement` IPaneType 随 ambient-agent UI 子系统
-    // 物理删。
+    // Zap Wave 7-3: `EnvironmentManagement` IPaneType physically removed with ambient-agent UI subsystem.
     Workflow,
     Settings,
     AIFact,
@@ -171,7 +170,7 @@ impl Display for IPaneType {
             IPaneType::Code => write!(f, "Code"),
             IPaneType::CodeDiff => write!(f, "Code Diff"),
             IPaneType::EnvVarCollection => write!(f, "Environment Variable Collection"),
-            // Zap Wave 7-3:`EnvironmentManagement` Display arm 随 variant 物理删。
+            // Zap Wave 7-3: `EnvironmentManagement` Display arm physically removed with variant.
             IPaneType::Workflow => write!(f, "Workflow"),
             IPaneType::Settings => write!(f, "Settings"),
             IPaneType::AIFact => write!(f, "AI Fact"),
@@ -230,8 +229,7 @@ impl PaneId {
         Self::new_from_ctx(IPaneType::EnvVarCollection, ctx)
     }
 
-    // Zap Wave 7-3:`from_environment_management_pane_ctx` 随 ambient-agent UI 子系统
-    // 物理删。
+    // Zap Wave 7-3: `from_environment_management_pane_ctx` physically removed with ambient-agent UI subsystem.
 
     /// Creates a [`PaneId`] from a [`ViewContext<PaneView<WorkflowView>>`]
     pub fn from_workflow_pane_ctx(ctx: &ViewContext<PaneView<WorkflowView>>) -> Self {
@@ -330,8 +328,7 @@ impl PaneId {
         Self::new(IPaneType::EnvVarCollection, env_var_collection_view)
     }
 
-    // Zap Wave 7-3:`from_environment_management_pane_view` 随 ambient-agent UI 子系统
-    // 物理删。
+    // Zap Wave 7-3: `from_environment_management_pane_view` physically removed with ambient-agent UI subsystem.
 
     /// Creates a [`PaneId`] from a [`PaneView<WorkflowView>`] entity ID.
     pub fn from_workflow_pane_view(
@@ -447,8 +444,8 @@ impl PaneId {
     }
 
     pub fn is_environment_management_pane(&self) -> bool {
-        // Zap Wave 7-3:ambient-agent UI 子系统物理删,任意 pane 都不是
-        // environment management pane。调用者为渐进式清理保留、返回 false。
+        // Zap Wave 7-3: ambient-agent UI subsystem physically removed;
+        // no pane is an environment management pane. Kept for progressive cleanup, returns false.
         false
     }
 
@@ -487,7 +484,7 @@ impl PaneId {
             IPaneType::EnvVarCollection => {
                 ChildView::<PaneView<EnvVarCollectionView>>::with_id(self.0.pane_view_id).finish()
             }
-            // Zap Wave 7-3:`EnvironmentManagement` render arm 随 variant 物理删。
+            // Zap Wave 7-3: `EnvironmentManagement` render arm physically removed with variant.
             IPaneType::Workflow => {
                 ChildView::<PaneView<WorkflowView>>::with_id(self.0.pane_view_id).finish()
             }

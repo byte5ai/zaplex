@@ -47,7 +47,7 @@ pub fn initialize_settings_for_tests_with_mode(
     AccessibilitySettings::register(app);
     app.update(AISettings::register_and_subscribe_to_events);
     AliasExpansionSettings::register(app);
-    // Zap Wave 7-3:`AmbientAgentSettings` 随 ambient-agent UI 子系统物理删。
+    // Zap Wave 7-3: `AmbientAgentSettings` removed along with ambient-agent UI subsystem.
     AppEditorSettings::register(app);
     BlockVisibilitySettings::register(app);
     BlockListSettings::register(app);
@@ -62,6 +62,7 @@ pub fn initialize_settings_for_tests_with_mode(
         crate::util::file::external_editor::EditorSettings::register(app);
     }
 
+    // Zap Wave 7-3: `AmbientAgentSettings` removed along with ambient-agent UI subsystem.
     FontSettings::register(app);
     GeneralSettings::register(app);
     GPUSettings::register(app);

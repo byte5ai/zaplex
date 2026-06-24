@@ -1,7 +1,7 @@
-//! SFTP 浏览器主视图
+//! SFTP browser main view
 //!
-//! 实现 BackingView trait，作为 pane 的核心视图组件。
-//! 提供远程文件浏览、上传下载、目录导航等完整功能。
+//! Implements the `BackingView` trait and serves as the pane's core view component.
+//! Provides full functionality for remote file browsing, upload/download, and directory navigation.
 //! author: logic
 //! date: 2026-05-26
 
@@ -46,185 +46,185 @@ use super::types::{
     TransferTask,
 };
 
-/// 工具栏按钮尺寸
+/// Toolbar button size
 const TOOLBAR_BTN_SIZE: f32 = 28.0;
-/// 工具栏图标尺寸
+/// Toolbar icon size
 const TOOLBAR_ICON_SIZE: f32 = 16.0;
-/// 工具栏间距
+/// Toolbar spacing
 const TOOLBAR_SPACING: f32 = 4.0;
-/// 面板内边距
+/// Panel inner padding
 const PANEL_PADDING: f32 = 8.0;
-/// SFTP 面板位置 ID（用于 SavePosition 定位右键菜单）
+/// SFTP panel position ID (used by SavePosition to position the context menu)
 pub(crate) const SFTP_PANEL_POSITION_ID: &str = "sftp_browser_panel_root";
 
-/// SFTP 浏览器动作
+/// SFTP browser action
 #[derive(Debug, Clone)]
 pub enum SftpBrowserAction {
-    /// 导航到指定路径
+    /// Navigate to the given path
     NavigateTo(PathBuf),
-    /// 返回上级目录
+    /// Go up to the parent directory
     GoUp,
-    /// 后退（历史记录）
+    /// Go back (history)
     GoBack,
-    /// 前进（历史记录）
+    /// Go forward (history)
     GoForward,
-    /// 刷新当前目录
+    /// Refresh the current directory
     Refresh,
-    /// 选中指定索引的条目
+    /// Select the entry at the given index
     SelectEntry(usize),
-    /// 打开指定索引的条目（目录则进入，文件则下载）
+    /// Open the entry at the given index (enter if a directory, download if a file)
     OpenEntry(usize),
-    /// 删除指定索引的条目
+    /// Delete the entry at the given index
     DeleteEntry(usize),
-    /// 重命名指定索引的条目
+    /// Rename the entry at the given index
     RenameEntry(usize),
-    /// 下载指定索引的条目
+    /// Download the entry at the given index
     DownloadEntry(usize),
-    /// 上传文件
+    /// Upload a file
     UploadFile,
-    /// 新建文件夹
+    /// Create a new folder
     NewFolder,
-    /// 确认删除
+    /// Confirm deletion
     ConfirmDelete,
-    /// 确认重命名
+    /// Confirm rename
     ConfirmRename,
-    /// 确认新建文件夹
+    /// Confirm new folder creation
     ConfirmNewFolder,
-    /// 确认覆盖
+    /// Confirm overwrite
     ConfirmOverwrite,
-    /// 弹出右键菜单
+    /// Open the context menu
     ContextMenu {
         index: usize,
         position: Vector2F,
     },
-    /// 关闭右键菜单
+    /// Close the context menu
     CloseContextMenu,
-    /// 关闭对话框
+    /// Close the dialog
     CloseDialog,
-    /// 查看条目详情
+    /// View entry details
     DetailsEntry(usize),
-    /// 设置搜索过滤
+    /// Set the search filter
     SetSearchFilter(String),
-    /// 清除搜索过滤
+    /// Clear the search filter
     ClearSearchFilter,
-    /// 返回上级（键盘快捷键）
+    /// Go up to the parent directory (keyboard shortcut)
     NavigateUp,
-    /// 删除选中条目（键盘快捷键）
+    /// Delete the selected entries (keyboard shortcut)
     DeleteSelected,
-    /// 创建文件夹（键盘快捷键）
+    /// Create a folder (keyboard shortcut)
     CreateFolder,
-    /// 文件拖入浏览器区域
+    /// Files dragged into the browser area
     DragFilesEnter,
-    /// 文件拖出浏览器区域
+    /// Files dragged out of the browser area
     DragFilesLeave,
-    /// 拖放文件上传
+    /// Upload files via drag and drop
     DragAndDropFiles(Vec<PathBuf>),
-    /// 执行上传
+    /// Execute an upload
     ExecuteUpload(String),
-    /// 执行保存下载（用户已选择路径）
+    /// Execute a save-as download (the user has chosen a path)
     DownloadSaveAs { index: usize, local_path: String },
-    /// 确认移动
+    /// Confirm move
     ConfirmMove,
-    /// 取消传输任务
+    /// Cancel a transfer task
     CancelTransfer(usize),
-    /// 切换传输面板可见性
+    /// Toggle transfer panel visibility
     ToggleTransferPanel,
-    /// 确认关闭传输面板（取消所有传输并清空记录）
+    /// Confirm closing the transfer panel (cancel all transfers and clear the history)
     ConfirmCloseTransferPanel,
 }
 
-/// SFTP 浏览器视图
+/// SFTP browser view
 pub struct SftpBrowserView {
-    /// 关联的 SSH 服务器节点 ID
+    /// ID of the associated SSH server node
     node_id: String,
-    /// pane 配置句柄
+    /// Pane configuration handle
     pane_configuration: ModelHandle<PaneConfiguration>,
-    /// 焦点句柄
+    /// Focus handle
     focus_handle: Option<PaneFocusHandle>,
-    // ---- 连接 ----
-    /// 连接状态
+    // ---- Connection ----
+    /// Connection state
     pub(crate) connection: ConnectionState,
-    /// SFTP 会话
+    /// SFTP session
     _session: Option<zap_sftp::SftpSession>,
-    /// SFTP 操作通道
+    /// SFTP operations channel
     sftp: Option<Arc<dyn SftpBackend>>,
-    // ---- 导航 ----
-    /// 当前路径
+    // ---- Navigation ----
+    /// Current path
     pub(crate) current_path: PathBuf,
-    /// 当前目录文件条目
+    /// File entries in the current directory
     pub(crate) entries: Vec<FileEntry>,
-    /// 选中的条目索引集合
+    /// Set of selected entry indices
     pub(crate) selected: HashSet<usize>,
-    /// 路径历史记录
+    /// Path history
     pub(crate) path_history: Vec<PathBuf>,
-    /// 历史记录当前位置
+    /// Current position in the history
     pub(crate) history_index: usize,
-    // ---- 传输 ----
-    /// 传输任务列表
+    // ---- Transfers ----
+    /// List of transfer tasks
     pub(crate) transfers: Vec<TransferTask>,
-    /// 下一个传输任务 ID
+    /// Next transfer task ID
     pub(crate) next_transfer_id: usize,
-    // ---- UI 状态 ----
-    /// 当前打开的对话框
+    // ---- UI state ----
+    /// Currently open dialog
     pub(crate) dialog: Option<Dialog>,
-    /// 是否正在加载
+    /// Whether a load is in progress
     pub(crate) is_loading: bool,
-    /// 右键菜单状态
+    /// Context menu state
     pub(crate) context_menu: Option<ContextMenuState>,
-    /// 搜索过滤文本
+    /// Search filter text
     pub(crate) search_filter: Option<String>,
-    /// 是否有文件拖拽悬停在浏览器上
+    /// Whether files are being dragged over the browser
     pub(crate) is_drag_hovering: bool,
-    // ---- 鼠标句柄 ----
-    /// 刷新按钮
+    // ---- Mouse handles ----
+    /// Refresh button
     refresh_btn: MouseStateHandle,
-    /// 上级目录按钮
+    /// Parent directory button
     up_btn: MouseStateHandle,
-    /// 后退按钮
+    /// Back button
     back_btn: MouseStateHandle,
-    /// 前进按钮
+    /// Forward button
     forward_btn: MouseStateHandle,
-    /// 上传按钮
+    /// Upload button
     upload_btn: MouseStateHandle,
-    /// 新建文件夹按钮
+    /// New folder button
     new_folder_btn: MouseStateHandle,
-    /// 对话框确认按钮
+    /// Dialog confirm button
     dialog_confirm_btn: MouseStateHandle,
-    /// 对话框取消按钮
+    /// Dialog cancel button
     dialog_cancel_btn: MouseStateHandle,
-    /// 对话框关闭按钮（标题栏 X 按钮）
+    /// Dialog close button (title bar X button)
     dialog_close_btn: MouseStateHandle,
-    // ---- 传输面板 ----
-    /// 传输面板是否被用户隐藏
+    // ---- Transfer panel ----
+    /// Whether the transfer panel has been hidden by the user
     transfer_panel_hidden: bool,
-    /// 传输面板关闭按钮
+    /// Transfer panel close button
     transfer_panel_close_btn: MouseStateHandle,
-    // ---- 对话框编辑器 ----
-    /// 重命名编辑器
+    // ---- Dialog editors ----
+    /// Rename editor
     pub(crate) rename_editor: ViewHandle<EditorView>,
-    /// 新建文件夹编辑器
+    /// New folder editor
     pub(crate) new_folder_editor: ViewHandle<EditorView>,
-    /// 搜索过滤编辑器
+    /// Search filter editor
     search_editor: ViewHandle<EditorView>,
-    // ---- 文件行鼠标句柄 ----
-    /// 每行文件条目的鼠标状态句柄
+    // ---- File row mouse handles ----
+    /// Mouse state handle for each file entry row
     row_mouse_handles: Vec<MouseStateHandle>,
-    // ---- 滚动 ----
-    /// 滚动状态句柄
+    // ---- Scrolling ----
+    /// Scroll state handle
     scroll_state: ClippedScrollStateHandle,
-    // ---- 异步任务 ----
-    /// 当前连接任务的 future handle
+    // ---- Async tasks ----
+    /// Future handle for the current connection task
     connect_handle: Option<SpawnedFutureHandle>,
-    /// 当前刷新目录的 future handle
+    /// Future handle for the current directory refresh
     refresh_handle: Option<SpawnedFutureHandle>,
-    /// 传输任务 ID 到 future handle 的映射
+    /// Mapping from transfer task ID to its future handle
     transfer_handles: HashMap<usize, SpawnedFutureHandle>,
-    /// 拖拽批量上传时的待处理队列
+    /// Pending queue for batched drag-and-drop uploads
     pending_uploads: Vec<PathBuf>,
 }
 
 impl SftpBrowserView {
-    /// 创建新的 SFTP 浏览器视图
+    /// Create a new SFTP browser view
     pub fn new(node_id: String, ctx: &mut ViewContext<Self>) -> Self {
         let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("文件管理"));
         let rename_editor = make_editor("Enter new name", ctx);
@@ -272,7 +272,7 @@ impl SftpBrowserView {
             pending_uploads: Vec::new(),
         };
 
-        // 订阅重命名编辑器事件
+        // Subscribe to rename editor events
         let rename_editor_handle = me.rename_editor.clone();
         ctx.subscribe_to_view(
             &rename_editor_handle,
@@ -288,7 +288,7 @@ impl SftpBrowserView {
             },
         );
 
-        // 订阅新建文件夹编辑器事件
+        // Subscribe to new folder editor events
         let new_folder_editor_handle = me.new_folder_editor.clone();
         ctx.subscribe_to_view(
             &new_folder_editor_handle,
@@ -304,7 +304,7 @@ impl SftpBrowserView {
             },
         );
 
-        // 订阅搜索编辑器事件
+        // Subscribe to search editor events
         let search_editor_handle = me.search_editor.clone();
         ctx.subscribe_to_view(
             &search_editor_handle,
@@ -328,13 +328,13 @@ impl SftpBrowserView {
             },
         );
 
-        // 发起连接
+        // Initiate the connection
         me.connect_to_server(ctx);
 
         me
     }
 
-    /// 注入测试后端，模拟 Connected 状态（仅测试使用）
+    /// Inject a test backend, simulating the Connected state (test only)
     #[cfg(test)]
     pub(crate) fn set_backend_for_test(
         &mut self,
@@ -350,7 +350,7 @@ impl SftpBrowserView {
         self.refresh_dir_sync(ctx);
     }
 
-    /// 注入测试后端（集成测试使用）
+    /// Inject a test backend (used by integration tests)
     #[cfg(feature = "integration_tests")]
     pub fn inject_mock_backend(
         &mut self,
@@ -366,7 +366,7 @@ impl SftpBrowserView {
         self.refresh_dir_sync(ctx);
     }
 
-    /// 同步刷新目录内容（仅测试使用，避免异步延迟）
+    /// Synchronously refresh the directory contents (test only, to avoid async delays)
     #[cfg(any(test, feature = "integration_tests"))]
     fn refresh_dir_sync(&mut self, ctx: &mut ViewContext<Self>) {
         let sftp = match &self.sftp {
@@ -407,42 +407,42 @@ impl SftpBrowserView {
         ctx.notify();
     }
 
-    /// 集成测试用 getter：连接状态
+    /// Integration-test getter: connection state
     #[cfg(feature = "integration_tests")]
     pub fn connection_state(&self) -> &ConnectionState {
         &self.connection
     }
 
-    /// 集成测试用 getter：文件条目列表
+    /// Integration-test getter: list of file entries
     #[cfg(feature = "integration_tests")]
     pub fn entries(&self) -> &[FileEntry] {
         &self.entries
     }
 
-    /// 集成测试用 getter：选中集合
+    /// Integration-test getter: set of selected entries
     #[cfg(feature = "integration_tests")]
     pub fn selected(&self) -> &HashSet<usize> {
         &self.selected
     }
 
-    /// 集成测试用 getter：对话框状态
+    /// Integration-test getter: dialog state
     #[cfg(feature = "integration_tests")]
     pub fn dialog(&self) -> &Option<Dialog> {
         &self.dialog
     }
 
-    /// 集成测试用 getter：右键菜单状态
+    /// Integration-test getter: context menu state
     #[cfg(feature = "integration_tests")]
     pub fn context_menu(&self) -> &Option<ContextMenuState> {
         &self.context_menu
     }
 
-    /// 获取 pane 配置
+    /// Get the pane configuration
     pub fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {
         self.pane_configuration.clone()
     }
 
-    /// 测试用：断开连接，清空状态
+    /// Test only: disconnect and clear state
     #[cfg(test)]
     pub(crate) fn disconnect_for_test(&mut self, ctx: &mut ViewContext<Self>) {
         self.connection = ConnectionState::Disconnected;
@@ -452,7 +452,7 @@ impl SftpBrowserView {
         ctx.notify();
     }
 
-    /// 连接到 SSH 服务器并建立 SFTP 通道
+    /// Connect to the SSH server and establish an SFTP channel
     fn connect_to_server(&mut self, ctx: &mut ViewContext<Self>) {
         let node_id = self.node_id.clone();
         let result = warp_ssh_manager::with_conn(|c| {
@@ -462,7 +462,7 @@ impl SftpBrowserView {
 
         match result {
             Ok(Some(server)) => {
-                // 取消之前的连接尝试
+                // Cancel any previous connection attempt
                 if let Some(h) = self.connect_handle.take() {
                     h.abort();
                 }
@@ -482,7 +482,7 @@ impl SftpBrowserView {
                                 match session.sftp() {
                                     Ok(sftp) => {
                                         let backend = Arc::new(LiveSftpBackend::new(sftp)) as Arc<dyn SftpBackend>;
-                                        // 解析用户 home 目录
+                                        // Resolve the user's home directory
                                         if let Ok(home) = backend.realpath(std::path::Path::new(".")) {
                                             me.current_path = normalize_remote_path(&home);
                                         } else {
@@ -507,7 +507,7 @@ impl SftpBrowserView {
                                 me.show_error_toast(e.to_string(), ctx);
                             }
                             Err(_) => {
-                                // JoinError（被 abort 或 panic）
+                                // JoinError (aborted or panicked)
                                 me.connection = ConnectionState::Failed("连接已取消".to_string());
                             }
                         }
@@ -528,10 +528,10 @@ impl SftpBrowserView {
         }
     }
 
-    /// 执行阻塞操作并回调
-    /// 生产环境：通过 ctx.spawn + spawn_blocking 在后台线程执行
-    /// 测试环境：直接同步执行（避免异步执行器时序问题）
-    /// 返回 SpawnedFutureHandle 用于取消操作（测试环境返回 None）
+    /// Run a blocking operation and invoke the callback with the result
+    /// Production: runs on a background thread via ctx.spawn + spawn_blocking
+    /// Tests: runs synchronously inline (to avoid async executor timing issues)
+    /// Returns a SpawnedFutureHandle for cancellation (returns None in tests)
     fn run_blocking<T: Send + 'static>(
         &mut self,
         ctx: &mut ViewContext<Self>,
@@ -555,7 +555,7 @@ impl SftpBrowserView {
         }
     }
 
-    /// 刷新当前目录内容
+    /// Refresh the current directory contents
     fn refresh_dir(&mut self, ctx: &mut ViewContext<Self>) {
         let sftp = match &self.sftp {
             Some(s) => s.clone(),
@@ -614,7 +614,7 @@ impl SftpBrowserView {
         );
     }
 
-    /// 同步行鼠标句柄数量与条目数量一致
+    /// Keep the number of row mouse handles in sync with the number of entries
     fn sync_row_mouse_handles(&mut self) {
         while self.row_mouse_handles.len() < self.entries.len() {
             self.row_mouse_handles.push(MouseStateHandle::default());
@@ -622,7 +622,7 @@ impl SftpBrowserView {
         self.row_mouse_handles.truncate(self.entries.len());
     }
 
-    /// 显示错误 Toast 弹窗
+    /// Show an error toast notification
     fn show_error_toast(&self, message: String, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
@@ -632,21 +632,21 @@ impl SftpBrowserView {
         });
     }
 
-    /// 导航到指定路径并更新历史记录
+    /// Navigate to the given path and update the history
     fn navigate_to(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {
         let path = normalize_remote_path(&path);
         if path == self.current_path {
             return;
         }
         self.current_path = path;
-        // 截断前进历史
+        // Truncate the forward history
         self.path_history.truncate(self.history_index + 1);
         self.path_history.push(self.current_path.clone());
         self.history_index = self.path_history.len() - 1;
         self.refresh_dir(ctx);
     }
 
-    /// 返回上级目录
+    /// Go up to the parent directory
     fn go_up(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(parent) = self.current_path.parent() {
             let parent = normalize_remote_path(&parent.to_path_buf());
@@ -656,7 +656,7 @@ impl SftpBrowserView {
         }
     }
 
-    /// 后退到历史记录中的上一个路径
+    /// Go back to the previous path in the history
     fn go_back(&mut self, ctx: &mut ViewContext<Self>) {
         if self.history_index > 0 {
             self.history_index -= 1;
@@ -665,7 +665,7 @@ impl SftpBrowserView {
         }
     }
 
-    /// 前进到历史记录中的下一个路径
+    /// Go forward to the next path in the history
     fn go_forward(&mut self, ctx: &mut ViewContext<Self>) {
         if self.history_index < self.path_history.len() - 1 {
             self.history_index += 1;
@@ -674,7 +674,7 @@ impl SftpBrowserView {
         }
     }
 
-    /// 打开指定索引的条目
+    /// Open the entry at the given index
     fn open_entry(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         if let Some(entry) = self.entries.get(index) {
             match entry.file_type {
@@ -688,11 +688,11 @@ impl SftpBrowserView {
         }
     }
 
-    /// 弹出删除确认对话框
+    /// Open the delete confirmation dialog
     fn delete_selected(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         if let Some(entry) = self.entries.get(index) {
             let (paths, is_dirs) = if self.selected.contains(&index) {
-                // 删除所有选中的
+                // Delete all selected entries
                 self.selected
                     .iter()
                     .filter_map(|&i| {
@@ -712,7 +712,7 @@ impl SftpBrowserView {
         }
     }
 
-    /// 执行删除操作
+    /// Perform the delete operation
     fn confirm_delete(&mut self, ctx: &mut ViewContext<Self>) {
         let sftp = match &self.sftp {
             Some(s) => s.clone(),
@@ -770,7 +770,7 @@ impl SftpBrowserView {
                         me.refresh_dir(ctx);
                     }
                     Err(_) => {
-                        // 被取消
+                        // Cancelled
                         me.refresh_dir(ctx);
                     }
                 }
@@ -779,7 +779,7 @@ impl SftpBrowserView {
         );
     }
 
-    /// 创建下载传输任务
+    /// Create a download transfer task
     fn download_entry(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         if let Some(entry) = self.entries.get(index) {
             let default_name = entry.name.clone();
@@ -798,7 +798,7 @@ impl SftpBrowserView {
         }
     }
 
-    /// 显示条目详情对话框
+    /// Show the entry details dialog
     fn show_details(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         if let Some(entry) = self.entries.get(index) {
             self.dialog = Some(Dialog::FileDetails {
@@ -808,21 +808,21 @@ impl SftpBrowserView {
         }
     }
 
-    /// 弹出重命名对话框
+    /// Open the rename dialog
     fn rename_entry(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         if let Some(entry) = self.entries.get(index) {
             self.dialog = Some(Dialog::Rename {
                 path: entry.path.clone(),
                 original_name: entry.name.clone(),
             });
-            // 将当前名称写入编辑器
+            // Write the current name into the editor
             self.rename_editor
                 .update(ctx, |e, ctx| e.set_buffer_text(&entry.name, ctx));
             ctx.notify();
         }
     }
 
-    /// 渲染单个工具栏按钮
+    /// Render a single toolbar button
     fn render_toolbar_btn(
         &self,
         icon: Icon,
@@ -859,7 +859,7 @@ impl SftpBrowserView {
         SavePosition::new(btn_el, position_id).finish()
     }
 
-    /// 渲染工具栏
+    /// Render the toolbar
     fn render_toolbar(&self, appearance: &Appearance) -> Box<dyn Element> {
         let nav_buttons = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -930,7 +930,7 @@ impl SftpBrowserView {
             .finish()
     }
 
-    /// 渲染面包屑导航
+    /// Render the breadcrumb navigation
     fn render_breadcrumb(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let text_color = theme.sub_text_color(theme.background());
@@ -942,7 +942,7 @@ impl SftpBrowserView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(2.0);
 
-        // 添加根目录 "/" 作为可点击入口
+        // Add the root directory "/" as a clickable entry point
         let root_text_color = text_color;
         let root_hoverable = Hoverable::new(Default::default(), move |_| {
             let t = Text::new_inline(
@@ -976,7 +976,7 @@ impl SftpBrowserView {
             .finish()
     }
 
-    /// 渲染连接状态（非连接时）
+    /// Render the connection state (when not connected)
     fn render_connection_state(&self, appearance: &Appearance) -> Box<dyn Element> {
         let (msg, icon) = match &self.connection {
             ConnectionState::Connecting => ("Connecting...".to_string(), Icon::Loading),
@@ -990,11 +990,11 @@ impl SftpBrowserView {
         render_centered_status(icon, &msg, 12.0, appearance)
     }
 
-    /// 渲染文件列表
+    /// Render the file list
     fn render_file_list(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
 
-        // 过滤条目
+        // Filter the entries
         let filtered_indices: Vec<usize> = self
             .entries
             .iter()
@@ -1020,10 +1020,10 @@ impl SftpBrowserView {
                 .finish();
         }
 
-        // 表头
+        // Header row
         let header = super::file_list::render_header(appearance);
 
-        // 文件行
+        // File rows
         let rows = super::file_list::render_file_rows(
             &self.entries,
             &filtered_indices,
@@ -1039,7 +1039,7 @@ impl SftpBrowserView {
             .finish()
     }
 
-    /// 渲染传输面板
+    /// Render the transfer panel
     fn render_transfers(&self, appearance: &Appearance) -> Box<dyn Element> {
         super::transfer_panel::render_transfer_panel(
             &self.transfers,
@@ -1048,10 +1048,11 @@ impl SftpBrowserView {
         )
     }
 
-    /// 执行上传操作（公共入口，供拖拽上传和文件选择上传共用）
+    /// Execute an upload (shared entry point for drag-and-drop and file-picker uploads)
     ///
-    /// 先检查远程目录是否已存在同名文件，若存在则弹出覆盖确认对话框，
-    /// 用户确认后通过 `execute_upload_confirmed` 执行实际上传。
+    /// First checks whether a file with the same name already exists in the remote directory;
+    /// if so, opens an overwrite confirmation dialog, and after the user confirms,
+    /// performs the actual upload via `execute_upload_confirmed`.
     fn execute_upload(&mut self, local_path: &Path, ctx: &mut ViewContext<Self>) {
         let file_name = local_path
             .file_name()
@@ -1065,7 +1066,7 @@ impl SftpBrowserView {
             }
         };
 
-        // 检查远程目录中是否已存在同名文件
+        // Check whether a file with the same name already exists in the remote directory
         let existing = self.entries.iter().find(|e| {
             e.name == file_name && matches!(e.file_type, FileEntryType::File)
         });
@@ -1082,28 +1083,28 @@ impl SftpBrowserView {
             return;
         }
 
-        // 无冲突，直接执行上传
+        // No conflict; perform the upload directly
         self.execute_upload_confirmed(local_path, &remote_path, ctx);
     }
 
-    /// 处理待上传队列，逐个上传直到遇到冲突或队列清空
+    /// Process the pending upload queue, uploading one file at a time until a conflict occurs or the queue is empty
     ///
-    /// 拖拽批量上传时，将所有文件入队后逐个处理。
-    /// 遇到同名文件冲突时暂停队列并弹出覆盖确认对话框，
-    /// 用户确认后由 ConfirmOverwrite 继续调用本方法。
+    /// For batched drag-and-drop uploads, all files are enqueued and then processed one by one.
+    /// When a same-name file conflict occurs, the queue is paused and an overwrite confirmation dialog is shown;
+    /// after the user confirms, ConfirmOverwrite calls this method again to continue.
     /// author: logic
     /// date: 2026-06-01
     fn process_pending_uploads(&mut self, ctx: &mut ViewContext<Self>) {
         while let Some(local_path) = self.pending_uploads.pop() {
             self.execute_upload(&local_path, ctx);
             if self.dialog.is_some() {
-                // 遇到冲突，暂停队列等待用户确认
+                // Conflict encountered; pause the queue and wait for user confirmation
                 return;
             }
         }
     }
 
-    /// 执行已确认的上传操作（创建传输任务并启动后台上传）
+    /// Execute a confirmed upload (create the transfer task and start the background upload)
     fn execute_upload_confirmed(
         &mut self,
         local_path: &Path,
@@ -1163,14 +1164,14 @@ impl SftpBrowserView {
                                 t.transferred = transferred.load(Ordering::SeqCst);
                             }
                             Err(_) => {
-                                // JoinError（被 abort）
+                                // JoinError (aborted)
                                 t.state = TransferState::Cancelled;
                                 t.transferred = transferred.load(Ordering::SeqCst);
                             }
                         }
                     }
 
-                    // 传输完成后清理 handle（future 已结束，无需 abort）
+                    // Clean up the handle once the transfer completes (the future has ended, no abort needed)
                     me.transfer_handles.remove(&task_id);
 
                     match &result {
@@ -1200,7 +1201,7 @@ impl SftpBrowserView {
         }
     }
 
-    /// 执行下载操作（公共逻辑，供确认覆盖和另存为共用）
+    /// Execute a download (shared logic for confirm-overwrite and save-as)
     fn execute_download(
         &mut self,
         remote_path: &Path,
@@ -1265,7 +1266,7 @@ impl SftpBrowserView {
                         }
                     }
 
-                    // 传输完成后清理 handle（future 已结束，无需 abort）
+                    // Clean up the handle once the transfer completes (the future has ended, no abort needed)
                     me.transfer_handles.remove(&task_id);
 
                     if let Ok(Err(e)) = &result {
@@ -1287,7 +1288,7 @@ impl SftpBrowserView {
         }
     }
 
-    /// 渲染搜索栏
+    /// Render the search bar
     fn render_search_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let text_color = theme.sub_text_color(theme.background());
@@ -1316,13 +1317,13 @@ impl SftpBrowserView {
         .finish()
     }
 
-    /// 渲染加载中状态
+    /// Render the loading state
     fn render_loading(&self, appearance: &Appearance) -> Box<dyn Element> {
         render_centered_status(Icon::Loading, "Loading...", 8.0, appearance)
     }
 }
 
-/// 渲染居中状态提示（图标 + 文字）
+/// Render a centered status indicator (icon + text)
 fn render_centered_status(
     icon: Icon,
     message: &str,
@@ -1356,7 +1357,7 @@ fn render_centered_status(
     Align::new(Container::new(content).with_uniform_padding(24.0).finish()).finish()
 }
 
-/// 安全拼接文件名到父路径，防止路径注入和路径遍历
+/// Safely join a file name to a parent path, preventing path injection and path traversal
 fn safe_join_name(parent: &Path, name: &str) -> Option<PathBuf> {
     if name.is_empty() || name.starts_with('/') || name.starts_with('\\') {
         return None;
@@ -1367,18 +1368,18 @@ fn safe_join_name(parent: &Path, name: &str) -> Option<PathBuf> {
     Some(parent.join(name))
 }
 
-/// 构建重命名后的完整路径
+/// Build the full path for a renamed entry
 fn build_rename_path(original_path: &PathBuf, new_name: &str) -> Option<PathBuf> {
     let parent = original_path.parent().unwrap_or(Path::new("/"));
     safe_join_name(parent, new_name).map(|p| normalize_remote_path(&p))
 }
 
-/// 构建新建文件夹的完整路径
+/// Build the full path for a new folder
 fn build_new_folder_path(parent_path: &PathBuf, folder_name: &str) -> Option<PathBuf> {
     safe_join_name(parent_path, folder_name).map(|p| normalize_remote_path(&p))
 }
 
-/// 构建上传后的远程路径
+/// Build the remote path for an uploaded file
 fn build_upload_remote_path(current_path: &PathBuf, local_file_name: &str) -> Option<PathBuf> {
     let name = Path::new(local_file_name)
         .file_name()
@@ -1394,7 +1395,7 @@ impl Entity for SftpBrowserView {
 impl TypedActionView for SftpBrowserView {
     type Action = SftpBrowserAction;
 
-    /// 处理所有 SFTP 浏览器动作
+    /// Handle all SFTP browser actions
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             SftpBrowserAction::NavigateTo(path) => {
@@ -1550,7 +1551,7 @@ impl TypedActionView for SftpBrowserView {
                 }
             }
             SftpBrowserAction::ConfirmOverwrite => {
-                // 从对话框中提取路径和传输方向
+                // Extract the paths and transfer direction from the dialog
                 let (source, target, file_size, direction) = match &self.dialog {
                     Some(Dialog::OverwriteConfirm { source, target, file_size, direction }) => {
                         (source.clone(), target.clone(), *file_size, *direction)
@@ -1568,7 +1569,7 @@ impl TypedActionView for SftpBrowserView {
                     }
                 };
 
-                // 关闭对话框
+                // Close the dialog
                 self.dialog = None;
                 match direction {
                     TransferDirection::Download => {
@@ -1578,7 +1579,7 @@ impl TypedActionView for SftpBrowserView {
                         self.execute_upload_confirmed(&source, &target, ctx);
                     }
                 }
-                // 批量上传队列：确认当前文件后继续处理下一个
+                // Batch upload queue: continue with the next file after confirming the current one
                 self.process_pending_uploads(ctx);
             }
             SftpBrowserAction::ContextMenu { index, position } => {
@@ -1594,7 +1595,7 @@ impl TypedActionView for SftpBrowserView {
                 ctx.notify();
             }
             SftpBrowserAction::CloseDialog => {
-                // 用户取消覆盖确认时，清空剩余的批量上传队列
+                // When the user cancels the overwrite confirmation, clear the remaining batch upload queue
                 let was_upload_overwrite = matches!(
                     self.dialog,
                     Some(Dialog::OverwriteConfirm { direction: TransferDirection::Upload, .. })
@@ -1673,11 +1674,11 @@ impl TypedActionView for SftpBrowserView {
             }
             SftpBrowserAction::CancelTransfer(task_id) => {
                 let task_id = *task_id;
-                // 协作式取消：设置 cancel_flag
+                // Cooperative cancellation: set the cancel_flag
                 if let Some(t) = self.transfers.iter().find(|t| t.id == task_id) {
                     t.cancel();
                 }
-                // 结构式取消：abort spawned future
+                // Structured cancellation: abort the spawned future
                 if let Some(handle) = self.transfer_handles.remove(&task_id) {
                     handle.abort();
                 }
@@ -1717,7 +1718,7 @@ impl TypedActionView for SftpBrowserView {
             }
             SftpBrowserAction::DragAndDropFiles(paths) => {
                 self.is_drag_hovering = false;
-                // 逆序入队，使得 pop() 按原始顺序取出
+                // Enqueue in reverse so that pop() yields files in the original order
                 self.pending_uploads = paths.iter().rev().cloned().collect();
                 self.process_pending_uploads(ctx);
             }
@@ -1745,12 +1746,12 @@ impl View for SftpBrowserView {
         "SftpBrowserView"
     }
 
-    /// 渲染完整 UI 布局
+    /// Render the complete UI layout
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
-        // 1. 非连接状态显示连接状态
+        // 1. When not connected, show the connection state
         if !matches!(self.connection, ConnectionState::Connected) {
             return Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -1763,7 +1764,7 @@ impl View for SftpBrowserView {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Max);
 
-        // 2. 面包屑
+        // 2. Breadcrumb
         col.add_child(
             Container::new(self.render_breadcrumb(appearance))
                 .with_padding_left(PANEL_PADDING)
@@ -1772,7 +1773,7 @@ impl View for SftpBrowserView {
                 .finish(),
         );
 
-        // 3. 工具栏
+        // 3. Toolbar
         col.add_child(
             Container::new(self.render_toolbar(appearance))
                 .with_padding_left(PANEL_PADDING)
@@ -1782,7 +1783,7 @@ impl View for SftpBrowserView {
                 .finish(),
         );
 
-        // 4. 搜索栏
+        // 4. Search bar
         col.add_child(
             Container::new(self.render_search_bar(appearance))
                 .with_padding_left(PANEL_PADDING)
@@ -1791,7 +1792,7 @@ impl View for SftpBrowserView {
                 .finish(),
         );
 
-        // 5. 加载中 / 文件列表
+        // 5. Loading indicator / file list
         if self.is_loading {
             col.add_child(Shrinkable::new(1.0, self.render_loading(appearance)).finish());
         } else {
@@ -1810,10 +1811,10 @@ impl View for SftpBrowserView {
             col.add_child(Shrinkable::new(1.0, scrollable).finish());
         }
 
-        // 7. 传输面板（浮动在底部）
+        // 7. Transfer panel (floating at the bottom)
         let mut main_content = col.finish();
 
-        // 8. 传输面板浮动层
+        // 8. Transfer panel floating layer
         if !self.transfers.is_empty() && !self.transfer_panel_hidden {
             let panel_el = Container::new(self.render_transfers(appearance))
                 .with_padding_left(PANEL_PADDING)
@@ -1834,7 +1835,7 @@ impl View for SftpBrowserView {
             main_content = stack.finish();
         }
 
-        // 9. 右键菜单
+        // 9. Context menu
         if let Some(ref cm_state) = self.context_menu {
             let menu_el = super::context_menu::render_context_menu(cm_state, appearance);
             let positioning = OffsetPositioning::offset_from_parent(
@@ -1849,7 +1850,7 @@ impl View for SftpBrowserView {
             main_content = stack.finish();
         }
 
-        // 9. 对话框（覆盖层）
+        // 9. Dialog (overlay layer)
         if let Some(ref dialog) = self.dialog {
             let dialog_el = super::dialogs::render_dialog(
                 dialog,
@@ -1866,7 +1867,7 @@ impl View for SftpBrowserView {
             main_content = stack.finish();
         }
 
-        // 10. 拖拽视觉反馈
+        // 10. Drag-and-drop visual feedback
         if self.is_drag_hovering {
             let drop_hint = Text::new_inline(
                 "拖放文件以上传".to_string(),
@@ -1892,11 +1893,11 @@ impl View for SftpBrowserView {
             main_content = stack.finish();
         }
 
-        // 11. 保存面板位置（用于右键菜单位置计算）
+        // 11. Save the panel position (used for context menu position calculation)
         let positioned_content =
             SavePosition::new(main_content, SFTP_PANEL_POSITION_ID).finish();
 
-        // 12. 键盘事件拦截
+        // 12. Keyboard event interception
         let key_handler = EventHandler::new(positioned_content).on_keydown(
             move |ctx, _app, keystroke| {
                 match keystroke.key.as_str() {
@@ -1917,7 +1918,7 @@ impl View for SftpBrowserView {
             },
         );
 
-        // 13. 拖拽事件拦截
+        // 13. Drag-and-drop event interception
         super::drop_target::SftpDropTargetElement::new(key_handler.finish()).finish()
     }
 }
@@ -1927,7 +1928,7 @@ impl BackingView for SftpBrowserView {
     type CustomAction = ();
     type AssociatedData = ();
 
-    /// 处理溢出菜单动作
+    /// Handle overflow menu actions
     fn handle_pane_header_overflow_menu_action(
         &mut self,
         action: &Self::PaneHeaderOverflowMenuAction,
@@ -1936,13 +1937,13 @@ impl BackingView for SftpBrowserView {
         self.handle_action(action, ctx);
     }
 
-    /// 关闭视图
+    /// Close the view
     fn close(&mut self, ctx: &mut ViewContext<Self>) {
-        // 协作式取消：设置所有传输任务的 cancel_flag
+        // Cooperative cancellation: set the cancel_flag on all transfer tasks
         for task in &self.transfers {
             task.cancel();
         }
-        // 结构式取消：abort spawned future
+        // Structured cancellation: abort the spawned futures
         for (_, handle) in self.transfer_handles.drain() {
             handle.abort();
         }
@@ -1955,12 +1956,12 @@ impl BackingView for SftpBrowserView {
         ctx.emit(PaneEvent::Close);
     }
 
-    /// 聚焦内容，将窗口焦点设置到当前视图
+    /// Focus the contents, setting window focus to the current view
     fn focus_contents(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.focus_self();
     }
 
-    /// 渲染头部内容
+    /// Render the header content
     fn render_header_content(
         &self,
         _ctx: &view::HeaderRenderContext<'_>,
@@ -1971,13 +1972,13 @@ impl BackingView for SftpBrowserView {
         view::HeaderContent::simple(title)
     }
 
-    /// 设置焦点句柄
+    /// Set the focus handle
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {
         self.focus_handle = Some(focus_handle);
     }
 }
 
-/// 创建单行编辑器
+/// Create a single-line editor
 fn make_editor(
     placeholder: &str,
     ctx: &mut ViewContext<SftpBrowserView>,
@@ -2013,10 +2014,10 @@ mod tests {
     use std::path::PathBuf;
 
     // ============================================================
-    // normalize_remote_path 测试
+    // normalize_remote_path tests
     // ============================================================
 
-    /// 测试反斜杠替换为正斜杠
+    /// Test that backslashes are replaced with forward slashes
     #[test]
     fn test_normalize_remote_path_backslash() {
         let path = PathBuf::from(r"home\user\docs");
@@ -2024,7 +2025,7 @@ mod tests {
         assert_eq!(result, PathBuf::from("home/user/docs"));
     }
 
-    /// 测试纯正斜杠路径不变
+    /// Test that a pure forward-slash path is left unchanged
     #[test]
     fn test_normalize_remote_path_forward_slash() {
         let path = PathBuf::from("/home/user/docs");
@@ -2032,7 +2033,7 @@ mod tests {
         assert_eq!(result, PathBuf::from("/home/user/docs"));
     }
 
-    /// 测试根路径
+    /// Test the root path
     #[test]
     fn test_normalize_remote_path_root() {
         let path = PathBuf::from("/");
@@ -2040,7 +2041,7 @@ mod tests {
         assert_eq!(result, PathBuf::from("/"));
     }
 
-    /// 测试空路径
+    /// Test the empty path
     #[test]
     fn test_normalize_remote_path_empty() {
         let path = PathBuf::from("");
@@ -2048,7 +2049,7 @@ mod tests {
         assert_eq!(result, PathBuf::from(""));
     }
 
-    /// 测试混合斜杠路径
+    /// Test a path with mixed slashes
     #[test]
     fn test_normalize_remote_path_mixed() {
         let path = PathBuf::from(r"home/user\docs/file.txt");
@@ -2057,10 +2058,10 @@ mod tests {
     }
 
     // ============================================================
-    // build_rename_path 测试
+    // build_rename_path tests
     // ============================================================
 
-    /// 测试重命名路径构建
+    /// Test rename path construction
     #[test]
     fn test_build_rename_path_basic() {
         let original = PathBuf::from("/home/user/old.txt");
@@ -2068,7 +2069,7 @@ mod tests {
         assert_eq!(result, Some(PathBuf::from("/home/user/new.txt")));
     }
 
-    /// 测试重命名路径无父目录
+    /// Test rename path construction with no parent directory
     #[test]
     fn test_build_rename_path_no_parent() {
         let original = PathBuf::from("old.txt");
@@ -2076,7 +2077,7 @@ mod tests {
         assert_eq!(result, Some(PathBuf::from("new.txt")));
     }
 
-    /// 测试重命名路径含反斜杠规范化
+    /// Test that a rename path with backslashes is normalized
     #[test]
     fn test_build_rename_path_normalizes() {
         let original = PathBuf::from("/home/user/old.txt");
@@ -2084,7 +2085,7 @@ mod tests {
         assert!(!result.to_string_lossy().contains('\\'));
     }
 
-    /// 测试重命名路径拒绝路径注入
+    /// Test that rename path construction rejects path injection
     #[test]
     fn test_build_rename_path_rejects_traversal() {
         let original = PathBuf::from("/home/user/old.txt");
@@ -2095,10 +2096,10 @@ mod tests {
     }
 
     // ============================================================
-    // build_new_folder_path 测试
+    // build_new_folder_path tests
     // ============================================================
 
-    /// 测试新建文件夹路径构建
+    /// Test new folder path construction
     #[test]
     fn test_build_new_folder_path_basic() {
         let parent = PathBuf::from("/home/user");
@@ -2106,7 +2107,7 @@ mod tests {
         assert_eq!(result, Some(PathBuf::from("/home/user/new_dir")));
     }
 
-    /// 测试新建文件夹路径含反斜杠规范化
+    /// Test that a new folder path with backslashes is normalized
     #[test]
     fn test_build_new_folder_path_normalizes() {
         let parent = PathBuf::from("/home/user");
@@ -2114,7 +2115,7 @@ mod tests {
         assert!(!result.to_string_lossy().contains('\\'));
     }
 
-    /// 测试新建文件夹路径拒绝路径注入
+    /// Test that new folder path construction rejects path injection
     #[test]
     fn test_build_new_folder_path_rejects_traversal() {
         let parent = PathBuf::from("/home/user");
@@ -2125,10 +2126,10 @@ mod tests {
     }
 
     // ============================================================
-    // build_upload_remote_path 测试
+    // build_upload_remote_path tests
     // ============================================================
 
-    /// 测试上传远程路径构建
+    /// Test upload remote path construction
     #[test]
     fn test_build_upload_remote_path_basic() {
         let current = PathBuf::from("/home/user");
@@ -2136,7 +2137,7 @@ mod tests {
         assert_eq!(result, Some(PathBuf::from("/home/user/upload.txt")));
     }
 
-    /// 测试上传远程路径含反斜杠规范化
+    /// Test that an upload remote path with backslashes is normalized
     #[test]
     fn test_build_upload_remote_path_normalizes() {
         let current = PathBuf::from("/home/user");
@@ -2145,17 +2146,17 @@ mod tests {
         assert!(!result.unwrap().to_string_lossy().contains('\\'));
     }
 
-    /// 测试上传远程路径拒绝危险文件名
+    /// Test that upload remote path construction rejects dangerous file names
     #[test]
     fn test_build_upload_remote_path_rejects_dangerous() {
         let current = PathBuf::from("/home/user");
-        // file_name() 从 "../etc/passwd" 中提取 "passwd"，路径安全
+        // file_name() extracts "passwd" from "../etc/passwd", so the path is safe
         assert_eq!(
             build_upload_remote_path(&current, "../etc/passwd"),
             Some(PathBuf::from("/home/user/passwd"))
         );
         assert_eq!(build_upload_remote_path(&current, ""), None);
-        // file_name() 从 "/etc/passwd" 中提取 "passwd"，路径安全
+        // file_name() extracts "passwd" from "/etc/passwd", so the path is safe
         assert_eq!(
             build_upload_remote_path(&current, "/etc/passwd"),
             Some(PathBuf::from("/home/user/passwd"))
@@ -2163,38 +2164,38 @@ mod tests {
     }
 
     // ============================================================
-    // SftpBrowserAction 枚举测试
+    // SftpBrowserAction enum tests
     // ============================================================
 
-    /// 测试 SftpBrowserAction::CancelTransfer 变体
+    /// Test the SftpBrowserAction::CancelTransfer variant
     #[test]
     fn test_action_cancel_transfer() {
         let action = SftpBrowserAction::CancelTransfer(42);
         assert!(matches!(action, SftpBrowserAction::CancelTransfer(42)));
     }
 
-    /// 测试 SftpBrowserAction::ConfirmMove 变体
+    /// Test the SftpBrowserAction::ConfirmMove variant
     #[test]
     fn test_action_confirm_move() {
         let action = SftpBrowserAction::ConfirmMove;
         assert!(matches!(action, SftpBrowserAction::ConfirmMove));
     }
 
-    /// 测试 SftpBrowserAction::SetSearchFilter 变体
+    /// Test the SftpBrowserAction::SetSearchFilter variant
     #[test]
     fn test_action_set_search_filter() {
         let action = SftpBrowserAction::SetSearchFilter("test".into());
         assert!(matches!(action, SftpBrowserAction::SetSearchFilter(_)));
     }
 
-    /// 测试 SftpBrowserAction::ClearSearchFilter 变体
+    /// Test the SftpBrowserAction::ClearSearchFilter variant
     #[test]
     fn test_action_clear_search_filter() {
         let action = SftpBrowserAction::ClearSearchFilter;
         assert!(matches!(action, SftpBrowserAction::ClearSearchFilter));
     }
 
-    /// 测试 SftpBrowserAction::DownloadSaveAs 变体
+    /// Test the SftpBrowserAction::DownloadSaveAs variant
     #[test]
     fn test_action_download_save_as() {
         let action = SftpBrowserAction::DownloadSaveAs {

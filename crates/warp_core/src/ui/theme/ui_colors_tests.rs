@@ -1,6 +1,6 @@
 use super::*;
 
-/// 验证 UiColors 全部为 Option::None 时能正确反序列化（空 ui_colors 块）。
+/// Verifies that UiColors deserializes correctly when every field is Option::None (an empty ui_colors block).
 #[test]
 fn deserialize_empty_ui_colors() {
     let yaml = r##"---
@@ -12,7 +12,7 @@ fn deserialize_empty_ui_colors() {
     assert!(colors.main_text.is_none());
 }
 
-/// 验证 UiColors 能正确反序列化带 alpha 的颜色。
+/// Verifies that UiColors correctly deserializes colors that include an alpha channel.
 #[test]
 fn deserialize_ui_colors_with_alpha() {
     let yaml = r##"---
@@ -31,11 +31,11 @@ hover: "#FFFFFF0D"
     assert_eq!(colors.focus_border.unwrap(), ColorU { r: 0x39, g: 0x94, b: 0xBC, a: 0xB3 });
     assert_eq!(colors.selection.unwrap(), ColorU { r: 0x39, g: 0x94, b: 0xBC, a: 0x33 });
     assert_eq!(colors.hover.unwrap(), ColorU { r: 0xFF, g: 0xFF, b: 0xFF, a: 0x0D });
-    // 未设置的字段应为 None
+    // Fields that were not set should be None
     assert!(colors.main_text.is_none());
 }
 
-/// 验证 UiColors 序列化时跳过 None 字段。
+/// Verifies that UiColors skips None fields during serialization.
 #[test]
 fn serialize_ui_colors_skips_none() {
     let colors = UiColors {

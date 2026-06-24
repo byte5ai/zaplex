@@ -156,50 +156,56 @@ fn should_skip_scp_fallback(error: &InstallError) -> bool {
 }
 
 // ===========================================================================
-// Zap fork:开发模式 remote-server 安装路径
+// Zap fork: dev-mode remote-server installation path
 //
-// 上游 / release 构建会让远端安装脚本从 GitHub releases 下载预编译的
-// remote-server 二进制。但在本地源码构建(`cargo run`)时,这会下载到
-// 「最新已发布」的陈旧二进制,而不是开发者刚改过的代码,导致根本无法
-// 调试 remote-server 的改动。
+// Upstream/release builds have the remote install script download pre-built
+// remote-server binaries from GitHub releases. However, during local source
+// builds (`cargo run`), this would download the latest released version—a
+// stale binary—rather than the developer's freshly modified code, making
+// debugging remote-server changes impossible.
 //
-// 因此在 DEBUG 且无 release tag 的源码构建下(见
-// `remote_server::setup::is_dev_source_build()`),`install_binary()` 改为:
-//   1. 本地把 `warp` 二进制交叉编译到 x86_64 musl(profile/features 与
-//      `script/deploy_remote_server` 完全一致);
-//   2. 通过已有的 SSH ControlMaster socket,用 `scp_upload` 把产物上传到
-//      `remote_server::setup::remote_server_binary()` 解析出的远端路径;
-//   3. 完全跳过 GitHub 下载安装脚本。
+// Therefore, for DEBUG source builds without a release tag (see
+// `remote_server::setup::is_dev_source_build()`), `install_binary()` instead:
+//   1. Locally cross-compile the `warp` binary to x86_64 musl (profile/features
+//      identical to `script/deploy_remote_server`);
+//   2. Using the existing SSH ControlMaster socket, upload the result via
+//      `scp_upload` to the remote path resolved by
+//      `remote_server::setup::remote_server_binary()`;
+//   3. Completely skip the GitHub download and install script.
 //
-// 如果交叉编译前置条件缺失(没装 musl target、没有 musl 链接器),不会
-// 硬失败,而是打印清晰告警并回退到原有下载安装流程,保证 dev 仍可用。
+// If cross-compile prerequisites are missing (musl target not installed, no
+// musl linker), the build does not hard-fail. Instead, it prints a clear
+// warning and falls back to the original download-install flow, keeping dev
+// builds usable.
 // ===========================================================================
 
-/// 开发模式交叉编译可能用到的 musl 链接器候选(按优先级)。
-/// macOS 上一般是 `x86_64-linux-musl-gcc`(filosottile/musl-cross),
-/// Linux 上常见为 `musl-gcc`。
+/// Candidate musl linkers for dev-mode cross-compilation (in priority order).
+/// On macOS typically `x86_64-linux-musl-gcc` (filosofittile/musl-cross),
+/// on Linux commonly `musl-gcc`.
 const DEV_MUSL_LINKER_CANDIDATES: &[&str] = &["x86_64-linux-musl-gcc", "musl-gcc"];
 
-/// 返回当前 workspace 根目录。
+/// Returns the workspace root directory.
 ///
-/// `ssh_transport.rs` 属于 `app` crate,`CARGO_MANIFEST_DIR` 指向
-/// `<workspace>/app`,其父目录即 workspace 根。
+/// `ssh_transport.rs` belongs to the `app` crate, where `CARGO_MANIFEST_DIR`
+/// points to `<workspace>/app`. Its parent is the workspace root.
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map(Path::to_path_buf)
-        // 理论上 `app` 一定有父目录;万一没有就退回 manifest 目录本身。
+        // In theory `app` always has a parent; if not, fall back to the manifest dir itself.
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
-/// 返回追加了 `~/.cargo/bin`(及 `$CARGO_HOME/bin`)的 PATH。
+/// Returns PATH with `~/.cargo/bin` (and `$CARGO_HOME/bin`) prepended.
 ///
-/// warp 进程常由桌面环境或系统 `cargo` 拉起,其 PATH 可能只含 `/usr/bin`
-/// 而不含 `~/.cargo/bin`。这会导致:
-///   - `cargo zigbuild` 找不到 `cargo-zigbuild` 子命令 → 回退到 musl-gcc;
-///   - cargo-zigbuild 自身找不到 `cargo` / `rustc`。
-/// 交叉编译相关的子进程统一用这里返回的 PATH,保证两者都能解析到。
-/// 若无需调整(无 HOME / 无法拼接)返回 `None`,调用方沿用继承的 PATH。
+/// The warp process is often launched by the desktop environment or system
+/// `cargo`, whose PATH may contain only `/usr/bin` without `~/.cargo/bin`.
+/// This causes:
+///   - `cargo zigbuild` cannot find the `cargo-zigbuild` subcommand → falls back to musl-gcc;
+///   - cargo-zigbuild itself cannot find `cargo` / `rustc`.
+/// Cross-compilation subprocesses uniformly use the PATH returned here to ensure
+/// both can resolve. If no adjustment is needed (no HOME / cannot concatenate),
+/// returns `None` and the caller uses the inherited PATH.
 fn dev_build_path_env() -> Option<std::ffi::OsString> {
     let mut extra: Vec<PathBuf> = Vec::new();
     if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
@@ -216,7 +222,7 @@ fn dev_build_path_env() -> Option<std::ffi::OsString> {
     std::env::join_paths(extra).ok()
 }
 
-/// 在 `PATH` 中查找首个可用的 musl 链接器,找不到返回 `None`。
+/// Finds the first available musl linker in `PATH`, returning `None` if not found.
 fn find_musl_linker() -> Option<&'static str> {
     DEV_MUSL_LINKER_CANDIDATES.iter().copied().find(|linker| {
         command::blocking::Command::new(linker)
@@ -230,23 +236,25 @@ fn find_musl_linker() -> Option<&'static str> {
     })
 }
 
-/// dev 交叉编译使用的构建后端。
+/// Build backend for dev cross-compilation.
 enum DevBuildBackend {
-    /// `cargo zigbuild`:zig 充当完整的 C/C++ musl 交叉工具链,无需单独安装
-    /// `*-musl-gcc` / `*-musl-g++`,能正确编译 `freetype-sys` 等带 C/C++ 源码
-    /// 的依赖。这是首选后端。
+    /// `cargo zigbuild`: zig serves as a complete C/C++ musl cross-toolchain,
+    /// eliminating the need to separately install `*-musl-gcc` / `*-musl-g++`.
+    /// Correctly compiles dependencies with C/C++ source like `freetype-sys`.
+    /// This is the preferred backend.
     Zigbuild,
-    /// 原生 `cargo build` + musl 链接器。仅当系统装有完整的 musl C/C++ 交叉
-    /// 工具链时才可靠 —— 只有 `*-musl-gcc`、缺 `*-musl-g++` 时,`freetype-sys`
-    /// 之类的 C++ 依赖会编译失败。
+    /// Native `cargo build` + musl linker. Only reliable when the system has
+    /// a complete musl C/C++ cross-toolchain. With only `*-musl-gcc` and no
+    /// `*-musl-g++`, C++ dependencies like `freetype-sys` fail to compile.
     MuslGcc(&'static str),
 }
 
-/// 检测 `cargo-zigbuild` 是否可用。
+/// Detects whether `cargo-zigbuild` is available.
 ///
-/// 直接探测 `cargo-zigbuild --version`(二进制本身),而不是
-/// `cargo zigbuild --version` —— 后者会被 `zigbuild` 子命令解析为未知参数
-/// 而失败。探测用的 PATH 与实际构建一致(注入 `~/.cargo/bin`)。
+/// Probes `cargo-zigbuild --version` (the binary itself), not
+/// `cargo zigbuild --version`—the latter fails as the `zigbuild` subcommand
+/// parses it as an unknown parameter. The probe PATH matches the actual build
+/// (with `~/.cargo/bin` injected).
 fn cargo_zigbuild_available() -> bool {
     let mut cmd = command::blocking::Command::new("cargo-zigbuild");
     cmd.arg("--version");
@@ -261,8 +269,9 @@ fn cargo_zigbuild_available() -> bool {
         .unwrap_or(false)
 }
 
-/// 选择 dev 交叉编译后端:优先 `cargo zigbuild`,回退到原生 `cargo build`
-/// + musl 链接器。两者都不可用时返回 `None`,由调用方回退到下载安装。
+/// Selects the dev cross-compile backend: prefers `cargo zigbuild`, falls back to
+/// native `cargo build` + musl linker. Returns `None` if both unavailable,
+/// allowing the caller to fall back to download-install.
 fn select_dev_build_backend() -> Option<DevBuildBackend> {
     if cargo_zigbuild_available() {
         return Some(DevBuildBackend::Zigbuild);
@@ -270,7 +279,7 @@ fn select_dev_build_backend() -> Option<DevBuildBackend> {
     find_musl_linker().map(DevBuildBackend::MuslGcc)
 }
 
-/// 检查 `x86_64-unknown-linux-musl` target 是否已通过 rustup 安装。
+/// Checks whether the `x86_64-unknown-linux-musl` target is installed via rustup.
 async fn musl_target_installed() -> bool {
     let output = command::r#async::Command::new("rustup")
         .arg("target")
@@ -283,54 +292,55 @@ async fn musl_target_installed() -> bool {
         Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
             .lines()
             .any(|line| line.trim() == remote_server::setup::DEV_MUSL_TARGET),
-        // 拿不到 rustup 输出时保守地认为未安装,从而触发回退。
+        // When unable to get rustup output, conservatively assume uninstalled to trigger fallback.
         _ => false,
     }
 }
 
-/// 交叉编译本地 `warp` 二进制到 musl,返回产物路径。
+/// Cross-compiles local `warp` binary to musl, returning the output path.
 ///
-/// profile / features 与 `script/deploy_remote_server` 对齐。
+/// Profile/features align with `script/deploy_remote_server`.
 async fn cross_compile_remote_server(backend: &DevBuildBackend) -> Result<PathBuf> {
     let root = workspace_root();
-    // 当前 channel 对应的 `[[bin]]` 名 —— OSS fork 是 `warp-oss`(见 app/Cargo.toml)。
-    // 不能写死 `warp`:`warp` 那个 bin 走 `load_config!("local")`,需要私有的
-    // `warp-channel-config` 才能生成 `local_config.json`,OSS fork 没有它会编译失败;
-    // `warp-oss`(src/bin/oss.rs)内联 `ChannelConfig`,无此依赖。
+    // Name of the `[[bin]]` for the current channel — OSS fork is `warp-oss` (see app/Cargo.toml).
+    // Cannot hardcode `warp`: that binary uses `load_config!("local")` and needs the private
+    // `warp-channel-config` to generate `local_config.json`. OSS fork lacks it and fails to compile.
+    // `warp-oss` (src/bin/oss.rs) inlines `ChannelConfig`, no such dependency.
     let bin_name = remote_server::setup::binary_name();
     let backend_desc = match backend {
         DevBuildBackend::Zigbuild => "cargo-zigbuild".to_string(),
         DevBuildBackend::MuslGcc(linker) => format!("cargo-build/{linker}"),
     };
     log::info!(
-        "dev remote-server: 交叉编译 {bin_name} -> {} (profile={}, backend={backend_desc})",
+        "dev remote-server: cross-compiling {bin_name} -> {} (profile={}, backend={backend_desc})",
         remote_server::setup::DEV_MUSL_TARGET,
         remote_server::setup::DEV_REMOTE_PROFILE,
     );
-    // 首次会编译整个 warp,耗时通常数分钟。stdout/stderr 直接 inherit 到运行
-    // Zap 的终端,这样开发者能看到 cargo 的实时编译进度(否则全程静默,
-    // 容易误以为卡死)。
+    // First-time compilation of the entire warp typically takes several minutes.
+    // stdout/stderr are directly inherited to the terminal running Zap, so developers
+    // can see cargo's real-time progress (otherwise completely silent, easy to think
+    // it's stuck).
     log::info!(
-        "dev remote-server: 正在交叉编译,首次通常需数分钟 —— cargo 进度会打印到\
-         运行 Zap 的终端"
+        "dev remote-server: cross-compiling now, first time typically takes several minutes — \
+         cargo progress will be printed to the terminal running Zap"
     );
 
     let status = async {
         let mut cmd = command::r#async::Command::new("cargo");
         cmd.current_dir(&root);
-        // 注入 `~/.cargo/bin`,确保 `cargo zigbuild` 能解析 `cargo-zigbuild`
-        // 子命令,且 cargo-zigbuild 能找到 `cargo` / `rustc`。
+        // Inject `~/.cargo/bin` to ensure `cargo zigbuild` can resolve the `cargo-zigbuild`
+        // subcommand, and cargo-zigbuild can find `cargo` / `rustc`.
         if let Some(path) = dev_build_path_env() {
             cmd.env("PATH", path);
         }
         match backend {
-            // zigbuild 是 cargo 子命令,自带 zig 链接器与 C/C++ 交叉编译器,
-            // 无需再设 LINKER env。
+            // zigbuild is a cargo subcommand with its own zig linker and C/C++ cross-compiler.
+            // No need to set LINKER env.
             DevBuildBackend::Zigbuild => {
                 cmd.arg("zigbuild");
             }
-            // 原生 cargo build:通过 env 指定 musl 链接器并覆盖 rustflags,
-            // 避免 .cargo/config.toml 里 macOS 专用 flag 污染交叉编译。
+            // Native cargo build: specify musl linker via env and override rustflags
+            // to prevent macOS-specific flags in .cargo/config.toml from polluting cross-compilation.
             DevBuildBackend::MuslGcc(linker) => {
                 cmd.arg("build")
                     .env("CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER", *linker)
@@ -350,7 +360,7 @@ async fn cross_compile_remote_server(backend: &DevBuildBackend) -> Result<PathBu
             .arg(remote_server::setup::DEV_REMOTE_PROFILE)
             .arg("--features")
             .arg(remote_server::setup::DEV_REMOTE_FEATURES)
-            // inherit:把 cargo 实时进度透到终端,而不是全程静默缓冲。
+            // inherit: pass cargo's real-time progress to terminal instead of buffering silently.
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
             .kill_on_drop(true)
@@ -370,13 +380,13 @@ async fn cross_compile_remote_server(backend: &DevBuildBackend) -> Result<PathBu
     if !status.success() {
         let code = status.code().unwrap_or(-1);
         return Err(anyhow!(
-            "cargo 交叉编译失败(exit {code}),详见运行 Zap 的终端的 cargo 输出"
+            "cargo cross-compilation failed (exit {code}); see cargo output in the terminal running Zap"
         ));
     }
 
-    // 产物位置:`<target_dir>/<triple>/<profile>/<bin_name>`。
-    // 优先读 `CARGO_TARGET_DIR`,否则回退到 `<workspace>/target`。仓库未在
-    // `.cargo/config.toml` 里设 `[build] target-dir`,故只需考虑 env。
+    // Output location: `<target_dir>/<triple>/<profile>/<bin_name>`.
+    // Prefer `CARGO_TARGET_DIR`, otherwise fall back to `<workspace>/target`.
+    // The repo does not set `[build] target-dir` in `.cargo/config.toml`, so only env matters.
     let target_root = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target"));
@@ -386,19 +396,19 @@ async fn cross_compile_remote_server(backend: &DevBuildBackend) -> Result<PathBu
         .join(bin_name);
     if !binary.is_file() {
         return Err(anyhow!(
-            "交叉编译完成但未在 {} 找到产物(若设置了 CARGO_TARGET_DIR 请确认路径)",
+            "cross-compilation completed but output not found at {} (if CARGO_TARGET_DIR is set, verify the path)",
             binary.display()
         ));
     }
     Ok(binary)
 }
 
-/// 开发模式安装:交叉编译本地 `warp` 并上传到远端 remote-server 路径。
+/// Dev-mode install: cross-compile local `warp` and upload to remote remote-server path.
 ///
-/// 上传目标与 `remote_server_binary()` 完全一致,确保随后的
-/// `check_binary()` / proxy 启动能找到它。
+/// Upload target exactly matches `remote_server_binary()`, ensuring that
+/// subsequent `check_binary()` / proxy startup can find it.
 async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
-    // 前置条件检查:缺任意一项都返回错误,由调用方回退到下载安装。
+    // Prerequisite check: missing any item returns error, caller falls back to download-install.
     if !musl_target_installed().await {
         return Err(anyhow!(
             "未安装 rust target {};可执行 `rustup target add {}`",
@@ -406,8 +416,9 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
             remote_server::setup::DEV_MUSL_TARGET,
         ));
     }
-    // 选择交叉编译后端:优先 `cargo zigbuild`(zig 自带完整 C/C++ musl 工具链,
-    // 能编译 freetype-sys 等 C++ 依赖),否则回退到 musl-gcc。两者皆无则报错。
+    // Select cross-compile backend: prefer `cargo zigbuild` (zig includes complete C/C++ musl
+    // toolchain, can compile C++ dependencies like freetype-sys), else fall back to musl-gcc.
+    // If neither available, error.
     let backend = select_dev_build_backend().ok_or_else(|| {
         anyhow!(
             "未找到可用的 musl 交叉编译后端。建议安装 cargo-zigbuild + zig\
@@ -419,7 +430,7 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
 
     let local_binary = cross_compile_remote_server(&backend).await?;
 
-    // 上传到 `remote_server_binary()` 解析出的精确路径,先建好父目录。
+    // Upload to the exact path resolved by `remote_server_binary()`, creating parent dir first.
     let remote_binary = remote_server::setup::remote_server_binary();
     let remote_dir = remote_server::setup::remote_server_dir();
     let mkdir_output = remote_server::ssh::run_ssh_command(
@@ -432,13 +443,13 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
         let code = mkdir_output.status.code().unwrap_or(-1);
         let stderr = String::from_utf8_lossy(&mkdir_output.stderr);
         return Err(anyhow!(
-            "远端 remote-server 目录创建失败(exit {code}): {stderr}"
+            "remote-server directory creation failed (exit {code}): {stderr}"
         ));
     }
 
-    log::info!("dev remote-server: 上传本地交叉编译产物到 {remote_binary}(scp -C 压缩,数百 MB 可能需数分钟)");
-    // dev 产物有数百 MB,用 DEV_UPLOAD_TIMEOUT(远超 SCP_INSTALL_TIMEOUT),
-    // 避免大文件上传被 120s 超时打断后回退到下载陈旧 release。
+    log::info!("dev remote-server: uploading local cross-compile output to {remote_binary} (scp -C compressed, hundreds of MB may take several minutes)");
+    // Dev output is hundreds of MB, use DEV_UPLOAD_TIMEOUT (much longer than SCP_INSTALL_TIMEOUT)
+    // to avoid large file uploads being interrupted by 120s timeout, then falling back to stale release.
     remote_server::ssh::scp_upload(
         socket_path,
         &local_binary,
@@ -447,7 +458,7 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
     )
     .await?;
 
-    // 赋予可执行权限。
+    // Make executable.
     let chmod_output = remote_server::ssh::run_ssh_command(
         socket_path,
         &format!("chmod 755 {remote_binary}"),
@@ -457,10 +468,10 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
     if !chmod_output.status.success() {
         let code = chmod_output.status.code().unwrap_or(-1);
         let stderr = String::from_utf8_lossy(&chmod_output.stderr);
-        return Err(anyhow!("远端 chmod 失败(exit {code}): {stderr}"));
+        return Err(anyhow!("remote chmod failed (exit {code}): {stderr}"));
     }
 
-    // 复用既有校验逻辑确认上传的二进制可运行。
+    // Reuse existing verification logic to confirm the uploaded binary is executable.
     verify_installed_binary(socket_path).await
 }
 
@@ -594,8 +605,8 @@ impl RemoteTransport for SshTransport {
             )
             .await
             {
-                // `{binary} --version` 退出 0 表示存在且可运行。
-                // 126/127 表示缺失或不可执行;其他非 0 退出视为真实检查失败。
+                // `{binary} --version` exit 0 means exists and is executable.
+                // 126/127 means missing or not executable; other non-0 exit treated as real check failure.
                 Ok(output) => match output.status.code() {
                     Some(0) => Ok(true),
                     Some(126) | Some(127) => Ok(false),
@@ -651,19 +662,19 @@ impl RemoteTransport for SshTransport {
                 remote_server::setup::remote_server_binary()
             );
 
-            // Zap fork:DEBUG 源码构建(无 release tag)走开发模式,
-            // 交叉编译本地 `warp` 并上传,而不是下载陈旧的 GitHub release。
-            // 失败时(交叉编译前置条件缺失等)打印告警并回退到下载安装,
-            // 保证 dev 体验不被破坏。release 构建跳过整段逻辑,行为不变。
+            // Zap fork: DEBUG source build (no release tag) uses dev mode,
+            // cross-compiling local `warp` and uploading instead of downloading stale GitHub release.
+            // On failure (cross-compile prerequisites missing, etc.), print warning and fall back
+            // to download-install, preserving dev experience. Release builds skip this entire block.
             if remote_server::setup::is_dev_source_build() {
-                log::info!("dev remote-server: 检测到 DEBUG 源码构建,改用本地交叉编译安装");
+                log::info!("dev remote-server: DEBUG source build detected, switching to local cross-compile install");
                 match dev_install_local_binary(&socket_path).await {
                     Ok(()) => return Ok(()),
                     Err(error) => {
                         log::warn!(
-                            "dev remote-server: 本地交叉编译安装不可用,回退到下载安装: {error:#}"
+                            "dev remote-server: local cross-compile install unavailable, falling back to download-install: {error:#}"
                         );
-                        // 落空,继续走下方常规下载安装流程。
+                        // Fall through, continue to regular download-install flow below.
                     }
                 }
             }

@@ -586,8 +586,8 @@ impl BlocklistAIActionModel {
         tool_call_id: &str,
         app: &AppContext,
     ) -> bool {
-        // 在 action model 里 `AIAgentActionId` 即 tool_call_id,这里只是把入参显式重命名,
-        // 让调用点(controller 的 byop preflight)读起来更直观。
+        // In action model, `AIAgentActionId` is tool_call_id; this is just making the input parameter explicitly renamed,
+        // to make the call site (controller's byop preflight) more intuitive to read.
         let action_id = crate::ai::agent::AIAgentActionId::from(tool_call_id.to_owned());
         let has_pending = self
             .pending_actions
@@ -848,7 +848,7 @@ impl BlocklistAIActionModel {
             TryExecuteResult::NotExecuted { reason, action } => {
                 log::info!(
                     "[byop-diag] try_to_execute_action: NotExecuted action_id={:?} reason={:?} \
-                     → 入 pending_actions[{:?}]",
+                     → entering pending_actions[{:?}]",
                     action.id,
                     reason,
                     conversation_id
@@ -885,16 +885,16 @@ impl BlocklistAIActionModel {
         self.queue_actions_with_options(actions, conversation_id, false, ctx);
     }
 
-    /// 同 `queue_actions`,但增加 `auto_accept` 参数。
+    /// Same as `queue_actions`, but with added `auto_accept` parameter.
     ///
-    /// 当 `auto_accept=true` 时,preprocess 完成后(`handle_preprocess_actions_results`)
-    /// 把每个 action push 进 pending_actions 后,**立即对它们逐个调用 `execute_action`**
-    /// (内部走 `is_user_initiated=true` 路径,绕过 `NeedsConfirmation` 检查),
-    /// 而不是默认的 `try_to_execute_available_actions`(`is_user_initiated=false`)。
+    /// When `auto_accept=true`, after preprocess completes (`handle_preprocess_actions_results`)
+    /// after pushing each action into pending_actions, **immediately call `execute_action` for each one**
+    /// (internally takes `is_user_initiated=true` path, bypassing `NeedsConfirmation` checks),
+    /// instead of the default `try_to_execute_available_actions`(`is_user_initiated=false`).
     ///
-    /// 用途:Zap BYOP 路径下 LRC tag-in 场景 — 用户主动 SetInputModeAgent 把
-    /// 控制权交给 agent,但 alt-screen 全屏下看不到 RequestedCommand 的 Accept 按钮,
-    /// controller 检测到 LRC 状态后用本方法绕开手动确认死锁。
+    /// Purpose: Zap BYOP path LRC tag-in scenario — user actively SetInputModeAgent to
+    /// give control to agent, but cannot see RequestedCommand's Accept button in alt-screen fullscreen,
+    /// controller detects LRC state then uses this method to bypass manual confirmation deadlock.
     pub(super) fn queue_actions_with_options(
         &mut self,
         actions: Vec<AIAgentAction>,
@@ -988,9 +988,9 @@ impl BlocklistAIActionModel {
             }
         }
         if auto_accept && !auto_accept_ids.is_empty() {
-            // Zap:LRC tag-in 自动授权路径。Bypass 默认的
+            // Zap: LRC tag-in auto-authorization path. Bypass the default
             // try_to_execute_available_actions(is_user_initiated=false),
-            // 直接对每个刚 push 的 action 调用 execute_action(等价用户 Accept)。
+            // directly call execute_action for each action just pushed (equivalent to user Accept).
             log::info!(
                 "[byop-diag] queue_actions_with_options(auto_accept=true): \
                  invoking execute_action for {} action(s)",
@@ -1229,8 +1229,8 @@ impl BlocklistAIActionModel {
         let Some(conversation_id) = found_conversation_id else {
             log::error!(
                 "[byop-diag] handle_requested_command_accepted: action_id={action_id:?} NOT FOUND \
-                 in pending_actions. pending_conversations=[{}] (action 没正确入 pending_actions,\
-                 chain 在 controller.queue_actions → action_model.try_to_execute_action 这一段断了)",
+                 in pending_actions. pending_conversations=[{}] (action did not enter pending_actions correctly,\
+                 chain broke in controller.queue_actions → action_model.try_to_execute_action segment)",
                 self.pending_actions
                     .iter()
                     .map(|(c, q)| format!("{c:?}:{}", q.len()))

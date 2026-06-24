@@ -320,7 +320,7 @@ impl Engine {
                     } else if let Some(character) = cursor.char() {
                         let mut bytes = [0u8; 4];
                         let utf8_len = character.encode_utf8(&mut bytes).len();
-                        // 反向 DFA 需按字节反序喂入,以匹配 query 的字节反向序列。
+                        // Reverse DFA requires byte-reversed feeding to match the byte-reversed sequence of the query.
                         let byte_iter: &mut dyn Iterator<Item = u8> = match direction {
                             SearchDirection::Forward => &mut bytes[..utf8_len].iter().copied(),
                             SearchDirection::Reverse => {

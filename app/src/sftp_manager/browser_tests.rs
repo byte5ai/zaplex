@@ -1,7 +1,7 @@
-//! SFTP 浏览器视图 UI 单元测试
+//! UI unit tests for the SFTP browser view
 //!
-//! 验证视图状态管理、Action 处理逻辑。使用 App::test() + mock 平台，
-//! 不依赖真实 SSH 连接（视图初始为 Disconnected 状态）。
+//! Verifies view state management and action-handling logic. Uses App::test() + a mock platform,
+//! with no dependency on a real SSH connection (the view starts in the Disconnected state).
 //! author: logic
 //! date: 2026-05-27
 
@@ -20,7 +20,7 @@ use super::browser::{SftpBrowserAction, SftpBrowserView};
 use super::types::{ConnectionState, Dialog, TransferDirection, TransferState};
 use crate::editor::EditorView;
 
-/// 初始化测试所需的最小单例集合
+/// Initializes the minimal set of singletons required by the tests
 fn initialize_app(app: &mut warpui::App) {
     use crate::workspace::ToastStack;
 
@@ -29,14 +29,14 @@ fn initialize_app(app: &mut warpui::App) {
     app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
     app.add_singleton_model(|_| ToastStack);
 
-    // SSH 管理器需要一个 SQLite 路径；使用临时文件，查询失败不 panic
+    // The SSH manager needs a SQLite path; use a temporary file so that failed queries don't panic
     let temp_db = std::env::temp_dir().join("warp_sftp_test.sqlite");
     let _ = warp_ssh_manager::set_database_path(temp_db);
 }
 
-/// 创建 SftpBrowserView 并放入窗口
+/// Creates a SftpBrowserView and places it in a window
 ///
-/// 视图初始状态为 Disconnected（无 SSH 连接），不影响 UI 状态逻辑测试。
+/// The view starts in the Disconnected state (no SSH connection), which does not affect the UI state-logic tests.
 fn create_view(app: &mut warpui::App) -> (warpui::WindowId, warpui::ViewHandle<SftpBrowserView>) {
     app.add_window(WindowStyle::NotStealFocus, |ctx| {
         SftpBrowserView::new("test-node".to_string(), ctx)
@@ -44,10 +44,10 @@ fn create_view(app: &mut warpui::App) -> (warpui::WindowId, warpui::ViewHandle<S
 }
 
 // ============================================================
-// 拖拽状态测试
+// Drag state tests
 // ============================================================
 
-/// 验证 DragFilesEnter 设置 is_drag_hovering 为 true
+/// Verifies that DragFilesEnter sets is_drag_hovering to true
 #[test]
 fn test_drag_files_enter() {
     warpui::App::test((), |mut app| async move {
@@ -61,24 +61,24 @@ fn test_drag_files_enter() {
         view.read(&app, |view, _| {
             assert!(
                 view.is_drag_hovering,
-                "DragFilesEnter 后 is_drag_hovering 应为 true"
+                "After DragFilesEnter, is_drag_hovering should be true"
             );
         });
     });
 }
 
-/// 验证 DragFilesLeave 设置 is_drag_hovering 为 false
+/// Verifies that DragFilesLeave sets is_drag_hovering to false
 #[test]
 fn test_drag_files_leave() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        // 先进入悬停状态
+        // First enter the hover state
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::DragFilesEnter, ctx);
         });
-        // 再离开
+        // Then leave
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::DragFilesLeave, ctx);
         });
@@ -86,24 +86,24 @@ fn test_drag_files_leave() {
         view.read(&app, |view, _| {
             assert!(
                 !view.is_drag_hovering,
-                "DragFilesLeave 后 is_drag_hovering 应为 false"
+                "After DragFilesLeave, is_drag_hovering should be false"
             );
         });
     });
 }
 
-/// 验证 DragAndDropFiles 重置 is_drag_hovering
+/// Verifies that DragAndDropFiles resets is_drag_hovering
 #[test]
 fn test_drag_and_drop_resets_hover() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        // 先进入悬停
+        // First enter the hover state
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::DragFilesEnter, ctx);
         });
-        // 释放文件（无 SFTP 连接，传输会失败但不崩溃）
+        // Drop the files (no SFTP connection, so the transfer fails but does not crash)
         view.update(&mut app, |view, ctx| {
             view.handle_action(
                 &SftpBrowserAction::DragAndDropFiles(vec![PathBuf::from("/tmp/test.txt")]),
@@ -114,17 +114,17 @@ fn test_drag_and_drop_resets_hover() {
         view.read(&app, |view, _| {
             assert!(
                 !view.is_drag_hovering,
-                "DragAndDropFiles 后 is_drag_hovering 应重置为 false"
+                "After DragAndDropFiles, is_drag_hovering should be reset to false"
             );
         });
     });
 }
 
 // ============================================================
-// 选择状态测试
+// Selection state tests
 // ============================================================
 
-/// 验证 SelectEntry 选中条目
+/// Verifies that SelectEntry selects an entry
 #[test]
 fn test_select_entry() {
     warpui::App::test((), |mut app| async move {
@@ -136,19 +136,19 @@ fn test_select_entry() {
         });
 
         view.read(&app, |view, _| {
-            assert!(view.selected.contains(&0), "SelectEntry(0) 后应选中索引 0");
+            assert!(view.selected.contains(&0), "After SelectEntry(0), index 0 should be selected");
         });
     });
 }
 
-/// 验证 SelectEntry 切换选中（单选模式：再次选中同一项仍保持选中）
+/// Verifies SelectEntry selection toggling (single-select mode: re-selecting the same item keeps it selected)
 #[test]
 fn test_toggle_select_entry() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        // 选中索引 2
+        // Select index 2
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::SelectEntry(2), ctx);
         });
@@ -156,22 +156,22 @@ fn test_toggle_select_entry() {
             assert!(view.selected.contains(&2));
         });
 
-        // 选中索引 5 → 清除之前的，只保留 5
+        // Select index 5 → clears the previous selection, keeping only 5
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::SelectEntry(5), ctx);
         });
         view.read(&app, |view, _| {
-            assert!(!view.selected.contains(&2), "SelectEntry(5) 后应取消选中 2");
-            assert!(view.selected.contains(&5), "SelectEntry(5) 后应选中 5");
+            assert!(!view.selected.contains(&2), "After SelectEntry(5), index 2 should be deselected");
+            assert!(view.selected.contains(&5), "After SelectEntry(5), index 5 should be selected");
         });
     });
 }
 
 // ============================================================
-// 搜索过滤测试
+// Search filter tests
 // ============================================================
 
-/// 验证 SetSearchFilter 设置搜索文本
+/// Verifies that SetSearchFilter sets the search text
 #[test]
 fn test_set_search_filter() {
     warpui::App::test((), |mut app| async move {
@@ -188,18 +188,18 @@ fn test_set_search_filter() {
     });
 }
 
-/// 验证 ClearSearchFilter 清除搜索文本
+/// Verifies that ClearSearchFilter clears the search text
 #[test]
 fn test_clear_search_filter() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        // 先设置
+        // First set it
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::SetSearchFilter("log".to_string()), ctx);
         });
-        // 再清除
+        // Then clear it
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::ClearSearchFilter, ctx);
         });
@@ -207,17 +207,17 @@ fn test_clear_search_filter() {
         view.read(&app, |view, _| {
             assert!(
                 view.search_filter.is_none(),
-                "ClearSearchFilter 后应为 None"
+                "After ClearSearchFilter, search_filter should be None"
             );
         });
     });
 }
 
 // ============================================================
-// 导航测试
+// Navigation tests
 // ============================================================
 
-/// 验证在根目录 NavigateUp 不改变路径
+/// Verifies that NavigateUp at the root directory does not change the path
 #[test]
 fn test_navigate_up_from_root() {
     warpui::App::test((), |mut app| async move {
@@ -236,17 +236,17 @@ fn test_navigate_up_from_root() {
             assert_eq!(
                 view.current_path,
                 PathBuf::from("/"),
-                "根目录 NavigateUp 应保持不变"
+                "NavigateUp from root directory should not change the path"
             );
         });
     });
 }
 
 // ============================================================
-// 初始状态测试
+// Initial state tests
 // ============================================================
 
-/// 验证视图初始状态正确
+/// Verifies that the view's initial state is correct
 #[test]
 fn test_initial_state() {
     warpui::App::test((), |mut app| async move {
@@ -254,20 +254,20 @@ fn test_initial_state() {
         let (_, view) = create_view(&mut app);
 
         view.read(&app, |view, _| {
-            assert!(view.entries.is_empty(), "初始条目列表应为空");
-            assert!(view.selected.is_empty(), "初始选中集合应为空");
-            assert!(view.transfers.is_empty(), "初始传输列表应为空");
-            assert!(view.search_filter.is_none(), "初始搜索过滤应为 None");
-            assert!(!view.is_drag_hovering, "初始拖拽悬停应为 false");
+            assert!(view.entries.is_empty(), "Initial entry list should be empty");
+            assert!(view.selected.is_empty(), "Initial selection set should be empty");
+            assert!(view.transfers.is_empty(), "Initial transfer list should be empty");
+            assert!(view.search_filter.is_none(), "Initial search filter should be None");
+            assert!(!view.is_drag_hovering, "Initial drag hover state should be false");
         });
     });
 }
 
 // ============================================================
-// 右键菜单测试
+// Context menu tests
 // ============================================================
 
-/// 验证 ContextMenu action 设置 context_menu 状态并选中条目
+/// Verifies that the ContextMenu action sets the context_menu state and selects the entry
 #[test]
 fn test_context_menu_sets_state() {
     use pathfinder_geometry::vector::Vector2F;
@@ -290,20 +290,20 @@ fn test_context_menu_sets_state() {
         view.read(&app, |view, _| {
             assert!(
                 view.context_menu.is_some(),
-                "ContextMenu 后 context_menu 应为 Some"
+                "After ContextMenu, context_menu should be Some"
             );
             let cm = view.context_menu.as_ref().unwrap();
-            assert_eq!(cm.entry_index, 3, "entry_index 应为 3");
-            assert_eq!(cm.position, position, "position 应与传入值一致");
+            assert_eq!(cm.entry_index, 3, "entry_index should be 3");
+            assert_eq!(cm.position, position, "position should match the provided value");
             assert!(
                 view.selected.contains(&3),
-                "ContextMenu 后应选中索引 3"
+                "After ContextMenu, index 3 should be selected"
             );
         });
     });
 }
 
-/// 验证 CloseContextMenu 清除 context_menu 状态
+/// Verifies that CloseContextMenu clears the context_menu state
 #[test]
 fn test_close_context_menu_clears_state() {
     use pathfinder_geometry::vector::Vector2F;
@@ -312,7 +312,7 @@ fn test_close_context_menu_clears_state() {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        // 先打开右键菜单
+        // First open the context menu
         view.update(&mut app, |view, ctx| {
             view.handle_action(
                 &SftpBrowserAction::ContextMenu {
@@ -323,10 +323,10 @@ fn test_close_context_menu_clears_state() {
             );
         });
         view.read(&app, |view, _| {
-            assert!(view.context_menu.is_some(), "应已打开菜单");
+            assert!(view.context_menu.is_some(), "Menu should be open");
         });
 
-        // 关闭菜单
+        // Close the menu
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::CloseContextMenu, ctx);
         });
@@ -334,13 +334,13 @@ fn test_close_context_menu_clears_state() {
         view.read(&app, |view, _| {
             assert!(
                 view.context_menu.is_none(),
-                "CloseContextMenu 后 context_menu 应为 None"
+                "After CloseContextMenu, context_menu should be None"
             );
         });
     });
 }
 
-/// 验证 ContextMenu 会替换之前的菜单状态
+/// Verifies that ContextMenu replaces the previous menu state
 #[test]
 fn test_context_menu_replaces_previous() {
     use pathfinder_geometry::vector::Vector2F;
@@ -349,7 +349,7 @@ fn test_context_menu_replaces_previous() {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        // 打开第一个菜单
+        // Open the first menu
         view.update(&mut app, |view, ctx| {
             view.handle_action(
                 &SftpBrowserAction::ContextMenu {
@@ -360,7 +360,7 @@ fn test_context_menu_replaces_previous() {
             );
         });
 
-        // 打开第二个菜单（不同位置和索引）
+        // Open the second menu (different position and index)
         let new_position = Vector2F::new(300.0, 400.0);
         view.update(&mut app, |view, ctx| {
             view.handle_action(
@@ -374,28 +374,28 @@ fn test_context_menu_replaces_previous() {
 
         view.read(&app, |view, _| {
             let cm = view.context_menu.as_ref().unwrap();
-            assert_eq!(cm.entry_index, 5, "应更新为新的 entry_index");
+            assert_eq!(cm.entry_index, 5, "Should update to new entry_index");
             assert_eq!(
                 cm.position, new_position,
-                "应更新为新的 position"
+                "Should update to new position"
             );
             assert!(
                 view.selected.contains(&5),
-                "应选中新索引 5"
+                "Should select new index 5"
             );
             assert!(
                 !view.selected.contains(&0),
-                "应取消选中旧索引 0"
+                "Should deselect old index 0"
             );
         });
     });
 }
 
 // ============================================================
-// 右键菜单边界条件测试
+// Context menu boundary-condition tests
 // ============================================================
 
-/// 验证 ContextMenu index=0 时正确处理
+/// Verifies that ContextMenu is handled correctly when index=0
 #[test]
 fn test_context_menu_zero_index() {
     use pathfinder_geometry::vector::Vector2F;
@@ -417,14 +417,14 @@ fn test_context_menu_zero_index() {
 
         view.read(&app, |view, _| {
             let cm = view.context_menu.as_ref().unwrap();
-            assert_eq!(cm.entry_index, 0, "index=0 应正确保存");
-            assert_eq!(cm.position, position, "position 应正确保存");
-            assert!(view.selected.contains(&0), "应选中索引 0");
+            assert_eq!(cm.entry_index, 0, "index=0 should be saved correctly");
+            assert_eq!(cm.position, position, "position should be saved correctly");
+            assert!(view.selected.contains(&0), "Should select index 0");
         });
     });
 }
 
-/// 验证 ContextMenu 大索引值不 panic
+/// Verifies that ContextMenu does not panic for a large index value
 #[test]
 fn test_context_menu_large_index() {
     use pathfinder_geometry::vector::Vector2F;
@@ -446,13 +446,13 @@ fn test_context_menu_large_index() {
 
         view.read(&app, |view, _| {
             let cm = view.context_menu.as_ref().unwrap();
-            assert_eq!(cm.entry_index, 999, "大索引应正确保存");
-            assert!(view.selected.contains(&999), "应选中大索引");
+            assert_eq!(cm.entry_index, 999, "Large index should be saved correctly");
+            assert!(view.selected.contains(&999), "Should select large index");
         });
     });
 }
 
-/// 验证 ContextMenu 负坐标正确处理
+/// Verifies that ContextMenu handles negative coordinates correctly
 #[test]
 fn test_context_menu_negative_position() {
     use pathfinder_geometry::vector::Vector2F;
@@ -474,24 +474,24 @@ fn test_context_menu_negative_position() {
 
         view.read(&app, |view, _| {
             let cm = view.context_menu.as_ref().unwrap();
-            assert_eq!(cm.position, position, "负坐标应正确保存");
+            assert_eq!(cm.position, position, "Negative coordinates should be saved correctly");
         });
     });
 }
 
-/// 验证 CloseContextMenu 在没有菜单打开时不 panic
+/// Verifies that CloseContextMenu does not panic when no menu is open
 #[test]
 fn test_close_context_menu_when_none() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        // 初始状态没有菜单
+        // No menu in the initial state
         view.read(&app, |view, _| {
-            assert!(view.context_menu.is_none(), "初始应无菜单");
+            assert!(view.context_menu.is_none(), "Initially there should be no menu");
         });
 
-        // 直接关闭不应 panic
+        // Closing directly should not panic
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::CloseContextMenu, ctx);
         });
@@ -499,13 +499,13 @@ fn test_close_context_menu_when_none() {
         view.read(&app, |view, _| {
             assert!(
                 view.context_menu.is_none(),
-                "关闭后仍应为 None"
+                "After closing, context_menu should still be None"
             );
         });
     });
 }
 
-/// 验证 ContextMenu 清除之前的选择并选中新条目
+/// Verifies that ContextMenu clears the previous selection and selects the new entry
 #[test]
 fn test_context_menu_clears_previous_selection() {
     use pathfinder_geometry::vector::Vector2F;
@@ -514,7 +514,7 @@ fn test_context_menu_clears_previous_selection() {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        // 先选中条目 2 和 3（通过两次 SelectEntry）
+        // First select entries 2 and 3 (via two SelectEntry calls)
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::SelectEntry(2), ctx);
         });
@@ -522,11 +522,11 @@ fn test_context_menu_clears_previous_selection() {
             view.handle_action(&SftpBrowserAction::SelectEntry(3), ctx);
         });
         view.read(&app, |view, _| {
-            assert!(view.selected.contains(&3), "应选中 3");
-            assert!(!view.selected.contains(&2), "单选模式应清除 2");
+            assert!(view.selected.contains(&3), "Should select 3");
+            assert!(!view.selected.contains(&2), "Single-select mode should clear 2");
         });
 
-        // 右键点击条目 7
+        // Right-click on entry 7
         view.update(&mut app, |view, ctx| {
             view.handle_action(
                 &SftpBrowserAction::ContextMenu {
@@ -538,14 +538,14 @@ fn test_context_menu_clears_previous_selection() {
         });
 
         view.read(&app, |view, _| {
-            assert!(view.selected.contains(&7), "应选中 7");
-            assert!(!view.selected.contains(&3), "应清除旧选择 3");
-            assert_eq!(view.selected.len(), 1, "应只有一个选中项");
+            assert!(view.selected.contains(&7), "Should select 7");
+            assert!(!view.selected.contains(&3), "Should clear old selection 3");
+            assert_eq!(view.selected.len(), 1, "Should have only one selected item");
         });
     });
 }
 
-/// 验证多次打开关闭菜单不泄漏状态
+/// Verifies that repeatedly opening and closing the menu does not leak state
 #[test]
 fn test_context_menu_multiple_open_close_cycles() {
     use pathfinder_geometry::vector::Vector2F;
@@ -555,7 +555,7 @@ fn test_context_menu_multiple_open_close_cycles() {
         let (_, view) = create_view(&mut app);
 
         for i in 0..5 {
-            // 打开菜单
+            // Open the menu
             view.update(&mut app, |view, ctx| {
                 view.handle_action(
                     &SftpBrowserAction::ContextMenu {
@@ -566,17 +566,17 @@ fn test_context_menu_multiple_open_close_cycles() {
                 );
             });
             view.read(&app, |view, _| {
-                assert!(view.context_menu.is_some(), "第 {i} 次打开应成功");
+                assert!(view.context_menu.is_some(), "The {i}-th open should succeed");
             });
 
-            // 关闭菜单
+            // Close the menu
             view.update(&mut app, |view, ctx| {
                 view.handle_action(&SftpBrowserAction::CloseContextMenu, ctx);
             });
             view.read(&app, |view, _| {
                 assert!(
                     view.context_menu.is_none(),
-                    "第 {i} 次关闭后应为 None"
+                    "After the {i}-th close, context_menu should be None"
                 );
             });
         }
@@ -584,45 +584,45 @@ fn test_context_menu_multiple_open_close_cycles() {
 }
 
 // ============================================================
-// 菜单项动作测试
+// Menu-item action tests
 // ============================================================
 
-/// 验证 SftpBrowserAction::DetailsEntry 变体正确构造
+/// Verifies that the SftpBrowserAction::DetailsEntry variant is constructed correctly
 #[test]
 fn test_action_details_entry() {
     let action = SftpBrowserAction::DetailsEntry(42);
     assert!(matches!(action, SftpBrowserAction::DetailsEntry(42)));
 }
 
-/// 验证 SftpBrowserAction::DeleteEntry 变体正确构造
+/// Verifies that the SftpBrowserAction::DeleteEntry variant is constructed correctly
 #[test]
 fn test_action_delete_entry() {
     let action = SftpBrowserAction::DeleteEntry(10);
     assert!(matches!(action, SftpBrowserAction::DeleteEntry(10)));
 }
 
-/// 验证 SftpBrowserAction::RenameEntry 变体正确构造
+/// Verifies that the SftpBrowserAction::RenameEntry variant is constructed correctly
 #[test]
 fn test_action_rename_entry() {
     let action = SftpBrowserAction::RenameEntry(5);
     assert!(matches!(action, SftpBrowserAction::RenameEntry(5)));
 }
 
-/// 验证 SftpBrowserAction::DownloadEntry 变体正确构造
+/// Verifies that the SftpBrowserAction::DownloadEntry variant is constructed correctly
 #[test]
 fn test_action_download_entry() {
     let action = SftpBrowserAction::DownloadEntry(3);
     assert!(matches!(action, SftpBrowserAction::DownloadEntry(3)));
 }
 
-/// 验证 SftpBrowserAction::OpenEntry 变体正确构造
+/// Verifies that the SftpBrowserAction::OpenEntry variant is constructed correctly
 #[test]
 fn test_action_open_entry() {
     let action = SftpBrowserAction::OpenEntry(1);
     assert!(matches!(action, SftpBrowserAction::OpenEntry(1)));
 }
 
-/// 验证 SftpBrowserAction::ContextMenu 变体正确构造
+/// Verifies that the SftpBrowserAction::ContextMenu variant is constructed correctly
 #[test]
 fn test_action_context_menu_variant() {
     use pathfinder_geometry::vector::Vector2F;
@@ -639,7 +639,7 @@ fn test_action_context_menu_variant() {
     ));
 }
 
-/// 验证 SftpBrowserAction::CloseContextMenu 变体正确构造
+/// Verifies that the SftpBrowserAction::CloseContextMenu variant is constructed correctly
 #[test]
 fn test_action_close_context_menu_variant() {
     let action = SftpBrowserAction::CloseContextMenu;
@@ -647,24 +647,24 @@ fn test_action_close_context_menu_variant() {
 }
 
 // ============================================================
-// DeleteEntry 动作处理测试
+// DeleteEntry action-handling tests
 // ============================================================
 
-/// 验证 DeleteEntry 在无 SFTP 连接时不 panic
+/// Verifies that DeleteEntry does not panic when there is no SFTP connection
 #[test]
 fn test_delete_entry_no_connection() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        // 无 SFTP 连接时执行 DeleteEntry 不应 panic
+        // Running DeleteEntry with no SFTP connection should not panic
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::DeleteEntry(0), ctx);
         });
     });
 }
 
-/// 验证 RenameEntry 在无 SFTP 连接时不 panic
+/// Verifies that RenameEntry does not panic when there is no SFTP connection
 #[test]
 fn test_rename_entry_no_connection() {
     warpui::App::test((), |mut app| async move {
@@ -678,10 +678,10 @@ fn test_rename_entry_no_connection() {
 }
 
 // ============================================================
-// Category 1: 对话框操作无连接安全测试
+// Category 1: dialog-operation no-connection safety tests
 // ============================================================
 
-/// 验证 ConfirmDelete 无 dialog、无连接时不 panic
+/// Verifies that ConfirmDelete does not panic with no dialog and no connection
 #[test]
 fn test_confirm_delete_no_connection_no_dialog() {
     warpui::App::test((), |mut app| async move {
@@ -698,7 +698,7 @@ fn test_confirm_delete_no_connection_no_dialog() {
     });
 }
 
-/// 验证 ConfirmDelete 有 dialog 但无连接时安全处理
+/// Verifies that ConfirmDelete is handled safely when a dialog exists but there is no connection
 #[test]
 fn test_confirm_delete_no_connection_with_dialog() {
     warpui::App::test((), |mut app| async move {
@@ -719,7 +719,7 @@ fn test_confirm_delete_no_connection_with_dialog() {
     });
 }
 
-/// 验证 ConfirmRename 无 dialog、无连接时不 panic
+/// Verifies that ConfirmRename does not panic with no dialog and no connection
 #[test]
 fn test_confirm_rename_no_connection_no_dialog() {
     warpui::App::test((), |mut app| async move {
@@ -736,7 +736,7 @@ fn test_confirm_rename_no_connection_no_dialog() {
     });
 }
 
-/// 验证 ConfirmRename 有 dialog 但无连接时提示错误并关闭 dialog
+/// Verifies that ConfirmRename shows an error and closes the dialog when a dialog exists but there is no connection
 #[test]
 fn test_confirm_rename_no_connection_with_dialog() {
     warpui::App::test((), |mut app| async move {
@@ -748,7 +748,7 @@ fn test_confirm_rename_no_connection_with_dialog() {
                 path: PathBuf::from("/home/old.txt"),
                 original_name: "old.txt".to_string(),
             });
-            // 先输入非空名称以跳过空名称检查
+            // First enter a non-empty name to skip the empty-name check
             view.rename_editor.update(ctx, |e: &mut EditorView, ctx| {
                 e.set_buffer_text("new_name", ctx);
             });
@@ -761,7 +761,7 @@ fn test_confirm_rename_no_connection_with_dialog() {
     });
 }
 
-/// 验证 ConfirmNewFolder 无 dialog、无连接时不 panic
+/// Verifies that ConfirmNewFolder does not panic with no dialog and no connection
 #[test]
 fn test_confirm_new_folder_no_connection_no_dialog() {
     warpui::App::test((), |mut app| async move {
@@ -778,7 +778,7 @@ fn test_confirm_new_folder_no_connection_no_dialog() {
     });
 }
 
-/// 验证 ConfirmNewFolder 有 dialog 但无连接时提示错误并关闭 dialog
+/// Verifies that ConfirmNewFolder shows an error and closes the dialog when a dialog exists but there is no connection
 #[test]
 fn test_confirm_new_folder_no_connection_with_dialog() {
     warpui::App::test((), |mut app| async move {
@@ -789,7 +789,7 @@ fn test_confirm_new_folder_no_connection_with_dialog() {
             view.dialog = Some(Dialog::CreateFolder {
                 parent_path: PathBuf::from("/home"),
             });
-            // 先输入非空名称以跳过空名称检查
+            // First enter a non-empty name to skip the empty-name check
             view.new_folder_editor.update(ctx, |e: &mut EditorView, ctx| {
                 e.set_buffer_text("new_folder", ctx);
             });
@@ -802,7 +802,7 @@ fn test_confirm_new_folder_no_connection_with_dialog() {
     });
 }
 
-/// 验证 ConfirmMove 无 dialog、无连接时不 panic
+/// Verifies that ConfirmMove does not panic with no dialog and no connection
 #[test]
 fn test_confirm_move_no_connection_no_dialog() {
     warpui::App::test((), |mut app| async move {
@@ -819,7 +819,7 @@ fn test_confirm_move_no_connection_no_dialog() {
     });
 }
 
-/// 验证 ConfirmMove 有 dialog 但无连接时提示错误并关闭 dialog
+/// Verifies that ConfirmMove shows an error and closes the dialog when a dialog exists but there is no connection
 #[test]
 fn test_confirm_move_no_connection_with_dialog() {
     warpui::App::test((), |mut app| async move {
@@ -841,10 +841,10 @@ fn test_confirm_move_no_connection_with_dialog() {
 }
 
 // ============================================================
-// Category 2: 导航边界测试
+// Category 2: navigation boundary tests
 // ============================================================
 
-/// 验证 NavigateTo 当前路径时不产生重复历史
+/// Verifies that NavigateTo to the current path does not create a duplicate history entry
 #[test]
 fn test_navigate_to_same_path() {
     warpui::App::test((), |mut app| async move {
@@ -862,7 +862,7 @@ fn test_navigate_to_same_path() {
     });
 }
 
-/// 验证 NavigateTo 深层路径正确更新
+/// Verifies that NavigateTo updates correctly for a deep path
 #[test]
 fn test_navigate_to_deep_path() {
     warpui::App::test((), |mut app| async move {
@@ -883,7 +883,7 @@ fn test_navigate_to_deep_path() {
     });
 }
 
-/// 验证 NavigateTo 将反斜杠规范化为正斜杠
+/// Verifies that NavigateTo normalizes backslashes to forward slashes
 #[test]
 fn test_navigate_to_backslash_path() {
     warpui::App::test((), |mut app| async move {
@@ -903,7 +903,7 @@ fn test_navigate_to_backslash_path() {
     });
 }
 
-/// 验证 GoBack 在初始历史位置不做操作
+/// Verifies that GoBack does nothing at the initial history position
 #[test]
 fn test_go_back_at_initial() {
     warpui::App::test((), |mut app| async move {
@@ -920,7 +920,7 @@ fn test_go_back_at_initial() {
     });
 }
 
-/// 验证 GoForward 在初始历史位置不做操作
+/// Verifies that GoForward does nothing at the initial history position
 #[test]
 fn test_go_forward_at_initial() {
     warpui::App::test((), |mut app| async move {
@@ -937,7 +937,7 @@ fn test_go_forward_at_initial() {
     });
 }
 
-/// 验证 GoUp 从根路径不做操作
+/// Verifies that GoUp does nothing from the root path
 #[test]
 fn test_go_up_from_root_via_action() {
     warpui::App::test((), |mut app| async move {
@@ -954,7 +954,7 @@ fn test_go_up_from_root_via_action() {
     });
 }
 
-/// 验证多步导航后 GoBack/GoForward 历史追踪正确
+/// Verifies that GoBack/GoForward history tracking is correct after multi-step navigation
 #[test]
 fn test_multiple_navigate_then_back_forward() {
     warpui::App::test((), |mut app| async move {
@@ -993,10 +993,10 @@ fn test_multiple_navigate_then_back_forward() {
 }
 
 // ============================================================
-// Category 3: 对话框开关循环测试
+// Category 3: dialog open/close cycle tests
 // ============================================================
 
-/// 验证 NewFolder 打开 CreateFolder 对话框
+/// Verifies that NewFolder opens the CreateFolder dialog
 #[test]
 fn test_new_folder_opens_dialog() {
     warpui::App::test((), |mut app| async move {
@@ -1013,7 +1013,7 @@ fn test_new_folder_opens_dialog() {
     });
 }
 
-/// 验证 CloseDialog 清除对话框
+/// Verifies that CloseDialog clears the dialog
 #[test]
 fn test_close_dialog_clears() {
     warpui::App::test((), |mut app| async move {
@@ -1031,7 +1031,7 @@ fn test_close_dialog_clears() {
     });
 }
 
-/// 验证 ConfirmOverwrite 关闭对话框
+/// Verifies that ConfirmOverwrite closes the dialog
 #[test]
 fn test_confirm_overwrite_closes_dialog() {
     warpui::App::test((), |mut app| async move {
@@ -1054,7 +1054,7 @@ fn test_confirm_overwrite_closes_dialog() {
     });
 }
 
-/// 验证 CloseDialog 在无 dialog 时不 panic
+/// Verifies that CloseDialog does not panic when there is no dialog
 #[test]
 fn test_close_dialog_when_none() {
     warpui::App::test((), |mut app| async move {
@@ -1071,7 +1071,7 @@ fn test_close_dialog_when_none() {
     });
 }
 
-/// 验证对话框多次开关循环稳定性
+/// Verifies the stability of repeated dialog open/close cycles
 #[test]
 fn test_dialog_multiple_cycles() {
     warpui::App::test((), |mut app| async move {
@@ -1097,10 +1097,10 @@ fn test_dialog_multiple_cycles() {
 }
 
 // ============================================================
-// Category 4: 传输任务生命周期测试
+// Category 4: transfer-task lifecycle tests
 // ============================================================
 
-/// 验证取消不存在的任务 ID 不 panic
+/// Verifies that cancelling a non-existent task ID does not panic
 #[test]
 fn test_cancel_transfer_nonexistent_id() {
     warpui::App::test((), |mut app| async move {
@@ -1117,7 +1117,7 @@ fn test_cancel_transfer_nonexistent_id() {
     });
 }
 
-/// 验证取消 ID 为 0 的不存在任务不 panic
+/// Verifies that cancelling a non-existent task with ID 0 does not panic
 #[test]
 fn test_cancel_transfer_zero_id() {
     warpui::App::test((), |mut app| async move {
@@ -1134,7 +1134,7 @@ fn test_cancel_transfer_zero_id() {
     });
 }
 
-/// 验证 DownloadSaveAs 越界索引不 panic 且不创建孤立任务
+/// Verifies that DownloadSaveAs does not panic for an out-of-range index and does not create an orphaned task
 #[test]
 fn test_download_save_as_out_of_range() {
     warpui::App::test((), |mut app| async move {
@@ -1158,7 +1158,7 @@ fn test_download_save_as_out_of_range() {
     });
 }
 
-/// 验证 DownloadSaveAs 在空条目列表 index=0 不 panic
+/// Verifies that DownloadSaveAs does not panic for index=0 with an empty entry list
 #[test]
 fn test_download_save_as_zero_index_empty() {
     warpui::App::test((), |mut app| async move {
@@ -1181,7 +1181,7 @@ fn test_download_save_as_zero_index_empty() {
     });
 }
 
-/// 验证 ExecuteUpload 不存在的本地文件且无连接时任务标记为 Failed
+/// Verifies that ExecuteUpload marks the task as Failed for a non-existent local file with no connection
 #[test]
 fn test_execute_upload_nonexistent_file() {
     warpui::App::test((), |mut app| async move {
@@ -1206,10 +1206,10 @@ fn test_execute_upload_nonexistent_file() {
 }
 
 // ============================================================
-// Category 5: DetailsEntry 边界测试
+// Category 5: DetailsEntry boundary tests
 // ============================================================
 
-/// 验证 DetailsEntry 越界索引不 panic
+/// Verifies that DetailsEntry does not panic for an out-of-range index
 #[test]
 fn test_details_entry_out_of_range() {
     warpui::App::test((), |mut app| async move {
@@ -1226,7 +1226,7 @@ fn test_details_entry_out_of_range() {
     });
 }
 
-/// 验证 DetailsEntry 在空条目 index=0 不 panic
+/// Verifies that DetailsEntry does not panic for index=0 with no entries
 #[test]
 fn test_details_entry_zero_empty() {
     warpui::App::test((), |mut app| async move {
@@ -1243,7 +1243,7 @@ fn test_details_entry_zero_empty() {
     });
 }
 
-/// 验证 DetailsEntry 极大索引不 panic
+/// Verifies that DetailsEntry does not panic for a very large index
 #[test]
 fn test_details_entry_usize_max() {
     warpui::App::test((), |mut app| async move {
@@ -1261,10 +1261,10 @@ fn test_details_entry_usize_max() {
 }
 
 // ============================================================
-// Category 6: OpenEntry / DownloadEntry 无条目测试
+// Category 6: OpenEntry / DownloadEntry no-entry tests
 // ============================================================
 
-/// 验证 OpenEntry 越界索引不 panic，路径不变
+/// Verifies that OpenEntry does not panic for an out-of-range index and leaves the path unchanged
 #[test]
 fn test_open_entry_out_of_range() {
     warpui::App::test((), |mut app| async move {
@@ -1281,7 +1281,7 @@ fn test_open_entry_out_of_range() {
     });
 }
 
-/// 验证 OpenEntry 在空条目 index=0 不 panic
+/// Verifies that OpenEntry does not panic for index=0 with no entries
 #[test]
 fn test_open_entry_zero_empty() {
     warpui::App::test((), |mut app| async move {
@@ -1298,7 +1298,7 @@ fn test_open_entry_zero_empty() {
     });
 }
 
-/// 验证 DownloadEntry 在空条目列表不 panic
+/// Verifies that DownloadEntry does not panic with an empty entry list
 #[test]
 fn test_download_entry_empty_entries() {
     warpui::App::test((), |mut app| async move {
@@ -1308,15 +1308,15 @@ fn test_download_entry_empty_entries() {
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::DownloadEntry(0), ctx);
         });
-        // 不 panic 即通过
+        // Passing means not panicking
     });
 }
 
 // ============================================================
-// Category 7: 选择与删除边界测试
+// Category 7: selection and deletion boundary tests
 // ============================================================
 
-/// 验证 DeleteSelected 在空选择集不 panic
+/// Verifies that DeleteSelected does not panic with an empty selection set
 #[test]
 fn test_delete_selected_empty_selection() {
     warpui::App::test((), |mut app| async move {
@@ -1333,7 +1333,7 @@ fn test_delete_selected_empty_selection() {
     });
 }
 
-/// 验证 DeleteSelected 有选择但无条目不 panic
+/// Verifies that DeleteSelected does not panic when there is a selection but no entries
 #[test]
 fn test_delete_selected_no_entries() {
     warpui::App::test((), |mut app| async move {
@@ -1351,7 +1351,7 @@ fn test_delete_selected_no_entries() {
     });
 }
 
-/// 验证 SelectEntry 接受 usize::MAX 不 panic
+/// Verifies that SelectEntry accepts usize::MAX without panicking
 #[test]
 fn test_select_entry_usize_max() {
     warpui::App::test((), |mut app| async move {
@@ -1368,7 +1368,7 @@ fn test_select_entry_usize_max() {
     });
 }
 
-/// 验证多次 SelectEntry 每次清除前一个选择
+/// Verifies that each SelectEntry call clears the previous selection
 #[test]
 fn test_multiple_select_clears_previous() {
     warpui::App::test((), |mut app| async move {
@@ -1391,10 +1391,10 @@ fn test_multiple_select_clears_previous() {
 }
 
 // ============================================================
-// Category 8: Render 安全性测试
+// Category 8: render safety tests
 // ============================================================
 
-/// 验证初始状态一致性（构造函数会尝试连接，可能为 Failed 或 Disconnected）
+/// Verifies initial state consistency (the constructor attempts to connect, so the state may be Failed or Disconnected)
 #[test]
 fn test_render_disconnected_state() {
     warpui::App::test((), |mut app| async move {
@@ -1402,7 +1402,7 @@ fn test_render_disconnected_state() {
         let (_, view) = create_view(&mut app);
 
         view.read(&app, |view, _| {
-            // 构造函数调用 connect_to_server，测试环境无 SSH 服务，状态为 Failed
+            // The constructor calls connect_to_server; with no SSH service in the test environment, the state is Failed
             assert!(matches!(
                 view.connection,
                 ConnectionState::Failed(_) | ConnectionState::Disconnected
@@ -1415,7 +1415,7 @@ fn test_render_disconnected_state() {
     });
 }
 
-/// 验证 drag hover 状态正确设置
+/// Verifies that the drag hover state is set correctly
 #[test]
 fn test_render_with_drag_hover() {
     warpui::App::test((), |mut app| async move {
@@ -1432,7 +1432,7 @@ fn test_render_with_drag_hover() {
     });
 }
 
-/// 验证搜索过滤状态正确设置
+/// Verifies that the search filter state is set correctly
 #[test]
 fn test_render_with_search_filter() {
     warpui::App::test((), |mut app| async move {
@@ -1449,7 +1449,7 @@ fn test_render_with_search_filter() {
     });
 }
 
-/// 验证右键菜单状态正确设置
+/// Verifies that the context menu state is set correctly
 #[test]
 fn test_render_with_context_menu() {
     warpui::App::test((), |mut app| async move {
@@ -1472,7 +1472,7 @@ fn test_render_with_context_menu() {
     });
 }
 
-/// 验证对话框打开状态正确设置
+/// Verifies that the dialog-open state is set correctly
 #[test]
 fn test_render_with_dialog_open() {
     warpui::App::test((), |mut app| async move {
@@ -1489,7 +1489,7 @@ fn test_render_with_dialog_open() {
     });
 }
 
-/// 验证传输任务创建后状态正确
+/// Verifies that the state is correct after a transfer task is created
 #[test]
 fn test_render_with_transfer_task() {
     warpui::App::test((), |mut app| async move {
@@ -1509,7 +1509,7 @@ fn test_render_with_transfer_task() {
     });
 }
 
-/// 验证所有叠加层同时存在时不 panic
+/// Verifies that no panic occurs when all overlays are present at once
 #[test]
 fn test_render_all_overlays_combined() {
     warpui::App::test((), |mut app| async move {
@@ -1543,14 +1543,14 @@ fn test_render_all_overlays_combined() {
     });
 }
 
-/// 验证所有叠加层关闭后状态正确清零
+/// Verifies that the state is correctly cleared after all overlays are closed
 #[test]
 fn test_render_after_close_all_overlays() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        // 开启所有叠加层
+        // Open all overlays
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::DragFilesEnter, ctx);
             view.handle_action(&SftpBrowserAction::SetSearchFilter("x".to_string()), ctx);
@@ -1564,7 +1564,7 @@ fn test_render_after_close_all_overlays() {
             view.handle_action(&SftpBrowserAction::NewFolder, ctx);
         });
 
-        // 关闭所有叠加层
+        // Close all overlays
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::DragFilesLeave, ctx);
             view.handle_action(&SftpBrowserAction::ClearSearchFilter, ctx);
@@ -1581,7 +1581,7 @@ fn test_render_after_close_all_overlays() {
     });
 }
 
-/// 验证初始路径历史状态
+/// Verifies the initial path history state
 #[test]
 fn test_render_path_history_initial() {
     warpui::App::test((), |mut app| async move {
@@ -1595,7 +1595,7 @@ fn test_render_path_history_initial() {
     });
 }
 
-/// 验证初始 is_loading 为 false
+/// Verifies that the initial is_loading is false
 #[test]
 fn test_render_is_loading_initial_false() {
     warpui::App::test((), |mut app| async move {

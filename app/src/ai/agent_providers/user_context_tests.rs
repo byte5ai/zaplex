@@ -150,7 +150,7 @@ fn file_binary_content_self_closing_with_size() {
         None,
     );
     let out = render_user_attachments(&[AIAgentContext::File(f)]).unwrap();
-    // 新版 placeholder:path + mime_type + binary + size,缺一不可。
+    // New placeholder: path + mime_type + binary + size, none of which may be missing.
     assert!(out.contains("path=\"logo.png\""));
     assert!(out.contains("mime_type=\"image/png\""));
     assert!(out.contains("binary=\"true\""));
@@ -159,7 +159,7 @@ fn file_binary_content_self_closing_with_size() {
 
 #[test]
 fn file_binary_empty_omits_size_attr() {
-    // 上层故意没读 bytes(.exe / 超大文件)→ size 属性应被省略,但 path / mime / binary 必存
+    // The upper layer deliberately did not read bytes (.exe / very large files) → the size attribute should be omitted, but path / mime / binary must be present
     let f = FileContext::new(
         "C:\\Users\\me\\WarpSetup.exe".into(),
         AnyFileContent::BinaryContent(Vec::new()),
@@ -173,8 +173,8 @@ fn file_binary_empty_omits_size_attr() {
         !out.contains("size="),
         "空 BinaryContent 不应输出 size 属性"
     );
-    // .exe 默认 mime 是 application/vnd.microsoft.portable-executable 或 octet-stream,
-    // 不强 assert 具体值,只验证 mime_type 属性存在
+    // The default mime for .exe is application/vnd.microsoft.portable-executable or octet-stream,
+    // so do not assert the specific value, only verify that the mime_type attribute exists
     assert!(out.contains("mime_type=\""));
 }
 

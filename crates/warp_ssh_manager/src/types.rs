@@ -1,7 +1,7 @@
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
-/// 连接状态，仅用于 UI 层显示，不持久化。
+/// Connection status, used for UI display only; not persisted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConnectionStatus {
     Unknown,
@@ -81,7 +81,7 @@ impl OneKeyCredentialKind {
     }
 }
 
-/// 树节点（folder 或 server），不含 server-only metadata。
+/// Tree node (folder or server), excluding server-only metadata.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SshNode {
     pub id: String,
@@ -91,11 +91,13 @@ pub struct SshNode {
     pub sort_order: i32,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
-    /// 仅对 folder 有意义，UI 据此决定是否隐藏子节点。SQLite 持久化让重启后状态保持。
+    /// Meaningful only for folders; UI uses this to decide whether to hide child nodes.
+    /// SQLite persistence maintains state across restarts.
     pub is_collapsed: bool,
 }
 
-/// Server 节点的连接配置。`password` / `passphrase` 不在此处，走 keychain。
+/// Connection configuration for a server node. `password` / `passphrase` are not here;
+/// they use keychain.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SshServerInfo {
     pub node_id: String,
@@ -126,7 +128,7 @@ impl SshServerInfo {
         }
     }
 
-    /// 从现有服务器克隆配置，生成新的 node_id。
+    /// Clones configuration from an existing server, generating a new node_id.
     pub fn clone_from_template(source: &Self, new_node_id: String) -> Self {
         Self {
             node_id: new_node_id,

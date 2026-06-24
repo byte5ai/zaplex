@@ -658,7 +658,7 @@ impl WarpTheme {
         self.background_image.clone()
     }
 
-    /// 获取 UI 颜色覆盖，如果未设置返回 None。
+    /// Returns the UI color overrides, or None if none are set.
     pub fn ui_colors(&self) -> Option<&self::ui_colors::UiColors> {
         self.ui_colors.as_ref()
     }

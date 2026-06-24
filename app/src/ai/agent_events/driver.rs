@@ -100,7 +100,7 @@ pub(crate) trait AgentEventSource: Send + Sync {
     ) -> Result<AgentEventSourceStream>;
 }
 
-/// 由 [`AgentEventStreamClient`] 提供底层流的 [`AgentEventSource`]。
+/// [`AgentEventSource`] that provides underlying stream from [`AgentEventStreamClient`].
 pub(crate) struct AgentEventStreamClientEventSource {
     client: Arc<dyn AgentEventStreamClient>,
 }

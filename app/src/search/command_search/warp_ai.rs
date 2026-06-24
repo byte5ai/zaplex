@@ -129,8 +129,8 @@ impl SearchItem for WarpAISearchItem {
     }
 }
 
-/// Zap 只保留同步入口:打开 BYOP Agent 或把自然语言写回输入框。
-/// 云端“自然语言生成命令”异步源已删除。
+/// Zap only retains synchronous entry points: open BYOP Agent or write natural language back to input box.
+/// The cloud “natural-language-to-command” async source has been removed.
 pub struct WarpAIDataSource;
 
 impl WarpAIDataSource {

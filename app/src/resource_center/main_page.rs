@@ -404,7 +404,7 @@ impl ResourceCenterMainView {
                 )
                 .build()
                 .on_click(|_ctx, _, _| {
-                    // 去中心化分支:Refer-a-friend 入口已移除。
+                    // Decentralization branch: Refer-a-friend entry has been removed.
                 })
                 .finish(),
         )

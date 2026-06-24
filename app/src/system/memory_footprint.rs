@@ -11,8 +11,8 @@ pub fn memory_footprint_bytes() -> u64 {
 /// Returns a platform-specific JSON object with a detailed breakdown of the
 /// current process's memory usage.
 ///
-/// Each platform populates whichever fields it can natively provide.  The
-/// 返回值是一个适合写入本地诊断日志的 opaque JSON blob。
+/// Each platform populates whichever fields it can natively provide. The return value
+/// is an opaque JSON blob suitable for writing to local diagnostic logs.
 pub fn memory_breakdown() -> serde_json::Value {
     platform::memory_breakdown()
 }

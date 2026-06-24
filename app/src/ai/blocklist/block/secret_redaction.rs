@@ -678,7 +678,7 @@ pub(crate) fn redact_secrets_in_element<T: PartialClickableElement>(
                 SECRET_REDACTION_REPLACEMENT_CHARACTER
                     .repeat(
                         // Use character range length here! Even wide characters should be replaced by a single *, in rich content
-                        // block secret redaction e.g. 码1234 -> *1234 not **1234.
+                        // block secret redaction e.g. (wide char)1234 -> *1234 not **1234.
                         detected_secret_range.char_range.end
                             - detected_secret_range.char_range.start,
                     )

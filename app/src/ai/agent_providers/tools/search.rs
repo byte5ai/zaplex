@@ -1,4 +1,4 @@
-//! 搜索类工具:`Grep`(逐行匹配)+ `FileGlobV2`(文件名通配)。
+//! Search tools: `Grep` (line-by-line matching) + `FileGlobV2` (filename globbing).
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -24,12 +24,12 @@ fn grep_parameters() -> Value {
         "properties": {
             "queries": {
                 "type": "array",
-                "description": "要搜索的关键字/正则模式列表(每个元素是一个独立查询,任一命中都算匹配)。",
+                "description": "List of keywords/regex patterns to search for (each element is an independent query; any match counts as a hit).",
                 "items": {"type": "string"}
             },
             "path": {
                 "type": "string",
-                "description": "搜索范围的相对路径(文件或目录)。空字符串或 \".\" 表示当前工作目录。",
+                "description": "Relative path of search scope (file or directory). Empty string or \".\" means current working directory.",
                 "default": "."
             }
         },
@@ -106,17 +106,17 @@ fn glob_parameters() -> Value {
         "properties": {
             "patterns": {
                 "type": "array",
-                "description": "文件名通配符列表(支持 ?、*、[…])。例如 [\"**/*.rs\", \"src/**/*.toml\"]。",
+                "description": "List of filename glob patterns (supports ?, *, […]). Example: [\"**/*.rs\", \"src/**/*.toml\"].",
                 "items": {"type": "string"}
             },
             "search_dir": {
                 "type": "string",
-                "description": "搜索目录的相对路径,空表示当前工作目录。",
+                "description": "Relative path of search directory; empty means current working directory.",
                 "default": "."
             },
             "limit": {
                 "type": "integer",
-                "description": "最大返回条数;0 或缺省表示不限。",
+                "description": "Maximum results to return; 0 or omitted means unlimited.",
                 "default": 0
             }
         },
@@ -136,7 +136,7 @@ fn glob_from_args(args: &str) -> Result<api::message::tool_call::Tool> {
                 parsed.search_dir
             },
             max_matches: parsed.limit,
-            max_depth: 0, // 不限深度
+            max_depth: 0, // Unlimited depth
             min_depth: 0,
         },
     ))
@@ -156,8 +156,8 @@ fn glob_result_to_json(result: &api::message::tool_call_result::Result) -> Optio
                 .iter()
                 .map(|f| f.file_path.as_str())
                 .collect();
-            // protobuf 中 Success.warnings: String 是 stderr 警告文本(如权限错误)。
-            // 仅在非空时输出,避免给模型噪声。
+            // In protobuf, Success.warnings: String is stderr warning text (e.g. permission errors).
+            // Only output when non-empty to avoid adding noise to the model.
             let mut value = json!({ "status": "ok", "files": files });
             if !s.warnings.is_empty() {
                 value["warnings"] = json!(s.warnings);

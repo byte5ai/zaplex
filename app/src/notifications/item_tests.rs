@@ -76,7 +76,7 @@ fn remove_by_origin_leaves_unrelated_notifications() {
     items.push(make_cli_session_notification(terminal_b));
     assert_eq!(items.filtered_count(NotificationFilter::All), 2);
 
-    // 仅删除 conversation 通知,CLI 会话通知应当保留。
+    // Remove only conversation notification; CLI session notification should remain.
     let removed = items.remove_by_origin(NotificationOrigin::Conversation(conv_id));
     assert!(removed);
     assert_eq!(items.filtered_count(NotificationFilter::All), 1);

@@ -225,9 +225,10 @@ pub struct Cache {
     raster_bounds: DashMap<RasterBoundsKey, Result<RectI, Error>>,
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     available_system_fonts: Option<AvailableSystemFonts>,
-    /// In-flight 等待者：当 `available_system_fonts` 还没就绪、首次扫描尚在异步执行时，
-    /// 后续 `all_system_fonts` 调用把自己的 sender 挂到这里复用同一次扫描结果，
-    /// 避免重复 spawn + 重复主线程 `process_loaded_system_fonts`。
+    /// In-flight waiters: when `available_system_fonts` is not yet ready and the first
+    /// scan is still executing asynchronously, subsequent `all_system_fonts` calls attach
+    /// their senders here to reuse the same scan result, avoiding duplicate spawn and
+    /// duplicate main thread `process_loaded_system_fonts`.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pending_system_fonts_senders: Vec<AvailableSystemFontsSender>,
     font_fallback_cache: FontFallbackCache,
@@ -304,8 +305,8 @@ impl Cache {
         self.pending_system_fonts_senders.push(tx);
 
         if already_in_flight {
-            // 已有同一次扫描在跑,只复用其结果,不重复 spawn / 不重复主线程
-            // process_loaded_system_fonts。
+            // A scan is already running; reuse its result, no duplicate spawn / no duplicate
+            // main thread process_loaded_system_fonts.
             return rx.map(Result::unwrap_or_default).boxed();
         }
 

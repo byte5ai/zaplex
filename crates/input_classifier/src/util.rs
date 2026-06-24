@@ -15,11 +15,11 @@ const DETECT_AS_COMMAND_LOW_TOKEN_THRESHOLD: f32 = 0.7;
 lazy_static! {
     /// One-off commands / keywords that should trigger a shell command classification.
     ///
-    /// `claude`, `codex`, and `gemini` are not actually _really_ one-off shell command keywords,
-    /// but false-positive NL classifications for these inputs (where the user was trying to use
-    /// claude code, codex CLI, or gemini CLI) suck, because the user often thinks we're
-    /// intentionally trying to push them away from those CLIs into Agent Mode, so we mitigate the
-    /// risk by always treating as shell.
+    /// `claude`, `codex`, and `gemini` are not actually one-off shell command keywords,
+    /// but false-positive natural language classifications for these inputs (where the user was trying to use
+    /// Claude Code, Codex CLI, or Gemini CLI) are undesirable, because the user often thinks we're
+    /// intentionally trying to push them away from those CLIs into Agent Mode. We mitigate the
+    /// risk by always treating these as shell commands.
     static ref ONE_OFF_SHELL_COMMAND_KEYWORDS: HashSet<&'static str> = HashSet::from(["#", "echo", "man", "sudo", "claude", "codex", "gemini"]);
 
     static ref ONE_OFF_NATURAL_LANGUAGE_WORDS: HashSet<&'static str> = HashSet::from(["hello", "hi", "hey", "hola", "thanks", "explain", "yes", "no", "what", "nice", "1. "]);
@@ -110,19 +110,19 @@ pub async fn is_likely_shell_command(
     false
 }
 
-/// 是否包含 CJK / 假名 / 韩文 / 全角字符。命中即视为非英文自然语言输入,
-/// 直接判 AI(因为词典与 ML 模型均为英文,无 CJK 训练样本)。
+/// Whether the text contains CJK / Hiragana / Korean / full-width characters. If matched, treat as non-English
+/// natural language input and classify directly as AI (because dictionaries and ML models are English-only, with no CJK training samples).
 pub fn contains_cjk(text: &str) -> bool {
     text.chars().any(|c| {
         matches!(
             c,
-            '\u{4E00}'..='\u{9FFF}'   // CJK 基本汉字
-            | '\u{3400}'..='\u{4DBF}' // CJK 扩展 A
-            | '\u{3040}'..='\u{309F}' // 平假名
-            | '\u{30A0}'..='\u{30FF}' // 片假名
-            | '\u{AC00}'..='\u{D7AF}' // 韩文音节
-            | '\u{3000}'..='\u{303F}' // CJK 标点(。、!?,等)
-            | '\u{FF00}'..='\u{FFEF}' // 半角/全角(。、!?,等)
+            '\u{4E00}'..='\u{9FFF}'   // CJK basic characters
+            | '\u{3400}'..='\u{4DBF}' // CJK extension A
+            | '\u{3040}'..='\u{309F}' // Hiragana
+            | '\u{30A0}'..='\u{30FF}' // Katakana
+            | '\u{AC00}'..='\u{D7AF}' // Korean syllables
+            | '\u{3000}'..='\u{303F}' // CJK punctuation (。、!?, etc.)
+            | '\u{FF00}'..='\u{FFEF}' // Half-width/full-width (。、!?, etc.)
         )
     })
 }

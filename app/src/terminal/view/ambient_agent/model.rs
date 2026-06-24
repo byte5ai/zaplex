@@ -290,7 +290,7 @@ impl AmbientAgentViewModel {
         ctx.emit(AmbientAgentViewModelEvent::EnteredComposingState);
     }
 
-    /// 用于加入已在运行的 ambient agent 共享会话。
+    /// Join an already-running ambient agent shared session.
     pub fn enter_viewing_existing_session(
         &mut self,
         task_id: AmbientAgentTaskId,
@@ -507,7 +507,7 @@ impl AmbientAgentViewModel {
                             }
 
                             if matches!(me.status, Status::WaitingForSession { .. }) {
-                                // 去云端分支:不再展示 agent capacity 模态
+                                // Cloud branch: no longer show agent capacity modal
                             }
                         }
                         AmbientAgentEvent::TimedOut => {}

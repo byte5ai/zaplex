@@ -17,7 +17,7 @@ use super::{Engine, Match, SearchConfig};
 
 #[test]
 fn test_search_cjk_literal() {
-    // CJK literal search
+    // CJK literal search test
     App::test((), |mut app| async move {
         let (buffer, _selection) = Buffer::mock_from_markdown(
             "Zap 是基于 Zap 的社区分支，保留账户与同步能力。",
@@ -43,7 +43,7 @@ fn test_search_cjk_literal() {
 
 #[test]
 fn test_search_cjk_multiple_matches() {
-    // 多个 CJK 匹配与大小写不敏感
+    // Multiple CJK matches and case-insensitive
     App::test((), |mut app| async move {
         let (buffer, _selection) = Buffer::mock_from_markdown(
             "账户与同步。再试一次账户。",
@@ -69,7 +69,7 @@ fn test_search_cjk_multiple_matches() {
 
 #[test]
 fn test_search_japanese_literal() {
-    // 日语平假名 / 片假名 / 汉字 混合
+    // Japanese hiragana / katakana / kanji mix
     App::test((), |mut app| async move {
         let (buffer, _selection) = Buffer::mock_from_markdown(
             "これはテストです。ターミナルを起動します。",
@@ -95,7 +95,7 @@ fn test_search_japanese_literal() {
 
 #[test]
 fn test_search_cjk_regex() {
-    // CJK 与正则接起来
+    // CJK combined with regex
     App::test((), |mut app| async move {
         let (buffer, _selection) = Buffer::mock_from_markdown(
             "版本 v1.2.3\n版本 v2.0.0",
@@ -115,7 +115,7 @@ fn test_search_cjk_regex() {
 
 #[test]
 fn test_search_emoji_literal() {
-    // 4 字节 UTF-8 字符(emoji 补充平面)
+    // 4-byte UTF-8 characters (emoji supplementary planes)
     App::test((), |mut app| async move {
         let (buffer, _selection) = Buffer::mock_from_markdown(
             "hello 🚀 world 🚀!",

@@ -123,15 +123,15 @@ pub fn render_loading_header(
     icon: warpui::elements::Icon,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    // 旧签名 fallback:不传 shimmer handle 时退化为静态 Text。
-    // 新代码请用 `render_loading_header_shimmer` 让标题文字带 shimmer 反馈,
-    // 或 `render_loading_header_animated` 让 icon 也带 spinner 帧动画。
+    // Legacy signature fallback: degrades to static Text when shimmer handle not provided.
+    // New code should use `render_loading_header_shimmer` for shimmer feedback on title text,
+    // or `render_loading_header_animated` for spinner frame animation on icon too.
     render_loading_header_inner(text, IconOrSpinner::Icon(icon), None, app)
 }
 
-/// Loading 卡 header,标题文字 shimmer 动画(icon 仍为静态)。
-/// caller 必须在 view 结构里持久化 `ShimmeringTextStateHandle`(否则每帧 new
-/// 会让 animation_start_time 永远归零、动画不动)。
+/// Loading card header with title text shimmer animation (icon remains static).
+/// Caller must persist `ShimmeringTextStateHandle` in view struct (otherwise every-frame
+/// new would reset animation_start_time to zero, and animation won't play).
 pub fn render_loading_header_shimmer(
     text: String,
     icon: warpui::elements::Icon,
@@ -141,11 +141,11 @@ pub fn render_loading_header_shimmer(
     render_loading_header_inner(text, IconOrSpinner::Icon(icon), Some(shimmer_handle), app)
 }
 
-/// Loading 卡 header,**双动画**:icon = `BrailleSpinner`(80ms 帧切换 ⠋⠙⠹⠸⠼...),
-/// 标题文字 = `ShimmeringTextElement`。视觉等价于 opencode TUI 的 `<spinner>` + 文字。
+/// Loading card header with **dual animation**: icon = `BrailleSpinner` (80ms frame transitions ⠋⠙⠹⠸⠼...),
+/// title text = `ShimmeringTextElement`. Visually equivalent to opencode TUI `<spinner>` + text.
 ///
-/// caller 必须在 view 结构里持久化 `SpinnerStateHandle` 和 `ShimmeringTextStateHandle`,
-/// 否则每帧 new 让 `Instant::now()` 重置 → spinner 永远停在第 0 帧、shimmer 永远归零。
+/// Caller must persist `SpinnerStateHandle` and `ShimmeringTextStateHandle` in view struct;
+/// otherwise every-frame new lets `Instant::now()` reset → spinner stays at frame 0 forever, shimmer resets to zero.
 pub fn render_loading_header_animated(
     text: String,
     spinner_handle: SpinnerStateHandle,
@@ -160,9 +160,9 @@ pub fn render_loading_header_animated(
     )
 }
 
-/// 终态 header(cancelled / denied):icon 为静态,标题文字带**删除线**。
-/// 对齐 opencode TUI 的 STRIKETHROUGH 用法:permission denied / 取消的工具
-/// 卡片用删除线表达"这个操作没发生过 / 被驳回"的视觉语义。
+/// Terminal-state header (cancelled / denied): icon is static, title text has **strikethrough**.
+/// Align with opencode TUI STRIKETHROUGH usage: permission denied / cancelled tool
+/// cards use strikethrough to express "this operation never happened / was rejected" visually.
 pub fn render_terminal_header_strikethrough(
     text: String,
     icon: warpui::elements::Icon,
@@ -241,8 +241,8 @@ fn render_loading_header_inner(
     let icon_element: Box<dyn Element> = match icon_or_spinner {
         IconOrSpinner::Icon(icon) => icon.finish(),
         IconOrSpinner::Spinner(spinner_state) => {
-            // Spinner 颜色对齐原 yellow_running_icon:Yellow ANSI。
-            // 颜色直接复用 sub_text_color 在 surface_2 上的视觉(浅黄/橙)避免对比过强。
+            // Spinner color aligns with original yellow_running_icon: Yellow ANSI.
+            // Color directly reuses sub_text_color on surface_2 visuals (pale yellow/orange) to avoid excessive contrast.
             use warp_core::ui::theme::AnsiColorIdentifier;
             let color = AnsiColorIdentifier::Yellow.to_ansi_color(&theme.terminal_colors().normal);
             Box::new(BrailleSpinner::new(
@@ -265,7 +265,7 @@ fn render_loading_header_inner(
     );
 
     let title: Box<dyn Element> = if let Some(handle) = shimmer_handle {
-        // shimmer base = 暗 / shimmer_color = 主前景,绕一圈高亮波。
+        // shimmer base = dark / shimmer_color = main foreground, highlight wave circling around.
         let base_color = appearance
             .theme()
             .sub_text_color(header_background)

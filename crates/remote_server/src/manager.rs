@@ -145,13 +145,13 @@ fn version_is_compatible(client: Option<&str>, server: &str) -> bool {
     }
 }
 
-/// 是否应当对远端 `server_version` 强制做 tag 严格匹配。
+/// Whether to enforce strict tag matching for the remote `server_version`.
 ///
-/// 对于 [`Channel::Oss`](Zap),源码本地构建没有
-/// `GIT_RELEASE_TAG`,但 SSH Extension 可能安装 latest release 的
-/// remote-server。若强制校验,客户端 `None` 与服务端非空 tag 会触发
-/// 删除、重装、再次不匹配的循环。release 构建通过版本化安装路径规避
-/// 旧二进制;本地构建继续跳过严格版本校验。
+/// For [`Channel::Oss`](Zap), locally-built source has no `GIT_RELEASE_TAG`,
+/// but SSH Extension may install a latest-release remote-server.
+/// Enforcing strict version check would cause a delete/reinstall/mismatch loop
+/// when client is `None` and server has a non-empty tag. Release builds avoid stale binaries
+/// via versioned install paths; local builds continue to skip strict version checking.
 #[cfg(not(target_family = "wasm"))]
 fn should_enforce_remote_version_check(channel: Channel) -> bool {
     !matches!(channel, Channel::Oss)
@@ -850,9 +850,9 @@ impl RemoteServerManager {
         // tag than the client expects, the binary on disk is stale. Remove it so
         // the next reconnect (or explicit reconnect by the user) will reinstall.
         //
-        // `Channel::Oss`(Zap)下临时复用官方 release 二进制,客户端自己
-        // 没有 `GIT_RELEASE_TAG`,与服务器永远不匹配,故跳过严格校验。详见
-        // [`should_enforce_remote_version_check`] 的注释。
+        // Under `Channel::Oss`(Zap), we temporarily reuse the official release binary;
+        // the client has no `GIT_RELEASE_TAG`, so it will never match the server.
+        // Therefore, strict version checking is skipped. See [`should_enforce_remote_version_check`] for details.
         let client_version = ChannelState::app_version();
         let enforce_version_check = should_enforce_remote_version_check(ChannelState::channel());
         if enforce_version_check && !version_is_compatible(client_version, &resp.server_version) {
@@ -1397,13 +1397,12 @@ impl RemoteServerManager {
             let exit_status = Self::capture_exit_status(&mut _child, session_id);
             // Drop the old child process explicitly before reconnecting.
             drop(_child);
-            // 如果子进程已经退出(`exit_status.is_some()`),说明对端 daemon 已经
-            // 真的不在了 —— 例如用户在远端 shell 内 `exit`,ssh ControlMaster
-            // 把所有 slave channel 一起收掉,`remote-server-proxy` 也跟着退出。
-            // 这种情况下立刻重连大概率失败,反而会让 terminal pane 卡 2~4 秒
-            // 才彻底结束;因此跳过自动重连,直接走 Disconnected 路径。
-            // 只有 `exit_status.is_none()`(child 仍在跑但 reader 收到 EOF)
-            // 这种"真·瞬时网络抖动"才保留重连逻辑。
+            // If the child has exited (`exit_status.is_some()`), the remote daemon truly shut down —
+            // for example, the user ran `exit` in the remote shell, SSH ControlMaster closes all slave channels,
+            // and `remote-server-proxy` exits too. Reconnecting immediately would likely fail and cause the
+            // terminal pane to hang 2-4 seconds before terminating; so skip auto-reconnect and go straight to Disconnected.
+            // Only `exit_status.is_none()` (child still running but reader got EOF) — true transient network hiccup —
+            // retains the reconnect logic.
             let child_already_exited = exit_status.is_some();
             let Some(auth_context) = self.auth_context.clone().filter(|_| !child_already_exited)
             else {

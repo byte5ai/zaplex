@@ -61,17 +61,17 @@ pub fn dump_dhat_heap_profile() {
     let _ = HEAP_PROFILER.lock().take();
 }
 
-/// Dump jemalloc heap profile 并写入本地日志。
+/// Dump jemalloc heap profile and write to local logs.
 ///
-/// 这里会派生 `go tool pprof`,从本地 HTTP server 拉取并符号化 heap profile。
+/// This spawns `go tool pprof`, fetches the heap profile from the local HTTP server, and symbolizes it.
 #[cfg(feature = "heap_usage_tracking")]
 pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
-    // openWarp 仅把 profile 数据和 memory_breakdown 写入本地日志。
+    // Zap only writes the profile data and memory_breakdown to local logs.
     let result = dump_jemalloc_heap_profile_inner().await;
     match result {
         Ok(profile_data) => {
             log::warn!(
-                "openWarp: 检测到内存使用异常(heap profile 大小 {} bytes,memory breakdown: {})",
+                "Zap: Detected abnormal memory usage (heap profile size {} bytes, memory breakdown: {})",
                 profile_data.len(),
                 memory_breakdown
             );

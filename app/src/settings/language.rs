@@ -1,12 +1,12 @@
-//! 用户界面语言设置(persisted via settings.toml,启动时应用到 i18n loader)。
+//! User interface language settings (persisted via settings.toml, applied to i18n loader on startup).
 //!
-//! 当前支持英文、简体中文与日语。新增语言只需:
-//!   1. `Language` 加 variant
-//!   2. `app/i18n/<locale>/warp.ftl` 新建翻译文件
-//!   3. `Display` + `to_locale_str` 加 case
+//! Currently supports English, Simplified Chinese, and Japanese. To add a new language:
+//!   1. Add a variant to `Language`
+//!   2. Create translation file in `app/i18n/<locale>/warp.ftl`
+//!   3. Add a case for `Display` + `to_locale_str`
 //!
-//! 切换在重启后完全生效(已渲染 UI 文本不会自动重排,需要 view 重建)。
-//! 设置页 dropdown 应附"重启 Zap 后完全生效"提示。
+//! Language switching takes full effect after restart (already-rendered UI text won't auto-reflow; views need rebuilding).
+//! Settings page dropdown should include a hint: "takes full effect after restarting Zap".
 
 use enum_iterator::Sequence;
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,7 @@ use warp_core::settings::{macros::define_settings_group, SupportedPlatforms, Syn
     rename_all = "snake_case"
 )]
 pub enum Language {
-    /// 跟随系统语言;若系统 locale 非已支持语言,fallback 到英文。
+    /// Follow system language; if system locale is not a supported language, fall back to English.
     #[default]
     #[schemars(description = "System default")]
     System,
@@ -56,7 +56,7 @@ impl std::fmt::Display for Language {
 }
 
 impl Language {
-    /// 转 BCP-47 locale 字符串,`System` 返回 `None` 表示走系统检测。
+    /// Convert to BCP-47 locale string; `System` returns `None` to use system detection.
     pub fn to_locale_str(self) -> Option<&'static str> {
         match self {
             Language::System => None,

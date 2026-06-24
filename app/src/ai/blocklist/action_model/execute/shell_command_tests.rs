@@ -46,10 +46,10 @@ fn does_not_detect_unrelated_or_non_interactive_ssh_commands() {
         "warp_run_generator_command 42 'ssh user@host ls'",
         "Zap-Run-GeneratorCommand 42 'git status' -ErrorAction Ignore",
         "rsync myfile.txt ssh://user@server.com",
-        // 右引号后还粘着字符,故意拒绝 tokenize,避免被错切成 `ssh`
-        // 然后通过 `ssh hello-world` 误判为交互会话。
+        // Character stuck after right quote, intentionally refuse tokenize to avoid mis-splitting to `ssh`
+        // and then misidentifying `ssh hello-world` as interactive session.
         r#""ssh"hello-world"#,
-        // 未闭合的引号同样拒绝 tokenize。
+        // Unclosed quote similarly refuses tokenize.
         r#""ssh hello world"#,
     ] {
         assert_eq!(
@@ -132,7 +132,7 @@ fn preemption_logic_covers_until_completion_timeout() {
     use ActionResultDelay::{Default, Duration as DurationDelay, OnCompletion, UntilCompletion};
     use WakeReason::*;
 
-    // BlockFinished 从不抢占 —— 它是“命令真正完成”的信号。
+    // BlockFinished never preempts — it's the signal “command truly completed”.
     assert!(!compute_is_preempted(BlockFinished, UntilCompletion));
     assert!(!compute_is_preempted(BlockFinished, Default));
     assert!(!compute_is_preempted(
@@ -142,21 +142,21 @@ fn preemption_logic_covers_until_completion_timeout() {
         }
     ));
 
-    // ForceRefresh 总是抢占,与 delay 无关。
+    // ForceRefresh always preempts, regardless of delay.
     assert!(compute_is_preempted(ForceRefresh, UntilCompletion));
     assert!(compute_is_preempted(ForceRefresh, Default));
 
-    // Timeout + OnCompletion / UntilCompletion 是抢占。
+    // Timeout + OnCompletion / UntilCompletion preempts.
     assert!(compute_is_preempted(
         Timeout,
         OnCompletion {
             timeout: Duration::from_secs(1)
         }
     ));
-    // #138: pager 卡死兜底超时必须被标记为抢占,避免 server 误解为“命令完成”。
+    // #138: pager deadlock fallback timeout must be marked as preemption to prevent server misinterpreting as “command complete”.
     assert!(compute_is_preempted(Timeout, UntilCompletion));
 
-    // Timeout + Default / Duration 不是抢占 —— agent 本来就预期会拿到中间快照。
+    // Timeout + Default / Duration doesn't preempt — agent expects to get intermediate snapshot anyway.
     assert!(!compute_is_preempted(Timeout, Default));
     assert!(!compute_is_preempted(
         Timeout,

@@ -417,8 +417,8 @@ impl AIContextMenu {
                     categories.push(AIContextMenuCategory::CurrentFolderFiles);
                 }
             }
-            // Zap:原会根据 outline_codebase_symbols_for_at_context_menu 设置 push Code
-            // 分类,现 outline 下线,Code 分类不再出现。
+            // Zap: Previously would push Code category based on the outline_codebase_symbols_for_at_context_menu setting.
+            // Now that outline is retired, the Code category no longer appears.
             return categories;
         }
 
@@ -452,7 +452,7 @@ impl AIContextMenu {
                 categories.push(AIContextMenuCategory::Commands);
             }
             categories.push(AIContextMenuCategory::Blocks);
-            // Zap:Code 分类随 outline 下线同步推退,不再 push。
+            // Zap: Code category retired in sync with outline sunset; no longer pushed.
             if show_warp_drive && FeatureFlag::DriveObjectsAsContext.is_enabled() {
                 categories.push(AIContextMenuCategory::Workflows);
                 categories.push(AIContextMenuCategory::Notebooks);
@@ -474,8 +474,8 @@ impl AIContextMenu {
             categories
         } else if !is_shared_session_viewer {
             // Terminal mode: show Files category only.
-            // Zap:原这里还会按 outline_codebase_symbols_for_at_context_menu push Code
-            // 分类,现 outline 下线,Code 分类不再出现。
+            // Zap: Previously would also push Code category based on outline_codebase_symbols_for_at_context_menu setting;
+            // now that outline is retired, the Code category no longer appears.
 
             if is_active_dir_in_git_repo {
                 vec![AIContextMenuCategory::RepoFiles]
@@ -488,7 +488,7 @@ impl AIContextMenu {
         }
     }
 
-    /// Set the input mode and update the menu state accordingly
+    /// Sets the input mode and updates the menu state accordingly
     pub fn set_input_mode(&mut self, is_ai_or_autodetect_mode: bool, ctx: &mut ViewContext<Self>) {
         if self.state.is_ai_or_autodetect_mode != is_ai_or_autodetect_mode {
             self.state.is_ai_or_autodetect_mode = is_ai_or_autodetect_mode;
@@ -595,9 +595,9 @@ impl AIContextMenu {
         // Get initial categories for proper initialization
         let initial_categories = Self::get_categories_for_mode(true, false, false, false, ctx); // Default to AI mode, not a viewer, not ambient agent, not CLI agent input
 
-        // Zap:原这里会创建 CodeSymbolCache(订阅 RepoOutlines) 以支持
-        // 代码符号搜索。该功能已随 outline 推退下线,这些订阅/创建代码
-        // 一并删除。
+        // Zap: Previously, this would create a CodeSymbolCache (subscribing to RepoOutlines) to support
+        // code symbol search. This feature has been retired along with outline sunset,
+        // and these subscription/creation code blocks have been removed accordingly.
 
         let mut result = Self {
             mixer,
@@ -867,8 +867,8 @@ impl AIContextMenu {
                     );
                 });
             }
-            // Zap:Code 分类随 outline 下线推退。该分类不会出现在 categories 中,
-            // 但 enum variant 保留以避免 match 大面积破坏;这里不会被命中。
+            // Zap: Code category retired along with outline sunset. This category will not appear in categories,
+            // but the enum variant is retained to avoid widespread match errors; this branch will never be hit.
             #[cfg(not(target_family = "wasm"))]
             NavigationState::Category(AIContextMenuCategory::Workflows) => {
                 let workflow_data_source = ctx.add_model(|_| WorkflowDataSource::new());
@@ -1043,8 +1043,8 @@ impl AIContextMenu {
                         mixer.add_sync_source(block_data_source, [QueryFilter::Blocks]);
                     });
                 }
-                // Zap:Code 分类随 outline 下线推退;不会出现但保留 noop 分支
-                // 避免 match 错误。
+                // Zap: Code category retired along with outline sunset; will not appear but kept as a no-op branch
+                // to avoid match errors.
                 AIContextMenuCategory::Code => {}
                 AIContextMenuCategory::Workflows => {
                     let workflow_data_source = ctx.add_model(|_| WorkflowDataSource::new());
@@ -1335,9 +1335,9 @@ impl AIContextMenu {
         .finish()
     }
 
-    // Zap:原 `render_code_symbols_indexing` 负责在代码符号索引中时渲染
-    // “Code symbols indexing...” 提示。outline 下线后该渲染路径不会被调,
-    // 函数一并删除。
+    // Zap: Previously, `render_code_symbols_indexing` was responsible for rendering
+    // “Code symbols indexing...” prompt when indexing code symbols. After outline retirement,
+    // this render path is no longer called and the function is removed accordingly.
 
     fn render_matching_results(
         &self,
@@ -1544,8 +1544,8 @@ impl AIContextMenu {
         fallback: Box<dyn Element>,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        // Zap:原这里会检查 Code 分类下是否正在索引代码符号,如是则走
-        // `render_code_symbols_indexing` 提示。outline 下线后该分类不会出现,完全删除。
+        // Zap: Previously, this would check if code symbols were being indexed under the Code category,
+        // and if so, would display `render_code_symbols_indexing`. After outline retirement, this category no longer appears; completely removed.
         let _ = category;
 
         if self.mixer.as_ref(app).is_loading() {

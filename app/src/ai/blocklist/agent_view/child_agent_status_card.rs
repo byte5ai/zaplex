@@ -202,9 +202,9 @@ impl View for ChildAgentStatusCard {
                 .unwrap_or_else(|| crate::t!("common-untitled"));
             let status_icon = child.status().status_icon_and_color(appearance.theme());
 
-            // T3-7:in_progress 子代理在 title 里 surface 当前 action,
-            // "Untitled · ↳ Searching codebase..." / "Refactor X · ↳ Reading files..."。
-            // finished 子代理仍显示原 title 不变。
+            // T3-7: an in-progress child agent surfaces its current action in the title,
+            // e.g. "Untitled - ↳ Searching codebase..." / "Refactor X - ↳ Reading files...".
+            // A finished child agent keeps showing its original title unchanged.
             let title = if child.status().is_in_progress() {
                 if let Some(presence) = latest_action_presence(child) {
                     format!("{raw_title} · ↳ {presence}...")
@@ -271,13 +271,14 @@ fn should_restore_dismissed_card(
     current_status.is_in_progress() && !was_in_progress
 }
 
-/// T3-7: 提取子代理 conversation 当前/最近的 action presence summary,
-/// 用于在父级 ChildAgentStatusCard 上 surface "↳ Searching codebase..." 之类的副标题。
-/// 对齐 opencode TUI Task 父卡 `↳ Bash $ git status` 的视觉。
+/// T3-7: extracts the current/most-recent action presence summary of a child
+/// agent conversation, used to surface a subtitle like "↳ Searching codebase..."
+/// on the parent ChildAgentStatusCard.
+/// Mirrors the look of opencode's TUI Task parent card `↳ Bash $ git status`.
 ///
-/// 实现:遍历 latest_exchange.output_status.output().messages 反向找最后一个
-/// `AIAgentOutputMessageType::Action`,取 `presence_continuous_summary`。
-/// 找不到则返回 None(card 不显示 subtitle)。
+/// Implementation: iterate latest_exchange.output_status.output().messages in
+/// reverse to find the last `AIAgentOutputMessageType::Action`, then take its
+/// `presence_continuous_summary`. Returns None if none is found (the card shows no subtitle).
 fn latest_action_presence(conversation: &AIConversation) -> Option<&'static str> {
     let exchange = conversation.latest_exchange()?;
     let output = exchange.output_status.output()?;

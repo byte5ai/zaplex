@@ -235,8 +235,8 @@ impl Element for Stack {
         self.origin = Some(Point::from_vec2f(origin, ctx.scene.z_index()));
         let parent_rect = self.bounds().unwrap();
         for child in &mut self.children {
-            // Overlay 子元素使用 overlay 层，使其获得 Overlay z-index，
-            // 避免事件分发时 is_covered 将自身子元素的 hit rect 误判为遮挡。
+            // Overlay child elements use overlay layer to get Overlay z-index,
+            // avoid is_covered misjudging own child elements' hit rect as blocked during event dispatch.
             if child.element.is_overlay() {
                 ctx.scene.start_overlay_layer(ClipBounds::None);
             } else {

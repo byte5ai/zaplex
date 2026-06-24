@@ -49,7 +49,7 @@ struct TombstoneDisplayData {
     working_directory: Option<String>,
     /// Artifacts from the conversation
     artifacts: Vec<Artifact>,
-    /// 在可从本地数据获得时记录任务执行 harness。
+    /// Record task execution harness when available from local data.
     #[cfg(not(target_family = "wasm"))]
     harness: Option<Harness>,
 }
@@ -112,7 +112,7 @@ impl TombstoneDisplayData {
         }
     }
 
-    /// 用 AmbientAgentTask 的数据补充展示信息。
+    /// Supplement display data with AmbientAgentTask data.
     #[cfg(not(target_family = "wasm"))]
     fn enrich_from_task(&mut self, task: AmbientAgentTask) {
         // Use task title if we don't have a conversation title.
@@ -240,8 +240,8 @@ impl ConversationEndedTombstoneView {
             &view.artifact_buttons_view,
             |_, _, event, ctx| match event {
                 ArtifactButtonsRowEvent::OpenPlan { document_uid } => {
-                    // openWarp 本地化:在 shared session tombstone 中同样走本地
-                    // AIDocument pane,不再依赖云 notebook_uid。
+                    // openWarp localization: in shared session tombstone, also use local
+                    // AIDocument pane, no longer depend on cloud notebook_uid.
                     let document_version =
                         crate::ai::document::ai_document_model::AIDocumentModel::as_ref(ctx)
                             .get_current_document(document_uid)

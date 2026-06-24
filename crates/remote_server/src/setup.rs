@@ -155,18 +155,19 @@ fn parse_status(
     _libc: &RemoteLibc,
     _required_glibc: Option<&str>,
 ) -> PreinstallStatus {
-    // remote-server 现在是静态 musl 二进制(见 `preinstall_check.sh` 顶部
-    // 注释),不链接宿主的动态 libc。因此 `glibc_too_old` / `non_glibc`
-    // 已不再是「不支持」的理由 —— 任意 glibc 版本与 musl/uclibc 宿主都能
-    // 运行该二进制。新版脚本不会再发出这两个 reason;但旧版 remote 端可能
-    // 仍缓存着老脚本,所以这里把这些 libc 门禁理由一并当作 `Supported`,
-    // 而不是 `Unsupported`,保持新旧脚本的判定一致。
+    // remote-server is now a static musl binary (see comment at the top of
+    // `preinstall_check.sh`), which does not link against the host's dynamic libc.
+    // Therefore, `glibc_too_old` / `non_glibc` are no longer valid "unsupported" reasons --
+    // any glibc version and musl/uclibc hosts can run this binary. The new script will not
+    // emit these two reasons anymore; however, old remote-side versions may still cache the
+    // old script, so here we treat these libc gate-keeping reasons as `Supported` rather than
+    // `Unsupported` to keep old and new script decisions consistent.
     match status {
         Some("supported") => PreinstallStatus::Supported,
         Some("unsupported") => match reason {
-            // 旧脚本残留的 libc 门禁理由:静态二进制下已失效,视为支持。
+            // Legacy script libc gate-keeping reasons: already obsolete under static binary, treat as supported.
             Some("glibc_too_old") | Some("non_glibc") => PreinstallStatus::Supported,
-            // 其他无法识别的 unsupported 理由:保守起见 fail open。
+            // Other unrecognized unsupported reasons: fail open for safety.
             _ => PreinstallStatus::Unknown,
         },
         // status=unknown, missing, or anything else → fail open.
@@ -254,7 +255,7 @@ pub fn parse_uname_output(output: &str) -> Result<RemotePlatform> {
     Ok(RemotePlatform { os, arch })
 }
 
-/// 返回远端二进制安装目录,按 channel 隔离。
+/// Returns the remote binary installation directory, isolated by channel.
 ///
 /// - stable:      `~/.warp/remote-server`
 /// - preview:     `~/.warp-preview/remote-server`
@@ -273,10 +274,10 @@ pub fn remote_server_dir() -> String {
     format!("~/{warp_dir}/remote-server")
 }
 
-/// 返回可安全放入路径的 remote-server identity key 目录名。
+/// Returns a directory name for the remote-server identity key that is safe to include in a path.
 ///
-/// identity key 不是密钥,但可能包含路径中不安全或有歧义的字节。
-/// 保留 ASCII 字母数字以及 `-` / `_`,其他 UTF-8 字节做百分号编码。
+/// The identity key is not a cryptographic key, but may contain bytes that are unsafe or ambiguous
+/// in paths. ASCII alphanumerics and `-` / `_` are preserved; other UTF-8 bytes are percent-encoded.
 pub fn remote_server_identity_dir_name(identity_key: &str) -> String {
     if identity_key.is_empty() {
         return "empty".to_string();
@@ -294,7 +295,7 @@ pub fn remote_server_identity_dir_name(identity_key: &str) -> String {
     encoded
 }
 
-/// 返回按 identity 隔离的远端目录,用于 daemon socket 和 PID 文件。
+/// Returns the remote directory isolated by identity, used for daemon socket and PID files.
 pub fn remote_server_daemon_dir(identity_key: &str) -> String {
     format!(
         "{}/{}",
@@ -303,17 +304,17 @@ pub fn remote_server_daemon_dir(identity_key: &str) -> String {
     )
 }
 
-/// 返回远端 remote-server 二进制文件名。
+/// Returns the remote-server binary filename.
 pub fn binary_name() -> &'static str {
     ChannelState::channel().cli_command_name()
 }
 
-/// 返回当前 channel 和客户端版本对应的远端二进制完整路径。
+/// Returns the full path to the remote binary corresponding to the current channel and client version.
 ///
-/// Local 构建保留无版本后缀路径,以便 `script/deploy_remote_server`
-/// 覆盖同一个开发 slot。Zap release 构建带 `GIT_RELEASE_TAG`
-/// 时使用版本后缀,这样新版本会自然触发重新安装;源码本地构建没有
-/// release tag,仍使用无后缀路径。
+/// Local builds preserve an unversioned suffix path so that `script/deploy_remote_server` can
+/// overwrite the same development slot. Zap release builds with `GIT_RELEASE_TAG` use a versioned
+/// suffix, allowing new versions to naturally trigger reinstalls. Source-built local builds without
+/// a release tag still use an unversioned path.
 pub fn remote_server_binary() -> String {
     let dir = remote_server_dir();
     let name = binary_name();
@@ -327,28 +328,28 @@ pub fn remote_server_binary() -> String {
     }
 }
 
-/// 返回检查远端 remote-server 二进制存在且可执行的 shell 命令。
+/// Returns the shell command to check if the remote remote-server binary exists and is executable.
 ///
-/// 与上游一致,这里实际运行 `--version`,而不只是 `test -x`;
-/// 这样可以把损坏或无法解析参数的二进制提前识别出来。
+/// Consistent with upstream, this actually runs `--version` rather than just `test -x`;
+/// this allows early detection of corrupted or parameter-unparseable binaries.
 pub fn binary_check_command() -> String {
     format!("{} --version", remote_server_binary())
 }
 
-/// 返回用于版本化安装路径的版本号。优先使用编译时注入的
-/// `GIT_RELEASE_TAG`;没有 release tag 时回退到 `CARGO_PKG_VERSION`,
-/// 让需要版本化路径的 channel 保持确定性,并在缺少对应 release 资产时
-/// 清晰失败,而不是误用无版本路径。
+/// Returns the version number used for versioned installation paths. Prefers the compile-time injected
+/// `GIT_RELEASE_TAG`; falls back to `CARGO_PKG_VERSION` when there is no release tag,
+/// keeping channels that need versioned paths deterministic and failing clearly when corresponding
+/// release assets are missing, rather than accidentally using unversioned paths.
 fn pinned_version() -> &'static str {
     ChannelState::app_version().unwrap_or(env!("CARGO_PKG_VERSION"))
 }
 
-/// 安装脚本模板独立放在 `.sh` 文件里方便维护。
-/// `{download_base_url}` 等占位符由 [`install_script`] 替换。
+/// The install script template is kept in a separate `.sh` file for easy maintenance.
+/// Placeholders like `{download_base_url}` are replaced by [`install_script`].
 const INSTALL_SCRIPT_TEMPLATE: &str = include_str!("install_remote_server.sh");
 
-/// 返回安装脚本。`staging_tarball_path` 非空时,脚本跳过远端下载,
-/// 改为解压客户端通过 SCP 预上传的 tarball。
+/// Returns the install script. When `staging_tarball_path` is non-empty, the script skips remote
+/// download and instead extracts a tarball pre-uploaded by the client via SCP.
 pub fn install_script(staging_tarball_path: Option<&str>) -> String {
     let version_suffix = version_suffix();
     INSTALL_SCRIPT_TEMPLATE
@@ -359,7 +360,7 @@ pub fn install_script(staging_tarball_path: Option<&str>) -> String {
         .replace("{staging_tarball_path}", staging_tarball_path.unwrap_or(""))
 }
 
-/// 构造 Zap CLI release 资产下载基址。
+/// Constructs the base URL for downloading Zap CLI release assets.
 fn download_url() -> String {
     let release_path = match ChannelState::app_version() {
         Some(tag) => format!("download/{tag}"),
@@ -378,7 +379,7 @@ fn version_suffix() -> String {
     }
 }
 
-/// 返回指定远端平台对应的 Zap CLI tarball URL。
+/// Returns the Zap CLI tarball URL for the specified remote platform.
 pub fn download_tarball_url(platform: &RemotePlatform) -> String {
     format!(
         "{}/zap-{}-{}.tar.gz",
@@ -388,31 +389,31 @@ pub fn download_tarball_url(platform: &RemotePlatform) -> String {
     )
 }
 
-/// Zap fork:开发模式(DEBUG 源码构建,无 release tag)下,
-/// SSH transport 不再从 GitHub 下载陈旧的发行版,而是本地交叉编译
-/// 当前 `warp` 二进制并上传。下面这些常量集中描述该交叉编译产物,
-/// 与 `script/deploy_remote_server` 保持一致(同 profile / 同 features /
-/// 同 target),避免两处分叉。
+/// Zap fork: In development mode (DEBUG source builds without release tags),
+/// the SSH transport no longer downloads stale releases from GitHub. Instead, it cross-compiles
+/// the current `warp` binary locally and uploads it. The constants below describe the cross-compilation
+/// artifacts, coordinated with `script/deploy_remote_server` (same profile / features / target)
+/// to avoid divergence.
 ///
-/// 交叉编译目标三元组。
+/// Cross-compilation target triple.
 pub const DEV_MUSL_TARGET: &str = "x86_64-unknown-linux-musl";
 
-/// 交叉编译使用的 cargo profile。对应 `Cargo.toml` 的 `[profile.dev-remote]`,
-/// 它继承 `dev` 并 strip 符号以减小体积、加快上传。
+/// Cargo profile used for cross-compilation. Corresponds to `[profile.dev-remote]` in `Cargo.toml`,
+/// which inherits from `dev` and strips symbols to reduce size and speed up uploads.
 pub const DEV_REMOTE_PROFILE: &str = "dev-remote";
 
-/// 交叉编译启用的 features,与 `script/deploy_remote_server` 一致。
+/// Features enabled for cross-compilation, consistent with `script/deploy_remote_server`.
 pub const DEV_REMOTE_FEATURES: &str = "release_bundle,crash_reporting,standalone,agent_mode_debug";
 
-/// 判断当前是否处于「开发模式 remote-server 安装」路径。
+/// Determines whether we are currently in the "development mode remote-server installation" path.
 ///
-/// 默认条件:DEBUG 构建(`debug_assertions`)且没有注入 `GIT_RELEASE_TAG`
-/// (`app_version().is_none()`,即源码本地构建,非发行版)。这与
-/// `remote_server_binary()` / `download_url()` 中对「无 release tag」的
-/// 判定保持同一标准。release 构建恒为 `false`,行为完全不变。
+/// Default condition: DEBUG build (`debug_assertions`) with no injected `GIT_RELEASE_TAG`
+/// (`app_version().is_none()`, i.e., source-built locally, not a release). This matches
+/// the standard used in `remote_server_binary()` / `download_url()` for "no release tag".
+/// Release builds always return `false`, with unchanged behavior.
 ///
-/// 显式覆盖:设置 `WARP_REMOTE_SERVER_FROM_LOCAL=1` 强制走本地交叉编译路径
-/// (`0`/未设视为关闭)。用于 release 构建里临时联调本地 remote-server。
+/// Explicit override: set `WARP_REMOTE_SERVER_FROM_LOCAL=1` to force the local cross-compilation path
+/// (`0` or unset means disabled). Used for temporary local remote-server debugging in release builds.
 pub fn is_dev_source_build() -> bool {
     if let Some(raw) = std::env::var_os("WARP_REMOTE_SERVER_FROM_LOCAL") {
         let lossy = raw.to_string_lossy();
@@ -426,21 +427,21 @@ pub fn is_dev_source_build() -> bool {
     cfg!(debug_assertions) && ChannelState::app_version().is_none()
 }
 
-/// 检查二进制是否存在的超时。
+/// Timeout for checking if the binary exists.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// 常规远端安装脚本超时。
+/// Standard remote install script timeout.
 pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// SCP fallback 包含本地下载、上传和远端解压,给它更宽松的超时。
+/// SCP fallback includes local download, upload, and remote extraction, so we use a more generous timeout.
 pub const SCP_INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// 开发模式交叉编译可能要从头编译整个 crate 图,给它一个很宽松的超时。
+/// Development mode cross-compilation may need to compile the entire crate graph from scratch, so we use a very generous timeout.
 pub const DEV_CROSS_COMPILE_TIMEOUT: Duration = Duration::from_secs(900);
 
-/// 开发模式上传本地交叉编译产物的超时。dev 二进制(未优化 + 调试信息)有
-/// 数百 MB,即便 scp 开了 `-C` 压缩,跨公网上传也可能要数分钟,因此给一个
-/// 远超 `SCP_INSTALL_TIMEOUT` 的宽松上限。
+/// Timeout for uploading development mode cross-compiled artifacts. The dev binary (unoptimized + debug info)
+/// can be hundreds of MB, and even with SCP's `-C` compression, uploading over the network may take minutes,
+/// so we use a much more generous limit than `SCP_INSTALL_TIMEOUT`.
 pub const DEV_UPLOAD_TIMEOUT: Duration = Duration::from_secs(1800);
 
 #[cfg(test)]

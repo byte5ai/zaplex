@@ -94,7 +94,7 @@ pub enum AISubpage {
     WarpAgent,
     /// Agent profiles and permissions.
     Profiles,
-    /// 自定义 AI 提供商(BYOP) 配置子页。
+    /// Custom AI provider (BYOP) configuration subpage.
     Providers,
     /// Knowledge / Rules settings.
     Knowledge,
@@ -143,7 +143,7 @@ use std::sync::LazyLock;
 
 const AI_SETTINGS_DROPDOWN_WIDTH: f32 = 250.;
 const AI_SETTINGS_DROPDOWN_MAX_HEIGHT: f32 = 250.;
-// AI 设置页描述文本走 i18n,key 见 app/i18n/{en,zh-CN}/warp.ftl 的 settings-ai-* 段。
+// AI settings page description text uses i18n; keys are in app/i18n/{en,zh-CN}/warp.ftl settings-ai-* sections.
 const CONTEXT_WINDOW_SLIDER_WIDTH: f32 = 220.;
 const CONTEXT_WINDOW_INPUT_BOX_WIDTH: f32 = 120.;
 const WISPR_FLOW_URL: &str = "https://wisprflow.ai/";
@@ -936,7 +936,7 @@ impl AISettingsPageView {
             ctx.notify();
         });
 
-        // CLI agent 安装扫描完成后刷新设置页（per-agent 表格出现）
+        // Refresh settings page after CLI agent install scan completes (per-agent table appears)
         ctx.subscribe_to_model(
             &CLIAgentInstallModel::handle(ctx),
             |_, _, CLIAgentInstallEvent::ScanComplete, ctx| {
@@ -1403,11 +1403,12 @@ impl AISettingsPageView {
         }
     }
 
-    /// 重建当前 subpage 的 widget 列表。
-    /// 用于 widget 的内部状态依赖 `AISettings` 中的复杂集合(例如自定义 Agent
-    /// Provider 列表),在集合大小变化时需要重新创建 widget 持有的 ViewHandle。
+    /// Rebuild the widget list for the current subpage.
+    /// Used when a widget's internal state depends on complex collections in `AISettings`
+    /// (e.g. custom Agent Provider lists); the ViewHandle held by the widget must be recreated
+    /// when the collection size changes.
     pub fn rebuild_current_page(&mut self, ctx: &mut ViewContext<Self>) {
-        // 复用旧 page 的滚动 handle,避免重建后跳回顶部。
+        // Reuse scroll handle from old page to avoid jumping back to top after rebuild.
         let preserved_scroll = self.page.scroll_states();
         self.page = Self::build_page(self.active_subpage, ctx);
         if let Some((v, h)) = preserved_scroll {
@@ -2140,7 +2141,7 @@ impl AISettingsPageView {
                 p.name = name.to_owned();
                 p.base_url = base_url.to_owned();
                 p.extra_headers = headers.to_vec();
-                // 按 model_index 更新，跳过越界索引（rebuild 中间表单与 settings 可能短暂不一致）。
+                // Update by model_index, skip out-of-bounds indices (rebuild form and settings may be transiently inconsistent).
                 for (idx, m_name, m_id, ctx_window, max_out) in models {
                     if let Some(m) = p.models.get_mut(*idx) {
                         m.name = m_name.clone();
@@ -2182,7 +2183,7 @@ impl Entity for AISettingsPageView {
     type Event = AISettingsPageEvent;
 }
 
-/// Per-agent 可见性维度。
+/// Per-agent visibility dimensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PerAgentDimension {
     Toolbar,
@@ -2203,7 +2204,7 @@ pub enum AISettingsPageAction {
     ToggleAIInputAutoDetection,
     ToggleNLDInTerminal,
     ToggleCLIAgentToolbar,
-    /// 切换单个 CLI agent 的指定维度可见性。
+    /// Toggle visibility for a specific dimension of an individual CLI agent.
     ToggleCLIAgentPerAgent(CLIAgent, PerAgentDimension),
     ToggleUseAgentToolbar,
     ToggleVoiceInput,
@@ -2211,7 +2212,7 @@ pub enum AISettingsPageAction {
     HyperlinkClick(HyperlinkUrl),
     ToggleShowInputHintText,
     ToggleShowAgentTips,
-    /// 切换「显示 Agent 快捷键提示」设置（零状态三件套 + message bar 底部 4 项 hint）。
+    /// Toggle "Show Agent keyboard shortcuts hint" setting (zero-state three-piece + 4 items in message bar footer).
     ToggleShowAgentZeroStateHints,
     SetThinkingDisplayMode(ThinkingDisplayMode),
     RemoveCLIAgentToolbarEnabledCommand(String),
@@ -2263,7 +2264,7 @@ pub enum AISettingsPageAction {
         pattern: String,
         agent: Option<CLIAgent>,
     },
-    // 自定义 Agent Provider 管理动作
+    // Custom Agent Provider management actions
     AddAgentProvider,
     RemoveAgentProvider {
         provider_id: String,
@@ -2276,8 +2277,8 @@ pub enum AISettingsPageAction {
         provider_id: String,
         base_url: String,
     },
-    /// 显式设置 provider 的 API 协议类型(OpenAI / OpenAI-Response / Gemini / Anthropic / Ollama)。
-    /// chat_stream 据此显式绑定 genai AdapterKind,绕过模型名识别。
+    /// Explicitly set provider's API protocol type (OpenAI / OpenAI-Response / Gemini / Anthropic / Ollama).
+    /// chat_stream explicitly binds genai AdapterKind based on this, bypassing model name detection.
     SetAgentProviderApiType {
         provider_id: String,
         api_type: crate::settings::AgentProviderApiType,
@@ -2286,17 +2287,17 @@ pub enum AISettingsPageAction {
         provider_id: String,
         api_key: String,
     },
-    /// 一次性保存某个 provider 卡片上的全部可编辑字段(name / base_url / api_key /
-    /// extra_headers / models)。取代原来"失焦/Enter 逐字段推入"的 UX —— 用户在
-    /// settings_view 点"保存"按钮后一起下发。
+    /// Save all editable fields on a provider card at once (name / base_url / api_key /
+    /// extra_headers / models). Replaces the previous "blur/Enter push-per-field" UX — the user
+    /// clicks "Save" in settings_view and all fields are sent together.
     SaveAgentProviderEdits {
         provider_id: String,
         name: String,
         base_url: String,
         api_key: String,
         headers: Vec<(String, String)>,
-        /// 只携带可编辑部分:`(model_index, name, id, context_window, max_output_tokens)`。
-        /// reasoning / tool_call / image / pdf / audio 由独立的 chip 动作维护,不走这里。
+        /// Only carries editable parts: `(model_index, name, id, context_window, max_output_tokens)`.
+        /// reasoning / tool_call / image / pdf / audio are maintained by independent chip actions, not here.
         models: Vec<(usize, String, String, u32, u32)>,
     },
     SaveAgentProviderEditsThen {
@@ -2305,7 +2306,7 @@ pub enum AISettingsPageAction {
         base_url: String,
         api_key: String,
         headers: Vec<(String, String)>,
-        /// 只携带可编辑部分:`(model_index, name, id, context_window, max_output_tokens)`。
+        /// Only carries editable parts: `(model_index, name, id, context_window, max_output_tokens)`.
         models: Vec<(usize, String, String, u32, u32)>,
         action: Box<AISettingsPageAction>,
     },
@@ -2330,13 +2331,13 @@ pub enum AISettingsPageAction {
         model_index: usize,
         id: String,
     },
-    /// 更新单条模型的 context_window(tokens),0 = 未指定。
+    /// Update context_window (tokens) for a single model; 0 = unspecified.
     UpdateAgentProviderModelContextWindow {
         provider_id: String,
         model_index: usize,
         context_window: u32,
     },
-    /// 更新单条模型的 max_output_tokens,0 = 未指定。
+    /// Update max_output_tokens for a single model; 0 = unspecified.
     UpdateAgentProviderModelMaxOutput {
         provider_id: String,
         model_index: usize,
@@ -2358,50 +2359,50 @@ pub enum AISettingsPageAction {
     FetchAgentProviderModels {
         provider_id: String,
     },
-    /// 触发一次 models.dev 目录加载(磁盘缓存 + 必要时网络刷新)。Providers 子页打开即触发。
+    /// Trigger one models.dev directory load (disk cache + refresh from network if needed). Triggered when Providers subpage opens.
     EnsureModelsDevLoaded,
-    /// 强制刷新 models.dev 目录(忽略 TTL)。"刷新" 按钮触发。
+    /// Force refresh models.dev directory (ignore TTL). Triggered by "Refresh" button.
     RefreshModelsDev,
-    /// 从 models.dev 目录创建一个新 provider:回填 name/base_url/全部模型(含 context)。
+    /// Create a new provider from models.dev directory: prefill name/base_url/all models (including context).
     AddProviderFromModelsDev {
         catalog_provider_id: String,
     },
-    /// 把现有 provider 的模型列表与 models.dev 同步(按 base_url 匹配),
-    /// 用 catalog 提供的 context_window / reasoning / tool_call 等元数据填充本地条目。
+    /// Sync existing provider's model list with models.dev (by base_url matching),
+    /// populate local entries with context_window / reasoning / tool_call / etc metadata from catalog.
     SyncProviderModelsFromModelsDev {
         provider_id: String,
     },
-    /// 折叠/展开 "快速添加" chip 行。
+    /// Collapse/expand "Quick add" chip row.
     ToggleModelsDevChipsExpanded,
-    /// 设置 "快速添加" chip 行的搜索 query(子串过滤 provider name/id)。
+    /// Set search query for "Quick add" chip row (substring filtering provider name/id).
     SetModelsDevSearchQuery(String),
 
-    // ----- 单条模型条目 detail panel -----
-    /// 切换单条模型的 detail panel 展开/折叠状态。
+    // ----- Single model entry detail panel -----
+    /// Toggle expand/collapse state of a single model's detail panel.
     ToggleAgentProviderModelExpanded {
         provider_id: String,
         model_index: usize,
     },
-    /// 三态循环切换单条模型的某个多模态 capability(image/pdf/audio)。
-    /// `None → Some(true) → Some(false) → None`。
+    /// Three-state cycle toggle a single model's multimodal capability (image/pdf/audio).
+    /// `None → Some(true) → Some(false) → None`.
     CycleAgentProviderModelCapability {
         provider_id: String,
         model_index: usize,
         kind: ModelCapabilityKind,
     },
-    /// 切换单条模型的 reasoning 标志(普通 bool 字段,不是三态)。
+    /// Toggle reasoning flag for a single model (ordinary bool field, not three-state).
     ToggleAgentProviderModelReasoning {
         provider_id: String,
         model_index: usize,
     },
-    /// 切换单条模型的 tool_call 标志。
+    /// Toggle tool_call flag for a single model.
     ToggleAgentProviderModelToolCall {
         provider_id: String,
         model_index: usize,
     },
 }
 
-/// model detail panel 三态 capability chip 的种类。
+/// Type of three-state capability chip in model detail panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelCapabilityKind {
     Image,
@@ -3128,8 +3129,8 @@ impl TypedActionView for AISettingsPageView {
                     let mut providers = settings.agent_providers.value().clone();
                     if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
                         p.api_type = *api_type;
-                        // 若 base_url 为空,顺手填该类型的默认 endpoint(便于新手)。
-                        // 用户已自填 base_url 时不动。
+                        // If base_url is empty, conveniently fill the default endpoint for this type (helps beginners).
+                        // Don't touch if user already filled base_url.
                         if p.base_url.trim().is_empty() {
                             p.base_url = api_type.default_base_url().to_owned();
                         }
@@ -3211,7 +3212,7 @@ impl TypedActionView for AISettingsPageView {
                     }
                     let _ = settings.agent_providers.set_value(providers, ctx);
                 });
-                // 行级 add 需要新建 EditorView,所以走 rebuild;rebuild_current_page 已保留滚动。
+                // Row-level add needs to create EditorView, so take the rebuild path; rebuild_current_page already preserves scroll.
                 self.rebuild_current_page(ctx);
             }
             AISettingsPageAction::RemoveAgentProviderModel {
@@ -3227,7 +3228,7 @@ impl TypedActionView for AISettingsPageView {
                     }
                     let _ = settings.agent_providers.set_value(providers, ctx);
                 });
-                // 删一条会让后续 index 漂移,清掉这个 provider 的全部展开记录避免误展开。
+                // Deleting shifts subsequent indices; clear all expand records for this provider to avoid accidental re-expansion.
                 super::agent_providers_widget::clear_expanded_models_for_provider(provider_id);
                 self.rebuild_current_page(ctx);
             }
@@ -3323,8 +3324,8 @@ impl TypedActionView for AISettingsPageView {
                                     .iter_mut()
                                     .find(|p| p.id == provider_id_for_handler)
                                 {
-                                    // 合并保留: 已存在的 id 保留用户改过的 name,新 id 追加,
-                                    // 本地多余的 id 不删(用户手动 ×)。
+                                    // Merge and preserve: keep existing ids with user-modified names,
+                                    // append new ids, don't delete local extras (user manually removed).
                                     let existing: std::collections::HashSet<String> =
                                         p.models.iter().map(|m| m.id.clone()).collect();
                                     for m in fetched {
@@ -3337,7 +3338,7 @@ impl TypedActionView for AISettingsPageView {
                                 }
                                 let _ = settings.agent_providers.set_value(providers, ctx);
                             });
-                            // 模型行数可能变了,需要 rebuild widget rows。
+                            // Model row count may have changed; need to rebuild widget rows.
                             view.rebuild_current_page(ctx);
                         }
                         Err(e) => {
@@ -3357,7 +3358,7 @@ impl TypedActionView for AISettingsPageView {
                     }
                     let _ = settings.agent_providers.set_value(providers, ctx);
                 });
-                // header 行数量变化后需要新建/销毁 EditorView handle,仅 notify 不会刷新 rows。
+                // After header row count changes, need to create/destroy EditorView handles; notify alone won't refresh rows.
                 self.rebuild_current_page(ctx);
             }
             AISettingsPageAction::RemoveAgentProviderHeader {
@@ -3373,7 +3374,7 @@ impl TypedActionView for AISettingsPageView {
                     }
                     let _ = settings.agent_providers.set_value(providers, ctx);
                 });
-                // 删除同样会导致 index 与现有 HeaderRow handle 漂移,需要重建页面。
+                // Deletion also causes index shift with existing HeaderRow handles; page rebuild is needed.
                 self.rebuild_current_page(ctx);
             }
             AISettingsPageAction::UpdateAgentProviderHeader {
@@ -3402,7 +3403,7 @@ impl TypedActionView for AISettingsPageView {
                         async move { models_dev::fetch_and_cache(client).await },
                         |view, result, ctx| match result {
                             Ok(()) => view.rebuild_current_page(ctx),
-                            Err(e) => log::warn!("[models.dev] 拉取失败: {e}"),
+                            Err(e) => log::warn!("[models.dev] fetch failed: {e}"),
                         },
                     );
                 } else {
@@ -3416,7 +3417,7 @@ impl TypedActionView for AISettingsPageView {
                     async move { models_dev::fetch_and_cache(client).await },
                     |view, result, ctx| match result {
                         Ok(()) => view.rebuild_current_page(ctx),
-                        Err(e) => log::warn!("[models.dev] 刷新失败: {e}"),
+                        Err(e) => log::warn!("[models.dev] refresh failed: {e}"),
                     },
                 );
             }
@@ -3425,11 +3426,11 @@ impl TypedActionView for AISettingsPageView {
             } => {
                 use crate::ai::agent_providers::models_dev;
                 let Some(catalog) = models_dev::cached() else {
-                    log::warn!("[models.dev] 目录尚未加载,无法添加 {catalog_provider_id}");
+                    log::warn!("[models.dev] catalog not yet loaded, cannot add {catalog_provider_id}");
                     return;
                 };
                 let Some(cat_provider) = catalog.get(catalog_provider_id) else {
-                    log::warn!("[models.dev] 目录中无 provider id: {catalog_provider_id}");
+                    log::warn!("[models.dev] no provider id in catalog: {catalog_provider_id}");
                     return;
                 };
                 let mut new_provider = crate::settings::AgentProvider::new_empty();
@@ -3456,14 +3457,14 @@ impl TypedActionView for AISettingsPageView {
             AISettingsPageAction::SyncProviderModelsFromModelsDev { provider_id } => {
                 use crate::ai::agent_providers::models_dev;
                 let Some(catalog) = models_dev::cached() else {
-                    log::warn!("[models.dev] 目录未加载,无法同步 {provider_id}");
+                    log::warn!("[models.dev] catalog not loaded, cannot sync {provider_id}");
                     return;
                 };
                 let providers_snapshot = AISettings::as_ref(ctx).agent_providers.value().clone();
                 let Some(local) = providers_snapshot.iter().find(|p| p.id == *provider_id) else {
                     return;
                 };
-                // 匹配策略:先按 base_url 完全相等 / 包含;否则按 name (大小写无关) 匹配 catalog provider id 或 name。
+                // Matching strategy: first try base_url exact match / contains; otherwise match name (case-insensitive) against catalog provider id or name.
                 let target_url = local.base_url.trim().trim_end_matches('/').to_lowercase();
                 let target_name = local.name.trim().to_lowercase();
                 let cat_provider = catalog.iter().find(|(_, p)| {
@@ -3483,7 +3484,7 @@ impl TypedActionView for AISettingsPageView {
                 });
                 let Some((_, cat_provider)) = cat_provider else {
                     log::warn!(
-                        "[models.dev] 未在目录中找到匹配 (base_url={}, name={})",
+                        "[models.dev] no matching entry in catalog (base_url={}, name={})",
                         local.base_url,
                         local.name
                     );
@@ -3493,7 +3494,7 @@ impl TypedActionView for AISettingsPageView {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     let mut providers = settings.agent_providers.value().clone();
                     if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        // 既有 id 用 catalog 元数据覆盖;catalog 多出的追加;本地多出的(用户自定义)保留。
+                        // Existing ids overwritten with catalog metadata; extra from catalog are appended; extra locally (user-defined) are preserved.
                         for local_model in p.models.iter_mut() {
                             if let Some(cat_m) = cat_models.get(&local_model.id) {
                                 let merged = models_dev::into_agent_provider_model(cat_m);
@@ -3504,11 +3505,11 @@ impl TypedActionView for AISettingsPageView {
                                 if local_model.name.trim().is_empty() {
                                     local_model.name = merged.name;
                                 }
-                                // 多模态 capability:**只填 None 槽位**,Some(_) 视为用户
-                                // 已显式覆盖,sync 不动。这样:
-                                // - 首次 sync(用户没碰过) → 全部写入 catalog 推断结果
-                                // - 用户手动 cycle 到 Some(true/false) 后再 sync → 保留覆盖
-                                // - 用户三态循环回 None(Auto) → 下次 sync 又会被填上
+                                // Multimodal capability: **only fill None slots**; Some(_) is treated as user
+                                // explicitly overridden, sync doesn't touch. Thus:
+                                // - First sync (user untouched) → all filled with catalog inferred results
+                                // - User manually cycles to Some(true/false) then syncs → preservation of override
+                                // - User cycles back to None (Auto) → next sync fills again
                                 if local_model.image.is_none() {
                                     local_model.image = merged.image;
                                 }
@@ -3563,7 +3564,7 @@ impl TypedActionView for AISettingsPageView {
                                 ModelCapabilityKind::Pdf => &mut m.pdf,
                                 ModelCapabilityKind::Audio => &mut m.audio,
                             };
-                            // 三态循环:None → Some(true) → Some(false) → None。
+                            // Three-state cycle: None → Some(true) → Some(false) → None.
                             *slot = match *slot {
                                 None => Some(true),
                                 Some(true) => Some(false),
@@ -5238,7 +5239,7 @@ struct AIInputWidget {
     nld_in_terminal_toggle: SwitchStateHandle,
     show_input_hint_toggle: SwitchStateHandle,
     show_agent_tips_toggle: SwitchStateHandle,
-    // 「显示 Agent 快捷键提示」开关对应的 switch 状态句柄。
+    // Switch state handle for "Show Agent keyboard shortcuts hint" toggle.
     show_agent_zero_state_hints_toggle: SwitchStateHandle,
     include_agent_commands_in_history_toggle: SwitchStateHandle,
 }
@@ -5307,7 +5308,7 @@ impl SettingsWidget for AIInputWidget {
             widget_children.push(agent_tips_toggle);
         }
 
-        // 「显示 Agent 快捷键提示」：控制零状态三件套与 message bar 底部 4 项 hint。
+        // "Show Agent keyboard shortcuts hint": controls zero-state three-piece and 4 items in message bar footer.
         widget_children.push(render_ai_setting_toggle::<ShowAgentZeroStateHints>(
             crate::t!("settings-ai-show-agent-zero-state-hints"),
             AISettingsPageAction::ToggleShowAgentZeroStateHints,
@@ -5773,7 +5774,7 @@ impl SettingsWidget for AIFactWidget {
             column.add_child(self.render_rule_suggestions_toggle(view, ai_settings, app));
         }
 
-        // 去中心化分支:不再渲染 "Zap Drive as agent context" 开关。
+        // Decentralized branch: no longer render "Zap Drive as agent context" toggle.
         let _ = self;
         let _ = view;
         column.with_child(button).finish()
@@ -6036,7 +6037,7 @@ pub(crate) fn cli_agent_settings_widget_id() -> &'static str {
     CLIAgentWidget::static_widget_id()
 }
 
-// ── Per-agent chip 布局常量 ──
+// ── Per-agent chip layout constants ──
 const CHIP_HEIGHT: f32 = 28.;
 const CHIP_HORIZONTAL_PADDING: f32 = 10.;
 const CHIP_CORNER_RADIUS: f32 = 4.;

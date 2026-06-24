@@ -106,7 +106,7 @@ lazy_static! {
 /// Return the font that should render shared CJK Han ideographs (U+4E00..U+9FEF and related)
 /// based on the current UI locale. Without this, the upstream mapping hard-codes Noto Sans SC
 /// (Simplified Chinese) for every Han code point, which renders Japanese-locale UI text with
-/// Simplified Chinese glyph shapes (e.g. 直/設/規 look "off" to Japanese readers).
+/// Simplified Chinese glyph shapes (e.g., certain Han characters look incorrect to Japanese readers).
 fn cjk_han_font_for_ui_locale() -> ExternalFontFamily {
     let locale = warpui::current_ui_locale();
     let lower = locale.to_ascii_lowercase();

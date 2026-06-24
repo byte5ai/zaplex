@@ -205,8 +205,8 @@ impl NewWorktreeModal {
             e.clear_buffer_and_reset_undo_stack(ctx);
         });
 
-        // 仅使用当前 session 的 cwd 作为默认值。PersistedWorkspace 已下线,
-        // 不再有「上次打开的仓库」可退。
+        // Only use the current session's cwd as the default. PersistedWorkspace is offline;
+        // there's no "last opened repository" to fall back to.
         let effective_cwd = cwd;
 
         let default_repo = effective_cwd

@@ -73,8 +73,8 @@ pub struct RuleEditorView {
 
 impl RuleEditorView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        // Zap(本地化,Phase 2d-1):原 NetworkStatus 订阅用于在线/离线状态变化时重绘
-        // (联动 `is_delete_allowed` 谓词),本地化后该谓词永为真,订阅为死代码,移除。
+        // Zap (localization, Phase 2d-1): original NetworkStatus subscription was for redrawing on online/offline state change
+        // (coupled with `is_delete_allowed` predicate); after localization the predicate is always true, subscription is dead code, removed.
         let appearance = Appearance::as_ref(ctx);
         let font_family = appearance.ui_font_family();
         let text = TextOptions {
@@ -377,8 +377,8 @@ impl View for RuleEditorView {
             .with_child(self.render_header(appearance))
             .with_child(self.render_form(appearance));
 
-        // Zap(本地化,Phase 2d-1):原 `is_delete_allowed` 依赖网络在线+server_id,
-        // 本地化后只要在编辑已有规则就可删除,谓词取消。
+        // Zap (localization, Phase 2d-1): original `is_delete_allowed` depended on network online + server_id;
+        // after localization, deletion is allowed whenever editing an existing rule, predicate is removed.
         if self.ai_fact.is_some() {
             col.add_child(ChildView::new(&self.delete_button).finish());
         }

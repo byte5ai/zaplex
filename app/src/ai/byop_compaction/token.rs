@@ -1,4 +1,4 @@
-//! Token 估算 — 对齐 opencode `packages/opencode/src/util/token.ts`。
+//! Token estimation — aligned with opencode `packages/opencode/src/util/token.ts`.
 //!
 //! ```ts
 //! const CHARS_PER_TOKEN = 4
@@ -7,21 +7,21 @@
 //! }
 //! ```
 //!
-//! 用 `chars().count()` 而不是 `len()`,避免 UTF-8 多字节字符把估算扭曲到天上。
-//! opencode 在 JS 里 `.length` 对 BMP 内字符是 1,与 chars().count() 在多数情况下一致;
-//! 对超出 BMP 的 emoji,JS 是 2 (UTF-16 surrogate pair),Rust chars().count() 是 1 —
-//! 这点小偏差对 head/tail 切分不构成实际影响。
+//! Use `chars().count()` instead of `len()` to avoid UTF-8 multi-byte characters skewing estimates.
+//! In opencode's JS, `.length` is 1 for BMP characters and matches chars().count() in most cases;
+//! for emoji outside BMP, JS is 2 (UTF-16 surrogate pair) while Rust chars().count() is 1 —
+//! this small difference has no practical impact on head/tail splitting.
 use super::consts::CHARS_PER_TOKEN;
 
-/// `Math.round(len / 4)` 等价。空串返回 0。
+/// Equivalent to `Math.round(len / 4)`. Returns 0 for empty string.
 pub fn estimate(input: &str) -> usize {
     let n = input.chars().count();
-    // Math.round 是 banker's rounding 之前的"四舍五入到偶数"在 JS 里表现为标准四舍五入,
-    // 这里用 (n + 2) / 4 等价于 round(n / 4) 对正整数。
+    // Math.round was "round to even" (banker's rounding) before, but in JS behaves as standard rounding.
+    // Here (n + 2) / 4 is equivalent to round(n / 4) for positive integers.
     (n + CHARS_PER_TOKEN / 2) / CHARS_PER_TOKEN
 }
 
-/// JSON 序列化后估算 — 对齐 opencode `compaction.ts:241`:
+/// Estimate after JSON serialization — aligned with opencode `compaction.ts:241`:
 /// `Token.estimate(JSON.stringify(msgs))`
 pub fn estimate_json<T: serde::Serialize>(value: &T) -> usize {
     serde_json::to_string(value)

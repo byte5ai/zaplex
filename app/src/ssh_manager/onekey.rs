@@ -1,13 +1,13 @@
-//! OneKey 凭据加载:从 SSH Manager 持久化层 + Keychain/DPAPI/Linux Keyring
-//! 读出所有已保存的 server 凭据,供 `TerminalView` 在检测到 PTY 密码提示时
-//! 弹出选择菜单。
+//! OneKey credential loading: read all saved server credentials from SSH Manager persistence layer
+//! + Keychain/DPAPI/Linux Keyring, for `TerminalView` to pop a selection menu when a PTY password
+//! prompt is detected.
 //!
-//! ## 注意
+//! ## Notes
 //!
-//! - 内部调用 `warp_ssh_manager::with_conn`(同步 Mutex + SQLite)和
-//!   `KeychainSecretStore::get`(同步 OS API),**不可以**在 UI 主线程直接
-//!   同步调用——server 一多就会卡顿。调用方需走 `tokio::task::spawn_blocking`。
-//! - secret 全程用 `Zeroizing<String>` 持有,丢弃时自动清零。
+//! - Internally calls `warp_ssh_manager::with_conn` (sync Mutex + SQLite) and
+//!   `KeychainSecretStore::get` (sync OS API), which **must NOT** be called synchronously on the
+//!   UI main thread—performance degrades with many servers. Callers must use `tokio::task::spawn_blocking`.
+//! - Secrets are held in `Zeroizing<String>` throughout and automatically zeroed on drop.
 
 use anyhow::Result;
 use zeroize::Zeroizing;
@@ -103,8 +103,8 @@ fn load_saved_ssh_credentials_with_store(
             } else {
                 format!("{}@{}:{}", server.username, server.host, server.port)
             };
-            // kind 由 auth_type 推出,只能是 Password / Passphrase 两者,RootPassword
-            // 不在 OneKey 本身的范围内(走独立的 su 弹窗确认流程)。
+            // kind is derived from auth_type, can only be Password or Passphrase;
+            // RootPassword is outside OneKey's scope (uses separate su dialog confirmation flow).
             let (subtitle, kind) = match server.auth_type {
                 AuthType::Password => (target, OneKeyCredentialKind::Password),
                 AuthType::Key => {

@@ -1,6 +1,6 @@
-//! 传输面板渲染组件
+//! Transfer panel rendering component
 //!
-//! 提供文件传输进度面板的渲染功能，包括传输方向图标、状态标签、进度条和传输列表。
+//! Provides rendering for file transfer progress panel, including transfer direction icon, status label, progress bar, and transfer list.
 //! author: logic
 //! date: 2026-05-26
 
@@ -16,12 +16,12 @@ use crate::sftp_manager::browser::SftpBrowserAction;
 use crate::sftp_manager::types::{TransferDirection, TransferState, TransferTask};
 use crate::ui_components::icons::Icon;
 
-/// 进度条高度
+/// Progress bar height
 const PROGRESS_BAR_HEIGHT: f32 = 4.0;
-/// 面板内边距
+/// Panel inner padding
 const PANEL_PADDING: f32 = 8.0;
 
-/// 渲染传输方向图标
+/// Render transfer direction icon
 fn render_direction_icon(
     direction: &TransferDirection,
     appearance: &Appearance,
@@ -40,7 +40,7 @@ fn render_direction_icon(
         .finish()
 }
 
-/// 渲染传输状态标签
+/// Render transfer state label
 fn render_state_label(state: &TransferState, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let ui_font = appearance.ui_font_family();
@@ -48,14 +48,14 @@ fn render_state_label(state: &TransferState, appearance: &Appearance) -> Box<dyn
 
     let (label, color) = match state {
         TransferState::Pending => (
-            String::from("等待中"),
+            String::from("Waiting"),
             theme.sub_text_color(theme.background()),
         ),
-        TransferState::InProgress => (String::from("传输中"), theme.accent()),
-        TransferState::Completed => (String::from("已完成"), theme.ui_green_color().into()),
-        TransferState::Failed(_) => (String::from("失败"), theme.ui_error_color().into()),
+        TransferState::InProgress => (String::from("Transferring"), theme.accent()),
+        TransferState::Completed => (String::from("Completed"), theme.ui_green_color().into()),
+        TransferState::Failed(_) => (String::from("Failed"), theme.ui_error_color().into()),
         TransferState::Cancelled => (
-            String::from("已取消"),
+            String::from("Cancelled"),
             theme.sub_text_color(theme.background()),
         ),
     };
@@ -65,7 +65,7 @@ fn render_state_label(state: &TransferState, appearance: &Appearance) -> Box<dyn
         .finish()
 }
 
-/// 渲染进度条
+/// Render progress bar
 fn render_progress_bar(progress: u8, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
 
@@ -82,7 +82,7 @@ fn render_progress_bar(progress: u8, appearance: &Appearance) -> Box<dyn Element
 
     let remaining = 100u8.saturating_sub(progress);
 
-    // 进度填充
+    // Progress fill
     let fill = ConstrainedBox::new(
         Container::new(Flex::row().finish())
             .with_background(theme.accent())
@@ -92,7 +92,7 @@ fn render_progress_bar(progress: u8, appearance: &Appearance) -> Box<dyn Element
     .with_height(PROGRESS_BAR_HEIGHT)
     .finish();
 
-    // 空白部分
+    // Empty space
     let spacer = Shrinkable::new(
         remaining as f32,
         ConstrainedBox::new(Flex::row().finish())
@@ -117,12 +117,12 @@ fn render_progress_bar(progress: u8, appearance: &Appearance) -> Box<dyn Element
     .finish()
 }
 
-/// 渲染单个传输行
+/// Render single transfer row
 fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn Element> {
-    // 方向图标
+    // Direction icon
     let dir_icon = render_direction_icon(&task.direction, appearance);
 
-    // 文件名
+    // Filename
     let file_name = task
         .source_path
         .file_name()
@@ -136,10 +136,10 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
     .with_color(appearance.theme().active_ui_text_color().into())
     .finish();
 
-    // 状态标签
+    // State label
     let state_el = render_state_label(&task.state, appearance);
 
-    // 第一行：图标 + 文件名 + 状态 + 取消按钮
+    // First row: icon + filename + status + cancel button
     let mut top_row = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(6.0)
@@ -147,7 +147,7 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
         .with_child(Shrinkable::new(1.0, name_el).finish())
         .with_child(state_el);
 
-    // 传输中的任务显示取消按钮
+    // Tasks in progress show cancel button
     if matches!(task.state, TransferState::InProgress) {
         let task_id = task.id;
         let icon_color = appearance
@@ -177,7 +177,7 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
         .with_spacing(4.0)
         .with_child(top_row.finish());
 
-    // 进度条（仅传输中显示）
+    // Progress bar (only shown when in progress)
     if matches!(task.state, TransferState::InProgress) {
         let bar = render_progress_bar(task.progress_percent(), appearance);
         col.add_child(bar);
@@ -189,9 +189,9 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
         .finish()
 }
 
-/// 渲染文件传输面板（主入口）
+/// Render file transfer panel (main entry point)
 ///
-/// 始终显示传输任务列表，标题栏右侧包含关闭按钮。
+/// Always display the transfer task list, with close button on the right of the title bar.
 pub fn render_transfer_panel(
     transfers: &[TransferTask],
     appearance: &Appearance,
@@ -202,15 +202,15 @@ pub fn render_transfer_panel(
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    // 标题栏
+    // Title bar
     let count = transfers.len();
-    let title_text = format!("传输 ({count})");
+    let title_text = format!("Transfer ({count})");
 
     let title_el = Text::new_inline(title_text, ui_font, ui_font_size)
         .with_color(text_color.into())
         .finish();
 
-    // 关闭按钮
+    // Close button
     let icon_color = theme.sub_text_color(theme.background());
     let close_btn = Hoverable::new(close_btn_state, move |_| {
         let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(icon_color).finish())
@@ -283,7 +283,7 @@ mod tests {
     }
 
     impl TransferPanelTestView {
-        /// 创建用于验证传输面板点击行为的测试视图
+        /// Create test view to verify transfer panel click behavior
         fn new() -> Self {
             Self {
                 transfers: vec![make_transfer_task(1)],
@@ -299,7 +299,7 @@ mod tests {
     impl TypedActionView for TransferPanelTestView {
         type Action = SftpBrowserAction;
 
-        /// 处理传输面板派发的测试动作
+        /// Handle test actions dispatched by transfer panel
         fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
             if matches!(action, SftpBrowserAction::CancelTransfer(_)) {
                 ctx.notify();
@@ -312,19 +312,19 @@ mod tests {
             "TransferPanelTestView"
         }
 
-        /// 渲染测试用传输面板
+        /// Render transfer panel for testing
         fn render(&self, app: &AppContext) -> Box<dyn Element> {
             let appearance = Appearance::as_ref(app);
             render_transfer_panel(&self.transfers, appearance, self.close_btn_state.clone())
         }
     }
 
-    /// 初始化传输面板测试所需的外观单例
+    /// Initialize Appearance singleton needed for transfer panel tests
     fn initialize_app(app: &mut App) {
         app.add_singleton_model(|_| Appearance::mock());
     }
 
-    /// 创建一个测试用传输任务
+    /// Create a test transfer task
     fn make_transfer_task(id: usize) -> TransferTask {
         TransferTask::new(
             id,
@@ -335,14 +335,14 @@ mod tests {
         )
     }
 
-    /// 验证点击传输面板背景区域不会影响传输内容展示
+    /// Verify clicking transfer panel background does not affect transfer content display
     #[test]
     fn clicking_panel_background_does_not_toggle_transfer_panel() {
         App::test((), |mut app| async move {
             initialize_app(&mut app);
             let (window_id, view) =
                 app.add_window(WindowStyle::NotStealFocus, |_| TransferPanelTestView::new());
-            let root_view_id = app.root_view_id(window_id).expect("测试窗口应包含根视图");
+            let root_view_id = app.root_view_id(window_id).expect("test window should contain root view");
             let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
             let invalidation = WindowInvalidation {
                 updated: HashSet::from([root_view_id]),
@@ -382,7 +382,7 @@ mod tests {
                 assert_eq!(
                     view.transfers.len(),
                     1,
-                    "点击传输面板背景区域后传输内容应保持显示"
+                    "transfer content should remain displayed after clicking transfer panel background"
                 );
             });
         });

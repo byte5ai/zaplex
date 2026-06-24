@@ -1,4 +1,4 @@
-//! Zap input editor logic related to decorating the input's text, such as
+//! Zap input editor logic for decorating input text, such as
 //! applying syntax highlighting and error underlining.
 
 use std::{collections::HashMap, ops::Range};
@@ -65,12 +65,10 @@ enum CompletionSessionContext {
     Empty(EmptyCompletionContext),
 }
 
-/// Returns boolean indicating whether we should attempt to red underline
-/// the command or not (this is a stop-gap since our parser doesn't cover
-/// all the edge cases for commands currently e.g. "!!"). We don't want
-/// to incorrectly red underline a valid command. In other words,
-/// we would rather miss red underlining an invalid command compared to
-/// incorrectly red underlining a valid command.
+/// Return boolean indicating whether we should attempt to red underline the command (this is a stop-gap
+/// since our parser doesn't cover all edge cases for commands currently, e.g. "!!").
+/// We don't want to incorrectly red underline a valid command. In other words,
+/// we prefer to miss red underlining an invalid command rather than incorrectly red underline a valid one.
 fn valid_command_for_error_underline(command: &str) -> bool {
     command
         .chars()
@@ -123,7 +121,7 @@ impl Input {
         }
     }
 
-    /// Applies background highlighting to slash command and skill command prefixes that should be
+    /// Apply background highlighting to slash command and skill command prefixes that should be
     /// syntax highlighted.
     fn apply_slash_command_prefix_highlighting(
         &mut self,
@@ -152,7 +150,7 @@ impl Input {
         true
     }
 
-    /// 高亮已登记的 @ 上下文引用，让它们和 slash command 一样有可识别的样式。
+    /// Highlight registered @ context references so they have the same recognizable style as slash commands.
     fn apply_at_context_reference_highlighting(
         &mut self,
         buffer_text: &str,
@@ -195,10 +193,9 @@ impl Input {
         true
     }
 
-    /// Computes information about the currently-entered command in a background
-    /// task and then uses it to decorate the input, specifically applying
-    /// styles for syntax highlighting and error underlining.
-    /// Includes a short-circuit that lets us clear formatting and return without parsing the input.
+    /// Compute information about the currently-entered command in a background task and use it to decorate
+    /// the input, specifically applying styles for syntax highlighting and error underlining.
+    /// Includes a short-circuit allowing us to clear formatting and return without parsing the input.
     pub fn run_input_background_jobs(
         &mut self,
         mode: InputBackgroundJobOptions,
@@ -210,7 +207,7 @@ impl Input {
 
         let mut mode = mode;
 
-        // We don't show input command decorations in AI mode, but we keep slash command prefix highlighting.
+        // In AI mode, we don't show input command decorations, but we keep slash command prefix highlighting.
         let buffer_text = self.editor.as_ref(ctx).buffer_text(ctx);
         if self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
             || (FeatureFlag::AgentView.is_enabled()
@@ -225,7 +222,7 @@ impl Input {
             self.apply_at_context_reference_highlighting(&buffer_text, ctx);
             mode.command_decoration = false;
 
-            // Return early because there are no input background jobs to run.
+            // Return early; no input background jobs to run.
             if mode.no_jobs_to_run() {
                 return;
             }
@@ -305,7 +302,7 @@ impl Input {
         }
     }
 
-    /// Applies error underlining and/or syntax highlighting as appropriate,
+    /// Apply error underlining and/or syntax highlighting as appropriate,
     /// using the result of the last parse operation.
     fn apply_decorations(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(parsed_tokens_snapshot) = &self.last_parsed_tokens else {
@@ -314,9 +311,8 @@ impl Input {
         let buffer_text = self.editor.as_ref(ctx).buffer_text(ctx);
         if buffer_text != parsed_tokens_snapshot.buffer_text {
             // Our state is out-of-date (parsed_tokens no longer applies to the
-            // updated state of the buffer) and this should be a no-op since
-            // another async callback is likely handling or already handled
-            // this (for a later state) i.e. race condition.
+            // updated buffer state); this should be a no-op since another async callback
+            // is likely handling or has already handled this (for a later state) — race condition.
             return;
         }
 
@@ -334,7 +330,7 @@ impl Input {
         }
     }
 
-    /// Removes decorations (error underlining, syntax highlighting, and background colors) from the input buffer.
+    /// Remove decorations (error underlining, syntax highlighting, and background colors) from the input buffer.
     pub(super) fn clear_decorations(&mut self, ctx: &mut ViewContext<Self>) {
         self.editor.update(ctx, |editor, ctx| {
             editor.update_buffer_styles(
@@ -345,7 +341,7 @@ impl Input {
         });
     }
 
-    /// Applies error underlining appropriately to all given tokens, given the
+    /// Apply error underlining appropriately to all given tokens based on
     /// parsed tokens data.
     ///
     /// This does not unset any existing error underline decorations in the
@@ -387,8 +383,8 @@ impl Input {
         }
     }
 
-    /// Applies syntax highlighting colors appropriately to all given tokens,
-    /// given the parsed tokens data.
+    /// Apply syntax highlighting colors appropriately to all given tokens
+    /// based on parsed tokens data.
     ///
     /// This does not unset any existing syntax highlighting decorations in the
     /// editor buffer.

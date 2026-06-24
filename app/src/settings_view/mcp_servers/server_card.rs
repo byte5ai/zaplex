@@ -115,8 +115,8 @@ impl StatusColor {
     fn to_color(&self, appearance: &Appearance) -> ColorU {
         match self {
             StatusColor::Red => appearance.theme().ui_error_color(),
-            // 状态指示点用原始 ANSI 颜色,避免 ansi_fg_* 把饱和度对半混到 foreground 上
-            // 在 One Dark / Tokyo Night 这类低饱和前景的主题里出现"灰绿/灰黄"模糊感。
+            // The status indicator dot uses the raw ANSI color, to avoid ansi_fg_* mixing the saturation halfway into the foreground,
+            // which causes a muddy "grayish-green / grayish-yellow" look in low-saturation-foreground themes like One Dark / Tokyo Night.
             StatusColor::Yellow => appearance.theme().terminal_colors().normal.yellow.into(),
             StatusColor::Green => appearance.theme().terminal_colors().normal.green.into(),
             StatusColor::Neutral => {
