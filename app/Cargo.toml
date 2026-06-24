@@ -234,6 +234,7 @@ warp_isolation_platform.workspace = true
 warp_ripgrep.workspace = true
 warp_managed_secrets.workspace = true
 zap_sync = { path = "../crates/zap_sync" }
+zaplex_remote_session.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block.workspace = true

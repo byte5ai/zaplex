@@ -1,0 +1,18 @@
+[package]
+name = "zaplex_remote_session"
+version = "0.1.0"
+edition = "2021"
+authors = ["Warp Team <dev@warp.dev>"]
+publish.workspace = true
+license.workspace = true
+description = "zaplex native persistent remote-session layer (PTY host + reconnect replay): shared types and logic"
+
+[features]
+# Client side (inside the app): attach/detach/resume + replay consumption.
+client = []
+# Daemon side: PTY host + output ring buffer + session registry.
+server = []
+
+[dependencies]
+serde.workspace = true
+uuid.workspace = true

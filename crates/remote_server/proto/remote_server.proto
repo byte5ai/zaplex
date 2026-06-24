@@ -33,6 +33,15 @@ message ClientMessage {
     CreateDirectory create_directory = 20;
     ReadFileChunk read_file_chunk = 21;
     WriteFileChunk write_file_chunk = 22;
+    // zaplex native session host (see the "Native Remote Session Layer"
+    // section at the end of this file).
+    OpenSession open_session = 23;
+    AttachSession attach_session = 24;
+    DetachSession detach_session = 25;
+    SessionInput session_input = 26;
+    ResizeSession resize_session = 27;
+    CloseSession close_session = 28;
+    ListSessions list_sessions = 29;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -60,6 +69,14 @@ message ServerMessage {
     CreateDirectoryResponse create_directory_response = 20;
     ReadFileChunkResponse read_file_chunk_response = 21;
     WriteFileChunkResponse write_file_chunk_response = 22;
+    // zaplex native session host (see the "Native Remote Session Layer"
+    // section at the end of this file).
+    SessionOpened session_opened = 23;
+    SessionAttached session_attached = 24;
+    SessionList session_list = 25;
+    // The following two are pushes (empty request_id):
+    SessionOutput session_output = 26;
+    SessionExited session_exited = 27;
   }
 }
 
@@ -92,6 +109,11 @@ message Abort {
 message InitializeResponse {
   string server_version = 1;
   string host_id = 2;
+  // Capabilities advertised by the daemon (values defined in
+  // zaplex_remote_session::types, e.g. "session-host"). Old daemons omit this
+  // field → it decodes as empty → the client falls back to the existing
+  // no-session-host behaviour. Used for capability negotiation.
+  repeated string features = 3;
 }
 
 // Sent by the client after the SSH session has been bootstrapped.
@@ -539,4 +561,125 @@ message WriteFileChunkResponse {
     WriteFileChunkSuccess success = 1;
     FileOperationError error = 2;
   }
+}
+
+// ── Native Remote Session Layer (zaplex native session host) ──────────
+// See docs/superpowers/plans/2026-06-24-native-remote-session-layer.md.
+//
+// The daemon owns the PTY and spawns the user shell itself; PTY bytes are
+// pushed to the currently attached connection via SessionOutput. After a
+// disconnect the session keeps living on the daemon side, and on reconnect the
+// client replays the delta from the ring buffer using last_seq — so
+// persistence lives in the daemon, not in the volatile SSH connection. The
+// mouse uses the standard SGR reporting path (no multiplexer nesting); resize
+// goes through TIOCSWINSZ.
+//
+// Stage 0 (this commit) only defines the wire format; the daemon-side handlers
+// land from Stage 1 onward. Until then these messages are rejected with
+// INVALID_REQUEST (honest refusal, see the server_model dispatch).
+
+// Terminal window size (rows/cols + optional pixels), used by OpenSession /
+// ResizeSession / SessionAttached.
+message SessionSize {
+  uint32 rows = 1;
+  uint32 cols = 2;
+  uint32 pixel_width = 3;
+  uint32 pixel_height = 4;
+}
+
+// Client → daemon: open a new session whose PTY is owned by the daemon.
+message OpenSession {
+  // Working directory; empty means the daemon default (user home).
+  optional string cwd = 1;
+  // Shell executable path; empty means the login shell.
+  optional string shell = 2;
+  // Environment variables injected into the shell.
+  map<string, string> env = 3;
+  // Initial window size.
+  SessionSize size = 4;
+}
+
+// Daemon → client: OpenSession succeeded, returns the newly assigned
+// persistent session id.
+message SessionOpened {
+  string session_id = 1;
+}
+
+// Client → daemon: attach to an existing session and start receiving live
+// output.
+message AttachSession {
+  string session_id = 1;
+  // Highest output seq the client has already consumed; 0 means replay
+  // everything available from the earliest point in the ring buffer.
+  uint64 last_seq = 2;
+}
+
+// Daemon → client: attach succeeded, with replay data and the current size.
+message SessionAttached {
+  string session_id = 1;
+  SessionSize size = 2;
+  // The seq of the first byte of the replay data.
+  uint64 base_seq = 3;
+  // Historical PTY bytes from after last_seq up to now (may be empty).
+  bytes replay = 4;
+}
+
+// Client → daemon: detach (notification, no response). The session keeps
+// living on the daemon side.
+message DetachSession {
+  string session_id = 1;
+}
+
+// Client → daemon: write keyboard/mouse bytes into the PTY (notification, no
+// response).
+message SessionInput {
+  string session_id = 1;
+  bytes bytes = 2;
+}
+
+// Client → daemon: resize the PTY window (notification, no response);
+// TIOCSWINSZ on the daemon side.
+message ResizeSession {
+  string session_id = 1;
+  SessionSize size = 2;
+}
+
+// Client → daemon: close the session and reclaim it (announced via
+// SessionExited once the shell exits).
+message CloseSession {
+  string session_id = 1;
+}
+
+// Client → daemon: list the sessions the daemon currently owns (multi-session
+// UI / adopt).
+message ListSessions {}
+
+// Summary information about a single session.
+message SessionInfo {
+  string session_id = 1;
+  string title = 2;
+  string cwd = 3;
+  bool alive = 4;
+  // Unix epoch millis of the last attach; 0 means never attached.
+  uint64 last_attached_epoch_millis = 5;
+}
+
+// Daemon → client: result of ListSessions.
+message SessionList {
+  repeated SessionInfo sessions = 1;
+}
+
+// Daemon → client (push, empty request_id): live PTY output. seq is
+// monotonically increasing, used for replay alignment on reconnect.
+message SessionOutput {
+  string session_id = 1;
+  uint64 seq = 2;
+  bytes bytes = 3;
+}
+
+// Daemon → client (push, empty request_id): the session's shell has exited.
+message SessionExited {
+  string session_id = 1;
+  // Process exit code; absent when killed by a signal (Unix).
+  optional int32 exit_code = 2;
 }
