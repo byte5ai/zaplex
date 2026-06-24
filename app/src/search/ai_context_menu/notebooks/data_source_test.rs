@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn test_multibyte_character_truncation() {
         // Test string with multibyte characters (emojis, accented chars)
-        let test_content = "This is a test with emojis 🚀 and accented chars like café and naïve that should be truncated properly without panicking. This string is intentionally long to test the 200 character limit and ensure we don't slice in the middle of multibyte characters like 你好世界";
+        let test_content = "This is a test with emojis 🚀 and accented chars like café and naïve that should be truncated properly without panicking. This string is intentionally long to test the 200 character limit and ensure we don't slice in the middle of multibyte characters including CJK";
 
         let truncated = if test_content.len() > 200 {
             let result = test_content

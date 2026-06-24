@@ -432,8 +432,8 @@ impl SearchItem for ModelSearchItem {
         };
         let header = render_model_spec_header(&title, &description, app);
 
-        // BYOP 走专用 score 渲染:Context / Output (bar 用 log2 归一化) + Cost = BilledToApi。
-        // 视觉与默认 Zap 面板完全一致,只是行的语义不同。
+        // BYOP uses dedicated score rendering: Context / Output (bar uses log2 normalization) + Cost = BilledToApi.
+        // Visually identical to the default Zap panel, just with different row semantics.
         if byop_llm_id::is_byop(&self.id) {
             if let Some((provider, _api_key, model_id)) = lookup_byop(app, &self.id) {
                 let model_entry = provider.models.iter().find(|m| m.id == model_id);

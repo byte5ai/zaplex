@@ -185,16 +185,16 @@ fn test_find_applicable_rules_with_relative_paths() {
 }
 
 // ---------------------------------------------------------------------------
-// Fast-path tests(针对 ProjectContextModel::scan_fast_path + fast_path_entry_still_valid)
+// Fast-path tests (for ProjectContextModel::scan_fast_path + fast_path_entry_still_valid)
 // ---------------------------------------------------------------------------
 //
-// 这些测试走真实 fs(临时目录),不依赖 ModelContext。覆盖:
-//   - cwd 本身有 AGENTS.md → 命中
-//   - WARP.md 优先于 AGENTS.md(同目录)
-//   - 祖先目录规则可被 findUp 到
-//   - 无规则 → 返 None
-//   - 失效检查:修改文件 mtime → still_valid 返 false
-//   - 失效检查:在 walked 目录里新增规则文件 → still_valid 返 false
+// These tests use real fs (temporary directories), not dependent on ModelContext. Coverage:
+//   - cwd itself has AGENTS.md → hit
+//   - WARP.md takes precedence over AGENTS.md (same directory)
+//   - Ancestor directory rules can be found via findUp
+//   - No rules → return None
+//   - Invalidation check: modify file mtime → still_valid returns false
+//   - Invalidation check: new rule file appears in walked directory → still_valid returns false
 
 #[cfg(feature = "local_fs")]
 #[test]
@@ -204,7 +204,7 @@ fn fast_path_finds_agents_md_in_cwd() {
     std::fs::write(cwd.join("AGENTS.md"), "hello agents").unwrap();
 
     let entry = ProjectContextModel::scan_fast_path(&cwd);
-    assert_eq!(entry.rules.len(), 1, "期望命中 1 个规则");
+    assert_eq!(entry.rules.len(), 1, "expect 1 rule hit");
     assert_eq!(entry.rules[0].content, "hello agents");
     assert_eq!(entry.rules[0].path, cwd.join("AGENTS.md"));
     assert_eq!(entry.root_path, cwd);
@@ -223,7 +223,7 @@ fn fast_path_warp_md_takes_priority_over_agents_md() {
     assert_eq!(
         entry.rules.len(),
         1,
-        "同目录两个规则文件只取 1 个(对齐 RuleAtPath::respected_rule)"
+        "two rule files in the same directory take only 1 (align with RuleAtPath::respected_rule)"
     );
     assert_eq!(entry.rules[0].content, "warp wins");
     assert_eq!(entry.rules[0].path, cwd.join("WARP.md"));
@@ -252,9 +252,9 @@ fn fast_path_returns_empty_when_no_rules_anywhere() {
 
     let entry = ProjectContextModel::scan_fast_path(&cwd);
     assert!(entry.rules.is_empty());
-    // root_path 回退为 cwd(语义对齐 find_applicable_rules 的 None 返回)
+    // root_path falls back to cwd (semantically aligned with find_applicable_rules' None return)
     assert_eq!(entry.root_path, cwd);
-    // walked_dir_stamps 不为空(至少 walked 了 cwd 本身,negative cache 可生效)
+    // walked_dir_stamps is not empty (at least cwd itself was walked, negative cache can work)
     assert!(!entry.walked_dir_stamps.is_empty());
 }
 
@@ -282,7 +282,7 @@ fn fast_path_invalidated_when_rule_file_mtime_changes() {
     let entry = ProjectContextModel::scan_fast_path(&cwd);
     assert!(ProjectContextModel::fast_path_entry_still_valid(&entry));
 
-    // 把 mtime 推后 10s → 缓存应被检测为失效
+    // Push mtime back by 10s → cache should be detected as invalid
     let stamp = entry.stamps[0].1;
     let new_mtime = FileTime::from_system_time(stamp + std::time::Duration::from_secs(10));
     set_file_mtime(&rule, new_mtime).unwrap();
@@ -297,13 +297,13 @@ fn fast_path_invalidated_when_new_rule_file_appears_in_walked_dir() {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().canonicalize().unwrap();
 
-    // 首次扫描:未命中任何规则(negative cache)
+    // First scan: no rules hit (negative cache)
     let entry = ProjectContextModel::scan_fast_path(&cwd);
     assert!(entry.rules.is_empty());
 
-    // 记录原始目录 mtime,后面手动推进一下以触发失效检测。
-    // 只在这里才创建文件 — 但某些文件系统创建文件不会马上更新目录 mtime。
-    // 为了测试稳定性,创建文件后显式调 set_file_mtime 保证目录 mtime 不同于 stamp。
+    // Record the original directory mtime, then manually advance it to trigger invalidation detection.
+    // Only create the file here — but some filesystems don't immediately update directory mtime when creating files.
+    // For test stability, after creating the file, explicitly call set_file_mtime to ensure directory mtime differs from stamp.
     std::fs::write(cwd.join("AGENTS.md"), "new!").unwrap();
     let original_dir_mtime = entry.walked_dir_stamps[0].1;
     let bumped =
@@ -316,10 +316,10 @@ fn fast_path_invalidated_when_new_rule_file_appears_in_walked_dir() {
 #[cfg(feature = "local_fs")]
 #[test]
 fn fast_path_walk_depth_bounded() {
-    // 验证 MAX_WALK_DEPTH 生效:深度超过上限的目录不会 stat 到顶层规则文件。
+    // Verify MAX_WALK_DEPTH is enforced: directories beyond the depth limit should not stat top-level rule files.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
-    // 构造 ≥7 层子目录(MAX_WALK_DEPTH = 6)
+    // Create ≥7 levels of subdirectories (MAX_WALK_DEPTH = 6)
     let mut deep = root.clone();
     for seg in ["a", "b", "c", "d", "e", "f", "g"] {
         deep.push(seg);
@@ -328,14 +328,14 @@ fn fast_path_walk_depth_bounded() {
     std::fs::write(root.join("AGENTS.md"), "top").unwrap();
 
     let entry = ProjectContextModel::scan_fast_path(&deep);
-    // 走不到顶层,拿不到规则
-    assert!(entry.rules.is_empty(), "深度超限后不应 stat 到顶层规则文件");
-    // walked_dir_stamps 不超过 MAX_WALK_DEPTH
+    // Cannot reach the top level; no rules found
+    assert!(entry.rules.is_empty(), "should not stat top-level rule file after depth exceeded");
+    // walked_dir_stamps does not exceed MAX_WALK_DEPTH
     assert!(entry.walked_dir_stamps.len() <= 6);
 }
 
 // ---------------------------------------------------------------------------
-// CLAUDE.md 默认识别专项测试
+// CLAUDE.md default recognition tests
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "local_fs")]
@@ -346,7 +346,7 @@ fn fast_path_finds_claude_md() {
     std::fs::write(cwd.join("CLAUDE.md"), "claude rules").unwrap();
 
     let entry = ProjectContextModel::scan_fast_path(&cwd);
-    assert_eq!(entry.rules.len(), 1, "CLAUDE.md 应被默认识别");
+    assert_eq!(entry.rules.len(), 1, "CLAUDE.md should be recognized by default");
     assert_eq!(entry.rules[0].content, "claude rules");
     assert_eq!(entry.rules[0].path, cwd.join("CLAUDE.md"));
 }
@@ -381,7 +381,7 @@ fn fast_path_agents_md_priority_over_claude_md() {
 
 #[test]
 fn upsert_rule_recognizes_claude_md() {
-    // 纯内存路径(不走 fs)验证 ProjectRules::upsert_rule 能识别 CLAUDE.md
+    // Pure in-memory path (no fs traversal) to verify ProjectRules::upsert_rule recognizes CLAUDE.md
     let mut rules = ProjectRules::default();
     rules.upsert_rule(Path::new("/a/CLAUDE.md"), "claude in /a".to_string());
 
@@ -394,7 +394,7 @@ fn upsert_rule_recognizes_claude_md() {
 
 #[test]
 fn upsert_rule_priority_three_way() {
-    // 同目录同时存在 WARP / AGENTS / CLAUDE → 只拿优先级最高的 WARP
+    // WARP / AGENTS / CLAUDE all exist in the same directory → take only the highest priority WARP
     let mut rules = ProjectRules::default();
     rules.upsert_rule(Path::new("/a/WARP.md"), "warp".to_string());
     rules.upsert_rule(Path::new("/a/AGENTS.md"), "agents".to_string());
@@ -403,13 +403,13 @@ fn upsert_rule_priority_three_way() {
     let result = rules
         .find_active_or_applicable_rules(&PathBuf::from("/a/x.rs"))
         .active_rules;
-    assert_eq!(result.len(), 1, "同目录多个规则文件只取优先级最高的");
+    assert_eq!(result.len(), 1, "multiple rule files in same directory take only highest priority");
     assert_eq!(result[0].path, PathBuf::from("/a/WARP.md"));
 }
 
 #[test]
 fn upsert_rule_priority_agents_beats_claude() {
-    // 同目录 AGENTS + CLAUDE → 取 AGENTS
+    // AGENTS + CLAUDE in same directory → take AGENTS
     let mut rules = ProjectRules::default();
     rules.upsert_rule(Path::new("/a/AGENTS.md"), "agents".to_string());
     rules.upsert_rule(Path::new("/a/CLAUDE.md"), "claude".to_string());
@@ -428,9 +428,9 @@ fn remove_rule_recognizes_claude_md() {
     rules.upsert_rule(Path::new("/a/AGENTS.md"), "y".to_string());
 
     let removed = rules.remove_rule(Path::new("/a/CLAUDE.md"));
-    assert!(removed.is_some(), "能移除 CLAUDE.md");
+    assert!(removed.is_some(), "can remove CLAUDE.md");
 
-    // 移除 CLAUDE 后 AGENTS 仍保留为该目录的生效规则
+    // After removing CLAUDE, AGENTS remains as the active rule for the directory
     let result = rules
         .find_active_or_applicable_rules(&PathBuf::from("/a/x.rs"))
         .active_rules;
@@ -440,7 +440,7 @@ fn remove_rule_recognizes_claude_md() {
 
 #[test]
 fn upsert_rule_case_insensitive_filename() {
-    // 大小写不敏感:claude.md / Agents.MD 也能识别
+    // Case-insensitive: claude.md / Agents.MD also recognized
     let mut rules = ProjectRules::default();
     rules.upsert_rule(Path::new("/a/claude.md"), "lower".to_string());
 

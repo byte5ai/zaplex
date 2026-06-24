@@ -51,22 +51,22 @@ cfg_if::cfg_if! {
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 const MAX_NUM_SIMILAR_HISTORY_CONTEXT: usize = 25;
 
-/// 调用 BYOP next_command one-shot,把结果包装为 `GenerateAIInputSuggestionsResponseV2`。
+/// Call BYOP next_command one-shot, wrap result as `GenerateAIInputSuggestionsResponseV2`.
 ///
-/// `byop_cfg` 必须由调用方在 spawn 前从 `&AppContext` 解出(运行时不再可用)。
-/// `byop_cfg = None` ⇒ 静默 no-op,返回 Ok 空响应(避免 401 报错噪声)。
+/// `byop_cfg` must be extracted by caller from `&AppContext` before spawn (unavailable at runtime).
+/// `byop_cfg = None` ⇒ silent no-op, return Ok empty response (avoid 401 error noise).
 async fn byop_generate_input_suggestions(
     byop_cfg: Option<OneshotConfig>,
     request: &GenerateAIInputSuggestionsRequest,
     user_rules: Vec<(Option<String>, String)>,
 ) -> Result<GenerateAIInputSuggestionsResponseV2, AIApiError> {
     let Some(cfg) = byop_cfg else {
-        // Zap 已剥云,无 BYOP 配置时不再 fallback ServerApi —— 返回空响应,
-        // UI 自然不会展示建议,也不会刷错误日志。
+        // Zap is cloud-removed; without BYOP config, no longer fallback to ServerApi ——
+        // return empty response, UI naturally won't show suggestions or spam error logs.
         return Ok(GenerateAIInputSuggestionsResponseV2::default());
     };
-    // 把 request 的扁平字段映射到 active_ai prompt 模板的输入。
-    // recent_blocks 留空 — context_messages + history_context 已经包含序列化历史命令。
+    // Map flat fields of request to active_ai prompt template input.
+    // recent_blocks left empty — context_messages + history_context already contain serialized history.
     let mut history_context = request.history_context.clone();
     if !request.context_messages.is_empty() {
         if !history_context.is_empty() {
@@ -85,7 +85,7 @@ async fn byop_generate_input_suggestions(
     let suggestion = byop_next_command::run_with(cfg, input).await;
     match suggestion {
         Some(cmd) => {
-            // 若用户已输入 prefix,模型必须以 prefix 开头才采纳。
+            // If user has entered prefix, model output must start with prefix to be accepted.
             if let Some(prefix) = request.prefix.as_deref() {
                 if !cmd.starts_with(prefix) {
                     log::debug!(
@@ -287,6 +287,8 @@ impl NextCommandModel {
         &self.next_command_state
     }
 
+    /// Returns the cached zero-state suggestion info for telemetry purposes.
+
     pub fn get_zero_state_suggestion_info(&self) -> Option<&ZeroStateSuggestionInfo> {
         self.zerostate_suggestion_info.as_ref()
     }
@@ -393,14 +395,14 @@ impl NextCommandModel {
     ) {
         let terminal_model = self.model.clone();
         let cached_next_command_context = self.cached_zerostate_next_command_context.clone();
-        // BYOP cfg 必须在 spawn 前解出(spawn 内拿不到 &AppContext)。
-        // 用 None terminal_view_id 走全局当前 active profile。
+        // BYOP cfg must be extracted before spawn (unavailable inside spawn).
+        // Use None terminal_view_id to run global current active profile.
         let byop_cfg = byop_next_command::resolve(ctx, None);
-        // 全局 Rules 同样在 spawn 前解出(spawn 内拿不到 &AppContext)。
-        // gate 与 chat 路径(`api.rs::RequestParams::new`)保持一致:两者都用
-        // `is_memory_enabled` 作为上游统一门控,属于产品层设计决定,非防御性代码。
-        // `collect_user_rules` 只遍历 `ObjectStoreModel.objects_by_id`(纯内存 HashMap),
-        // 不触发任何 IO,与上方的 `byop_next_command::resolve` 开销同量级。
+        // Global Rules also extracted before spawn (unavailable inside spawn).
+        // Gate aligns with chat path (`api.rs::RequestParams::new`): both use
+        // `is_memory_enabled` as upstream unified gate, product-layer design decision, not defensive code.
+        // `collect_user_rules` only iterates `ObjectStoreModel.objects_by_id` (pure in-memory HashMap),
+        // no I/O triggered; overhead same magnitude as `byop_next_command::resolve` above.
         let user_rules = if AISettings::as_ref(ctx).is_memory_enabled(ctx) {
             collect_user_rules(ObjectStoreModel::as_ref(ctx))
         } else {

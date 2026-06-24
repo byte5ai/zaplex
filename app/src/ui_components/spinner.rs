@@ -1,9 +1,9 @@
-//! Braille spinner element — `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` 80ms 切帧。
+//! Braille spinner element — `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` frame switches every 80ms.
 //!
-//! 替换 inline_action loading 卡的静态 Circle icon,视觉等价于 opencode TUI
-//! `<spinner frames=...>` 元件。
+//! Replaces static Circle icon in inline_action loading stalls; visually equivalent to opencode TUI
+//! `<spinner frames=...>` component.
 //!
-//! 用法:
+//! Usage:
 //! ```ignore
 //! let spinner = BrailleSpinner::new(
 //!     family_id,
@@ -12,8 +12,8 @@
 //!     spinner_state_handle.clone(),
 //! );
 //! ```
-//! `SpinnerStateHandle` 必须存在 view struct 跨 render 持久化(否则 Instant 每帧
-//! 重置 → 永远停在第 0 帧)。同 ShimmeringTextStateHandle 模式。
+//! `SpinnerStateHandle` must persist across renders in the view struct (otherwise Instant resets each frame
+//! → stays at frame 0 forever). Same pattern as ShimmeringTextStateHandle.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -89,8 +89,8 @@ impl Element for BrailleSpinner {
         app: &AppContext,
     ) -> Vector2F {
         let frame = FRAMES[self.state.frame_idx()];
-        // braille 字符是等宽,但仍每帧 layout 一次以确保字体/字号变更立即生效。
-        // 单字符 layout 成本可忽略。
+        // Braille characters are monospace, but still lay out each frame to ensure font/size changes take effect immediately.
+        // Single-character layout cost is negligible.
         let mut text =
             Text::new_inline(frame, self.family_id, self.font_size).with_color(self.color);
         let size = text.layout(constraint, ctx, app);
@@ -110,8 +110,8 @@ impl Element for BrailleSpinner {
         if let Some(t) = self.inner.as_mut() {
             t.paint(origin, ctx, app);
         }
-        // 关键:每帧 paint 完请求 80ms 后再次重绘,触发下一帧字符切换。
-        // 不调用 repaint_after 则 spinner 静止——这是动画的引擎心跳。
+        // Critical: after each frame paint, request repaint after 80ms to trigger next frame character switch.
+        // Without calling repaint_after, spinner is static — this is the animation engine's heartbeat.
         ctx.repaint_after(Duration::from_millis(FRAME_INTERVAL_MS));
     }
 

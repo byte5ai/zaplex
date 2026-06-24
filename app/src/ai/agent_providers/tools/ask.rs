@@ -1,12 +1,16 @@
-//! `ask_user_question`:让模型在缺关键信息时主动反问用户(单选/多选/自由补全)。
+//! `ask_user_question`: lets the model proactively ask the user back when key information is
+//! missing (single-choice / multi-choice / free-form completion).
 //!
-//! warp 自家是 `AskUserQuestion`,内部全部用 `MultipleChoice` 一种 Question 类型
-//! (是否允许 multiselect / 是否允许 "Other" 自由补全靠内部 bool 决定)。
+//! Warp's own variant is `AskUserQuestion`, which internally always uses a single `MultipleChoice`
+//! Question type (whether multiselect is allowed and whether free-form "Other" completion is
+//! allowed are decided by internal bools).
 //!
-//! ## 使用建议(写到 description 让模型看到)
+//! ## Usage guidance (written into the description so the model sees it)
 //!
-//! 不要用本工具问"是否继续"/"你确认吗"这类琐碎问题 — 直接走应答策略。
-//! 当用户给的指令含多种合理理解、且选错代价高时再用。
+//! Do not use this tool to ask trivial questions like "should I continue?" / "are you sure?" --
+//! just follow the response strategy directly.
+//! Use it only when the user's instruction admits several reasonable interpretations and choosing
+//! wrong is costly.
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -25,13 +29,13 @@ struct Args {
 struct QuestionArg {
     question: String,
     options: Vec<String>,
-    /// 0-based,推荐选项的下标。缺省 = 0。
+    /// 0-based index of the recommended option. Defaults to 0.
     #[serde(default)]
     recommended_index: i32,
-    /// 是否允许多选。
+    /// Whether multiple selection is allowed.
     #[serde(default)]
     multi_select: bool,
-    /// 是否允许用户输入"Other"自由文本。
+    /// Whether the user is allowed to enter free-form "Other" text.
     #[serde(default)]
     supports_other: bool,
 }

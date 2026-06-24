@@ -755,9 +755,9 @@ impl WorkflowView {
         if let ContainerConfiguration::Pane(pane_config) = &mut self.container_configuration {
             pane_config.update(ctx, |pane_config, ctx| {
                 pane_config.set_title(workflow_name, ctx);
-                // TODO(zap-cloud-removal Phase 5): sharing UI 已退役,
-                // workflow ShareableObject 注入移除;workflow.id 仍为 cloud_object id,
-                // Phase 5 退役 cloud_object 时一并清。
+                // TODO(zap-cloud-removal Phase 5): sharing UI has been retired,
+                // workflow ShareableObject injection removed; workflow.id still is cloud_object id,
+                // will clean up together with cloud_object retirement in Phase 5.
                 let _ = workflow.id;
             });
         }
@@ -848,8 +848,8 @@ impl WorkflowView {
             );
         }
 
-        // TODO(zap-cloud-removal Phase 5): workflow invitee_email 同样无 UI
-        // 出口,但 settings 由上层传入,彻底退役时清字段。
+        // TODO(zap-cloud-removal Phase 5): workflow invitee_email similarly has no UI
+        // exit, but settings is passed from above; clear field on complete retirement.
         let _ = settings;
 
         if matches!(mode, WorkflowViewMode::View) {
@@ -1963,9 +1963,9 @@ impl WorkflowView {
                         .finish()
                 });
             } else {
-                // openWarp UX: 与 notebook details_bar 一致,给 workflow 编辑
-                // 切换按钮加 tooltip,避免用户不知道这个铅笔能点、
-                // 点了会发生什么。Tooltip 表达「点击后会发生的动作」。
+                // openWarp UX: consistent with notebook details_bar, add tooltip to workflow edit
+                // toggle button to prevent users from not knowing this pencil is clickable and
+                // what happens when clicked. Tooltip expresses "action after clicking".
                 let tooltip_text = match self.workflow_view_mode {
                     WorkflowViewMode::View => crate::t!("common-tooltip-enter-edit-mode"),
                     WorkflowViewMode::Edit => crate::t!("common-tooltip-exit-edit-mode"),

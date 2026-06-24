@@ -1,8 +1,8 @@
-//! Command palette 数据源:SSH 服务器(openWarp 独有)。
+//! Command palette data source: SSH servers (openWarp-specific).
 //!
-//! 用户在 Ctrl+Shift+P 中按服务器名 / host 模糊匹配,选中 → emit
-//! `WorkspaceAction::OpenSshTerminal` 开新 tab 连接(走 SecretInjector 自动
-//! 注入密码,跟从 SSH 管理器右键"连接"完全等价)。
+//! In Ctrl+Shift+P, users fuzzy-match by server name / host, select → emit
+//! `WorkspaceAction::OpenSshTerminal` to open a new tab connection (via SecretInjector for automatic
+//! password injection, completely equivalent to right-click "Connect" from SSH manager).
 
 pub mod data_source;
 pub mod search_item;

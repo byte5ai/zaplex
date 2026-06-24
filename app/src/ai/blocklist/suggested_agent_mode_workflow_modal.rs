@@ -233,9 +233,9 @@ impl View for SuggestedAgentModeWorkflowModal {
         if let Some(modal) = &self.modal {
             ChildView::new(modal).finish()
         } else {
-            // Zap:此 view 始终挂在 workspace 树里,默认 modal=None 是常态
-            // (云端 ShowSuggestions 已禁用,chip 不会出现,modal 不会被填充)。
-            // 不打 warn,避免每帧污染日志。
+            // Zap: this view is always attached to the workspace tree; modal=None by default is normal
+            // (cloud ShowSuggestions is disabled, chip won't appear, modal won't be populated).
+            // Don't log a warning to avoid polluting the log every frame.
             Empty::new().finish()
         }
     }

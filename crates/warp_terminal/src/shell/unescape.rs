@@ -8,13 +8,12 @@ enum CurrentQuoteStrategy {
 }
 
 /// Unescape alias outputs in single quoting and ANSI-C quoting format.
-/// For single quoting, we should take the literal meaning of all characters within
-/// the quoting. For ANSI-C quoting, we need to translate escape sequences to their
-/// unicode values.
+/// For single quoting, all characters within the quoting take their literal meaning.
+/// For ANSI-C quoting, escape sequences must be translated to their unicode values.
 ///
-/// Note that we don't unescape double quotes here as they require the knowledge of
-/// shell variables' values. E.g. If we have the following string `echo "'$apple'"`,
-/// we could unescape it without knowing what the value of $apple.
+/// Note: we do not unescape double quotes here as they require knowledge of
+/// shell variable values. For example, with the string `echo "'$apple'"`,
+/// we can unescape it without knowing the value of $apple.
 pub fn unescape_quotes(s: &str) -> Result<String> {
     let mut current_quoting = CurrentQuoteStrategy::None;
 
@@ -23,7 +22,7 @@ pub fn unescape_quotes(s: &str) -> Result<String> {
 
     while let Some((idx, c)) = chars.next() {
         match (c, &current_quoting) {
-            // If in single / Ansi-C quote, end the quote escaping.
+            // If in single / ANSI-C quote, end quote escaping.
             ('\'', CurrentQuoteStrategy::Single | CurrentQuoteStrategy::AnsiC) => {
                 current_quoting = CurrentQuoteStrategy::None
             }
@@ -36,7 +35,7 @@ pub fn unescape_quotes(s: &str) -> Result<String> {
                         return Err(anyhow!("invalid escape at char {} in string {}", idx, s));
                     }
                     Some((_, next_character)) => {
-                        // Referenced from the table here: https://en.wikipedia.org/wiki/Escape_sequences_in_C
+                        // Referenced from the table at: https://en.wikipedia.org/wiki/Escape_sequences_in_C
                         res.push(match next_character {
                             'a' => '\u{07}',
                             'b' => '\u{08}',
@@ -46,8 +45,8 @@ pub fn unescape_quotes(s: &str) -> Result<String> {
                             'r' => '\r',
                             't' => '\t',
                             'v' => '\u{0B}',
-                            // TODO(kevin): Need to add escaping to unicode
-                            // characters here. But this should be rare.
+                            // TODO(kevin): Need to add escaping for unicode
+                            // characters here, but this should be rare.
                             next_character => next_character,
                         });
                     }
@@ -60,12 +59,12 @@ pub fn unescape_quotes(s: &str) -> Result<String> {
                     }
                     Some((_, next_character)) => {
                         // The backslash retains special meaning when followed by
-                        // ‘$’, ‘`’, ‘"’, ‘\’. Otherwise is treated as a literal.
-                        // Referenced from here:
+                        // ‘$’, ‘`’, ‘"’, ‘\’; otherwise treated as literal.
+                        // Referenced from:
                         // https://www.gnu.org/software/bash/manual/html_node/Double-Quotes.html
                         match next_character {
                             '$' | '`' | '"' | '\\' => res.push(next_character),
-                            // Newlines are ignored after a backslash, see:
+                            // Newlines are ignored after a backslash; see:
                             // https://www.gnu.org/savannah-checkouts/gnu/bash/manual/bash.html#Escape-Character
                             '\n' => {}
                             _ => {
@@ -81,7 +80,7 @@ pub fn unescape_quotes(s: &str) -> Result<String> {
                     return Err(anyhow!("invalid escape at char {} in string {}", idx, s));
                 }
                 Some((_, next_character)) => match next_character {
-                    // Newlines are ignored after a backslash, see:
+                    // Newlines are ignored after a backslash; see:
                     // https://www.gnu.org/savannah-checkouts/gnu/bash/manual/bash.html#Escape-Character
                     '\n' => {}
                     _ => res.push(next_character),
@@ -121,7 +120,7 @@ fn test_unescape_quotes() {
     // Failure case when the escape character is at end of string.
     assert!(unescape_quotes(r"$'\").is_err());
 
-    // Chars following escape chars should be taken literally when not currently
+    // Characters following escape characters should be taken literally when not currently
     // in a quote strategy.
     assert_eq!(
         unescape_quotes(r"'echo '\''hello\nworld'\'").unwrap(),

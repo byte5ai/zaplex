@@ -1,7 +1,7 @@
-//! 提示用户类工具:`suggest_new_conversation` / `suggest_prompt`。
+//! User suggestion tools: `suggest_new_conversation` / `suggest_prompt`.
 //!
-//! 这两个 tool 都是**纯本地 channel 信号** + UI 弹窗 — 模型主动建议某个动作,
-//! 用户在 UI 接受/拒绝,executor 等用户决定后回写 result。不依赖任何 server。
+//! Both tools are **pure local channel signals** + UI popup — model proactively suggests an action,
+//! user accepts/rejects in UI, executor writes result back after user decides. No server dependency.
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -16,7 +16,7 @@ use super::OpenAiTool;
 
 #[derive(Debug, Deserialize)]
 struct NewConvArgs {
-    /// 当前 assistant message 的 id(模型若不知道可传空字符串,controller 会兜底)。
+    /// ID of current assistant message (model can pass empty string if unknown, controller will fallback).
     #[serde(default)]
     message_id: String,
 }
@@ -27,7 +27,7 @@ fn new_conv_parameters() -> Value {
         "properties": {
             "message_id": {
                 "type": "string",
-                "description": "可选: 从哪条 assistant message 处分支新对话(留空则用当前 message)。"
+                "description": "Optional: which assistant message to branch new conversation from (leave empty to use current message)."
             }
         },
         "additionalProperties": false
@@ -66,10 +66,10 @@ fn new_conv_result_to_json(result: &api::message::tool_call_result::Result) -> O
 
 pub static SUGGEST_NEW_CONVERSATION: OpenAiTool = OpenAiTool {
     name: "suggest_new_conversation",
-    description: "建议用户从当前 message 处分支出一个新对话。\
-                  适用场景:当前对话上下文已经很长且即将切换主题,或当前任务结束、\
-                  下一个任务与之无关时。UI 会弹出确认框,用户接受才真正分支。\
-                  **不要滥用** — 只在上下文切换收益明显时调。",
+    description: "Suggest branching a new conversation from the current message.\
+                  Use cases: current conversation context is very long and topic is about to change, or\
+                  current task is done and next task is unrelated. UI shows confirmation dialog, user must accept to actually branch.\
+                  **Don't overuse** — only call when context switch benefit is clear.",
     parameters: new_conv_parameters,
     from_args: new_conv_from_args,
     result_to_json: new_conv_result_to_json,
@@ -81,9 +81,9 @@ pub static SUGGEST_NEW_CONVERSATION: OpenAiTool = OpenAiTool {
 
 #[derive(Debug, Deserialize)]
 struct PromptArgs {
-    /// 实际发给 agent 的 prompt 文本。
+    /// Actual prompt text sent to agent.
     prompt: String,
-    /// 可选:UI 上展示的短标签(若 prompt 太长用作 chip 显示)。
+    /// Optional: short label displayed in UI (if prompt is too long, used for chip display).
     #[serde(default)]
     label: String,
 }
@@ -94,11 +94,11 @@ fn prompt_parameters() -> Value {
         "properties": {
             "prompt": {
                 "type": "string",
-                "description": "建议给用户的下一条 prompt(用户点击后实际发给 agent)。"
+                "description": "Next prompt to suggest to user (actually sent to agent on user click)."
             },
             "label": {
                 "type": "string",
-                "description": "可选: chip 上显示的短标签(prompt 较长时建议提供)。"
+                "description": "Optional: short label displayed on chip (recommended when prompt is long)."
             }
         },
         "required": ["prompt"],
@@ -138,9 +138,9 @@ fn prompt_result_to_json(result: &api::message::tool_call_result::Result) -> Opt
 
 pub static SUGGEST_PROMPT: OpenAiTool = OpenAiTool {
     name: "suggest_prompt",
-    description: "在回答末尾给用户提议下一条 prompt(以 chip 形式展示)。\
-                  适用场景:任务自然延伸出明显的 follow-up(测试通过后建议跑 lint;读完代码建议补单测等)。\
-                  避免给重复或显而易见的建议。",
+    description: "Suggest next prompt to user at end of response (displayed as chip).\
+                  Use cases: task naturally extends into obvious follow-up (suggest lint run after tests pass; suggest unit tests after reading code, etc.).\
+                  Avoid duplicate or obvious suggestions.",
     parameters: prompt_parameters,
     from_args: prompt_from_args,
     result_to_json: prompt_result_to_json,

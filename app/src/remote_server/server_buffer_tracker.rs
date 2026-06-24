@@ -24,18 +24,19 @@ pub enum PendingBufferRequestKind {
 /// - Per-buffer connection sets (which connections have each buffer open)
 /// - Pending async requests (OpenBuffer, SaveBuffer, ResolveConflict) awaiting events
 pub struct ServerBufferTracker {
-    /// 双向映射 wire path ↔ FileId,两侧查找都 O(1)。
-    /// `path_for_file_id` 在每次 `ServerLocalBufferUpdated` 都会被调用,
-    /// 用 BiMap 避免线性扫描。
+    /// Bidirectional mapping wire path ↔ FileId, O(1) lookup on both sides.
+    /// `path_for_file_id` is called on every `ServerLocalBufferUpdated`, so using
+    /// BiMap avoids linear scans.
     open_buffers: BiMap<String, FileId>,
-    /// 持有每个已打开 server-local buffer 的**强引用** `ModelHandle<Buffer>`。
+    /// Holds a **strong reference** `ModelHandle<Buffer>` for each open server-local buffer.
     ///
-    /// `GlobalBufferModel` 内部只存 `WeakModelHandle`,客户端靠编辑器 view 持有
-    /// 强引用让 buffer 存活;但 daemon 没有 view —— 若不在这里持有强引用,
-    /// `handle_open_buffer` 返回后 buffer 引用计数归零,会被 WarpUI 的
-    /// `flush_effects` 回收,导致随后 `FileModel` 异步加载完成时 weak handle 已
-    /// 失效(日志「Cannot populate buffer with content due to deallocated model
-    /// handle」)。buffer 关闭(无连接)时一并 drop。
+    /// `GlobalBufferModel` internally only stores `WeakModelHandle`; the client keeps the
+    /// buffer alive via the editor view's strong reference. But the daemon has no view —
+    /// if we don't hold the strong reference here, after `handle_open_buffer` returns, the
+    /// buffer's refcount drops to zero and WarpUI's `flush_effects` reclaims it, causing
+    /// later when `FileModel` completes async loading, the weak handle is already invalid
+    /// (log message "Cannot populate buffer with content due to deallocated model handle").
+    /// The buffer is dropped when closed (no more connections).
     buffer_handles: HashMap<FileId, ModelHandle<Buffer>>,
     /// Tracks which connections have each buffer open.
     /// File-watcher pushes go to all connections in the set.
@@ -59,8 +60,8 @@ impl ServerBufferTracker {
 
     // ── Path ↔ FileId mapping ─────────────────────────────────────
 
-    /// Register a wire path → FileId mapping,并持有 buffer 的强引用让它在
-    /// daemon 端存活(见 `buffer_handles` 字段说明)。
+    /// Register a wire path → FileId mapping and hold a strong reference to the buffer
+    /// to keep it alive on the daemon side (see `buffer_handles` field description).
     pub fn track_open_buffer(
         &mut self,
         path: String,
@@ -71,15 +72,16 @@ impl ServerBufferTracker {
         self.buffer_handles.insert(file_id, buffer);
     }
 
-    /// Look up a FileId by its wire path. O(1)。
+    /// Look up a FileId by its wire path. O(1).
     pub fn file_id_for_path(&self, path: &str) -> Option<FileId> {
         self.open_buffers.get_by_left(path).copied()
     }
 
-    /// Look up the wire path for a given FileId. O(1) via BiMap。
-    /// 返回 owned `String` 而非 `&str`,让调用方在持有结果的同时还能借用
-    /// 其它 `&mut self`(典型场景:在事件 handler 里拿到 path 然后回头
-    /// `send_server_message(...)`)。push 频率不高,clone 开销可忽略。
+    /// Look up the wire path for a given FileId. O(1) via BiMap.
+    /// Returns owned `String` rather than `&str`, allowing the caller to hold the result
+    /// while borrowing other parts of `&mut self` (typical use: in an event handler, get
+    /// the path then call `send_server_message(...)` afterward). Push frequency is low,
+    /// so the clone overhead is negligible.
     pub fn path_for_file_id(&self, file_id: FileId) -> Option<String> {
         self.open_buffers.get_by_right(&file_id).cloned()
     }
@@ -107,7 +109,7 @@ impl ServerBufferTracker {
         conn_id: ConnectionId,
         ctx: &mut ModelContext<ServerModel>,
     ) -> Vec<FileId> {
-        // 丢弃该连接产生的所有 pending 请求,避免断连后留下陈旧条目。
+        // Discard all pending requests from this connection, avoiding stale entries after disconnect.
         for entries in self.pending_requests.values_mut() {
             entries.retain(|(_, pending_conn_id, _)| *pending_conn_id != conn_id);
         }
@@ -131,7 +133,7 @@ impl ServerBufferTracker {
             self.buffer_connections.remove(&file_id);
             self.open_buffers.remove_by_right(&file_id);
             self.pending_requests.remove(&file_id);
-            // 释放强引用,允许 buffer 被回收。
+            // Release strong reference, allowing the buffer to be reclaimed.
             self.buffer_handles.remove(&file_id);
             GlobalBufferModel::handle(ctx).update(ctx, |gbm, ctx| gbm.remove(file_id, ctx));
         }
@@ -162,7 +164,7 @@ impl ServerBufferTracker {
         self.buffer_connections.remove(&file_id);
         self.open_buffers.remove_by_left(path);
         self.pending_requests.remove(&file_id);
-        // 释放强引用,允许 buffer 被回收。
+        // Release strong reference, allowing the buffer to be reclaimed.
         self.buffer_handles.remove(&file_id);
         GlobalBufferModel::handle(ctx).update(ctx, |gbm, ctx| gbm.remove(file_id, ctx));
     }

@@ -41,8 +41,9 @@ pub struct HeuristicClassifier;
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl InputClassifier for HeuristicClassifier {
     async fn detect_input_type(&self, input: ParsedTokensSnapshot, context: &Context) -> InputType {
-        // 输入含 CJK 字符直接判 AI:底层词典与 ML 模型皆英文训练,
-        // 中/日/韩文走默认逻辑会被误判为 Shell。
+        // If input contains CJK characters, directly classify as AI: the underlying dictionary
+        // and ML models are all trained in English, so Chinese/Japanese/Korean text using
+        // default logic would be misclassified as Shell.
         if contains_cjk(input.buffer_text.as_str()) {
             return InputType::AI;
         }
@@ -77,9 +78,9 @@ impl InputClassifier for HeuristicClassifier {
 
         let word_tokens = parse_query_into_tokens(input.buffer_text.as_str());
 
-        // Try autodetecting both including and not including the last token,
-        // since we aren't sure if the user is done typing. If either case is
-        // detected as AI input, set to AI input.
+        // Try auto-detecting both with and without the last token, since we are unsure
+        // whether the user has finished typing. If either case is detected as AI input,
+        // classify as AI input.
         let result = natural_language_detection_heuristic(
             input.clone(),
             word_tokens.clone(),

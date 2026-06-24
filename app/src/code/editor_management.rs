@@ -121,9 +121,9 @@ pub enum CodeSource {
     ProjectRules { path: PathBuf },
     /// Opened from file tree.
     FileTree { path: PathBuf },
-    /// 从远端文件树点击打开的远端文件(openWarp 独有)。通过 buffer-sync 协议
-    /// 与 SSH daemon 同步内容,本地没有对应路径,因此 tab 身份用 [`RemotePath`]
-    /// 标识。pane 不持久化 —— 远端 buffer 依赖活跃 SSH 连接。
+    /// Remote file opened by clicking in remote file tree (openWarp-specific). Sync content with SSH daemon via buffer-sync protocol,
+    /// no corresponding local path, so tab identity uses [`RemotePath`].
+    /// Panes not persistent — remote buffers depend on active SSH connection.
     RemoteFileTree {
         remote_path: super::buffer_location::RemotePath,
     },
@@ -153,8 +153,8 @@ impl CodeSource {
         }
     }
 
-    /// 本地文件路径。**不包含远端文件** —— 远端文件没有本地路径,用
-    /// [`Self::location`] 取统一身份。
+    /// Local file path. **Excludes remote files** — remote files have no local path, use
+    /// [`Self::location`] for unified identity.
     pub fn path(&self) -> Option<PathBuf> {
         match self {
             Self::New { .. } | Self::AIAction { .. } | Self::RemoteFileTree { .. } => None,
@@ -166,10 +166,10 @@ impl CodeSource {
         }
     }
 
-    /// 该 source 对应文件的统一身份(本地路径或远端 `RemotePath`)。
+    /// Unified identity for file corresponding to this source (local path or remote `RemotePath`).
     ///
-    /// 本地文件与远端文件统一走 `CodeView` 的多文件分组逻辑,tab 去重 / 聚焦
-    /// 都用 [`BufferLocation`] 作为 key。
+    /// Both local and remote files use `CodeView`'s multi-file grouping logic, tab deduplication / focus
+    /// both use [`BufferLocation`] as key.
     pub fn location(&self) -> Option<BufferLocation> {
         match self {
             Self::New { .. } | Self::AIAction { .. } => None,
@@ -224,7 +224,7 @@ impl CodeSource {
     /// Returns `true` if this source should be restored across app restarts.
     ///
     /// `AIAction` is ephemeral (tied to a live conversation) and should not
-    /// be restored. `RemoteFileTree` 依赖活跃 SSH 连接,同样不恢复。
+    /// be restored. `RemoteFileTree` depends on active SSH connection, also not restored.
     pub fn is_restorable(&self) -> bool {
         !matches!(self, Self::AIAction { .. } | Self::RemoteFileTree { .. })
     }
@@ -279,7 +279,7 @@ impl CodeManager {
         self.source_to_pane_data.remove(&source.omit_line_col());
     }
     /// Returns the locator for a code pane that already has `location` open in
-    /// the given pane group. `location` 统一覆盖本地与远端文件。
+    /// the given pane group. `location` unified covers both local and remote files.
     pub fn get_locator_for_location_in_tab(
         &self,
         pane_group_id: EntityId,

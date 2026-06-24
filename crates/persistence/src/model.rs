@@ -1423,7 +1423,7 @@ pub struct SshNodeRow {
     pub sort_order: i32,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
-    /// 仅对 folder 有意义;server 永远是 false。
+    /// Only meaningful for folder; always false for server.
     pub is_collapsed: bool,
 }
 

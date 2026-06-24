@@ -22,7 +22,7 @@ pub struct Scene {
     layers: Vec1<Layer>,
     overlay_layers: Vec<Layer>,
     #[cfg(debug_assertions)]
-    /// Custom panic location, set with [`Scene::set_location_for_panic_logging`]
+    /// Custom panic location, set with [`Scene::set_location_for_panic_logging`].
     panic_location: Option<&'static std::panic::Location<'static>>,
 }
 
@@ -439,8 +439,9 @@ impl Scene {
     // on its current layer. The intersection is then checked against the event position
     // to determine whether we should dispatch the event.
     pub fn visible_rect(&self, origin: Point, size: Vector2F) -> Option<RectF> {
-        // TODO:调查什么情况下会传入 scene 中不存在的 z-index。
-        // 历史崩溃样本显示这较常见,但不太影响正常使用;可能发生在 view teardown frame。
+        // TODO: Investigate under what conditions a z-index not in the scene gets passed in.
+        // Historical crash samples show this is relatively common, but doesn't significantly impact normal usage;
+        // may occur during view teardown frame.
         let maybe_layer = match origin.z_index() {
             ZIndex::Normal(index) => self.layers.get(index),
             ZIndex::Overlay(index) => self.overlay_layers.get(index),
@@ -577,13 +578,11 @@ impl Scene {
         );
     }
 
-    /// This method draws a rectangle without recording any information about it in the current
-    /// layer. Note this should be used with caution. In most cases, what you need is
-    /// `draw_rect_with_hit_recording` instead. However, in rare cases this may be useful for
-    /// performance reasons when many intermediate rects are drawn. If this is called, it is up to
-    /// the caller to also draw a rect (via draw_rect_with_hit_recording) that encompasses the range
-    /// of the rects drawn so that layer recording for event dispatching is correctly kept
-    /// up-to-date.
+    /// Draw a rectangle without recording any information about it in the current layer.
+    /// This should be used with caution. In most cases, use `draw_rect_with_hit_recording` instead.
+    /// However, in rare cases this may be useful for performance when drawing many intermediate rects.
+    /// If used, caller must also draw a rect (via draw_rect_with_hit_recording) encompassing the range
+    /// of drawn rects so that layer recording for event dispatching remains correctly up-to-date.
     pub fn draw_rect_without_hit_recording(&mut self, rect: RectF) -> &mut Rect {
         #[cfg(debug_assertions)]
         let location = self.panic_location.take();
@@ -645,10 +644,9 @@ impl Scene {
         layer.record_hit_rect(rect);
     }
 
-    /// Adds a glyph that should be drawn in the scene.
+    /// Add a glyph that should be drawn in the scene.
     ///
-    /// `position` is the point at which the glyph's left edge meets the
-    /// baseline.
+    /// `position` is the point where the glyph's left edge meets the baseline.
     pub fn draw_glyph(
         &mut self,
         position: Vector2F,
@@ -672,12 +670,12 @@ impl Scene {
         layer.glyphs.last_mut().unwrap()
     }
 
-    /// Get an iterator over all layers in order, from bottom to top
+    /// Get iterator over all layers in order, from bottom to top
     pub fn layers(&self) -> impl Iterator<Item = &Layer> {
         self.layers.iter().chain(self.overlay_layers.iter())
     }
 
-    /// Get the total number of layers
+    /// Get total number of layers
     #[cfg(test)]
     pub fn layer_count(&self) -> usize {
         self.layers.len() + self.overlay_layers.len()

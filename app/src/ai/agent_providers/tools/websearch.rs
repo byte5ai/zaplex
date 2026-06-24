@@ -1,14 +1,15 @@
-//! `websearch` BYOP 工具 descriptor。
+//! `websearch` BYOP tool descriptor.
 //!
-//! 实际 HTTP 执行在 `web_runtime::run_websearch`(走 Exa MCP 端点)。本 descriptor
-//! 提供给 genai SDK 用于把 tool 描述发给上游 LLM(name + description + JSON Schema)。
+//! Actual HTTP execution happens in `web_runtime::run_websearch` (via Exa MCP endpoint).
+//! This descriptor is provided to genai SDK to send tool description to upstream LLM
+//! (name + description + JSON Schema).
 //!
-//! ## 不走 protobuf executor
+//! ## Does not use protobuf executor
 //!
-//! `from_args` 永远返回 `Err`,`result_to_json` 永远返回 `None`。`chat_stream::
-//! parse_incoming_tool_call` 之前按 name 命中后直接调 `web_runtime`。
+//! `from_args` always returns `Err`, `result_to_json` always returns `None`.
+//! `chat_stream::parse_incoming_tool_call` matches by name first and calls `web_runtime` directly.
 //!
-//! 参数 schema 与 opencode `websearch.ts:7-22` 对齐。
+//! Parameter schema aligns with opencode `websearch.ts:7-22`.
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};

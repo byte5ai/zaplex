@@ -757,9 +757,9 @@ impl BlocklistAIHistoryModel {
         Ok(conversation.create_optimistic_cli_subagent_task(&block_id, terminal_view_id, ctx))
     }
 
-    /// Zap BYOP 专用:见 `Conversation::create_optimistic_cli_subagent_task_silent` 文档。
-    /// 创建真实 subagent task 但不 emit `CreatedSubtask`,避免触发 `CLISubagentView`
-    /// 在 task 没 exchange 时 panic。
+    /// Zap BYOP-specific: see `Conversation::create_optimistic_cli_subagent_task_silent` docs.
+    /// Creates real subagent task but doesn't emit `CreatedSubtask`, avoiding triggering `CLISubagentView`
+    /// panic when task has no exchange.
     pub fn create_silent_cli_subagent_task_for_conversation(
         &mut self,
         block_id: BlockId,

@@ -166,8 +166,8 @@ fn test_retry_menu_item_logic() {
         let object_type_and_id: ObjectTypeAndId =
             ObjectTypeAndId::from_id_and_type(sync_id, ObjectType::Workflow);
 
-        // Zap(Wave 4):SyncQueue 整删,原本验证 SyncQueue 队列变化的
-        // 断言全部变为无意义。跳过留下调用流程本身以验证不报 panic。
+        // Zap (Wave 4): SyncQueue entirely removed; assertions that previously validated SyncQueue changes
+        // are now meaningless. Skip validation and leave the call flow itself to verify it doesn't panic.
 
         index.update(&mut app, |index, ctx| {
             index.retry_failed_object(&object_type_and_id, ctx);
@@ -180,9 +180,9 @@ fn test_retry_menu_item_logic() {
             }
         });
 
-        // Zap(Wave 4):原验证 SyncQueue 队头是 CreateWorkflow,SyncQueue 整删后不适用。
+        // Zap (Wave 4): Previously verified that the SyncQueue head is CreateWorkflow; no longer applicable after SyncQueue removal.
 
-        // Zap(Wave 4):原验证 SyncQueue 队列长度 + UpdateWorkflow tag,SyncQueue 整删后不适用。
+        // Zap (Wave 4): Previously verified SyncQueue length + UpdateWorkflow tag; no longer applicable after SyncQueue removal.
     })
 }
 

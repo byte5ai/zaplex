@@ -22,8 +22,8 @@ use crate::{
 };
 use warpui::SingletonEntity;
 
-/// BYOP 路径的请求分流参数。从 LLMId、settings、conversation 中提取后
-/// 一次性塞给 spawn closure(ctx 不能跨 await 边界)。
+/// BYOP path request dispatch parameters. Extracted from LLMId, settings, and conversation,
+/// then passed once to spawn closure (ctx cannot cross await boundary).
 pub(super) struct PendingTitleGeneration {
     pub(super) input: crate::ai::agent_providers::chat_stream::TitleGenInput,
     pub(super) user_query: String,
@@ -34,36 +34,37 @@ struct ByopDispatch {
     base_url: String,
     api_key: String,
     model_id: String,
-    /// 显式指定的 API 协议类型,chat_stream 据此映射 genai AdapterKind。
+    /// Explicitly specified API protocol type; chat_stream uses this to map genai AdapterKind.
     api_type: crate::settings::AgentProviderApiType,
-    /// Provider 级 reasoning effort 偏好。`Auto` 时不向 genai 传 effort,
-    /// 由 adapter 自己按模型名后缀推断;非 Auto 经 client capability gate 后注入。
+    /// Provider-level reasoning effort preference. When `Auto`, effort is not sent to genai;
+    /// adapter infers from model name suffix. When non-Auto, injected after client capability gate.
     reasoning_effort: crate::settings::ReasoningEffortSetting,
     extra_headers: Vec<(String, String)>,
-    /// conversation 的 root task id — 必须用本地已注册的 id,
-    /// 否则下游 `Action::AddMessagesToTask` 在 task_store 找不到会 `TaskNotFound`。
+    /// Root task ID of the conversation — must use a locally registered ID;
+    /// otherwise downstream `Action::AddMessagesToTask` will not find it in task_store, causing `TaskNotFound`.
     root_task_id: String,
-    /// 本轮模型输出应该写入的 task id。普通对话等于 root task;CLI subagent 后续轮为 subtask。
+    /// Task ID where this round's model output should be written. For normal conversations equals root task;
+    /// for CLI subagent, subsequent rounds use subtask.
     target_task_id: String,
-    /// 是否需要 emit `CreateTask` 把 Optimistic root 升级为 Server task。
-    /// 仅首轮(root task 还没 source)需要;再次发会触发 `UnexpectedUpgrade`。
+    /// Whether to emit `CreateTask` to upgrade Optimistic root to Server task.
+    /// Only needed in first round (root task has no source yet); sending again triggers `UnexpectedUpgrade`.
     needs_create_task: bool,
-    /// 标题生成模型参数。仅在首轮(needs_create_task)且 active title_model
-    /// 解码为合法 BYOP id 时填充;否则不启动后台标题生成。
+    /// Title generation model parameters. Populated only in first round (when needs_create_task) and when
+    /// active title_model decodes to a valid BYOP ID; otherwise background title generation is not started.
     title_gen: Option<TitleGenParams>,
-    /// LRC 场景绑定的 `command_id`(= LRC block id 字符串)。
+    /// `command_id` bound to LRC scenario (= LRC block ID string).
     lrc_command_id: Option<String>,
-    /// 是否需要在 chat_stream 中合成 subagent CreateTask 来升级 optimistic CLI subtask。
+    /// Whether to synthesize subagent CreateTask in chat_stream to upgrade optimistic CLI subtask.
     lrc_should_spawn_subagent: bool,
-    /// 选中模型的上下文窗口(tokens)。0/None ⇒ 用户未填且 catalog 也无,
-    /// chat_stream 跳过 context_window_usage 计算,UI 维持 100% 占位。
+    /// Context window size (tokens) of the selected model. 0/None ⇒ user did not fill and catalog also has none;
+    /// chat_stream skips context_window_usage calculation, UI maintains 100% placeholder.
     context_window: Option<u32>,
-    /// ユーザー設定 (image/pdf/audio 三態 Override) を反映済みの attachment caps。
-    /// `resolve_for_model` で計算。UI 表示と runtime 動作が同じ caps を参照する。
+    /// Attachment capabilities reflecting user settings (image/pdf/audio three-state Override).
+    /// Computed via `resolve_for_model`. UI display and runtime behavior reference the same caps.
     attachment_caps: crate::ai::agent_providers::attachment_caps::AttachmentCaps,
 }
 
-/// 标题生成专用的 BYOP 配置(可能与主 base 模型同 provider 也可能不同)。
+/// BYOP configuration dedicated to title generation (may be same provider as main base model or different).
 pub(crate) struct TitleGenParams {
     pub base_url: String,
     pub api_key: String,
@@ -80,8 +81,8 @@ fn byop_dispatch_info(
     let (provider, api_key, model_id) =
         crate::ai::agent_providers::lookup_byop(ctx, &params.model)?;
     let extra_headers = provider.extra_headers.clone();
-    // 从 provider.models 里找当前模型条目,取其 context_window(tokens)。
-    // 0 视为未填,后续走 None 分支 ⇒ chat_stream 不算占用率。
+    // Find the current model entry in provider.models and get its context_window (tokens).
+    // 0 is treated as unfilled; subsequent None branch ⇒ chat_stream skips usage calculation.
     let context_window = provider
         .models
         .iter()
@@ -96,14 +97,14 @@ fn byop_dispatch_info(
         .byop_target_task_id
         .clone()
         .unwrap_or_else(|| root_task_id.clone());
-    // compute_active_tasks 只返回 `task.source().is_some()` 的 task —
-    // 因此非空 ⇒ root 已经升级为 Server 状态,不要再 emit CreateTask。
+    // compute_active_tasks only returns tasks where `task.source().is_some()` —
+    // therefore non-empty ⇒ root has already been upgraded to Server state, do not emit CreateTask again.
     let needs_create_task = conversation.compute_active_tasks().is_empty();
 
-    // 标题生成:只在首轮触发(避免每轮重复打标题)。
-    // 解析 active title_model:可能是 base_model 自己,也可能是用户独立选的另一个 BYOP 模型。
-    // 任一模型不是 BYOP 编码(比如 fallback 到非 BYOP 默认),则跳过 — Zap 主路径都是 BYOP,
-    // 实际 fallback 到 base 时,base 自己就是 BYOP。
+    // Title generation: only trigger in first round (avoid repeating title per round).
+    // Parse active title_model: may be base_model itself or another BYOP model independently selected by user.
+    // If either model is not BYOP-encoded (e.g., fallback to non-BYOP default), skip it — Zap main path is all BYOP;
+    // when actually falling back to base, base itself is BYOP.
     let llm_prefs = crate::ai::llms::LLMPreferences::as_ref(ctx);
     let title_gen = if needs_create_task {
         let title_id = llm_prefs.get_active_title_model(ctx, None).id.clone();
@@ -265,9 +266,9 @@ impl ResponseStream {
 
         let request_id = Uuid::new_v4();
         let params_clone = params.clone();
-        // BYOP 路径: 若选中的 base model 是用户自定义 provider 编码的 LLMId,
-        // 则在 spawn 前从 ctx 中取出 (provider, api_key, model_id, root_task_id),
-        // 走自定义 chat completions。否则走 warp 自家 multi-agent 端点(原有路径)。
+        // BYOP path: if the selected base model is an LLMId encoded by user-defined provider,
+        // then before spawn, extract (provider, api_key, model_id, root_task_id) from ctx
+        // and use custom chat completions. Otherwise, use warp's own multi-agent endpoint (original path).
         let byop_dispatch = byop_dispatch_info(&params, &ai_identifiers, ctx);
         let pending_title_generation = byop_dispatch
             .as_ref()
@@ -332,9 +333,9 @@ impl ResponseStream {
         self.params.lrc_should_spawn_subagent
     }
 
-    /// Zap BYOP 本地会话压缩:返回本流是否在跑 SummarizeConversation,
-    /// 以及 overflow 标记。controller 在 handle_response_stream_finished 的
-    /// Done 分支据此调 commit_summarization 把摘要落到 conversation.compaction_state。
+    /// Zap BYOP local session compression: returns whether this stream is running SummarizeConversation
+    /// and the overflow flag. Controller calls commit_summarization in the Done branch of
+    /// handle_response_stream_finished to persist the summary to conversation.compaction_state.
     pub fn summarization_overflow(&self) -> Option<bool> {
         self.params.input.iter().find_map(|input| match input {
             crate::ai::agent::AIAgentInput::SummarizeConversation { overflow, .. } => {

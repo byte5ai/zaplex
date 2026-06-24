@@ -1,21 +1,21 @@
-//! BYOP system prompt 模板渲染。
+//! BYOP system prompt template rendering.
 //!
-//! 把 warp 客户端已经收集好的 `AIAgentContext`(env / git / skills / project_rules / current_time)
-//! 渲染为 OpenAI 兼容 endpoint 的 `system` message 字符串。
+//! Renders the `AIAgentContext` already collected by the warp client (env / git / skills / project_rules / current_time)
+//! into the `system` message string for an OpenAI-compatible endpoint.
 //!
-//! ## 工作流
+//! ## Workflow
 //!
-//! 1. 从 `params.input` 抽出最近一条 `UserQuery.context: Arc<[AIAgentContext]>`
-//!    (warp `convert_to.rs::convert_input` 取的也是同一份)
-//! 2. `collect_prompt_context` 把每个 enum variant 拍成扁平 `PromptContext` struct
-//! 3. `pick_template` 按 model id 子串匹配选 `system/{anthropic,gpt,beast,codex,
-//!    gemini,kimi,trinity,default}.j2`(对齐 opencode
+//! 1. Extract the most recent `UserQuery.context: Arc<[AIAgentContext]>` from `params.input`
+//!    (warp's `convert_to.rs::convert_input` reads the same thing)
+//! 2. `collect_prompt_context` flattens each enum variant into a flat `PromptContext` struct
+//! 3. `pick_template` selects `system/{anthropic,gpt,beast,codex,
+//!    gemini,kimi,trinity,default}.j2` by substring-matching the model id (mirrors opencode's
 //!    `packages/opencode/src/session/system.ts::provider`)
-//! 4. minijinja 渲染
+//! 4. minijinja rendering
 //!
-//! ## 模板加载
+//! ## Template loading
 //!
-//! 全部模板 `include_str!` 编进二进制(零运行时 IO),改模板需重编。
+//! All templates are compiled into the binary via `include_str!` (zero runtime IO); changing a template requires a recompile.
 
 use std::sync::OnceLock;
 
@@ -79,10 +79,10 @@ fn build_env() -> Environment<'static> {
     )
     .expect("init_project command template parses");
 
-    // 按 model id 子串匹配分发 system prompt(对齐 opencode
-    // `packages/opencode/src/session/system.ts::provider`)。OpenRouter 路径形如
+    // Dispatch the system prompt by substring-matching the model id (mirrors opencode's
+    // `packages/opencode/src/session/system.ts::provider`). OpenRouter paths such as
     // `anthropic/claude-3.5-sonnet` / `google/gemini-2.5-flash` / `openai/gpt-4o`
-    // 也能正确命中。识别不到家族就走 default.j2 兜底,所以自定义 model id 安全。
+    // also match correctly. If no family is recognized it falls back to default.j2, so custom model ids are safe.
     for (name, src) in [
         (
             "system/default.j2",
@@ -114,24 +114,24 @@ fn env() -> &'static Environment<'static> {
 }
 
 // ---------------------------------------------------------------------------
-// 模板选择
+// Template selection
 // ---------------------------------------------------------------------------
 
-/// 按 model id 子串匹配选模板(对齐 opencode
-/// `packages/opencode/src/session/system.ts::provider`)。
+/// Selects a template by substring-matching the model id (mirrors opencode's
+/// `packages/opencode/src/session/system.ts::provider`).
 ///
-/// 匹配规则(顺序敏感,先到先得):
-/// - `gpt-4` / `o1` / `o3` / `o4` → beast(强自治 + sequential thinking)
-/// - 其他 `gpt` 中含 `codex` → codex(apply_file_diffs + 严格 final answer formatting)
-/// - 其他 `gpt` → gpt(pragmatic engineer + commentary/final 双通道)
-/// - `gemini-` → gemini(Core Mandates + Workflows + 大量 examples)
-/// - `claude` / `sonnet` / `opus` / `haiku` → anthropic(Claude Code 风格)
-/// - `trinity` → trinity(一 tool 一 message 风格)
-/// - `kimi` → kimi(SAME language + AGENTS.md)
-/// - 其他 → default.j2(兜底)
+/// Matching rules (order-sensitive, first match wins):
+/// - `gpt-4` / `o1` / `o3` / `o4` → beast (strong autonomy + sequential thinking)
+/// - other `gpt` containing `codex` → codex (apply_file_diffs + strict final answer formatting)
+/// - other `gpt` → gpt (pragmatic engineer + commentary/final dual channel)
+/// - `gemini-` → gemini (Core Mandates + Workflows + many examples)
+/// - `claude` / `sonnet` / `opus` / `haiku` → anthropic (Claude Code style)
+/// - `trinity` → trinity (one-tool-per-message style)
+/// - `kimi` → kimi (SAME language + AGENTS.md)
+/// - everything else → default.j2 (fallback)
 ///
-/// 全程 lowercase 后匹配,兼容 `GPT-4o` / `OPENAI/gpt-4o` / `Anthropic/Claude-3.5`
-/// 这种用户大小写写法。OpenRouter 形式 `provider/model` 也能正确命中。
+/// Everything is matched after lowercasing, so user casing like `GPT-4o` / `OPENAI/gpt-4o` / `Anthropic/Claude-3.5`
+/// is handled. The OpenRouter `provider/model` form also matches correctly.
 pub fn pick_template(model_id: &str) -> &'static str {
     let id = model_id.to_ascii_lowercase();
 
@@ -160,8 +160,8 @@ pub fn pick_template(model_id: &str) -> &'static str {
     "system/default.j2"
 }
 
-/// 从 `LLMId` 中抽取模型 id 字串。BYOP 编码会取 model 部分,
-/// 否则原样返回(理论上 BYOP 路径只会传 BYOP id,但兜底一下)。
+/// Extracts the model id string from an `LLMId`. For BYOP encoding it takes the model part,
+/// otherwise it returns the value as-is (in theory the BYOP path only passes BYOP ids, but this is a safety fallback).
 fn model_id_from_llm_id(id: &LLMId) -> String {
     if let Some((_pid, mid)) = super::llm_id::decode(id) {
         mid
@@ -171,7 +171,7 @@ fn model_id_from_llm_id(id: &LLMId) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// AIAgentContext → 扁平模板上下文
+// AIAgentContext → flat template context
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, Serialize)]
@@ -209,8 +209,8 @@ struct ProjectRuleCtx {
     content: String,
 }
 
-/// Zap BYOP 修复 Issue #116:全局 Rules(用户在 设置 → Agents → Rules 创建)
-/// 的扁平视图,喂给 `partials/user_rules.j2` 渲染进 system prompt。
+/// Zap BYOP fix for Issue #116: a flat view of the global Rules (created by the user under
+/// Settings → Agents → Rules), fed to `partials/user_rules.j2` to be rendered into the system prompt.
 #[derive(Debug, Serialize)]
 struct UserRuleCtx {
     name: Option<String>,
@@ -230,33 +230,33 @@ struct PromptContext {
     git: Option<GitCtx>,
     skills: Vec<SkillCtx>,
     project_rules: Vec<ProjectRuleCtx>,
-    /// Zap BYOP 修复 Issue #116:由 caller(`render_system`)从
-    /// `RequestParams.user_rules` 注入,经 `partials/user_rules.j2` 渲染。
+    /// Zap BYOP fix for Issue #116: injected by the caller (`render_system`) from
+    /// `RequestParams.user_rules` and rendered via `partials/user_rules.j2`.
     user_rules: Vec<UserRuleCtx>,
     current_time: String,
     model_id: String,
-    /// 本轮真正喂给上游模型的 tool name 列表(由 `chat_stream::available_tool_names`
-    /// 计算,含 gating 后的内置 tools 和当前 MCP tools)。
-    /// 模板按此动态渲染白名单,不再硬编码。
+    /// The list of tool names actually fed to the upstream model this turn (computed by
+    /// `chat_stream::available_tool_names`, including the post-gating built-in tools and the current MCP tools).
+    /// The template renders the whitelist dynamically from this instead of hardcoding it.
     available_tools: Vec<String>,
-    /// 本轮是否处于 `/plan` 触发的 Plan Mode(只读研究模式)。
-    /// 由 `chat_stream::is_plan_mode_turn` 计算,模板按此 include
-    /// `partials/plan_mode.j2` 注入只读约束 + 计划产出引导。
+    /// Whether this turn is in the `/plan`-triggered Plan Mode (read-only research mode).
+    /// Computed by `chat_stream::is_plan_mode_turn`; based on this the template includes
+    /// `partials/plan_mode.j2` to inject the read-only constraints + plan-output guidance.
     plan_mode: bool,
 }
 
 fn collect_prompt_context(model_id: &str, ctx: &[AIAgentContext]) -> PromptContext {
     let mut out = PromptContext {
-        // P0-1 prompt cache 优化:`current_time` 只保留到自然日粒度,
-        // 不再精确到秒。原因:
-        // - system prompt 中任何每请求都变的内容都会让 Anthropic 的第 1 个
-        //   system breakpoint 写入的 hash 独一无二 → 写完即废,永不命中。
-        //   OpenAI 前 256 token 路由哈希同理,会被分散到不同机器。
-        // - 模型实际只需要知道“今天是哪天”就够了,跳越自然日那一次
-        //   miss 成本可接受(一天 × 所有活跃对话 × system tokens)。
-        // - 跨年同理成本与跨日一致,不需额外处理。
-        // 后续可考虑进一步把“当前时间”移到 user message 末尾(P0-1 方案 C),
-        // 让 system 段 100% 稳定;本步先取低风险的方案 B。
+        // P0-1 prompt cache optimization: `current_time` is kept only at calendar-day granularity,
+        // no longer down to the second. Reasons:
+        // - Anything in the system prompt that changes on every request makes the hash written at
+        //   Anthropic's first system breakpoint unique → invalidated as soon as it's written, never hit.
+        //   The same applies to OpenAI's first-256-token routing hash, which gets scattered across machines.
+        // - The model really only needs to know "what day it is today", so the one miss when crossing
+        //   into a new calendar day is an acceptable cost (one day × all active conversations × system tokens).
+        // - Crossing a year boundary costs the same as crossing a day, so no extra handling is needed.
+        // Later we could go further and move "current time" to the end of the user message (P0-1 option C),
+        // making the system segment 100% stable; for this step we take the lower-risk option B.
         current_time: Local::now().format("%Y-%m-%d").to_string(),
         model_id: model_id.to_owned(),
         ..Default::default()
@@ -283,22 +283,22 @@ fn collect_prompt_context(model_id: &str, ctx: &[AIAgentContext]) -> PromptConte
                 }
             }
             AIAgentContext::CurrentTime { current_time } => {
-                // P0-1:与默认值保持一致,只保留自然日粒度。
-                // 上游 Zap 有可能传入精确到秒的 timestamp,这里统一压到“当前日期”。
+                // P0-1: consistent with the default value, keep only calendar-day granularity.
+                // Upstream Zap may pass a second-precision timestamp, so we normalize it down to "current date" here.
                 out.current_time = current_time.format("%Y-%m-%d").to_string();
             }
-            // 代码索引功能未实现,Codebase 上下文不进 system prompt。
+            // Code indexing is not implemented, so Codebase context does not go into the system prompt.
             AIAgentContext::Codebase { .. } => {}
-            // P1-7 prompt cache 说明:`Git { head, branch }` 取决于当前仓库状态,
-            // 用户切分支会让渲染出的 system 段变化,导致所有上游供应商
-            // (Anthropic / OpenAI / DeepSeek)的 system+messages cache 全部失效。
-            // 这是**预期行为**:
-            //   - 指令模型在新分支上不能认为是老 git context;
-            //   - 作为代价用户在新分支上首请求 100% miss、写入新 cache,之后该
-            //     分支会复用。跨分支跳转频繁的开发者会看到最多的 miss。
-            // 考虑过的替代:把 git 状态移到 user message 末尾(同 P0-1 方案 C),
-            // 但那样 system 段会丢失“模型一看就知道当前分支”的上下文意义,
-            // 需要依赖它进行推理的模型会变差。本补丁维持现状。
+            // P1-7 prompt cache note: `Git { head, branch }` depends on the current repository state,
+            // so switching branches changes the rendered system segment, invalidating the
+            // system+messages cache of every upstream provider (Anthropic / OpenAI / DeepSeek).
+            // This is **expected behavior**:
+            //   - on a new branch the instruction model must not assume the old git context;
+            //   - as a tradeoff, the user's first request on a new branch is a 100% miss that writes a new
+            //     cache, after which that branch reuses it. Developers who jump between branches frequently see the most misses.
+            // Alternative considered: moving the git state to the end of the user message (same as P0-1 option C),
+            // but that would make the system segment lose the contextual meaning of "the model can tell the current branch at a glance",
+            // degrading models that need to rely on it for reasoning. This patch keeps the status quo.
             AIAgentContext::Git { head, branch } => {
                 out.git = Some(GitCtx {
                     head: head.clone(),
@@ -342,12 +342,12 @@ fn collect_prompt_context(model_id: &str, ctx: &[AIAgentContext]) -> PromptConte
                     out.project_rules.push(ProjectRuleCtx { path, content });
                 }
             }
-            // 用户附件类 context(File / Image / SelectedText / Block)不进 system prompt,
-            // 由 `user_context::render_user_attachments` 在 chat_stream 的 UserQuery 分支
-            // 注入到当前轮 user message。这跟 warp 自家路径分两类的语义对齐:
-            // - 环境型 → InputContext.{directory,shell,git,...} → 后端注入 system 区
-            // - 附件型 → InputContext.{executed_shell_commands,selected_text,files,images}
-            //            → 后端注入 user 区
+            // User attachment context (File / Image / SelectedText / Block) does not go into the system prompt;
+            // it is injected into the current turn's user message by `user_context::render_user_attachments`
+            // in chat_stream's UserQuery branch. This aligns with the semantics of warp's own path, which splits into two kinds:
+            // - environment type → InputContext.{directory,shell,git,...} → backend injects into the system area
+            // - attachment type → InputContext.{executed_shell_commands,selected_text,files,images}
+            //            → backend injects into the user area
             AIAgentContext::File(_)
             | AIAgentContext::Image(_)
             | AIAgentContext::SelectedText(_)
@@ -359,7 +359,7 @@ fn collect_prompt_context(model_id: &str, ctx: &[AIAgentContext]) -> PromptConte
 }
 
 // ---------------------------------------------------------------------------
-// 公共 API
+// Public API
 // ---------------------------------------------------------------------------
 
 pub fn render_init_project_command(arguments: Option<&str>) -> String {
@@ -387,15 +387,15 @@ pub fn render_init_project_command(arguments: Option<&str>) -> String {
     }
 }
 
-/// 渲染最终发给上游模型的 system message 字符串。
+/// Renders the final system message string sent to the upstream model.
 ///
-/// `ctx` 一般来自 `params.input` 中最近一条 `AIAgentInput::UserQuery.context`。
-/// 拿不到 context(空数组)也 OK — 模板会用 default 占位渲染。
+/// `ctx` usually comes from the most recent `AIAgentInput::UserQuery.context` in `params.input`.
+/// Not getting any context (an empty array) is fine too — the template renders with default placeholders.
 ///
-/// `available_tools` 由 `chat_stream::available_tool_names` 计算,本轮实际暴露给
-/// 上游 LLM 的工具名列表(内置 + MCP,已应用 gating)。模板按此动态渲染白名单,
-/// 不要再硬编码"unavailable tools"黑名单 —— 模型看不到的工具自然不会调,
-/// 反过来用文本黑名单会让模型连真实可用的工具也不敢调。
+/// `available_tools` is computed by `chat_stream::available_tool_names`: the list of tool names actually
+/// exposed to the upstream LLM this turn (built-in + MCP, with gating applied). The template renders the
+/// whitelist dynamically from this; do not hardcode an "unavailable tools" blacklist anymore — the model
+/// naturally won't call tools it can't see, whereas a textual blacklist makes the model afraid to call even genuinely available tools.
 pub fn render_system(
     model: &LLMId,
     ctx: &[AIAgentContext],
@@ -439,7 +439,7 @@ fn fallback_init_project_command(arguments: &str) -> String {
     )
 }
 
-/// 渲染兜底 system(只在模板加载/渲染失败时用,不应在正常路径触发)。
+/// Renders the fallback system prompt (used only when template loading/rendering fails; should not be triggered on the normal path).
 fn fallback_system(model_id: &str) -> String {
     format!(
         "You are the AI coding agent inside Zap, an AI Development Environment (ADE). \
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn pick_template_dispatches_by_model_family() {
-        // 直连形式
+        // Direct-connection form
         for (id, want) in [
             ("claude-sonnet-4-5", "system/anthropic.j2"),
             ("claude-opus-4-1", "system/anthropic.j2"),
@@ -481,7 +481,7 @@ mod tests {
             ("gemini-2.5-pro", "system/gemini.j2"),
             ("kimi-k2", "system/kimi.j2"),
             ("trinity-v1", "system/trinity.j2"),
-            // 兜底
+            // Fallback
             ("deepseek-chat", "system/default.j2"),
             ("qwen2.5-coder", "system/default.j2"),
             ("glm-4", "system/default.j2"),
@@ -494,7 +494,7 @@ mod tests {
 
     #[test]
     fn pick_template_handles_openrouter_path_form() {
-        // OpenRouter 形式 `provider/model`,子串匹配仍命中正确家族
+        // OpenRouter `provider/model` form; substring matching still hits the correct family
         for (id, want) in [
             ("anthropic/claude-3.5-sonnet", "system/anthropic.j2"),
             ("anthropic/claude-opus-4", "system/anthropic.j2"),
@@ -545,13 +545,13 @@ mod tests {
         );
         assert!(out.contains("Shell: bash 5.1"), "{out}");
         assert!(out.contains("linux (Ubuntu 22.04)"), "{out}");
-        // home 字段已对齐 opencode 砍掉,不再渲染
+        // The home field was dropped to align with opencode and is no longer rendered
         assert!(!out.contains("Home directory:"), "{out}");
     }
 
     #[test]
     fn render_produces_non_empty_for_all_families() {
-        // 任意 model id 都能渲染出非空字符串(包含 Zap 自我标识)。
+        // Any model id should render a non-empty string (containing Zap's self-identification).
         for id in [
             "claude-sonnet-4-5",
             "gpt-4o",
@@ -579,15 +579,15 @@ mod tests {
     #[test]
     fn render_omits_skills_block_when_empty() {
         let out = render_system(&LLMId::from("byop:p:deepseek-chat"), &[], &[], false, &[]);
-        // 没 skills 时 skills 区块不应出现
+        // When there are no skills, the skills block should not appear
         assert!(
             !out.contains("Skills provide specialized instructions"),
             "{out}"
         );
     }
 
-    /// Issue #169 回归:系统 prompt 中的 skill 区块必须包含 skill_path(绝对路径),
-    /// 而非仅 name/description,否则模型无法正确调用 read_skill 工具。
+    /// Issue #169 regression: the skill block in the system prompt must contain skill_path (an absolute path),
+    /// not just name/description, otherwise the model cannot call the read_skill tool correctly.
     #[test]
     fn render_includes_skill_path_for_read_skill_tool() {
         use crate::ai::skills::SkillDescriptor;
@@ -612,9 +612,9 @@ mod tests {
         );
     }
 
-    /// Issue #169 后续:bundled skill 的 BundledSkillId 变体在 BYOP 路径下不可通过
-    /// read_skill 加载(走 InvokeSkill),因此 system prompt 中不应输出 <skill_path>
-    /// 以避免模型使用必然失败的 @warp-skill:{id} 值。
+    /// Issue #169 follow-up: a bundled skill's BundledSkillId variant cannot be loaded via read_skill
+    /// on the BYOP path (it goes through InvokeSkill), so the system prompt should not emit <skill_path>,
+    /// to avoid the model using an @warp-skill:{id} value that is guaranteed to fail.
     #[test]
     fn render_omits_skill_path_for_bundled_skill() {
         use crate::ai::skills::SkillDescriptor;
@@ -649,14 +649,14 @@ mod tests {
 
     #[test]
     fn fallback_does_not_panic() {
-        // render_system 永远不会 panic,失败也走 fallback_system
+        // render_system never panics; on failure it falls back to fallback_system
         let out = render_system(&LLMId::from("byop:p:any"), &[], &[], false, &[]);
         assert!(!out.is_empty());
     }
 
     #[test]
     fn render_lists_available_tools_dynamically() {
-        // 传入的 tool 名字必须出现在 system prompt 里(动态白名单)
+        // The tool names passed in must appear in the system prompt (dynamic whitelist)
         let tools: Vec<String> = vec![
             "run_shell_command".into(),
             "webfetch".into(),
@@ -670,16 +670,16 @@ mod tests {
                 "expected `{name}` in prompt, got: {out}"
             );
         }
-        // 不应再出现旧黑名单措辞
+        // The old blacklist wording should no longer appear
         assert!(
             !out.contains("Do not call unavailable tools"),
-            "黑名单段已删除: {out}"
+            "blacklist section has been removed: {out}"
         );
     }
 
     #[test]
     fn render_omits_tool_list_when_empty() {
-        // tool_names 为空(理论上不会发生,兜底:不渲染白名单段)
+        // tool_names is empty (shouldn't happen in theory; fallback: don't render the whitelist section)
         let out = render_system(&LLMId::from("byop:p:deepseek-chat"), &[], &[], false, &[]);
         assert!(!out.contains("Available Tools"), "{out}");
     }
@@ -689,7 +689,7 @@ mod tests {
         let out = render_system(&LLMId::from("byop:p:deepseek-chat"), &[], &[], false, &[]);
         assert!(
             !out.contains("Plan Mode (Read-Only)"),
-            "plan_mode=false 不应包含 Plan Mode 段: {out}"
+            "plan_mode=false should not contain Plan Mode section: {out}"
         );
     }
 
@@ -714,24 +714,24 @@ mod tests {
             );
             assert!(
                 out.contains("Plan Mode (Read-Only)"),
-                "id={id} plan_mode=true 应包含 Plan Mode 段: {out}"
+                "id={id} plan_mode=true should contain Plan Mode section: {out}"
             );
             assert!(
                 out.contains("Stop and wait"),
-                "id={id} plan_mode=true 应包含 Stop and wait 引导: {out}"
+                "id={id} plan_mode=true should contain Stop and wait guidance: {out}"
             );
         }
     }
 
-    // Issue #116:全局 Rules(用户在 设置 → Agents → Rules 创建)必须注入 system prompt。
-    // 下面三个用例覆盖 `partials/user_rules.j2` 的关键分支。
+    // Issue #116: the global Rules (created by the user under Settings → Agents → Rules) must be injected into the system prompt.
+    // The three test cases below cover the key branches of `partials/user_rules.j2`.
 
     #[test]
     fn render_omits_user_rules_block_when_empty() {
         let out = render_system(&LLMId::from("byop:p:deepseek-chat"), &[], &[], false, &[]);
         assert!(
             !out.contains("# User rules"),
-            "user_rules 为空时不应渲染 user rules 区块: {out}"
+            "when user_rules is empty, user rules section should not be rendered: {out}"
         );
     }
 
@@ -748,20 +748,20 @@ mod tests {
             false,
             &rules,
         );
-        assert!(out.contains("# User rules"), "应渲染 user rules 区块: {out}");
-        assert!(out.contains("## My rule"), "应包含规则名: {out}");
+        assert!(out.contains("# User rules"), "should render user rules section: {out}");
+        assert!(out.contains("## My rule"), "should contain rule name: {out}");
         assert!(
             out.contains("Always use snake_case in Rust."),
-            "应包含规则内容: {out}"
+            "should contain rule content: {out}"
         );
     }
 
     #[test]
     fn render_includes_user_rules_across_all_template_families() {
-        // user_rules.j2 经 footer.j2 注入,所有 system 模板族都引用了 footer。
-        // 这个回归用例确保 anthropic / beast / codex / gemini / kimi / trinity /
-        // default 任一模板族都会渲染 user rules,不会因为某条家族没拉 footer 而漏注入。
-        let rules = vec![(Some("家族覆盖".to_string()), "snake_case only.".to_string())];
+        // user_rules.j2 is injected via footer.j2, and every system template family references footer.
+        // This regression test ensures that any of the anthropic / beast / codex / gemini / kimi / trinity /
+        // default template families renders user rules, so none of them misses the injection by not pulling in footer.
+        let rules = vec![(Some("family coverage".to_string()), "snake_case only.".to_string())];
         for id in [
             "claude-sonnet-4-5",
             "gpt-4o",
@@ -781,14 +781,14 @@ mod tests {
             );
             assert!(
                 out.contains("snake_case only."),
-                "id={id} 应包含 user rule 内容: {out}"
+                "id={id} should contain user rule content: {out}"
             );
         }
     }
 
     #[test]
     fn render_user_rules_separates_multiple_rules_with_blank_line() {
-        // 多条规则之间应有空行分隔(`{% if not loop.last %}`),最后一条之后不留空行。
+        // Multiple rules should be separated by a blank line (`{% if not loop.last %}`), with no blank line after the last one.
         let rules = vec![
             (Some("R1".to_string()), "first content".to_string()),
             (Some("R2".to_string()), "second content".to_string()),
@@ -802,23 +802,23 @@ mod tests {
             &rules,
         );
 
-        // 两条规则之间应至少包含一个 "blank line"(两个相邻换行)。
-        // 不写死具体换行数,因为 minijinja 的 trim_blocks/lstrip_blocks 默认行为
-        // 决定的具体换行数容易随模板微调而变(reviewer 实测出过 3 个换行的形态)。
-        // 我们要的契约是"有视觉空行 + 顺序正确"。
-        let pos_r1 = out.find("first content").expect("找不到 R1 content");
-        let pos_r2 = out.find("## R2").expect("找不到 R2 标题");
-        let pos_r3 = out.find("## R3").expect("找不到 R3 标题");
-        assert!(pos_r1 < pos_r2 && pos_r2 < pos_r3, "顺序应保持: {out}");
+        // Between two rules there should be at least one "blank line" (two adjacent newlines).
+        // We don't hardcode the exact number of newlines, because the count determined by minijinja's
+        // default trim_blocks/lstrip_blocks behavior easily changes with minor template tweaks (a reviewer
+        // actually observed a 3-newline shape). The contract we want is "a visual blank line + correct order".
+        let pos_r1 = out.find("first content").expect("could not find R1 content");
+        let pos_r2 = out.find("## R2").expect("could not find R2 heading");
+        let pos_r3 = out.find("## R3").expect("could not find R3 heading");
+        assert!(pos_r1 < pos_r2 && pos_r2 < pos_r3, "order should be maintained: {out}");
         let between_r1_r2 = &out[pos_r1 + "first content".len()..pos_r2];
         let between_r2_r3 = &out[pos_r2..pos_r3];
         assert!(
             between_r1_r2.contains("\n\n"),
-            "R1 与 R2 之间应有空行,实际:{between_r1_r2:?}"
+            "there should be a blank line between R1 and R2, actual: {between_r1_r2:?}"
         );
         assert!(
             between_r2_r3.contains("\n\n"),
-            "R2 与 R3 之间应有空行,实际:{between_r2_r3:?}"
+            "there should be a blank line between R2 and R3, actual: {between_r2_r3:?}"
         );
     }
 
@@ -834,19 +834,19 @@ mod tests {
         );
         assert!(out.contains("# User rules"), "{out}");
         assert!(out.contains("Be terse."), "{out}");
-        // 无 name 时不应渲染空的 `## ` 标题行
+        // When there is no name, an empty `## ` heading line should not be rendered
         assert!(
             !out.contains("## \n"),
-            "无 name 时不应渲染空的 '## ' 标题: {out}"
+            "when there is no name, empty '## ' heading should not be rendered: {out}"
         );
     }
 
     #[test]
     fn render_includes_thinking_language_across_all_template_families() {
-        // thinking_language.j2 经 footer.j2 注入,所有 system 模板族都引用了 footer。
-        // 回归用例确保 8 族模板都会渲染 thinking_language,不会因为某条家族没拉 footer
-        // 而漏注入,导致 LLM 在中文用户提问时仍用英文思考。
-        // 8 族对应: anthropic / gpt / beast / codex / gemini / kimi / trinity / default
+        // thinking_language.j2 is injected via footer.j2, and every system template family references footer.
+        // This regression test ensures all 8 template families render thinking_language, so none of them misses
+        // the injection by not pulling in footer, which would make the LLM still think in English when the user asks in Chinese.
+        // The 8 families correspond to: anthropic / gpt / beast / codex / gemini / kimi / trinity / default
         for id in [
             "claude-sonnet-4-5",
             "gpt-3.5-turbo",
@@ -866,19 +866,19 @@ mod tests {
             );
             assert!(
                 out.contains("# Thinking language"),
-                "id={id} 应渲染 thinking_language 区块: {out}"
+                "id={id} should render thinking_language section: {out}"
             );
             assert!(
                 out.contains("internal reasoning"),
-                "id={id} 应包含 thinking_language 锚点: {out}"
+                "id={id} should contain thinking_language anchor: {out}"
             );
         }
     }
 
     #[test]
     fn render_thinking_language_precedes_tool_aliases() {
-        // meta-rule 应在工具列表之前,不被 user_rules / project_rules 覆盖。
-        // 需要传一个非空 tool 列表,否则 tool_aliases.j2 整个块被 {% if available_tools %} 跳过。
+        // The meta-rule should come before the tool list and not be overridden by user_rules / project_rules.
+        // A non-empty tool list must be passed, otherwise the whole tool_aliases.j2 block is skipped by {% if available_tools %}.
         let tools = vec!["read_files".to_string()];
         let out = render_system(
             &LLMId::from("byop:p:claude-sonnet-4-5"),
@@ -889,13 +889,13 @@ mod tests {
         );
         let pos_thinking = out
             .find("# Thinking language")
-            .expect("应包含 thinking_language");
+            .expect("should contain thinking_language");
         let pos_tools = out
             .find("# Available Tools")
-            .expect("应包含 tool_aliases");
+            .expect("should contain tool_aliases");
         assert!(
             pos_thinking < pos_tools,
-            "thinking_language 应在 tool_aliases 之前: thinking={pos_thinking}, tools={pos_tools}\n{out}"
+            "thinking_language should come before tool_aliases: thinking={pos_thinking}, tools={pos_tools}\n{out}"
         );
     }
 }

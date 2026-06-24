@@ -19,7 +19,7 @@ pub mod skill;
 pub mod agent;
 pub mod completions;
 pub mod config_file;
-// Zap Wave 7-2:`environment` CLI 随 cloud ambient agent 主体子系统物理删。
+// Zap Wave 7-2: `environment` CLI removed along with cloud ambient agent main subsystem.
 pub mod json_filter;
 pub mod mcp;
 pub mod model;
@@ -140,9 +140,9 @@ impl Args {
             } else {
                 use clap::FromArgMatches as _;
 
-                // Zap Wave 7-2:`warp environment` 子命令 随 cloud ambient agent 主体物理删 ——
-                // 以前这里有个反向拦截:在 clap 解析前检查并提前报错。
-                // 现在 enum variant 已删，clap 会自然报“unrecognized subcommand”。
+                // Zap Wave 7-2: `warp environment` subcommand removed along with cloud ambient agent main subsystem.
+                // Previously, there was a reverse intercept here: checking and erroring early before clap parsing.
+                // Now that the enum variant is removed, clap will naturally report “unrecognized subcommand”.
 
                 if !FeatureFlag::ProviderCommand.is_enabled() {
                     let args: Vec<String> = env::args().collect();
@@ -188,8 +188,8 @@ impl Args {
     pub fn clap_command() -> clap::Command {
         let mut command = <Args as CommandFactory>::command();
 
-        // Zap Wave 7-2:`environment` 子命令与 `--environment` 参数随 cloud ambient agent
-        // 主体物理删 —— enum variant 已从 `CliCommand` 和 `RunAgentArgs` 移除。
+        // Zap Wave 7-2: `environment` subcommand and `--environment` parameter removed along with cloud ambient agent
+        // main subsystem — enum variants already removed from `CliCommand` and `RunAgentArgs`.
 
         // Hide the provider subcommand from help text
         if !FeatureFlag::ProviderCommand.is_enabled() {
@@ -318,7 +318,7 @@ pub enum CliCommand {
     #[command(subcommand)]
     Agent(crate::agent::AgentCommand),
 
-    // Zap Wave 7-2:`Environment` variant 随 cloud ambient agent 主体子系统物理删。
+    // Zap Wave 7-2: `Environment` variant removed along with cloud ambient agent main subsystem.
     /// Manage MCP servers.
     #[command(subcommand)]
     MCP(crate::mcp::MCPCommand),

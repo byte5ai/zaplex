@@ -87,18 +87,21 @@ pub struct ShellCommandExecutor {
 
 impl ShellCommandExecutor {
     pub const MAX_WAIT_DURATION: Duration = Duration::from_secs(2);
-    /// Maximum delay we will honor for any agent-requested wait. Applies both  
-    /// to finite `ShellCommandDelay::Duration` requests and to  
-    /// `ShellCommandDelay::OnCompletion`, which would otherwise wait indefinitely.  
+    /// Maximum delay we will honor for any agent-requested wait. Applies both
+    /// to finite `ShellCommandDelay::Duration` requests and to
+    /// `ShellCommandDelay::OnCompletion`, which would otherwise wait indefinitely.
     pub const MAX_AGENT_DELAY_DURATION: Duration = Duration::from_secs(120);
-    /// 「pager 卡死防御」:`wait_until_completion=true`(`ActionResultDelay::UntilCompletion`)
-    /// 路径的最终兜底超时,仅用于防止 `turn_off_pager_for_command` 被用户 shell 配置
-    /// 绕过(`~/.zshrc` `export PAGER=less`、`git config --global core.pager less` 等)
-    /// 后 agent 永久挂起的极端情况。
+    /// "Pager hang defense": the final fallback timeout for the
+    /// `wait_until_completion=true` (`ActionResultDelay::UntilCompletion`) path. It exists only to
+    /// prevent the agent from hanging forever in the extreme case where `turn_off_pager_for_command`
+    /// is bypassed by the user's shell configuration (`~/.zshrc` `export PAGER=less`,
+    /// `git config --global core.pager less`, etc.).
     ///
-    /// **不是**通用的命令超时:30 分钟刻意远超 `MAX_AGENT_DELAY_DURATION`,以避免误伤
-    /// `cargo build --release` / `docker build` / 大型 `npm install` 等合法长任务。
-    /// 触发时通过 `is_preempted=true` 把快照标记为抢占,而非"命令完成"。
+    /// This is **not** a general-purpose command timeout: 30 minutes is deliberately far above
+    /// `MAX_AGENT_DELAY_DURATION` so as not to wrongly cut off legitimate long-running tasks such as
+    /// `cargo build --release` / `docker build` / large `npm install`.
+    /// When it fires, the snapshot is marked as preempted via `is_preempted=true` rather than as
+    /// "command finished".
     pub const MAX_UNTIL_COMPLETION_DURATION: Duration = Duration::from_secs(30 * 60);
 
     pub fn new(
@@ -231,48 +234,57 @@ impl ShellCommandExecutor {
         }
     }
 
-    /// 用一组通用 pager 环境变量包裹命令,让命令在不进 pager 的同时**保留真实退出码**。
+    /// Wraps the command in a set of generic pager environment variables so that it avoids invoking a
+    /// pager while still **preserving the command's real exit code**.
     ///
-    /// 之前的实现是 `(cmd) | cat`,虽然能让 stdout 不再是 tty(从而 git/man/less 等不调 pager),
-    /// 但 bash/zsh 下 `$?` 会被 `cat` 的退出码(几乎总是 0)覆盖,导致 agent 看到 `cargo check`
-    /// 失败时仍然得到 exit_code=0,做出错误判断。
+    /// The previous implementation was `(cmd) | cat`. While that makes stdout no longer a tty (so
+    /// git/man/less etc. don't invoke a pager), under bash/zsh `$?` gets overwritten by `cat`'s exit
+    /// code (almost always 0). As a result, when `cargo check` fails the agent still sees
+    /// exit_code=0 and makes a wrong judgment.
     ///
-    /// 这里改用 `PAGER=cat GIT_PAGER=cat MANPAGER=cat` 并在子壳/script block 里执行,
-    /// 既能覆盖 git/man/bat/kubectl/psql/gh 等绝大多数 CLI 的 pager 行为,又让外层 `$?` /
-    /// `$LASTEXITCODE` 取自命令本身。
+    /// We now use `PAGER=cat GIT_PAGER=cat MANPAGER=cat` and run inside a subshell / script block.
+    /// This overrides the pager behavior of the vast majority of CLIs (git/man/bat/kubectl/psql/gh
+    /// etc.) while letting the outer `$?` / `$LASTEXITCODE` come from the command itself.
     ///
-    /// **加固两条**(配合 `ActionResultDelay::UntilCompletion` 没有短超时的事实,见 #138):
-    /// 1. 先 `unset` 再 `export`(对应 shell 的等价语法),清除从父进程继承的 `PAGER=less`
-    ///    等用户 `~/.zshrc` / `~/.bashrc` 导出值,再赋成 `cat`。仅 `export` 在某些边界
-    ///    场景下仍会被随后的 `.zshenv` 之类二次覆盖。
-    /// 2. 注入 `GIT_CONFIG_COUNT=1 / GIT_CONFIG_KEY_0=core.pager / GIT_CONFIG_VALUE_0=cat`
-    ///    作为双保险:经实测 git 2.54 中 `GIT_PAGER` 环境变量已经优先于
-    ///    `~/.gitconfig` 里 `git config --global core.pager less`,但用 git ≥ 2.31 的
-    ///    `GIT_CONFIG_COUNT` 机制再叠一层 in-process config override,可挡住未来 git
-    ///    版本调整优先级或第三方 pager wrapper 的边角情况。对非 git 命令完全无害,
-    ///    因此无需检测首 token。
+    /// **Two hardening measures** (given that `ActionResultDelay::UntilCompletion` has no short
+    /// timeout, see #138):
+    /// 1. `unset` first, then `export` (using the shell's equivalent syntax), to clear values
+    ///    inherited from the parent process such as the user's `PAGER=less` exported from
+    ///    `~/.zshrc` / `~/.bashrc`, before assigning `cat`. Using only `export` could still be
+    ///    re-overridden in some edge cases by a subsequent `.zshenv` or similar.
+    /// 2. Inject `GIT_CONFIG_COUNT=1 / GIT_CONFIG_KEY_0=core.pager / GIT_CONFIG_VALUE_0=cat`
+    ///    as a double safeguard: in practice, in git 2.54 the `GIT_PAGER` environment variable
+    ///    already takes precedence over `git config --global core.pager less` in `~/.gitconfig`,
+    ///    but stacking an in-process config override via git ≥ 2.31's `GIT_CONFIG_COUNT` mechanism
+    ///    guards against future git versions changing the precedence, or third-party pager wrapper
+    ///    corner cases. It is completely harmless for non-git commands, so there is no need to
+    ///    inspect the first token.
     ///
-    /// 即便上述都失效,`action_result_future` 的 `MAX_UNTIL_COMPLETION_DURATION` 兜底
-    /// 会保证 agent 不会**永久**挂起。
+    /// Even if all of the above fail, `action_result_future`'s `MAX_UNTIL_COMPLETION_DURATION`
+    /// fallback ensures the agent will never hang **forever**.
     fn turn_off_pager_for_command(&self, command: &String, ctx: &mut ModelContext<Self>) -> String {
         match self.active_session.as_ref(ctx).shell_type(ctx) {
-            // 子壳里 export,子壳退出码 = 最后一条命令的退出码,从而保留真实 $?。
-            // 先 unset 清理继承自父 shell 的 PAGER/GIT_PAGER/MANPAGER,再 export=cat。
+            // Export inside a subshell; the subshell's exit code = the last command's exit code, thus
+            // preserving the real $?. unset first to clear PAGER/GIT_PAGER/MANPAGER inherited from
+            // the parent shell, then export=cat.
             Some(ShellType::Zsh) | Some(ShellType::Bash) => format!(
                 "(unset PAGER GIT_PAGER MANPAGER; export PAGER=cat GIT_PAGER=cat MANPAGER=cat GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=cat; {command})"
             ),
-            // fish: set -lx 在 begin/end 块内是局部 export, $status 取最后一条命令。
-            // 用 `set -e` 先清掉继承变量,再 `set -lx` 赋 cat。
+            // fish: set -lx is a local export inside a begin/end block, and $status comes from the
+            // last command. Use `set -e` to clear inherited variables first, then `set -lx` to
+            // assign cat.
             Some(ShellType::Fish) => format!(
                 "begin; set -e PAGER; set -e GIT_PAGER; set -e MANPAGER; set -lx PAGER cat; set -lx GIT_PAGER cat; set -lx MANPAGER cat; set -lx GIT_CONFIG_COUNT 1; set -lx GIT_CONFIG_KEY_0 core.pager; set -lx GIT_CONFIG_VALUE_0 cat; {command}; end"
             ),
-            // pwsh: script block 局部 $env: 不污染外层会话, $LASTEXITCODE 透出。
-            // Remove-Item Env: 清理继承值,再赋 cat;对不存在变量用 -ErrorAction SilentlyContinue。
+            // pwsh: a script block's local $env: does not pollute the outer session, and
+            // $LASTEXITCODE propagates out. Remove-Item Env: clears inherited values, then assigns
+            // cat; for variables that don't exist, use -ErrorAction SilentlyContinue.
             Some(ShellType::PowerShell) => format!(
                 "& {{ Remove-Item Env:PAGER -ErrorAction SilentlyContinue; Remove-Item Env:GIT_PAGER -ErrorAction SilentlyContinue; Remove-Item Env:MANPAGER -ErrorAction SilentlyContinue; $env:PAGER='cat'; $env:GIT_PAGER='cat'; $env:MANPAGER='cat'; $env:GIT_CONFIG_COUNT='1'; $env:GIT_CONFIG_KEY_0='core.pager'; $env:GIT_CONFIG_VALUE_0='cat'; {command} }}"
             ),
-            // 未知 shell 无法安全装饰,直接放过 —— 此路径下 pager 抑制完全无效,只能
-            // 依靠 MAX_UNTIL_COMPLETION_DURATION 兜底超时避免永久挂起。
+            // An unknown shell cannot be decorated safely, so pass it through unchanged -- on this
+            // path pager suppression is completely ineffective, and we can only rely on the
+            // MAX_UNTIL_COMPLETION_DURATION fallback timeout to avoid hanging forever.
             None => command.clone(),
         }
     }
@@ -305,19 +317,24 @@ impl ShellCommandExecutor {
                         RequestCommandOutputResult::CancelledBeforeExecution,
                     ));
                 }
-                // Zap:同步等待型命令(wait_until_completion=true)无条件禁用 pager。
+                // Zap: synchronous wait-style commands (wait_until_completion=true) unconditionally
+                // disable the pager.
                 //
-                // 模型自报的 `uses_pager` 不可靠 —— deepseek-v4-flash 等小模型几乎不会主动标,
-                // 一旦命中 `git diff`/`git log`/`man` 等隐式 pager 就会卡在 less 提示符,
-                // warp 把命令降级成 LongRunningCommandSnapshot 返回,但 agent 不知道这种契约
-                // 切换、继续并行发新 tool call,导致 PTY 和 UI 双重锁死(输入框消失)。
+                // The model's self-reported `uses_pager` is unreliable -- small models such as
+                // deepseek-v4-flash almost never set it proactively, and once they hit an implicit
+                // pager like `git diff`/`git log`/`man` they get stuck at the less prompt. warp then
+                // downgrades the command to a LongRunningCommandSnapshot return value, but the agent
+                // is unaware of this contract switch and keeps firing new tool calls in parallel,
+                // deadlocking both the PTY and the UI (the input box disappears).
                 //
-                // 治本逻辑:既然 agent 显式说"等到完成",pager 提示符违反这个契约,warp
-                // 必须确保 pager 一定不被触发,而不是让模型来预判每个 CLI 的分页行为。
+                // Root-cause fix: since the agent explicitly says "wait until completion", a pager
+                // prompt violates that contract, so warp must guarantee the pager is never triggered
+                // rather than relying on the model to predict each CLI's paging behavior.
                 //
-                // 不影响显式异步路径(wait_until_completion=false),tail -f / dev server
-                // 等真正长运行命令仍走原有 LongRunningCommandSnapshot 链路。
-                let _ = uses_pager; // 字段保留作 API 兼容,但语义已不再依赖
+                // This does not affect the explicit async path (wait_until_completion=false);
+                // genuinely long-running commands like tail -f / dev servers still go through the
+                // existing LongRunningCommandSnapshot path.
+                let _ = uses_pager; // Field retained for API compatibility, but the semantics no longer depend on it.
                 let decorated_command = if *wait_until_completion {
                     self.turn_off_pager_for_command(command, ctx)
                 } else {
@@ -430,12 +447,14 @@ impl ShellCommandExecutor {
                     ));
                 }
                 let command = block.command_with_secrets_unobfuscated(false);
-                // 仅在 `ReadShellCommandOutput` 路径上根据命令内容下调等待时长:此处
-                // 是 agent 对一个**仍在运行**的 block 的二次轮询,默认走 `OnCompletion`
-                // 时会等满 `MAX_AGENT_DELAY_DURATION`(120s)。对 ssh / mosh / sftp /
-                // telnet 等永不主动退出的交互会话来说,这种等待没有意义。
-                // `RequestCommandOutput`(首次发起)使用 `MAX_WAIT_DURATION = 2s` 的默
-                // 认超时,本就不会卡 120s,因此无需同样处理。
+                // Only on the `ReadShellCommandOutput` path do we shorten the wait based on the
+                // command's contents: here the agent is re-polling a block that is **still
+                // running**, and by default the `OnCompletion` path waits the full
+                // `MAX_AGENT_DELAY_DURATION` (120s). For interactive sessions that never exit on
+                // their own, such as ssh / mosh / sftp / telnet, this wait is pointless.
+                // `RequestCommandOutput` (the initial invocation) uses the default
+                // `MAX_WAIT_DURATION = 2s` timeout and would never block for 120s, so it needs no
+                // equivalent handling.
                 let delay = effective_read_shell_command_delay(&command, delay.clone());
                 drop(model);
 
@@ -632,10 +651,11 @@ impl ShellCommandExecutor {
                     _ = timeout => WakeReason::Timeout,
                 }
             } else {
-                // ActionResultDelay::UntilCompletion 路径原本是无超时的。加上 `MAX_UNTIL_COMPLETION_DURATION`
-                // 硬兜底,防止 `turn_off_pager_for_command` 被用户 shell 配置绕过后 agent
-                // 永久挂起(见 #138)。超时触发走下面 `compute_is_preempted` 的
-                // `(Timeout, UntilCompletion)` 分支,被标记为抢占。
+                // The ActionResultDelay::UntilCompletion path originally had no timeout. Add a hard
+                // `MAX_UNTIL_COMPLETION_DURATION` fallback to prevent the agent from hanging forever
+                // after `turn_off_pager_for_command` is bypassed by the user's shell configuration
+                // (see #138). When the timeout fires it goes through `compute_is_preempted`'s
+                // `(Timeout, UntilCompletion)` branch below and is marked as preempted.
                 let hard_timeout = Timer::after(Self::MAX_UNTIL_COMPLETION_DURATION).fuse();
                 pin!(hard_timeout);
                 select! {
@@ -655,10 +675,12 @@ impl ShellCommandExecutor {
             // true completion from a forced client poll (`ForceRefresh`), a timeout during
             // `on_completion`, or the `UntilCompletion` pager-hang safety-net timeout.
             //
-            // 注: `RequestCommandOutputResult::LongRunningCommandSnapshot` 目前没有 `is_preempted`
-            // 字段(与 `ReadShellCommandOutputResult` / `TransferShellCommandControlToUserResult` 不同),
-            // 该标记在 `RequestCommandOutput` 路径上会被 `action_result_for_requested_command` 的 `..`
-            // 丢弃;这里仍然按语义正确赋值,以便日后字段补齐后自动生效。
+            // Note: `RequestCommandOutputResult::LongRunningCommandSnapshot` currently has no
+            // `is_preempted` field (unlike `ReadShellCommandOutputResult` /
+            // `TransferShellCommandControlToUserResult`), so on the `RequestCommandOutput` path this
+            // flag is discarded by the `..` in `action_result_for_requested_command`; we still
+            // assign it correctly per its semantics here, so it takes effect automatically once the
+            // field is added in the future.
             let is_preempted = compute_is_preempted(wake_reason, delay);
 
             // At this point, we've either received block metadata or we've timed out.
@@ -704,22 +726,25 @@ impl ShellCommandExecutor {
     }
 
     pub(super) fn cancel_execution(&mut self, id: &AIAgentActionId, _ctx: &mut ModelContext<Self>) {
-        // RequestedCommand 路径以 action id 为 selector,无条件清理。
-        // 不能依赖 `is_active_and_long_running()` 守卫:命令派生后 ~50ms
-        // (LONG_RUNNING_COMMAND_DURATION_MS) 窗口内守卫为 false,会导致 senders 残留,
-        // 进而让 detached future 挂到命令真正结束才退出(对 wait_until_completion=true
-        // 即 ActionResultDelay::UntilCompletion 的影响尤其大)。
+        // The RequestedCommand path uses the action id as the selector, and is cleaned up
+        // unconditionally. We cannot rely on the `is_active_and_long_running()` guard: within the
+        // ~50ms window (LONG_RUNNING_COMMAND_DURATION_MS) after the command is spawned the guard is
+        // false, which would leave senders lingering, and in turn make the detached future hang
+        // until the command truly finishes (with an especially large impact on
+        // wait_until_completion=true, i.e. ActionResultDelay::UntilCompletion).
         let requested_selector = BlockSelector::RequestedCommandId(id.clone());
         self.block_finished_senders.remove(&requested_selector);
         self.force_refresh_senders.remove(&requested_selector);
 
-        // 不再用 `BlockSelector::Id(active_block.id())` 做兜底清理。WriteToLRC /
-        // ReadShellCommandOutput / TransferShellCommandControlToUser 的 sender key 来
-        // 自 action 参数中的 block_id 或创建时的 active_block,与 cancel 时刻的
-        // active_block 不存在可靠对应:若用户在 action 派生后切换了 active block,
-        // 旧的 active-block 兜底就匹配不上;若没切换,清理也只是"偶发正确"。它们的
-        // sender 由各自 on_complete 回调在 future 自然结束时清理;如需即时清理需引入
-        // action_id → BlockSelector 反向索引,属于本 issue 之外的独立改动。
+        // We no longer use `BlockSelector::Id(active_block.id())` for fallback cleanup. The sender
+        // keys for WriteToLRC / ReadShellCommandOutput / TransferShellCommandControlToUser come from
+        // the block_id in the action parameters or from the active_block at creation time, and have
+        // no reliable correspondence to the active_block at cancel time: if the user switched the
+        // active block after the action was spawned, the old active-block fallback won't match; if
+        // they didn't switch, the cleanup is only "incidentally correct". Their senders are cleaned
+        // up by their respective on_complete callbacks when the future ends naturally; immediate
+        // cleanup would require introducing an action_id -> BlockSelector reverse index, which is a
+        // separate change beyond the scope of this issue.
     }
 
     /// Force any in-flight poll for the given long-running command block to resolve
@@ -760,11 +785,11 @@ impl ShellCommandExecutor {
     }
 }
 
-/// `action_result_future` 内部使用的等待策略。
+/// The wait strategy used internally by `action_result_future`.
 ///
-/// 相比对外的 `Option<ShellCommandDelay>`,这里把 `OnCompletion` 的 timeout
-/// 从隐式常量提升为显式字段,便于按命令场景动态调整(见
-/// `effective_read_shell_command_delay`)。
+/// Compared with the externally-facing `Option<ShellCommandDelay>`, this promotes
+/// `OnCompletion`'s timeout from an implicit constant to an explicit field, making it easy to
+/// adjust dynamically per command scenario (see `effective_read_shell_command_delay`).
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum ActionResultDelay {
     UntilCompletion,
@@ -785,8 +810,8 @@ impl ActionResultDelay {
     }
 }
 
-/// `action_result_future` 中决定 `is_preempted` 取值的原因。提到模块作用域
-/// 以便 `compute_is_preempted` 可被同模块单测调用。
+/// The reason that determines the value of `is_preempted` in `action_result_future`. Hoisted to
+/// module scope so that `compute_is_preempted` can be called by unit tests in the same module.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum WakeReason {
     BlockFinished,
@@ -797,13 +822,15 @@ enum WakeReason {
     ForceRefresh,
 }
 
-/// 计算快照是否应被标记为抢占(`is_preempted=true`)。提取为纯函数使其能被
-/// 单测验证表驱动逻辑正确性(避免需要在异步 `select!` 里 mock 时钟)。
+/// Computes whether the snapshot should be marked as preempted (`is_preempted=true`). Extracted as
+/// a pure function so unit tests can verify the table-driven logic (avoiding the need to mock the
+/// clock inside an async `select!`).
 ///
-/// 抢占语义:server 将快照视为"提前看一眼",而非"命令完成"。满足以下任一:
-/// - `ForceRefresh`(用户 Check now 手动触发)
-/// - `Timeout` 且 delay 为 `OnCompletion`(超过 agent 订的 on-completion 超时)
-/// - `Timeout` 且 delay 为 `UntilCompletion`(命中 pager 卡死兜底超时,见 #138)
+/// Preemption semantics: the server treats the snapshot as "a peek ahead" rather than "command
+/// finished". True if any of the following holds:
+/// - `ForceRefresh` (user manually triggered Check now)
+/// - `Timeout` with delay `OnCompletion` (exceeded the on-completion timeout the agent requested)
+/// - `Timeout` with delay `UntilCompletion` (hit the pager-hang fallback timeout, see #138)
 fn compute_is_preempted(wake: WakeReason, delay: ActionResultDelay) -> bool {
     matches!(wake, WakeReason::ForceRefresh)
         || matches!(
@@ -821,19 +848,20 @@ fn action_result_delay_for_requested_command(wait_until_completion: bool) -> Act
     }
 }
 
-/// 把 agent 请求的 `ShellCommandDelay` 映射成内部使用的 `ActionResultDelay`,
-/// 并对**永不主动退出**的交互会话(ssh / mosh / sftp / telnet 等)做特殊处理:
+/// Maps the agent-requested `ShellCommandDelay` to the internally-used `ActionResultDelay`, with
+/// special handling for interactive sessions that **never exit on their own** (ssh / mosh / sftp /
+/// telnet etc.):
 ///
-/// 1. `Some(OnCompletion)` —— 把 timeout 从 `MAX_AGENT_DELAY_DURATION`(120s)
-///    缩短到 `MAX_WAIT_DURATION`(2s),避免 agent 在永不结束的命令上死等。
-/// 2. `None`(默认)—— 主动**升级**为 `OnCompletion { 2s }`,而不是保留
-///    `Default`。注意这会同步改变 `action_result_future` 内 `is_preempted` 的
-///    取值:`Default` + `Timeout` 不算抢占,而 `OnCompletion` + `Timeout` 会
-///    标记为抢占,从而让 server 把这次快照理解为"先看一眼"而非"命令完成"。
-///    对交互会话来说这是正确语义。
-/// 3. `Some(Duration(d))` —— 保留 agent 的显式请求,不做改写。
+/// 1. `Some(OnCompletion)` -- shorten the timeout from `MAX_AGENT_DELAY_DURATION` (120s) to
+///    `MAX_WAIT_DURATION` (2s), so the agent doesn't wait forever on a never-ending command.
+/// 2. `None` (the default) -- proactively **upgrade** to `OnCompletion { 2s }` rather than keeping
+///    `Default`. Note this also changes the value of `is_preempted` inside `action_result_future`:
+///    `Default` + `Timeout` does not count as preemption, whereas `OnCompletion` + `Timeout` is
+///    marked as preempted, making the server interpret this snapshot as "a peek" rather than
+///    "command finished". This is the correct semantics for interactive sessions.
+/// 3. `Some(Duration(d))` -- preserve the agent's explicit request without rewriting it.
 ///
-/// 非交互命令一律走 `from_shell_command_delay` 的原始映射。
+/// Non-interactive commands always go through `from_shell_command_delay`'s original mapping.
 fn effective_read_shell_command_delay(
     command: &str,
     delay: Option<ShellCommandDelay>,
@@ -849,15 +877,17 @@ fn effective_read_shell_command_delay(
     ActionResultDelay::from_shell_command_delay(delay)
 }
 
-/// 判断 `command` 是否会启动一个**永不主动退出**的交互会话。命中规则:
-/// - 被 Zap generator wrapper 包裹的命令,递归判断内部命令。
-/// - 裸 `ssh ...`(走 `parse_interactive_ssh_command`,会正确排除 `-T` / `-W`
-///   等非交互形式)。
-/// - 带路径或带 `.exe` 的 ssh(改写为裸 `ssh` 后再判)。
-/// - `mosh` / `sftp` / `telnet`(含 `.exe`)等没有 ssh 那样的非交互旗标,直接按
-///   可执行名匹配即可。
+/// Determines whether `command` starts an interactive session that **never exits on its own**.
+/// Matching rules:
+/// - For a command wrapped by the Zap generator wrapper, recursively evaluate the inner command.
+/// - Bare `ssh ...` (via `parse_interactive_ssh_command`, which correctly excludes non-interactive
+///   forms such as `-T` / `-W`).
+/// - ssh with a path or `.exe` suffix (rewritten to bare `ssh` and then evaluated).
+/// - `mosh` / `sftp` / `telnet` (including `.exe`), which lack ssh-style non-interactive flags, so
+///   matching by executable name is sufficient.
 ///
-/// 仅供 `effective_read_shell_command_delay` 使用的启发式检测,误判后果有限。
+/// A heuristic used only by `effective_read_shell_command_delay`; the consequences of a misjudgment
+/// are limited.
 fn command_starts_non_terminating_session(command: &str) -> bool {
     let command = command.trim_start();
     in_band_generator_command(command)
@@ -875,17 +905,19 @@ fn command_starts_non_terminating_session(command: &str) -> bool {
         })
 }
 
-/// 解开 Zap 自身的 generator wrapper,把里面真正要跑的命令抽出来。
+/// Unwraps Zap's own generator wrapper to extract the actual command to run from inside it.
 ///
-/// wrapper 协议形如:`<wrapper> <generator_id> '<inner_command>' [extra flags...]`
-/// 其中:
-/// - `<wrapper>` 是 `warp_run_generator_command`(POSIX shell)或
-///   `Zap-Run-GeneratorCommand`(PowerShell,大小写不敏感)。
-/// - `<generator_id>` 是数字 id,这里不解析,直接跳过。
-/// - `<inner_command>` 是被单引号包裹的真实命令字符串,也就是我们要返回的内容。
+/// The wrapper protocol looks like: `<wrapper> <generator_id> '<inner_command>' [extra flags...]`
+/// where:
+/// - `<wrapper>` is `warp_run_generator_command` (POSIX shell) or `Zap-Run-GeneratorCommand`
+///   (PowerShell, case-insensitive).
+/// - `<generator_id>` is a numeric id; we don't parse it and simply skip it.
+/// - `<inner_command>` is the real command string wrapped in single quotes, which is exactly what
+///   we want to return.
 ///
-/// 协议固定按位置取 `tokens[2]`;若后续 wrapper 新增可选参数破坏了位置假设,这
-/// 里会静默失配(返回 None),最坏情况只是退回到旧的 120s 等待,不会引入错误行为。
+/// The protocol always takes `tokens[2]` by position; if a future wrapper adds optional arguments
+/// that break the positional assumption, this will silently mismatch (return None), and in the
+/// worst case merely fall back to the old 120s wait without introducing incorrect behavior.
 fn in_band_generator_command(command: &str) -> Option<String> {
     let tokens = shell_words::split(command.trim_start()).ok()?;
     if tokens.len() >= 3
@@ -898,14 +930,15 @@ fn in_band_generator_command(command: &str) -> Option<String> {
     }
 }
 
-/// 当命令的可执行入口是带路径或带 `.exe` 后缀的 ssh 时,把它改写为裸 `ssh`,
-/// 以便复用 `parse_interactive_ssh_command` 这套只接受 `^ssh\s+...` 的解析。
+/// When the command's executable entry point is ssh with a path or `.exe` suffix, rewrite it to
+/// bare `ssh` so we can reuse `parse_interactive_ssh_command`, which only accepts `^ssh\s+...`.
 ///
-/// 例如 `"C:\Windows\System32\OpenSSH\ssh.exe" host -p 22` 会被改写为
-/// `ssh host -p 22`。其余参数原样保留(`rest` 是 `first_executable_token` 切
-/// 完第一个 token 后的剩余字符串)。
+/// For example, `"C:\Windows\System32\OpenSSH\ssh.exe" host -p 22` is rewritten to
+/// `ssh host -p 22`. The remaining arguments are preserved as-is (`rest` is the string left over
+/// after `first_executable_token` strips the first token).
 ///
-/// 命名上只做"前缀改写",不规范化路径中的反斜杠/引号,也不展开转义。
+/// By name this only does a "prefix rewrite"; it does not normalize backslashes/quotes in the path,
+/// nor expand escapes.
 fn normalized_ssh_command(command: &str) -> Option<String> {
     let (token, rest) = first_executable_token(command)?;
     let name = command_basename(token);
@@ -921,11 +954,12 @@ fn first_executable_name(command: &str) -> Option<String> {
     Some(command_basename(token).to_ascii_lowercase())
 }
 
-/// 返回命令真正的"可执行入口" token,跳过常见的调用前缀:
-/// - PowerShell 调用运算符 `&`(必须是独立 token,如 `& "C:\...\ssh.exe" host`)。
-/// - POSIX `command` 内建(`command ssh host`),用于绕过 alias/function。
+/// Returns the command's true "executable entry point" token, skipping common invocation prefixes:
+/// - The PowerShell call operator `&` (must be a standalone token, e.g. `& "C:\...\ssh.exe" host`).
+/// - The POSIX `command` builtin (`command ssh host`), used to bypass an alias/function.
 ///
-/// 只剥离一层前缀,够覆盖实际场景;不支持 `&&` 链、`call`、`exec` 等其他形态。
+/// It strips only one layer of prefix, which is enough to cover real-world cases; it does not
+/// support `&&` chains, `call`, `exec`, or other forms.
 fn first_executable_token(command: &str) -> Option<(&str, &str)> {
     let (token, rest) = first_command_token(command)?;
     if token == "&" || token.eq_ignore_ascii_case("command") {
@@ -935,18 +969,21 @@ fn first_executable_token(command: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// 启发式 tokenization:取出命令的第一个 token,以及它后面剩余的原始字符串。
+/// Heuristic tokenization: extracts the command's first token and the raw string that follows it.
 ///
-/// 故意**不**使用 `shell_words::split`,原因有二:
-/// 1. `shell_words` 会因 PowerShell 调用运算符 `&` 等非 POSIX 字符直接 fail,
-///    而我们需要识别这类形态。
-/// 2. 我们只需要"第一个 token + rest"两段,不需要完整 token 流,手写更直接。
+/// It deliberately does **not** use `shell_words::split`, for two reasons:
+/// 1. `shell_words` would fail outright on non-POSIX characters such as the PowerShell call
+///    operator `&`, yet we need to recognize such forms.
+/// 2. We only need the two parts "first token + rest", not a full token stream, so writing it by
+///    hand is more direct.
 ///
-/// 引号处理只识别字符串**起始位置**的 `"` 或 `'`,且不处理转义。为了避免
-/// `"foo"bar`、`"ssh"hello-world` 这类"右引号后还粘着字符"的输入被错切成
-/// `foo` / `ssh` 进而触发**误检**(把普通命令认成交互会话),这里要求右引号
-/// 后必须紧跟空白或字符串结尾;不满足就返回 `None`,让上层走"退回到旧的等待
-/// 行为"这条安全分支,而不是冒着 false-positive 风险硬切。
+/// Quote handling only recognizes a `"` or `'` at the **start** of the string, and does not handle
+/// escapes. To avoid inputs like `"foo"bar` or `"ssh"hello-world` (where a character is stuck right
+/// after the closing quote) being mis-split into `foo` / `ssh` and thereby triggering a **false
+/// detection** (mistaking an ordinary command for an interactive session), we require the closing
+/// quote to be immediately followed by whitespace or the end of the string; otherwise we return
+/// `None`, letting the caller take the safe "fall back to the old wait behavior" branch rather than
+/// risking a false positive by forcing a split.
 fn first_command_token(command: &str) -> Option<(&str, &str)> {
     let command = command.trim_start();
     if command.is_empty() {
@@ -960,8 +997,9 @@ fn first_command_token(command: &str) -> Option<(&str, &str)> {
             if ch == first {
                 let token = &command[first.len_utf8()..idx];
                 let rest = &command[idx + ch.len_utf8()..];
-                // 右引号后必须是空白或字符串末尾;否则视为无法 tokenize,
-                // 让调用方退回到不抢占的安全路径。
+                // The closing quote must be followed by whitespace or the end of the string;
+                // otherwise treat it as un-tokenizable and let the caller fall back to the
+                // non-preempting safe path.
                 if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
                     return None;
                 }
@@ -969,7 +1007,7 @@ fn first_command_token(command: &str) -> Option<(&str, &str)> {
             }
         }
 
-        // 没找到配对的右引号:同样视为无法 tokenize。
+        // No matching closing quote found: likewise treated as un-tokenizable.
         return None;
     }
 

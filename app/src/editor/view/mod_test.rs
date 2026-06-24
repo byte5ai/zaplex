@@ -4041,7 +4041,7 @@ fn test_select_next_occurrence_multi_byte() {
             editor.add_next_occurrence(ctx);
         });
 
-        // Both instances of `分分分` should be selected.
+        // Both instances of the repeated Chinese character should be selected.
         editor.update(&mut app, |editor, ctx| {
             assert_eq!(
                 editor.selected_ranges(ctx),
@@ -4371,7 +4371,7 @@ fn test_system_delete_multibyte_characters_basic() {
         });
 
         editor.update(&mut app, |editor, ctx| {
-            // Delete "世界" (6 bytes, 2 chars - each Chinese character is 3 bytes)
+            // Delete 2 Chinese characters (6 bytes total - each Chinese character is 3 bytes)
             editor.system_delete(ByteOffset::from(0)..ByteOffset::from(6), ctx);
             assert_eq!(editor.buffer_text(ctx), " 🌍 café");
         });
@@ -4454,7 +4454,7 @@ fn test_system_delete_various_unicode_categories() {
             let text3 = editor.buffer_text(ctx);
             assert_eq!(text3, "你好 🌍🎉");
 
-            // Delete "你好 " (Chinese - 7 bytes: 2 chars × 3 bytes each + 1 space)
+            // Delete 2 Chinese characters and a space (7 bytes total: 2 chars × 3 bytes each + 1 space)
             editor.system_delete(ByteOffset::from(0)..ByteOffset::from(7), ctx);
             let text4 = editor.buffer_text(ctx);
             assert_eq!(text4, "🌍🎉");

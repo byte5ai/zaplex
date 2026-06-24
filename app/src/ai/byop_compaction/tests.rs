@@ -1,6 +1,6 @@
-//! Phase 1 单元测试 — 覆盖纯函数(token / overflow / prompt / config / algorithm)。
+//! Phase 1 unit tests — covering pure functions (token / overflow / prompt / config / algorithm).
 //!
-//! Phase 3 (state + message_view) 落地后再补 e2e 集成测试。
+//! E2E integration tests will be added after Phase 3 (state + message_view) lands.
 
 use super::algorithm::{prune_decisions, select, turns, MessageRef, Role, ToolOutputRef};
 use super::commit::commit_summarization;
@@ -28,7 +28,7 @@ fn token_estimate_short() {
 #[test]
 fn token_estimate_aligned() {
     assert_eq!(estimate(&"a".repeat(40)), 10);
-    assert_eq!(estimate(&"a".repeat(41)), 10); // 41/4 = 10.25 → 10 (banker's rounding 不影响)
+    assert_eq!(estimate(&"a".repeat(41)), 10); // 41/4 = 10.25 → 10 (banker's rounding has no effect)
     assert_eq!(estimate(&"a".repeat(42)), 11); // 42/4 = 10.5 → 11
 }
 
@@ -59,7 +59,7 @@ fn usable_without_input_limit() {
         input: 0,
         max_output: 8_000,
     };
-    // 走第二分支:context - max_output = 192_000
+    // Takes second branch: context - max_output = 192_000
     assert_eq!(usable(&cfg, model), 192_000);
 }
 
@@ -83,7 +83,7 @@ fn usable_respects_cfg_reserved_override() {
         input: 180_000,
         max_output: 8_000,
     };
-    // reserved 覆盖为 50_000 → 180_000 - 50_000 = 130_000
+    // reserved overridden to 50_000 → 180_000 - 50_000 = 130_000
     assert_eq!(usable(&cfg, model), 130_000);
 }
 
@@ -133,7 +133,7 @@ fn token_counts_count_uses_total_when_present() {
         cache_read: 10,
         cache_write: 5,
     };
-    assert_eq!(t.count(), 100); // total 优先
+    assert_eq!(t.count(), 100); // total takes priority
 }
 
 #[test]
@@ -237,14 +237,14 @@ fn continue_message_normal_branch() {
 
 // -- algorithm: turns / select / prune ----------------------------------
 
-/// 测试用 mock message 实现。
+/// Test mock message implementation.
 #[derive(Debug, Clone)]
 struct M {
     id: u32,
     role: Role,
-    /// user 消息是否带 compaction 标记
+    /// whether user message has compaction marker
     is_compaction: bool,
-    /// assistant 消息是否是摘要
+    /// whether assistant message is a summary
     is_summary: bool,
     size: usize,
     tools: Vec<ToolOutputRef<u32>>,
@@ -354,7 +354,7 @@ fn turns_skips_compaction_marker() {
     let msgs = vec![
         M::user(1, 10),
         M::assistant(2, 20),
-        M::user_compaction(99), // 不算 turn
+        M::user_compaction(99), // does not count as turn
         M::assistant(3, 30),
         M::user(4, 10),
     ];
@@ -382,12 +382,12 @@ fn select_keeps_recent_turns_within_budget() {
     ];
     let cfg = CompactionConfig {
         tail_turns: 2,
-        preserve_recent_tokens: Some(500), // 足够装下最近 2 个 turn (各 200)
+        preserve_recent_tokens: Some(500), // enough to fit recent 2 turns (200 each)
         ..Default::default()
     };
     let model = ModelLimit::FALLBACK;
     let r = select(&msgs, &cfg, model, sum_size);
-    // tail 起点是第 2 个 turn 的 user(idx=2),head_end=2
+    // tail starts at user of 2nd turn (idx=2), head_end=2
     assert_eq!(r.head_end, 2);
     assert_eq!(r.tail_start_id, Some(3));
 }
@@ -396,7 +396,7 @@ fn select_keeps_recent_turns_within_budget() {
 fn select_split_turn_when_over_budget() {
     let msgs = vec![
         M::user(1, 100),
-        M::user(2, 100), // turn 2 含 5 条消息共 500
+        M::user(2, 100), // turn 2 contains 5 messages totaling 500
         M::assistant(3, 100),
         M::assistant(4, 100),
         M::assistant(5, 100),
@@ -404,12 +404,12 @@ fn select_split_turn_when_over_budget() {
     ];
     let cfg = CompactionConfig {
         tail_turns: 1,
-        preserve_recent_tokens: Some(250), // 装不下 turn2 整体(500),触发 splitTurn
+        preserve_recent_tokens: Some(250), // can't fit entire turn2 (500), triggers splitTurn
         ..Default::default()
     };
     let model = ModelLimit::FALLBACK;
     let r = select(&msgs, &cfg, model, sum_size);
-    // splitTurn 从 turn2.start+1=2 开始找,messages[2..6]=400 > 250, [3..6]=300>250, [4..6]=200<=250 → start=4
+    // splitTurn starts at turn2.start+1=2, messages[2..6]=400 > 250, [3..6]=300>250, [4..6]=200<=250 → start=4
     assert_eq!(r.head_end, 4);
     assert_eq!(r.tail_start_id, Some(5));
 }
@@ -449,7 +449,7 @@ fn tool_output(call_id: u32, name: &str, size: usize) -> ToolOutputRef<u32> {
 
 #[test]
 fn prune_below_minimum_returns_empty() {
-    // 只有少量 tool output,不到 PRUNE_MINIMUM(20_000)
+    // Only a small amount of tool output, below PRUNE_MINIMUM(20_000)
     let msgs = vec![
         M::user(1, 10),
         M::assistant_with_tools(2, 0, vec![tool_output(101, "bash", 5_000)]),
@@ -463,7 +463,7 @@ fn prune_below_minimum_returns_empty() {
 
 #[test]
 fn prune_skips_protected_skill_tool() {
-    // 大 skill tool + 大 bash tool;skill 受保护永不入 prune,bash 在 PRUNE_PROTECT 内也不剪
+    // Large skill tool + large bash tool; skill is protected and never pruned, bash is not trimmed within PRUNE_PROTECT
     let msgs = vec![
         M::user(1, 10),
         M::assistant_with_tools(
@@ -479,24 +479,24 @@ fn prune_skips_protected_skill_tool() {
         M::user(5, 10),
     ];
     let r = prune_decisions(&msgs);
-    // 只剪超过 PRUNE_PROTECT(40_000)之外的部分,且总剪量 > PRUNE_MINIMUM(20_000)
-    // 最近 2 个 user turn 不动:turn5..end / turn3..turn5 都保留
-    // 这里第 1 个 turn 含 bash 30_000(超 PROTECT),所以应被剪
-    // total 累计:30_000 (bash 102) + 30_000 (bash 103,但在 turn3 受保护 skip)...
-    // 注意:user_turns_seen 在遇到 user(5) 时变 1,user(3) 时变 2,继续看更早消息
-    // assistant(4) 的 tools 在 turn3 内,user_turns_seen=2 时还是 continue?
-    //   循环:idx=4 user(5), seen=1 → continue
+    // Only trim parts beyond PRUNE_PROTECT(40_000), and total trimmed > PRUNE_MINIMUM(20_000)
+    // Latest 2 user turns untouched: turn5..end / turn3..turn5 all preserved
+    // Here 1st turn contains bash 30_000 (exceeds PROTECT), so should be trimmed
+    // total accumulate: 30_000 (bash 102) + 30_000 (bash 103, but protected skip in turn3)...
+    // Note: user_turns_seen becomes 1 at user(5), 2 at user(3), continue looking earlier messages
+    // assistant(4) tools in turn3, when user_turns_seen=2 still continue?
+    //   loop: idx=4 user(5), seen=1 → continue
     //         idx=3 assistant(4), seen=1 → continue
-    //         idx=2 user(3), seen=2 → 进入处理
-    //         idx=1 assistant(2), seen=2 → 处理 tools(skill skip; bash 30_000 → total=30_000 > PROTECT(40_000)? no, 30<40 → continue)
-    //         idx=0 user(1), seen=3 → 处理(无 tools)
-    // total=30_000,pruned=0,小于 PRUNE_MINIMUM → 返回空
+    //         idx=2 user(3), seen=2 → enter processing
+    //         idx=1 assistant(2), seen=2 → process tools (skill skip; bash 30_000 → total=30_000 > PROTECT(40_000)? no, 30<40 → continue)
+    //         idx=0 user(1), seen=3 → process (no tools)
+    // total=30_000,pruned=0, less than PRUNE_MINIMUM → return empty
     assert_eq!(r.len(), 0);
 }
 
 #[test]
 fn prune_reaches_minimum_returns_decisions() {
-    // 构造足够大的 tool output 触发 prune
+    // Construct large enough tool output to trigger prune
     let big_tool = |id: u32| tool_output(id, "bash", 25_000);
     let msgs = vec![
         M::user(1, 10),
@@ -506,15 +506,15 @@ fn prune_reaches_minimum_returns_decisions() {
         M::user(5, 10),
     ];
     let r = prune_decisions(&msgs);
-    // 倒序遍历:
+    // Traverse in reverse:
     //  idx=4 user(5) seen=1 continue
     //  idx=3 assistant(4) seen=1 continue
     //  idx=2 user(3) seen=2 continue (no tools)
-    //  idx=1 assistant(2) seen=2,tools 倒序:103 → total=25_000 < 40_000 continue;
-    //                                        102 → total=50_000 > 40_000 → pruned=25_000, push (2,102)
-    //                                        101 → total=75_000 > 40_000 → pruned=50_000, push (2,101)
+    //  idx=1 assistant(2) seen=2, tools reverse: 103 → total=25_000 < 40_000 continue;
+    //                                              102 → total=50_000 > 40_000 → pruned=25_000, push (2,102)
+    //                                              101 → total=75_000 > 40_000 → pruned=50_000, push (2,101)
     //  idx=0 user(1) seen=3 continue
-    // pruned=50_000 > PRUNE_MINIMUM(20_000) → 返回 [(2,102),(2,101)]
+    // pruned=50_000 > PRUNE_MINIMUM(20_000) → return [(2,102),(2,101)]
     assert_eq!(r.len(), 2);
     assert!(r.contains(&(2, 102)));
     assert!(r.contains(&(2, 101)));
@@ -532,7 +532,7 @@ fn prune_stops_at_summary_boundary() {
         M::user(6, 10),
     ];
     let r = prune_decisions(&msgs);
-    // seen=2 时遇到 summary(3) 就 break,不会处理 idx=1 的 big_tool
+    // When seen=2 and encounters summary(3), break immediately, won't process big_tool at idx=1
     assert_eq!(r.len(), 0);
 }
 
@@ -547,8 +547,8 @@ fn prune_stops_at_already_compacted() {
         M::assistant(4, 0),
         M::user(5, 10),
     ];
-    // 倒序 tools:102 size=50_000 → total=50_000 > 40_000 → pruned=50_000, push (2,102)
-    //              101 already_compacted → break outer
+    // Reverse tools: 102 size=50_000 → total=50_000 > 40_000 → pruned=50_000, push (2,102)
+    //               101 already_compacted → break outer
     let r = prune_decisions(&msgs);
     assert_eq!(r.len(), 1);
     assert_eq!(r[0], (2, 102));

@@ -1,4 +1,4 @@
-//! SSH 数据同步提供者，实现 SyncDataProvider trait
+//! SSH data synchronization provider, implements SyncDataProvider trait
 //!
 // author: logic
 // date: 2026-05-26
@@ -15,7 +15,7 @@ use zap_sync::crypto;
 use zap_sync::{SyncDataProvider, SyncEngineError, SyncVersionStore};
 use zeroize::Zeroizing;
 
-/// keychain 三种凭据 kind,用于 collect/apply/orphan-cleanup 时统一遍历
+/// Keychain three credential kinds, used for uniform traversal during collect/apply/orphan-cleanup
 const ALL_SECRET_KINDS: [SecretKind; 4] = [
     SecretKind::Password,
     SecretKind::Passphrase,
@@ -23,7 +23,7 @@ const ALL_SECRET_KINDS: [SecretKind; 4] = [
     SecretKind::OneKeyPassword,
 ];
 
-/// SSH 同步用的节点数据
+/// Node data for SSH synchronization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncNode {
     pub id: String,
@@ -34,7 +34,7 @@ pub struct SyncNode {
     pub is_collapsed: bool,
 }
 
-/// SSH 同步用的服务器数据（含加密密码）
+/// Server data for SSH synchronization (includes encrypted passwords)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncServer {
     pub node_id: String,
@@ -64,7 +64,7 @@ pub struct SyncOneKeyCredential {
     pub password_encrypted: Option<String>,
 }
 
-/// SSH 同步数据
+/// SSH synchronization data
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SshSyncData {
     pub nodes: Vec<SyncNode>,
@@ -73,13 +73,13 @@ pub struct SshSyncData {
     pub onekey_credentials: Vec<SyncOneKeyCredential>,
 }
 
-/// SSH 数据同步提供者
+/// SSH data synchronization provider
 pub struct SshSyncProvider {
     secret_store: KeychainSecretStore,
 }
 
 impl SshSyncProvider {
-    /// 创建新的 SshSyncProvider 实例
+    /// Create a new SshSyncProvider instance
     pub fn new() -> Self {
         Self {
             secret_store: KeychainSecretStore::default(),
@@ -131,11 +131,11 @@ impl SyncDataProvider for SshSyncProvider {
                     with_conn(|conn| Ok(SshRepository::get_server(conn, &node.id)?))
                         .map_err(|e| SyncEngineError::Provider(e.to_string()))?;
                 if let Some(server) = server_result {
-                    // 区分 keychain 错误与"用户没设密码":
-                    // - Ok(Some) = 有密码,加密上传
-                    // - Ok(None) = 用户确实没设,字段写 None
-                    // - Err = 中止整次上传,避免把瞬时 keychain 故障序列化为
-                    //   "无密码"覆盖其他设备的真实密码(PR #161 review #5)
+                    // Distinguish keychain errors from "user didn't set password":
+                    // - Ok(Some) = password exists, encrypt and upload
+                    // - Ok(None) = user indeed didn't set it, write None to field
+                    // - Err = abort entire upload to avoid serializing transient keychain failure as
+                    //   "no password" and overwriting real passwords on other devices (PR #161 review #5)
                     let password = read_secret(&self.secret_store, &node.id, SecretKind::Password)?;
                     let passphrase =
                         read_secret(&self.secret_store, &node.id, SecretKind::Passphrase)?;
@@ -174,10 +174,10 @@ impl SyncDataProvider for SshSyncProvider {
         let ssh_data: SshSyncData = serde_json::from_value(data.clone())
             .map_err(|e: serde_json::Error| SyncEngineError::Serialization(e.to_string()))?;
 
-        // ---- 阶段 0 ---- 全部解密 + 收集 explicit-clear 列表
-        // pending_secrets: 远程明确给了密文 → 需要写入 keychain
-        // explicit_clears: 远程明确给了 None → 需要 delete keychain(用户在其他设备清空了密码,
-        //                  不清理会导致本地继续用旧密码,违反用户意图;PR #161 七轮 review)
+        // ---- Phase 0 ---- Decrypt all + collect explicit-clear list
+        // pending_secrets: remote explicitly provided ciphertext → need to write to keychain
+        // explicit_clears: remote explicitly provided None → need to delete keychain(user cleared password on another device,
+        //                  not cleaning up will cause local to continue using old password, violating user intent; PR #161 seven-round review)
         struct PendingSecret {
             node_id: String,
             kind: SecretKind,
@@ -228,11 +228,11 @@ impl SyncDataProvider for SshSyncProvider {
             }
         }
 
-        // ---- 阶段 0.5 ---- 拓扑排序节点,父节点先于子节点;orphan(parent 不在数据集中)
-        // 视作根节点插入,避免 SQLite FK 违规整事务回滚
+        // ---- Phase 0.5 ---- Topologically sort nodes, parent before child; orphans (parent not in dataset)
+        // insert as root nodes to avoid SQLite FK violation rolling back entire transaction
         let sorted_nodes = topologically_sort_nodes(&ssh_data.nodes);
 
-        // ---- 阶段 0.6 ---- 收集本地原有 keychain owner id,供后续 orphan keychain 清理
+        // ---- Phase 0.6 ---- Collect existing local keychain owner ids for subsequent orphan keychain cleanup
         let mut existing_secret_owner_ids: Vec<String> = with_conn(|conn| {
             Ok(persistence::schema::ssh_nodes::table
                 .select(persistence::schema::ssh_nodes::id)
@@ -247,24 +247,24 @@ impl SyncDataProvider for SshSyncProvider {
         .map_err(|e| SyncEngineError::Provider(e.to_string()))?;
         existing_secret_owner_ids.extend(existing_credential_ids);
 
-        // ---- 阶段 1 ---- 先写 keychain。任一失败 → 立即中止,不动 DB。
-        // 跟踪 (node_id, kind, prior_value) 列表,DB 阶段失败时:
-        // - prior_value=Some(v) → restore 回旧值(避免覆盖了用户既有密码)
-        // - prior_value=None    → delete(避免污染)
-        // 真正的"原子回滚"以 secret_store.set 的幂等覆盖语义为基础(PR #161 三轮 review)
+        // ---- Phase 1 ---- Write keychain first. Any failure → abort immediately, don't touch DB.
+        // Track (node_id, kind, prior_value) list; if DB phase fails:
+        // - prior_value=Some(v) → restore to old value (avoid overwriting user's existing password)
+        // - prior_value=None    → delete (avoid pollution)
+        // True "atomic rollback" is based on idempotent override semantics of secret_store.set (PR #161 three-round review)
         let mut written_secrets: Vec<WrittenSecret> = Vec::new();
         for s in &pending_secrets {
-            // 写入前快照原值,以便后续 rollback 可以真正恢复旧值。
-            // 真实的 keychain 错误中止整个流程,但 NoBackend(headless Linux 等)按"无旧值"处理。
-            // 此设计与 collect_data 的 read_secret 一致 — 同样的环境约束。
+            // Snapshot prior value before write so subsequent rollback can truly restore old value.
+            // Real keychain errors abort entire flow, but NoBackend (headless Linux, etc.) treats as "no prior value".
+            // This design is consistent with collect_data's read_secret — same environmental constraints.
             let prior_value = match self.secret_store.get(&s.node_id, s.kind) {
-                // store.get 已经返回 Option<Zeroizing<String>>,直接用,保留零化语义
+                // store.get already returns Option<Zeroizing<String>>, use directly, preserving zeroing semantics
                 Ok(opt) => opt,
                 Err(e) => {
-                    // 与 read_secret 同等严格:keychain 任何错误都中止,避免无法 rollback
+                    // Same rigor as read_secret: any keychain error aborts to allow rollback
                     rollback_keychain_writes(&self.secret_store, &written_secrets);
                     return Err(SyncEngineError::Provider(format!(
-                        "读取 keychain 旧值失败 ({}, {:?}): {e}。已回滚 {} 项,请确认密钥库可用后重试下载",
+                        "Failed to read prior keychain value ({}, {:?}): {e}. Rolled back {} items, please confirm keychain is available and retry download",
                         s.node_id,
                         s.kind,
                         written_secrets.len()
@@ -274,7 +274,7 @@ impl SyncDataProvider for SshSyncProvider {
             if let Err(e) = self.secret_store.set(&s.node_id, s.kind, &s.value) {
                 rollback_keychain_writes(&self.secret_store, &written_secrets);
                 return Err(SyncEngineError::Provider(format!(
-                    "写入 keychain 失败 ({}, {:?}): {e},请检查密钥库权限后重试下载",
+                    "Failed to write keychain ({}, {:?}): {e}, please check keychain permissions and retry download",
                     s.node_id, s.kind
                 )));
             }
@@ -285,7 +285,7 @@ impl SyncDataProvider for SshSyncProvider {
             });
         }
 
-        // ---- 阶段 2 ---- DB 事务:DELETE + 按拓扑顺序 INSERT
+        // ---- Phase 2 ---- DB transaction: DELETE + INSERT in topological order
         let db_result = with_conn(|conn| {
             conn.transaction::<(), anyhow::Error, _>(|conn| {
                 conn.batch_execute(
@@ -308,7 +308,7 @@ impl SyncDataProvider for SshSyncProvider {
 
                 for node in &sorted_nodes {
                     let kind = NodeKind::parse(&node.kind)
-                        .ok_or_else(|| anyhow::anyhow!("无效的 kind: {}", node.kind))?;
+                        .ok_or_else(|| anyhow::anyhow!("Invalid kind: {}", node.kind))?;
                     diesel::insert_into(persistence::schema::ssh_nodes::table)
                         .values(persistence::model::NewSshNode {
                             id: &node.id,
@@ -342,28 +342,28 @@ impl SyncDataProvider for SshSyncProvider {
             })
         });
         if let Err(e) = db_result {
-            // DB 失败 → 回滚刚写入的 keychain,避免长期残留指向不存在 node 的密钥
+            // DB failure → rollback just-written keychain to avoid long-term stray keys pointing to non-existent nodes
             let rolled = written_secrets.len();
             rollback_keychain_writes(&self.secret_store, &written_secrets);
             return Err(SyncEngineError::Provider(format!(
-                "DB 写入失败 ({e});已回滚 {rolled} 项 keychain 写入"
+                "DB write failed ({e}); rolled back {rolled} keychain writes"
             )));
         }
 
-        // ---- 阶段 3a ---- 清理 explicit-clear:节点仍存在但远程把对应 *_encrypted 设为 None
-        // 用户在其他设备清空了某项密码 → 必须 delete 本地 keychain,否则 connect 时会继续用旧密码,
-        // 违背用户清除意图(PR #161 七轮 review)
+        // ---- Phase 3a ---- Clean explicit-clear: node still exists but remote set corresponding *_encrypted to None
+        // User cleared a password on another device → must delete local keychain, otherwise connect will continue using old password,
+        // violating user's clear intent (PR #161 seven-round review)
         for (node_id, kind) in &explicit_clears {
             if let Err(e) = self.secret_store.delete(node_id, *kind) {
                 log::warn!(
-                    "清理 explicit-clear keychain 项失败 {node_id}/{:?}: {e}",
+                    "Failed to clean explicit-clear keychain entry {node_id}/{:?}: {e}",
                     kind
                 );
             }
         }
 
-        // ---- 阶段 3b ---- 清理 orphan keychain:本地原有但远程已删除的 owner id 对应的密码,
-        // 必须显式 delete,否则同 UUID 节点重新出现时会读到陈旧密码 (PR #161 review #4)
+        // ---- Phase 3b ---- Clean orphan keychain: passwords for owner ids that existed locally but are now deleted remotely,
+        // must explicitly delete, otherwise when same UUID node re-appears, it will read stale password (PR #161 review #4)
         let mut new_secret_owner_ids: HashSet<&str> =
             ssh_data.nodes.iter().map(|n| n.id.as_str()).collect();
         new_secret_owner_ids.extend(
@@ -378,7 +378,7 @@ impl SyncDataProvider for SshSyncProvider {
             }
             for kind in ALL_SECRET_KINDS {
                 if let Err(e) = self.secret_store.delete(old_id, kind) {
-                    log::warn!("清理 orphan keychain 项失败 {old_id}/{:?}: {e}", kind);
+                    log::warn!("Failed to clean orphan keychain entry {old_id}/{:?}: {e}", kind);
                 }
             }
         }
@@ -387,18 +387,18 @@ impl SyncDataProvider for SshSyncProvider {
     }
 }
 
-/// apply_data Phase 1 已写入的 keychain 条目记录,带原值快照用于真正回滚。
-/// `prior_value` 用 `Zeroizing<String>` 持有,保证回滚链上明文密码 drop 时被零化。
+/// apply_data Phase 1 record of keychain entries already written, with prior value snapshot for true rollback.
+/// `prior_value` held in `Zeroizing<String>`, guarantees plaintext passwords are zeroed when dropped in rollback chain.
 struct WrittenSecret {
     node_id: String,
     kind: SecretKind,
     prior_value: Option<Zeroizing<String>>,
 }
 
-/// 真正的"回滚":对每个已被覆盖的条目:
-/// - prior_value=Some → 写回旧值,避免用户既有密码被吞
-/// - prior_value=None → delete,避免 orphan
-/// 任何步骤失败仅 log,不阻塞调用方(尽力而为)。
+/// True "rollback": for each already-overwritten entry:
+/// - prior_value=Some → write back old value, avoid user's existing password being lost
+/// - prior_value=None → delete, avoid orphan
+/// Any step failure only logs, doesn't block caller (best-effort).
 fn rollback_keychain_writes<S: SshSecretStore + ?Sized>(store: &S, written: &[WrittenSecret]) {
     for entry in written {
         let res = match &entry.prior_value {
@@ -407,7 +407,7 @@ fn rollback_keychain_writes<S: SshSecretStore + ?Sized>(store: &S, written: &[Wr
         };
         if let Err(e) = res {
             log::warn!(
-                "回滚 keychain 写入失败 {}/{:?}: {e}(secret 可能保持新值或成为 orphan)",
+                "Failed to rollback keychain write {}/{:?}: {e}(secret may remain with new value or become orphan)",
                 entry.node_id,
                 entry.kind
             );
@@ -415,17 +415,17 @@ fn rollback_keychain_writes<S: SshSecretStore + ?Sized>(store: &S, written: &[Wr
     }
 }
 
-/// 读取 keychain 凭据。
-/// - `Ok(Some)` = 有密码,加密上传
-/// - `Ok(None)` = 用户没设密码(合法状态),字段写 None
-/// - `Err` = keychain 故障 (NoBackend / Locked / 权限拒绝)
+/// Read keychain credential.
+/// - `Ok(Some)` = password exists, encrypt and upload
+/// - `Ok(None)` = user didn't set password (legal state), write None to field
+/// - `Err` = keychain failure (NoBackend / Locked / permission denied)
 ///
-/// 注意:对 NoBackend 不做 fallback。上层 keyring crate 把锁定的 keychain 和
-/// 完全无 backend 都映射成 NoBackend,无法可靠区分(keyring 3.6 documented 行为)。
-/// 把 NoBackend 当成 Ok(None) 会让"锁定" 这种瞬时故障静默丢密码 → 云端被清空,
-/// 重装后无法恢复(KDF/格式仍是待优化项)。
-/// headless Linux / CI 用户若全程无密码,upload 不会触发此函数;一旦遇到 Err,
-/// 错误信息明确指引用户解锁/启用 keychain。
+/// Note: no fallback for NoBackend. Upstream keyring crate maps both locked keychain and
+/// completely absent backend to NoBackend, can't reliably distinguish (keyring 3.6 documented behavior).
+/// Treating NoBackend as Ok(None) would silently lose password on transient "locked" failure → cloud cleared,
+/// unrecoverable after reinstall (KDF/format still optimization items).
+/// headless Linux / CI users with no password throughout won't trigger this function; once Err occurs,
+/// error message clearly directs user to unlock/enable keychain.
 fn read_secret(
     store: &dyn SshSecretStore,
     node_id: &str,
@@ -434,10 +434,10 @@ fn read_secret(
     match store.get(node_id, kind) {
         Ok(opt) => Ok(opt.map(|z| z.to_string())),
         Err(e) => Err(SyncEngineError::Provider(format!(
-            "读取 keychain 失败 ({node_id}, {kind:?}): {e}。\
-             keychain 可能被锁定或当前环境无 backend(headless Linux / WSL 等)。\
-             请解锁 keychain 或启用 secret-service / Credential Manager 后重试上传。\
-             若该服务器确实不需要密码同步,可在 SSH 管理器中清除该字段。"
+            "Failed to read keychain ({node_id}, {kind:?}): {e}.\
+             Keychain may be locked or current environment has no backend (headless Linux / WSL, etc.).\
+             Please unlock keychain or enable secret-service / Credential Manager and retry upload.\
+             If this server doesn't actually need password sync, clear the field in SSH Manager."
         ))),
     }
 }
@@ -445,7 +445,7 @@ fn read_secret(
 fn encrypt_optional(token: &str, value: Option<&str>) -> Result<Option<String>, SyncEngineError> {
     match value {
         None => Ok(None),
-        // 空字符串视为"无密码",不上传(与既往行为兼容,避免空字符串密文污染)
+        // Empty string treated as "no password", don't upload (compatible with past behavior, avoid empty-string ciphertext pollution)
         Some(s) if s.is_empty() => Ok(None),
         Some(s) => Ok(Some(
             crypto::encrypt(token, s).map_err(|e| SyncEngineError::Crypto(e.to_string()))?,
@@ -464,8 +464,8 @@ fn onekey_secret_kind(kind: OneKeyCredentialKind) -> SecretKind {
     }
 }
 
-/// BFS 拓扑排序:父节点先于子节点。parent_id 引用数据集外节点的孤儿节点,
-/// 视作根节点附加到末尾,parent_id 清空,避免 SQLite FK 约束失败让整个 download 回滚。
+/// BFS topological sort: parent before child. Orphan nodes (parent_id references node outside dataset)
+/// treated as root nodes, appended to end with parent_id cleared, to avoid SQLite FK constraint failure rolling back entire download.
 fn topologically_sort_nodes(nodes: &[SyncNode]) -> Vec<SyncNode> {
     use std::collections::HashMap;
     let mut by_parent: HashMap<Option<&str>, Vec<&SyncNode>> = HashMap::new();
@@ -493,20 +493,20 @@ fn topologically_sort_nodes(nodes: &[SyncNode]) -> Vec<SyncNode> {
         }
     }
 
-    // 剩余节点要么是 orphan(parent_id 指向数据集外),要么属于一个循环。
-    // 两种都把 parent_id 清空降级为根插入(可恢复且无数据丢失),并显式日志告警,
-    // 让用户能在日志中看到数据被结构化重置。
+    // Remaining nodes are either orphans (parent_id points outside dataset) or belong to a cycle.
+    // Both cases: clear parent_id and demote to root insertion (recoverable with no data loss), and log warnings explicitly
+    // so users can see data being structurally reset in logs.
     for n in nodes {
         if !seen.contains(&n.id) {
             if has_cycle_membership(n, nodes) {
                 log::warn!(
-                    "apply_data: 节点 {} 处于循环引用中(parent_id {:?}),已降级为根节点",
+                    "apply_data: node {} has circular reference (parent_id {:?}), demoted to root node",
                     n.id,
                     n.parent_id
                 );
             } else {
                 log::warn!(
-                    "apply_data: 节点 {} 的 parent_id {:?} 在数据集中不存在,作为根节点插入",
+                    "apply_data: node {}'s parent_id {:?} doesn't exist in dataset, inserting as root node",
                     n.id,
                     n.parent_id
                 );
@@ -520,8 +520,8 @@ fn topologically_sort_nodes(nodes: &[SyncNode]) -> Vec<SyncNode> {
     result
 }
 
-/// 判断节点 `start` 是否在循环中(从它出发沿 parent_id 链最终回到自身或环上)。
-/// 用于区分日志中的 "orphan" vs "cycle";限制最大遍历步数防止指数复杂度。
+/// Determine if node `start` is in a cycle (following parent_id chain from it eventually returns to self or to a cycle).
+/// Used to distinguish "orphan" vs "cycle" in logs; limit max traversal steps to prevent exponential complexity.
 fn has_cycle_membership(start: &SyncNode, all: &[SyncNode]) -> bool {
     let by_id: std::collections::HashMap<&str, &SyncNode> =
         all.iter().map(|n| (n.id.as_str(), n)).collect();
@@ -533,19 +533,19 @@ fn has_cycle_membership(start: &SyncNode, all: &[SyncNode]) -> bool {
             return false;
         };
         if !visited.insert(current.id.as_str()) {
-            // 走过同一节点 → 循环
+            // Visited same node again → cycle
             return true;
         }
         match by_id.get(pid) {
             Some(parent) => current = parent,
-            None => return false, // parent 在数据集外 → orphan,不是 cycle
+            None => return false, // parent outside dataset → orphan, not cycle
         }
     }
-    // 超过 max_steps 还没结束 → 一定有环
+    // Still going after max_steps → must be a cycle
     true
 }
 
-/// 数据库同步版本存储适配器
+/// Database synchronization version storage adapter
 pub struct DbVersionStore;
 
 impl SyncVersionStore for DbVersionStore {
@@ -797,7 +797,7 @@ mod tests {
         let json = serde_json::to_string(&node).unwrap();
         assert!(
             json.contains("\"parent_id\":null"),
-            "parent_id=None 应序列化为 null"
+            "parent_id=None should serialize as null"
         );
         let parsed: SyncNode = serde_json::from_str(&json).unwrap();
         assert!(parsed.parent_id.is_none());

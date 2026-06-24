@@ -372,7 +372,7 @@ pub struct AIAgentOutput {
     /// The set of documents that were referenced in the LLM's response.
     pub citations: Vec<AIAgentCitation>,
 
-    /// 本地/后端流式响应可附带的不透明输出 ID。
+    /// Opaque output ID that may accompany a local/backend streaming response.
     pub server_output_id: Option<ServerOutputId>,
 
     /// Optional metadata that may be attached by the `AIAgentApi` when emitting this output.
@@ -2062,14 +2062,14 @@ pub enum AIAgentAttachment {
         current: Option<CurrentHead>,
         base: DiffBase,
     },
-    /// VM 文件系统中文件的本地引用(例如 ambient-agent 运行恢复的附件)。
-    /// 本地 agent 直接把该路径作为 LLM 的文件上下文。
+    /// Local reference to a file in the VM filesystem (e.g. an attachment restored from an ambient-agent run).
+    /// The local agent passes this path directly as file context for the LLM.
     FilePathReference {
-        /// 附件的不透明本地 ID。
+        /// Opaque local ID of the attachment.
         file_id: String,
-        /// 原始文件名。
+        /// Original file name.
         file_name: String,
-        /// 文件在磁盘上的完整解析路径。
+        /// Fully resolved path of the file on disk.
         file_path: String,
     },
     #[serde(untagged)]
@@ -2390,10 +2390,10 @@ pub enum AIAgentInput {
 
     SummarizeConversation {
         prompt: Option<String>,
-        /// Zap BYOP:本字段标记本次摘要是否由 token-overflow 自动触发,
-        /// `chat_stream::SummarizeConversation` 分支据此决定 follow-up 文案
-        /// (overflow 路径会拼一段 "previous request exceeded ..." 解释)。
-        /// 本地 agent conversation 路径不读这个字段。所有现有调用点保持 `overflow: false`。
+        /// Zap BYOP: this field marks whether this summarization was triggered automatically by token overflow.
+        /// The `chat_stream::SummarizeConversation` branch uses it to decide the follow-up wording
+        /// (the overflow path appends a "previous request exceeded ..." explanation).
+        /// The local agent conversation path does not read this field. All existing call sites keep `overflow: false`.
         overflow: bool,
     },
 
@@ -2404,15 +2404,15 @@ pub enum AIAgentInput {
         user_query: Option<InvokeSkillUserQuery>,
     },
 
-    /// 使用 ambient agent 运行中保存的 prompt 启动对话。
-    /// 如果提供 runtime_skill,本地 agent 会创建 InvokeSkill 消息。skill 指令会发送给 LLM,
-    /// 但不会显示在 UI 查询气泡中。
+    /// Start a conversation using a prompt saved during an ambient agent run.
+    /// If a runtime_skill is provided, the local agent creates an InvokeSkill message. The skill instructions are sent to the LLM,
+    /// but are not shown in the UI query bubble.
     StartFromAmbientRunPrompt {
         ambient_run_id: String,
         context: Arc<[AIAgentContext]>,
         /// Optional skill to use as base context (content hidden from user in UI).
         runtime_skill: Option<ai::skills::ParsedSkill>,
-        /// 可选的任务附件本地目录路径,用于给 LLM 构造正确的文件路径。
+        /// Optional local directory path of task attachments, used to construct correct file paths for the LLM.
         attachments_dir: Option<String>,
     },
 

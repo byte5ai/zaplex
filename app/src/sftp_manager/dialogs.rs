@@ -1,6 +1,6 @@
-//! 对话框渲染组件
+//! Dialog rendering component.
 //!
-//! 提供删除确认、重命名、新建文件夹、文件详情等对话框的渲染功能。
+//! Provides rendering functionality for dialogs such as delete confirmation, rename, create folder, and file details.
 //! author: logic
 //! date: 2026-05-26
 
@@ -20,20 +20,20 @@ use crate::editor::EditorView;
 use crate::sftp_manager::browser::SftpBrowserAction;
 use crate::sftp_manager::types::{format_size, Dialog, FileEntry, TransferDirection};
 
-/// 对话框最大宽度
+/// Maximum dialog width.
 const DIALOG_MAX_WIDTH: f32 = 360.0;
-/// 对话框最大高度
+/// Maximum dialog height.
 const DIALOG_MAX_HEIGHT: f32 = 500.0;
-/// 对话框内边距
+/// Dialog inner padding.
 const DIALOG_PADDING: f32 = 16.0;
-/// 按钮最小宽度
+/// Minimum button width.
 const BUTTON_MIN_WIDTH: f32 = 80.0;
-/// 按钮高度
+/// Button height.
 const BUTTON_HEIGHT: f32 = 32.0;
 
-/// 弹窗外壳容器
+/// Dialog shell container.
 ///
-/// 提供统一的背景色、圆角、边框和内边距。
+/// Provides uniform background color, corner radius, border, and padding.
 fn dialog_shell(content: Box<dyn Element>, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     Container::new(content)
@@ -44,9 +44,9 @@ fn dialog_shell(content: Box<dyn Element>, appearance: &Appearance) -> Box<dyn E
         .finish()
 }
 
-/// 渲染标题行（标题 + 关闭按钮）
+/// Render title bar (title + close button).
 ///
-/// 标题使用 Shrinkable 包裹以支持自适应宽度，右侧放置 X 关闭按钮。
+/// Title is wrapped with Shrinkable for adaptive width, X close button is placed on the right.
 fn render_title_bar(title: &str, appearance: &Appearance, close_btn_state: MouseStateHandle) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
@@ -72,7 +72,7 @@ fn render_title_bar(title: &str, appearance: &Appearance, close_btn_state: Mouse
         .finish()
 }
 
-/// 渲染 X 图标关闭按钮
+/// Render X icon close button.
 fn render_icon_close_button(appearance: &Appearance, mouse_state: MouseStateHandle) -> Box<dyn Element> {
     let theme = appearance.theme();
     let icon_color = theme.sub_text_color(theme.background());
@@ -95,9 +95,9 @@ fn render_icon_close_button(appearance: &Appearance, mouse_state: MouseStateHand
     .finish()
 }
 
-/// 渲染操作按钮组件
+/// Render action button component.
 ///
-/// is_accent 为 true 时使用 accent 色背景，否则使用 surface_2 背景。
+/// When is_accent is true, use accent color background; otherwise use surface_2 background.
 fn render_button(
     label: &str,
     is_accent: bool,
@@ -153,14 +153,14 @@ fn render_button(
     }
 }
 
-/// 渲染取消按钮
+/// Render cancel button.
 fn render_cancel_button(appearance: &Appearance, mouse_state: MouseStateHandle) -> Box<dyn Element> {
-    render_button("取消", false, appearance, SftpBrowserAction::CloseDialog, mouse_state, Some("sftp_btn:dialog_cancel"))
+    render_button("Cancel", false, appearance, SftpBrowserAction::CloseDialog, mouse_state, Some("sftp_btn:dialog_cancel"))
 }
 
-/// 渲染描述性确认对话框（标题 + 描述 + 确认/取消按钮）
+/// Render descriptive confirmation dialog (title + description + confirm/cancel buttons).
 ///
-/// 适用于删除确认、移动确认、覆盖确认等场景。
+/// Applicable to scenarios such as delete confirmation, move confirmation, and overwrite confirmation.
 fn render_confirm_dialog(
     title: &str,
     description: &str,
@@ -213,7 +213,7 @@ fn render_confirm_dialog(
     wrap_dismiss(dialog_body)
 }
 
-/// 将弹窗内容包裹在 Dismiss + 居中容器中
+/// Wrap dialog content in Dismiss + centered container.
 fn wrap_dismiss(dialog_content: Box<dyn Element>) -> Box<dyn Element> {
     Dismiss::new(dialog_content)
         .prevent_interaction_with_other_elements()
@@ -223,7 +223,7 @@ fn wrap_dismiss(dialog_content: Box<dyn Element>) -> Box<dyn Element> {
         .finish()
 }
 
-/// 渲染删除确认对话框
+/// Render delete confirmation dialog.
 fn render_delete_confirm(
     paths: &[PathBuf],
     appearance: &Appearance,
@@ -237,15 +237,15 @@ fn render_delete_confirm(
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| paths[0].display().to_string());
-        format!("确定要删除 \"{name}\" 吗？此操作不可撤销。")
+        format!("Are you sure you want to delete \"{name}\"? This action cannot be undone.")
     } else {
-        format!("确定要删除 {count} 个项目吗？此操作不可撤销。")
+        format!("Are you sure you want to delete {count} items? This action cannot be undone.")
     };
 
     render_confirm_dialog(
-        "确认删除",
+        "Confirm Delete",
         &desc,
-        "删除",
+        "Delete",
         SftpBrowserAction::ConfirmDelete,
         appearance,
         confirm_btn_state,
@@ -254,7 +254,7 @@ fn render_delete_confirm(
     )
 }
 
-/// 渲染重命名对话框
+/// Render rename dialog.
 fn render_rename(
     original_name: &str,
     editor: &ViewHandle<EditorView>,
@@ -268,11 +268,11 @@ fn render_rename(
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    // 标题行
-    let title_bar = render_title_bar("重命名", appearance, close_btn_state);
+    // Title bar
+    let title_bar = render_title_bar("Rename", appearance, close_btn_state);
 
-    // 当前名称提示
-    let hint = format!("当前名称: {original_name}");
+    // Current name hint
+    let hint = format!("Current name: {original_name}");
     let hint_el = Shrinkable::new(
         1.0,
         Text::new(hint, ui_font, ui_font_size)
@@ -281,7 +281,7 @@ fn render_rename(
     )
     .finish();
 
-    // 编辑器 — Shrinkable + Clipped 防止长文件名溢出
+    // Editor — Shrinkable + Clipped to prevent long filename overflow
     let editor_el = Container::new(
         Shrinkable::new(
             1.0,
@@ -297,9 +297,9 @@ fn render_rename(
     .with_background(theme.surface_2())
     .finish();
 
-    // 按钮
+    // Buttons
     let confirm_btn = render_button(
-        "确定",
+        "Confirm",
         true,
         appearance,
         SftpBrowserAction::ConfirmRename,
@@ -333,7 +333,7 @@ fn render_rename(
     wrap_dismiss(dialog_body)
 }
 
-/// 渲染新建文件夹对话框
+/// Render create folder dialog.
 fn render_create_folder(
     editor: &ViewHandle<EditorView>,
     appearance: &Appearance,
@@ -343,10 +343,10 @@ fn render_create_folder(
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
 
-    // 标题行
-    let title_bar = render_title_bar("新建文件夹", appearance, close_btn_state);
+    // Title bar
+    let title_bar = render_title_bar("New Folder", appearance, close_btn_state);
 
-    // 编辑器
+    // Editor
     let editor_el = Container::new(
         Shrinkable::new(
             1.0,
@@ -362,9 +362,9 @@ fn render_create_folder(
     .with_background(theme.surface_2())
     .finish();
 
-    // 按钮
+    // Buttons
     let confirm_btn = render_button(
-        "创建",
+        "Create",
         true,
         appearance,
         SftpBrowserAction::ConfirmNewFolder,
@@ -397,7 +397,7 @@ fn render_create_folder(
     wrap_dismiss(dialog_body)
 }
 
-/// 渲染单个属性行（标签 + 值）
+/// Render single property row (label + value).
 fn detail_row(label: &str, value: &str, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let sub_color = theme.sub_text_color(theme.background());
@@ -429,38 +429,38 @@ fn detail_row(label: &str, value: &str, appearance: &Appearance) -> Box<dyn Elem
         .finish()
 }
 
-/// 渲染文件详情对话框
+/// Render file details dialog.
 fn render_file_details(
     entry: &FileEntry,
     appearance: &Appearance,
     cancel_btn_state: MouseStateHandle,
     close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
-    // 标题行
-    let title_bar = render_title_bar("文件详情", appearance, close_btn_state);
+    // Title bar
+    let title_bar = render_title_bar("File Details", appearance, close_btn_state);
 
-    // 类型
+    // Type
     let type_str = match entry.file_type {
-        crate::sftp_manager::types::FileEntryType::File => "文件",
-        crate::sftp_manager::types::FileEntryType::Directory => "目录",
-        crate::sftp_manager::types::FileEntryType::Symlink => "符号链接",
-        crate::sftp_manager::types::FileEntryType::Other => "其他",
+        crate::sftp_manager::types::FileEntryType::File => "File",
+        crate::sftp_manager::types::FileEntryType::Directory => "Directory",
+        crate::sftp_manager::types::FileEntryType::Symlink => "Symbolic Link",
+        crate::sftp_manager::types::FileEntryType::Other => "Other",
     };
 
-    // 构建属性行
+    // Build property rows
     let mut rows = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(8.0);
 
-    rows.add_child(detail_row("类型", type_str, appearance));
-    rows.add_child(detail_row("大小", &format_size(entry.size), appearance));
+    rows.add_child(detail_row("Type", type_str, appearance));
+    rows.add_child(detail_row("Size", &format_size(entry.size), appearance));
     let modified = entry.modified.as_deref().unwrap_or("--");
-    rows.add_child(detail_row("修改时间", modified, appearance));
+    rows.add_child(detail_row("Modified", modified, appearance));
     let permissions = entry.permissions.as_deref().unwrap_or("--");
-    rows.add_child(detail_row("权限", permissions, appearance));
-    rows.add_child(detail_row("路径", &entry.path.display().to_string(), appearance));
+    rows.add_child(detail_row("Permissions", permissions, appearance));
+    rows.add_child(detail_row("Path", &entry.path.display().to_string(), appearance));
 
-    // 关闭按钮
+    // Close button
     let close_btn = render_cancel_button(appearance, cancel_btn_state);
 
     let content = Flex::column()
@@ -479,7 +479,7 @@ fn render_file_details(
     wrap_dismiss(dialog_body)
 }
 
-/// 渲染移动对话框
+/// Render move dialog.
 fn render_move_dialog(
     source: &PathBuf,
     target_dir: &PathBuf,
@@ -494,13 +494,13 @@ fn render_move_dialog(
         .unwrap_or_default();
     let target_display = target_dir.display();
     let desc = format!(
-        "将 \"{source_name}\" 移动到 {target_display}"
+        "Move \"{source_name}\" to {target_display}"
     );
 
     render_confirm_dialog(
-        "移动文件",
+        "Move File",
         &desc,
-        "移动",
+        "Move",
         SftpBrowserAction::ConfirmMove,
         appearance,
         confirm_btn_state,
@@ -509,7 +509,7 @@ fn render_move_dialog(
     )
 }
 
-/// 渲染覆盖确认对话框
+/// Render overwrite confirmation dialog.
 fn render_overwrite_confirm(
     _source: &PathBuf,
     target: &PathBuf,
@@ -525,14 +525,14 @@ fn render_overwrite_confirm(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let desc = match direction {
-        TransferDirection::Upload => format!("远程文件 {target_name} 已存在，是否覆盖？"),
-        TransferDirection::Download => format!("目标文件 {target_name} 已存在，是否覆盖？"),
+        TransferDirection::Upload => format!("Remote file {target_name} already exists. Overwrite?"),
+        TransferDirection::Download => format!("Target file {target_name} already exists. Overwrite?"),
     };
 
     render_confirm_dialog(
-        "确认覆盖",
+        "Confirm Overwrite",
         &desc,
-        "覆盖",
+        "Overwrite",
         SftpBrowserAction::ConfirmOverwrite,
         appearance,
         confirm_btn_state,
@@ -541,9 +541,9 @@ fn render_overwrite_confirm(
     )
 }
 
-/// 渲染对话框（主入口函数）
+/// Render dialog (main entry point).
 ///
-/// 根据对话框类型分发到对应的渲染函数。
+/// Dispatch to the corresponding render function based on dialog type.
 pub fn render_dialog(
     dialog: &Dialog,
     rename_editor: &ViewHandle<EditorView>,
@@ -575,9 +575,9 @@ pub fn render_dialog(
         }
         Dialog::CloseTransferPanelConfirm => {
             render_confirm_dialog(
-                "关闭传输面板",
-                "有正在进行的传输任务，关闭将中断所有传输并清空记录。确定要关闭吗？",
-                "关闭",
+                "Close Transfer Panel",
+                "There are active transfer tasks. Closing will cancel all transfers and clear the records. Are you sure?",
+                "Close",
                 SftpBrowserAction::ConfirmCloseTransferPanel,
                 appearance,
                 confirm_btn_state,

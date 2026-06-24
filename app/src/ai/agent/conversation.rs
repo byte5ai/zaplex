@@ -219,13 +219,13 @@ pub struct AIConversation {
     /// Legacy cloud event cursor retained only for deserializing older conversations.
     last_event_sequence: Option<i64>,
 
-    /// Zap BYOP 本地会话压缩 sidecar — 与 warp protobuf message 解耦,
-    /// 通过 message_id 索引挂"is_summary / tool_output_compacted_at / synthetic_continue"等元数据。
-    /// 默认空表 = 未压缩状态,完全无侵入。
-    /// 详见 [`crate::ai::byop_compaction`]。
+    /// Zap BYOP local session compaction sidecar — decoupled from warp protobuf message,
+    /// indexed by message_id to attach metadata like "is_summary / tool_output_compacted_at / synthetic_continue".
+    /// Empty by default = uncompacted state, fully non-invasive.
+    /// See [`crate::ai::byop_compaction`] for details.
     pub(crate) compaction_state: crate::ai::byop_compaction::state::CompactionState,
-    /// Zap BYOP repair sidecar。invalid sidecar 必须原样保留,避免保存时
-    /// 静默授权 repair 或抹掉损坏元数据。
+    /// Zap BYOP repair sidecar. Invalid sidecars must be preserved as-is to avoid silently
+    /// authorizing repair or erasing corrupted metadata during save.
     pub(crate) byop_repair_state: RepairStateStatus,
 }
 
@@ -1238,7 +1238,7 @@ impl AIConversation {
         })
     }
 
-    /// Computer Use 已被移除,保留空 iterator 以兼容调用点。
+    /// Computer Use has been removed; empty iterator retained for backward compatibility with call sites.
     pub fn use_computer_action_ids(&self) -> impl Iterator<Item = AIAgentActionId> + '_ {
         std::iter::empty()
     }
@@ -1357,7 +1357,7 @@ impl AIConversation {
                 response_stream_id: Some(stream_id.clone()),
             });
         }
-        // turn 启动即落盘:user query 提交时先写一次,stream 中途强退也能保留提问记录。
+        // Persist on turn startup: write once when user query is submitted, so even if stream aborts mid-way, question history is preserved.
         self.write_updated_conversation_state(ctx);
         Ok(())
     }
@@ -2507,15 +2507,15 @@ impl AIConversation {
                     })
                     .ok_or(UpdateConversationError::ExchangeNotFound)?;
 
-                // Zap 优化 1:文本/推理流的 fast path。
-                // mask 为 `agent_output.text` 或 `agent_reasoning.reasoning` 时
-                // 不会触发 todos_op(只有 UpdateTodos message 才会),
-                // current_todo_list / current_comment_state 在
-                // `to_client_output_message` 的 AgentOutput / AgentReasoning 分支
-                // 完全不读(见 convert_from.rs:128-143)。
-                // 高频 chunk 流(每 ~5-50ms 一帧)下,跳过 `self.todo_lists.last().cloned()`
-                // (整个 todo list 浅 clone)+ `self.code_review.as_ref().cloned()`
-                // 可显著降低单 chunk CPU 开销,缓解 view::render 帧时间被拖长。
+                // Zap optimization 1: Fast path for text/reasoning streams.
+                // When mask is `agent_output.text` or `agent_reasoning.reasoning`,
+                // todos_op is not triggered (only UpdateTodos message does),
+                // and current_todo_list / current_comment_state are
+                // completely unread in `to_client_output_message`'s AgentOutput / AgentReasoning branches
+                // (see convert_from.rs:128-143).
+                // In high-frequency chunk streams (~5-50ms per frame), skipping `self.todo_lists.last().cloned()`
+                // (entire todo list shallow clone) + `self.code_review.as_ref().cloned()`
+                // can significantly reduce per-chunk CPU overhead and alleviate view::render frame time overhead.
                 let is_text_or_reasoning_append = is_pure_text_or_reasoning_mask(&mask);
                 let current_todo_list = if is_text_or_reasoning_append {
                     None
@@ -2552,7 +2552,7 @@ impl AIConversation {
                     conversation_id: self.id,
                     is_hidden: self.is_exchange_hidden(exchange_id),
                 });
-                // streaming chunk delta 不落盘,落盘只在 part / message 边界发生。
+                // Streaming chunk delta not persisted; persistence only happens at part/message boundaries.
             }
             Action::ShowSuggestions(suggestions) => {
                 let exchange_id = self
@@ -2621,8 +2621,8 @@ impl AIConversation {
                 // exchange's client representation (added_message_ids) remains
                 // unmodified, pointing to message IDs that now exist in a subtask.
 
-                // 任务结构变化必须落盘,否则重启时 task 树和 conversation_data
-                // 不一致会被 `is_restorable` 过滤丢弃整条会话。
+                // Task structure changes must be persisted; otherwise on restart, task tree and conversation_data
+                // mismatch will cause `is_restorable` to filter out and discard the entire session.
                 self.write_updated_conversation_state(ctx);
             }
             Action::StartNewConversation(_) => {
@@ -2693,25 +2693,24 @@ impl AIConversation {
         new_task_id
     }
 
-    /// Zap BYOP 专用:agent 自起 LRC 收到 snapshot 时,在 conversation 直接落地
-    /// 一个 Server-backed cli subagent task。
+    /// Zap BYOP-specific: When agent self-initiates LRC and receives snapshot,
+    /// directly land a Server-backed cli subagent task in conversation.
     ///
-    /// 不走 `create_optimistic_cli_subagent_task`(它产出 `TaskImpl::Optimistic`,且
-    /// 内部 emit `CreatedSubtask`):
-    /// 1. Optimistic task 的 `add_messages`(`task.rs:649`)/ `try_get_source`
-    ///    (`task.rs:627`)等入口会直接返回 `TaskNotInitialized`,后续 user follow-up
-    ///    query 路由进来后,模型回包的 stream chunks 走 `apply_client_action` 调
-    ///    `add_messages` 时全部失败 → "TaskNotFound" / "Failed to apply client
-    ///    actions"。
-    /// 2. emit `CreatedSubtask` 触发 `CLISubagentView::new`,要求 `task.last_exchange()`
-    ///    存在,而 silent 路径不触发新 query → task 始终空 → `expect("Exchange exists")`
-    ///    panic;`block/cli.rs:438` 已加 root_task fallback 兜底,这里仍然由 cli_controller
-    ///    自己控制 emit 时机。
+    /// Does not use `create_optimistic_cli_subagent_task` (which produces `TaskImpl::Optimistic` and
+    /// internally emits `CreatedSubtask`):
+    /// 1. Optimistic task entry points like `add_messages` (`task.rs:649`) / `try_get_source`
+    ///    (`task.rs:627`) directly return `TaskNotInitialized`. When subsequent user follow-up
+    ///    query routes in, model response stream chunks calling `apply_client_action` then `add_messages`
+    ///    all fail → "TaskNotFound" / "Failed to apply client actions".
+    /// 2. Emitting `CreatedSubtask` triggers `CLISubagentView::new`, requiring `task.last_exchange()`
+    ///    to exist, but the silent path doesn't trigger a new query → task stays empty → `expect("Exchange exists")`
+    ///    panics. `block/cli.rs:438` added root_task fallback safety net, but here cli_controller
+    ///    still controls emit timing.
     ///
-    /// 实现:`Task::new_byop_silent_cli_subtask` 本地合成 `api::Task` + 合成
-    /// `SubagentParams { command_id }`,task 一开始就 Server-backed。dependencies 指向
-    /// root task 让 conversation tree 完整。**不 emit CreatedSubtask**,由调用方
-    /// (cli_controller)在升级 block 后手动 emit `SpawnedSubagent` 创建浮窗。
+    /// Implementation: `Task::new_byop_silent_cli_subtask` locally synthesizes `api::Task` + synthesizes
+    /// `SubagentParams { command_id }`. Task is Server-backed from the start. Dependencies point to
+    /// root task to keep conversation tree complete. **Does not emit CreatedSubtask**; caller
+    /// (cli_controller) manually emits `SpawnedSubagent` after block upgrade to create floating panel.
     pub fn create_optimistic_cli_subagent_task_silent(&mut self, block_id: &BlockId) -> TaskId {
         if self.optimistic_cli_subagent_subtask_id.take().is_some() {
             log::error!(
@@ -2722,9 +2721,9 @@ impl AIConversation {
         let parent_task_id = String::from(self.task_store.root_task_id().clone());
         let new_task = Task::new_byop_silent_cli_subtask(block_id.clone(), parent_task_id);
         let new_task_id = new_task.id().clone();
-        // 仍然记录到 optimistic_cli_subagent_subtask_id,保持
-        // `has_active_subagent`、`controller.rs:1107-1130` 的 LRC subtask 检测路径
-        // 与上游一致。该字段名仅指"未经 server 确认",和 task 内部存储格式无关。
+        // Still record to optimistic_cli_subagent_subtask_id to keep the LRC subtask detection path in
+        // `has_active_subagent` and `controller.rs:1107-1130` consistent with upstream. Field name only means
+        // "not yet server-confirmed"; unrelated to task internal storage format.
         self.optimistic_cli_subagent_subtask_id = Some(new_task_id.clone());
         self.task_store.insert(new_task);
         new_task_id
@@ -2948,9 +2947,9 @@ impl AIConversation {
         &self,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
-        // 调用方(`append_byop_preflight_messages_to_task`)在写入前已经调用过
-        // `ensure_can_persist_byop_preflight_state`,此处不再重复校验 sender 是否存在;
-        // 只关心 try_send 自身的 Full/Closed 错误,沿用现有的 ByopPreflightPersistenceSend。
+        // Caller (`append_byop_preflight_messages_to_task`) already called
+        // `ensure_can_persist_byop_preflight_state` before writing, so no need to re-check sender existence here.
+        // Only care about try_send's own Full/Closed errors, continuing to use existing ByopPreflightPersistenceSend.
         let sqlite_sender = GlobalResourceHandlesProvider::as_ref(ctx)
             .get()
             .model_event_sender
@@ -3480,18 +3479,18 @@ impl AIConversation {
     }
 }
 
-/// Zap 优化 1: 检测 AppendToMessageContent 的 mask 是不是纯
-/// 文本/推理 append。这两类 mask path:
-/// - `agent_output.text` —— BYOP / 云路径文本 chunk
-/// - `agent_reasoning.reasoning` —— BYOP / 云路径思考 chunk
+/// Zap optimization 1: Detect if AppendToMessageContent mask is purely text/reasoning append.
+/// These two mask paths:
+/// - `agent_output.text` — BYOP / cloud path text chunk
+/// - `agent_reasoning.reasoning` — BYOP / cloud path reasoning chunk
 ///
-/// 命中时 conversation 层跳过 todo_list / code_review 的 clone(高频 chunk
-/// 下省整段 vec clone + Arc bump),`to_client_output_message` 的 AgentOutput
-/// / AgentReasoning 分支也不读这两个参数(见 convert_from.rs:128-143)。
+/// When hit, conversation layer skips todo_list / code_review clone (saves entire vec clone + Arc bump
+/// in high-frequency chunks), and `to_client_output_message`'s AgentOutput / AgentReasoning branches
+/// don't read these two parameters (see convert_from.rs:128-143).
 ///
-/// 任何其它 mask path(tool_call.* / web_search / web_fetch / update_todos
-/// 等)走原 slow path,保持原行为。多 path mask 只要有一条非文本/推理就走
-/// slow path,稳健起见。
+/// Any other mask paths (tool_call.* / web_search / web_fetch / update_todos, etc.)
+/// use slow path, maintaining original behavior. For multi-path masks, if any path is non-text/reasoning,
+/// use slow path for robustness.
 fn is_pure_text_or_reasoning_mask(mask: &prost_types::FieldMask) -> bool {
     !mask.paths.is_empty()
         && mask

@@ -1,20 +1,20 @@
-//! SSH 密码 / passphrase 自动注入。订阅 terminal pane 的 PTY 输出广播,
-//! 匹配到 `password:` / `passphrase:` 行尾提示后**一次性**写入 secret + `\n`。
+//! Automatic SSH password/passphrase injection. Subscribes to the PTY output broadcast of a terminal pane,
+//! and upon matching `password:` or `passphrase:` prompts at line end, **one-time** writes secret + `\n`.
 //!
-//! ## 关键设计权衡
+//! ## Key Design Trade-offs
 //!
-//! - **8KB 滑窗 + 行尾严格匹配**:正则 `(?im)(password|passphrase)[^\n]*:\s*$`
-//!   仅匹配行尾(避免 motd / banner 里"password" 字样误中)+ 滑窗保证内存上限。
+//! - **8KB sliding window + strict line-end matching**: regex `(?im)(password|passphrase)[^\n]*:\s*$`
+//!   only matches at line end (avoids false positives from "password" in motd/banner) + sliding window ensures memory bound.
 //!
-//! - **15s 超时**:典型 SSH 公钥协商 < 2s,密码 prompt < 5s。15s 是公钥认证
-//!   失败 + fallback 密码的合理上限。**配公钥免登录的边界**(authorized_keys
-//!   配了 + 我们也存了密码):公钥握手成功 → 不会出现 prompt → injector 静默
-//!   超时退出,**不会乱注入到登录后的 shell**。
+//! - **15s timeout**: typical SSH pubkey negotiation < 2s, password prompt < 5s. 15s is a reasonable upper limit
+//!   for pubkey auth failure + fallback to password. **Boundary for pubkey-based passwordless login**
+//!   (authorized_keys configured + we also have password stored): successful pubkey handshake → no prompt appears
+//!   → injector silently times out and exits, **won't mistakenly inject into post-login shell**.
 //!
-//! - **一次性触发**:匹配后立即 break,injector future 退出 → InactiveReceiver
-//!   drop → 后续 PTY 流不再被本注入器看见,**杜绝二次注入**。
+//! - **One-time trigger**: immediately break after match, injector future exits → InactiveReceiver
+//!   drops → subsequent PTY stream no longer seen by this injector, **prevents double injection**.
 //!
-//! - **bytes::Regex**:PTY 输出可能含未完整 UTF-8 字节,用 `regex::bytes` 安全。
+//! - **bytes::Regex**: PTY output may contain incomplete UTF-8 bytes, using `regex::bytes` is safe.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,18 +27,18 @@ use zeroize::Zeroizing;
 use crate::ssh_manager::password_prompt::bytes_look_like_password_prompt;
 use crate::terminal::TerminalView;
 
-/// 注入超时上限。
+/// Injection timeout upper limit.
 const INJECT_TIMEOUT: Duration = Duration::from_secs(15);
-/// 滑窗保留最近这么多字节的 PTY 输出供正则匹配。
+/// Sliding window retains this many bytes of PTY output for regex matching.
 const SLIDING_WINDOW_BYTES: usize = 8 * 1024;
-/// 当 buffer 超过这个值,drain 到滑窗大小。
+/// When buffer exceeds this value, drain to sliding window size.
 const BUFFER_HARD_LIMIT: usize = 16 * 1024;
 
-/// 在 owner=Workspace 上下文 spawn 一个一次性注入任务。Workspace drop 时
-/// 任务自动取消;owner 不需要 abort。
+/// Spawn a one-time injection task in the owner=Workspace context. The task is automatically
+/// cancelled when Workspace is dropped; owner doesn't need to abort.
 ///
-/// 调用前提:`pty_reads_rx` 由 `terminal_view.inactive_pty_reads_rx(ctx)`
-/// 取得,**Some 时才会真正起 future**;wasm / 远端会话拿到 None 直接 no-op。
+/// Prerequisite: `pty_reads_rx` is obtained from `terminal_view.inactive_pty_reads_rx(ctx)`.
+/// The future only actually runs when Some; wasm / remote session gets None and directly no-ops.
 pub fn spawn_password_injector<O>(
     pty_reads_rx: Option<InactiveReceiver<Arc<Vec<u8>>>>,
     terminal_view: WeakViewHandle<TerminalView>,
@@ -56,9 +56,9 @@ pub fn spawn_password_injector<O>(
         return;
     }
 
-    // 起飞即把 in-flight 置 true,通知 OneKey listener 在本次 injection 完结前
-    // 不要弹菜单。这样无论是先 injector 注入完才轮到 onekey 看到同一段字节,
-    // 还是 onekey 先看到,语义都是统一的:**injector 优先**。
+    // Set in-flight to true immediately, notifying OneKey listener not to show menu
+    // before this injection completes. This way, regardless of whether injector finishes first
+    // or OneKey sees the bytes first, the semantics are consistent: **injector has priority**.
     if let Some(view) = terminal_view.upgrade(ctx) {
         view.update(ctx, |view, _| {
             view.set_ssh_secret_auto_injection_in_flight(true);
@@ -85,8 +85,8 @@ pub fn spawn_password_injector<O>(
             return;
         };
         view.update(ctx, |view, ctx| {
-            // 把密码 + 换行作为字节写入 PTY,等同模拟键盘按键回应交互式 prompt。
-            // 此时 ssh 已经在跑(bootstrap 早完成),write_to_pty 直写是正解。
+            // Write password + newline as bytes to PTY, equivalent to simulating keyboard keystrokes in response to interactive prompt.
+            // At this point SSH is already running (bootstrap completed long ago), write_to_pty direct write is the right approach.
             let mut bytes = secret.as_bytes().to_vec();
             bytes.push(b'\n');
             view.write_to_pty(bytes, ctx);
@@ -96,8 +96,8 @@ pub fn spawn_password_injector<O>(
     });
 }
 
-/// 异步循环:消费 PTY 广播,滑窗追加,**正则一旦命中行尾 prompt 就返回 true**;
-/// EOF 返回 false。timeout 由调用方 `with_timeout` 包装。
+/// Async loop: consumes PTY broadcast, appends to sliding window, **returns true as soon as regex matches line-end prompt**;
+/// returns false on EOF. Timeout is wrapped by caller via `with_timeout`.
 async fn watch_for_prompt(rx: InactiveReceiver<Arc<Vec<u8>>>) -> bool {
     let mut active = rx.activate_cloned();
     let mut buf: Vec<u8> = Vec::with_capacity(SLIDING_WINDOW_BYTES);

@@ -100,18 +100,18 @@ pub enum SettingsPageViewHandle {
     Keybindings(ViewHandle<KeybindingsView>),
     About(ViewHandle<AboutPageView>),
     Code(ViewHandle<CodeSettingsPageView>),
-    // Zap Wave 3-1:`OzCloudAPIKeys` variant 随 `platform_page` 一同物理删。
-    // 云端 API key 管理 UI 完全代表 Zap Inc 云端账号,与 BYOP 无关。
-    // Zap Wave 6-8:`SharedBlocks` / `Referrals` variant 随 `ShowBlocksView` /
-    // `ReferralsPageView` 与对应 ServerApi client trait 物理删。
-    // Zap Wave 7-3:`CloudEnvironments` variant 随 ambient-agent UI 子系统物理删。
+    // Zap Wave 3-1: `OzCloudAPIKeys` variant removed together with `platform_page`.
+    // Cloud API key management UI fully represents Zap Inc cloud account; unrelated to BYOP.
+    // Zap Wave 6-8: `SharedBlocks` / `Referrals` variant removed together with `ShowBlocksView` /
+    // `ReferralsPageView` and the corresponding ServerApi client trait.
+    // Zap Wave 7-3: `CloudEnvironments` variant removed together with ambient-agent UI subsystem.
     Warpify(ViewHandle<WarpifyPageView>),
     AI(ViewHandle<AISettingsPageView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
     ZapDrive(ViewHandle<WarpDriveSettingsPageView>),
-    /// 全局 HTTP 代理设置页。
+    /// Global HTTP proxy settings page.
     Network(ViewHandle<NetworkPageView>),
-    /// 云同步设置页。
+    /// Cloud sync settings page.
     CloudSync(ViewHandle<CloudSyncPageView>),
 }
 
@@ -124,9 +124,9 @@ impl SettingsPageViewHandle {
             Keybindings(view_handle) => ChildView::new(view_handle).finish(),
             About(view_handle) => ChildView::new(view_handle).finish(),
             Code(view_handle) => ChildView::new(view_handle).finish(),
-            // Zap Wave 3-1:`OzCloudAPIKeys` arm 随 `platform_page` 一同物理删。
-            // Zap Wave 6-8:`SharedBlocks` / `Referrals` arm 随 variant 物理删。
-            // Zap Wave 7-3:`CloudEnvironments` arm 随 ambient-agent UI 一同物理删。
+            // Zap Wave 3-1: `OzCloudAPIKeys` arm removed together with `platform_page`.
+            // Zap Wave 6-8: `SharedBlocks` / `Referrals` arm removed together with variant.
+            // Zap Wave 7-3: `CloudEnvironments` arm removed together with ambient-agent UI.
             Warpify(view_handle) => ChildView::new(view_handle).finish(),
             AI(view_handle) => ChildView::new(view_handle).finish(),
             MCPServers(view_handle) => ChildView::new(view_handle).finish(),
@@ -193,8 +193,8 @@ impl SettingsPage {
 pub enum SettingsPageEvent {
     FocusModal,
     Pane(PaneEventWrapper),
-    // Zap Wave 7-3:`EnvironmentSetupModeSelectorToggled` /
-    // `AgentAssistedEnvironmentModalToggled` 随 ambient-agent UI 子系统物理删。
+    // Zap Wave 7-3: `EnvironmentSetupModeSelectorToggled` /
+    // `AgentAssistedEnvironmentModalToggled` removed together with ambient-agent UI subsystem.
 }
 
 /// Wrapper for pane events to avoid circular dependency with pane module.
@@ -1326,8 +1326,8 @@ impl<V: warpui::View> PageType<V> {
         }
     }
 
-    /// 取出当前 page 的滚动状态 handle(垂直、水平),用于 rebuild 时跨实例保留滚动位置。
-    /// `Monolith` 的 scroll state 是可选的,这里只在两个非空 handle 都存在时返回。
+    /// Extract the current page's scroll state handles (vertical, horizontal) for preserving scroll position
+    /// across instances during rebuild. `Monolith` scroll state is optional; only return if both handles are non-null.
     pub(super) fn scroll_states(
         &self,
     ) -> Option<(ClippedScrollStateHandle, ClippedScrollStateHandle)> {
@@ -1354,7 +1354,7 @@ impl<V: warpui::View> PageType<V> {
         }
     }
 
-    /// 用旧 page 的 scroll handle 替换当前 page 的内部 handle,保留滚动位置。
+    /// Replace the current page's internal scroll handles with the old page's handles to preserve scroll position.
     pub(super) fn replace_scroll_states(
         &mut self,
         v: ClippedScrollStateHandle,

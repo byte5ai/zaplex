@@ -23,11 +23,11 @@ pub enum EnvVarCollectionSource {
     },
 }
 
-/// Manages EnvVarCollection panes
+/// Manages EnvVarCollection panes.
 impl EnvVarCollectionManager {
     pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
-        // Zap:同 WorkflowManager — client_id→server_id 转换事件仅云端创建成功后触发,
-        // Zap 无云 = 永不触发。Phase 2c‑1 移除 UpdateManager 订阅与死处理函数。
+        // Zap: Like WorkflowManager — client_id→server_id conversion events are only triggered after successful cloud creation;
+        // Zap has no cloud = never triggered. Phase 2c-1 removes UpdateManager subscriptions and dead handler functions.
         EnvVarCollectionManager {
             panes_by_hashed_id: HashMap::new(),
         }

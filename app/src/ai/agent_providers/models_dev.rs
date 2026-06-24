@@ -1,20 +1,22 @@
-//! models.dev 数据源接入。
+//! models.dev data source integration.
 //!
-//! 在用户打开 Providers 设置页时,后台异步拉取 `https://models.dev/api.json`,
-//! 缓存到 `${cache_dir}/models-dev.json`。下一次启动直接读缓存,
-//! 缓存命中且未过 TTL(默认 24h) 不再发请求;过期/缺失时再去拉。
+//! When the user opens the Providers settings page, the background asynchronously fetches
+//! `https://models.dev/api.json` and caches it to `${cache_dir}/models-dev.json`. On the next
+//! startup, the cache is read directly. If the cache hit is within the TTL (default 24h),
+//! no request is made; otherwise, fetch on expiry/missing.
 //!
-//! 数据结构对齐 opencode 的 `provider/models.ts`:顶层是
-//! `{ <provider_id>: Provider }`,Provider 含 `models: { <model_id>: Model }`。
-//! 我们只关心 UI "快速选择" 需要的几个字段:
-//! - provider: id / name / api / env(暗示需要哪个 env var)
+//! Data structure aligns with opencode's `provider/models.ts`: top level is
+//! `{ <provider_id>: Provider }`, where Provider contains `models: { <model_id>: Model }`.
+//! We only care about a few fields needed for UI "quick selection":
+//! - provider: id / name / api / env (indicates which env var is needed)
 //! - model:    id / name / limit.context / limit.output / reasoning / tool_call
 //!
-//! 没列出的字段一律走 `serde(default)` + `#[allow(dead_code)]` 容忍。
+//! Unlisted fields use `serde(default)` + `#[allow(dead_code)]` for tolerance.
 //!
-//! 设计取舍:**同步缓存读、异步网络拉**。读侧给 UI 用,要快;
-//! 拉侧后台 spawn,失败不弹错只 log,缓存读不到就给空数据,UI 展示
-//! "暂未拉取到 models.dev,请检查网络"。
+//! Design tradeoff: **synchronous cache read, asynchronous network fetch**. Read side
+//! is for UI and must be fast; fetch side spawns in background, fails silently with only
+//! logging. If cache cannot be read, return empty data, and UI displays
+//! "models.dev not yet fetched, please check network".
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -31,7 +33,7 @@ const CACHE_FILENAME: &str = "models-dev.json";
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// `models.dev` 顶层数据 — provider_id → Provider。
+/// models.dev top-level data — provider_id → Provider.
 pub type Catalog = BTreeMap<String, Provider>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -40,16 +42,16 @@ pub struct Provider {
     pub id: String,
     #[serde(default)]
     pub name: String,
-    /// 上游 API base URL,例如 `https://api.deepseek.com/v1`。
+    /// Upstream API base URL, e.g., `https://api.deepseek.com/v1`.
     #[serde(default)]
     pub api: Option<String>,
-    /// 该 provider 通常需要的环境变量名,例如 `["DEEPSEEK_API_KEY"]`。
+    /// Environment variable names typically required by this provider, e.g., `["DEEPSEEK_API_KEY"]`.
     #[serde(default)]
     pub env: Vec<String>,
-    /// 可用模型,key 为模型 id。
+    /// Available models, keyed by model id.
     #[serde(default)]
     pub models: BTreeMap<String, Model>,
-    /// 文档 URL(部分 provider 有)。
+    /// Documentation URL (present for some providers).
     #[serde(default)]
     pub doc: Option<String>,
 }
@@ -68,17 +70,17 @@ pub struct Model {
     pub reasoning: bool,
     #[serde(default = "default_true")]
     pub tool_call: bool,
-    /// 是否支持文件附件(attachment 字段,与 modalities 互补:
-    /// modalities 描述 native 多模态;attachment 涵盖 PDF / 通用文件附件协议)。
+    /// Whether file attachments are supported (attachment field complements modalities:
+    /// modalities describe native multimodality; attachment covers PDF / generic file attachment protocol).
     #[serde(default)]
     pub attachment: bool,
-    /// 输入 / 输出 modalities,典型值:`text` / `image` / `audio` / `video` / `pdf`。
+    /// Input / output modalities, typical values: `text` / `image` / `audio` / `video` / `pdf`.
     #[serde(default)]
     pub modalities: ModelModalities,
-    /// 上下文窗口上限。
+    /// Context window upper limit.
     #[serde(default)]
     pub limit: ModelLimit,
-    /// "alpha" / "beta" / "deprecated" 标签。
+    /// Status tags: "alpha" / "beta" / "deprecated".
     #[serde(default)]
     pub status: Option<String>,
 }
@@ -109,13 +111,13 @@ pub struct ModelLimit {
     pub output: u32,
 }
 
-// ── 进程内单例缓存 ──────────────────────────────────────────────────────────
+// ── In-process singleton cache ───────────────────────────────────────────
 
 #[derive(Debug, Default)]
 struct State {
-    /// 已加载的 catalog。`None` 表示从未加载成功。
+    /// Loaded catalog. `None` indicates never successfully loaded.
     catalog: Option<Catalog>,
-    /// 缓存最后修改时间(用于判断是否过期)。
+    /// Cache last modification time (used to determine expiration).
     loaded_at: Option<SystemTime>,
 }
 
@@ -130,13 +132,13 @@ fn cache_path() -> PathBuf {
     p
 }
 
-/// 读已加载的 catalog 副本(无锁等待 — 直接克隆)。
-/// 没数据返回 `None`,UI 应展示 "正在拉取" / 重试按钮。
+/// Read a copy of the loaded catalog (no lock waiting — direct clone).
+/// Returns `None` if no data; UI should display "fetching" / retry button.
 pub fn cached() -> Option<Catalog> {
     state().read().ok().and_then(|s| s.catalog.clone())
 }
 
-/// 一个模型从 models.dev 抽出的能力快照,用于 BYOP UI / chat_stream 决策附件类型。
+/// A capability snapshot of a model extracted from models.dev, used for BYOP UI / chat_stream attachment type decisions.
 #[derive(Debug, Clone, Default)]
 pub struct ModelCaps {
     pub vision: bool,
@@ -156,12 +158,14 @@ impl ModelCaps {
     }
 }
 
-/// 在已加载的 catalog 里按 model_id 查找,返回该模型在 models.dev 上声明的能力。
+/// Look up a model by model_id in the loaded catalog and return the capabilities
+/// declared for that model on models.dev.
 ///
-/// 优先用 `provider_id` 精确匹配 catalog provider key;miss 时退化到「全 catalog
-/// 扫描第一个 model.id 命中」。这样既能精确匹配(用户填的 provider.id 与 models.dev
-/// 一致时),又能应对用户自定义 provider id(比如 "openrouter" 或 "siliconflow"
-/// 这种聚合 provider 转发上游模型,id 与 models.dev 上游 provider 不同)。
+/// First attempts exact match using `provider_id` as the catalog provider key;
+/// on miss, degrades to "scan entire catalog for first model.id hit".
+/// This allows both exact matching (when user-supplied provider.id matches models.dev)
+/// and user-defined provider ids (e.g., "openrouter" or "siliconflow" — aggregator
+/// providers that forward upstream models with different ids than models.dev upstream providers).
 pub fn lookup_caps(provider_id: &str, model_id: &str) -> Option<ModelCaps> {
     let s = state().read().ok()?;
     let catalog = s.catalog.as_ref()?;
@@ -178,8 +182,9 @@ pub fn lookup_caps(provider_id: &str, model_id: &str) -> Option<ModelCaps> {
     None
 }
 
-/// 把磁盘缓存读进内存(同步,非阻塞;只在 process 启动或 UI 第一次需要时调用)。
-/// 如果磁盘缓存不存在或解析失败,返回 false,调用方应触发一次网络拉取。
+/// Load disk cache into memory (synchronous, non-blocking; called only on process startup
+/// or first UI need). Returns false if disk cache doesn't exist or fails to parse;
+/// caller should trigger a network fetch.
 pub fn load_from_disk() -> bool {
     let path = cache_path();
     let bytes = match std::fs::read(&path) {
@@ -198,13 +203,13 @@ pub fn load_from_disk() -> bool {
             true
         }
         Err(e) => {
-            log::warn!("[models.dev] 解析磁盘缓存失败 ({path:?}): {e}");
+            log::warn!("[models.dev] Failed to parse disk cache ({path:?}): {e}");
             false
         }
     }
 }
 
-/// 缓存是否过期 — 不存在或超过 TTL。
+/// Whether cache is stale — doesn't exist or exceeds TTL.
 pub fn is_stale() -> bool {
     let s = match state().read() {
         Ok(s) => s,
@@ -219,15 +224,15 @@ pub fn is_stale() -> bool {
     }
 }
 
-/// 异步拉取 models.dev 并写入磁盘缓存与内存缓存。
-/// 失败仅 log,不向上 propagate(UI 调用方按 `cached()` 是否为 `Some` 决定显示)。
+/// Asynchronously fetch models.dev and write to disk and memory cache.
+/// Failures only log, do not propagate upward (UI caller decides display based on whether `cached()` is `Some`).
 pub async fn fetch_and_cache(client: Client) -> Result<(), String> {
     let resp = client
         .get(MODELS_DEV_URL)
         .timeout(FETCH_TIMEOUT)
         .send()
         .await
-        .map_err(|e| format!("HTTP 请求失败: {e}"))?;
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
 
     let status = resp.status();
     if !status.is_success() {
@@ -236,18 +241,18 @@ pub async fn fetch_and_cache(client: Client) -> Result<(), String> {
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| format!("读响应体失败: {e}"))?;
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
 
     let catalog: Catalog =
-        serde_json::from_slice(&bytes).map_err(|e| format!("JSON 解析失败: {e}"))?;
+        serde_json::from_slice(&bytes).map_err(|e| format!("JSON parse failed: {e}"))?;
 
-    // 写盘 — 失败不算致命,只 log。
+    // Write to disk — failure is not fatal, only log.
     let path = cache_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Err(e) = std::fs::write(&path, &bytes) {
-        log::warn!("[models.dev] 写磁盘缓存失败 ({path:?}): {e}");
+        log::warn!("[models.dev] Failed to write disk cache ({path:?}): {e}");
     }
 
     if let Ok(mut s) = state().write() {
@@ -257,7 +262,7 @@ pub async fn fetch_and_cache(client: Client) -> Result<(), String> {
     Ok(())
 }
 
-// ── chip 行折叠/展开状态(进程级,避免 widget rebuild 丢) ─────────────────
+// ── Chip row collapse/expand state (process-level, avoids widget rebuild loss) ─
 
 static CHIPS_EXPANDED: AtomicBool = AtomicBool::new(false);
 
@@ -269,7 +274,7 @@ pub fn toggle_chips_expanded() {
     CHIPS_EXPANDED.fetch_xor(true, Ordering::Relaxed);
 }
 
-// ── 快速添加 chip 行的搜索过滤 ──────────────────────────────────────────────
+// ── Search filter for quick chip row addition ────────────────────────────
 
 fn search_state() -> &'static RwLock<String> {
     static S: OnceLock<RwLock<String>> = OnceLock::new();
@@ -290,8 +295,9 @@ pub fn set_search_query(q: String) {
     }
 }
 
-/// 按当前搜索 query 过滤 catalog,大小写不敏感子串匹配 provider.name 与 provider.id。
-/// 空 query 返回全部条目顺序。返回拥有所有权的 Vec 以便 UI 端 take/iter。
+/// Filter catalog by current search query, case-insensitive substring matching on
+/// provider.name and provider.id. Empty query returns all entries in order.
+/// Returns owned Vec so UI can take/iter.
 pub fn filter_catalog(catalog: &Catalog, query: &str) -> Vec<(String, Provider)> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
@@ -307,11 +313,12 @@ pub fn filter_catalog(catalog: &Catalog, query: &str) -> Vec<(String, Provider)>
         .collect()
 }
 
-/// 把 models.dev 的 Model 转换成本地 settings 用的 AgentProviderModel。
+/// Convert a models.dev Model to a local settings AgentProviderModel.
 ///
-/// 默认把 catalog 推断的 image/pdf/audio 写进字段(用户首次 sync / quick-add 时
-/// 直接看到模型能力被同步进 toml,不需要展开 detail 才看到)。
-/// 后续 sync 时调用方只往 None 槽位填新值,Some(_) 视为用户显式覆盖跳过。
+/// By default, writes catalog-inferred image/pdf/audio into fields (so on first user
+/// sync / quick-add, model capabilities are directly visible in toml without needing
+/// to expand details). On subsequent syncs, callers only fill `None` slots with new values;
+/// `Some(_)` is treated as explicit user override to skip.
 pub fn into_agent_provider_model(model: &Model) -> crate::settings::AgentProviderModel {
     let caps = ModelCaps::from_model(model);
     crate::settings::AgentProviderModel {

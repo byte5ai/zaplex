@@ -30,16 +30,16 @@ pub enum ShellPathType {
     PlatformNative(PathBuf),
 }
 
-/// Zap:某个远端目录(cwd)下真实子项的快照。
+/// Zap: Snapshot of real items in a remote directory (cwd).
 ///
-/// 由 daemon 的 `ListDirectory` RPC 返回的结果填充。终端链接检测器
-/// 在远端会话里用它做精确校验:把 `ls -l` 整行候选子串里真正的文件名
-/// 切出来 —— 这正是本地会话里 `fs::metadata` 存在性校验所起的作用。
+/// Populated with results returned by the daemon's `ListDirectory` RPC. The terminal link detector
+/// uses this for precise validation in remote sessions: it extracts the actual filename from candidate
+/// substrings in the full `ls -l` line — exactly what `fs::metadata` existence checking does in local sessions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteDirListing {
-    /// 该目录的绝对路径(远端 cwd)。
+    /// The absolute path of the directory (remote cwd).
     pub dir: PathBuf,
-    /// 目录下的直接子项:文件名 -> 是否为目录。
+    /// Direct child items in the directory: filename -> whether it is a directory.
     pub entries: HashMap<String, bool>,
 }
 
@@ -49,20 +49,23 @@ impl RemoteDirListing {
     }
 }
 
-/// Zap:终端文件链接的校验来源。
+/// Zap: Validation source for terminal file links.
 ///
-/// 本地会话用本地文件系统 `fs::metadata` 判断路径是否存在;远端 SSH
-/// (remote-server)会话的文件不在本地磁盘上,本地校验必然失败,因此远端
-/// 会话改用 daemon `ListDirectory` RPC 缓存下来的真实目录列表做精确校验。
+/// Local sessions use the local filesystem `fs::metadata` to check if a path exists;
+/// remote SSH (remote-server) session files are not on the local disk, so local validation
+/// would necessarily fail. Therefore, remote sessions instead use the real directory list cached
+/// from the daemon's `ListDirectory` RPC for precise validation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum LinkValidationContext {
-    /// 本地会话:用本地文件系统校验路径是否真实存在。
+    /// Local session: uses the local filesystem to check if the path actually exists.
     #[default]
     Local,
-    /// 远端 SSH 会话:用缓存下来的远端 cwd 目录列表精确校验。
+    /// Remote SSH session: uses the cached remote cwd directory list for precise validation.
     ///
-    /// `None` 表示该 cwd 的目录列表尚未缓存(异步拉取中或拉取失败),
-    /// 此时本轮校验一律视为"无效"(不高亮),等列表到达后 re-render 再点亮。
+    /// `None` means the directory list for this cwd has not yet been cached
+    /// (async fetch in progress or fetch failed);
+    /// in this case, validation is treated as "invalid" (not highlighted) this round,
+    /// and will be re-rendered and highlighted once the list arrives.
     Remote(Option<Arc<RemoteDirListing>>),
 }
 
@@ -129,27 +132,28 @@ fn is_path_valid(
         return false;
     }
 
-    // Zap:远端 SSH 会话的文件不在本地磁盘上,`fs::metadata` 必然失败。
-    // 改用 daemon `ListDirectory` 缓存下来的真实目录列表精确校验:候选解析
-    // 路径有效 ⇔ 其父目录恰好等于缓存的 cwd 且其文件名是该目录下的已知子项。
-    // 这给链接检测器的子串搜索提供了和本地 `fs::metadata` 等价的消歧依据,
-    // 能从 `ls -l` 整行里准确切出真正的文件名。
+    // Zap: Remote SSH session files are not on the local disk, so `fs::metadata` will necessarily fail.
+    // Use the real directory list cached from daemon `ListDirectory` for precise validation:
+    // a candidate parsed path is valid ⇔ its parent directory exactly equals the cached cwd
+    // and its filename is a known child item in that directory.
+    // This provides the link detector's substring search with the same disambiguation basis as local `fs::metadata`,
+    // allowing it to accurately extract the true filename from the full `ls -l` line.
     if let LinkValidationContext::Remote(listing) = validation_ctx {
-        // cwd 列表尚未缓存(异步拉取中/失败):本轮视为无效,等列表到达后再点亮。
+        // cwd list not yet cached (async fetch in progress/failed): treat as invalid this round, highlight after list arrives.
         let Some(listing) = listing else {
             return false;
         };
         let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
             return false;
         };
-        // 父目录必须正好是缓存的那个 cwd。
+        // Parent directory must exactly be the cached cwd.
         if path.parent() != Some(listing.dir.as_path()) {
             return false;
         }
         let Some(&is_dir) = listing.entries.get(file_name) else {
             return false;
         };
-        // 与本地一致:带行列号时不能是目录。
+        // Consistent with local behavior: cannot be a directory when line and column numbers are present.
         return !is_dir || clean_path_result.line_and_column_num.is_none();
     }
 
@@ -161,11 +165,12 @@ fn is_path_valid(
     metadata.is_file() || (metadata.is_dir() && clean_path_result.line_and_column_num.is_none())
 }
 
-/// Zap:判断一个已解析的远端路径是否指向目录。
+/// Zap: Determines whether a parsed remote path points to a directory.
 ///
-/// 仅在远端会话点击链接、需要决定"打开文件 vs `cd` 进目录"时调用;
-/// 依据是缓存下来的远端 cwd 目录列表。列表未缓存或路径不在其中时返回
-/// `false`(按文件处理,与不缓存时的保守行为一致)。
+/// Only called when clicking a link in a remote session and needing to decide
+/// "open file vs `cd` into directory"; the basis is the cached remote cwd directory list.
+/// Returns `false` if the list is not cached or the path is not in it
+/// (treated as a file, consistent with conservative behavior when not cached).
 pub fn remote_path_is_dir(path: &Path, listing: &RemoteDirListing) -> bool {
     let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
         return false;

@@ -98,8 +98,8 @@ fn test_custom_heading_font_size_multipliers() {
     );
 }
 
-/// 作者: logic
-/// 验证默认倍率精确值，防止 BlockHeaderSize 或 Default impl 被意外修改
+/// Author: logic
+/// Verify exact default multiplier values to prevent BlockHeaderSize or Default impl from being accidentally modified
 #[test]
 fn test_heading_default_values_are_spec() {
     let m = HeadingFontSizeMultipliers::default();
@@ -111,8 +111,8 @@ fn test_heading_default_values_are_spec() {
     assert_eq!(m.h6, 0.75);
 }
 
-/// 作者: logic
-/// 验证标题字号倍率层级不变式: h1 >= h2 >= h3 >= h4 >= h5 >= h6
+/// Author: logic
+/// Verify heading font size multiplier ordering invariant: h1 >= h2 >= h3 >= h4 >= h5 >= h6
 #[test]
 fn test_heading_multipliers_size_ordering() {
     let m = HeadingFontSizeMultipliers::default();
@@ -123,8 +123,8 @@ fn test_heading_multipliers_size_ordering() {
     assert!(m.h5 >= m.h6, "h5 >= h6");
 }
 
-/// 作者: logic
-/// 验证 get_multiplier 是 const fn，可在编译期求值
+/// Author: logic
+/// Verify that get_multiplier is a const fn and can be evaluated at compile time
 #[test]
 fn test_get_multiplier_const_fn() {
     const M: HeadingFontSizeMultipliers = HeadingFontSizeMultipliers {
@@ -151,7 +151,7 @@ fn applies_replacements_with_multibyte_and_prefix() {
     let mut text = format!("{}{}", "•  ", original);
     let glyph_offset = 3; // prefix length in chars
 
-    // Secret over chars [2..5): "冲ab"
+    // Secret over chars [2..5): portion to redact
     let start_byte = original
         .chars()
         .take(2)
@@ -168,7 +168,7 @@ fn applies_replacements_with_multibyte_and_prefix() {
     let replacements = vec![(secret, Cow::Owned("***".to_string()))];
     apply_secret_replacements(&mut text, glyph_offset, &replacements);
 
-    assert_eq!(text, format!("{}{}", "•  ", "令狐***cXYZ"));
+    assert_eq!(text, format!("{}{}", "•  ", "prefix***suffix"));
 }
 
 #[test]

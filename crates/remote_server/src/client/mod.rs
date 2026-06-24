@@ -375,10 +375,11 @@ impl RemoteServerClient {
         }
     }
 
-    /// Zap:列举远端主机上某个目录的直接子项。
+    /// Zap: List direct children of a directory on the remote host.
     ///
-    /// 终端文件链接检测用它精确校验远端路径形态(本地会话靠
-    /// `fs::metadata` 做这件事,远端文件不在本地磁盘上)。
+    /// Used by terminal file link detection to precisely verify remote path form
+    /// (local sessions use `fs::metadata` for this; remote files are not on the
+    /// local disk).
     pub async fn list_directory(&self, path: String) -> Result<ListDirectoryResponse, ClientError> {
         let request_id = RequestId::new();
         let msg = ClientMessage {
@@ -468,8 +469,8 @@ impl RemoteServerClient {
     /// server-reported `next_offset`, until a chunk signals `eof`. Used by the
     /// in-app image viewer to fetch raw image bytes for `AssetSource::Raw`.
     pub async fn read_file_bytes(&self, path: String) -> Result<Vec<u8>, ClientError> {
-        // 服务端单块上限 8 MiB(`handle_read_file_chunk`)。客户端按 4 MiB 请求,
-        // 远低于 64 MiB 消息上限,给 framing 留足余量。
+        // Server chunk limit is 8 MiB (`handle_read_file_chunk`). Client requests in 4 MiB chunks,
+        // well below the 64 MiB message limit, leaving ample headroom for framing.
         const CHUNK_SIZE: u64 = 4 * 1024 * 1024;
 
         let mut bytes = Vec::new();
@@ -541,9 +542,10 @@ impl RemoteServerClient {
 
     /// Sends a buffer edit notification to the remote host.
     ///
-    /// Zap:与其它 fire-and-forget 通知不同,buffer 编辑投递失败必须上报。
-    /// `outbound_tx` 关闭(连接已死)时若静默吞掉,本地 buffer 会继续推进而
-    /// daemon 收不到编辑,造成不可见的失步。失败返回 `Err` 让调用方处理。
+    /// Zap: Unlike other fire-and-forget notifications, buffer edit delivery failures must
+    /// be reported. If we silently drop when `outbound_tx` is closed (connection dead), the
+    /// local buffer continues to advance while the daemon doesn't receive the edit, causing
+    /// invisible desynchronization. Return `Err` on failure to let the caller handle it.
     pub fn send_buffer_edit(
         &self,
         path: String,

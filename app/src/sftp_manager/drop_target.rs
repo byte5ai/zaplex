@@ -1,8 +1,7 @@
-//! SFTP 浏览器拖拽目标 Element，拦截 OS 级文件拖拽事件。
+//! SFTP browser drag-drop target Element, intercepting OS-level file drag events.
 //!
-//! 仿照 `terminal_size_element.rs` 实现，在 `dispatch_event` 中
-//! 捕获 `DragFiles` / `DragFileExit` / `DragAndDropFiles` 事件，
-//! 转发为 `SftpBrowserAction`。
+//! Implemented following `terminal_size_element.rs`, captures `DragFiles` / `DragFileExit` / `DragAndDropFiles`
+//! events in `dispatch_event`, and forwards them as `SftpBrowserAction`.
 //! author: logic
 //! date: 2026-05-27
 
@@ -19,13 +18,13 @@ use warpui::{
 
 use super::browser::SftpBrowserAction;
 
-/// SFTP 拖拽目标 Element
+/// SFTP drag-drop target Element
 pub struct SftpDropTargetElement {
     child: Box<dyn Element>,
 }
 
 impl SftpDropTargetElement {
-    /// 创建拖拽目标 Element
+    /// Create a drag-drop target Element
     pub fn new(child: Box<dyn Element>) -> Self {
         Self { child }
     }
@@ -108,7 +107,7 @@ impl Element for SftpDropTargetElement {
 }
 
 impl SftpDropTargetElement {
-    /// 判断鼠标位置是否在 Element 边界内
+    /// Check if mouse position is within Element bounds
     fn mouse_position_is_in_bounds(&self, position: Vector2F) -> bool {
         let Some(bounds) = self.bounds() else {
             return false;

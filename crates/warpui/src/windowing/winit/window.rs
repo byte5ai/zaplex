@@ -1606,7 +1606,7 @@ fn maybe_adjust_window_vertically(window: &winit::window::Window) -> Option<i32>
         adjustment = bottom_of_monitor - bottom_of_window;
     }
 
-    // 偏移为 0 视为窗口已经完全在屏幕内,跳过移窗与日志
+    // Offset of 0 is considered window fully on-screen, skip moving window and logging
     if adjustment == 0 {
         return None;
     }

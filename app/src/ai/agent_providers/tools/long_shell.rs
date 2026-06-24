@@ -1,10 +1,10 @@
-//! 长运行 shell 命令的交互工具:
-//! - `write_to_long_running_shell_command`: 给一个尚在运行的命令写 stdin/PTY
-//! - `read_shell_command_output`: 拿一个尚在运行命令的当前输出快照
+//! Interactive tools for long-running shell commands:
+//! - `write_to_long_running_shell_command`: write stdin/PTY to a still-running command
+//! - `read_shell_command_output`: get a snapshot of a still-running command's current output
 //!
-//! 这两个工具的 `command_id` 来自 `run_shell_command` 的初始 snapshot
-//! (`LongRunningShellCommandSnapshot.command_id`)。模型在调用前需要先看到一个
-//! 长运行 shell 的 snapshot 拿到 id。
+//! The `command_id` for both tools comes from `run_shell_command`'s initial snapshot
+//! (`LongRunningShellCommandSnapshot.command_id`). The model must see a long-running
+//! shell snapshot to obtain the ID before calling these tools.
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -21,14 +21,13 @@ use super::OpenAiTool;
 struct WriteArgs {
     command_id: String,
     input: String,
-    /// "raw" | "line" | "block",默认 "line"
+    /// "raw" | "line" | "block", default "line"
     #[serde(default = "default_mode")]
     mode: String,
 }
 
 fn default_mode() -> String {
-    "line".to_owned()
-}
+    "line".to_owned()  // default: "line"
 
 fn write_parameters() -> Value {
     json!({
@@ -36,16 +35,16 @@ fn write_parameters() -> Value {
         "properties": {
             "command_id": {
                 "type": "string",
-                "description": "之前 run_shell_command 返回的长运行命令 id。"
+                "description": "Long-running command ID returned from run_shell_command."
             },
             "input": {
                 "type": "string",
-                "description": "要写到 stdin/PTY 的文本。mode=raw 时可使用 <ESC>/<ENTER>/<CTRL-C> 控制键 token。"
+                "description": "Text to write to stdin/PTY. With mode=raw, can use <ESC>/<ENTER>/<CTRL-C> control key tokens."
             },
             "mode": {
                 "type": "string",
                 "enum": ["raw", "line", "block"],
-                "description": "raw=原始字节;line=作为一行(自动加换行);block=作为多行块。",
+                "description": "raw=raw bytes; line=as one line (auto newline); block=as multi-line block.",
                 "default": "line"
             }
         },
@@ -133,7 +132,7 @@ fn write_result_to_json(result: &api::message::tool_call_result::Result) -> Opti
             "exit_code": f.exit_code,
             "output": f.output,
         }),
-        // ShellCommandError 现仅有 BlockNotFound 一个 variant
+        // ShellCommandError currently has only BlockNotFound variant
         Some(WR::Error(_)) => json!({
             "status": "error",
             "message": "block_not_found_or_command_id_invalid",
@@ -160,7 +159,7 @@ pub static WRITE_TO_LONG_RUNNING_SHELL_COMMAND: OpenAiTool = OpenAiTool {
 #[derive(Debug, Deserialize)]
 struct ReadArgs {
     command_id: String,
-    /// "on_completion"(默认)或 number(秒数 → Duration)
+    /// "on_completion" (default) or number (seconds → Duration)
     #[serde(default)]
     delay_seconds: Option<u64>,
 }
@@ -171,11 +170,11 @@ fn read_parameters() -> Value {
         "properties": {
             "command_id": {
                 "type": "string",
-                "description": "运行中命令的 id。"
+                "description": "ID of running command."
             },
             "delay_seconds": {
                 "type": "integer",
-                "description": "可选: 在指定秒数后返回当前 snapshot;不填则等到命令完成才返回。",
+                "description": "Optional: return current snapshot after specified seconds; if omitted, wait until command completes.",
                 "minimum": 0
             }
         },

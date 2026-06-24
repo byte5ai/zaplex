@@ -1,13 +1,13 @@
 use crate::network::NetworkStatus;
 use crate::persistence::ModelEvent;
-// Zap Wave 3-1:`AuthClient` trait 与 `workspace:debug_create_anonymous_user`
-// debug action 随 auth 子系统下线一同物理删。
+// Zap Wave 3-1: `AuthClient` trait and `workspace:debug_create_anonymous_user`
+// debug action physically removed together with auth subsystem sunset.
 use crate::app_state::get_app_state;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
-// Zap Wave 3-1:`ServerApiProvider` 不再被本文件使用,`debug_create_anonymous_user`
-// debug action 随 AuthClient 一同物理删。
+// Zap Wave 3-1: `ServerApiProvider` is no longer used in this file;
+// `debug_create_anonymous_user` debug action physically removed with AuthClient.
 use ::settings::ToggleableSetting;
 use warp_core::execution_mode::AppExecutionMode;
 
@@ -125,8 +125,8 @@ pub fn init_global_actions(app: &mut AppContext) {
         "workspace:toggle_debug_network_status",
         toggle_debug_network_status,
     );
-    // Zap Wave 3-1:`workspace:debug_create_anonymous_user` global action 已随
-    // 上游匿名用户创建云端入口一同物理删。
+    // Zap Wave 3-1: `workspace:debug_create_anonymous_user` global action physically removed
+    // together with upstream anonymous user creation cloud endpoint.
     app.add_global_action("workspace:open_repository", open_repository);
     app.add_global_action("app:undo_close", undo_close);
 }
@@ -178,9 +178,9 @@ fn save_app_snapshot_now(ctx: &mut AppContext) {
     // would produce a snapshot with zero windows. Persisting that snapshot
     // wipes the on-disk session via `save_app_state`'s delete-then-insert
     // transaction. `save_app` fires from window move / focus / resize /
-    // close callbacks (see `app_callbacks` in `lib.rs`), all of which run
-    // during a drag, so we have to short-circuit at this boundary. The
-    // first save after the drag finalizes will rewrite the snapshot.
+    // close callbacks (see `app_callbacks` in `lib.rs`), all of which occur
+    // during a drag, so we must short-circuit at this boundary. The
+    // first save after the drag completes will rewrite the snapshot.
     if CrossWindowTabDrag::as_ref(ctx).is_active() {
         return;
     }
@@ -215,8 +215,9 @@ fn toggle_debug_network_status(_: &(), ctx: &mut AppContext) {
     });
 }
 
-// Zap Wave 3-1:`fn create_anonymous_user` debug 调试入口已随上游匿名用户
-// 创建云端入口一同物理删。Zap 已无匿名用户概念。
+// Zap Wave 3-1: `fn create_anonymous_user` debug entry point physically removed
+// together with upstream anonymous user creation cloud endpoint. Zap no longer
+// has the concept of anonymous users.
 
 /// Reopens the last closed item (window or tab).
 fn undo_close(_: &(), ctx: &mut AppContext) {

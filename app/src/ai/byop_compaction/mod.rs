@@ -1,12 +1,12 @@
-//! BYOP 本地会话压缩 — 1:1 复刻 opencode `packages/opencode/src/session/{compaction,overflow,summary}.ts`。
+//! BYOP local session compaction — 1:1 replica of opencode `packages/opencode/src/session/{compaction,overflow,summary}.ts`.
 //!
-//! 入口 API:
-//! - [`overflow::is_overflow`] — 自动触发判断(基于 LLM response usage)
-//! - [`algorithm::select`] — 切分 head(送摘要 LLM) + tail(原样保留)
-//! - [`algorithm::prune`] — 只清旧 tool output(不删消息)
-//! - [`prompt::build_prompt`] — 拼摘要请求文本
+//! Entry APIs:
+//! - [`overflow::is_overflow`] — auto-trigger decision (based on LLM response usage)
+//! - [`algorithm::select`] — split head (to summarization LLM) + tail (keep as-is)
+//! - [`algorithm::prune`] — only clear old tool output (don't delete messages)
+//! - [`prompt::build_prompt`] — assemble summarization request text
 //!
-//! 与 warp 服务端 protobuf `SummarizeConversation` 解耦,只在 BYOP 路径生效。
+//! Decoupled from warp server-side protobuf `SummarizeConversation`, only effective in BYOP path.
 pub mod algorithm;
 pub mod commit;
 pub mod config;
@@ -19,7 +19,7 @@ pub mod token;
 pub use config::CompactionConfig;
 pub use overflow::{is_overflow, usable};
 
-/// 字节级对齐 opencode `compaction.ts` 顶部常数(行 33-39, overflow.ts:6, util/token.ts:1)。
+/// Byte-level alignment with opencode `compaction.ts` top constants (lines 33-39, overflow.ts:6, util/token.ts:1).
 pub mod consts {
     pub const PRUNE_MINIMUM: usize = 20_000;
     pub const PRUNE_PROTECT: usize = 40_000;

@@ -31,8 +31,8 @@ fn mock_appearance() -> Appearance {
     )
 }
 
-/// 作者: logic
-/// UI 字体大小语义化方法测试
+/// author: logic
+/// Test UI semantic font size methods
 #[test]
 fn test_semantic_font_sizes_at_default() {
     let appearance = mock_appearance();
@@ -50,8 +50,8 @@ fn test_semantic_font_sizes_at_default() {
     assert_eq!(appearance.ui_font_hero(), 36.0);
 }
 
-/// 作者: logic
-/// 验证 header_font_size 和 overline_font_size 也随 ui_font_size 缩放
+/// author: logic
+/// Verify that header_font_size and overline_font_size scale with ui_font_size
 #[test]
 fn test_header_and_overline_font_size_scaling() {
     let appearance = mock_appearance();
@@ -59,8 +59,8 @@ fn test_header_and_overline_font_size_scaling() {
     assert_eq!(appearance.overline_font_size(), 10.0);
 }
 
-/// 作者: logic
-/// 设置 ui_font_size 为最小值后验证比例缩放
+/// author: logic
+/// Set ui_font_size to minimum and verify proportional scaling
 #[test]
 fn test_semantic_font_sizes_at_minimum() {
     let mut appearance = mock_appearance();
@@ -81,8 +81,8 @@ fn test_semantic_font_sizes_at_minimum() {
     assert_eq!(appearance.overline_font_size(), 8.0 * 10.0 / 12.0);
 }
 
-/// 作者: logic
-/// 验证最大值 (20.0) 时的缩放
+/// author: logic
+/// Verify scaling at maximum (20.0)
 #[test]
 fn test_semantic_font_sizes_at_maximum() {
     let mut appearance = mock_appearance();
@@ -96,15 +96,15 @@ fn test_semantic_font_sizes_at_maximum() {
     assert_eq!(appearance.ui_font_display(), 20.0 * 24.0 / 12.0);
 }
 
-/// 作者: logic
-/// 验证默认值常量
+/// author: logic
+/// Verify default value constants
 #[test]
 fn test_default_constants() {
     assert_eq!(DEFAULT_UI_FONT_SIZE, 12.0);
 }
 
-/// 作者: logic
-/// 验证 ui_font_body 等于 ui_font_size（1:1 比例）
+/// author: logic
+/// Verify that ui_font_body equals ui_font_size (1:1 ratio)
 #[test]
 fn test_ui_font_body_equals_base() {
     let mut appearance = mock_appearance();
@@ -119,8 +119,8 @@ fn test_ui_font_body_equals_base() {
     }
 }
 
-/// 作者: logic
-/// 验证各语义化方法保持严格的大小层级关系
+/// author: logic
+/// Verify that semantic methods maintain strict size hierarchy
 #[test]
 fn test_semantic_font_size_ordering() {
     let mut appearance = mock_appearance();
@@ -150,16 +150,16 @@ fn test_semantic_font_size_ordering() {
     }
 }
 
-/// 作者: logic
-/// 验证 dropdown 顶栏高度公式在默认字号 (12) 时为 30.0
+/// author: logic
+/// Verify that dropdown top bar height formula is 30.0 at default font size (12)
 #[test]
 fn test_dropdown_top_bar_height_at_default() {
     let appearance = mock_appearance();
     assert_eq!(appearance.dropdown_top_bar_height(), 30.0);
 }
 
-/// 作者: logic
-/// 验证 dropdown 顶栏高度随字号线性缩放且不低于 30.0
+/// author: logic
+/// Verify that dropdown top bar height scales linearly with font size and never goes below 30.0
 #[test]
 fn test_dropdown_top_bar_height_scaling() {
     let mut appearance = mock_appearance();
@@ -180,8 +180,8 @@ fn test_dropdown_top_bar_height_scaling() {
     assert_eq!(appearance.dropdown_top_bar_height(), 50.0, "size 20: 20*2.5=50");
 }
 
-/// 作者: logic
-/// 验证 dropdown 顶栏高度永远不低于 30.0
+/// author: logic
+/// Verify that dropdown top bar height never goes below 30.0
 #[test]
 fn test_dropdown_top_bar_height_never_below_minimum() {
     let mut appearance = mock_appearance();
@@ -195,8 +195,8 @@ fn test_dropdown_top_bar_height_never_below_minimum() {
     }
 }
 
-/// 作者: logic
-/// 验证 dropdown 顶栏高度在边界字号 (8.0 和 20.0) 下的值
+/// author: logic
+/// Verify dropdown top bar height values at boundary font sizes (8.0 and 20.0)
 #[test]
 fn test_dropdown_top_bar_height_at_boundaries() {
     let mut appearance = mock_appearance();

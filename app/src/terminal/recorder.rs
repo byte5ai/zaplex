@@ -89,9 +89,9 @@ impl PtyRecorder {
         self.recording_handle.is_some()
     }
 
-    /// Returns a clone of the inactive PTY-reads broadcast receiver,
-    /// for non-recording listeners(SSH manager 的 SecretInjector 用)。
-    /// Wasm / no-local_fs 版本永远是 `None`。
+    /// Returns a clone of the inactive PTY-reads broadcast receiver
+    /// for non-recording listeners (used by SSH manager's SecretInjector).
+    /// Wasm / no-local_fs version always returns `None`.
     pub fn inactive_pty_reads_rx(&self) -> Option<InactiveReceiver<Arc<Vec<u8>>>> {
         self.pty_reads_rx.clone()
     }

@@ -152,10 +152,10 @@ impl ApplicationService {
 // A D-Bus client for connecting to an already-running instance of Zap and
 // invoking org.freedesktop.Application IPC methods.
 //
-// `default_service` / `default_path` 在调用处 (`pass_startup_args_to_existing_instance`) 通过
-// `.destination(well_known_name())` / `.path(application_service_path())` 在 builder 上覆盖,
-// 所以这里的常量不会被实际使用;但为避免误导未来通过 `Proxy::new` 直接使用 default 的调用方,
-// 这里仍指向 OSS 默认的 `dev.zap.Zap`。
+// `default_service` / `default_path` are overridden at the call site (`pass_startup_args_to_existing_instance`)
+// via `.destination(well_known_name())` / `.path(application_service_path())` on the builder,
+// so the constants here will not actually be used; but to avoid misleading future callers who might
+// use `Proxy::new` directly with defaults, these still point to the OSS default `dev.zap.Zap`.
 #[proxy(
     interface = "org.freedesktop.Application",
     default_service = "dev.zap.Zap",

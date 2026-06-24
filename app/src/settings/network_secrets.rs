@@ -1,11 +1,11 @@
-//! `ProxyCredentials`:把代理 Basic Auth 的密码保存到 OS 密钥库(见 Issue #72)。
+//! `ProxyCredentials`: store proxy Basic Auth password in OS keychain (see Issue #72).
 //!
-//! 仅存密码;用户名、URL 等非敏感字段仍在 `NetworkSettings` 的 settings.toml 里。
-//! 设计形态与 `crate::ai::agent_providers::AgentProviderSecrets` 一致:基于
-//! `warpui_extras::secure_storage`(macOS Keychain / Windows DPAPI / Linux Keyring)。
+//! Only stores password; non-sensitive fields like username, URL remain in `NetworkSettings`'s settings.toml.
+//! Design mirrors `crate::ai::agent_providers::AgentProviderSecrets`: based on
+//! `warpui_extras::secure_storage` (macOS Keychain / Windows DPAPI / Linux Keyring).
 //!
-//! 注意:代理只有一个全局 password,因此存储里就一个 key、value 是原始 password
-//! 字符串(不再走 JSON map)。
+//! Note: proxy has only one global password, so storage has one key and value is the raw password
+//! string (no longer uses JSON map).
 
 use warpui::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::secure_storage::{self, AppContextExt};
@@ -14,11 +14,11 @@ const SECURE_STORAGE_KEY: &str = "ProxyPassword";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProxyCredentialsEvent {
-    /// 密码值变化(可能为空)。
+    /// Password value changed (may be empty).
     PasswordChanged,
 }
 
-/// 单例:管理全局 HTTP 代理的 Basic Auth 密码。
+/// Singleton: manages the global HTTP proxy's Basic Auth password.
 pub struct ProxyCredentials {
     password: String,
 }
@@ -30,12 +30,12 @@ impl ProxyCredentials {
         }
     }
 
-    /// 读取当前密码;无值时返回空串。
+    /// Read current password; returns empty string if no value.
     pub fn password(&self) -> &str {
         &self.password
     }
 
-    /// 设置 / 更新密码。传入空串等价于删除。
+    /// Set / update password. Passing empty string is equivalent to deletion.
     pub fn set_password(&mut self, password: String, ctx: &mut ModelContext<Self>) {
         if self.password == password {
             return;
@@ -58,8 +58,8 @@ impl ProxyCredentials {
 
     fn persist(&self, ctx: &mut ModelContext<Self>) {
         if self.password.is_empty() {
-            // 空字符串语义为"无密码";delete 失败也接受,只 log。
-            // 避免 let-chain(app crate 是 Rust 2021),分两步判断。
+            // Empty string semantics: "no password"; accept delete failure, only log.
+            // Avoid let-chain (app crate is Rust 2021), split into two checks.
             if let Err(e) = ctx.secure_storage().remove_value(SECURE_STORAGE_KEY) {
                 if !matches!(e, secure_storage::Error::NotFound) {
                     log::error!("Failed to remove proxy password: {e:#}");
