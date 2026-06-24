@@ -406,6 +406,18 @@ Jedes Element muss **wirksame Entlastung** bringen; was nur „nett" ist, fliegt
 
 Falls nicht: private Fork läuft weiter, kein Drama.
 
+### 6.4 Ausblick — Mobile Companion (iPhone/Android, **nicht eingeplant**)
+
+> Zukunfts-Idee, **steht unmittelbar nicht an** — hier nur als möglicher Ausblick, damit die Architektur ihn nicht verbaut.
+
+Ein **Companion für unterwegs**, um Sessions zu **überwachen und leichtgewichtig zu steuern**, wenn der Desktop nicht greifbar ist. Kein zweites Voll-Terminal — eine **stark angepasste UI** mit bewusst **reduziertem Funktionsumfang**: nur das, was ein Dev mobil wirklich braucht.
+
+- **Sehen (Glance):** Welche Session braucht *jetzt* meine Aufmerksamkeit (Needs-me, §5.7)? Status aller Sessions/Agents; Sub-Auslastung/Heat + Rate-Limit-Warnungen je Claude/Codex; Kosten; der letzte Output/Transcript-Tail einer Session.
+- **Tun (wenige, hochwertige Aktionen):** auf einen wartenden Prompt antworten (Approve/Deny, kurze Text-Antwort), eine Session pausieren/fortsetzen/killen, Subscription umschalten, einen **vordefinierten** Agenten starten. **Push-Notifications** für „braucht Input" / „fertig" / „nahe Rate-Limit" (gespeist aus `zaplex.signal_attention`, §7).
+- **Bewusst NICHT mobil:** volles Terminal-Editing, MC-Dateimanagement, Multi-Pane — das bleibt Desktop. Mobil zählt *glanceable + ein paar wirksame Eingriffe*, kein Mini-Desktop.
+
+**Warum es architektonisch trägt:** Der **native Session-Daemon** (§3.5) macht es erst möglich — die Sessions leben host-seitig persistent, also kann ein Telefon sich ein-/ausklinken, ohne dass etwas abbricht. **Provider-agnostisch** (deckt auch **Codex** ab — anders als `claude remote-control`, das nur die Claude-Mobile-App bedient). Anbindung über den `zaplex.*`-MCP-/Server-Layer (§7). Die Persistenz-Entscheidung (Option 1) ist damit zugleich die Voraussetzung, dass dieser Ausblick später überhaupt sauber baubar ist — wir verbauen ihn heute nicht.
+
 ---
 
 ## 7. MCP — ergänzende Rolle
