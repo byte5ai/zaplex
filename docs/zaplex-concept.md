@@ -96,6 +96,8 @@ Die Schicht, die Zap aus konzeptionellem Grund weglässt (Roadmap: „single acc
 - **RAM-Governor für die Fleet** — harter Ceiling, pro Session (~330 MB für Claude; Codex-Footprint bei Umsetzung messen, eigener Wert).
 - **Adopt-by-session-id** — Session, die in einer anderen Shell gestartet wurde, hier weiterführen (beide Provider).
 - **MC-style Dual-Pane File Manager** — Host↔Host-Copy ohne scp, weil `warp_files` Single-Pane ist. *(Provider-unabhängig — gehört zur MC-Hälfte.)*
+- **Multiplexer-kompatibles Zapify** (zaplex' Shell-Integration, Pendant zu Warps „Warpify") — den Mehrwert (Blocks, Prompt-Status, Command-Status, Completions) auch *innerhalb* eines vom User betriebenen `tmux`/`screen`/`byobu` liefern, statt ihn dort abzuschalten. *(Provider-unabhängig — Terminal-/MC-Hälfte; Details §3.5.)*
+- **Native Session-Resilienz + mosh** — interaktive Remote-Sessions überleben Verbindungsabbrüche (Deckel zu, Akku leer, Netz-/Tailscale-Roaming), nahtloses Re-Attach mit erhaltener Historie, plus mosh-Eigenschaften (UDP-Roaming, predictive local echo). Macht externes `byobu` + `mosh` überflüssig. Pro Verbindung in den Settings schaltbar. *(Provider-unabhängig; Details §3.5.)*
 
 ### 3.3 Datenschicht — was getestet ist, was greenfield ist
 
@@ -127,6 +129,29 @@ Die Schicht, die Zap aus konzeptionellem Grund weglässt (Roadmap: „single acc
 | RAM-Governor | ✅ (~330 MB) | ✅ (Footprint messen) |
 
 Die rot markierte Zelle ist der einzige bewusste Asymmetrie-Punkt: Codex hat kein dem `claude remote-control` äquivalentes Serverprotokoll. Codex-Sessions laufen auf Remote-Hosts in tmux und sind adopt-bar, aber es gibt keine Codex-Mobile-App-Anbindung. Das wird in der UI nicht verschleiert.
+
+### 3.5 Sicheres Remote-Entwickeln — Multiplexer-kompatible Shell-Integration + Session-Resilienz
+
+> **Motivation:** Der User entwickelt täglich auf Remote-Hosts (devhost via Tailscale, macmini) und stützt sich heute auf **externes** `byobu` (Persistenz) + `mosh` (Roaming) *um* das Terminal herum. Ziel: zaplex vereint alles Notwendige zum sicheren Remote-Entwickeln **im integrierten Terminal**. Dies betrifft die interaktive User-Shell — verwandt mit, aber nicht identisch zur Agent-Fleet-Persistenz (§3.2/§4.4); beide sollten auf **einer** Resilienz-Primitive sitzen, nicht doppelt gebaut werden.
+
+**Zwei Lücken im heutigen Warp/Zap-Verhalten** (am Code verifiziert):
+
+1. **Warpify ⟂ Multiplexer.** Wer auf dem Host bereits in `tmux`/`screen`/`byobu` sitzt, verliert die Warpify-Features. Zaps SSH-Warpify startet einen **eigenen, privaten** `tmux -Lwarp -CC` (Control-Mode, eigener Socket — `app/assets/bundled/ssh/bash_zsh/warpify_ssh_session.sh`, `app/src/terminal/model/ansi/mod.rs`), der nicht mit dem Multiplexer des Users komponiert; der Ausfall ist sogar als Hook `RemoteWarpificationIsUnavailable` kodiert (`app/src/terminal/model/ansi/dcs_hooks.rs`).
+2. **Keine Persistenz interaktiver Sessions.** SSH läuft über das native `ssh`-Binary + ControlMaster (`crates/warp_ssh_manager/`, `app/src/remote_server/ssh_transport.rs`). Reconnect ist nur für transiente Blips ausgelegt (`MAX_RECONNECT_ATTEMPTS = 2`, `RECONNECT_DELAY = 2s` — `crates/remote_server/src/manager.rs`); Deckel-zu/Akku-leer überschreiten das sofort. tmux dient im Code **nur** dem Warpify-Bootstrap, **nicht** der Persistenz (Feature-Flag `SSHTmuxWrapper`).
+
+**Zwei sich ergänzende, unabhängig lieferbare Stoßrichtungen:**
+
+- **Track A — Zapify ⟂ Multiplexer auflösen.** **Begriff (festgelegt):** Zaps Shell-Integration heißt upstream „Warpify"; unsere namensregel-konforme Variante heißt **Zapify** (`zaplex_*`). Wo wir das Verhalten neu bauen/erweitern, sprechen wir von Zapify; „Warpify" bleibt nur als Name des bestehenden Zap/Warp-Mechanismus und in vorhandenen Code-Pfaden (`app/src/terminal/warpify/…`) stehen. — Inhaltlich: den DCS/OSC-Hook-Strom (OSC `9277`–`9280`, `dcs_hooks.rs`) durch einen **vom User betriebenen** Multiplexer transportieren, statt einen eigenen `-Lwarp`-tmux danebenzustellen. Offene Punkte: (a) Upstream-Stand prüfen — ist das in `zerx-lab/zap`/aktuellem Warp schon gelöst? Dann übernehmen statt neu bauen. (b) Passthrough-Framing (`tmux allow-passthrough`, `screen` restriktiver) — passieren die Hook-Sequenzen ungeschädigt? (c) Pro-Pane-Zuordnung der Blocks (Pane-ID als Hook-Dimension). (d) Modus „bestehende `$TMUX`/`STY`/byobu-Umgebung erkennen und darin bootstrappen".
+- **Track B — Native Session-Resilienz + mosh.** Eingebauter Mechanismus: mehrere Sessions pro Host, Überleben von Verbindungsabbrüchen mit nahtlosem Re-Attach, plus mosh-Eigenschaften (UDP-Transport mit State-Sync, predictive local echo, Roaming über IP-Wechsel). Umsetzungsoptionen, aufsteigend:
+  - **B1: `mosh` orchestrieren** — zaplex ruft `mosh`/`mosh-server` am Host auf (setzt mosh am Host voraus; mosh allein persistiert nicht über Server-Restart). Schneller Latenz-/Roaming-Gewinn.
+  - **B2: Eigener zaplex-Session-Daemon** — baut auf dem vorhandenen `remote-server`-Daemon auf (überlebt SSH-Drop bereits, `crates/remote_server/`), erweitert um persistente Session-IDs über App-Restart, Output-Replay-Buffer und Re-Attach-Protokoll (erweitert die `Connecting→Initializing→Connected→Reconnecting`-Zustandsmaschine).
+  - **B3: B2 + nativer UDP-Transport (mosh-äquivalent)** — SSP-artiger State-Sync + predictive echo + Roaming nativ im zaplex-Transport. Kür; mosh' Sicherheitsmodell (AES-OCB, Schlüssel über initiale SSH-Verbindung) als Referenz.
+
+  **Reihenfolge:** B2 zuerst (Persistenz ist der schmerzhafteste Mangel, baut auf vorhandenem Code auf) → B1 (mosh-Roaming als schneller Gewinn) → B3 (nativer Transport) als Kür. Track A läuft parallel und unabhängig.
+
+**Pro-Verbindung-Setting (beide Tracks).** Host-Profile liegen in `SshServerInfo` (`crates/warp_ssh_manager/src/types.rs`) ↔ Tabelle `ssh_servers` (`crates/persistence/src/model.rs`), CRUD in `repository.rs`. Additiv erweiterbar um z. B. `zapify_multiplexer: Off|UseExisting|Managed` (Track A) und `session_resilience: Off|PersistOnly|PersistPlusMosh` (Track B): Felder am Struct + Diesel-Migration + CRUD + SSH-Manager-Panel. Default konservativ (aus). **Ehrlich degradieren**, wo Host-Voraussetzungen fehlen (kein tmux/mosh, alte tmux-Version — vorhandene Hooks `TmuxNotInstalled`/`UnsupportedTmuxVersion`, Auto-Install-Ansatz `SshTmuxInstaller` wiederverwenden). Globaler Default bleibt über die Warpify-Settings steuerbar (`app/src/terminal/warpify/settings.rs`); der Per-Host-Toggle überschreibt ihn.
+
+**Akzeptanz:** (A) In einer User-eigenen `byobu`/`tmux`-Session erscheinen Blocks/Prompt/Completions wie lokal, ohne konkurrierenden zaplex-Multiplexer. (B) Eine interaktive Session überlebt Deckel-zu/Akku-leer/Netzwechsel mit nahtlosem Re-Attach und erhaltener Historie; über Tailscale-Roaming bleibt das Tippgefühl latenzarm. Ergebnis: kein externes `byobu` + `mosh` mehr nötig.
 
 ---
 
@@ -340,6 +365,8 @@ Der Provider wird **nicht** per Hotkey gewählt — er ist erstes Feld im Launch
 **Scope:** Claude-Bun-Datenschicht nach Rust portieren (`discover.ts`/`collect.ts`/`usage.ts` → `zaplex_accounts`-internals, als zweite `ProviderBackend`-Impl neben der bereits nativen Codex-Impl). Eigene Fleet-Steuerung im UI (Start/Stop von remote-control-Servern aus dem Account Dock heraus, Claude). MC Dual-Pane.
 
 **Trigger für den Start:** v0 läuft seit X Wochen ohne Krücken-Gefühl. Bun-Subprocess wird als spürbare Latenz/Fragility erlebbar.
+
+**Sicheres Remote-Entwickeln (§3.5):** parallel zur Provider-Arbeit einplanen, da provider-unabhängig (Terminal-/MC-Hälfte). **Track A** (Zapify — Multiplexer-kompatible Shell-Integration) vorab als Spike — falls Upstream das schon gelöst hat, ggf. schon in v0 übernehmbar. **Track B-B2** (Persistenz auf Basis des vorhandenen `remote-server`-Daemons) in v1; **B1** (mosh-Roaming) und **B3** (nativer UDP-Transport) folgen.
 
 ### 6.3 v2 — „upstream contribution oder permanent fork" (offen)
 
