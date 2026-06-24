@@ -75,6 +75,7 @@ async fn initialize_round_trip() {
         server_message::Message::InitializeResponse(InitializeResponse {
             server_version: "test-0.1.0".to_string(),
             host_id: "test-host-id".to_string(),
+            features: vec![],
         })
     });
 
@@ -95,6 +96,7 @@ async fn initialize_sends_empty_auth_token_when_none() {
         server_message::Message::InitializeResponse(InitializeResponse {
             server_version: "test-0.1.0".to_string(),
             host_id: "test-host-id".to_string(),
+            features: vec![],
         })
     });
 
@@ -113,6 +115,7 @@ async fn initialize_sends_auth_token_when_provided() {
         server_message::Message::InitializeResponse(InitializeResponse {
             server_version: "test-0.1.0".to_string(),
             host_id: "test-host-id".to_string(),
+            features: vec![],
         })
     });
 
@@ -290,6 +293,7 @@ async fn concurrent_in_flight_requests() {
         server_message::Message::InitializeResponse(InitializeResponse {
             server_version: "test-0.1.0".to_string(),
             host_id: "test-host-id".to_string(),
+            features: vec![],
         })
     });
     let client = std::sync::Arc::new(client);
@@ -327,6 +331,7 @@ async fn mock_server_with_error_handling(
                         InitializeResponse {
                             server_version: "test-0.1.0".to_string(),
                             host_id: "test-host-id".to_string(),
+                            features: vec![],
                         },
                     )),
                 };
