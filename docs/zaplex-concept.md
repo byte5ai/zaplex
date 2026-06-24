@@ -557,7 +557,7 @@ Für Kontext, damit die neue Session nicht in dieselbe Diskussion zurückfällt:
 
 - **MCP-only-Ansatz:** verworfen (siehe §2.3 — fehlende visuelle Permanenz)
 - **Electron-App als Produkt** (`iret77/claudeplex-desktop`, Fork der Team-App von Marcel): als *Auslieferungsform* nicht weiterverfolgt (Electron baut Terminal-Unterbau redundant nach; Zap liefert ihn fertig) — bleibt aber **Referenzquelle** für UI/UX-Muster und Implementierungsideen (§1, §5.7).
-- **Standalone claudeplex weiterführen:** ja, parallel, als Bun-CLI für Headless-/Server-Nutzung. Aber das Cockpit-UI lebt zukünftig im Zap-Fork (zaplex).
+- **Standalone claudeplex weiterführen:** **Nein.** Den claudeplex-Fork (`iret77/claudeplex`) führen wir **nicht** als Fork weiter — er bleibt **reine Referenzquelle** (Ideen-/Code-Vorbild), wird aber nicht aktiv gepflegt. Ob das **Team** die **Original-Repos** (claudeplex / claudeplex-desktop) fortführt, hängt davon ab, **wie überzeugend zaplex wird** — das ist die Entscheidung des Teams, nicht Teil dieses Konzepts. Das Cockpit-UI lebt zukünftig **allein** im Zap-Fork (zaplex).
 - **Warp (upstream) forken statt Zap:** Zap gewinnt wegen Local-first + bereits verdrahteter CLI-Agent-Integration (Claude **und** Codex) + Maintainer-Zugänglichkeit.
 - **Eigene Bun-Implementierung für Codex:** verworfen — keine getestete Vorlage vorhanden, Symmetrie-um-der-Symmetrie-willen wäre eine Krücke. Codex wird direkt nativ in Rust gebaut (§3.3).
 - **API-Key statt Subscription als Fokus:** Subscription-Support ist Must-Have und das Zentrum der Orchestrierung (§1). Zaps bestehender API-Key-/BYOP-Pfad (§3.1) wird aber **nicht** entfernt — er bleibt verfügbar, wo schon vorhanden; nur Heat/Routing sind subscription-zentriert.
