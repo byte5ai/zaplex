@@ -1,0 +1,60 @@
+# PR validation pipeline — runs cargo check only, no packaging.
+#
+# Division of labour with zap_release.yml:
+# - This workflow: runs a Linux cargo check on every PR, giving compile
+#   feedback within a few minutes.
+# - zap_release.yml: runs the full three-platform packaging (~3h) only on
+#   tag push / manual dispatch.
+#
+# Only one platform (Linux): the Windows/macOS differences are mainly in the
+# bundle stage rather than the cargo compile, and a Linux check already catches
+# ~90% of compile errors; cross-platform issues are acceptable to surface at
+# release-tag time.
+#
+# (Restored after being removed in cff5085e: the "release tag will catch it"
+# rationale failed when an LLM-assisted change broke main between releases.)
+
+name: PR Check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Kept consistent with zap_release.yml — only the oss channel can
+  # cargo build/check without the private warp-channel-config repo.
+  CHANNEL: oss
+
+jobs:
+  cargo_check:
+    name: cargo check (Linux x86_64)
+    # Same runner as release_linux, glibc 2.35, to avoid deps differences that
+    # only appear on ubuntu-latest.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          # release_deps would install cargo-about, which check does not need;
+          # build_deps already provide protoc / libdbus / pkg-config etc.
+          install_release_deps: false
+
+      - name: Ensure rust target is installed
+        run: rustup target add x86_64-unknown-linux-gnu
+        shell: bash
+
+      - name: cargo check (default = zap-oss bin)
+        # `cargo check --workspace` would pull in wasm/preview channel-gated
+        # targets; check only the default oss bin + its dependency graph, matching
+        # the release_linux compile target. (Cargo.lock is gitignored, so no
+        # --locked here.)
+        run: cargo check --bin zap-oss
+        shell: bash
