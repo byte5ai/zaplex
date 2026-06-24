@@ -33,6 +33,13 @@ else
   MERGE_BASE="$BASE_REF"
 fi
 
+# CJK ideograph ranges: Unified, Ext-A, Compatibility Ideographs, and the
+# supplementary-plane extensions (Ext-B and beyond). We match these explicit
+# ranges rather than PCRE \p{Han}, because \p{Han} also matches U+00B7 MIDDLE
+# DOT (·) — a common separator — via its script extensions, which would be a
+# false positive on legitimate English/German text.
+CJK_IDEOGRAPHS='[\x{3400}-\x{4DBF}\x{4E00}-\x{9FFF}\x{F900}-\x{FAFF}\x{20000}-\x{2A6DF}\x{2A700}-\x{2EBEF}]'
+
 # Code files only — docs and commit messages are out of scope by policy.
 changed_files="$(git diff --name-only --diff-filter=ACMR "$MERGE_BASE" HEAD -- '*.rs' '*.proto')"
 
@@ -40,12 +47,12 @@ found=0
 while IFS= read -r file; do
   [ -n "$file" ] || continue
   # Added lines (diff '+' lines), minus the '+++ ' file header, that contain a
-  # Han character.
+  # CJK ideograph.
   hits="$(
     git diff --unified=0 "$MERGE_BASE" HEAD -- "$file" \
       | grep -P '^\+' \
       | grep -vP '^\+\+\+ ' \
-      | grep -P '\p{Han}' \
+      | grep -P "$CJK_IDEOGRAPHS" \
       || true
   )"
   if [ -n "$hits" ]; then
