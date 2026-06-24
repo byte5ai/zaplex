@@ -1734,8 +1734,6 @@ impl AppearanceSettingsPageView {
         match val {
             Language::System => crate::t_static!("settings-language-system-default"),
             Language::English => crate::t_static!("settings-language-english"),
-            Language::SimplifiedChinese => "简体中文",
-            Language::Japanese => "日本語",
         }
     }
 

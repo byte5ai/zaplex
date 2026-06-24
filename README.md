@@ -4,8 +4,6 @@
 
 # Zap
 
-[简体中文](./README.zh-CN.md) · [日本語](./README.ja.md)
-
 <sub><i>Currently based on <a href="https://github.com/warpdotdev/warp">Warp</a>; evolving independently going forward.</i></sub>
 
 </div>
