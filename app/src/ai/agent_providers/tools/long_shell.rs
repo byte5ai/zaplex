@@ -28,6 +28,7 @@ struct WriteArgs {
 
 fn default_mode() -> String {
     "line".to_owned()  // default: "line"
+}
 
 fn write_parameters() -> Value {
     json!({
