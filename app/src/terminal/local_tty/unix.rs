@@ -942,3 +942,89 @@ fn test_get_pw_entry() {
     let mut buf: [i8; 1024] = [0; 1024];
     let _pw = get_pw_entry(&mut buf);
 }
+
+#[cfg(test)]
+mod session_pty_tests {
+    use super::spawn_session_pty;
+    use std::collections::HashMap;
+    use std::io::{ErrorKind, Read, Write};
+    use std::os::fd::AsRawFd;
+    use std::time::{Duration, Instant};
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// Spawns a real shell on a daemon-owned PTY, applies a resize via
+    /// TIOCSWINSZ (the same ioctl the session host's resize handler uses), and
+    /// confirms that (a) a command's output streams back through the master and
+    /// (b) the resize reached the slave tty (`stty size` → `30 100`). Exercises
+    /// the OS-level behaviour the daemon reader/writer tasks rely on
+    /// (Stage 1 #9/#10).
+    ///
+    /// Robustness: the read is non-blocking with a deadline and we tear the
+    /// shell down ourselves — the test never depends on the shell self-exiting,
+    /// so it cannot hang.
+    #[test]
+    fn spawn_session_pty_streams_and_resizes() {
+        let env = HashMap::new();
+        let (leader, mut child) =
+            spawn_session_pty(None, "/bin/sh", &env, 24, 80).expect("spawn_session_pty");
+        let mut master = std::fs::File::from(leader);
+
+        // Resize to 30x100 via the same ioctl the daemon's ResizeSession handler
+        // uses, before issuing the command.
+        let win = libc::winsize {
+            ws_row: 30,
+            ws_col: 100,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: `master` wraps a live PTY leader fd.
+        let rc =
+            unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &win as *const libc::winsize) };
+        assert_eq!(rc, 0, "TIOCSWINSZ should succeed");
+
+        // The marker is computed by the shell (M42K), so it only appears in
+        // *executed* output — not in the tty's echo of the command itself.
+        master
+            .write_all(b"stty size; echo M$((6*7))K\n")
+            .expect("write command to pty");
+
+        // Non-blocking master so the read loop can never hang.
+        let fd = master.as_raw_fd();
+        // SAFETY: toggling O_NONBLOCK on our own fd.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut out = Vec::new();
+        let mut buf = [0u8; 4096];
+        while Instant::now() < deadline && !contains(&out, b"M42K") {
+            match master.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => out.extend_from_slice(&buf[..n]),
+                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+
+        // Always tear the shell down ourselves; never rely on it self-exiting.
+        let _ = child.kill();
+        let _ = child.wait();
+
+        let text = String::from_utf8_lossy(&out);
+        assert!(
+            contains(&out, b"M42K"),
+            "command output should stream back through the PTY; got:\n{text}"
+        );
+        assert!(
+            text.contains("30 100"),
+            "stty size should reflect the TIOCSWINSZ resize; got:\n{text}"
+        );
+    }
+}
