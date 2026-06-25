@@ -5,10 +5,10 @@ name: Test (manual)
 # runs the actual tests on demand.
 #
 # Runner choice (see `runs_on` / `add_swap` inputs):
-# - DEFAULT: a fast larger runner (`ubuntu-8core-32gb`) — more cores + enough
-#   RAM (no swapping), which is the only setup that actually *speeds up* heavy
-#   builds. It must be created once in the org's Actions runner settings
-#   (GitHub Team/Enterprise required) with that exact name.
+# - DEFAULT: the fast larger runner `ubuntu-latest-xl` (16 vCPU / 64 GB) — more
+#   cores + ample RAM (no swapping), which is the only setup that actually
+#   *speeds up* heavy builds. Created once in the org's Actions runner settings
+#   (GitHub Team/Enterprise required) under that exact name.
 # - The standard `ubuntu-22.04` runner (~2 vCPU / 7 GB) is intentionally NOT the
 #   default: it is slower than the dev host and brings no speed benefit. Use it
 #   only on explicit request, by setting `runs_on=ubuntu-22.04` + `add_swap=true`.
@@ -25,9 +25,9 @@ on:
         required: false
         default: ""
       runs_on:
-        description: "Runner label. Default is the fast larger runner (must be created in org settings). Only set ubuntu-22.04 if you explicitly want the slow standard runner."
+        description: "Runner label. Default is the fast larger runner (ubuntu-latest-xl, 16 vCPU / 64 GB). Only set ubuntu-22.04 if you explicitly want the slow standard runner."
         required: false
-        default: "ubuntu-8core-32gb"
+        default: "ubuntu-latest-xl"
       add_swap:
         description: "Add a 12 GB swapfile. Only needed on the 7 GB standard runner; leave off for the large runner (it has enough RAM)."
         type: boolean
