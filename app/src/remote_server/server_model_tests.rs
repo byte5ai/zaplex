@@ -24,6 +24,8 @@ fn test_model() -> ServerModel {
         #[cfg(feature = "local_fs")]
         buffers: ServerBufferTracker::new(),
         auth_token: None,
+        #[cfg(unix)]
+        sessions: HashMap::new(),
     }
 }
 
