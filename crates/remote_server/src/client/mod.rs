@@ -19,6 +19,8 @@ use crate::proto::{
     ResolveConflictResponse, ResolvePath, ResolvePathResponse, RunCommandRequest,
     RunCommandResponse, SaveBuffer, SaveBufferResponse, ServerMessage, SessionBootstrapped,
     TextEdit, WriteFile, WriteFileChunk, WriteFileChunkResponse,
+    AttachSession, DetachSession, OpenSession, ResizeSession, SessionAttached, SessionInput,
+    SessionOpened, SessionSize,
 };
 
 use crate::protocol::{self, ProtocolError, RequestId};
@@ -78,6 +80,18 @@ pub enum ClientEvent {
         new_server_version: u64,
         expected_client_version: u64,
         edits: Vec<TextEdit>,
+    },
+    /// Live PTY output for a daemon-hosted session (push). `seq` is the byte
+    /// offset of the first byte in this chunk (monotonic), for replay alignment.
+    SessionOutput {
+        session_id: String,
+        seq: u64,
+        bytes: Vec<u8>,
+    },
+    /// A daemon-hosted session's shell exited (push).
+    SessionExited {
+        session_id: String,
+        exit_code: Option<i32>,
     },
     /// A server message could not be decoded and had no parseable request_id.
     MessageDecodingError,
@@ -622,6 +636,127 @@ impl RemoteServerClient {
         }
     }
 
+    // ── Native session host (Stage 2 client side) ────────────────────────
+
+    /// Opens a new daemon-hosted PTY session and awaits its assigned id.
+    pub async fn open_session(
+        &self,
+        cwd: Option<String>,
+        shell: Option<String>,
+        env: std::collections::HashMap<String, String>,
+        rows: u32,
+        cols: u32,
+    ) -> Result<SessionOpened, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::OpenSession(OpenSession {
+                cwd,
+                shell,
+                env,
+                size: Some(SessionSize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                }),
+            })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::SessionOpened(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for OpenSession: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Attaches to an existing daemon-hosted session and awaits the attach
+    /// response (which carries the replay from `last_seq`; 0 = full available
+    /// replay).
+    pub async fn attach_session(
+        &self,
+        session_id: String,
+        last_seq: u64,
+    ) -> Result<SessionAttached, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::AttachSession(AttachSession {
+                session_id,
+                last_seq,
+            })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::SessionAttached(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for AttachSession: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Sends keyboard/mouse input bytes to a session's PTY (notification).
+    pub fn send_session_input(
+        &self,
+        session_id: String,
+        bytes: Vec<u8>,
+    ) -> Result<(), ClientError> {
+        let msg = ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::SessionInput(SessionInput {
+                session_id,
+                bytes,
+            })),
+        };
+        self.outbound_tx.try_send(msg).map_err(|e| {
+            log::error!("Failed to enqueue session input: {e}");
+            ClientError::Disconnected
+        })
+    }
+
+    /// Resizes a session's PTY (notification).
+    pub fn send_resize_session(
+        &self,
+        session_id: String,
+        rows: u32,
+        cols: u32,
+    ) -> Result<(), ClientError> {
+        let msg = ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::ResizeSession(ResizeSession {
+                session_id,
+                size: Some(SessionSize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                }),
+            })),
+        };
+        self.outbound_tx.try_send(msg).map_err(|e| {
+            log::error!("Failed to enqueue session resize: {e}");
+            ClientError::Disconnected
+        })
+    }
+
+    /// Detaches from a session without terminating it; the daemon keeps it
+    /// alive for a later re-attach (notification).
+    pub fn send_detach_session(&self, session_id: String) -> Result<(), ClientError> {
+        let msg = ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::DetachSession(DetachSession {
+                session_id,
+            })),
+        };
+        self.outbound_tx.try_send(msg).map_err(|e| {
+            log::error!("Failed to enqueue session detach: {e}");
+            ClientError::Disconnected
+        })
+    }
+
     /// Converts a server push message (empty request_id) into a domain event.
     fn push_message_to_event(msg: ServerMessage) -> Option<ClientEvent> {
         match msg.message? {
@@ -638,6 +773,15 @@ impl RemoteServerClient {
                 new_server_version: push.new_server_version,
                 expected_client_version: push.expected_client_version,
                 edits: push.edits,
+            }),
+            server_message::Message::SessionOutput(push) => Some(ClientEvent::SessionOutput {
+                session_id: push.session_id,
+                seq: push.seq,
+                bytes: push.bytes,
+            }),
+            server_message::Message::SessionExited(push) => Some(ClientEvent::SessionExited {
+                session_id: push.session_id,
+                exit_code: push.exit_code,
             }),
             other => {
                 log::warn!("Unhandled push message variant: {other:?}");

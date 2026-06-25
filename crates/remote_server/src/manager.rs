@@ -1257,6 +1257,15 @@ impl RemoteServerManager {
                     edits,
                 });
             }
+            ClientEvent::SessionOutput { .. } | ClientEvent::SessionExited { .. } => {
+                // Stage 2 (client attach): these session push events will be
+                // forwarded to the attached terminal model once the app-side
+                // attach increment lands. The client API + push decoding are in
+                // place; there is no consumer yet, so drop here for now. (No
+                // session is opened from the client until the app wires it, so
+                // this arm is not hit at runtime.)
+                log::trace!("Session push event for {session_id:?} — no consumer yet (Stage 2)");
+            }
             ClientEvent::MessageDecodingError => {
                 ctx.emit(RemoteServerManagerEvent::ServerMessageDecodingError { session_id });
             }
