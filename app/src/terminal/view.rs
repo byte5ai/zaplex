@@ -4206,7 +4206,11 @@ impl TerminalView {
                     | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
                     | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
                     | RemoteServerManagerEvent::BufferUpdated { .. }
-                    | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. } => {}
+                    | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
+                    // Stage 2: handled by the attached-remote terminal byte-source
+                    // (later increment), not in this view-level telemetry match.
+                    | RemoteServerManagerEvent::SessionOutput { .. }
+                    | RemoteServerManagerEvent::SessionExited { .. } => {}
                 }
             });
         }

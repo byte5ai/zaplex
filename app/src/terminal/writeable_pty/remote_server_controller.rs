@@ -146,7 +146,11 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::BufferUpdated { .. }
             | RemoteServerManagerEvent::SetupStateChanged { .. }
             | RemoteServerManagerEvent::ClientRequestFailed { .. }
-            | RemoteServerManagerEvent::ServerMessageDecodingError { .. } => {}
+            | RemoteServerManagerEvent::ServerMessageDecodingError { .. }
+            // Stage 2: session output/exit are consumed by the attached-remote
+            // terminal byte-source (later increment), not by this controller.
+            | RemoteServerManagerEvent::SessionOutput { .. }
+            | RemoteServerManagerEvent::SessionExited { .. } => {}
         });
 
         Self {

@@ -178,7 +178,11 @@ impl Sessions {
                 | RemoteServerManagerEvent::BinaryCheckComplete { .. }
                 | RemoteServerManagerEvent::BinaryInstallComplete { .. }
                 | RemoteServerManagerEvent::ClientRequestFailed { .. }
-                | RemoteServerManagerEvent::ServerMessageDecodingError { .. } => {}
+                | RemoteServerManagerEvent::ServerMessageDecodingError { .. }
+                // Stage 2: the attached-remote terminal byte-source subscribes
+                // to these in a later increment; no-op here for now.
+                | RemoteServerManagerEvent::SessionOutput { .. }
+                | RemoteServerManagerEvent::SessionExited { .. } => {}
                 RemoteServerManagerEvent::SessionReconnected {
                     session_id: sid,
                     client,
