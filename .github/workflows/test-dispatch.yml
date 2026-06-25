@@ -1,0 +1,85 @@
+name: Test (manual)
+
+# Manually-triggered full test run — keeps heavy compilation off the dev host
+# (pay-per-run). The per-PR gate (pr-check.yml) only does `cargo check`; this
+# runs the actual tests on demand.
+#
+# Runner choice (see `runs_on` / `add_swap` inputs):
+# - Standard `ubuntu-22.04` (~2 vCPU / 7 GB on private repos): cheapest, uses
+#   free-tier minutes. The full test build needs more than 7 GB, so `add_swap`
+#   adds a swapfile (slower, but no OOM) — same trick as the dev host.
+# - A larger runner: faster (more cores, more RAM, no swapping) but billed at a
+#   higher rate and only available if the org has configured larger runners
+#   (Team/Enterprise). Put that runner's label in `runs_on` and set
+#   `add_swap=false`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Cargo package to test (-p). Default: warp (the app)."
+        required: false
+        default: "warp"
+      filter:
+        description: "Optional test-name filter (cargo test <filter>). Empty = all tests of the package."
+        required: false
+        default: ""
+      runs_on:
+        description: "Runner label. Default ubuntu-22.04 (standard). Enter your larger-runner label for speed."
+        required: false
+        default: "ubuntu-22.04"
+      add_swap:
+        description: "Add a 12 GB swapfile (needed on the 7 GB standard runner; turn off on a large runner)."
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Same as zap_release.yml / pr-check.yml — only the oss channel builds without
+  # the private warp-channel-config repo.
+  CHANNEL: oss
+
+jobs:
+  test:
+    name: cargo test (Linux)
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          install_release_deps: false
+          install_test_deps: true
+
+      - name: Add swap (standard runner has only ~7 GB RAM)
+        if: ${{ inputs.add_swap }}
+        run: |
+          sudo fallocate -l 12G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Ensure rust target is installed
+        run: rustup target add x86_64-unknown-linux-gnu
+        shell: bash
+
+      - name: cargo test
+        env:
+          PKG: ${{ inputs.package }}
+          FILTER: ${{ inputs.filter }}
+        run: |
+          args=(-p "$PKG" --no-fail-fast)
+          if [ -n "$FILTER" ]; then
+            args+=("$FILTER")
+          fi
+          echo "Running: cargo test ${args[*]}"
+          cargo test "${args[@]}"
+        shell: bash
