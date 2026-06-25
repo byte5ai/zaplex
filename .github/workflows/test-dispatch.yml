@@ -5,13 +5,13 @@ name: Test (manual)
 # runs the actual tests on demand.
 #
 # Runner choice (see `runs_on` / `add_swap` inputs):
-# - Standard `ubuntu-22.04` (~2 vCPU / 7 GB on private repos): cheapest, uses
-#   free-tier minutes. The full test build needs more than 7 GB, so `add_swap`
-#   adds a swapfile (slower, but no OOM) — same trick as the dev host.
-# - A larger runner: faster (more cores, more RAM, no swapping) but billed at a
-#   higher rate and only available if the org has configured larger runners
-#   (Team/Enterprise). Put that runner's label in `runs_on` and set
-#   `add_swap=false`.
+# - DEFAULT: a fast larger runner (`ubuntu-8core-32gb`) — more cores + enough
+#   RAM (no swapping), which is the only setup that actually *speeds up* heavy
+#   builds. It must be created once in the org's Actions runner settings
+#   (GitHub Team/Enterprise required) with that exact name.
+# - The standard `ubuntu-22.04` runner (~2 vCPU / 7 GB) is intentionally NOT the
+#   default: it is slower than the dev host and brings no speed benefit. Use it
+#   only on explicit request, by setting `runs_on=ubuntu-22.04` + `add_swap=true`.
 
 on:
   workflow_dispatch:
@@ -25,14 +25,14 @@ on:
         required: false
         default: ""
       runs_on:
-        description: "Runner label. Default ubuntu-22.04 (standard). Enter your larger-runner label for speed."
+        description: "Runner label. Default is the fast larger runner (must be created in org settings). Only set ubuntu-22.04 if you explicitly want the slow standard runner."
         required: false
-        default: "ubuntu-22.04"
+        default: "ubuntu-8core-32gb"
       add_swap:
-        description: "Add a 12 GB swapfile (needed on the 7 GB standard runner; turn off on a large runner)."
+        description: "Add a 12 GB swapfile. Only needed on the 7 GB standard runner; leave off for the large runner (it has enough RAM)."
         type: boolean
         required: false
-        default: true
+        default: false
 
 permissions:
   contents: read
