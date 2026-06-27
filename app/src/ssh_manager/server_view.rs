@@ -33,8 +33,8 @@ use warpui::{
 
 use warp_ssh_manager::{
     AuthType, ConnectionStatus, KeychainSecretStore, NodeKind, OneKeyCredentialKind, SecretKind,
-    SshNode, SshOneKeyCredential, SshRepository, SshSecretStore, SshSecretStoreError,
-    SshServerInfo,
+    SessionResilience, SshNode, SshOneKeyCredential, SshRepository, SshSecretStore,
+    SshSecretStoreError, SshServerInfo,
 };
 use zeroize::Zeroizing;
 
@@ -693,6 +693,12 @@ impl SshServerView {
                 Some(notes_text.trim().to_string())
             },
             last_connected_at: self.server.as_ref().and_then(|s| s.last_connected_at),
+            // No UI control yet (Stage 4); preserve the stored value on edit.
+            session_resilience: self
+                .server
+                .as_ref()
+                .map(|s| s.session_resilience)
+                .unwrap_or_default(),
         };
 
         // 2. Write to DB (rename + update_server + possible move_node)
@@ -814,6 +820,11 @@ impl SshServerView {
                 Some(notes_text.trim().to_string())
             },
             last_connected_at: self.server.as_ref().and_then(|s| s.last_connected_at),
+            session_resilience: self
+                .server
+                .as_ref()
+                .map(|s| s.session_resilience)
+                .unwrap_or_default(),
         };
         ctx.dispatch_typed_action(&crate::workspace::WorkspaceAction::OpenSshTerminal {
             node_id: self.node_id.clone(),
@@ -855,6 +866,8 @@ impl SshServerView {
             startup_command: None,
             notes: None,
             last_connected_at: None,
+            // Ephemeral object for the connection test only; never persisted.
+            session_resilience: SessionResilience::default(),
         };
 
         let (server, password) = match resolve_test_server_and_password(

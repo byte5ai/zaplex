@@ -181,6 +181,7 @@ fn onekey_test_connection_uses_shared_password_credential() {
         startup_command: None,
         notes: None,
         last_connected_at: None,
+        session_resilience: warp_ssh_manager::SessionResilience::default(),
     };
 
     let (server, pw) = resolve_test_server_and_password(server, &credentials, "", &store).unwrap();
@@ -211,6 +212,7 @@ fn onekey_test_connection_prefers_editor_password() {
         startup_command: None,
         notes: None,
         last_connected_at: None,
+        session_resilience: warp_ssh_manager::SessionResilience::default(),
     };
 
     let (_, pw) =
@@ -239,6 +241,7 @@ fn onekey_key_credential_resolves_test_connection_to_key_auth() {
         startup_command: None,
         notes: None,
         last_connected_at: None,
+        session_resilience: warp_ssh_manager::SessionResilience::default(),
     };
 
     let (server, pw) = resolve_test_server_and_password(server, &credentials, "", &store).unwrap();

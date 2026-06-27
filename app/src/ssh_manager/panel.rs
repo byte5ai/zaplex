@@ -386,6 +386,7 @@ impl SshManagerPanel {
             startup_command: None,
             notes: Some(format!("Imported from {path_display}")),
             last_connected_at: None,
+            session_resilience: warp_ssh_manager::SessionResilience::default(),
         };
 
         let parent = self.parent_for_new_node();
