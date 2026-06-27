@@ -28,10 +28,23 @@ type PtyController = writeable_pty::PtyController<Sender<Message>>;
 
 /// Parameters for opening a fresh daemon-hosted session. The initial size is
 /// derived from the terminal model, so it is intentionally not included here.
+#[derive(Clone, Debug, Default)]
 pub struct OpenSessionParams {
     pub cwd: Option<String>,
     pub shell: Option<String>,
     pub env: HashMap<String, String>,
+}
+
+/// A request to back a newly created terminal with a daemon-hosted session on an
+/// already-identified (possibly not-yet-connected) remote-server connection.
+/// Carried through `NewTerminalOptions` into `create_session`.
+#[derive(Clone, Debug)]
+pub struct DaemonSessionRequest {
+    /// The manager/connection session id the daemon session lives on. Allocated
+    /// up front (see `headless_connect::alloc_daemon_session_id`); the terminal
+    /// waits for it to reach `Connected` before issuing `OpenSession`.
+    pub connection_session_id: SessionId,
+    pub open_params: OpenSessionParams,
 }
 
 /// A [`crate::terminal::TerminalManager`] whose PTY lives in the remote daemon

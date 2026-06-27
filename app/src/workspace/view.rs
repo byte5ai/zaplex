@@ -5445,6 +5445,18 @@ impl Workspace {
                     (server.clone(), node_id.clone(), fallback_kind)
                 }
             };
+
+        // Native persistent remote-session layer (Option B): a host with
+        // `session_resilience` enabled opens directly as a daemon-hosted session
+        // instead of a local PTY running `ssh`. Falls through to the normal path
+        // if the host isn't resilient or the auth isn't headless-capable.
+        #[cfg(unix)]
+        {
+            if self.try_open_daemon_ssh_terminal(&server_for_connection, ctx) {
+                return;
+            }
+        }
+
         let cmd = warp_ssh_manager::build_ssh_command_line(&server_for_connection);
         let window_id = ctx.window_id();
 
@@ -5531,6 +5543,96 @@ impl Workspace {
         terminal_view.update(ctx, |view, ctx| {
             view.execute_command_or_set_pending(&cmd, ctx);
         });
+    }
+
+    /// Native persistent remote-session path (Stage 2, Option B). Returns `true`
+    /// if the host was opened as a daemon-hosted session (caller should stop), or
+    /// `false` to fall through to the ordinary local-PTY SSH path. v1 only takes
+    /// the daemon path for resilient hosts with headless-capable (key) auth.
+    #[cfg(unix)]
+    fn try_open_daemon_ssh_terminal(
+        &mut self,
+        server: &warp_ssh_manager::SshServerInfo,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        use crate::remote_server::headless_connect;
+
+        if !server.session_resilience.is_enabled() {
+            return false;
+        }
+        if !headless_connect::is_headless_capable(server) {
+            log::info!(
+                "Host {} has session_resilience enabled but its auth is not \
+                 headless-capable (v1: key auth only); using the normal SSH path",
+                server.host
+            );
+            return false;
+        }
+
+        let session_id = headless_connect::alloc_daemon_session_id();
+        let request = crate::terminal::daemon_tty::DaemonSessionRequest {
+            connection_session_id: session_id,
+            open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+        };
+
+        // Create the daemon-backed tab first: its event loop subscribes for
+        // `SessionConnected` on `session_id` before we kick off the connect.
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                hide_homepage: true,
+                daemon_request: Some(request),
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None, /* custom_tab_title */
+            ctx,
+        );
+
+        self.spawn_daemon_session_connect(server.clone(), session_id, ctx);
+        true
+    }
+
+    /// Establishes the headless SSH ControlMaster for a daemon session, then
+    /// connects the remote-server session on `session_id`. The daemon terminal
+    /// (already created) issues `OpenSession` once `SessionConnected` fires.
+    #[cfg(unix)]
+    fn spawn_daemon_session_connect(
+        &mut self,
+        server: warp_ssh_manager::SshServerInfo,
+        session_id: SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::remote_server::auth_context::server_api_auth_context;
+        use crate::remote_server::headless_connect;
+        use crate::remote_server::manager::RemoteServerManager;
+        use crate::remote_server::ssh_transport::SshTransport;
+
+        let auth_context = std::sync::Arc::new(server_api_auth_context(
+            AuthStateProvider::as_ref(ctx).get().clone(),
+        ));
+        let socket_path = headless_connect::control_socket_path(&server);
+        let server_for_master = server.clone();
+        let socket_for_async = socket_path.clone();
+
+        ctx.spawn(
+            async move {
+                headless_connect::ensure_control_master(&server_for_master, &socket_for_async).await
+            },
+            move |_workspace, result, ctx| match result {
+                Ok(()) => {
+                    let transport = SshTransport::new(socket_path, auth_context.clone());
+                    RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+                        mgr.connect_session(session_id, transport, auth_context, ctx);
+                    });
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to establish daemon ControlMaster for {}: {e:#}",
+                        server.host
+                    );
+                }
+            },
+        );
     }
 
     fn handle_right_panel_event(&mut self, event: RightPanelEvent, ctx: &mut ViewContext<Self>) {
