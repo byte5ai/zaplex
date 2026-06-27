@@ -31,7 +31,7 @@ use crate::input_suggestions::{Event as InputSuggestionsEvent, InputSuggestions}
 
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{TelemetryEvent, WarpAIActionType};
-use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_WARP_AI_WIDTH};
+use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_ZAPLEX_AI_WIDTH};
 use crate::ui_components::blended_colors;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -228,7 +228,7 @@ impl AIAssistantPanelView {
             Some(handle) => handle,
             None => {
                 log::error!("Couldn't retrieve warp ai resizable state handle.");
-                resizable_state_handle(DEFAULT_WARP_AI_WIDTH)
+                resizable_state_handle(DEFAULT_ZAPLEX_AI_WIDTH)
             }
         };
 

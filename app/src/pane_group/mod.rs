@@ -221,7 +221,7 @@ fn resolve_tab_config_shell(name: &str, ctx: &AppContext) -> Option<AvailableShe
 
     AvailableShell::try_from(name).ok()
 }
-const WARP_SHELL_COMPATIBILITY_DOCS: &str =
+const ZAPLEX_SHELL_COMPATIBILITY_DOCS: &str =
     "";
 // Default minimum width for a newly created Agent Mode pane so that it is legible. Called "default"
 // because this value may be too large for small windows. In that case, we fall back to 50% of the
@@ -2438,7 +2438,7 @@ impl PaneGroup {
                     ),
                     FormattedTextFragment::hyperlink(
                         crate::t!("common-learn-more"),
-                        WARP_SHELL_COMPATIBILITY_DOCS,
+                        ZAPLEX_SHELL_COMPATIBILITY_DOCS,
                     ),
                 ]),
             )

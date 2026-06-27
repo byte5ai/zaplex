@@ -64,7 +64,7 @@ pub struct RemoteServerIdentityArgs {
 #[derive(Debug, Default, Clone, clap::Args)]
 pub struct GlobalOptions {
     /// API key for server authentication.
-    #[arg(long = "api-key", global = true, env = "WARP_API_KEY")]
+    #[arg(long = "api-key", global = true, env = "ZAPLEX_API_KEY")]
     pub api_key: Option<String>,
 
     /// Set the output format.
@@ -73,7 +73,7 @@ pub struct GlobalOptions {
         global = true,
         value_enum,
         default_value_t = OutputFormat::Pretty,
-        env = "WARP_OUTPUT_FORMAT"
+        env = "ZAPLEX_OUTPUT_FORMAT"
     )]
     pub output_format: OutputFormat,
 }

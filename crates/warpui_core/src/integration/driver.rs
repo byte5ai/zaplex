@@ -715,7 +715,7 @@ impl TestDriver {
 
 /// Returns whether video recording should be enabled for the given test name.
 ///
-/// Checks the `WARP_INTEGRATION_TEST_VIDEO` environment variable:
+/// Checks the `ZAPLEX_INTEGRATION_TEST_VIDEO` environment variable:
 /// - Unset or empty → recording disabled.
 /// - `"1"` or `"all"` → recording enabled for every test.
 /// - Any other value → treated as a comma-separated list of test names;
@@ -724,10 +724,10 @@ impl TestDriver {
 /// Example:
 /// ```sh
 /// # Record all tests
-/// WARP_INTEGRATION_TEST_VIDEO=1 cargo nextest run ...
+/// ZAPLEX_INTEGRATION_TEST_VIDEO=1 cargo nextest run ...
 ///
 /// # Record only specific tests
-/// WARP_INTEGRATION_TEST_VIDEO=test_foo,test_bar cargo nextest run ...
+/// ZAPLEX_INTEGRATION_TEST_VIDEO=test_foo,test_bar cargo nextest run ...
 /// ```
 fn video_recording_enabled_for_test(test_name: &str) -> bool {
     let Ok(value) = std::env::var(video_recorder::VIDEO_ENABLED_ENV_VAR) else {

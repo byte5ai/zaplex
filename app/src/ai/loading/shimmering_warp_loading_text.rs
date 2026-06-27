@@ -8,7 +8,7 @@ use warpui::elements::Element;
 use warpui::{AppContext, SingletonEntity};
 
 /// Zap icon glyph character
-const WARP_GLYPH: &str = "\u{E500}";
+const ZAPLEX_GLYPH: &str = "\u{E500}";
 
 /// Creates a shimmering text element with the Zap glyph.
 pub fn shimmering_warp_loading_text(
@@ -29,7 +29,7 @@ pub fn shimmering_warp_loading_text(
 
     // Create a single shimmering element with glyph and text
     ShimmeringTextElement::new(
-        format!("{} {}", WARP_GLYPH, text.into()),
+        format!("{} {}", ZAPLEX_GLYPH, text.into()),
         appearance.ui_font_family(),
         font_size,
         base_color,

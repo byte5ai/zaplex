@@ -627,7 +627,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::MakeWarpDefaultTerminal,
             )),
-            context.to_owned() & !id!(flags::WARP_IS_DEFAULT_TERMINAL),
+            context.to_owned() & !id!(flags::ZAPLEX_IS_DEFAULT_TERMINAL),
         )]);
     }
 }

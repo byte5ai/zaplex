@@ -168,9 +168,9 @@ pub(super) fn relaunch() -> Result<()> {
     );
     // When testing local channel version JSON, have the newly launched binary continue referencing the same file
     // to verify changelog display after auto-update.
-    if let Ok(path) = env::var("WARP_CHANNEL_VERSIONS_PATH") {
+    if let Ok(path) = env::var("ZAPLEX_CHANNEL_VERSIONS_PATH") {
         let quoted_path = shell_escape::escape(path.into());
-        open_args.push_str(&format!(" --env WARP_CHANNEL_VERSIONS_PATH={quoted_path}"));
+        open_args.push_str(&format!(" --env ZAPLEX_CHANNEL_VERSIONS_PATH={quoted_path}"));
     }
 
     let relaunch_script =

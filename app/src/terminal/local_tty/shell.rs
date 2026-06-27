@@ -159,7 +159,7 @@ impl ShellStarter {
         if let Some(warp_shell_env_var) = warp_shell_path() {
             let (warp_shell_path, shell_type) = supported_shell_path_and_type(&warp_shell_env_var)
                 .unwrap_or_else(|| {
-                    panic!("Cannot spawn shell; $WARP_SHELL_PATH is invalid: {warp_shell_env_var}")
+                    panic!("Cannot spawn shell; $ZAPLEX_SHELL_PATH is invalid: {warp_shell_env_var}")
                 });
             return Some(
                 ShellStarterSource::Environment(DirectShellStarter {
@@ -326,7 +326,7 @@ pub enum ShellStarterSource {
     /// The user chose the path by setting a custom shell path in settings or selecting a WSL
     /// distribution.
     Override(ShellStarter),
-    /// The user chose the path to the shell by setting the `WARP_SHELL_PATH` environment variable.
+    /// The user chose the path to the shell by setting the `ZAPLEX_SHELL_PATH` environment variable.
     Environment(DirectShellStarter),
     /// The default shell for the user (as indicated by the user's passwd entry on UNIX).
     /// On Windows, this an ordered list of shells hardcoded _by Warp_.

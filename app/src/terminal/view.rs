@@ -618,7 +618,7 @@ pub const WAKEUP_THROTTLE_PERIOD: Duration =
 
 pub const EXECUTE_PENDING_COMMAND_DELAY: Duration = Duration::from_millis(100);
 
-pub const WARP_PROMPT_HEIGHT_LINES: f32 = 0.9;
+pub const ZAPLEX_PROMPT_HEIGHT_LINES: f32 = 0.9;
 
 const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 
@@ -702,7 +702,7 @@ const DEFAULT_AI_BLOCK_HEIGHT: f32 = 96.;
 
 pub const DEFAULT_ASK_AI_AUTOSUGGESTION_TEXT: &str = "What happened here?";
 
-const WARP_MD_PATH: &str = "WARP.md";
+const ZAPLEX_MD_PATH: &str = "WARP.md";
 
 pub const LONG_RUNNING_AGENT_REQUESTED_COMMAND_CONTEXT_KEY: &str = "LongRunningRequestedCommand";
 pub const LONG_RUNNING_AGENT_REQUESTED_COMMAND_USER_TOOK_OVER_CONTEXT_KEY: &str =
@@ -20811,7 +20811,7 @@ impl TerminalView {
         let prompt = Text::new_inline(
             Self::block_prompt(model, sessions, index),
             appearance.monospace_font_family(),
-            appearance.monospace_font_size() * WARP_PROMPT_HEIGHT_LINES,
+            appearance.monospace_font_size() * ZAPLEX_PROMPT_HEIGHT_LINES,
         )
         .with_style(Properties::default().weight(appearance.monospace_font_weight()))
         .with_color(terminal_theme_prompt)
@@ -20823,7 +20823,7 @@ impl TerminalView {
             let duration = Text::new_inline(
                 duration_string,
                 appearance.monospace_font_family(),
-                appearance.monospace_font_size() * WARP_PROMPT_HEIGHT_LINES,
+                appearance.monospace_font_size() * ZAPLEX_PROMPT_HEIGHT_LINES,
             )
             .with_style(Properties::default().weight(appearance.monospace_font_weight()))
             .with_color(terminal_theme_prompt)
@@ -24256,7 +24256,7 @@ impl TypedActionView for TerminalView {
             OpenProjectRulesPane => {
                 if let Some(current_dir) = self.pwd() {
                     let mut warp_md_path = PathBuf::from(&current_dir);
-                    warp_md_path.push(WARP_MD_PATH);
+                    warp_md_path.push(ZAPLEX_MD_PATH);
                     #[cfg(feature = "local_fs")]
                     ctx.emit(Event::OpenCodeInWarp {
                         source: CodeSource::ProjectRules { path: warp_md_path },

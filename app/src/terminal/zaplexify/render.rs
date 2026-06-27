@@ -28,7 +28,7 @@ const SUBSHELL_FLAG_HORIZONTAL_PADDING: f32 = 8.;
 const SUBSHELL_FLAG_VERTICAL_PADDING: f32 = 1.;
 
 // TODO(liam): remove this once figuring out how to get theme color in layout()
-const WARP_DRIVE_ENV_VAR_COLLECTION_ICON_COLOR: u32 = 0xC464FFFF;
+const ZAPLEX_DRIVE_ENV_VAR_COLLECTION_ICON_COLOR: u32 = 0xC464FFFF;
 const ICON_MARGIN: f32 = 4.;
 const TERMINAL_ICON: &str = "bundled/svg/terminal.svg";
 pub const HORIZONTAL_TEXT_MARGIN: f32 = 20.;
@@ -207,7 +207,7 @@ fn get_subshell_flag_info(subshell_source: &SubshellSource, theme: &WarpTheme) -
     match subshell_source {
         SubshellSource::EnvVarCollection(environment_name) => (
             environment_name.to_string(),
-            Fill::Solid(ColorU::from_u32(WARP_DRIVE_ENV_VAR_COLLECTION_ICON_COLOR)),
+            Fill::Solid(ColorU::from_u32(ZAPLEX_DRIVE_ENV_VAR_COLLECTION_ICON_COLOR)),
         ),
         SubshellSource::Command(command) => (command.to_string(), theme.subshell_background()),
     }

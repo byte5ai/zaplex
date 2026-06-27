@@ -127,7 +127,7 @@ pub const WAITING_FOR_USER_INPUT_MESSAGE: &str = "Agent waiting for instructions
 const IMAGE_SOURCE_LINK_LINE_INDEX: usize = 1;
 
 const ERROR_APOLOGY_TEXT: &str = "I'm sorry, I couldn't complete that request.";
-const INTERNAL_WARP_ERROR: &str = "Internal Zap error.";
+const INTERNAL_ZAPLEX_ERROR: &str = "Internal Zap error.";
 
 pub const LOAD_OUTPUT_MESSAGE: &str = "Warping...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_ADJUSTING: &str = "Adjusting tasks...";
@@ -548,7 +548,7 @@ pub fn render_warping_indicator_base(
     // Unicode code point for the Zap glyph that is embedded in the version of Roboto we bundle
     // into the app. This code point MUST be rendered using Roboto (the default ui font) or else the
     // glyph may not be rendered.
-    const WARP_GLYPH: &str = "\u{E500}";
+    const ZAPLEX_GLYPH: &str = "\u{E500}";
 
     let appearance = Appearance::as_ref(app);
 
@@ -586,7 +586,7 @@ pub fn render_warping_indicator_base(
         let sub_element = if should_indent_tip_for_warp_glyph {
             let font_size = appearance.monospace_font_size() - 3.;
             let glyph_indent = Text::new_inline(
-                format!("{WARP_GLYPH} "),
+                format!("{ZAPLEX_GLYPH} "),
                 appearance.ui_font_family(),
                 font_size,
             )
@@ -2965,13 +2965,13 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
         RenderableAIError::QuotaLimit => {
             // Zap(Phase 3c A1): remove logic in QuotaLimit that depends on `AIRequestUsageModel`
             // for refreshing rendered time. After localization, cloud quota no longer applies; keep only generic error text.
-            format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_WARP_ERROR}")
+            format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_ZAPLEX_ERROR}")
         }
         RenderableAIError::ServerOverloaded => {
             "Zap is currently overloaded. Please try again later.".to_string()
         }
         RenderableAIError::InternalWarpError => {
-            format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_WARP_ERROR}")
+            format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_ZAPLEX_ERROR}")
         }
         RenderableAIError::Other {
             error_message,

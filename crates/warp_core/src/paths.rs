@@ -28,21 +28,21 @@ use crate::{
 ///
 /// This should be used, for example, as the base directory under which
 /// repository workflows would be stored (in "./.warp/workflows").
-pub const WARP_CONFIG_DIR: &str = ".warp";
+pub const ZAPLEX_CONFIG_DIR: &str = ".warp";
 
 /// The name of the folder that stores Zap execution logs and network logs.
 /// This is currently only used on Windows to maintain backwards compatibility.
-pub const WARP_LOGS_DIR: &str = "logs";
+pub const ZAPLEX_LOGS_DIR: &str = "logs";
 
 fn base_warp_config_dir_name() -> String {
     match ChannelState::channel() {
         // Preview shares the same directory as Stable for backward
         // compatibility — existing users already have config in `.warp`.
-        Channel::Stable | Channel::Preview => WARP_CONFIG_DIR.to_owned(),
+        Channel::Stable | Channel::Preview => ZAPLEX_CONFIG_DIR.to_owned(),
         Channel::Oss => ".zap".to_owned(),
-        Channel::Dev => format!("{WARP_CONFIG_DIR}-dev"),
-        Channel::Integration => format!("{WARP_CONFIG_DIR}-integration"),
-        Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
+        Channel::Dev => format!("{ZAPLEX_CONFIG_DIR}-dev"),
+        Channel::Integration => format!("{ZAPLEX_CONFIG_DIR}-integration"),
+        Channel::Local => format!("{ZAPLEX_CONFIG_DIR}-local"),
     }
 }
 /// Returns the home-relative Zap config directory name for the current channel and data profile.
@@ -86,12 +86,12 @@ pub fn warp_home_mcp_config_file_path() -> Option<PathBuf> {
 #[cfg(target_os = "macos")]
 fn macos_config_dir_name() -> String {
     match ChannelState::channel() {
-        Channel::Stable => WARP_CONFIG_DIR.to_owned(),
-        Channel::Preview => format!("{WARP_CONFIG_DIR}-preview"),
+        Channel::Stable => ZAPLEX_CONFIG_DIR.to_owned(),
+        Channel::Preview => format!("{ZAPLEX_CONFIG_DIR}-preview"),
         Channel::Oss => ".zap".to_owned(),
-        Channel::Dev => format!("{WARP_CONFIG_DIR}-dev"),
-        Channel::Integration => format!("{WARP_CONFIG_DIR}-integration"),
-        Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
+        Channel::Dev => format!("{ZAPLEX_CONFIG_DIR}-dev"),
+        Channel::Integration => format!("{ZAPLEX_CONFIG_DIR}-integration"),
+        Channel::Local => format!("{ZAPLEX_CONFIG_DIR}-local"),
     }
 }
 

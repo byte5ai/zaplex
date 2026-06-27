@@ -401,10 +401,10 @@ fn windows_askpass_script_is_spawnable() {
 
     // Spawn the askpass script using CreateProcessW to follow the same code path as ssh.
     // CREATE_NO_WINDOW simulates the environment when ssh spawns askpass (no console).
-    // Must set WARP_SSH_ASKPASS_FILE env var; the script uses it to locate the password file.
+    // Must set ZAPLEX_SSH_ASKPASS_FILE env var; the script uses it to locate the password file.
     let output = std::process::Command::new("cmd.exe")
         .raw_arg(format!("/c \"{}\"", script.display()))
-        .env("WARP_SSH_ASKPASS_FILE", &password_file)
+        .env("ZAPLEX_SSH_ASKPASS_FILE", &password_file)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use warp_core::errors::{AnyhowErrorExt, ErrorExt};
 use warp_core::register_error;
 
-const WARP_ERROR_CODE_HEADER: &str = "X-Zap-Error-Code";
-const WARP_ERROR_CODE_OUT_OF_CREDITS: &str = "OUT_OF_CREDITS";
+const ZAPLEX_ERROR_CODE_HEADER: &str = "X-Zap-Error-Code";
+const ZAPLEX_ERROR_CODE_OUT_OF_CREDITS: &str = "OUT_OF_CREDITS";
 
 #[derive(thiserror::Error, Debug, Serialize, Deserialize)]
 #[error("{error}")]
@@ -107,9 +107,9 @@ impl AIApiError {
 
     fn error_for_429(headers: &::http::HeaderMap) -> Self {
         if headers
-            .get(WARP_ERROR_CODE_HEADER)
+            .get(ZAPLEX_ERROR_CODE_HEADER)
             .and_then(|v| v.to_str().ok())
-            == Some(WARP_ERROR_CODE_OUT_OF_CREDITS)
+            == Some(ZAPLEX_ERROR_CODE_OUT_OF_CREDITS)
         {
             AIApiError::QuotaLimit
         } else {

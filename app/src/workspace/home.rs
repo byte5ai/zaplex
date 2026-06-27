@@ -8,8 +8,8 @@ use warpui::ViewContext;
 use super::view::Workspace;
 use crate::pane_group::{AnyPaneContent, FilePane};
 
-const WARP_HOME_TITLE: &str = "Welcome to Zap";
-const WARP_HOME_CONTENT: &str = r#"
+const ZAPLEX_HOME_TITLE: &str = "Welcome to Zap";
+const ZAPLEX_HOME_CONTENT: &str = r#"
 Welcome to Zap.
 
 Use this local workspace to:
@@ -27,7 +27,7 @@ pub fn create_home_pane(ctx: &mut ViewContext<Workspace>) -> Box<dyn AnyPaneCont
         ctx,
     );
     pane.file_view(ctx).update(ctx, |pane, ctx| {
-        pane.open_static(WARP_HOME_TITLE, WARP_HOME_CONTENT, ctx);
+        pane.open_static(ZAPLEX_HOME_TITLE, ZAPLEX_HOME_CONTENT, ctx);
     });
     Box::new(pane)
 }

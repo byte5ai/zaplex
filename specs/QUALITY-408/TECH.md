@@ -6,7 +6,7 @@ On macOS, `macos_config_dir_name()` returns `.warp` for both Stable and Preview 
 
 ## Relevant Code
 
-- `crates/warp_core/src/paths.rs:42-51` — `macos_config_dir_name()` maps channels to directory names. The `Channel::Preview` arm currently returns `WARP_CONFIG_DIR` (`.warp`).
+- `crates/warp_core/src/paths.rs:42-51` — `macos_config_dir_name()` maps channels to directory names. The `Channel::Preview` arm currently returns `ZAPLEX_CONFIG_DIR` (`.warp`).
 - `crates/warp_core/src/paths.rs:57-67` — `data_dir()` uses `macos_config_dir_name()` on macOS.
 - `crates/warp_core/src/paths.rs:71-83` — `config_local_dir()` also uses `macos_config_dir_name()` on macOS. On macOS, `data_dir()` and `config_local_dir()` return the same path.
 - `app/src/warp_data_directory_watcher.rs:28-46` — `ensure_warp_watch_roots_exist()` creates the data and config directories at startup.
@@ -21,8 +21,8 @@ The `macos_config_dir_name()` function in `paths.rs` determines the macOS config
 ```rust
 fn macos_config_dir_name() -> String {
     match ChannelState::channel() {
-        Channel::Stable | Channel::Preview => WARP_CONFIG_DIR.to_owned(),
-        Channel::Dev => format!("{WARP_CONFIG_DIR}-dev"),
+        Channel::Stable | Channel::Preview => ZAPLEX_CONFIG_DIR.to_owned(),
+        Channel::Dev => format!("{ZAPLEX_CONFIG_DIR}-dev"),
         // ...
     }
 }
@@ -32,7 +32,7 @@ Both `data_dir()` and `config_local_dir()` use this on macOS, so all config path
 
 The SQLite database is **not** affected — it is stored under `secure_state_dir()` (App Group container) or `state_dir()` (`~/Library/Application Support/dev.warp.Warp-Preview/`), both of which already use the bundle ID and are channel-specific.
 
-The `WARP_CONFIG_DIR` constant (`.warp`) is also used for per-repository project configs (e.g., `./.warp/workflows`). This is unrelated to the home-directory config and must not change.
+The `ZAPLEX_CONFIG_DIR` constant (`.warp`) is also used for per-repository project configs (e.g., `./.warp/workflows`). This is unrelated to the home-directory config and must not change.
 
 ## Proposed Changes
 
@@ -43,11 +43,11 @@ Change the Preview arm to return `.warp-preview`:
 ```rust
 fn macos_config_dir_name() -> String {
     match ChannelState::channel() {
-        Channel::Stable => WARP_CONFIG_DIR.to_owned(),
-        Channel::Preview => format!("{WARP_CONFIG_DIR}-preview"),
-        Channel::Dev => format!("{WARP_CONFIG_DIR}-dev"),
-        Channel::Integration => format!("{WARP_CONFIG_DIR}-integration"),
-        Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
+        Channel::Stable => ZAPLEX_CONFIG_DIR.to_owned(),
+        Channel::Preview => format!("{ZAPLEX_CONFIG_DIR}-preview"),
+        Channel::Dev => format!("{ZAPLEX_CONFIG_DIR}-dev"),
+        Channel::Integration => format!("{ZAPLEX_CONFIG_DIR}-integration"),
+        Channel::Local => format!("{ZAPLEX_CONFIG_DIR}-local"),
     }
 }
 ```

@@ -372,14 +372,14 @@ fn embed_resource_file(target_dir: &Path) {
     // metadata. Windows Task Manager's process grouping name actually comes from PE resources
     // `FileDescription` / `ProductName` (not the window title), so if we fall back to default "Zap" here,
     // a dev binary built directly via `cargo build` will display as `Zap(N)` in Task Manager.
-    // Upstream official CI pipeline overrides this explicitly via `export WARP_APP_NAME=...` before calling, unaffected.
-    let app_name = env::var("WARP_APP_NAME").unwrap_or_else(|_| "Zap".to_owned());
+    // Upstream official CI pipeline overrides this explicitly via `export ZAPLEX_APP_NAME=...` before calling, unaffected.
+    let app_name = env::var("ZAPLEX_APP_NAME").unwrap_or_else(|_| "Zap".to_owned());
     let bin_name = env::var("CARGO_BIN_NAME").unwrap_or("oss".to_owned());
-    // Override with `WARP_APP_PUBLISHER`; default aligns with installer / AUMID as "Zap".
+    // Override with `ZAPLEX_APP_PUBLISHER`; default aligns with installer / AUMID as "Zap".
     // Keep installer `MyAppPublisher`, Cargo bundle metadata `copyright`, and process AUMID
     // `dev.zap.Zap` globally aligned across three places, avoiding Windows Shell missing the
     // icon cache due to publisher / product name fingerprint mismatch.
-    let publisher = env::var("WARP_APP_PUBLISHER").unwrap_or_else(|_| "Zap".to_owned());
+    let publisher = env::var("ZAPLEX_APP_PUBLISHER").unwrap_or_else(|_| "Zap".to_owned());
     let (ver_major, ver_minor, ver_patch, ver_build) = parse_file_version_quad(&version);
 
     let icon_path = Path::new("channels")

@@ -1154,7 +1154,7 @@ impl ansi::Handler for HeaderGrid {
                     honor_ps1
                 );
                 // We send a terminal event which will result in bindkeys being issued to the shell session, to
-                // switch the prompt mode via the $WARP_HONOR_PS1 environment variable.
+                // switch the prompt mode via the $ZAPLEX_HONOR_PS1 environment variable.
                 self.event_proxy
                     .send_terminal_event(Event::HonorPS1OutOfSync);
 

@@ -77,7 +77,7 @@ body:
     id: "xtrace-output"
     attributes:
       label: "Include shell xtrace output"
-      description: "Run `WARP_DEBUG_MODE=1 ssh YOUR-HOSTNAME-HERE` from inside Zap and paste the full output starting from the SSH command block. Redact secrets before posting."
+      description: "Run `ZAPLEX_DEBUG_MODE=1 ssh YOUR-HOSTNAME-HERE` from inside Zap and paste the full output starting from the SSH command block. Redact secrets before posting."
     validations:
       required: true
   - type: dropdown

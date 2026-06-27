@@ -37,7 +37,7 @@ extern crate plist;
 const ITERM_DEFAULT_MONOSPACE_FONT_SIZE: &str = "12";
 const ITERM_DEFAULT_MONOSPACE_FONT_FAMILY: &str = "Monaco";
 
-const WARP_DEFAULT_WORKING_DIRECTORY: ITermWorkingDirectoryStrategy =
+const ZAPLEX_DEFAULT_WORKING_DIRECTORY: ITermWorkingDirectoryStrategy =
     ITermWorkingDirectoryStrategy::Simple(ITermWorkingDirectory::ReuseLast);
 
 const PIN_TOP: i64 = 2;
@@ -829,7 +829,7 @@ impl ParseableConfig for ITermProfile {
         }
 
         if self.working_directory == default_profile.working_directory
-            || self.working_directory == Some(WARP_DEFAULT_WORKING_DIRECTORY)
+            || self.working_directory == Some(ZAPLEX_DEFAULT_WORKING_DIRECTORY)
         {
             self.working_directory = None;
         }

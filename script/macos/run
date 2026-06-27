@@ -7,8 +7,8 @@
 # This script is invoked by `./script/run`, which handles cross-platform
 # setup (install_channel_config, binary name detection, feature-to-env-var
 # mapping). The following env vars are expected to be set by the caller:
-#   WARP_BIN_NAME  — "warp" (internal local build) or "zap-oss"
-#   WARP_CHANNEL   — "local" or "oss"
+#   ZAPLEX_BIN_NAME  — "warp" (internal local build) or "zap-oss"
+#   ZAPLEX_CHANNEL   — "local" or "oss"
 #   FEATURES       — comma-separated cargo features (already normalized)
 # Must be called from the root directory of the warp repo.
 
@@ -17,16 +17,16 @@ set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 cd "${REPO_ROOT}"
 
-: "${WARP_BIN_NAME:?WARP_BIN_NAME must be set (invoke via ./script/run)}"
-: "${WARP_CHANNEL:?WARP_CHANNEL must be set (invoke via ./script/run)}"
+: "${ZAPLEX_BIN_NAME:?ZAPLEX_BIN_NAME must be set (invoke via ./script/run)}"
+: "${ZAPLEX_CHANNEL:?ZAPLEX_CHANNEL must be set (invoke via ./script/run)}"
 : "${FEATURES:?FEATURES must be set (invoke via ./script/run)}"
 
-if [ "$WARP_CHANNEL" = "local" ]; then
-    WARP_APP_PATH="target/debug/bundle/osx/WarpLocal.app"
-    WARP_SCHEME_NAME="warplocal"
+if [ "$ZAPLEX_CHANNEL" = "local" ]; then
+    ZAPLEX_APP_PATH="target/debug/bundle/osx/WarpLocal.app"
+    ZAPLEX_SCHEME_NAME="warplocal"
 else
-    WARP_APP_PATH="target/debug/bundle/osx/Zap.app"
-    WARP_SCHEME_NAME="zap"
+    ZAPLEX_APP_PATH="target/debug/bundle/osx/Zap.app"
+    ZAPLEX_SCHEME_NAME="zap"
 fi
 DONT_OPEN=false
 # Launches the binary with "open", meaning the Zap process is
@@ -39,7 +39,7 @@ OPEN_WITH_LAUNCHD=false
 # Arguments to pass directly Zap (specified after --)
 # This is not supported when opening with launchd, as passing CLI arguments to
 # an application doesn't make sense.
-WARP_ARGS=()
+ZAPLEX_ARGS=()
 
 # Export this variable so it can be referenced by app/build.rs later when
 # running `cargo bundle`.
@@ -50,7 +50,7 @@ while (( "$#" )); do
   case "$1" in
     --)
       shift
-      WARP_ARGS=("$@")
+      ZAPLEX_ARGS=("$@")
       break
       ;;
     --dont-open)
@@ -59,10 +59,10 @@ while (( "$#" )); do
       ;;
     --release)
       echo "Detected release build, pointing at release bundle under target/release/bundle"
-      if [ "$WARP_CHANNEL" = "local" ]; then
-          WARP_APP_PATH="target/release/bundle/osx/WarpLocal.app"
+      if [ "$ZAPLEX_CHANNEL" = "local" ]; then
+          ZAPLEX_APP_PATH="target/release/bundle/osx/WarpLocal.app"
       else
-          WARP_APP_PATH="target/release/bundle/osx/Zap.app"
+          ZAPLEX_APP_PATH="target/release/bundle/osx/Zap.app"
       fi
       PARAMS="$PARAMS $1"
       shift
@@ -70,10 +70,10 @@ while (( "$#" )); do
     --profile)
       PROFILE="$2"
       shift 2
-      if [ "$WARP_CHANNEL" = "local" ]; then
-          WARP_APP_PATH="target/${PROFILE}/bundle/osx/WarpLocal.app"
+      if [ "$ZAPLEX_CHANNEL" = "local" ]; then
+          ZAPLEX_APP_PATH="target/${PROFILE}/bundle/osx/WarpLocal.app"
       else
-          WARP_APP_PATH="target/${PROFILE}/bundle/osx/Zap.app"
+          ZAPLEX_APP_PATH="target/${PROFILE}/bundle/osx/Zap.app"
       fi
       PARAMS="$PARAMS --profile $PROFILE"
       ;;
@@ -92,19 +92,19 @@ while (( "$#" )); do
   esac
 done
 
-rm -rf "$WARP_APP_PATH"
+rm -rf "$ZAPLEX_APP_PATH"
 
 pushd app > /dev/null
-echo "Bundling app (bin: $WARP_BIN_NAME)..."
-cargo bundle --bin "$WARP_BIN_NAME" --features "$FEATURES" $PARAMS
+echo "Bundling app (bin: $ZAPLEX_BIN_NAME)..."
+cargo bundle --bin "$ZAPLEX_BIN_NAME" --features "$FEATURES" $PARAMS
 echo "Successfully bundled..."
 popd > /dev/null
 
 echo "Adding rpath to support mac frameworks"
-install_name_tool -add_rpath "@executable_path/../Frameworks" "$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$ZAPLEX_APP_PATH/Contents/MacOS/$ZAPLEX_BIN_NAME"
 
-export WARP_SCHEME_NAME
-export WARP_PLIST_PATH="$WARP_APP_PATH/Contents/Info.plist"
+export ZAPLEX_SCHEME_NAME
+export ZAPLEX_PLIST_PATH="$ZAPLEX_APP_PATH/Contents/Info.plist"
 ./script/update_plist
 
 echo "Preparing bundled resources..."
@@ -114,27 +114,27 @@ fi
 # Pass FEATURES through (and an empty cargo profile, since this script does
 # not configure one) so that the schema generation reuses the same compiled
 # artifacts as the cargo bundle invocation above.
-NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" "$WARP_APP_PATH/Contents/Resources" "$WARP_CHANNEL" "" "$FEATURES"
+NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" "$ZAPLEX_APP_PATH/Contents/Resources" "$ZAPLEX_CHANNEL" "" "$FEATURES"
 
-"${REPO_ROOT}/script/compile_icon" "$WARP_CHANNEL" "$WARP_APP_PATH"
+"${REPO_ROOT}/script/compile_icon" "$ZAPLEX_CHANNEL" "$ZAPLEX_APP_PATH"
 
 if [[ ",$FEATURES," =~ ",heap_usage_tracking," ]]; then
   echo "Bundling pprof..."
-  HELPERS_DIR="$WARP_APP_PATH/Contents/Helpers"
+  HELPERS_DIR="$ZAPLEX_APP_PATH/Contents/Helpers"
   "${REPO_ROOT}/script/prepare_bundled_pprof" "$HELPERS_DIR"
 fi
 
 echo "Codesigning app..."
 SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)"
-codesign --force --deep --options runtime --sign "${SIGNING_CERT:--}" "$WARP_APP_PATH" --entitlements script/Debug-Entitlements.plist
+codesign --force --deep --options runtime --sign "${SIGNING_CERT:--}" "$ZAPLEX_APP_PATH" --entitlements script/Debug-Entitlements.plist
 
 if [ "$DONT_OPEN" = false ] ; then
     if  [ "$OPEN_WITH_LAUNCHD" = true ]; then
         echo "Launching with MacOS application launcher"
-        PATH="" /usr/bin/open "./$WARP_APP_PATH"
+        PATH="" /usr/bin/open "./$ZAPLEX_APP_PATH"
         tail -f ~/Library/Logs/warp_local.log
     else
-        echo "Opening app at ./$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
-        "./$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME" "${WARP_ARGS[@]}"
+        echo "Opening app at ./$ZAPLEX_APP_PATH/Contents/MacOS/$ZAPLEX_BIN_NAME"
+        "./$ZAPLEX_APP_PATH/Contents/MacOS/$ZAPLEX_BIN_NAME" "${ZAPLEX_ARGS[@]}"
     fi
 fi

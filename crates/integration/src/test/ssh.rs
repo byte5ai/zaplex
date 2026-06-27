@@ -126,7 +126,7 @@ fn verify_login_shell(shell: &str) -> TestStep {
         "zsh" => "[[ -o login ]]",
         "fish" => "status --is-login",
         // For other shells, we don't actually start a login shell but do source /etc/profile.
-        _ => "test \"$WARP_PROFILE_LOADED\" = true",
+        _ => "test \"$ZAPLEX_PROFILE_LOADED\" = true",
     };
 
     match shell {

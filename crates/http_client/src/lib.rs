@@ -30,27 +30,27 @@ pub mod headers {
     pub const CLIENT_RELEASE_VERSION_HEADER_KEY: &str = "X-Zap-Client-Version";
 
     /// Custom Zap header indicating the OS category the request was sent from.
-    pub(crate) const WARP_OS_CATEGORY: &str = "X-Zap-OS-Category";
+    pub(crate) const ZAPLEX_OS_CATEGORY: &str = "X-Zap-OS-Category";
     /// Custom Zap header indicating the OS name the request was sent from. On Linux this is the
     /// name of the distribution. On all other platforms it should be equivalent to
-    /// `WARP_OS_CATEGORY`.
-    pub(crate) const WARP_OS_NAME: &str = "X-Zap-OS-Name";
+    /// `ZAPLEX_OS_CATEGORY`.
+    pub(crate) const ZAPLEX_OS_NAME: &str = "X-Zap-OS-Name";
     /// Custom Zap header indicating the version of the operating system. On Linux this is the
     /// version of the distribution, not the Linux kernel version.
-    pub(crate) const WARP_OS_VERSION: &str = "X-Zap-OS-Version";
+    pub(crate) const ZAPLEX_OS_VERSION: &str = "X-Zap-OS-Version";
 
     /// Custom Zap header indicating the linux kernel version. This is only sent from Linux.
-    pub(crate) const WARP_OS_LINUX_KERNEL_VERSION: &str = "X-Zap-OS-Linux-Kernel-Version";
+    pub(crate) const ZAPLEX_OS_LINUX_KERNEL_VERSION: &str = "X-Zap-OS-Linux-Kernel-Version";
 
     /// Custom Zap header indicating the client role. We don't use the User-Agent header
     /// because it can't be set from WASM.
-    pub(crate) const WARP_CLIENT_ID: &str = "X-Zap-Client-ID";
+    pub(crate) const ZAPLEX_CLIENT_ID: &str = "X-Zap-Client-ID";
 }
 
 /// The environment variable containing extra HTTP headers to attach to requests.
 /// Only read when the channel is `Channel::Integration`. The value is a newline-separated
 /// list of `Name:Value` pairs, where each pair is split on the first colon.
-const EXTRA_HTTP_HEADERS_ENV_VAR: &str = "WARP_EXTRA_HTTP_HEADERS";
+const EXTRA_HTTP_HEADERS_ENV_VAR: &str = "ZAPLEX_EXTRA_HTTP_HEADERS";
 
 /// A wrapper around a `reqwest::Client` to execute requests. Returns a custom `RequestBuilder` type
 /// that ensures any call to the underlying `reqwest::Client` are properly adapted so that they can
@@ -260,7 +260,7 @@ impl Client {
     fn add_warp_http_headers(mut builder: RequestBuilder) -> RequestBuilder {
         // Include the client ID header.
         if let Some(client_id) = execution_mode::current_client_id() {
-            builder = builder.header(headers::WARP_CLIENT_ID, client_id);
+            builder = builder.header(headers::ZAPLEX_CLIENT_ID, client_id);
         }
 
         // If there's an app version, include it as an HTTP request header.
@@ -302,12 +302,12 @@ impl Client {
             // Operating system category.
             let category = os_system_info.category().to_string();
             if let Ok(category) = HeaderValue::from_str(&category) {
-                builder = builder.header(headers::WARP_OS_CATEGORY, category);
+                builder = builder.header(headers::ZAPLEX_OS_CATEGORY, category);
             }
 
             // Operating system name.
             builder = builder.header(
-                headers::WARP_OS_NAME,
+                headers::ZAPLEX_OS_NAME,
                 HeaderValue::from_static(os_system_info.name()),
             );
 
@@ -316,7 +316,7 @@ impl Client {
                 .version()
                 .and_then(|version| HeaderValue::from_str(version).ok())
             {
-                builder = builder.header(headers::WARP_OS_VERSION, version);
+                builder = builder.header(headers::ZAPLEX_OS_VERSION, version);
             }
 
             // Linux kernel version.
@@ -325,7 +325,7 @@ impl Client {
                 .and_then(|kernel_version| HeaderValue::from_str(kernel_version).ok())
             {
                 builder =
-                    builder.header(headers::WARP_OS_LINUX_KERNEL_VERSION, linux_kernel_version);
+                    builder.header(headers::ZAPLEX_OS_LINUX_KERNEL_VERSION, linux_kernel_version);
             }
         }
 

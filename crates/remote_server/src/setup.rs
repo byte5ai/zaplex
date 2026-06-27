@@ -412,10 +412,10 @@ pub const DEV_REMOTE_FEATURES: &str = "release_bundle,crash_reporting,standalone
 /// the standard used in `remote_server_binary()` / `download_url()` for "no release tag".
 /// Release builds always return `false`, with unchanged behavior.
 ///
-/// Explicit override: set `WARP_REMOTE_SERVER_FROM_LOCAL=1` to force the local cross-compilation path
+/// Explicit override: set `ZAPLEX_REMOTE_SERVER_FROM_LOCAL=1` to force the local cross-compilation path
 /// (`0` or unset means disabled). Used for temporary local remote-server debugging in release builds.
 pub fn is_dev_source_build() -> bool {
-    if let Some(raw) = std::env::var_os("WARP_REMOTE_SERVER_FROM_LOCAL") {
+    if let Some(raw) = std::env::var_os("ZAPLEX_REMOTE_SERVER_FROM_LOCAL") {
         let lossy = raw.to_string_lossy();
         let trimmed = lossy.trim();
         let disabled =

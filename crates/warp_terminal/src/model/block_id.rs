@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// A globally unique ID for the block that is unique across all sessions.
-/// For a block created as a result of pty output, it takes the form {WARP_SESSION_ID}-{NUM_ID},
+/// For a block created as a result of pty output, it takes the form {ZAPLEX_SESSION_ID}-{NUM_ID},
 /// where NUM_ID is a monotonically increasing counter for the session.
 /// This is because the block ID comes from the precmd in this case, and it is expensive to create a UUID in the bootstrap script.
 /// For manually created blocks within the app, it is a UUID.

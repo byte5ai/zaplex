@@ -562,7 +562,7 @@ pub(crate) const TOGGLE_NOTIFICATION_MAILBOX_BINDING_NAME: &str =
 
 // these won't have to be public after we deprecate the code mode v1 project explorer which is defined in terminal
 pub(crate) const TOGGLE_PROJECT_EXPLORER_BINDING_NAME: &str = "workspace:toggle_project_explorer";
-pub(crate) const TOGGLE_WARP_DRIVE_BINDING_NAME: &str = "workspace:toggle_warp_drive";
+pub(crate) const TOGGLE_ZAPLEX_DRIVE_BINDING_NAME: &str = "workspace:toggle_warp_drive";
 pub(crate) const TOGGLE_RIGHT_PANEL_BINDING_NAME: &str = "workspace:toggle_right_panel";
 pub(crate) const TOGGLE_VERTICAL_TABS_PANEL_BINDING_NAME: &str =
     "workspace:toggle_vertical_tabs_panel";
@@ -578,7 +578,7 @@ pub(crate) const TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME: &str = "workspace:toggle_
 pub(crate) const LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME: &str =
     "workspace:left_panel_project_explorer";
 pub(crate) const LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME: &str = "workspace:left_panel_global_search";
-pub(crate) const LEFT_PANEL_WARP_DRIVE_BINDING_NAME: &str = "workspace:left_panel_warp_drive";
+pub(crate) const LEFT_PANEL_ZAPLEX_DRIVE_BINDING_NAME: &str = "workspace:left_panel_warp_drive";
 pub(crate) const LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME: &str =
     "workspace:left_panel_agent_conversations";
 pub(crate) const LEFT_PANEL_SSH_MANAGER_BINDING_NAME: &str = "workspace:left_panel_ssh_manager";
@@ -612,7 +612,7 @@ const MAX_WINDOW_TITLE_LENGTH: usize = 80;
 pub const DEFAULT_USER_DISPLAY_NAME: &str = "User";
 
 lazy_static! {
-    static ref OPENING_WARP_DRIVE_ON_START_UP: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    static ref OPENING_ZAPLEX_DRIVE_ON_START_UP: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     static ref PANEL_CORNER_RADIUS: CornerRadius = CornerRadius::with_all(Radius::Pixels(8.));
     static ref PANEL_HEADER_CORNER_RADIUS: CornerRadius =
         CornerRadius::with_top(Radius::Pixels(8.));
@@ -18327,7 +18327,7 @@ impl Workspace {
             .value()
             .same_line_prompt_enabled()
         {
-            context.set.insert(flags::WARP_SAME_LINE_PROMPT_FLAG);
+            context.set.insert(flags::ZAPLEX_SAME_LINE_PROMPT_FLAG);
         }
 
         if *ssh_settings.enable_legacy_ssh_wrapper.value() {
@@ -20635,7 +20635,7 @@ impl View for Workspace {
         };
 
         if WarpDriveSettings::is_warp_drive_enabled(app) {
-            context.set.insert(flags::ENABLE_WARP_DRIVE);
+            context.set.insert(flags::ENABLE_ZAPLEX_DRIVE);
         }
 
         if AISettings::as_ref(app).is_any_ai_enabled(app)
@@ -20676,7 +20676,7 @@ impl View for Workspace {
 
         let default_terminal = DefaultTerminal::as_ref(app);
         if default_terminal.is_warp_default() {
-            context.set.insert(flags::WARP_IS_DEFAULT_TERMINAL);
+            context.set.insert(flags::ZAPLEX_IS_DEFAULT_TERMINAL);
         }
 
         if FeatureFlag::DebugMode.is_enabled() {

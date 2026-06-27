@@ -211,8 +211,8 @@ mod appimage {
         command.arg(warp_cli::finish_update_flag());
         // When testing local channel version JSON, have the newly launched binary continue referencing the same file
         // to verify changelog display after auto-update.
-        if let Ok(path) = std::env::var("WARP_CHANNEL_VERSIONS_PATH") {
-            command.env("WARP_CHANNEL_VERSIONS_PATH", path);
+        if let Ok(path) = std::env::var("ZAPLEX_CHANNEL_VERSIONS_PATH") {
+            command.env("ZAPLEX_CHANNEL_VERSIONS_PATH", path);
         }
 
         log::info!("Relaunching warp for update...");
@@ -246,8 +246,8 @@ mod package_manager {
         command.arg(finish_update_flag);
         // When testing local channel version JSON, have the newly launched binary continue referencing the same file
         // to verify changelog display after auto-update.
-        if let Ok(path) = std::env::var("WARP_CHANNEL_VERSIONS_PATH") {
-            command.env("WARP_CHANNEL_VERSIONS_PATH", path);
+        if let Ok(path) = std::env::var("ZAPLEX_CHANNEL_VERSIONS_PATH") {
+            command.env("ZAPLEX_CHANNEL_VERSIONS_PATH", path);
         }
 
         log::info!("Relaunching warp for update...");

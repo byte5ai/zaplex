@@ -37,7 +37,7 @@ use crate::{
             DRIVE_INDEX_VIEW_POSITION_ID, FOLDER_DEPTH_INDENT, INDEX_CONTENT_MARGIN_LEFT,
             ITEM_FONT_SIZE, ITEM_MARGIN_BOTTOM, ITEM_PADDING_HORIZONTAL, ITEM_PADDING_VERTICAL,
         },
-        panel::WARP_DRIVE_POSITION_ID,
+        panel::ZAPLEX_DRIVE_POSITION_ID,
     },
     menu::Menu,
     ui_components::{
@@ -718,7 +718,7 @@ impl<'a> WarpDriveRow<'a> {
 /// Generate a callback for calculating the Drag bounds within Zap Drive
 fn drag_bounds_callback() -> impl Fn(&PositionCache, Vector2F) -> Option<RectF> {
     move |position_cache, window: Vector2F| {
-        let drive_index = position_cache.get_position(WARP_DRIVE_POSITION_ID)?;
+        let drive_index = position_cache.get_position(ZAPLEX_DRIVE_POSITION_ID)?;
 
         let top_left = drive_index.origin();
 

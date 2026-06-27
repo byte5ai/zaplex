@@ -35,7 +35,7 @@ use super::{
 pub const MIN_SIDEBAR_WIDTH: f32 = 250.;
 pub const MAX_SIDEBAR_WIDTH_RATIO: f32 = 0.75;
 
-pub const WARP_DRIVE_POSITION_ID: &str = "warp_drive";
+pub const ZAPLEX_DRIVE_POSITION_ID: &str = "warp_drive";
 
 /// The sidebar that houses Zap Drive.
 /// `DrivePanel` is different from `DriveIndex` in that it is responsible for
@@ -669,7 +669,7 @@ impl View for DrivePanel {
                 Align::new(
                     SavePosition::new(
                         ChildView::new(&self.index_view).finish(),
-                        WARP_DRIVE_POSITION_ID,
+                        ZAPLEX_DRIVE_POSITION_ID,
                     )
                     .finish(),
                 )
