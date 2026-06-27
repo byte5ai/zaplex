@@ -647,8 +647,8 @@ pub enum FeatureFlag {
     /// When enabled, solo users (not on a team) can use BYO API keys.
     SoloUserByok,
 
-    /// Replaces the in-block warpification banner with a warpify footer.
-    WarpifyFooter,
+    /// Replaces the in-block zaplexification banner with a zaplexify footer.
+    ZaplexifyFooter,
 
     /// Guided onboarding flow for existing users introducing HOA features
     /// (vertical tabs, agent inbox, tab configs).

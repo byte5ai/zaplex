@@ -1372,13 +1372,13 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
         .with_context_predicate(id!("Workspace"))
         .with_custom_action(CustomAction::ShowAboutWarp),
         EditableBinding::new(
-            "workspace:show_settings_warpify_page",
-            BindingDescription::new(crate::t!("keybinding-desc-workspace-show-settings-warpify"))
+            "workspace:show_settings_zaplexify_page",
+            BindingDescription::new(crate::t!("keybinding-desc-workspace-show-settings-zaplexify"))
                 .with_custom_description(
                     bindings::MAC_MENUS_CONTEXT,
-                    crate::t!("keybinding-desc-workspace-show-settings-warpify-menu"),
+                    crate::t!("keybinding-desc-workspace-show-settings-zaplexify-menu"),
                 ),
-            WorkspaceAction::ShowSettingsPage(SettingsSection::Warpify),
+            WorkspaceAction::ShowSettingsPage(SettingsSection::Zaplexify),
         )
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),

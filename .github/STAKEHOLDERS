@@ -86,12 +86,12 @@
 /crates/input_classifier/ @harryalbert
 /crates/natural_language_detection/ @harryalbert
 
-# Blocklist UX / modality and cloud mode UI / shell compatibility / completions and bootstrap / warpifying
+# Blocklist UX / modality and cloud mode UI / shell compatibility / completions and bootstrap / zaplexifying
 /app/src/ai/blocklist/ @zachbai
 /app/src/root_view.rs @zachbai
 /app/src/terminal/bootstrap.rs @zachbai
-/app/src/terminal/warpify/ @zachbai
-/app/src/settings_view/warpify_page.rs @zachbai
+/app/src/terminal/zaplexify/ @zachbai
+/app/src/settings_view/zaplexify_page.rs @zachbai
 /app/assets/bundled/bootstrap/ @zachbai
 /crates/warp_completer/ @zachbai @szgupta @alokedesai
 

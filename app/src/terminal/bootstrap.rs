@@ -13,7 +13,7 @@ use crate::{
 #[cfg(feature = "local_fs")]
 use super::{
     model::session::{BootstrapSessionType, SessionInfo},
-    warpify::settings::{PIPENV_SUBSHELL_COMMAND_REGEX, POETRY_SUBSHELL_COMMAND_REGEX},
+    zaplexify::settings::{PIPENV_SUBSHELL_COMMAND_REGEX, POETRY_SUBSHELL_COMMAND_REGEX},
 };
 
 lazy_static! {
@@ -81,7 +81,7 @@ pub fn should_use_rc_file_bootstrap_method(
                     && shell_type == ShellType::Zsh)
                 || is_msys2
         }
-        BootstrapSessionType::WarpifiedRemote => false,
+        BootstrapSessionType::ZaplexifiedRemote => false,
     }
 }
 

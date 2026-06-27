@@ -31,7 +31,7 @@ This spec covers three pieces:
 - `app/src/terminal/view.rs (11022-11199)` — `TerminalView::handle_session_bootstrapped()` reacts to the event
 
 ### Session and SSH types
-- `app/src/terminal/model/session.rs (691-699)` — `SessionType::Local` / `SessionType::WarpifiedRemote`
+- `app/src/terminal/model/session.rs (691-699)` — `SessionType::Local` / `SessionType::ZaplexifiedRemote`
 - `app/src/terminal/model/session.rs (426-451)` — `SessionInfo` struct with `hostname`, `user`, `session_type`, `spawning_session_id`
 - `app/src/terminal/model/terminal_model.rs (632-647)` — `SubshellInitializationInfo` with `ssh_connection_info: Option<InteractiveSshCommand>`
 - `app/src/terminal/ssh/util.rs (86-89)` — `InteractiveSshCommand { host, port }`

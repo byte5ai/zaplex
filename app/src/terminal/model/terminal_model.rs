@@ -26,7 +26,7 @@ pub use crate::terminal::history::HistoryEntry;
 
 use super::ansi::{
     FinishUpdateValue, InputBufferValue, Mode, PendingHook, TmuxInstallFailedInfo,
-    WarpificationUnavailableReason,
+    ZaplexificationUnavailableReason,
 };
 use super::block::{
     AgentInteractionMetadata, Block, BlockId, BlockMetadata, BlockSize, BlocklistEnvVarMetadata,
@@ -362,7 +362,7 @@ enum IsReceivingHook {
     No,
 }
 
-/// Information needed to render a warpify "success" block upon successful subshell bootstrap.
+/// Information needed to render a zaplexify "success" block upon successful subshell bootstrap.
 #[derive(Debug, Clone)]
 pub struct SubshellSuccessBlockInfo {
     /// The ID of the newly bootstrapped subshell session.
@@ -489,7 +489,7 @@ pub struct TerminalModel {
     pending_legacy_ssh_session: Option<SSHValue>,
 
     /// This variable allows us to differentiate between warp-initiated and user-initiated invocations of
-    /// control mode. Whenever we attempt to warpify an ssh session, we track the context of when warp initiated
+    /// control mode. Whenever we attempt to zaplexify an ssh session, we track the context of when warp initiated
     /// control mode, indicating that we expect the shell to enter control mode. We reset to None whenever
     /// the active block finishes. If we enter control mode and option is None, then we know it's user-initiated.
     pending_warp_initiated_control_mode: Option<WarpInitiatedTmuxControlMode>,
@@ -2255,7 +2255,7 @@ impl TerminalModel {
     /// a line of output that is not a known SSH output, we consider that to be some mild evidence that
     /// login is complete. Though, because that output line might be a false alarm (i.e., it could be
     /// an SSH banner OR a line like "Permission denied."), we wait some amount of time and check again
-    /// before indicating we're ready for warpification.
+    /// before indicating we're ready for zaplexification.
     pub fn check_for_end_of_ssh_login(&mut self, confirmation_check: bool) {
         let Some(mut ssh_login_state) = self.notify_on_end_of_ssh_login.clone() else {
             return;
@@ -2278,7 +2278,7 @@ impl TerminalModel {
             SshLoginState::LastLogin | SshLoginState::PromptDetected => {
                 self.event_proxy
                     .send_terminal_event(Event::DetectedEndOfSshLogin(
-                        SshLoginStatus::ReadyToWarpify,
+                        SshLoginStatus::ReadyToZaplexify,
                     ));
 
                 ssh_login_state.notification_state = SshLoginNotificationState::Completed;
@@ -2289,7 +2289,7 @@ impl TerminalModel {
                     if ssh_login_state.notification_state == SshLoginNotificationState::Monitoring {
                         self.event_proxy
                             .send_terminal_event(Event::DetectedEndOfSshLogin(
-                                SshLoginStatus::RecheckBeforeWarpifying,
+                                SshLoginStatus::RecheckBeforeZaplexifying,
                             ));
 
                         // We want to avoid emitting redundant events for the initial check.
@@ -2299,7 +2299,7 @@ impl TerminalModel {
                 } else {
                     self.event_proxy
                         .send_terminal_event(Event::DetectedEndOfSshLogin(
-                            SshLoginStatus::ReadyToWarpify,
+                            SshLoginStatus::ReadyToZaplexify,
                         ));
 
                     ssh_login_state.notification_state = SshLoginNotificationState::Completed;
@@ -2331,7 +2331,7 @@ impl TerminalModel {
         self.pending_warp_initiated_control_mode.is_some()
     }
 
-    pub fn is_warpified_ssh(&self) -> bool {
+    pub fn is_zaplexified_ssh(&self) -> bool {
         matches!(
             self.tmux_control_mode_context,
             Some(TmuxControlModeContext::WarpInitiatedForSsh { .. })
@@ -2969,8 +2969,8 @@ impl ansi::Handler for TerminalModel {
             );
             if is_tmux_ssh {
                 self.event_proxy
-                    .send_terminal_event(Event::RemoteWarpificationIsUnavailable(
-                        WarpificationUnavailableReason::UnsupportedShell {
+                    .send_terminal_event(Event::RemoteZaplexificationIsUnavailable(
+                        ZaplexificationUnavailableReason::UnsupportedShell {
                             shell_name: data.shell,
                         },
                     ))
@@ -3016,8 +3016,8 @@ impl ansi::Handler for TerminalModel {
                 })),
             _ => self
                 .event_proxy
-                .send_terminal_event(Event::RemoteWarpificationIsUnavailable(
-                    WarpificationUnavailableReason::UnsupportedShell {
+                .send_terminal_event(Event::RemoteZaplexificationIsUnavailable(
+                    ZaplexificationUnavailableReason::UnsupportedShell {
                         shell_name: data.shell,
                     },
                 )),
@@ -3029,9 +3029,9 @@ impl ansi::Handler for TerminalModel {
             .send_terminal_event(Event::FinishUpdate(data));
     }
 
-    fn remote_warpification_is_unavailable(&mut self, data: WarpificationUnavailableReason) {
+    fn remote_zaplexification_is_unavailable(&mut self, data: ZaplexificationUnavailableReason) {
         self.event_proxy
-            .send_terminal_event(Event::RemoteWarpificationIsUnavailable(data));
+            .send_terminal_event(Event::RemoteZaplexificationIsUnavailable(data));
     }
 
     fn notify_ssh_tmux_is_installed(&mut self, tmux_installation: TmuxInstallationState) {

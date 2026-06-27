@@ -23,7 +23,7 @@ use super::terminal_manager::OpenSessionParams;
 /// — the daemon owns the PTY and the replay buffer; the client is just an
 /// attached view.
 ///
-/// The daemon is responsible for bootstrapping the shell (Warpify init) when it
+/// The daemon is responsible for bootstrapping the shell (Zaplexify init) when it
 /// spawns the PTY, so — unlike the websocket path — this event loop never writes
 /// a bootstrap script itself. Keeping bootstrap server-side is what makes a
 /// later reattach clean: it must happen exactly once, not on every client

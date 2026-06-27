@@ -1,7 +1,7 @@
 //! Inline block view that asks the user whether they want to install
 //! Zap's SSH extension on the remote host the shell just connected to,
 //! or continue without installing (falling back to the existing
-//! ControlMaster warpification path).
+//! ControlMaster zaplexification path).
 //!
 //! Designed from frame 6050:2448 of the Figma file
 //! [Remote session initialization](https://www.figma.com/design/r0BO9cTZCK6pDE6qerg2K0/Remote-session-initialization).
@@ -37,7 +37,7 @@ use crate::{
     send_telemetry_from_ctx,
     server::telemetry::TelemetryEvent,
     terminal::model::session::SessionId,
-    terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings},
+    terminal::zaplexify::settings::{SshExtensionInstallMode, ZaplexifySettings},
     ui_components::blended_colors,
     Appearance,
 };
@@ -170,11 +170,11 @@ impl SshRemoteServerChoiceView {
             .with_child(Container::new(checkbox_label).with_margin_left(4.).finish())
             .finish();
 
-        // Right: "Manage Warpify settings" link.
+        // Right: "Manage Zaplexify settings" link.
         let manage_settings_link = appearance
             .ui_builder()
             .link(
-                crate::t!("ssh-remote-choice-manage-warpify-settings"),
+                crate::t!("ssh-remote-choice-manage-zaplexify-settings"),
                 None,
                 Some(Box::new(|ctx| {
                     ctx.dispatch_typed_action(SshRemoteServerChoiceViewAction::ZapifySettings);
@@ -263,7 +263,7 @@ impl TypedActionView for SshRemoteServerChoiceView {
             SshRemoteServerChoiceViewAction::Install => {
                 if self.do_not_ask_again {
                     let mode = SshExtensionInstallMode::AlwaysInstall;
-                    WarpifySettings::handle(ctx).update(ctx, |settings, ctx| {
+                    ZaplexifySettings::handle(ctx).update(ctx, |settings, ctx| {
                         if let Err(e) = settings.ssh_extension_install_mode.set_value(mode, ctx) {
                             log::error!("Failed to persist ssh_extension_install_mode: {e}");
                         }
@@ -280,7 +280,7 @@ impl TypedActionView for SshRemoteServerChoiceView {
             SshRemoteServerChoiceViewAction::Skip => {
                 if self.do_not_ask_again {
                     let mode = SshExtensionInstallMode::NeverInstall;
-                    WarpifySettings::handle(ctx).update(ctx, |settings, ctx| {
+                    ZaplexifySettings::handle(ctx).update(ctx, |settings, ctx| {
                         if let Err(e) = settings.ssh_extension_install_mode.set_value(mode, ctx) {
                             log::error!("Failed to persist ssh_extension_install_mode: {e}");
                         }

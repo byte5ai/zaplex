@@ -1,5 +1,5 @@
 //! Banner shown when the remote-server binary check, installation, or connection fails on the remote host.
-//! We fall back to the existing Warpification behavior and display this banner so the user knows why advanced features are unavailable.
+//! We fall back to the existing Zaplexification behavior and display this banner so the user knows why advanced features are unavailable.
 
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::AnsiColorIdentifier;
@@ -16,7 +16,7 @@ use crate::{terminal::model::session::SessionId, ui_components::icons::Icon, App
 
 const BANNER_BODY: &str =
     "While advanced features like file browsing and code review are currently \
-    disabled, the rest of your Warpified experience is fully available.";
+    disabled, the rest of your Zaplexified experience is fully available.";
 
 #[derive(Clone, Debug)]
 pub enum SshRemoteServerFailedBannerAction {

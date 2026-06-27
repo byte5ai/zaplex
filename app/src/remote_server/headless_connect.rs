@@ -1,7 +1,7 @@
 //! Headless SSH ControlMaster setup for daemon-hosted sessions (Stage 2, Option B).
 //!
 //! A resilient SSH host (`session_resilience.is_enabled()`) opens directly as a
-//! daemon-hosted session — there is no interactive `ssh` PTY whose warpify
+//! daemon-hosted session — there is no interactive `ssh` PTY whose zaplexify
 //! bootstrap would establish the ControlMaster. So we establish it ourselves
 //! (`ssh -f -N -o ControlMaster=auto -o ControlPath=<socket> …`) and hand the
 //! socket to [`SshTransport`](super::ssh_transport::SshTransport) +

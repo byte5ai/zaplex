@@ -37,50 +37,50 @@ fn get_script(asset_source: AssetSource, ctx: &AppContext) -> String {
 #[cfg_attr(windows, ignore = "TODO(CORE-3626)")]
 #[test]
 /// See [assert_script_is_short_enough_mac] for more information.
-fn test_mac_warpification_script_size() {
+fn test_mac_zaplexification_script_size() {
     App::test(Assets, |mut app| async move {
         initialize_app(&mut app);
 
         app.read(|ctx| {
             assert_script_is_short_enough_mac(
-                &begin_warpify_ssh_session_command(ctx),
+                &begin_zaplexify_ssh_session_command(ctx),
                 "unknown_init_subshell.sh",
                 false,
             );
 
             assert_script_is_short_enough_mac(
                 &get_script(
-                    bundled_asset!("ssh/bash_zsh/install_tmux_and_warpify_brew.sh"),
+                    bundled_asset!("ssh/bash_zsh/install_tmux_and_zaplexify_brew.sh"),
                     ctx,
                 ),
-                "install_tmux_and_warpify_brew.sh",
+                "install_tmux_and_zaplexify_brew.sh",
                 false,
             );
             assert_script_is_short_enough_mac(
                 &get_script(
-                    bundled_asset!("ssh/fish/install_tmux_and_warpify_brew.sh"),
+                    bundled_asset!("ssh/fish/install_tmux_and_zaplexify_brew.sh"),
                     ctx,
                 ),
-                "fish/install_tmux_and_warpify_brew.sh",
+                "fish/install_tmux_and_zaplexify_brew.sh",
                 false,
             );
 
             assert_script_is_short_enough_mac(
-                &warpify_ssh_session_command("Darwin", ShellType::Zsh, ctx)
+                &zaplexify_ssh_session_command("Darwin", ShellType::Zsh, ctx)
                     .expect("Should get Darwin zsh script"),
-                "zsh warpify",
+                "zsh zaplexify",
                 true,
             );
             assert_script_is_short_enough_mac(
-                &warpify_ssh_session_command("Darwin", ShellType::Bash, ctx)
+                &zaplexify_ssh_session_command("Darwin", ShellType::Bash, ctx)
                     .expect("Should get Darwin bash script"),
-                "bash warpify",
+                "bash zaplexify",
                 true,
             );
             assert_script_is_short_enough_mac(
-                &warpify_ssh_session_command("Darwin", ShellType::Fish, ctx)
+                &zaplexify_ssh_session_command("Darwin", ShellType::Fish, ctx)
                     .expect("Should get Darwin fish script"),
-                "fish warpify",
+                "fish zaplexify",
                 true,
             )
         });

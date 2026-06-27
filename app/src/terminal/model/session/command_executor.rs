@@ -198,7 +198,7 @@ fn new_command_executor_for_local_tty_session(
 
     if FeatureFlag::SSHTmuxWrapper.is_enabled()
         && session_info.tmux_control_mode
-        // We don't allow nested tmux warpification, so if our parent session is already warified using
+        // We don't allow nested tmux zaplexification, so if our parent session is already warified using
         // tmux then we shouldn't.
         && !parent_session_info.is_some_and(|s| s.tmux_control_mode)
     {
@@ -313,7 +313,7 @@ fn new_command_executor_for_local_tty_session(
                 }
             }
         }
-        BootstrapSessionType::WarpifiedRemote
+        BootstrapSessionType::ZaplexifiedRemote
             if is_legacy_ssh_session
                 && !FeatureFlag::InBandGeneratorsForSSH.is_enabled()
                 && !force_use_in_band_generators =>

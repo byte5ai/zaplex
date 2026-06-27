@@ -3,7 +3,7 @@ use crate::auth::AuthState;
 use crate::auth::AuthStateProvider;
 use crate::terminal::model::terminal_model::ExitReason;
 use crate::terminal::shell::ShellName;
-use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::zaplexify::settings::ZaplexifySettings;
 use crate::terminal::TerminalManager as _;
 use anyhow::Context as _;
 use async_broadcast::InactiveReceiver;
@@ -615,10 +615,10 @@ impl TerminalManager {
 
         // The TMUX SSH wrapper supercedes the original ControlMaster wrapper.
         let enable_ssh_wrapper = if FeatureFlag::SSHTmuxWrapper.is_enabled() {
-            *WarpifySettings::as_ref(ctx)
-                .enable_ssh_warpification
+            *ZaplexifySettings::as_ref(ctx)
+                .enable_ssh_zaplexification
                 .value()
-                && !*WarpifySettings::as_ref(ctx).use_ssh_tmux_wrapper.value()
+                && !*ZaplexifySettings::as_ref(ctx).use_ssh_tmux_wrapper.value()
         } else {
             *SshSettings::as_ref(ctx).enable_legacy_ssh_wrapper.value()
         };

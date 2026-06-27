@@ -24,26 +24,26 @@ use warpui::{
 };
 
 use super::render::{HORIZONTAL_TEXT_MARGIN, SSH_DOCS_URL, SUBSHELL_DOCS_URL};
-use super::settings::WarpifySettings;
-use super::{render, subshell_bootstrap_success_block_bytes, WarpificationSource};
+use super::settings::ZaplexifySettings;
+use super::{render, subshell_bootstrap_success_block_bytes, ZaplexificationSource};
 
 const VERTICAL_TEXT_MARGIN: f32 = 16.;
 
 #[derive(Debug, Clone)]
-pub enum WarpifySuccessBlockEvent {
+pub enum ZaplexifySuccessBlockEvent {
     ZapifySettings,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub enum WarpifySuccessBlockAction {
-    ClearAutoWarpifySnippet,
+pub enum ZaplexifySuccessBlockAction {
+    ClearAutoZaplexifySnippet,
     ZapifySettings,
     OpenUrl(String),
 }
 
-struct AutoWarpifySnippet {
+struct AutoZaplexifySnippet {
     /// On subshell initialization, this will contain the output grid to display,
-    /// containing info like how to auto-warpify the subshell.
+    /// containing info like how to auto-zaplexify the subshell.
     output_grid: Cow<'static, str>,
     /// The output grid needs to be selectable to allow users to copy the command to their clipboard.
     selection_handle: SelectionHandle,
@@ -55,24 +55,24 @@ struct AutoWarpifySnippet {
     can_write_to_rc: bool,
 }
 
-pub struct WarpifySuccessBlock {
-    source: WarpificationSource,
+pub struct ZaplexifySuccessBlock {
+    source: ZaplexificationSource,
     spawning_command: String,
     learn_more_link_mouse_states: MouseStateHandle,
-    auto_warpify_snippet: Option<AutoWarpifySnippet>,
+    auto_zaplexify_snippet: Option<AutoZaplexifySnippet>,
 }
 
-impl WarpifySuccessBlock {
+impl ZaplexifySuccessBlock {
     #[allow(clippy::new_without_default)]
     pub fn new(
-        source: WarpificationSource,
+        source: ZaplexificationSource,
         spawning_command: String,
         subshell_info: Option<SubshellInitializationInfo>,
         shell: Shell,
         disable_tmux: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&WarpifySettings::handle(ctx), move |_, _, _, ctx| {
+        ctx.subscribe_to_model(&ZaplexifySettings::handle(ctx), move |_, _, _, ctx| {
             ctx.notify();
         });
 
@@ -80,17 +80,17 @@ impl WarpifySuccessBlock {
         // getting the OS to write to the correct RC file.
         let remote_os = TargetOS::Linux;
 
-        let is_auto_warpify_configured = subshell_info
+        let is_auto_zaplexify_configured = subshell_info
             .as_ref()
             .map(|info| info.was_triggered_by_rc_file_snippet)
             .unwrap_or_default();
 
-        let auto_warpify_snippet = if is_auto_warpify_configured {
+        let auto_zaplexify_snippet = if is_auto_zaplexify_configured {
             None
         } else {
             subshell_info.and_then(|subshell_info| {
-                // If warpification wasn't triggered automatically, show a snippet about
-                // how to automatically warpify.
+                // If zaplexification wasn't triggered automatically, show a snippet about
+                // how to automatically zaplexify.
                 (!subshell_info.was_triggered_by_rc_file_snippet).then(|| {
                     let (command, is_executable) = subshell_bootstrap_success_block_bytes(
                         &subshell_info,
@@ -113,10 +113,10 @@ impl WarpifySuccessBlock {
                 })
             })
         };
-        let auto_warpify_snippet = auto_warpify_snippet.map(|(output_grid, can_write_to_rc)| {
-            AutoWarpifySnippet {
+        let auto_zaplexify_snippet = auto_zaplexify_snippet.map(|(output_grid, can_write_to_rc)| {
+            AutoZaplexifySnippet {
                 description: (if !output_grid.is_empty() {
-                    "Run the following to automatically Warpify in the future:"
+                    "Run the following to automatically Zaplexify in the future:"
                 } else {
                     "In remote subshells, Zap runs commands in the background to power completions, syntax highlighting, and other features."
                 }).into(),
@@ -133,12 +133,12 @@ impl WarpifySuccessBlock {
             source,
             learn_more_link_mouse_states: Default::default(),
             spawning_command,
-            auto_warpify_snippet,
+            auto_zaplexify_snippet,
         }
     }
 
     pub fn selected_text(&self) -> Option<String> {
-        self.auto_warpify_snippet
+        self.auto_zaplexify_snippet
             .as_ref()
             .and_then(|snippet| snippet.selected_text.read().clone())
     }
@@ -156,7 +156,7 @@ impl WarpifySuccessBlock {
 
     pub fn render_title_ui(&self, theme: &WarpTheme, appearance: &Appearance) -> Box<dyn Element> {
         let header_contents = render::build_header_row(
-            "Session Warpified",
+            "Session Zaplexified",
             Icon::new(UiIcon::Zap.into(), theme.active_ui_detail()),
             theme,
             appearance,
@@ -185,8 +185,8 @@ impl WarpifySuccessBlock {
 
     fn render_learn_more_link(&self, appearance: &Appearance) -> Box<dyn Element> {
         let url = match self.source {
-            WarpificationSource::Ssh => SSH_DOCS_URL,
-            WarpificationSource::Subshell => SUBSHELL_DOCS_URL,
+            ZaplexificationSource::Ssh => SSH_DOCS_URL,
+            ZaplexificationSource::Subshell => SUBSHELL_DOCS_URL,
         };
 
         let font_family_id = appearance.monospace_font_family();
@@ -198,7 +198,7 @@ impl WarpifySuccessBlock {
                 None,
                 Some(Box::new({
                     move |ctx| {
-                        ctx.dispatch_typed_action(WarpifySuccessBlockAction::OpenUrl(
+                        ctx.dispatch_typed_action(ZaplexifySuccessBlockAction::OpenUrl(
                             url.to_owned(),
                         ));
                     }
@@ -215,13 +215,13 @@ impl WarpifySuccessBlock {
             .finish()
     }
 
-    /// Fired when a block ends and we are not in a Warpified session.
-    pub fn on_warpified_session_complete(&mut self, ctx: &mut ViewContext<Self>) {
-        self.clear_auto_warpify_snippet(ctx);
+    /// Fired when a block ends and we are not in a Zaplexified session.
+    pub fn on_zaplexified_session_complete(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_auto_zaplexify_snippet(ctx);
     }
 
-    pub fn clear_auto_warpify_snippet(&mut self, ctx: &mut ViewContext<Self>) {
-        self.auto_warpify_snippet = None;
+    pub fn clear_auto_zaplexify_snippet(&mut self, ctx: &mut ViewContext<Self>) {
+        self.auto_zaplexify_snippet = None;
         ctx.notify();
     }
 
@@ -232,16 +232,16 @@ impl WarpifySuccessBlock {
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         let theme = appearance.theme();
-        let auto_warpify_snippet = self.auto_warpify_snippet.as_ref()?;
+        let auto_zaplexify_snippet = self.auto_zaplexify_snippet.as_ref()?;
 
-        if auto_warpify_snippet.output_grid.is_empty() {
+        if auto_zaplexify_snippet.output_grid.is_empty() {
             return None;
         }
 
-        let shell_language = ProgrammingLanguage::Shell(auto_warpify_snippet.shell_type);
+        let shell_language = ProgrammingLanguage::Shell(auto_zaplexify_snippet.shell_type);
         let runnable_command = render_runnable_code_snippet(
-            &auto_warpify_snippet.output_grid,
-            if auto_warpify_snippet.can_write_to_rc {
+            &auto_zaplexify_snippet.output_grid,
+            if auto_zaplexify_snippet.can_write_to_rc {
                 Some(&shell_language)
             } else {
                 None
@@ -252,7 +252,7 @@ impl WarpifySuccessBlock {
                         code_snippet.to_string(),
                     ));
 
-                    ctx.dispatch_typed_action(WarpifySuccessBlockAction::ClearAutoWarpifySnippet);
+                    ctx.dispatch_typed_action(ZaplexifySuccessBlockAction::ClearAutoZaplexifySnippet);
                 }
             })),
             Some(Box::new({
@@ -260,19 +260,19 @@ impl WarpifySuccessBlock {
                     ctx.dispatch_typed_action(WorkspaceAction::CopyTextToClipboard(code_snippet));
                 }
             })),
-            Some(auto_warpify_snippet.code_snippet_handles.clone()),
+            Some(auto_zaplexify_snippet.code_snippet_handles.clone()),
             app,
         );
 
         let semantic_selection = SemanticSelection::as_ref(app);
-        let selected_text = auto_warpify_snippet.selected_text.clone();
+        let selected_text = auto_zaplexify_snippet.selected_text.clone();
 
-        // TODO(Simon): Implement full selection and copying functionality for the WarpifySuccessBlock.
+        // TODO(Simon): Implement full selection and copying functionality for the ZaplexifySuccessBlock.
         // Look to the `EnvVarCollectionBlock` for the existing implementation paradigm. We don't
         // yet have a robust way of ensuring that every aspect of text selection is implemented
         // properly, so be extra careful not to miss any details!
         let output_grid = SelectableArea::new(
-            auto_warpify_snippet.selection_handle.clone(),
+            auto_zaplexify_snippet.selection_handle.clone(),
             move |selection_args, _, _| {
                 *selected_text.write() = selection_args.selection;
             },
@@ -286,7 +286,7 @@ impl WarpifySuccessBlock {
             .with_child(
                 Container::new(
                     Text::new(
-                        auto_warpify_snippet.description.clone(),
+                        auto_zaplexify_snippet.description.clone(),
                         appearance.monospace_font_family(),
                         appearance.monospace_font_size(),
                     )
@@ -308,15 +308,15 @@ impl WarpifySuccessBlock {
     }
 }
 
-impl Entity for WarpifySuccessBlock {
-    type Event = WarpifySuccessBlockEvent;
+impl Entity for ZaplexifySuccessBlock {
+    type Event = ZaplexifySuccessBlockEvent;
 }
 
-pub const WARPIFY_SUCCESS_BLOCK_VISIBLE_KEY: &str = "WarpifySuccessBlockVisible";
+pub const ZAPLEXIFY_SUCCESS_BLOCK_VISIBLE_KEY: &str = "ZaplexifySuccessBlockVisible";
 
-impl View for WarpifySuccessBlock {
+impl View for ZaplexifySuccessBlock {
     fn ui_name() -> &'static str {
-        "WarpifySuccessBlock"
+        "ZaplexifySuccessBlock"
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
@@ -341,19 +341,19 @@ impl View for WarpifySuccessBlock {
     }
 }
 
-impl TypedActionView for WarpifySuccessBlock {
-    type Action = WarpifySuccessBlockAction;
+impl TypedActionView for ZaplexifySuccessBlock {
+    type Action = ZaplexifySuccessBlockAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            WarpifySuccessBlockAction::ZapifySettings => {
-                ctx.emit(WarpifySuccessBlockEvent::ZapifySettings);
+            ZaplexifySuccessBlockAction::ZapifySettings => {
+                ctx.emit(ZaplexifySuccessBlockEvent::ZapifySettings);
             }
-            WarpifySuccessBlockAction::OpenUrl(url) => {
+            ZaplexifySuccessBlockAction::OpenUrl(url) => {
                 ctx.open_url(url);
             }
-            WarpifySuccessBlockAction::ClearAutoWarpifySnippet => {
-                self.clear_auto_warpify_snippet(ctx);
+            ZaplexifySuccessBlockAction::ClearAutoZaplexifySnippet => {
+                self.clear_auto_zaplexify_snippet(ctx);
             }
         }
     }

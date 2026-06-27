@@ -33,7 +33,7 @@ When a Warp tab is attached to a Unix-like shell on Windows — WSL, or MSYS2 / 
 
 4. Shell-specific escaping (quoting spaces, special characters) applies on top of the transformed path using the active session's shell family — identical to the non-WSL/non-MSYS2 behavior today.
 
-5. When the active session is neither WSL nor MSYS2/Git Bash (local PowerShell, cmd, SSH into a remote host, Warpified remote, etc.), dropped paths are inserted exactly as they are today. No transformation happens.
+5. When the active session is neither WSL nor MSYS2/Git Bash (local PowerShell, cmd, SSH into a remote host, Zaplexified remote, etc.), dropped paths are inserted exactly as they are today. No transformation happens.
 
 6. Image auto-attachment (dragging an image file into Agent Mode / an empty buffer, which attaches it as AI image context) continues to use the original Windows-native path for filesystem reads, regardless of WSL / MSYS2 state. Transformed paths would not be readable from the Windows host.
 
@@ -47,7 +47,7 @@ When a Warp tab is attached to a Unix-like shell on Windows — WSL, or MSYS2 / 
 
 10. Non-regressions:
     - Dropping into any non-terminal editor (notebooks, settings, themes, etc.) is unchanged — no path transformation is applied.
-    - Dropping into a non-WSL, non-MSYS2 terminal session (PowerShell, cmd, SSH, remote Warpified) is unchanged.
+    - Dropping into a non-WSL, non-MSYS2 terminal session (PowerShell, cmd, SSH, remote Zaplexified) is unchanged.
     - The terminal-grid long-running-command code paths for both WSL and MSYS2 are unchanged.
     - Dropping image-only content into the input in Agent Mode still attaches the images; nothing about attachment behavior changes.
     - Pasting paths via clipboard is out of scope for this ticket and remains unchanged.

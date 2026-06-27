@@ -8,7 +8,7 @@ body:
         Thanks for helping improve **Zap** — a community fork of Zap focused on BYOP (bring-your-own-provider) AI, local credentials, and a privacy-first terminal.
 
         **Out of scope (please do not file here):**
-        - Zap cloud account / billing / Zap AI quota / Warpify SSO / Zap Drive cloud sync — these belong to upstream Zap, not Zap.
+        - Zap cloud account / billing / Zap AI quota / Zaplexify SSO / Zap Drive cloud sync — these belong to upstream Zap, not Zap.
         - Issues only reproducible with Zap's first-party cloud agent (Zap ships it disabled).
   - type: checkboxes
     attributes:
@@ -16,7 +16,7 @@ body:
       options:
         - label: "I have [searched Zap issues](https://github.com/zerx-lab/warp/issues?q=is%3Aissue+label%3Abug) and there are no duplicates."
           required: true
-        - label: "This bug is in Zap itself — not in upstream Zap's cloud account, billing, Warpify SSO, or cloud-only features."
+        - label: "This bug is in Zap itself — not in upstream Zap's cloud account, billing, Zaplexify SSO, or cloud-only features."
           required: true
         - label: "I have included relevant logs (`RUST_LOG=info` output, panic traces, etc.). Optional, but greatly speeds up triage."
           required: false

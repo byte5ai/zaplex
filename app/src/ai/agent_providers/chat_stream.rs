@@ -161,7 +161,7 @@ fn render_lrc_request_context(params: &RequestParams) -> Option<String> {
 /// Without explicitly telling the model this, the LLM will infer from the local OS in the system prompt that "the target is on the remote,
 /// I have to ssh over first," and so output a doubly-nested command like `ssh xx@xx uname -a`.
 ///
-/// Note: warpified SSH (`SessionType::WarpifiedRemote`) is not handled here — on that path
+/// Note: zaplexified SSH (`SessionType::ZaplexifiedRemote`) is not handled here — on that path
 /// the remote shell hook has re-bootstrapped, host_info / shell are the true remote values, and the prompt is correct as-is.
 fn render_ssh_session_block(
     session_context: &crate::ai::blocklist::SessionContext,

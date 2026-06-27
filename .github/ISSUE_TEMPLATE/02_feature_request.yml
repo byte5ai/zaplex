@@ -13,7 +13,7 @@ body:
         - **Preserved Zap UX** — Blocks, Workflows, Keymaps, themes; continuously merged from upstream.
         - **Localized UI** — English + Simplified Chinese, community-extensible.
 
-        **Out of scope:** features that require Zap's cloud account, Zap AI gateway, Zap Drive cloud sync, Warpify SSO, billing, team/enterprise admin, or Zap's first-party telemetry. Those belong to upstream Zap.
+        **Out of scope:** features that require Zap's cloud account, Zap AI gateway, Zap Drive cloud sync, Zaplexify SSO, billing, team/enterprise admin, or Zap's first-party telemetry. Those belong to upstream Zap.
   - type: checkboxes
     attributes:
       label: "Pre-submit Checks"
@@ -22,7 +22,7 @@ body:
           required: true
         - label: "I have read the [Zap README](https://github.com/zerx-lab/warp#readme) and this feature is not already supported."
           required: true
-        - label: "This request fits Zap's BYOP / local-first / privacy-first direction (it does NOT require Zap cloud account, Zap AI gateway, Zap Drive cloud sync, Warpify SSO, billing, or telemetry)."
+        - label: "This request fits Zap's BYOP / local-first / privacy-first direction (it does NOT require Zap cloud account, Zap AI gateway, Zap Drive cloud sync, Zaplexify SSO, billing, or telemetry)."
           required: true
   - type: textarea
     id: "describe-solution"

@@ -10,57 +10,57 @@ use warp_util::path::ShellFamily;
 use warpui::{AppContext, ModelContext};
 use warpui::{Entity, SingletonEntity};
 
-use crate::terminal::ssh::util::{parse_interactive_ssh_command, SshWarpifyCommand};
+use crate::terminal::ssh::util::{parse_interactive_ssh_command, SshZaplexifyCommand};
 
 // Cannot directly use Vec<Regex> here b/c Regex doesn't impl Eq, Serialize, and Deserialize.
-maybe_define_setting!(AddedSubshellCommands, group: WarpifySettings, {
+maybe_define_setting!(AddedSubshellCommands, group: ZaplexifySettings, {
     type: Vec<String>,
     default: Vec::new(),
     supported_platforms: SupportedPlatforms::ALL,
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
-    toml_path: "warpify.subshells.added_subshell_commands",
+    toml_path: "zaplexify.subshells.added_subshell_commands",
     description: "Additional regex patterns for commands that should be recognized as subshells.",
 });
 
-maybe_define_setting!(SubshellCommandsDenylist, group: WarpifySettings, {
+maybe_define_setting!(SubshellCommandsDenylist, group: ZaplexifySettings, {
     type: Vec<String>,
     default: Vec::new(),
     supported_platforms: SupportedPlatforms::ALL,
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
-    toml_path: "warpify.subshells.subshell_commands_denylist",
-    description: "Commands that should not trigger the subshell warpification prompt.",
+    toml_path: "zaplexify.subshells.subshell_commands_denylist",
+    description: "Commands that should not trigger the subshell zaplexification prompt.",
 });
 
-maybe_define_setting!(SshHostsDenylist, group: WarpifySettings, {
+maybe_define_setting!(SshHostsDenylist, group: ZaplexifySettings, {
     type: Vec<String>,
     default: Vec::new(),
     supported_platforms: SupportedPlatforms::ALL,
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
-    toml_path: "warpify.ssh.ssh_hosts_denylist",
-    description: "SSH hosts that should not trigger the warpification prompt.",
+    toml_path: "zaplexify.ssh.ssh_hosts_denylist",
+    description: "SSH hosts that should not trigger the zaplexification prompt.",
 });
 
-maybe_define_setting!(EnableSshWarpification, group: WarpifySettings, {
+maybe_define_setting!(EnableSshZaplexification, group: ZaplexifySettings, {
     type: bool,
     default: true,
     supported_platforms: SupportedPlatforms::ALL,
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
-    toml_path: "warpify.ssh.enable_ssh_warpification",
+    toml_path: "zaplexify.ssh.enable_ssh_zaplexification",
     description: "Whether to enable Zap features in SSH sessions.",
 });
 
-maybe_define_setting!(UseSshTmuxWrapper, group: WarpifySettings, {
+maybe_define_setting!(UseSshTmuxWrapper, group: ZaplexifySettings, {
     type: bool,
     default: false,
     supported_platforms: SupportedPlatforms::OR(SupportedPlatforms::MAC.into(), SupportedPlatforms::LINUX.into()),
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
-    toml_path: "warpify.ssh.use_ssh_tmux_wrapper",
-    description: "Whether to use a tmux-based wrapper for SSH warpification.",
+    toml_path: "zaplexify.ssh.use_ssh_tmux_wrapper",
+    description: "Whether to use a tmux-based wrapper for SSH zaplexification.",
 });
 
 /// Controls how Zap handles the SSH extension (remote server binary) when connecting
@@ -88,17 +88,17 @@ pub enum SshExtensionInstallMode {
     AlwaysAsk,
     /// Automatically install and connect without prompting.
     AlwaysInstall,
-    /// Never install; fall back to legacy warpification.
+    /// Never install; fall back to legacy zaplexification.
     NeverInstall,
 }
 
-maybe_define_setting!(SshExtensionInstallModeSetting, group: WarpifySettings, {
+maybe_define_setting!(SshExtensionInstallModeSetting, group: ZaplexifySettings, {
     type: SshExtensionInstallMode,
     default: SshExtensionInstallMode::default(),
     supported_platforms: SupportedPlatforms::ALL,
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
-    toml_path: "warpify.ssh.ssh_extension_install_mode",
+    toml_path: "zaplexify.ssh.ssh_extension_install_mode",
     description: "Controls SSH extension installation behavior.",
 });
 
@@ -123,7 +123,7 @@ impl SshExtensionInstallMode {
 /// Normally we use the define_settings_group! macro for singleton models of settings like this.
 /// However, this model needs to do some extra processing on the added_subshell_commands and store
 /// an enriched representation in parsed_added_subshell_commands.
-pub struct WarpifySettings {
+pub struct ZaplexifySettings {
     /// A list of regexes that users can add to define new subshell-compatible commands. This
     /// represents the raw, serialized value. Therefore, it is Vec<String>.
     pub added_subshell_commands: AddedSubshellCommands,
@@ -133,9 +133,9 @@ pub struct WarpifySettings {
     /// needs to be kept up-to-date as added_subshell_commands changes. See the Self::register
     /// method for how this is done.
     pub parsed_added_subshell_commands: Vec<Result<Regex, regex::Error>>,
-    /// A list of commands that we shouldn't attempt to warpify. These can be added either b/c the
+    /// A list of commands that we shouldn't attempt to zaplexify. These can be added either b/c the
     /// "don't ask again" button was clicked in the trigger banner, or it was added explicitly on
-    /// the Warpify settings page. This represents the raw, serialized value.
+    /// the Zaplexify settings page. This represents the raw, serialized value.
     pub subshell_command_denylist: SubshellCommandsDenylist,
     /// This is subshell_command_denylist compiled to actual executable Regex. This is a Result as we
     /// cannot guarantee the values are valid regex. Even if we prevent them in the UI from entering
@@ -144,11 +144,11 @@ pub struct WarpifySettings {
     /// method for how this is done.
     pub parsed_subshell_command_denylist: Vec<Result<Regex, regex::Error>>,
 
-    /// A list of hosts that we shouldn't attempt to warpify. This supports regex.
+    /// A list of hosts that we shouldn't attempt to zaplexify. This supports regex.
     /// These can be added either b/c the "don't ask again" button was clicked in the trigger banner,
-    /// or it was added explicitly on the Warpify settings page.
+    /// or it was added explicitly on the Zaplexify settings page.
     /// While this could live in the `SshSettings` group, the custom processing shared with the other
-    /// subshell logic better justifies it living in the `WarpifySettings` group.
+    /// subshell logic better justifies it living in the `ZaplexifySettings` group.
     pub ssh_hosts_denylist: SshHostsDenylist,
     /// This is ssh_hosts_denylist compiled to actual executable Regex. This is a Result as we
     /// cannot guarantee the values are valid regex. Even if we prevent them in the UI from entering
@@ -157,10 +157,10 @@ pub struct WarpifySettings {
     /// method for how this is done.
     pub parsed_ssh_hosts_denylist: Vec<Result<Regex, regex::Error>>,
 
-    /// This setting controls whether we should ever warpify ssh sessions.
-    pub enable_ssh_warpification: EnableSshWarpification,
+    /// This setting controls whether we should ever zaplexify ssh sessions.
+    pub enable_ssh_zaplexification: EnableSshZaplexification,
 
-    /// This setting controls whether we should prompt the user to warpify an ssh session using the
+    /// This setting controls whether we should prompt the user to zaplexify an ssh session using the
     /// tmux wrapper instead of the default legacy wrapper.
     pub use_ssh_tmux_wrapper: UseSshTmuxWrapper,
 
@@ -214,7 +214,7 @@ lazy_static! {
 /// define_settings_group! macro, which is the basic template for user-defaults-backed settings.
 /// I have separated this stuff from the other impl block, which contains the subshell-specific
 /// logic, because this is basically boilerplate.
-impl WarpifySettings {
+impl ZaplexifySettings {
     fn new_from_storage(ctx: &mut ModelContext<Self>) -> Self {
         let added_subshell_commands = AddedSubshellCommands::new_from_storage(ctx);
         let subshell_command_denylist = SubshellCommandsDenylist::new_from_storage(ctx);
@@ -230,7 +230,7 @@ impl WarpifySettings {
             subshell_command_denylist,
             parsed_ssh_hosts_denylist: Self::parse_ssh_hosts_denylist(&ssh_hosts_denylist),
             ssh_hosts_denylist,
-            enable_ssh_warpification: EnableSshWarpification::new_from_storage(ctx),
+            enable_ssh_zaplexification: EnableSshZaplexification::new_from_storage(ctx),
             use_ssh_tmux_wrapper: UseSshTmuxWrapper::new_from_storage(ctx),
             ssh_extension_install_mode: SshExtensionInstallModeSetting::new_from_storage(ctx),
         }
@@ -253,7 +253,7 @@ impl WarpifySettings {
             subshell_command_denylist,
             parsed_ssh_hosts_denylist: Self::parse_ssh_hosts_denylist(&ssh_hosts_denylist),
             ssh_hosts_denylist,
-            enable_ssh_warpification: EnableSshWarpification::new(None),
+            enable_ssh_zaplexification: EnableSshZaplexification::new(None),
             use_ssh_tmux_wrapper: UseSshTmuxWrapper::new(None),
             ssh_extension_install_mode: SshExtensionInstallModeSetting::new(None),
         }
@@ -266,26 +266,26 @@ impl WarpifySettings {
         let handle = ctx.add_singleton_model(Self::new_from_storage);
         handle.clone().update(ctx, |_, ctx| {
             ctx.subscribe_to_model(&handle, |me, event, _| match event {
-                WarpifySettingsChangedEvent::AddedSubshellCommands { .. } => {
+                ZaplexifySettingsChangedEvent::AddedSubshellCommands { .. } => {
                     me.parsed_added_subshell_commands =
                         Self::parse_added_subshell_commands(&me.added_subshell_commands)
                 }
-                WarpifySettingsChangedEvent::SubshellCommandsDenylist { .. } => {
+                ZaplexifySettingsChangedEvent::SubshellCommandsDenylist { .. } => {
                     me.parsed_subshell_command_denylist =
                         Self::parse_subshell_command_denylist(&me.subshell_command_denylist)
                 }
-                WarpifySettingsChangedEvent::SshHostsDenylist { .. } => {
+                ZaplexifySettingsChangedEvent::SshHostsDenylist { .. } => {
                     me.parsed_ssh_hosts_denylist =
                         Self::parse_ssh_hosts_denylist(&me.ssh_hosts_denylist)
                 }
-                WarpifySettingsChangedEvent::EnableSshWarpification { .. } => {}
-                WarpifySettingsChangedEvent::UseSshTmuxWrapper { .. } => {}
-                WarpifySettingsChangedEvent::SshExtensionInstallModeSetting { .. } => {}
+                ZaplexifySettingsChangedEvent::EnableSshZaplexification { .. } => {}
+                ZaplexifySettingsChangedEvent::UseSshTmuxWrapper { .. } => {}
+                ZaplexifySettingsChangedEvent::SshExtensionInstallModeSetting { .. } => {}
             })
         });
 
         register_settings_events!(
-            WarpifySettings,
+            ZaplexifySettings,
             added_subshell_commands,
             AddedSubshellCommands,
             handle.clone(),
@@ -293,7 +293,7 @@ impl WarpifySettings {
         );
 
         register_settings_events!(
-            WarpifySettings,
+            ZaplexifySettings,
             subshell_command_denylist,
             SubshellCommandsDenylist,
             handle.clone(),
@@ -301,15 +301,15 @@ impl WarpifySettings {
         );
 
         register_settings_events!(
-            WarpifySettings,
-            enable_ssh_warpification,
-            EnableSshWarpification,
+            ZaplexifySettings,
+            enable_ssh_zaplexification,
+            EnableSshZaplexification,
             handle.clone(),
             ctx
         );
 
         register_settings_events!(
-            WarpifySettings,
+            ZaplexifySettings,
             use_ssh_tmux_wrapper,
             UseSshTmuxWrapper,
             handle.clone(),
@@ -317,7 +317,7 @@ impl WarpifySettings {
         );
 
         register_settings_events!(
-            WarpifySettings,
+            ZaplexifySettings,
             ssh_extension_install_mode,
             SshExtensionInstallModeSetting,
             handle.clone(),
@@ -325,7 +325,7 @@ impl WarpifySettings {
         );
 
         register_settings_events!(
-            WarpifySettings,
+            ZaplexifySettings,
             ssh_hosts_denylist,
             SshHostsDenylist,
             handle,
@@ -335,9 +335,9 @@ impl WarpifySettings {
 }
 
 /// This is also something that would normally be generated by
-/// define_settings_group!(WarpifySettings). Since we didn't use that macro we define it manually
+/// define_settings_group!(ZaplexifySettings). Since we didn't use that macro we define it manually
 /// here. It's the event emitted by the setter methods when a setting value changes.
-pub enum WarpifySettingsChangedEvent {
+pub enum ZaplexifySettingsChangedEvent {
     AddedSubshellCommands {
         change_event_reason: ChangeEventReason,
     },
@@ -347,7 +347,7 @@ pub enum WarpifySettingsChangedEvent {
     SshHostsDenylist {
         change_event_reason: ChangeEventReason,
     },
-    EnableSshWarpification {
+    EnableSshZaplexification {
         change_event_reason: ChangeEventReason,
     },
     UseSshTmuxWrapper {
@@ -358,15 +358,15 @@ pub enum WarpifySettingsChangedEvent {
     },
 }
 
-impl Entity for WarpifySettings {
-    type Event = WarpifySettingsChangedEvent;
+impl Entity for ZaplexifySettings {
+    type Event = ZaplexifySettingsChangedEvent;
 }
 
-impl SingletonEntity for WarpifySettings {}
+impl SingletonEntity for ZaplexifySettings {}
 
 /// This is the other impl block for this model. This one contains the actual subshell-specific
 /// logic.
-impl WarpifySettings {
+impl ZaplexifySettings {
     fn is_built_in_subshell_match(command: &str) -> bool {
         for command_regex in SUBSHELL_COMMAND_REGEXES.iter() {
             if command_regex.is_match(command) {
@@ -392,7 +392,7 @@ impl WarpifySettings {
         }
 
         if !self.use_ssh_tmux_wrapper.value()
-            && SshWarpifyCommand::matches(command)
+            && SshZaplexifyCommand::matches(command)
                 .is_some_and(|command| command.is_ssh_like_command())
         {
             return true;
@@ -404,8 +404,8 @@ impl WarpifySettings {
             }
         }
 
-        // While in-band generators are our best option for warpifying ssh sessions from powershell, hard-code
-        // the warpify subshell banner to show up.
+        // While in-band generators are our best option for zaplexifying ssh sessions from powershell, hard-code
+        // the zaplexify subshell banner to show up.
         if matches!(shell_family, ShellFamily::PowerShell)
             && parse_interactive_ssh_command(command).is_some()
         {
@@ -485,7 +485,7 @@ impl WarpifySettings {
         new_added_commands_list.push(command_to_add.trim().to_owned());
 
         // The set_value method generated by the maybe_define_setting! macro will take
-        // care of emitting the WarpifySettingsChangedEvent::AddedSubshellCommands event to keep
+        // care of emitting the ZaplexifySettingsChangedEvent::AddedSubshellCommands event to keep
         // parsed_added_subshell_commands in sync.
         self.added_subshell_commands
             .set_value(new_added_commands_list, ctx)
@@ -494,7 +494,7 @@ impl WarpifySettings {
         ctx.notify();
     }
 
-    /// Check if the user has asked us to remember a command and avoid asking to warpify a subshell.
+    /// Check if the user has asked us to remember a command and avoid asking to zaplexify a subshell.
     pub fn is_denylisted_subshell_command(&self, command: &str) -> bool {
         let command = command.trim();
         self.parsed_subshell_command_denylist

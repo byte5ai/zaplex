@@ -18,7 +18,7 @@ use crate::{
         },
         settings::{SpacingMode, TerminalSettings},
         view::TerminalAction,
-        warpify::render::{render_subshell_flag, render_subshell_flag_pole},
+        zaplexify::render::{render_subshell_flag, render_subshell_flag_pole},
     },
 };
 use pathfinder_geometry::vector::vec2f;

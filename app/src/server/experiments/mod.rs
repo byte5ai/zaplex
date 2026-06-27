@@ -28,8 +28,8 @@ pub enum ServerExperiment {
     EnvVarsEarlyAccessExperiment,
     AgentModeAnalyticsExperiment,
     WindowsLaunchExperiment,
-    TmuxSshWarpificationControl,
-    TmuxSshWarpificationExperiment,
+    TmuxSshZaplexificationControl,
+    TmuxSshZaplexificationExperiment,
     SuggestedCodeDiffsControl,
     SuggestedCodeDiffsExperiment,
     PromptSuggestionsViaMaaControl,
@@ -73,8 +73,8 @@ impl ServerExperiment {
                 // TODO(alokedesai): Clean this up now that we no longer gate access to the Windows
                 // build on an allowlist.
             }
-            Self::TmuxSshWarpificationControl => FeatureFlag::SSHTmuxWrapper.set_enabled(false),
-            Self::TmuxSshWarpificationExperiment => {
+            Self::TmuxSshZaplexificationControl => FeatureFlag::SSHTmuxWrapper.set_enabled(false),
+            Self::TmuxSshZaplexificationExperiment => {
                 // Only enable the TMUX-based experience if not on windows. ConPTY doesn't support
                 // DCS, which we need in order to use tmux control mode.
                 if cfg!(not(windows)) {

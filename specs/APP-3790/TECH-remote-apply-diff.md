@@ -29,7 +29,7 @@ When an AI agent runs in an SSH session, the `ApplyFileDiffs` tool is disabled b
 
 **CodeDiffView save/delete/create**: `DiffSessionType` already exists with `Local` and `Remote(HostId)` variants. `set_candidate_diffs` routes to `register_file` (local) or `register_remote_file` (remote). `FileModel` has `FileBackend::Remote` that dispatches save/delete through `RemoteServerClient`. However, `RequestFileEditsExecutor` never sets `diff_session_type` — it defaults to `Local`.
 
-**Agent tool gating**: `get_supported_tools` excludes `ApplyFileDiffs`, `ReadFiles`, and `SearchCodebase` when `session_type` is `WarpifiedRemote`. There is no field on `SessionContext` to indicate whether a `RemoteServerClient` is available.
+**Agent tool gating**: `get_supported_tools` excludes `ApplyFileDiffs`, `ReadFiles`, and `SearchCodebase` when `session_type` is `ZaplexifiedRemote`. There is no field on `SessionContext` to indicate whether a `RemoteServerClient` is available.
 
 **Post-accept context**: After diffs are accepted, `execute` re-reads files from disk via `read_local_file_context` and sends updated content to the LLM. This would require a network round-trip for remote sessions.
 
@@ -146,7 +146,7 @@ Session type is modeled as two distinct enums to separate immutable bootstrap-ti
 ```rust
 pub enum BootstrapSessionType {
     Local,
-    WarpifiedRemote,
+    ZaplexifiedRemote,
 }
 ```
 
@@ -155,7 +155,7 @@ pub enum BootstrapSessionType {
 ```rust
 pub enum SessionType {
     Local,
-    WarpifiedRemote { host_id: Option<HostId> },
+    ZaplexifiedRemote { host_id: Option<HostId> },
 }
 ```
 
@@ -176,10 +176,10 @@ match session_context.session_type() {
             api::ToolType::SearchCodebase,
         ]);
     }
-    Some(SessionType::WarpifiedRemote { host_id: Some(_) }) => {
+    Some(SessionType::ZaplexifiedRemote { host_id: Some(_) }) => {
         supported_tools.push(api::ToolType::ApplyFileDiffs);
     }
-    Some(SessionType::WarpifiedRemote { host_id: None }) => {
+    Some(SessionType::ZaplexifiedRemote { host_id: None }) => {
         // Feature flag off or not yet connected — no remote tools.
     }
 }

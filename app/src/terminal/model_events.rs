@@ -17,7 +17,7 @@ use warpui::SingletonEntity;
 use warpui::{Entity, ModelContext, ModelHandle};
 
 use super::event::SshLoginStatus;
-use super::model::ansi::{FinishUpdateValue, WarpificationUnavailableReason};
+use super::model::ansi::{FinishUpdateValue, ZaplexificationUnavailableReason};
 use super::model::block::BlockId;
 use super::model::completions::ShellCompletion;
 use super::model::terminal_model::{ExitReason, TmuxControlModeContext, TmuxInstallationState};
@@ -197,7 +197,7 @@ impl ModelEventDispatcher {
                             // Clip large durations to u64::MAX
                             .min(u64::MAX as u128) as u64;
                         send_telemetry_from_ctx!(
-                            TelemetryEvent::SshTmuxWarpificationSuccess {
+                            TelemetryEvent::SshTmuxZaplexificationSuccess {
                                 duration_ms,
                                 tmux_installation: control_mode.tmux_installation,
                             },
@@ -249,8 +249,8 @@ impl ModelEventDispatcher {
             Event::DetectedEndOfSshLogin(check_type) => {
                 ModelEvent::DetectedEndOfSshLogin(check_type)
             }
-            Event::RemoteWarpificationIsUnavailable(reason) => {
-                ModelEvent::RemoteWarpificationIsUnavailable(reason)
+            Event::RemoteZaplexificationIsUnavailable(reason) => {
+                ModelEvent::RemoteZaplexificationIsUnavailable(reason)
             }
             Event::SshTmuxInstaller(tmux_installation) => {
                 ModelEvent::SshTmuxInstaller(tmux_installation)
@@ -419,9 +419,9 @@ pub enum ModelEvent {
     },
     /// Sent when a line of output from an interactive ssh session indicates login is complete.
     /// A line such as "Last login: Wed Oct 30" for example indicates login is complete. This is
-    /// useful for detecting when an ssh session becomes ready for warpification.
+    /// useful for detecting when an ssh session becomes ready for zaplexification.
     DetectedEndOfSshLogin(SshLoginStatus),
-    RemoteWarpificationIsUnavailable(WarpificationUnavailableReason),
+    RemoteZaplexificationIsUnavailable(ZaplexificationUnavailableReason),
     SshTmuxInstaller(TmuxInstallationState),
     TmuxInstallFailed {
         line: String,

@@ -6,8 +6,8 @@ use crate::ai::blocklist::inline_action::requested_script::{RequestedScriptStatu
 use crate::appearance::Appearance;
 use crate::terminal::model::ansi::SystemDetails;
 use crate::terminal::model::escape_sequences;
-use crate::terminal::warpify::render;
-use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::zaplexify::render;
+use crate::terminal::zaplexify::settings::ZaplexifySettings;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon as UiIcon;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
@@ -35,7 +35,7 @@ pub struct TmuxInstallMethod {
 
 #[derive(Debug, Clone)]
 pub enum SshInstallTmuxBlockEvent {
-    InstallTmuxAndWarpify(TmuxInstallMethod),
+    InstallTmuxAndZaplexify(TmuxInstallMethod),
     ToggleScriptVisibility,
     Cancel,
     Interrupt,
@@ -89,7 +89,7 @@ impl SshKeyEvent {
 pub struct SshInstallTmuxBlock {
     requested_script_mouse_states: RequestedScriptMouseStates,
     why_install_tmux_highlight_index: HighlightedHyperlink,
-    never_warpify_mouse_state_handle: MouseStateHandle,
+    never_zaplexify_mouse_state_handle: MouseStateHandle,
     block_mouse_state: MouseStateHandle,
     is_focused: bool,
     is_collapsed: bool,
@@ -167,7 +167,7 @@ impl SshInstallTmuxBlock {
         Self {
             requested_script_mouse_states: Default::default(),
             why_install_tmux_highlight_index: Default::default(),
-            never_warpify_mouse_state_handle: Default::default(),
+            never_zaplexify_mouse_state_handle: Default::default(),
             block_mouse_state: Default::default(),
             is_focused: false,
             is_collapsed: true,
@@ -220,7 +220,7 @@ impl SshInstallTmuxBlock {
         ctx: &mut ViewContext<Self>,
     ) {
         self.script_status = RequestedScriptStatus::Running;
-        ctx.emit(SshInstallTmuxBlockEvent::InstallTmuxAndWarpify(
+        ctx.emit(SshInstallTmuxBlockEvent::InstallTmuxAndZaplexify(
             install_method,
         ));
         ctx.notify()
@@ -331,11 +331,11 @@ impl SshInstallTmuxBlock {
 
         let right_hand_size = is_awaiting_action
             .then(|| {
-                render::render_never_warpify_ssh_link(
+                render::render_never_zaplexify_ssh_link(
                     &self.ssh_host,
                     app,
                     appearance,
-                    self.never_warpify_mouse_state_handle.clone(),
+                    self.never_zaplexify_mouse_state_handle.clone(),
                     move |ctx, ssh_host| {
                         ctx.dispatch_typed_action(SshInstallTmuxBlockAction::AddSshHostToDenylist(
                             ssh_host.to_owned(),
@@ -377,12 +377,12 @@ impl View for SshInstallTmuxBlock {
         );
 
         let explanation = if self.outdated_version {
-            "In order to Warpify your SSH session, a more recent version of tmux (>=3.0) must be installed. "
+            "In order to Zaplexify your SSH session, a more recent version of tmux (>=3.0) must be installed. "
         } else {
-            "In order to Warpify your SSH session, tmux must be installed. "
+            "In order to Zaplexify your SSH session, tmux must be installed. "
         };
 
-        let warpify_description = vec![
+        let zaplexify_description = vec![
             FormattedTextFragment::plain_text(explanation),
             FormattedTextFragment::hyperlink(
                 crate::t!("terminal-ssh-why-need-tmux"),
@@ -393,8 +393,8 @@ impl View for SshInstallTmuxBlock {
         let text_color =
             blended_colors::text_sub(appearance.theme(), appearance.theme().surface_1());
 
-        let warpify_description = FormattedTextElement::new(
-            FormattedText::new([FormattedTextLine::Line(warpify_description)]),
+        let zaplexify_description = FormattedTextElement::new(
+            FormattedText::new([FormattedTextLine::Line(zaplexify_description)]),
             appearance.monospace_font_size(),
             appearance.monospace_font_family(),
             appearance.monospace_font_family(),
@@ -409,7 +409,7 @@ impl View for SshInstallTmuxBlock {
         .finish();
 
         content
-            .add_child(render::apply_spacing_styles(Container::new(warpify_description)).finish());
+            .add_child(render::apply_spacing_styles(Container::new(zaplexify_description)).finish());
 
         if let Some(root_install_state) = &self.system_install_state {
             content.add_child(self.render_system_install_ui(root_install_state, app));
@@ -494,9 +494,9 @@ impl TypedActionView for SshInstallTmuxBlock {
                 ctx.emit(SshInstallTmuxBlockEvent::Interrupt);
             }
             (SshInstallTmuxBlockAction::AddSshHostToDenylist(ssh_host), true) => {
-                let settings = WarpifySettings::handle(ctx);
-                settings.update(ctx, |warpify, ctx| {
-                    warpify.denylist_ssh_host(ssh_host, ctx);
+                let settings = ZaplexifySettings::handle(ctx);
+                settings.update(ctx, |zaplexify, ctx| {
+                    zaplexify.denylist_ssh_host(ssh_host, ctx);
                 });
                 ctx.emit(SshInstallTmuxBlockEvent::Cancel);
                 ctx.notify();
@@ -523,16 +523,16 @@ pub fn install_tmux_script(system: &SystemDetails, app: &AppContext) -> Option<S
         system.shell.as_str(),
     ) {
         ("Linux", _, "bash" | "zsh") => {
-            bundled_asset!("ssh/bash_zsh/install_tmux_and_warpify_linux.sh")
+            bundled_asset!("ssh/bash_zsh/install_tmux_and_zaplexify_linux.sh")
         }
         ("Linux", _, "fish") => {
-            bundled_asset!("ssh/fish/install_tmux_and_warpify_linux.sh")
+            bundled_asset!("ssh/fish/install_tmux_and_zaplexify_linux.sh")
         }
         ("Darwin", "homebrew", "bash" | "zsh") => {
-            bundled_asset!("ssh/bash_zsh/install_tmux_and_warpify_brew.sh")
+            bundled_asset!("ssh/bash_zsh/install_tmux_and_zaplexify_brew.sh")
         }
         ("Darwin", "homebrew", "fish") => {
-            bundled_asset!("ssh/fish/install_tmux_and_warpify_brew.sh")
+            bundled_asset!("ssh/fish/install_tmux_and_zaplexify_brew.sh")
         }
         _ => return None,
     };
@@ -561,19 +561,19 @@ pub fn install_root_tmux_script(
         system.shell.as_str(),
     ) {
         ("Linux", "apt", "bash" | "zsh") => {
-            bundled_asset!("ssh/bash_zsh/root/install_tmux_and_warpify_apt.sh")
+            bundled_asset!("ssh/bash_zsh/root/install_tmux_and_zaplexify_apt.sh")
         }
         ("Linux", "dnf", "bash" | "zsh") => {
-            bundled_asset!("ssh/bash_zsh/root/install_tmux_and_warpify_dnf.sh")
+            bundled_asset!("ssh/bash_zsh/root/install_tmux_and_zaplexify_dnf.sh")
         }
         ("Linux", "pacman", "bash" | "zsh") => {
-            bundled_asset!("ssh/bash_zsh/root/install_tmux_and_warpify_pacman.sh")
+            bundled_asset!("ssh/bash_zsh/root/install_tmux_and_zaplexify_pacman.sh")
         }
         ("Linux", "yum", "bash" | "zsh") => {
-            bundled_asset!("ssh/bash_zsh/root/install_tmux_and_warpify_yum.sh")
+            bundled_asset!("ssh/bash_zsh/root/install_tmux_and_zaplexify_yum.sh")
         }
         ("Linux", "zypper", "bash" | "zsh") => {
-            bundled_asset!("ssh/bash_zsh/root/install_tmux_and_warpify_zypper.sh")
+            bundled_asset!("ssh/bash_zsh/root/install_tmux_and_zaplexify_zypper.sh")
         }
         _ => return None,
     };

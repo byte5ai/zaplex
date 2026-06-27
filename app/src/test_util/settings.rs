@@ -29,7 +29,7 @@ pub fn initialize_settings_for_tests_with_mode(
             general_settings::GeneralSettings, keys_settings::KeysSettings,
             ligature_settings::LigatureSettings, safe_mode_settings::SafeModeSettings,
             session_settings::SessionSettings, settings::TerminalSettings,
-            shared_session::settings::SharedSessionSettings, warpify::settings::WarpifySettings,
+            shared_session::settings::SharedSessionSettings, zaplexify::settings::ZaplexifySettings,
             BlockListSettings,
         },
         undo_close::UndoCloseSettings,
@@ -83,7 +83,7 @@ pub fn initialize_settings_for_tests_with_mode(
     ScrollSettings::register(app);
     SelectionSettings::register(app);
     app.update(|ctx| {
-        WarpifySettings::register(ctx);
+        ZaplexifySettings::register(ctx);
     });
     SessionSettings::register(app);
     SshSettings::register(app);

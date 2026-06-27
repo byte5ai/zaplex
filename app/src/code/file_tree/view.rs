@@ -2907,7 +2907,7 @@ impl View for FileTreeView {
             if let CodingPanelEnablementState::RemoteSession { has_remote_server } = self.enablement
             {
                 // When the session has a remote server connection (Auto SSH
-                // Warpification / mode 1), show a loading state — the server
+                // Zaplexification / mode 1), show a loading state — the server
                 // may push repo metadata momentarily. For other SSH modes
                 // (tmux, subshell) no data will arrive, so show the disabled
                 // error instead.

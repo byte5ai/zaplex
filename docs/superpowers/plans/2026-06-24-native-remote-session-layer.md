@@ -129,7 +129,7 @@ Lebt im erweiterten Daemon (`app/src/remote_server/unix/mod.rs` → ruft in `zap
 
 **Client-seitige Session-Persistenz (über App-Restart):** kleine Tabelle `remote_sessions` in `crates/persistence` (diesel-Migration unter `crates/persistence/migrations/`, schema.rs auto-generiert via `diesel.toml`): `{ session_id, host_node_id, identity_key, title, cwd, last_seq, last_attached_at }`. Beim Start: pro Host `ListSessions` → mit persistierten Einträgen abgleichen → wieder-attachbar anzeigen.
 
-**Per-Verbindung-Setting (aus §3.5):** `SshServerInfo` (`crates/warp_ssh_manager/src/types.rs:99`) + Tabelle `ssh_servers` (`crates/persistence/src/model.rs:1463`) + CRUD (`repository.rs`) additiv um `session_resilience: Off | PersistOnly | PersistPlusMosh` erweitern (Feld + Migration + Row/NewRow + Mapping). Default `Off` (konservativ). Globales Default + Feature-Gate über `maybe_define_setting!` (`app/src/terminal/warpify/settings.rs`-Muster) und `warp_features` (`SSHTmuxWrapper`-Muster).
+**Per-Verbindung-Setting (aus §3.5):** `SshServerInfo` (`crates/warp_ssh_manager/src/types.rs:99`) + Tabelle `ssh_servers` (`crates/persistence/src/model.rs:1463`) + CRUD (`repository.rs`) additiv um `session_resilience: Off | PersistOnly | PersistPlusMosh` erweitern (Feld + Migration + Row/NewRow + Mapping). Default `Off` (konservativ). Globales Default + Feature-Gate über `maybe_define_setting!` (`app/src/terminal/zaplexify/settings.rs`-Muster) und `warp_features` (`SSHTmuxWrapper`-Muster).
 
 **RAM-Ceiling pro Session:** Heute existiert **kein** RAM-Governor (nur zeilenbasierte Scrollback-Grenze `BlockSize::max_block_scroll_limit`). Der Ring-Buffer bekommt ein **byte-basiertes** Ceiling pro Session (Setting), und die Registry ein Gesamt-Ceiling pro Host — das ist zugleich der erste Baustein des in §3.2 genannten „RAM-Governor für die Fleet" (gemeinsame Primitive, §10).
 
@@ -219,6 +219,6 @@ Stufen 0–4 = **Must-Have-Persistenz (B2)**. Stufe 5 = **B3-Kür**. Jede Stufe 
 | Maus (Intercept + Write-back) | `app/src/terminal/alt_screen/mod.rs:11` · `app/src/terminal/writeable_pty/pty_controller.rs:40` |
 | SessionType / BootstrapSessionType | `app/src/terminal/model/session.rs:834,843` |
 | SSH-Host-Settings + ssh_servers + CRUD | `crates/warp_ssh_manager/src/types.rs:99` · `crates/persistence/src/model.rs:1463` · `crates/warp_ssh_manager/src/repository.rs` |
-| Settings-Makro / Feature-Flags | `app/src/terminal/warpify/settings.rs:46` · `crates/warp_features/src/lib.rs:124` |
+| Settings-Makro / Feature-Flags | `app/src/terminal/zaplexify/settings.rs:46` · `crates/warp_features/src/lib.rs:124` |
 | Workspace / Crate-Registrierung | `Cargo.toml:1` (`[workspace] members=["crates/*","app"]`, `[workspace.dependencies]`) |
 | Persistenz-Migrationen / Schema | `crates/persistence/migrations/` · `diesel.toml` · `crates/persistence/src/schema.rs` |

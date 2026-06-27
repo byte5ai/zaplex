@@ -85,7 +85,7 @@ impl SessionContext {
                     .filter_map(|res| res.and_then(EngineDirEntry::try_from).ok())
                     .collect::<Vec<_>>()
             }
-            SessionType::WarpifiedRemote { .. } => {
+            SessionType::ZaplexifiedRemote { .. } => {
                 let env_vars = self
                     .session
                     .path()
@@ -198,7 +198,7 @@ impl PathCompletionContext for SessionContext {
         // connected yet, the command executor may be an InBand fallback that
         // sends escape sequences to a raw remote shell. Return empty without
         // caching so we retry after the remote server handshake finishes.
-        if let SessionType::WarpifiedRemote { host_id: None } = self.session.session_type() {
+        if let SessionType::ZaplexifiedRemote { host_id: None } = self.session.session_type() {
             if FeatureFlag::SshRemoteServer.is_enabled()
                 && !self.session.is_legacy_ssh_session()
             {

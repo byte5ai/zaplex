@@ -50,7 +50,7 @@ fn test_remote_sessions() {
     let local_session = Session::test();
     let remote_session = Session::new(
         SessionInfo::new_for_test()
-            .with_session_type(BootstrapSessionType::WarpifiedRemote)
+            .with_session_type(BootstrapSessionType::ZaplexifiedRemote)
             .with_hostname("remote-host".to_string())
             .with_user("remote-user".to_string()),
         Arc::new(TestCommandExecutor {}),
