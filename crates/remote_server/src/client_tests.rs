@@ -5,7 +5,8 @@ use crate::proto::{
     client_message, read_file_chunk_response, resolve_path_response, run_command_response,
     server_message, write_file_chunk_response, ClientMessage, ErrorCode, FileSystemEntryKind,
     InitializeResponse, ReadFileChunkResponse, ReadFileChunkSuccess, ResolvePathResponse,
-    ResolvePathSuccess, RunCommandResponse, RunCommandSuccess, ServerMessage,
+    ResolvePathSuccess, RunCommandResponse, RunCommandSuccess, ServerMessage, SessionAttached,
+    SessionExited, SessionOpened, SessionOutput, SessionSize,
     WriteFileChunkResponse, WriteFileChunkSuccess,
 };
 use crate::protocol;
@@ -403,5 +404,240 @@ async fn server_returns_error_for_malformed_message_with_parseable_id() {
             assert_eq!(e.code(), ErrorCode::InvalidRequest);
         }
         other => panic!("expected ErrorResponse, got: {other:?}"),
+    }
+}
+
+// ---- Native daemon session protocol (Stage 2) -----------------------------
+//
+// Headless round-trip coverage for the client half of the daemon-hosted session
+// protocol: OpenSession/AttachSession requests, SessionOutput/SessionExited
+// server pushes surfacing as ClientEvents, and the fire-and-forget
+// input/resize/detach frames. The server PTY-spawn half is covered separately
+// by `session_pty_tests` in app/src/terminal/local_tty/unix.rs.
+
+#[tokio::test]
+async fn open_session_round_trip() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        match &msg.message {
+            Some(client_message::Message::OpenSession(open)) => {
+                let size = open.size.as_ref().expect("OpenSession carries size");
+                assert_eq!(size.rows, 30);
+                assert_eq!(size.cols, 100);
+                assert_eq!(open.cwd.as_deref(), Some("/home/me"));
+                assert_eq!(open.shell.as_deref(), Some("/bin/zsh"));
+                assert_eq!(open.env.get("FOO").map(String::as_str), Some("bar"));
+            }
+            other => panic!("expected OpenSession, got {other:?}"),
+        }
+        server_message::Message::SessionOpened(SessionOpened {
+            session_id: "sess-1".to_string(),
+        })
+    });
+
+    let mut env = std::collections::HashMap::new();
+    env.insert("FOO".to_string(), "bar".to_string());
+    let resp = client
+        .open_session(
+            Some("/home/me".to_string()),
+            Some("/bin/zsh".to_string()),
+            env,
+            30,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.session_id, "sess-1");
+}
+
+#[tokio::test]
+async fn attach_session_round_trip() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        match &msg.message {
+            Some(client_message::Message::AttachSession(att)) => {
+                assert_eq!(att.session_id, "sess-1");
+                assert_eq!(att.last_seq, 42);
+            }
+            other => panic!("expected AttachSession, got {other:?}"),
+        }
+        server_message::Message::SessionAttached(SessionAttached {
+            session_id: "sess-1".to_string(),
+            size: Some(SessionSize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            }),
+            base_seq: 42,
+            replay: b"replayed".to_vec(),
+        })
+    });
+
+    let resp = client.attach_session("sess-1".to_string(), 42).await.unwrap();
+    assert_eq!(resp.base_seq, 42);
+    assert_eq!(resp.replay, b"replayed");
+}
+
+#[tokio::test]
+async fn session_output_push_surfaces_as_event() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let executor = executor::Background::default();
+    let (_client, event_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+
+    tokio::spawn(async move {
+        let _server_read = server_read; // keep the duplex open for the reader task
+        let mut writer = server_write.compat_write();
+        protocol::write_server_message(
+            &mut writer,
+            &ServerMessage {
+                request_id: String::new(), // empty => push
+                message: Some(server_message::Message::SessionOutput(SessionOutput {
+                    session_id: "sess-1".to_string(),
+                    seq: 7,
+                    bytes: b"hello pty".to_vec(),
+                })),
+            },
+        )
+        .await
+        .unwrap();
+        std::future::pending::<()>().await;
+    });
+
+    match event_rx.recv().await.unwrap() {
+        ClientEvent::SessionOutput {
+            session_id,
+            seq,
+            bytes,
+        } => {
+            assert_eq!(session_id, "sess-1");
+            assert_eq!(seq, 7);
+            assert_eq!(bytes, b"hello pty");
+        }
+        other => panic!("expected SessionOutput, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn session_exited_push_surfaces_as_event() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let executor = executor::Background::default();
+    let (_client, event_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+
+    tokio::spawn(async move {
+        let _server_read = server_read;
+        let mut writer = server_write.compat_write();
+        protocol::write_server_message(
+            &mut writer,
+            &ServerMessage {
+                request_id: String::new(),
+                message: Some(server_message::Message::SessionExited(SessionExited {
+                    session_id: "sess-1".to_string(),
+                    exit_code: Some(0),
+                })),
+            },
+        )
+        .await
+        .unwrap();
+        std::future::pending::<()>().await;
+    });
+
+    match event_rx.recv().await.unwrap() {
+        ClientEvent::SessionExited {
+            session_id,
+            exit_code,
+        } => {
+            assert_eq!(session_id, "sess-1");
+            assert_eq!(exit_code, Some(0));
+        }
+        other => panic!("expected SessionExited, got {other:?}"),
+    }
+}
+
+/// Reads a single fire-and-forget client frame from the server side of a duplex.
+async fn read_one_client_frame(
+    client: RemoteServerClient,
+    send: impl FnOnce(&RemoteServerClient),
+    server_read: tokio::io::ReadHalf<tokio::io::DuplexStream>,
+) -> ClientMessage {
+    send(&client);
+    let mut reader = server_read.compat();
+    protocol::read_client_message(&mut reader).await.unwrap()
+}
+
+#[tokio::test]
+async fn send_session_input_sends_frame() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, _server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let executor = executor::Background::default();
+    let (client, _event_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+
+    let msg = read_one_client_frame(
+        client,
+        |c| c.send_session_input("sess-1".to_string(), b"abc".to_vec()).unwrap(),
+        server_read,
+    )
+    .await;
+    match msg.message {
+        Some(client_message::Message::SessionInput(si)) => {
+            assert_eq!(si.session_id, "sess-1");
+            assert_eq!(si.bytes, b"abc");
+        }
+        other => panic!("expected SessionInput, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn send_resize_session_sends_frame() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, _server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let executor = executor::Background::default();
+    let (client, _event_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+
+    let msg = read_one_client_frame(
+        client,
+        |c| c.send_resize_session("sess-1".to_string(), 50, 120).unwrap(),
+        server_read,
+    )
+    .await;
+    match msg.message {
+        Some(client_message::Message::ResizeSession(rs)) => {
+            assert_eq!(rs.session_id, "sess-1");
+            let size = rs.size.expect("resize carries size");
+            assert_eq!(size.rows, 50);
+            assert_eq!(size.cols, 120);
+        }
+        other => panic!("expected ResizeSession, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn send_detach_session_sends_frame() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, _server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let executor = executor::Background::default();
+    let (client, _event_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+
+    let msg = read_one_client_frame(
+        client,
+        |c| c.send_detach_session("sess-1".to_string()).unwrap(),
+        server_read,
+    )
+    .await;
+    match msg.message {
+        Some(client_message::Message::DetachSession(d)) => {
+            assert_eq!(d.session_id, "sess-1");
+        }
+        other => panic!("expected DetachSession, got {other:?}"),
     }
 }
