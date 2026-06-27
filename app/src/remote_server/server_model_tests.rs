@@ -234,3 +234,176 @@ fn create_directory_creates_nested_directories() {
     ));
     assert!(nested.is_dir());
 }
+
+// ---- Daemon session host: end-to-end glue (Stage 2) -----------------------
+//
+// Drives the full server-side glue headlessly on a real warpui test App: an
+// OpenSession message spawns a real PTY+shell, SessionInput reaches that PTY,
+// the background reader task streams PTY bytes back as SessionOutput pushes via
+// the model, and CloseSession reaps the shell and emits SessionExited. This is
+// the path that was previously only compile-verified (no async-model harness).
+// Unix-only: the daemon owns the PTY (PTY ownership is unix-only).
+
+#[cfg(unix)]
+mod daemon_session {
+    use super::test_model;
+    use crate::remote_server::proto::{
+        client_message, server_message, ClientMessage, CloseSession, OpenSession, ServerMessage,
+        SessionInput, SessionSize,
+    };
+    use futures::future::Either;
+    use std::time::Duration;
+    use warpui::App;
+
+    /// Awaits `rx.recv()` but gives up after `dur` so a stuck test fails instead
+    /// of hanging the CI job.
+    async fn recv_deadline(
+        rx: &async_channel::Receiver<ServerMessage>,
+        dur: Duration,
+    ) -> Option<ServerMessage> {
+        let timer = async_io::Timer::after(dur);
+        match futures::future::select(std::pin::pin!(rx.recv()), std::pin::pin!(timer)).await {
+            Either::Left((Ok(msg), _)) => Some(msg),
+            _ => None,
+        }
+    }
+
+    /// Drains messages until a `SessionOutput` whose accumulated bytes contain
+    /// `needle`, or the overall deadline elapses.
+    async fn wait_for_output(
+        rx: &async_channel::Receiver<ServerMessage>,
+        needle: &[u8],
+        total: Duration,
+    ) -> bool {
+        let collect = async {
+            let mut buf: Vec<u8> = Vec::new();
+            loop {
+                match rx.recv().await {
+                    Ok(msg) => {
+                        if let Some(server_message::Message::SessionOutput(out)) = msg.message {
+                            buf.extend_from_slice(&out.bytes);
+                            if buf.windows(needle.len()).any(|w| w == needle) {
+                                return true;
+                            }
+                        }
+                    }
+                    Err(_) => return false,
+                }
+            }
+        };
+        let timer = async_io::Timer::after(total);
+        match futures::future::select(std::pin::pin!(collect), std::pin::pin!(timer)).await {
+            Either::Left((found, _)) => found,
+            Either::Right(_) => false,
+        }
+    }
+
+    async fn wait_for_exit(
+        rx: &async_channel::Receiver<ServerMessage>,
+        session_id: &str,
+        total: Duration,
+    ) -> bool {
+        let collect = async {
+            loop {
+                match rx.recv().await {
+                    Ok(msg) => {
+                        if let Some(server_message::Message::SessionExited(e)) = msg.message {
+                            if e.session_id == session_id {
+                                return true;
+                            }
+                        }
+                    }
+                    Err(_) => return false,
+                }
+            }
+        };
+        let timer = async_io::Timer::after(total);
+        match futures::future::select(std::pin::pin!(collect), std::pin::pin!(timer)).await {
+            Either::Left((found, _)) => found,
+            Either::Right(_) => false,
+        }
+    }
+
+    fn open_session_msg() -> ClientMessage {
+        ClientMessage {
+            request_id: "open-1".to_string(),
+            message: Some(client_message::Message::OpenSession(OpenSession {
+                cwd: None,
+                shell: Some("/bin/bash".to_string()),
+                env: std::collections::HashMap::new(),
+                size: Some(SessionSize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                }),
+            })),
+        }
+    }
+
+    #[test]
+    fn open_streams_output_then_close_exits() {
+        App::test((), |mut app| async move {
+            // Build the model via the struct-literal helper (no `new()`), so the
+            // test doesn't need FileModel/RepoMetadata singletons — but still
+            // gets a real ModelContext (executor + spawner) from the App.
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+
+            // OpenSession -> spawns PTY+shell, replies SessionOpened.
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
+
+            let session_id = {
+                let msg = recv_deadline(&conn_rx, Duration::from_secs(10))
+                    .await
+                    .expect("expected a server message after OpenSession");
+                match msg.message {
+                    Some(server_message::Message::SessionOpened(o)) => o.session_id,
+                    other => panic!("expected SessionOpened, got {other:?}"),
+                }
+            };
+            assert!(!session_id.is_empty(), "daemon assigned a session id");
+
+            // SessionInput: the executed output (not the echoed input) carries
+            // the marker, proving the byte round-trip reached the real shell.
+            // `D4''EM0N` echoes verbatim but executes to `D4EM0N`.
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id,
+                    ClientMessage {
+                        request_id: String::new(),
+                        message: Some(client_message::Message::SessionInput(SessionInput {
+                            session_id: session_id.clone(),
+                            bytes: b"echo D4''EM0N\n".to_vec(),
+                        })),
+                    },
+                    ctx,
+                )
+            });
+            assert!(
+                wait_for_output(&conn_rx, b"D4EM0N", Duration::from_secs(15)).await,
+                "expected SessionOutput containing the executed marker"
+            );
+
+            // CloseSession -> reaps the shell, emits SessionExited.
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id,
+                    ClientMessage {
+                        request_id: String::new(),
+                        message: Some(client_message::Message::CloseSession(CloseSession {
+                            session_id: session_id.clone(),
+                        })),
+                    },
+                    ctx,
+                )
+            });
+            assert!(
+                wait_for_exit(&conn_rx, &session_id, Duration::from_secs(10)).await,
+                "expected SessionExited after CloseSession"
+            );
+        });
+    }
+}
