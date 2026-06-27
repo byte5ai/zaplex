@@ -40,6 +40,9 @@ pub(super) struct EventLoop {
     /// Input/resize messages received before the session id is known. Flushed,
     /// in order, once `OpenSession` resolves.
     pending_input: Vec<EventLoopMessage>,
+    /// The `OpenSession` request, held until the transport is `Connected`. Taken
+    /// (once) by `try_open`. `None` after the session has been opened.
+    pending_open: Option<(OpenSessionParams, SizeInfo)>,
 }
 
 impl EventLoop {
@@ -55,11 +58,13 @@ impl EventLoop {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let mut event_loop = Self::new(model, channel_event_listener, connection_session_id);
+        event_loop.pending_open = Some((open_params, size_info));
 
         // Output path: live PTY bytes arrive as manager pushes. Filter to our
-        // own daemon session and feed them through the ANSI processor.
+        // own daemon session and feed them through the ANSI processor. The
+        // connect-state arms gate `OpenSession` on the transport being ready.
         let manager = RemoteServerManager::handle(ctx);
-        ctx.subscribe_to_model(&manager, |me, event, _ctx| match event {
+        ctx.subscribe_to_model(&manager, |me, event, ctx| match event {
             RemoteServerManagerEvent::SessionOutput {
                 pty_session_id,
                 bytes,
@@ -74,6 +79,16 @@ impl EventLoop {
             } if me.is_our_session(pty_session_id) => {
                 me.on_session_exited(*exit_code);
             }
+            RemoteServerManagerEvent::SessionConnected { session_id, .. }
+                if *session_id == me.connection_session_id =>
+            {
+                me.try_open(ctx);
+            }
+            RemoteServerManagerEvent::SessionConnectionFailed { session_id, .. }
+                if *session_id == me.connection_session_id =>
+            {
+                me.on_connect_failed();
+            }
             _ => {}
         });
 
@@ -81,9 +96,9 @@ impl EventLoop {
         // keystrokes can be routed to the live client.
         ctx.spawn_stream_local(event_loop_rx, Self::on_event_loop_message, |_, _| ());
 
-        // Open the daemon-hosted session; `pty_session_id` is filled in when it
-        // resolves, at which point any buffered input is flushed.
-        event_loop.open_session(open_params, size_info, ctx);
+        // If the transport is already connected, open the session now; otherwise
+        // the `SessionConnected` arm above triggers it once it connects.
+        event_loop.try_open(ctx);
 
         event_loop
     }
@@ -100,6 +115,7 @@ impl EventLoop {
             connection_session_id,
             pty_session_id: None,
             pending_input: Vec::new(),
+            pending_open: None,
         }
     }
 
@@ -116,21 +132,34 @@ impl EventLoop {
         })
     }
 
-    /// Issues the `OpenSession` request. The initial size is taken from the
-    /// terminal model so the daemon-side PTY matches what the user sees.
+    /// Opens the daemon session if the transport is connected and a pending
+    /// request is still outstanding. Idempotent: a no-op once opened, and a
+    /// no-op (leaving the request pending) while the transport is not yet
+    /// connected — the `SessionConnected` arm calls this again when it is.
+    fn try_open(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.pty_session_id.is_some() || self.pending_open.is_none() {
+            return;
+        }
+        let Some(client) = self.client(ctx) else {
+            return; // Not connected yet; wait for `SessionConnected`.
+        };
+        let (open_params, size_info) = self
+            .pending_open
+            .take()
+            .expect("pending_open is Some (checked above)");
+        self.open_session(client, open_params, size_info, ctx);
+    }
+
+    /// Issues the `OpenSession` request over a connected client. The initial
+    /// size is taken from the terminal model so the daemon-side PTY matches
+    /// what the user sees.
     fn open_session(
         &mut self,
+        client: Arc<RemoteServerClient>,
         open_params: OpenSessionParams,
         size_info: SizeInfo,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(client) = self.client(ctx) else {
-            log::error!(
-                "Cannot open daemon session: no live client for {:?}",
-                self.connection_session_id
-            );
-            return;
-        };
         let OpenSessionParams { cwd, shell, env } = open_params;
         let rows = size_info.rows as u32;
         let cols = size_info.columns as u32;
@@ -139,6 +168,17 @@ impl EventLoop {
             Ok(opened) => me.on_session_opened(opened.session_id, ctx),
             Err(err) => log::error!("Failed to open daemon session: {err:?}"),
         });
+    }
+
+    fn on_connect_failed(&mut self) {
+        log::error!(
+            "Daemon session transport failed to connect for {:?}",
+            self.connection_session_id
+        );
+        // Stage 3+: surface a clear error block into the terminal model. For now,
+        // drop the pending open so a later spurious event can't reopen it.
+        self.pending_open = None;
+        self.channel_event_listener.send_wakeup_event();
     }
 
     fn on_session_opened(&mut self, pty_session_id: String, ctx: &mut ModelContext<Self>) {
