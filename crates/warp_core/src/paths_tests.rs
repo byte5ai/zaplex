@@ -106,10 +106,10 @@ fn test_oss_secure_state_dir_is_disabled() {
 
 #[test]
 fn test_project_path_for_zap_dev_app_id() {
-    // Covers the `starts_with("Zaplex")` branch in `project_dirs_for_app_id` on Linux,
+    // Covers the `starts_with("Zap")` branch in `project_dirs_for_app_id` on Linux,
     // which maps suffixed application names like `ZapDev` to a dashed lowercase
     // directory matching the Linux package name (e.g. `zap-dev`).
-    let project_dirs = project_dirs_for_app_id(AppId::new("dev", "zap", "ZapDev"), None)
+    let project_dirs = project_dirs_for_app_id(AppId::new("dev", "zaplex", "ZapDev"), None)
         .expect("should be able to compute project dirs");
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
@@ -117,7 +117,7 @@ fn test_project_path_for_zap_dev_app_id() {
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(project_dirs.project_path(), "zap-dev");
         } else if #[cfg(windows)] {
-            assert_eq!(project_dirs.project_path(), "zap\\ZapDev");
+            assert_eq!(project_dirs.project_path(), "zaplex\\ZapDev");
         } else {
             unimplemented!("Need to update tests for current platform!");
         }
@@ -126,7 +126,7 @@ fn test_project_path_for_zap_dev_app_id() {
 
 #[test]
 fn test_project_path_for_oss_app_id() {
-    let project_dirs = project_dirs_for_app_id(AppId::new("dev", "zap", "Zaplex"), None)
+    let project_dirs = project_dirs_for_app_id(AppId::new("dev", "zaplex", "Zaplex"), None)
         .expect("should be able to compute project dirs");
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
@@ -134,7 +134,7 @@ fn test_project_path_for_oss_app_id() {
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(project_dirs.project_path(), "zap");
         } else if #[cfg(windows)] {
-            assert_eq!(project_dirs.project_path(), "zap\\Zaplex");
+            assert_eq!(project_dirs.project_path(), "zaplex\\Zaplex");
         } else {
             unimplemented!("Need to update tests for current platform!");
         }

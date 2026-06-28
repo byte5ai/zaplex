@@ -242,7 +242,7 @@ fn project_dirs_for_app_id(
             // a directory like "zap" matching our Linux package name.
             let base_app_name = match app_id.application_name() {
                 "Zaplex" => "zap".to_owned(),
-                other if other.starts_with("Zaplex") => other.replace("Zaplex", "zap-"),
+                other if other.starts_with("Zap") => other.replace("Zap", "zap-"),
                 _ => app_id.application_name().to_owned(),
             };
         } else {

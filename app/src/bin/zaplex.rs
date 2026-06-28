@@ -26,7 +26,7 @@ fn main() -> Result<()> {
     let mut state = ChannelState::new(
         Channel::Oss,
         ChannelConfig {
-            app_id: AppId::new("dev", "zap", "Zaplex"),
+            app_id: AppId::new("dev", "zaplex", "Zaplex"),
             logfile_name: "zaplex.log".into(),
             autoupdate_config: None,
             mcp_static_config: None,

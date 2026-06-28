@@ -37,7 +37,7 @@ pub struct ChannelState {
 impl ChannelState {
     pub fn init() -> Self {
         let channel = Channel::Oss;
-        let app_id = AppId::new("dev", "zap", "Zaplex");
+        let app_id = AppId::new("dev", "zaplex", "Zaplex");
         Self {
             channel,
             additional_features: Default::default(),
