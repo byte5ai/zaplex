@@ -15,11 +15,16 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use remote_server::auth::RemoteServerAuthContext;
+use remote_server::transport::RemoteTransport;
 use warp_core::SessionId;
 use warp_ssh_manager::{AuthType, SshServerInfo};
+
+use super::ssh_transport::SshTransport;
 
 /// Daemon sessions are allocated `SessionId`s in the **top half** of the u64
 /// space so they cannot collide with shell-bootstrap-minted ids (which are
@@ -171,6 +176,38 @@ pub async fn ensure_control_master(server: &SshServerInfo, socket_path: &Path) -
         "ControlMaster socket did not appear at {}",
         socket_path.display()
     ))
+}
+
+/// Brings up the headless ControlMaster for `server` at `socket_path` and ensures
+/// the remote-server binary is installed (auto-install if missing). Shared by the
+/// daemon-terminal connect (`Workspace::spawn_daemon_session_connect`) and the
+/// adopt-sidebar's connect-to-list. On success the caller builds a fresh
+/// [`SshTransport`] over `socket_path` and calls `connect_session`.
+pub async fn prepare_daemon_transport(
+    server: SshServerInfo,
+    socket_path: PathBuf,
+    auth_context: Arc<RemoteServerAuthContext>,
+) -> std::result::Result<(), String> {
+    let host = server.host.clone();
+    log::info!("daemon connect [{host}]: establishing ControlMaster");
+    ensure_control_master(&server, &socket_path)
+        .await
+        .map_err(|e| format!("ControlMaster setup failed: {e:#}"))?;
+    let transport = SshTransport::new(socket_path, auth_context);
+    log::info!("daemon connect [{host}]: checking remote-server binary");
+    match transport.check_binary().await {
+        Ok(true) => log::info!("daemon connect [{host}]: binary present"),
+        Ok(false) => {
+            log::info!("daemon connect [{host}]: binary missing — installing");
+            transport
+                .install_binary()
+                .await
+                .map_err(|e| format!("remote-server install failed: {e}"))?;
+            log::info!("daemon connect [{host}]: install complete");
+        }
+        Err(e) => return Err(format!("remote-server binary check failed: {e}")),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
