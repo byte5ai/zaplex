@@ -161,6 +161,7 @@ impl EventLoop {
             return; // The reconnected client isn't registered yet.
         };
         let last_seq = self.last_seq;
+        log::info!("daemon_tty: re-attaching pty_session_id={pty_session_id} from seq {last_seq}");
         let future = async move { client.attach_session(pty_session_id, last_seq).await };
         ctx.spawn(future, |me, result, _ctx| match result {
             Ok(attached) => {
@@ -217,10 +218,11 @@ impl EventLoop {
         let OpenSessionParams { cwd, shell, env } = open_params;
         let rows = size_info.rows as u32;
         let cols = size_info.columns as u32;
+        log::info!("daemon_tty: issuing OpenSession (cwd={cwd:?}, shell={shell:?}, {rows}x{cols})");
         let future = async move { client.open_session(cwd, shell, env, rows, cols).await };
         ctx.spawn(future, |me, result, ctx| match result {
             Ok(opened) => me.on_session_opened(opened.session_id, ctx),
-            Err(err) => log::error!("Failed to open daemon session: {err:?}"),
+            Err(err) => log::error!("daemon_tty: OpenSession failed: {err:?}"),
         });
     }
 
@@ -236,6 +238,7 @@ impl EventLoop {
     }
 
     fn on_session_opened(&mut self, pty_session_id: String, ctx: &mut ModelContext<Self>) {
+        log::info!("daemon_tty: session opened, pty_session_id={pty_session_id}");
         self.pty_session_id = Some(pty_session_id.clone());
         // Flush any input that arrived before the session was addressable.
         let pending = std::mem::take(&mut self.pending_input);

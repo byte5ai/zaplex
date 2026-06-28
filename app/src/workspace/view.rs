@@ -5641,30 +5641,59 @@ impl Workspace {
         use crate::remote_server::headless_connect;
         use crate::remote_server::manager::RemoteServerManager;
         use crate::remote_server::ssh_transport::SshTransport;
+        use remote_server::transport::RemoteTransport;
 
         let auth_context = std::sync::Arc::new(server_api_auth_context(
             AuthStateProvider::as_ref(ctx).get().clone(),
         ));
         let socket_path = headless_connect::control_socket_path(&server);
-        let server_for_master = server.clone();
-        let socket_for_async = socket_path.clone();
+        let host = server.host.clone();
 
+        let server_for_master = server.clone();
+        let socket_for_check = socket_path.clone();
+        let auth_for_check = auth_context.clone();
+        let host_for_async = host.clone();
+
+        // Off the main thread: bring up the ControlMaster, then make sure the
+        // remote-server binary is installed (auto-install if missing), so the
+        // connect below doesn't silently fail on a host that's never been used.
         ctx.spawn(
             async move {
-                headless_connect::ensure_control_master(&server_for_master, &socket_for_async).await
+                log::info!("daemon connect [{host_for_async}]: establishing ControlMaster");
+                headless_connect::ensure_control_master(&server_for_master, &socket_for_check)
+                    .await
+                    .map_err(|e| format!("ControlMaster setup failed: {e:#}"))?;
+
+                let transport = SshTransport::new(socket_for_check, auth_for_check);
+                log::info!("daemon connect [{host_for_async}]: checking remote-server binary");
+                match transport.check_binary().await {
+                    Ok(true) => log::info!("daemon connect [{host_for_async}]: binary present"),
+                    Ok(false) => {
+                        log::info!(
+                            "daemon connect [{host_for_async}]: binary missing — installing"
+                        );
+                        transport
+                            .install_binary()
+                            .await
+                            .map_err(|e| format!("remote-server install failed: {e}"))?;
+                        log::info!("daemon connect [{host_for_async}]: install complete");
+                    }
+                    Err(e) => return Err(format!("remote-server binary check failed: {e}")),
+                }
+                Ok::<(), String>(())
             },
             move |_workspace, result, ctx| match result {
                 Ok(()) => {
+                    log::info!(
+                        "daemon connect [{host}]: transport ready — connecting session {session_id:?}"
+                    );
                     let transport = SshTransport::new(socket_path, auth_context.clone());
                     RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
                         mgr.connect_session(session_id, transport, auth_context, ctx);
                     });
                 }
                 Err(e) => {
-                    log::error!(
-                        "Failed to establish daemon ControlMaster for {}: {e:#}",
-                        server.host
-                    );
+                    log::error!("daemon connect [{host}] failed: {e}");
                 }
             },
         );
