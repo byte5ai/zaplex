@@ -420,7 +420,7 @@ impl PackageManager {
     }
 
     /// Write the "command the user should run to upgrade" to logs. OSS users can find the exact command
-    /// in logs under ~/.local/share/dev.zap.Zaplex/; the UI still falls back to "go to GitHub to download", not distinguishing by package manager.
+    /// in logs under ~/.local/share/dev.zaplex.Zaplex/; the UI still falls back to "go to GitHub to download", not distinguishing by package manager.
     fn log_upgrade_hint(&self) {
         let hint = match self {
             Self::Apt { package_name } => {

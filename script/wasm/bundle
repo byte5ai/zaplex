@@ -127,7 +127,7 @@ elif [[ $RELEASE_CHANNEL = "preview" ]]; then
 elif [[ $RELEASE_CHANNEL = "stable" ]]; then
   ZAPLEX_BIN="stable"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-  ZAPLEX_BIN="zap-oss"
+  ZAPLEX_BIN="zaplex"
 fi
 
 if [ -n "${FEATURES_OVERRIDE+x}" ]; then

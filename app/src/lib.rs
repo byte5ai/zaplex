@@ -2277,7 +2277,7 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
     #[cfg(all(debug_assertions, not(windows)))]
     flags.insert(FeatureFlag::ServerFileBrowser);
 
-    // Issue #72: HTTP proxy settings page. Does not use channel check, all channels including zap-oss
+    // Issue #72: HTTP proxy settings page. Does not use channel check, all channels including zaplex
     // enabled by default, as basic capability for enterprise VPN / corporate proxy scenarios.
     flags.insert(FeatureFlag::HttpProxySettings);
 

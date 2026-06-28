@@ -27,7 +27,7 @@ fn main() -> Result<()> {
         Channel::Oss,
         ChannelConfig {
             app_id: AppId::new("dev", "zap", "Zaplex"),
-            logfile_name: "zap.log".into(),
+            logfile_name: "zaplex.log".into(),
             autoupdate_config: None,
             mcp_static_config: None,
         },
@@ -60,9 +60,9 @@ embed_plist::embed_info_plist_bytes!(r#"
     <key>CFBundleDisplayName</key>
     <string>Zaplex</string>
     <key>CFBundleExecutable</key>
-    <string>zap-oss</string>
+    <string>zaplex</string>
     <key>CFBundleIdentifier</key>
-    <string>dev.zap.Zaplex</string>
+    <string>dev.zaplex.Zaplex</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleLocalizations</key>
@@ -82,7 +82,7 @@ embed_plist::embed_info_plist_bytes!(r#"
     <key>UIDesignRequiresCompatibility</key>
     <true/>
     <key>CFBundleURLTypes</key>
-    <array><dict><key>CFBundleURLName</key><string>Custom App</string><key>CFBundleURLSchemes</key><array><string>zap</string></array></dict></array>
+    <array><dict><key>CFBundleURLName</key><string>Custom App</string><key>CFBundleURLSchemes</key><array><string>zaplex</string></array></dict></array>
     <key>NSHumanReadableCopyright</key>
     <string>© 2026, Zaplex</string>
     </dict>

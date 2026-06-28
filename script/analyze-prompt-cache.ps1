@@ -5,7 +5,7 @@
     在每次流末打印的 `[byop-cache]` 日志行)。
 
 .DESCRIPTION
-    1. 自动定位 Zaplex 日志文件:`%LOCALAPPDATA%\zap\Zaplex\data\logs\zap.log`
+    1. 自动定位 Zaplex 日志文件:`%LOCALAPPDATA%\zap\Zaplex\data\logs\zaplex.log`
     2. grep 形如下面格式的行:
        [byop-cache] prompt_tokens=N cache_read=R (X.X%) cache_create=W (Y.Y%) model=M compaction=L
        其中 compaction= 是 P2-16 添加的可选字段(none / inactive / active(hidden=N))
@@ -33,7 +33,7 @@
 .EXAMPLE
     .\analyze-prompt-cache.ps1 -Watch
 .EXAMPLE
-    .\analyze-prompt-cache.ps1 -LogPath "D:\backup\zap.log"
+    .\analyze-prompt-cache.ps1 -LogPath "D:\backup\zaplex.log"
 
 .NOTES
     需要 Zaplex 启用 INFO 级日志(`[byop-cache]` 是 log::info!)。
@@ -62,14 +62,14 @@ function Resolve-ZapLog {
     $candidates = @()
     if ($env:LOCALAPPDATA) {
         # 当前版本路径(`crates/simple_logger/src/manager.rs::log_directory_path` Windows 分支)
-        $candidates += (Join-Path -Path $env:LOCALAPPDATA -ChildPath 'zap\Zaplex\data\logs\zap.log')
+        $candidates += (Join-Path -Path $env:LOCALAPPDATA -ChildPath 'zap\Zaplex\data\logs\zaplex.log')
         # 备选(以前版本的路径)
-        $candidates += (Join-Path -Path $env:LOCALAPPDATA -ChildPath 'zap\Zaplex\data\zap.log')
-        $candidates += (Join-Path -Path $env:LOCALAPPDATA -ChildPath 'zap\Zaplex\zap.log')
+        $candidates += (Join-Path -Path $env:LOCALAPPDATA -ChildPath 'zap\Zaplex\data\zaplex.log')
+        $candidates += (Join-Path -Path $env:LOCALAPPDATA -ChildPath 'zap\Zaplex\zaplex.log')
     }
     if ($env:APPDATA) {
-        $candidates += (Join-Path -Path $env:APPDATA -ChildPath 'zap\Zaplex\data\logs\zap.log')
-        $candidates += (Join-Path -Path $env:APPDATA -ChildPath 'zap\Zaplex\data\zap.log')
+        $candidates += (Join-Path -Path $env:APPDATA -ChildPath 'zap\Zaplex\data\logs\zaplex.log')
+        $candidates += (Join-Path -Path $env:APPDATA -ChildPath 'zap\Zaplex\data\zaplex.log')
     }
     foreach ($c in $candidates) {
         if ($c -and (Test-Path -LiteralPath $c)) { return (Resolve-Path -LiteralPath $c).Path }

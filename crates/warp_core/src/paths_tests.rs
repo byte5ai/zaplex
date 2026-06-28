@@ -8,7 +8,7 @@ fn test_data_dir_path() {
     // ChannelState, by default, is configured for Channel::Oss.
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(data_dir(), home_dir.join(".zap"));
+            assert_eq!(data_dir(), home_dir.join(".zaplex"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(data_dir(), home_dir.join(".local/share/zap"));
         } else if #[cfg(windows)] {
@@ -25,7 +25,7 @@ fn test_config_local_dir_path() {
     // ChannelState, by default, is configured for Channel::Oss.
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(config_local_dir(), home_dir.join(".zap"));
+            assert_eq!(config_local_dir(), home_dir.join(".zaplex"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(config_local_dir(), home_dir.join(".config/zap"));
         } else if #[cfg(windows)] {
@@ -40,8 +40,8 @@ fn test_config_local_dir_path() {
 fn test_warp_home_config_dir_path() {
     let home_dir = home_dir().expect("Should be able to compute home directory");
     let expected_dir_name = match ChannelState::data_profile() {
-        Some(data_profile) => format!(".zap-{data_profile}"),
-        None => ".zap".to_string(),
+        Some(data_profile) => format!(".zaplex-{data_profile}"),
+        None => ".zaplex".to_string(),
     };
 
     assert_eq!(
@@ -68,7 +68,7 @@ fn test_cache_dir_path() {
     // ChannelState, by default, is configured for Channel::Oss.
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(cache_dir(), home_dir.join("Library/Application Support/dev.zap.Zaplex"));
+            assert_eq!(cache_dir(), home_dir.join("Library/Application Support/dev.zaplex.Zaplex"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(cache_dir(), home_dir.join(".cache/zap"));
         } else if #[cfg(windows)] {
@@ -85,7 +85,7 @@ fn test_state_dir_path() {
     cfg_if::cfg_if! {
         // ChannelState, by default, is configured for Channel::Oss.
         if #[cfg(target_os = "macos")] {
-            assert_eq!(state_dir(), home_dir.join("Library/Application Support/dev.zap.Zaplex"));
+            assert_eq!(state_dir(), home_dir.join("Library/Application Support/dev.zaplex.Zaplex"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(state_dir(), home_dir.join(".local/state/zap"));
         } else if #[cfg(windows)] {
@@ -113,7 +113,7 @@ fn test_project_path_for_zap_dev_app_id() {
         .expect("should be able to compute project dirs");
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(project_dirs.project_path(), "dev.zap.ZapDev");
+            assert_eq!(project_dirs.project_path(), "dev.zaplex.ZapDev");
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(project_dirs.project_path(), "zap-dev");
         } else if #[cfg(windows)] {
@@ -130,7 +130,7 @@ fn test_project_path_for_oss_app_id() {
         .expect("should be able to compute project dirs");
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(project_dirs.project_path(), "dev.zap.Zaplex");
+            assert_eq!(project_dirs.project_path(), "dev.zaplex.Zaplex");
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             assert_eq!(project_dirs.project_path(), "zap");
         } else if #[cfg(windows)] {

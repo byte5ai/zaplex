@@ -196,8 +196,8 @@ elif [[ $RELEASE_CHANNEL = "stable" ]]; then
   BINARY_NAME="warp"
   APP_NAME="Zaplex"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-  ZAPLEX_BIN="zap-oss"
-  BINARY_NAME="zap-oss"
+  ZAPLEX_BIN="zaplex"
+  BINARY_NAME="zaplex"
   APP_NAME="Zaplex"
   # OSS channel 使用本地 crash reporting,不启用 release 默认特性集合。
   FEATURES="release_bundle"
@@ -206,7 +206,7 @@ fi
 # Artifact-specific binary naming
 if [[ "$ARTIFACT" == "cli" ]]; then
   # For CLI artifacts, use oz instead of warp as the binary name.  The OSS
-  # channel is an exception: its CLI command name is `zap-oss`, matching
+  # channel is an exception: its CLI command name is `zaplex`, matching
   # `Channel::cli_command_name` in the Rust source.
   if [[ $RELEASE_CHANNEL != "oss" ]]; then
     BINARY_NAME="${BINARY_NAME/warp/oz}"
@@ -221,11 +221,11 @@ elif [[ "$ARTIFACT" == "app" ]]; then
 fi
 
 if [[ $RELEASE_CHANNEL = "oss" ]]; then
-  # OSS(Zaplex) bundle id 与运行时 app id (`dev.zap.Zaplex`, 见
+  # OSS(Zaplex) bundle id 与运行时 app id (`dev.zaplex.Zaplex`, 见
   # `app/src/bin/oss.rs` / Cargo bundle metadata) 对齐, 否则 Linux 桌面
   # (尤其是 Wayland) 会按 desktop-file ID 而非 StartupWMClass 关联窗口,
   # 导致 icon 找不到.
-  BUNDLE_ID="dev.zap.Zaplex"
+  BUNDLE_ID="dev.zaplex.Zaplex"
 else
   BUNDLE_ID="dev.warp.$APP_NAME"
 fi

@@ -119,9 +119,9 @@ fn main() -> Result<()> {
         if target_env == "msvc"
             && env::var("CARGO_FEATURE_WINDOWS_HIGH_PERFORMANCE_GPU_DEFAULT").is_ok()
         {
-            println!("cargo:rustc-link-arg-bin=zap-oss=/EXPORT:NvOptimusEnablement,DATA");
+            println!("cargo:rustc-link-arg-bin=zaplex=/EXPORT:NvOptimusEnablement,DATA");
             println!(
-                "cargo:rustc-link-arg-bin=zap-oss=/EXPORT:AmdPowerXpressRequestHighPerformance,DATA"
+                "cargo:rustc-link-arg-bin=zaplex=/EXPORT:AmdPowerXpressRequestHighPerformance,DATA"
             );
         }
 
@@ -368,7 +368,7 @@ fn embed_resource_file(target_dir: &Path) {
 
     let version = env::var("GIT_RELEASE_TAG").unwrap_or("v0".to_owned());
     // Default value aligns with publisher and is set to "Zaplex", aligned globally with
-    // `script/windows/bundle.ps1` OSS branch (`$APP_NAME = 'Zaplex'`) + AUMID `dev.zap.Zaplex` + Cargo bundle
+    // `script/windows/bundle.ps1` OSS branch (`$APP_NAME = 'Zaplex'`) + AUMID `dev.zaplex.Zaplex` + Cargo bundle
     // metadata. Windows Task Manager's process grouping name actually comes from PE resources
     // `FileDescription` / `ProductName` (not the window title), so if we fall back to default "Zaplex" here,
     // a dev binary built directly via `cargo build` will display as `Zaplex(N)` in Task Manager.
@@ -377,7 +377,7 @@ fn embed_resource_file(target_dir: &Path) {
     let bin_name = env::var("CARGO_BIN_NAME").unwrap_or("oss".to_owned());
     // Override with `ZAPLEX_APP_PUBLISHER`; default aligns with installer / AUMID as "Zaplex".
     // Keep installer `MyAppPublisher`, Cargo bundle metadata `copyright`, and process AUMID
-    // `dev.zap.Zaplex` globally aligned across three places, avoiding Windows Shell missing the
+    // `dev.zaplex.Zaplex` globally aligned across three places, avoiding Windows Shell missing the
     // icon cache due to publisher / product name fingerprint mismatch.
     let publisher = env::var("ZAPLEX_APP_PUBLISHER").unwrap_or_else(|_| "Zaplex".to_owned());
     let (ver_major, ver_minor, ver_patch, ver_build) = parse_file_version_quad(&version);

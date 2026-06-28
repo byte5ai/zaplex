@@ -245,7 +245,7 @@ impl ChannelState {
             // Dummy value--integration tests shouldn't support URL schemes.
             Channel::Integration => "warpintegration",
             Channel::Local => "warplocal",
-            Channel::Oss => "zap",
+            Channel::Oss => "zaplex",
         }
     }
 }

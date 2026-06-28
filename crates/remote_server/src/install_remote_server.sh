@@ -4,7 +4,7 @@
 # setup.rs 会在运行时替换这些占位符:
 #   {download_base_url}     - 例如 https://github.com/zerx-lab/warp/releases/latest/download
 #   {install_dir}           - 例如 ~/.zap/remote-server
-#   {binary_name}           - 例如 zap-oss
+#   {binary_name}           - 例如 zaplex
 #   {version_suffix}        - 例如 -v0.2026...,没有 release tag 时为空
 #   {staging_tarball_path}  - SCP fallback 预上传 tarball 路径,常规下载路径为空
 set -e
@@ -60,7 +60,7 @@ tar -xzf "$tmpdir/zap.tar.gz" -C "$tmpdir"
 
 bin="$tmpdir/{binary_name}"
 if [ ! -f "$bin" ]; then
-  bin=$(find "$tmpdir" -type f \( -name 'zap-oss' -o -name 'warp-oss' -o -name 'oz*' \) ! -path "$tmpdir/resources/*" ! -name '*.tar.gz' | head -n1)
+  bin=$(find "$tmpdir" -type f \( -name 'zaplex' -o -name 'warp-oss' -o -name 'oz*' \) ! -path "$tmpdir/resources/*" ! -name '*.tar.gz' | head -n1)
 fi
 if [ -z "$bin" ]; then echo "no binary found in tarball" >&2; exit 1; fi
 chmod +x "$bin"

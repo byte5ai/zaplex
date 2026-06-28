@@ -895,7 +895,7 @@ fn dmg_name(channel: Channel) -> String {
         .is_ok_and(|output| output.stdout.starts_with(b"arm64"));
 
     // openWarp GitHub Release asset names are fixed as `Zap-arm64.dmg` / `Zap-intel.dmg`
-    // (naming convention from .github/workflows), which differs from `app_name_prefix("zap-oss")`.
+    // (naming convention from .github/workflows), which differs from `app_name_prefix("zaplex")`.
     // Here we hardcode only for OSS, which doesn't affect the universal naming for official channels.
     if matches!(channel, Channel::Oss) {
         return if is_arm64 {
@@ -920,7 +920,7 @@ fn app_name_prefix(channel: Channel) -> &'static str {
         Channel::Local => "warp",
         Channel::Integration => "integration",
         Channel::Dev => "WarpDev",
-        Channel::Oss => "zap-oss",
+        Channel::Oss => "zaplex",
     }
 }
 
@@ -931,7 +931,7 @@ fn executable_name(channel: Channel) -> &'static str {
         Channel::Local => "warp",
         Channel::Integration => "integration",
         Channel::Dev => "dev",
-        Channel::Oss => "zap-oss",
+        Channel::Oss => "zaplex",
     }
 }
 

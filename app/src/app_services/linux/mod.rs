@@ -155,10 +155,10 @@ impl ApplicationService {
 // `default_service` / `default_path` are overridden at the call site (`pass_startup_args_to_existing_instance`)
 // via `.destination(well_known_name())` / `.path(application_service_path())` on the builder,
 // so the constants here will not actually be used; but to avoid misleading future callers who might
-// use `Proxy::new` directly with defaults, these still point to the OSS default `dev.zap.Zaplex`.
+// use `Proxy::new` directly with defaults, these still point to the OSS default `dev.zaplex.Zaplex`.
 #[proxy(
     interface = "org.freedesktop.Application",
-    default_service = "dev.zap.Zaplex",
+    default_service = "dev.zaplex.Zaplex",
     default_path = "/dev/zap/Zaplex",
     gen_blocking = false
 )]

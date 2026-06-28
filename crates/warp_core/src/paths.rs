@@ -39,7 +39,7 @@ fn base_warp_config_dir_name() -> String {
         // Preview shares the same directory as Stable for backward
         // compatibility — existing users already have config in `.warp`.
         Channel::Stable | Channel::Preview => ZAPLEX_CONFIG_DIR.to_owned(),
-        Channel::Oss => ".zap".to_owned(),
+        Channel::Oss => ".zaplex".to_owned(),
         Channel::Dev => format!("{ZAPLEX_CONFIG_DIR}-dev"),
         Channel::Integration => format!("{ZAPLEX_CONFIG_DIR}-integration"),
         Channel::Local => format!("{ZAPLEX_CONFIG_DIR}-local"),
@@ -88,7 +88,7 @@ fn macos_config_dir_name() -> String {
     match ChannelState::channel() {
         Channel::Stable => ZAPLEX_CONFIG_DIR.to_owned(),
         Channel::Preview => format!("{ZAPLEX_CONFIG_DIR}-preview"),
-        Channel::Oss => ".zap".to_owned(),
+        Channel::Oss => ".zaplex".to_owned(),
         Channel::Dev => format!("{ZAPLEX_CONFIG_DIR}-dev"),
         Channel::Integration => format!("{ZAPLEX_CONFIG_DIR}-integration"),
         Channel::Local => format!("{ZAPLEX_CONFIG_DIR}-local"),

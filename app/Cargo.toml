@@ -1,6 +1,6 @@
 [package]
 authors = ["Zaplex Team"]
-default-run = "zap-oss"
+default-run = "zaplex"
 description = "The local-first agentic terminal"
 edition = "2021"
 autobins = false
@@ -13,12 +13,12 @@ license.workspace = true
 name = "warp"
 path = "src/lib.rs"
 
-# Zaplex 只保留两个 bin:打包用的 zap-oss,以及构建期工具 generate_settings_schema。
+# Zaplex 只保留两个 bin:打包用的 zaplex,以及构建期工具 generate_settings_schema。
 # 原 warp 多渠道发布的 dev/stable/preview/local bin 已删除。
 
 [[bin]]
-name = "zap-oss"
-path = "src/bin/zap_oss.rs"
+name = "zaplex"
+path = "src/bin/zaplex.rs"
 test = false
 
 [[bin]]
@@ -836,7 +836,7 @@ hoa_remote_control = []
 codex_notifications = []
 configurable_context_window = []
 
-[package.metadata.bundle.bin.zap-oss]
+[package.metadata.bundle.bin.zaplex]
 category = "public.app-category.developer-tools"
 copyright = "© 2025-2026, Zaplex"
 identifier = "dev.zaplex.Zaplex"

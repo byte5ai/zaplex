@@ -262,14 +262,14 @@ pub fn parse_uname_output(output: &str) -> Result<RemotePlatform> {
 /// - dev:         `~/.warp-dev/remote-server`
 /// - local:       `~/.warp-local/remote-server`
 /// - integration: `~/.warp-dev/remote-server`
-/// - warp-oss:    `~/.zap/remote-server`
+/// - warp-oss:    `~/.zaplex/remote-server`
 pub fn remote_server_dir() -> String {
     let warp_dir = match ChannelState::channel() {
         Channel::Stable => ".warp",
         Channel::Preview => ".warp-preview",
         Channel::Dev | Channel::Integration => ".warp-dev",
         Channel::Local => ".warp-local",
-        Channel::Oss => ".zap",
+        Channel::Oss => ".zaplex",
     };
     format!("~/{warp_dir}/remote-server")
 }
