@@ -5573,6 +5573,7 @@ impl Workspace {
         let request = crate::terminal::daemon_tty::DaemonSessionRequest {
             connection_session_id: session_id,
             open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+            adopt_pty_session_id: None,
         };
 
         // Create the daemon-backed tab first: its event loop subscribes for
@@ -5590,6 +5591,40 @@ impl Workspace {
 
         self.spawn_daemon_session_connect(server.clone(), session_id, ctx);
         true
+    }
+
+    /// Adopts an already-running daemon session in a new tab: attaches to
+    /// `pty_session_id` (replay + live) instead of opening a fresh one. This is
+    /// the entry point the multi-session sidebar calls when the user picks a
+    /// listed session (the listing comes from `RemoteServerClient::list_sessions`).
+    #[cfg(unix)]
+    pub fn adopt_daemon_session(
+        &mut self,
+        server: warp_ssh_manager::SshServerInfo,
+        pty_session_id: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::remote_server::headless_connect;
+
+        let session_id = headless_connect::alloc_daemon_session_id();
+        let request = crate::terminal::daemon_tty::DaemonSessionRequest {
+            connection_session_id: session_id,
+            open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+            adopt_pty_session_id: Some(pty_session_id),
+        };
+
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                hide_homepage: true,
+                daemon_request: Some(request),
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None, /* custom_tab_title */
+            ctx,
+        );
+
+        self.spawn_daemon_session_connect(server, session_id, ctx);
     }
 
     /// Establishes the headless SSH ControlMaster for a daemon session, then

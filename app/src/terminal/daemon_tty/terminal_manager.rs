@@ -45,6 +45,10 @@ pub struct DaemonSessionRequest {
     /// waits for it to reach `Connected` before issuing `OpenSession`.
     pub connection_session_id: SessionId,
     pub open_params: OpenSessionParams,
+    /// `None` opens a fresh session; `Some(pty_session_id)` adopts an existing
+    /// daemon session (attach + replay instead of open) — the multi-session
+    /// "adopt a running session" path (Stage 4).
+    pub adopt_pty_session_id: Option<String>,
 }
 
 /// A [`crate::terminal::TerminalManager`] whose PTY lives in the remote daemon
@@ -78,6 +82,7 @@ impl TerminalManager {
         initial_input_config: Option<InputConfig>,
         connection_session_id: SessionId,
         open_params: OpenSessionParams,
+        adopt_pty_session_id: Option<String>,
         ctx: &mut AppContext,
     ) -> ModelHandle<Box<dyn crate::terminal::TerminalManager>> {
         // Create all the channels we need for communication.
@@ -127,6 +132,7 @@ impl TerminalManager {
             size_info,
             connection_session_id,
             open_params,
+            adopt_pty_session_id,
             ctx,
         );
 
@@ -192,6 +198,7 @@ impl TerminalManager {
         size_info: SizeInfo,
         connection_session_id: SessionId,
         open_params: OpenSessionParams,
+        adopt_pty_session_id: Option<String>,
         ctx: &mut AppContext,
     ) -> ModelHandle<EventLoop> {
         ctx.add_model(|ctx| {
@@ -202,6 +209,7 @@ impl TerminalManager {
                 size_info,
                 connection_session_id,
                 open_params,
+                adopt_pty_session_id,
                 ctx,
             )
         })

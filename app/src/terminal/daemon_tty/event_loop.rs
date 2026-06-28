@@ -58,10 +58,16 @@ impl EventLoop {
         size_info: SizeInfo,
         connection_session_id: SessionId,
         open_params: OpenSessionParams,
+        adopt_pty_session_id: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let mut event_loop = Self::new(model, channel_event_listener, connection_session_id);
-        event_loop.pending_open = Some((open_params, size_info));
+        match adopt_pty_session_id {
+            // Adopt an existing daemon session: attach + replay on connect.
+            Some(id) => event_loop.pty_session_id = Some(id),
+            // Open a fresh session once the transport is connected.
+            None => event_loop.pending_open = Some((open_params, size_info)),
+        }
 
         // Output path: live PTY bytes arrive as manager pushes. Filter to our
         // own daemon session and feed them through the ANSI processor. The
@@ -87,7 +93,7 @@ impl EventLoop {
             RemoteServerManagerEvent::SessionConnected { session_id, .. }
                 if *session_id == me.connection_session_id =>
             {
-                me.try_open(ctx);
+                me.on_transport_connected(ctx);
             }
             // Transport reconnected (SSH blip): the daemon session kept running —
             // re-attach and replay what we missed (§9).
@@ -108,11 +114,21 @@ impl EventLoop {
         // keystrokes can be routed to the live client.
         ctx.spawn_stream_local(event_loop_rx, Self::on_event_loop_message, |_, _| ());
 
-        // If the transport is already connected, open the session now; otherwise
-        // the `SessionConnected` arm above triggers it once it connects.
-        event_loop.try_open(ctx);
+        // If the transport is already connected, act now (open or adopt);
+        // otherwise the `SessionConnected` arm above does it once it connects.
+        event_loop.on_transport_connected(ctx);
 
         event_loop
+    }
+
+    /// On (initial) transport connect: open a fresh session if one is pending,
+    /// otherwise attach to the adopted session id.
+    fn on_transport_connected(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.pending_open.is_some() {
+            self.try_open(ctx);
+        } else if self.pty_session_id.is_some() {
+            self.reattach(ctx);
+        }
     }
 
     fn new(

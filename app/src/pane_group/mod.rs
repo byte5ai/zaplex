@@ -4841,6 +4841,7 @@ impl PaneGroup {
                     initial_input_config,
                     request.connection_session_id,
                     request.open_params,
+                    request.adopt_pty_session_id,
                     ctx,
                 );
             let terminal_view = terminal_manager.as_ref(ctx).view();
