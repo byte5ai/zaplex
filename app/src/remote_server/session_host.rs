@@ -44,6 +44,13 @@ pub(super) struct Session {
     pub(super) attached: ConnectionId,
     /// Ordered keyboard/mouse input → the writer task → the PTY.
     pub(super) input_tx: async_channel::Sender<Vec<u8>>,
+    /// Working directory the session was opened in (for `ListSessions`).
+    pub(super) cwd: Option<String>,
+    /// Login shell the session runs (for `ListSessions` titles).
+    pub(super) shell: String,
+    /// Unix epoch millis of the last attach (open counts as the first attach);
+    /// `0` means never. Drives `ListSessions` and the detached-idle GC.
+    pub(super) last_attached_ms: u64,
 }
 
 /// Per-session reader task: pumps PTY output into the model (which appends it to

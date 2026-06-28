@@ -19,8 +19,8 @@ use crate::proto::{
     ResolveConflictResponse, ResolvePath, ResolvePathResponse, RunCommandRequest,
     RunCommandResponse, SaveBuffer, SaveBufferResponse, ServerMessage, SessionBootstrapped,
     TextEdit, WriteFile, WriteFileChunk, WriteFileChunkResponse,
-    AttachSession, DetachSession, OpenSession, ResizeSession, SessionAttached, SessionInput,
-    SessionOpened, SessionSize,
+    AttachSession, DetachSession, ListSessions, OpenSession, ResizeSession, SessionAttached,
+    SessionInput, SessionList, SessionOpened, SessionSize,
 };
 
 use crate::protocol::{self, ProtocolError, RequestId};
@@ -693,6 +693,23 @@ impl RemoteServerClient {
             Some(server_message::Message::SessionAttached(resp)) => Ok(resp),
             other => {
                 log::error!("Unexpected response variant for AttachSession: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Lists the daemon's live sessions (Stage 4: multi-session UI / adopt).
+    pub async fn list_sessions(&self) -> Result<SessionList, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::ListSessions(ListSessions {})),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::SessionList(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for ListSessions: {other:?}");
                 Err(ClientError::UnexpectedResponse)
             }
         }

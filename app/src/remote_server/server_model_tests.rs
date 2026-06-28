@@ -248,8 +248,8 @@ fn create_directory_creates_nested_directories() {
 mod daemon_session {
     use super::test_model;
     use crate::remote_server::proto::{
-        client_message, server_message, AttachSession, ClientMessage, CloseSession, OpenSession,
-        ServerMessage, SessionInput, SessionSize,
+        client_message, server_message, AttachSession, ClientMessage, CloseSession, ListSessions,
+        OpenSession, ServerMessage, SessionInput, SessionList, SessionSize,
     };
     use futures::future::Either;
     use std::time::Duration;
@@ -514,6 +514,106 @@ mod daemon_session {
             );
 
             model.update(&mut app, |m, ctx| m.handle_message(conn_id2, close_msg(&session_id), ctx));
+        });
+    }
+
+    fn open_in(cwd: &str) -> ClientMessage {
+        ClientMessage {
+            request_id: "open".to_string(),
+            message: Some(client_message::Message::OpenSession(OpenSession {
+                cwd: Some(cwd.to_string()),
+                shell: Some("/bin/bash".to_string()),
+                env: std::collections::HashMap::new(),
+                size: Some(SessionSize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                }),
+            })),
+        }
+    }
+
+    fn list_msg() -> ClientMessage {
+        ClientMessage {
+            request_id: "list".to_string(),
+            message: Some(client_message::Message::ListSessions(ListSessions {})),
+        }
+    }
+
+    /// First `SessionOpened` on the channel (skips any interleaved output).
+    async fn recv_session_opened(rx: &async_channel::Receiver<ServerMessage>) -> Option<String> {
+        for _ in 0..20 {
+            match recv_deadline(rx, Duration::from_secs(10)).await {
+                Some(m) => {
+                    if let Some(server_message::Message::SessionOpened(o)) = m.message {
+                        return Some(o.session_id);
+                    }
+                }
+                None => return None,
+            }
+        }
+        None
+    }
+
+    /// Next `SessionList` on the channel (skips interleaved output / exits).
+    async fn recv_session_list(rx: &async_channel::Receiver<ServerMessage>) -> Option<SessionList> {
+        for _ in 0..100 {
+            match recv_deadline(rx, Duration::from_secs(5)).await {
+                Some(m) => {
+                    if let Some(server_message::Message::SessionList(list)) = m.message {
+                        return Some(list);
+                    }
+                }
+                None => return None,
+            }
+        }
+        None
+    }
+
+    /// Stage 4: multiple sessions per daemon are listable, carry their cwd, and
+    /// the list shrinks when a session is closed.
+    #[test]
+    fn list_sessions_reports_open_sessions() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+
+            // Real, existing working directories — the daemon chdirs the PTY in.
+            let dir_a = tempfile::tempdir().unwrap();
+            let dir_b = tempfile::tempdir().unwrap();
+            let path_a = dir_a.path().to_string_lossy().to_string();
+            let path_b = dir_b.path().to_string_lossy().to_string();
+
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_in(&path_a), ctx));
+            let id_a = recv_session_opened(&conn_rx).await.expect("session A opened");
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_in(&path_b), ctx));
+            let id_b = recv_session_opened(&conn_rx).await.expect("session B opened");
+            assert_ne!(id_a, id_b);
+
+            // ListSessions reports both, each with its cwd, all alive.
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, list_msg(), ctx));
+            let list = recv_session_list(&conn_rx).await.expect("SessionList");
+            assert_eq!(list.sessions.len(), 2, "two sessions listed");
+            let by_id: std::collections::HashMap<&str, &str> = list
+                .sessions
+                .iter()
+                .map(|s| (s.session_id.as_str(), s.cwd.as_str()))
+                .collect();
+            assert_eq!(by_id.get(id_a.as_str()), Some(&path_a.as_str()));
+            assert_eq!(by_id.get(id_b.as_str()), Some(&path_b.as_str()));
+            assert!(list.sessions.iter().all(|s| s.alive));
+
+            // Closing one shrinks the list to the survivor.
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, close_msg(&id_a), ctx));
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, list_msg(), ctx));
+            let list2 = recv_session_list(&conn_rx).await.expect("SessionList after close");
+            assert_eq!(list2.sessions.len(), 1);
+            assert_eq!(list2.sessions[0].session_id, id_b);
+
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, close_msg(&id_b), ctx));
         });
     }
 }

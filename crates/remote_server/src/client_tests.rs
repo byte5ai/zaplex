@@ -6,7 +6,7 @@ use crate::proto::{
     server_message, write_file_chunk_response, ClientMessage, ErrorCode, FileSystemEntryKind,
     InitializeResponse, ReadFileChunkResponse, ReadFileChunkSuccess, ResolvePathResponse,
     ResolvePathSuccess, RunCommandResponse, RunCommandSuccess, ServerMessage, SessionAttached,
-    SessionExited, SessionOpened, SessionOutput, SessionSize,
+    SessionExited, SessionInfo, SessionList, SessionOpened, SessionOutput, SessionSize,
     WriteFileChunkResponse, WriteFileChunkSuccess,
 };
 use crate::protocol;
@@ -640,4 +640,39 @@ async fn send_detach_session_sends_frame() {
         }
         other => panic!("expected DetachSession, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn list_sessions_round_trip() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        match &msg.message {
+            Some(client_message::Message::ListSessions(_)) => {}
+            other => panic!("expected ListSessions, got {other:?}"),
+        }
+        server_message::Message::SessionList(SessionList {
+            sessions: vec![
+                SessionInfo {
+                    session_id: "s1".to_string(),
+                    title: "work".to_string(),
+                    cwd: "/home/me/work".to_string(),
+                    alive: true,
+                    last_attached_epoch_millis: 123,
+                },
+                SessionInfo {
+                    session_id: "s2".to_string(),
+                    title: "logs".to_string(),
+                    cwd: "/var/log".to_string(),
+                    alive: true,
+                    last_attached_epoch_millis: 456,
+                },
+            ],
+        })
+    });
+
+    let resp = client.list_sessions().await.unwrap();
+    assert_eq!(resp.sessions.len(), 2);
+    assert_eq!(resp.sessions[0].session_id, "s1");
+    assert_eq!(resp.sessions[0].cwd, "/home/me/work");
+    assert!(resp.sessions[0].alive);
+    assert_eq!(resp.sessions[1].last_attached_epoch_millis, 456);
 }

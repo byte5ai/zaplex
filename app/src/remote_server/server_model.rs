@@ -29,7 +29,8 @@ use zaplex_remote_session::types::supported_features;
 #[cfg(unix)]
 use super::proto::{
     AttachSession, CloseSession, DetachSession, OpenSession, ResizeSession, SessionAttached,
-    SessionExited, SessionInput, SessionOpened, SessionOutput, SessionSize,
+    SessionExited, SessionInfo, SessionInput, SessionList, SessionOpened, SessionOutput,
+    SessionSize,
 };
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -727,11 +728,14 @@ impl ServerModel {
                 self.handle_detach_session(msg);
                 return;
             }
-            // ListSessions (multi-session UI / adopt) is Stage 4.
+            // Multi-session listing for the sidebar / adopt-by-id (Stage 4).
+            #[cfg(unix)]
+            Some(client_message::Message::ListSessions(_)) => self.handle_list_sessions(),
+            #[cfg(not(unix))]
             Some(client_message::Message::ListSessions(_)) => {
                 HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                     code: ErrorCode::InvalidRequest.into(),
-                    message: "ListSessions is not implemented yet".to_string(),
+                    message: "zaplex session host requires a unix daemon".to_string(),
                 }))
             }
             // Non-unix daemons have no session host (PTY ownership is unix-only).
@@ -1901,6 +1905,16 @@ fn file_context_result_to_proto(result: ReadFileContextResult) -> ReadFileContex
     }
 }
 
+/// Current Unix time in epoch milliseconds (`0` if the clock is before the
+/// epoch). Used to stamp session attach times for `ListSessions` / the GC.
+#[cfg(unix)]
+fn now_epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Daemon-side session-host handlers (Stage 1). Unix-only: the daemon owns the
 /// PTYs. The per-session state and async tasks live in `super::session_host`.
 #[cfg(unix)]
@@ -1966,6 +1980,9 @@ impl ServerModel {
                 cols,
                 attached: conn_id,
                 input_tx,
+                cwd,
+                shell: shell.clone(),
+                last_attached_ms: now_epoch_millis(),
             },
         );
 
@@ -2014,6 +2031,7 @@ impl ServerModel {
         let (base_seq, replay) = session.ring.replay_from(msg.last_seq);
         // Route live output to the reconnected connection from now on.
         session.attached = conn_id;
+        session.last_attached_ms = now_epoch_millis();
         let size = SessionSize {
             rows: session.rows as u32,
             cols: session.cols as u32,
@@ -2041,6 +2059,41 @@ impl ServerModel {
             session.attached = uuid::Uuid::nil();
             log::info!("Daemon: detached session {} (still running)", msg.session_id);
         }
+    }
+
+    /// Lists all live daemon-hosted sessions (Stage 4: multi-session UI / adopt).
+    /// Registry membership means alive — exited sessions are removed (and
+    /// `SessionExited`-announced) by the reader-EOF/close paths.
+    fn handle_list_sessions(&self) -> HandlerOutcome {
+        let sessions = self
+            .sessions
+            .iter()
+            .map(|(id, session)| {
+                let title = session
+                    .cwd
+                    .as_deref()
+                    .filter(|c| !c.is_empty())
+                    .and_then(|cwd| {
+                        std::path::Path::new(cwd)
+                            .file_name()
+                            .map(|b| b.to_string_lossy().into_owned())
+                    })
+                    .unwrap_or_else(|| {
+                        std::path::Path::new(&session.shell)
+                            .file_name()
+                            .map(|b| b.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| session.shell.clone())
+                    });
+                SessionInfo {
+                    session_id: id.clone(),
+                    title,
+                    cwd: session.cwd.clone().unwrap_or_default(),
+                    alive: true,
+                    last_attached_epoch_millis: session.last_attached_ms,
+                }
+            })
+            .collect();
+        HandlerOutcome::Sync(server_message::Message::SessionList(SessionList { sessions }))
     }
 
     /// Applies a window resize to the session's PTY (TIOCSWINSZ).
