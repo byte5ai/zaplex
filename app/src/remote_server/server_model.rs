@@ -2015,6 +2015,36 @@ impl ServerModel {
         exec.spawn(super::session_host::run_session_writer(async_leader, input_rx))
             .detach();
 
+        // Bootstrap the daemon-spawned shell with the Zaplexify shell integration
+        // (blocks, prompt marks, completions) by writing the init script as the
+        // session's first input — the ordered writer delivers it ahead of any
+        // user input. The script self-sets TERM_PROGRAM, emits the InitShell DCS
+        // hook, and is idempotent (ZAPLEX_BOOTSTRAPPED guard), so a later
+        // re-attach won't double-run it. Without this the session would be a
+        // bare VT (no blocks) — this is what makes a daemon session a real
+        // Zaplex terminal.
+        match crate::terminal::shell::ShellType::from_name(&shell) {
+            Some(shell_type) => {
+                let mut bootstrap =
+                    crate::terminal::bootstrap::init_shell_script_for_shell(shell_type, &crate::ASSETS)
+                        .into_bytes();
+                bootstrap.extend_from_slice(shell_type.execute_command_bytes());
+                if let Some(session) = self.sessions.get(&session_id) {
+                    if let Err(e) = session.input_tx.try_send(bootstrap) {
+                        log::warn!("Daemon: failed to enqueue bootstrap for {session_id}: {e}");
+                    } else {
+                        log::info!("Daemon: bootstrapped session {session_id} ({})", shell_type.name());
+                    }
+                }
+            }
+            None => {
+                log::info!(
+                    "Daemon: shell {shell:?} is not Zaplexify-capable; session {session_id} \
+                     runs as a plain shell (no blocks)"
+                );
+            }
+        }
+
         log::info!("Daemon: opened session {session_id} ({rows}x{cols}, shell={shell})");
         HandlerOutcome::Sync(server_message::Message::SessionOpened(SessionOpened {
             session_id,

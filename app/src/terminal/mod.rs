@@ -31,7 +31,7 @@ pub mod block_list_element;
 pub mod block_list_viewport;
 pub mod blockgrid_element;
 mod blockgrid_renderer;
-mod bootstrap;
+pub mod bootstrap;
 pub mod color;
 mod command_corrections_denylist;
 pub mod daemon_tty;
