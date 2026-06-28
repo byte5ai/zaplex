@@ -66,14 +66,46 @@ pub fn control_socket_path(server: &SshServerInfo) -> PathBuf {
         .join(format!("zaplex-daemon-{:016x}", stable_hash(&key)))
 }
 
+/// Whether a live ControlMaster is serving `socket_path` — `ssh -O check`
+/// returns success only when the master process is actually alive (a stale
+/// socket file fails the check). Runs entirely over the local Unix socket, so
+/// it returns quickly; bounded by a short timeout regardless.
+async fn control_master_alive(socket_path: &Path) -> bool {
+    let mut cmd = command::r#async::Command::new("ssh");
+    cmd.arg("-O")
+        .arg("check")
+        .arg("-o")
+        .arg(format!("ControlPath={}", socket_path.display()))
+        .arg("placeholder@placeholder")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    matches!(
+        tokio::time::timeout(Duration::from_secs(5), cmd.output()).await,
+        Ok(Ok(output)) if output.status.success()
+    )
+}
+
 /// Ensures a ControlMaster is up at `socket_path` (idempotent via
 /// `ControlMaster=auto` + `ControlPersist`). Spawns `ssh -f -N …`, which
 /// authenticates and then backgrounds itself; the master socket exists by the
 /// time the foreground process exits. Key/agent auth only (`BatchMode=yes`).
 pub async fn ensure_control_master(server: &SshServerInfo, socket_path: &Path) -> Result<()> {
     if socket_path.exists() {
-        // A persistent master from an earlier tab is already serving this host.
-        return Ok(());
+        // A socket file is present, but the master may have died on an SSH drop,
+        // leaving a stale socket. Verify it's actually serving: reuse a live
+        // master, otherwise remove the stale socket and spawn a fresh one. This
+        // is what lets a daemon session's transport be re-established after a
+        // connection loss (the session itself kept running daemon-side).
+        if control_master_alive(socket_path).await {
+            return Ok(());
+        }
+        log::info!(
+            "ControlMaster socket {} is stale; re-establishing",
+            socket_path.display()
+        );
+        let _ = std::fs::remove_file(socket_path);
     }
 
     let mut args: Vec<String> = Vec::new();
