@@ -307,3 +307,187 @@ impl EventLoop {
 impl Entity for EventLoop {
     type Event = ();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::borrow::Cow;
+    use warp_core::HostId;
+    use warpui::{App, ModelHandle};
+
+    const OUR_PTY: &str = "pty-ours";
+    const HOST: &str = "test-host";
+
+    /// A [`ChannelEventListener`] whose wakeup channel we keep. `process_pty_bytes`
+    /// fires a wakeup *after* feeding the bytes through the ANSI processor into the
+    /// terminal model, so an observed wakeup proves the output reached the parser
+    /// and model for our session (the shared parser's rendering itself is covered
+    /// by the terminal-model / ANSI tests — here we test daemon-session routing).
+    fn test_listener() -> (ChannelEventListener, async_channel::Receiver<()>) {
+        let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
+        let (events_tx, _events_rx) = async_channel::unbounded();
+        let (pty_reads_tx, _pty_reads_rx) = async_broadcast::broadcast(1);
+        (
+            ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx),
+            wakeups_rx,
+        )
+    }
+
+    fn output_event(
+        conn: SessionId,
+        pty: &str,
+        seq: u64,
+        bytes: &[u8],
+    ) -> RemoteServerManagerEvent {
+        RemoteServerManagerEvent::SessionOutput {
+            session_id: conn,
+            host_id: HostId::new(HOST.to_string()),
+            pty_session_id: pty.to_string(),
+            seq,
+            bytes: bytes.to_vec(),
+        }
+    }
+
+    fn drain<T>(rx: &async_channel::Receiver<T>) {
+        while rx.try_recv().is_ok() {}
+    }
+
+    /// Starts an EventLoop that has *adopted* `OUR_PTY` (so it is immediately
+    /// addressable without a connected client to open) on a real
+    /// `RemoteServerManager` singleton. The manager is what the loop subscribes
+    /// to for live `SessionOutput`, so emitting from it drives the real path.
+    fn start_adopted_loop(
+        app: &mut App,
+        conn: SessionId,
+    ) -> (
+        ModelHandle<RemoteServerManager>,
+        ModelHandle<EventLoop>,
+        Arc<FairMutex<TerminalModel>>,
+        async_channel::Receiver<()>,
+    ) {
+        let manager = app.add_singleton_model(RemoteServerManager::new);
+        let (listener, wakeups_rx) = test_listener();
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(None, Some(listener.clone()))));
+        // The input stream isn't exercised here; dropping the sender just closes it.
+        let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+        let size = SizeInfo::new_without_font_metrics(24, 80);
+        let model_for_loop = model.clone();
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::start(
+                model_for_loop,
+                event_loop_rx,
+                listener,
+                size,
+                conn,
+                OpenSessionParams::default(),
+                Some(OUR_PTY.to_string()),
+                ctx,
+            )
+        });
+        (manager, event_loop, model, wakeups_rx)
+    }
+
+    /// The core client-side output path: a live `SessionOutput` push for our
+    /// daemon session is fed to the terminal (proven by the repaint wakeup) and
+    /// advances `last_seq` (= seq + len, the replay cursor) — while a push for a
+    /// *different* `pty_session_id` on the same connection is ignored.
+    #[test]
+    fn session_output_routes_to_terminal_and_filters_by_pty() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(7u64);
+            let (manager, event_loop, _model, wakeups_rx) = start_adopted_loop(&mut app, conn);
+
+            // Delivery is synchronous: `ctx.emit` queues an effect that
+            // `flush_effects` dispatches to subscribers before `update` returns.
+            manager.update(&mut app, |_m, ctx| {
+                ctx.emit(output_event(conn, OUR_PTY, 0, b"hello-daemon"));
+            });
+
+            assert!(
+                !wakeups_rx.is_empty(),
+                "our SessionOutput must reach the parser/model and request a repaint"
+            );
+            assert_eq!(
+                event_loop.read(&app, |me, _| me.last_seq),
+                b"hello-daemon".len() as u64,
+                "last_seq must advance to seq + bytes.len() (the replay cursor)"
+            );
+
+            // A push for another session on the same connection is filtered out.
+            drain(&wakeups_rx);
+            manager.update(&mut app, |_m, ctx| {
+                ctx.emit(output_event(conn, "pty-someone-else", 999, b"NOT-OURS"));
+            });
+            assert!(
+                wakeups_rx.is_empty(),
+                "output for a foreign pty_session_id must not reach our terminal"
+            );
+            assert_eq!(
+                event_loop.read(&app, |me, _| me.last_seq),
+                b"hello-daemon".len() as u64,
+                "foreign output must not advance our last_seq"
+            );
+
+            // A contiguous follow-up chunk for our session advances the cursor by
+            // its own length from the new seq.
+            manager.update(&mut app, |_m, ctx| {
+                ctx.emit(output_event(conn, OUR_PTY, 12, b"-more"));
+            });
+            assert_eq!(
+                event_loop.read(&app, |me, _| me.last_seq),
+                (b"hello-daemon".len() + b"-more".len()) as u64,
+                "last_seq tracks the latest seq + len"
+            );
+        });
+    }
+
+    /// Keystrokes that arrive before `OpenSession` resolves are buffered in order
+    /// and flushed once the daemon session id is known — so nothing typed during
+    /// the connect window is lost.
+    #[test]
+    fn input_before_session_open_is_buffered_then_flushed() {
+        App::test((), |mut app| async move {
+            // Held for the duration so the singleton stays registered.
+            let _manager = app.add_singleton_model(RemoteServerManager::new);
+            let conn = SessionId::from(9u64);
+            let (listener, _wakeups_rx) = test_listener();
+            let model = Arc::new(FairMutex::new(TerminalModel::mock(None, Some(listener.clone()))));
+            let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+            let size = SizeInfo::new_without_font_metrics(24, 80);
+            let model_for_loop = model.clone();
+            // `None` = open a fresh session; with no connected client it never
+            // resolves, so `pty_session_id` stays `None` and input must buffer.
+            let event_loop = app.add_model(|ctx| {
+                EventLoop::start(
+                    model_for_loop,
+                    event_loop_rx,
+                    listener,
+                    size,
+                    conn,
+                    OpenSessionParams::default(),
+                    None,
+                    ctx,
+                )
+            });
+
+            event_loop.update(&mut app, |me, ctx| {
+                me.on_event_loop_message(EventLoopMessage::Input(Cow::Owned(b"a".to_vec())), ctx);
+                me.on_event_loop_message(EventLoopMessage::Input(Cow::Owned(b"b".to_vec())), ctx);
+            });
+            event_loop.read(&app, |me, _| {
+                assert!(me.pty_session_id.is_none(), "session not opened yet");
+                assert_eq!(me.pending_input.len(), 2, "input must be buffered before open");
+            });
+
+            // Opening drains the buffer (dispatch drops without a live client, but
+            // the buffer must be flushed and the id recorded).
+            event_loop.update(&mut app, |me, ctx| {
+                me.on_session_opened("pty-late".to_string(), ctx);
+            });
+            event_loop.read(&app, |me, _| {
+                assert_eq!(me.pty_session_id.as_deref(), Some("pty-late"));
+                assert!(me.pending_input.is_empty(), "buffer must flush on open");
+            });
+        });
+    }
+}
