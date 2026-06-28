@@ -402,7 +402,7 @@ impl View {
                 | (PaletteMode::LaunchConfig, QueryFilter::LaunchConfigurations)
                 | (PaletteMode::Files, QueryFilter::Files)
                 | (PaletteMode::Conversations, QueryFilter::Conversations)
-                | (PaletteMode::ZapDrive, QueryFilter::Drive)
+                | (PaletteMode::ZaplexDrive, QueryFilter::Drive)
         )
     }
 

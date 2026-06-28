@@ -113,14 +113,14 @@ impl SearchItem for WarpAISearchItem {
     fn accept_result(&self) -> CommandSearchItemAction {
         match self {
             WarpAISearchItem::Translate => CommandSearchItemAction::TranslateUsingWarpAI,
-            WarpAISearchItem::Open => CommandSearchItemAction::ZapAI,
+            WarpAISearchItem::Open => CommandSearchItemAction::ZaplexAI,
         }
     }
 
     fn execute_result(&self) -> CommandSearchItemAction {
         match self {
             WarpAISearchItem::Translate => CommandSearchItemAction::TranslateUsingWarpAI,
-            WarpAISearchItem::Open => CommandSearchItemAction::ZapAI,
+            WarpAISearchItem::Open => CommandSearchItemAction::ZaplexAI,
         }
     }
 

@@ -165,7 +165,7 @@ impl OneTimeModalModel {
 
     fn check_and_trigger_zap_launch_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
         // Only show if the feature flag is enabled.
-        if !FeatureFlag::ZapLaunchModal.is_enabled() {
+        if !FeatureFlag::ZaplexLaunchModal.is_enabled() {
             return false;
         }
 

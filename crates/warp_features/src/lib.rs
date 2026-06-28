@@ -553,7 +553,7 @@ pub enum FeatureFlag {
 
     /// Enables the Zaplex launch modal announcing Zaplex going open-source.
     /// When enabled, the HOA onboarding flow is suppressed.
-    ZapLaunchModal,
+    ZaplexLaunchModal,
 
     /// Updated tab styling (background colors, border, close button positioning, margins).
     NewTabStyling,
@@ -610,7 +610,7 @@ pub enum FeatureFlag {
 
     /// Enables the new settings to control visibility of Zaplex Drive, Code Review Panel,
     /// and Project Explorer & Global Search features.
-    ZapNewSettingsModes,
+    ZaplexNewSettingsModes,
 
     /// Enables vertical tab layout as an alternative to the horizontal tab bar.
     VerticalTabs,

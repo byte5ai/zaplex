@@ -402,7 +402,7 @@ pub enum PaletteSource {
     PrefixChange,
     Keybinding,
     CtrlTab { shift_pressed_initially: bool },
-    ZapDrive,
+    ZaplexDrive,
     QuitModal,
     LogOutModal,
     IntegrationTest,
@@ -527,7 +527,7 @@ pub enum CommandCorrectionEvent {
 pub enum CommandSearchResultType {
     History,
     Workflow,
-    ZapAI,
+    ZaplexAI,
     TranslateUsingWarpAI,
     Notebook,
     EnvVarCollection,
@@ -544,7 +544,7 @@ impl From<&CommandSearchItemAction> for CommandSearchResultType {
             AcceptWorkflow(_) => Self::Workflow,
             AcceptNotebook(_) => Self::Notebook,
             AcceptEnvVarCollection(_) => Self::EnvVarCollection,
-            ZapAI => Self::ZapAI,
+            ZaplexAI => Self::ZaplexAI,
             TranslateUsingWarpAI => Self::TranslateUsingWarpAI,
             AcceptAIQuery(_) | RunAIQuery(_) => Self::AIQuery,
         }
@@ -667,7 +667,7 @@ pub enum KnowledgePaneEntrypoint {
     Settings,
 
     #[serde(rename = "warp_drive")]
-    ZapDrive,
+    ZaplexDrive,
 
     #[serde(rename = "ai_blocklist")]
     AIBlocklist,
@@ -686,7 +686,7 @@ pub enum MCPServerCollectionPaneEntrypoint {
     Settings,
 
     #[serde(rename = "warp_drive")]
-    ZapDrive,
+    ZaplexDrive,
 
     #[serde(rename = "slash_command")]
     SlashCommand,

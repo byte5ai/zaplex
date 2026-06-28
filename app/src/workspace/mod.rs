@@ -1033,7 +1033,7 @@ pub fn init(app: &mut AppContext) {
             "workspace:search_drive",
             crate::t!("keybinding-desc-workspace-search-drive"),
             WorkspaceAction::OpenPalette {
-                mode: PaletteMode::ZapDrive,
+                mode: PaletteMode::ZaplexDrive,
                 source: PaletteSource::Keybinding,
                 query: None,
             },

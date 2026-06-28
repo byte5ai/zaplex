@@ -20,7 +20,7 @@ use crate::{
         update_manager::UpdateManager,
         Owner, StoredObjectMetadata, StoredObjectPermissions,
     },
-    drive::ZapDriveObjectSettings,
+    drive::ZaplexDriveObjectSettings,
     editor::{DisplayPoint, EditorAction, SelectAction},
     network::NetworkStatus,
     notebooks::{
@@ -124,7 +124,7 @@ fn open_notebook(
     notebook: NotebookObject,
 ) -> BoxFuture<'static, ()> {
     let load_future = handle.update(app, |view, ctx| {
-        view.load(notebook, &ZapDriveObjectSettings::default(), ctx)
+        view.load(notebook, &ZaplexDriveObjectSettings::default(), ctx)
     });
     app.update(|ctx| ctx.await_spawned_future(load_future.future_id()))
 }

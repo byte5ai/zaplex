@@ -1,7 +1,7 @@
 use super::{workflow::Workflow, WorkflowObjectModel};
 use crate::{
     cloud_object::{model::persistence::ObjectStoreModel, GenericStoredObject, Owner},
-    drive::ZapDriveObjectSettings,
+    drive::ZaplexDriveObjectSettings,
     pane_group::{PaneContent, WorkflowPane},
     safe_warn,
     server::ids::{ClientId, SyncId},
@@ -59,7 +59,7 @@ impl WorkflowManager {
     pub fn create_pane(
         &mut self,
         source: &WorkflowOpenSource,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         mode: WorkflowViewMode,
         window_id: WindowId,
         ctx: &mut ModelContext<Self>,
@@ -116,7 +116,7 @@ impl WorkflowManager {
                             *initial_folder_id,
                             ClientId::default(),
                         ),
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         mode,
                         ctx,
                     );

@@ -78,7 +78,7 @@ use crate::cloud_object::{
 };
 use crate::code::editor_management::CodeSource;
 use crate::drive::folders::{FolderId, FolderObject, FolderObjectModel};
-use crate::drive::ZapDriveObjectSettings;
+use crate::drive::ZaplexDriveObjectSettings;
 use crate::env_vars::{EnvVarCollectionObject, EnvVarCollectionObjectModel};
 use crate::features::FeatureFlag;
 use crate::notebooks::{NotebookId, NotebookObject};
@@ -2496,7 +2496,7 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                         Some(path) => NotebookPaneSnapshot::LocalFileNotebook { path: Some(path) },
                         None => NotebookPaneSnapshot::NotebookObject {
                             notebook_id,
-                            settings: ZapDriveObjectSettings::default(),
+                            settings: ZaplexDriveObjectSettings::default(),
                         },
                     })
                 }
@@ -2514,7 +2514,7 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
 
                     LeafContents::Workflow(WorkflowPaneSnapshot::WorkflowObject {
                         workflow_id,
-                        settings: ZapDriveObjectSettings::default(),
+                        settings: ZaplexDriveObjectSettings::default(),
                     })
                 }
                 CODE_PANE_KIND => {

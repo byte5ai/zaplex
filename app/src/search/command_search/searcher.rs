@@ -61,7 +61,7 @@ pub enum CommandSearchItemAction {
     RunAIQuery(String),
 
     /// The user accepted the search item to open Zaplex AI.
-    ZapAI,
+    ZaplexAI,
 
     /// The user accepted the search item to translate the query to a command using Zaplex AI.
     TranslateUsingWarpAI,

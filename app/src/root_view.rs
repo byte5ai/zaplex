@@ -11,7 +11,7 @@ use crate::cloud_object::model::persistence::ObjectStoreModel;
 use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType, ObjectType};
 use crate::drive::export::ExportManager;
 use crate::drive::items::WarpDriveItemId;
-use crate::drive::{ObjectTypeAndId, ZapDriveObjectArgs, ZapDriveObjectSettings};
+use crate::drive::{ObjectTypeAndId, ZaplexDriveObjectArgs, ZaplexDriveObjectSettings};
 use crate::experiments::{BlockOnboarding, Experiment};
 use crate::interval_timer::IntervalTimer;
 use crate::launch_configs::launch_config;
@@ -862,7 +862,7 @@ fn open_linear_issue_work_in_new_window(args: &LinearIssueWork, ctx: &mut AppCon
     });
 }
 
-fn open_warp_drive_object(arg: &ZapDriveObjectArgs, ctx: &mut AppContext) {
+fn open_warp_drive_object(arg: &ZaplexDriveObjectArgs, ctx: &mut AppContext) {
     match arg.object_type {
         ObjectType::Notebook => open_new_workspace_with_notebook_open(
             SyncId::ServerId(arg.server_id),
@@ -888,7 +888,7 @@ fn display_object_missing_error_in_window(window_id: WindowId, ctx: &mut AppCont
 
 fn open_new_workspace_with_notebook_open(
     notebook_id: SyncId,
-    settings: ZapDriveObjectSettings,
+    settings: ZaplexDriveObjectSettings,
     ctx: &mut AppContext,
 ) {
     open_new_with_workspace_source(
@@ -902,7 +902,7 @@ fn open_new_workspace_with_notebook_open(
 
 fn open_new_workspace_with_workflow_open(
     workflow_id: SyncId,
-    settings: ZapDriveObjectSettings,
+    settings: ZaplexDriveObjectSettings,
     ctx: &mut AppContext,
 ) {
     open_new_with_workspace_source(
@@ -1310,11 +1310,11 @@ pub enum NewWorkspaceSource {
     },
     NotebookById {
         id: SyncId,
-        settings: ZapDriveObjectSettings,
+        settings: ZaplexDriveObjectSettings,
     },
     WorkflowById {
         id: SyncId,
-        settings: ZapDriveObjectSettings,
+        settings: ZaplexDriveObjectSettings,
     },
     AgentSession {
         options: Box<NewTerminalOptions>,
@@ -1478,11 +1478,11 @@ impl RootView {
                 if #[cfg(target_family = "wasm")] {
                     AuthOnboardingState::WebImport(AuthOnboardingTarget::Workspace(workspace_args.into()))
                 } else {
-                    // When ZapNewSettingsModes is enabled, show onboarding before login for
+                    // When ZaplexNewSettingsModes is enabled, show onboarding before login for
                     // users who haven't completed it yet (tracked via a local UserPreferences key).
-                    let has_completed_local_onboarding = FeatureFlag::ZapNewSettingsModes.is_enabled()
+                    let has_completed_local_onboarding = FeatureFlag::ZaplexNewSettingsModes.is_enabled()
                         && has_completed_local_onboarding(ctx);
-                    let should_show_pre_login_onboarding = FeatureFlag::ZapNewSettingsModes.is_enabled()
+                    let should_show_pre_login_onboarding = FeatureFlag::ZaplexNewSettingsModes.is_enabled()
                         && FeatureFlag::AgentOnboarding.is_enabled()
                         && !has_completed_local_onboarding;
                     if FeatureFlag::ForceLogin.is_enabled() {
@@ -1954,7 +1954,7 @@ impl RootView {
 
     pub fn open_warp_drive_object_in_existing_window(
         &mut self,
-        arg: &ZapDriveObjectArgs,
+        arg: &ZaplexDriveObjectArgs,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
@@ -2436,7 +2436,7 @@ impl RootView {
             return;
         };
 
-        if FeatureFlag::ZapNewSettingsModes.is_enabled()
+        if FeatureFlag::ZaplexNewSettingsModes.is_enabled()
             && FeatureFlag::TabConfigs.is_enabled()
         {
             let intention = tutorial.intention();

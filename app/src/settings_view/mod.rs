@@ -142,7 +142,7 @@ pub(super) fn editor_text_colors(appearance: &Appearance) -> TextColors {
 pub enum SettingsViewEvent {
     Pane(PaneEvent),
     StartResize,
-    // Zaplex decentralized branch: `CheckForUpdate` / `ZapDrive` variants removed with Account
+    // Zaplex decentralized branch: `CheckForUpdate` / `ZaplexDrive` variants removed with Account
     // main settings page sole emitter (`MainSettingsPageView`).
     ShowToast {
         message: String,
@@ -164,7 +164,7 @@ pub enum SettingsSection {
     Appearance,
     Features,
     Keybindings,
-    ZapDrive,
+    ZaplexDrive,
     Zaplexify,
     /// Internal backing-page identifier for AISettingsPageView. Multiple subpages
     /// (WarpAgent, AgentProfiles, Knowledge, ThirdPartyCLIAgents) share this single
@@ -206,7 +206,7 @@ impl Display for SettingsSection {
             SettingsSection::Appearance => crate::t!("settings-section-appearance"),
             SettingsSection::Features => crate::t!("settings-section-features"),
             SettingsSection::Keybindings => crate::t!("settings-section-keybindings"),
-            SettingsSection::ZapDrive => crate::t!("settings-section-warp-drive"),
+            SettingsSection::ZaplexDrive => crate::t!("settings-section-warp-drive"),
             SettingsSection::Zaplexify => crate::t!("settings-section-zaplexify"),
             SettingsSection::AI => crate::t!("settings-section-ai"),
             SettingsSection::WarpAgent => crate::t!("settings-section-warp-agent"),
@@ -292,7 +292,7 @@ impl FromStr for SettingsSection {
             "Features" => Ok(Self::Features),
             "Keyboard shortcuts" => Ok(Self::Keybindings),
             "Zaplexify" => Ok(Self::Zaplexify),
-            "ZapDrive" | "Zaplex Drive" => Ok(Self::ZapDrive),
+            "ZaplexDrive" | "Zaplex Drive" => Ok(Self::ZaplexDrive),
             // This page was called "Oz" at one point, keep for backward compatibility.
             "Oz" | "Zaplex Agent" => Ok(Self::WarpAgent),
             "Profiles" | "AgentProfiles" => Ok(Self::AgentProfiles),
@@ -769,7 +769,7 @@ pub enum SettingsAction {
     FeaturesPageToggle(FeaturesPageAction),
     AI(AISettingsPageAction),
     Code(CodeSettingsPageAction),
-    ZapDrive(warp_drive_page::WarpDriveSettingsPageAction),
+    ZaplexDrive(warp_drive_page::WarpDriveSettingsPageAction),
     CloudSync(cloud_sync_page::CloudSyncPageAction),
     ZaplexifyPageToggle(ZaplexifyPageAction),
     Tab,
@@ -922,7 +922,7 @@ macro_rules! update_page {
             SettingsPageViewHandle::About(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Code(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::MCPServers(handle) => $ctx.update_view(handle, $update),
-            SettingsPageViewHandle::ZapDrive(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::ZaplexDrive(handle) => $ctx.update_view(handle, $update),
             // Issue #72: Global HTTP proxy settings page.
             SettingsPageViewHandle::Network(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::CloudSync(handle) => $ctx.update_view(handle, $update),
@@ -1695,7 +1695,7 @@ impl SettingsView {
             SettingsPageViewHandle::AI(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::MCPServers(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Code(v) => v.as_ref(app).should_render(app),
-            SettingsPageViewHandle::ZapDrive(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::ZaplexDrive(v) => v.as_ref(app).should_render(app),
             // Issue #72: Global HTTP proxy settings page.
             SettingsPageViewHandle::Network(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::CloudSync(v) => v.as_ref(app).should_render(app),
@@ -2256,9 +2256,9 @@ impl TypedActionView for SettingsView {
                     }
                 }
             }
-            SettingsAction::ZapDrive(warp_drive_action) => {
-                if let Some(warp_drive_page) = self.settings_page(SettingsSection::ZapDrive) {
-                    if let SettingsPageViewHandle::ZapDrive(view) = &warp_drive_page.view_handle {
+            SettingsAction::ZaplexDrive(warp_drive_action) => {
+                if let Some(warp_drive_page) = self.settings_page(SettingsSection::ZaplexDrive) {
+                    if let SettingsPageViewHandle::ZaplexDrive(view) = &warp_drive_page.view_handle {
                         view.update(ctx, |view, ctx| {
                             view.handle_action(warp_drive_action, ctx);
                         })

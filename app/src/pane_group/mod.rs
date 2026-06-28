@@ -104,7 +104,7 @@ use crate::banner::{Banner, BannerEvent, BannerState, BannerTextContent, Dismiss
 use crate::channel::{Channel, ChannelState};
 use crate::code::view::CodeView;
 use crate::drive::items::WarpDriveItemId;
-use crate::drive::{ObjectTypeAndId, ZapDriveObjectArgs};
+use crate::drive::{ObjectTypeAndId, ZaplexDriveObjectArgs};
 use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::{self, PaneMode, PaneTemplateType};
 use crate::persistence::ModelEvent;
@@ -486,8 +486,8 @@ pub enum Event {
         /// The session that the path was opened from.
         session: Arc<Session>,
     },
-    ZapDriveLink {
-        open_warp_drive_args: ZapDriveObjectArgs,
+    ZaplexDriveLink {
+        open_warp_drive_args: ZaplexDriveObjectArgs,
     },
     #[cfg(feature = "local_fs")]
     OpenCodeInWarp {
@@ -562,7 +562,7 @@ pub enum Event {
     },
     /// Clears the hovered tab index so it no longer appears as highlighted drop target
     ClearHoveredTabIndex,
-    ZapDriveObjectInPane(ObjectUid),
+    ZaplexDriveObjectInPane(ObjectUid),
     OpenSuggestedAgentModeWorkflowModal {
         workflow_and_id: SuggestedAgentModeWorkflowAndId,
     },

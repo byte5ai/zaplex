@@ -719,8 +719,8 @@ fn handle_terminal_view_event(
                 group.focus_pane(terminal_pane_id.into(), true, ctx);
                 ctx.emit(pane_group::Event::FocusPaneGroup);
             }
-            Event::ZapDriveObjectInPane(uid) => {
-                ctx.emit(pane_group::Event::ZapDriveObjectInPane(uid.clone()));
+            Event::ZaplexDriveObjectInPane(uid) => {
+                ctx.emit(pane_group::Event::ZaplexDriveObjectInPane(uid.clone()));
             }
             Event::OpenSuggestedAgentModeWorkflowModal { workflow_and_id } => {
                 ctx.emit(pane_group::Event::OpenSuggestedAgentModeWorkflowModal {

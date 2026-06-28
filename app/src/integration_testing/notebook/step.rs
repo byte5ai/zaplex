@@ -12,7 +12,7 @@ use crate::{
         model::persistence::ObjectStoreModel, update_manager::UpdateManager, Space,
         StoredObjectEventEntrypoint,
     },
-    drive::ZapDriveObjectSettings,
+    drive::ZaplexDriveObjectSettings,
     integration_testing::view_getters::{notebook_view, workspace_view},
     notebooks::manager::NotebookSource,
     server::ids::{ClientId, SyncId},
@@ -83,7 +83,7 @@ pub fn open_notebook(window_key: impl Into<String>, notebook_key: impl Into<Stri
             WindowManager::as_ref(ctx).show_window_and_focus_app(*window_id);
             workspace.open_notebook(
                 &NotebookSource::Existing(*notebook_id),
-                &ZapDriveObjectSettings::default(),
+                &ZaplexDriveObjectSettings::default(),
                 ctx,
                 true,
             );

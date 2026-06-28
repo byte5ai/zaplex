@@ -7,7 +7,7 @@ use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle};
 use crate::{
     app_state::{LeafContents, NotebookPaneSnapshot},
     cloud_object::Space,
-    drive::{items::WarpDriveItemId, ObjectTypeAndId, ZapDriveObjectSettings},
+    drive::{items::WarpDriveItemId, ObjectTypeAndId, ZaplexDriveObjectSettings},
     notebooks::{
         link::{LinkEvent, NotebookLinks},
         manager::{NotebookManager, NotebookSource},
@@ -47,7 +47,7 @@ impl NotebookPane {
     /// Restore a notebook pane given its cloud notebook ID.
     pub fn restore(
         notebook_id: Option<SyncId>,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<PaneGroup>,
     ) -> anyhow::Result<Self> {
         let window_id = ctx.window_id();
@@ -81,7 +81,7 @@ impl PaneContent for NotebookPane {
         let notebook_id = self.notebook_view(app).as_ref(app).notebook_id(app);
         LeafContents::Notebook(NotebookPaneSnapshot::NotebookObject {
             notebook_id,
-            settings: ZapDriveObjectSettings::default(),
+            settings: ZaplexDriveObjectSettings::default(),
         })
     }
 
@@ -183,9 +183,9 @@ pub(super) fn subscribe_to_link_model(
                 session: session.clone(),
             })
         }
-        LinkEvent::ZapDriveLink {
+        LinkEvent::ZaplexDriveLink {
             open_warp_drive_args,
-        } => ctx.emit(crate::pane_group::Event::ZapDriveLink {
+        } => ctx.emit(crate::pane_group::Event::ZaplexDriveLink {
             open_warp_drive_args: open_warp_drive_args.clone(),
         }),
         LinkEvent::StartLocalSession { path } => {

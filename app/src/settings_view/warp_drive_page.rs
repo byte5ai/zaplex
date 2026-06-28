@@ -68,11 +68,11 @@ impl View for WarpDriveSettingsPageView {
 
 impl SettingsPageMeta for WarpDriveSettingsPageView {
     fn section() -> SettingsSection {
-        SettingsSection::ZapDrive
+        SettingsSection::ZaplexDrive
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {
-        FeatureFlag::ZapNewSettingsModes.is_enabled()
+        FeatureFlag::ZaplexNewSettingsModes.is_enabled()
     }
 
     fn update_filter(&mut self, query: &str, ctx: &mut ViewContext<Self>) -> MatchData {
@@ -90,7 +90,7 @@ impl SettingsPageMeta for WarpDriveSettingsPageView {
 
 impl From<ViewHandle<WarpDriveSettingsPageView>> for SettingsPageViewHandle {
     fn from(view_handle: ViewHandle<WarpDriveSettingsPageView>) -> Self {
-        SettingsPageViewHandle::ZapDrive(view_handle)
+        SettingsPageViewHandle::ZaplexDrive(view_handle)
     }
 }
 

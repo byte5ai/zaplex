@@ -261,7 +261,7 @@ pub enum WorkspaceAction {
     ToggleWarpDrive,
     /// Unconditionally opens Zaplex Drive. This is used in the case of user lifecycle
     /// events like new user onboarding or when the user joins a team.
-    ZapDrive,
+    ZaplexDrive,
     /// Toggles the right panel. This happens as an explicit action from the user.
     ToggleRightPanel,
     /// Opens the code review panel (right panel) without toggling. If already open,
@@ -759,7 +759,7 @@ impl WorkspaceAction {
             | StartTabDrag
             | ToggleLeftPanel
             | ToggleWarpDrive
-            | ZapDrive
+            | ZaplexDrive
             | ClosePanel
             | ToggleRightPanel
             | OpenCodeReviewPanel(..)

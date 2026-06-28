@@ -77,10 +77,10 @@ impl SelectedSettings {
                 !agent_settings.disable_oz
             }
             SelectedSettings::Terminal { .. } => {
-                // With old onboarding (no ZapNewSettingsModes), Terminal
+                // With old onboarding (no ZaplexNewSettingsModes), Terminal
                 // intent still leaves AI enabled; with new onboarding,
                 // Terminal intent explicitly disables AI.
-                !FeatureFlag::ZapNewSettingsModes.is_enabled()
+                !FeatureFlag::ZaplexNewSettingsModes.is_enabled()
             }
         }
     }
@@ -158,7 +158,7 @@ impl OnboardingStateModel {
 
     pub(crate) fn settings(&self) -> SelectedSettings {
         use warp_core::features::FeatureFlag;
-        let ui_customization = if FeatureFlag::ZapNewSettingsModes.is_enabled() {
+        let ui_customization = if FeatureFlag::ZaplexNewSettingsModes.is_enabled() {
             Some(self.ui_customization.clone())
         } else {
             None
@@ -467,7 +467,7 @@ impl OnboardingStateModel {
         // If the user is past the agent slide, don't change the agent model from underneath them.
         // When the new settings modes flag is on, ThemePicker comes after the agent slides
         // so it must also be guarded.
-        let is_past_agent_slide = if FeatureFlag::ZapNewSettingsModes.is_enabled() {
+        let is_past_agent_slide = if FeatureFlag::ZaplexNewSettingsModes.is_enabled() {
             matches!(
                 self.step,
                 OnboardingStep::ThirdParty | OnboardingStep::ThemePicker
@@ -575,7 +575,7 @@ impl OnboardingStateModel {
 
     pub(crate) fn back(&mut self, ctx: &mut ModelContext<Self>) {
         use warp_core::features::FeatureFlag;
-        let theme_picker_last = FeatureFlag::ZapNewSettingsModes.is_enabled();
+        let theme_picker_last = FeatureFlag::ZaplexNewSettingsModes.is_enabled();
 
         let prev = if theme_picker_last {
             match self.step {
@@ -610,7 +610,7 @@ impl OnboardingStateModel {
 
     pub(crate) fn next(&mut self, ctx: &mut ModelContext<Self>) {
         use warp_core::features::FeatureFlag;
-        let theme_picker_last = FeatureFlag::ZapNewSettingsModes.is_enabled();
+        let theme_picker_last = FeatureFlag::ZaplexNewSettingsModes.is_enabled();
 
         let is_last_step = if theme_picker_last {
             matches!(self.step, OnboardingStep::ThemePicker)

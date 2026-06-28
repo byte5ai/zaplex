@@ -71,19 +71,19 @@ pub fn init(app: &mut AppContext) {
 
     app.register_fixed_bindings([FixedBinding::new(
         "escape",
-        ZapLaunchModalAction::Close,
-        id!(ZapLaunchModal::ui_name()),
+        ZaplexLaunchModalAction::Close,
+        id!(ZaplexLaunchModal::ui_name()),
     )]);
 }
 
 #[derive(Clone, Debug)]
-pub enum ZapLaunchModalAction {
+pub enum ZaplexLaunchModalAction {
     Close,
     VisitRepo,
 }
 
 #[derive(Clone, Debug)]
-pub enum ZapLaunchModalEvent {
+pub enum ZaplexLaunchModalEvent {
     Close,
 }
 
@@ -125,24 +125,24 @@ impl ActionButtonTheme for CtaButtonTheme {
     }
 }
 
-pub struct ZapLaunchModal {
+pub struct ZaplexLaunchModal {
     close_button: ViewHandle<ActionButton>,
     cta_button: ViewHandle<ActionButton>,
 }
 
-impl ZapLaunchModal {
+impl ZaplexLaunchModal {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let close_button = ctx.add_view(|_ctx| {
             ActionButton::new("", CloseButtonTheme)
                 .with_icon(Icon::X)
                 .with_size(ButtonSize::Small)
-                .on_click(|ctx| ctx.dispatch_typed_action(ZapLaunchModalAction::Close))
+                .on_click(|ctx| ctx.dispatch_typed_action(ZaplexLaunchModalAction::Close))
         });
 
         let cta_button = ctx.add_view(|_ctx| {
             ActionButton::new(crate::t!("zap-launch-visit-repo"), CtaButtonTheme)
                 .with_full_width(true)
-                .on_click(|ctx| ctx.dispatch_typed_action(ZapLaunchModalAction::VisitRepo))
+                .on_click(|ctx| ctx.dispatch_typed_action(ZaplexLaunchModalAction::VisitRepo))
         });
 
         Self {
@@ -364,13 +364,13 @@ impl ZapLaunchModal {
     }
 }
 
-impl Entity for ZapLaunchModal {
-    type Event = ZapLaunchModalEvent;
+impl Entity for ZaplexLaunchModal {
+    type Event = ZaplexLaunchModalEvent;
 }
 
-impl View for ZapLaunchModal {
+impl View for ZaplexLaunchModal {
     fn ui_name() -> &'static str {
-        "ZapLaunchModal"
+        "ZaplexLaunchModal"
     }
 
     fn on_focus(&mut self, _focus_ctx: &warpui::FocusContext, ctx: &mut ViewContext<Self>) {
@@ -402,17 +402,17 @@ impl View for ZapLaunchModal {
     }
 }
 
-impl TypedActionView for ZapLaunchModal {
-    type Action = ZapLaunchModalAction;
+impl TypedActionView for ZaplexLaunchModal {
+    type Action = ZaplexLaunchModalAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            ZapLaunchModalAction::Close => {
-                ctx.emit(ZapLaunchModalEvent::Close);
+            ZaplexLaunchModalAction::Close => {
+                ctx.emit(ZaplexLaunchModalEvent::Close);
             }
-            ZapLaunchModalAction::VisitRepo => {
+            ZaplexLaunchModalAction::VisitRepo => {
                 ctx.open_url(REPO_URL);
-                ctx.emit(ZapLaunchModalEvent::Close);
+                ctx.emit(ZaplexLaunchModalEvent::Close);
             }
         }
     }

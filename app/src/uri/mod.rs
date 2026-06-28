@@ -6,7 +6,7 @@ pub mod web_intent_parser;
 pub mod browser_url_handler;
 
 use crate::ai::agent::api::ServerConversationToken;
-use crate::drive::ZapDriveObjectSettings;
+use crate::drive::ZaplexDriveObjectSettings;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
 use crate::root_view::{open_new_window_get_handles, OpenLaunchConfigArg};
@@ -18,7 +18,7 @@ use crate::util::openable_file_type::{
 use crate::workspace::active_terminal_in_window;
 use crate::workspace::{Workspace, WorkspaceAction, WorkspaceRegistry};
 use crate::{cloud_object::ObjectType, workspace::ToastStack};
-use crate::{drive::ZapDriveObjectArgs, view_components::DismissibleToast};
+use crate::{drive::ZaplexDriveObjectArgs, view_components::DismissibleToast};
 
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::settings_view::SettingsSection;
@@ -203,10 +203,10 @@ impl UriHost {
                         ctx.root_view_id(window_id)
                             .map(|view_id| (window_id, view_id))
                     });
-                    let args = ZapDriveObjectArgs {
+                    let args = ZaplexDriveObjectArgs {
                         object_type,
                         server_id,
-                        settings: ZapDriveObjectSettings {
+                        settings: ZaplexDriveObjectSettings {
                             focused_folder_id,
                             invitee_email,
                         },

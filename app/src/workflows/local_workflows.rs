@@ -26,7 +26,7 @@ pub enum UseCache {
     No,
 }
 
-/// Singleton model that loads and caches local (non-ZapDrive) workflows.
+/// Singleton model that loads and caches local (non-ZaplexDrive) workflows.
 pub struct LocalWorkflows {
     app_workflows: Vec<Workflow>,
 

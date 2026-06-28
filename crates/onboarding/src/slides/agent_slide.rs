@@ -309,7 +309,7 @@ impl AgentSlide {
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(upper_sections);
 
-        if FeatureFlag::ZapNewSettingsModes.is_enabled() {
+        if FeatureFlag::ZaplexNewSettingsModes.is_enabled() {
             let disable_oz_section = self.render_disable_oz_section(appearance, settings);
             col = col.with_child(
                 Container::new(disable_oz_section)
@@ -911,7 +911,7 @@ impl AgentSlide {
         );
 
         let step_index = 2;
-        let step_count = if warp_core::features::FeatureFlag::ZapNewSettingsModes.is_enabled()
+        let step_count = if warp_core::features::FeatureFlag::ZaplexNewSettingsModes.is_enabled()
         {
             5
         } else {
@@ -929,7 +929,7 @@ impl AgentSlide {
     fn render_visual(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
 
-        if FeatureFlag::ZapNewSettingsModes.is_enabled() {
+        if FeatureFlag::ZaplexNewSettingsModes.is_enabled() {
             let use_vertical = self
                 .onboarding_state
                 .as_ref(app)

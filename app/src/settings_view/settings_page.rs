@@ -108,7 +108,7 @@ pub enum SettingsPageViewHandle {
     Zaplexify(ViewHandle<ZaplexifyPageView>),
     AI(ViewHandle<AISettingsPageView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
-    ZapDrive(ViewHandle<WarpDriveSettingsPageView>),
+    ZaplexDrive(ViewHandle<WarpDriveSettingsPageView>),
     /// Global HTTP proxy settings page.
     Network(ViewHandle<NetworkPageView>),
     /// Cloud sync settings page.
@@ -130,7 +130,7 @@ impl SettingsPageViewHandle {
             Zaplexify(view_handle) => ChildView::new(view_handle).finish(),
             AI(view_handle) => ChildView::new(view_handle).finish(),
             MCPServers(view_handle) => ChildView::new(view_handle).finish(),
-            ZapDrive(view_handle) => ChildView::new(view_handle).finish(),
+            ZaplexDrive(view_handle) => ChildView::new(view_handle).finish(),
             Network(view_handle) => ChildView::new(view_handle).finish(),
             CloudSync(view_handle) => ChildView::new(view_handle).finish(),
         }

@@ -30,7 +30,7 @@ use crate::{
     auth::UserUid,
     channel::ChannelState,
     drive::{
-        items::WarpDriveItem, ObjectTypeAndId, ZapDriveObjectArgs, ZapDriveObjectSettings,
+        items::WarpDriveItem, ObjectTypeAndId, ZaplexDriveObjectArgs, ZaplexDriveObjectSettings,
     },
     persistence::ModelEvent,
     server::ids::{ClientId, HashableId, HashedSqliteId, ObjectUid, ServerId, SyncId, ToServerId},
@@ -828,7 +828,7 @@ where
 /// can be opened natively in Zaplex with no web interaction.
 pub fn extract_server_id_and_object_type_from_warp_drive_link(
     url: &Url,
-) -> Option<ZapDriveObjectArgs> {
+) -> Option<ZaplexDriveObjectArgs> {
     let server_id = url
         .path_segments()
         .and_then(|mut segments| segments.next_back())
@@ -851,13 +851,13 @@ pub fn extract_server_id_and_object_type_from_warp_drive_link(
 
     let invitee_email: Option<String> = query_string.get("invitee_email").map(|s| s.to_string());
 
-    Some(ZapDriveObjectArgs {
+    Some(ZaplexDriveObjectArgs {
         object_type,
         server_id: match server_id {
             Some(server_id) => server_id.try_into().ok()?,
             _ => return None,
         },
-        settings: ZapDriveObjectSettings {
+        settings: ZaplexDriveObjectSettings {
             focused_folder_id,
             invitee_email,
         },

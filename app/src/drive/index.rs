@@ -2563,7 +2563,7 @@ impl DriveIndex {
             }
         };
 
-        // This icon should render the same as other ZapDrive icons but with no click or hover states.
+        // This icon should render the same as other ZaplexDrive icons but with no click or hover states.
         Container::new(
             ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
                 .with_width(SECTION_HEADER_FONT_SIZE)

@@ -1624,7 +1624,7 @@ pub enum Event {
     OpenWorkflowModalWithWorkflowObject(SyncId),
     // Tell the pane group to open the workflow modal with an unsaved workflow.
     OpenWorkflowModalWithTemporary(Box<Workflow>),
-    ZapDriveObjectInPane(ObjectUid),
+    ZaplexDriveObjectInPane(ObjectUid),
     OpenSuggestedAgentModeWorkflowModal {
         workflow_and_id: SuggestedAgentModeWorkflowAndId,
     },
@@ -1864,7 +1864,7 @@ pub enum LongRunningCommandAgentInteractionState {
 #[derive(Clone, Copy, Debug)]
 pub enum LeftPanelTargetView {
     FileTree,
-    ZapDrive,
+    ZaplexDrive,
 }
 
 #[derive(Clone)]
@@ -18143,7 +18143,7 @@ impl TerminalView {
             }
             AIBlockEvent::OpenCitation(citation) => match citation {
                 AIAgentCitation::WarpDriveObject { uid } => {
-                    ctx.emit(Event::ZapDriveObjectInPane(uid.clone()));
+                    ctx.emit(Event::ZaplexDriveObjectInPane(uid.clone()));
                 }
                 AIAgentCitation::WarpDocumentation { path: _ } => {
                     // The Zaplex fork does not inherit the upstream docs.warp.dev documentation site,
@@ -18158,7 +18158,7 @@ impl TerminalView {
             }
             AIBlockEvent::OpenWorkflow { sync_id } => {
                 if let Some(object) = ObjectStoreModel::as_ref(ctx).get_workflow(sync_id) {
-                    ctx.emit(Event::ZapDriveObjectInPane(object.uid()));
+                    ctx.emit(Event::ZaplexDriveObjectInPane(object.uid()));
                 }
             }
             AIBlockEvent::OpenSuggestedAgentModeWorkflowModal { workflow_and_id } => {

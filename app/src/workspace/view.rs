@@ -109,7 +109,7 @@ use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabCloseButtonPosition;
 use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
 use crate::workspace::view::zap_launch_modal::{
-    ZapLaunchModal, ZapLaunchModalEvent,
+    ZaplexLaunchModal, ZaplexLaunchModalEvent,
 };
 use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
 use crate::BlocklistAIHistoryModel;
@@ -207,7 +207,7 @@ use crate::drive::import::modal::{ImportModal, ImportModalEvent};
 use crate::drive::workflows::arguments::ArgumentsState;
 use crate::drive::workflows::modal::{WorkflowModal, WorkflowModalEvent};
 use crate::drive::{
-    DriveObjectType, DrivePanel, DrivePanelEvent, ObjectTypeAndId, ZapDriveObjectSettings,
+    DriveObjectType, DrivePanel, DrivePanelEvent, ObjectTypeAndId, ZaplexDriveObjectSettings,
 };
 use crate::experiments::{BlockOnboarding, Experiment};
 use crate::menu::{
@@ -928,7 +928,7 @@ pub struct Workspace {
     theme_deletion_modal: ViewHandle<ThemeDeletionModal>,
     suggested_agent_mode_workflow_modal: ViewHandle<SuggestedAgentModeWorkflowModal>,
     suggested_rule_modal: ViewHandle<SuggestedRuleModal>,
-    zap_launch_modal: ViewHandle<ZapLaunchModal>,
+    zap_launch_modal: ViewHandle<ZaplexLaunchModal>,
     codex_modal: ViewHandle<CodexModal>,
     toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
     agent_toast_stack: ViewHandle<AgentToastStack>,
@@ -1341,7 +1341,7 @@ impl Workspace {
                 if let Some(id) = id_to_force_expand {
                     self.open_notebook(
                         &NotebookSource::Existing(id),
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         ctx,
                         true,
                     );
@@ -1358,7 +1358,7 @@ impl Workspace {
                 if let Some(id) = id_to_force_expand {
                     self.open_workflow_with_existing(
                         id,
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         ctx,
                     );
                     ObjectStoreModel::handle(ctx).update(ctx, |object_store_model, ctx| {
@@ -2518,7 +2518,7 @@ impl Workspace {
 
         let suggested_rule_modal = Self::build_suggested_rule_modal(ctx);
 
-        let zap_launch_view = ctx.add_typed_action_view(ZapLaunchModal::new);
+        let zap_launch_view = ctx.add_typed_action_view(ZaplexLaunchModal::new);
         ctx.subscribe_to_view(&zap_launch_view, |me, _, event, ctx| {
             me.handle_zap_launch_modal_event(event, ctx);
         });
@@ -3526,7 +3526,7 @@ impl Workspace {
                 LeftPanelDisplayedTab::GlobalSearch => ToolPanelView::GlobalSearch {
                     entry_focus: GlobalSearchEntryFocus::Results,
                 },
-                LeftPanelDisplayedTab::ZapDrive => ToolPanelView::ZapDrive,
+                LeftPanelDisplayedTab::ZaplexDrive => ToolPanelView::ZaplexDrive,
                 LeftPanelDisplayedTab::ConversationListView => ToolPanelView::ConversationListView,
                 LeftPanelDisplayedTab::SshManager => ToolPanelView::SshManager,
                 LeftPanelDisplayedTab::ServerFileBrowser => ToolPanelView::ServerFileBrowser,
@@ -5229,7 +5229,7 @@ impl Workspace {
                 let pane_group = self.active_tab_pane_group().clone();
                 self.handle_file_tree_event(pane_group, pane_group_event, ctx);
             }
-            LeftPanelEvent::ZapDrive(drive_event) => {
+            LeftPanelEvent::ZaplexDrive(drive_event) => {
                 self.handle_warp_drive_event(drive_event, ctx);
             }
             LeftPanelEvent::ServerFileBrowser(event) => match event {
@@ -6757,7 +6757,7 @@ impl Workspace {
             ObjectType::Notebook => {
                 self.open_notebook(
                     &NotebookSource::Existing(sync_id),
-                    &ZapDriveObjectSettings::default(),
+                    &ZaplexDriveObjectSettings::default(),
                     ctx,
                     true,
                 );
@@ -6765,7 +6765,7 @@ impl Workspace {
             ObjectType::Workflow => {
                 self.open_workflow_in_pane(
                     &WorkflowOpenSource::Existing(sync_id),
-                    &ZapDriveObjectSettings::default(),
+                    &ZaplexDriveObjectSettings::default(),
                     WorkflowViewMode::View,
                     ctx,
                 );
@@ -6794,7 +6794,7 @@ impl Workspace {
     pub fn open_notebook(
         &mut self,
         source: &NotebookSource,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<Self>,
         default_to_new_pane: bool,
     ) {
@@ -6816,7 +6816,7 @@ impl Workspace {
                 );
             }
             // TODO(zap-cloud-removal Phase 5): this invitee_email/source notebook
-            // invitation path no longer has a UI entry point, but `ZapDriveObjectSettings.invitee_email`
+            // invitation path no longer has a UI entry point, but `ZaplexDriveObjectSettings.invitee_email`
             // is still passed in by the URL handler / drag-drop path. When the invitee concept is
             // retired in Phase 5, remove the field from the settings struct as well.
             let _ = settings;
@@ -6871,7 +6871,7 @@ impl Workspace {
     pub fn open_workflow_from_intent(
         &mut self,
         workflow_id: SyncId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<Self>,
     ) {
         // If running workflows is supported, do so. Otherwise, or if the workflow isn't in memory,
@@ -6914,7 +6914,7 @@ impl Workspace {
     pub fn open_workflow_in_pane(
         &mut self,
         source: &WorkflowOpenSource,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         mode: WorkflowViewMode,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -7764,7 +7764,7 @@ impl Workspace {
             );
             self.tips_completed.update(ctx, |tips_completed, ctx| {
                 mark_feature_used_and_write_to_user_defaults(
-                    Tip::Action(TipAction::ZapDrive),
+                    Tip::Action(TipAction::ZaplexDrive),
                     tips_completed,
                     ctx,
                 );
@@ -9378,7 +9378,7 @@ impl Workspace {
                     // Proc same behavior as DrivePanelEvent::RunWorkflow
                     self.run_cloud_workflow_in_active_input(
                         workflow.clone(),
-                        WorkflowSelectionSource::ZapDrive,
+                        WorkflowSelectionSource::ZaplexDrive,
                         TerminalSessionFallbackBehavior::default(),
                         ctx,
                     );
@@ -10723,7 +10723,7 @@ impl Workspace {
     pub fn add_tab_for_cloud_notebook(
         &mut self,
         notebook_id: SyncId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<Self>,
     ) {
         // TODO: We should validate that this notebook exists and fallback if it doesn't
@@ -10741,7 +10741,7 @@ impl Workspace {
     fn add_tab_for_cloud_workflow(
         &mut self,
         workflow_id: SyncId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<Self>,
     ) {
         let panes_layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
@@ -12119,7 +12119,7 @@ impl Workspace {
                 _ => self.open_navigation_palette(ctx),
             },
             PaletteMode::LaunchConfig => self.open_launch_config_palette(ctx),
-            PaletteMode::ZapDrive => self.open_warp_drive_palette(ctx),
+            PaletteMode::ZaplexDrive => self.open_warp_drive_palette(ctx),
             PaletteMode::Files => self.open_files_palette(ctx),
             PaletteMode::Conversations => self.open_conversations_palette(ctx),
         }
@@ -12212,7 +12212,7 @@ impl Workspace {
             }
             CommandPaletteEvent::OpenNotebook { id } => self.open_notebook(
                 &NotebookSource::Existing(*id),
-                &ZapDriveObjectSettings::default(),
+                &ZaplexDriveObjectSettings::default(),
                 ctx,
                 true,
             ),
@@ -12258,7 +12258,7 @@ impl Workspace {
     fn view_in_warp_drive(&mut self, item_id: WarpDriveItemId, ctx: &mut ViewContext<Self>) {
         self.open_left_panel(ctx);
         self.left_panel_view.update(ctx, |left_panel, ctx| {
-            left_panel.handle_action(&LeftPanelAction::ZapDrive, ctx);
+            left_panel.handle_action(&LeftPanelAction::ZaplexDrive, ctx);
         });
 
         if let WarpDriveItemId::Object(object_id) = item_id {
@@ -12374,10 +12374,10 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            // Zaplex decentralized fork: the `CheckForUpdate` / `ZapDrive` event arms were physically
+            // Zaplex decentralized fork: the `CheckForUpdate` / `ZaplexDrive` event arms were physically
             // removed along with the same-named variants in `SettingsViewEvent`. Manual update checks
             // can still be triggered by `WorkspaceAction::CheckForUpdate` (the `workspace:check_for_updates` binding);
-            // Zaplex Drive can still be triggered by `WorkspaceAction::ZapDrive`.
+            // Zaplex Drive can still be triggered by `WorkspaceAction::ZaplexDrive`.
             SettingsViewEvent::Pane(_) | SettingsViewEvent::StartResize => {}
             SettingsViewEvent::ShowToast { message, flavor } => {
                 self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -12618,7 +12618,7 @@ impl Workspace {
             pane_group::Event::OpenCloudWorkflowForEdit(workflow_id) => self
                 .open_workflow_with_existing(
                     *workflow_id,
-                    &ZapDriveObjectSettings::default(),
+                    &ZaplexDriveObjectSettings::default(),
                     ctx,
                 ),
             pane_group::Event::OpenWorkflowModalWithTemporary(workflow) => {
@@ -12680,7 +12680,7 @@ impl Workspace {
             } => {
                 self.move_to_drive_space(*object_type_and_id, *space, ctx);
             }
-            pane_group::Event::ZapDriveLink {
+            pane_group::Event::ZaplexDriveLink {
                 open_warp_drive_args,
             } => {
                 let object_found = ObjectStoreModel::as_ref(ctx)
@@ -13257,7 +13257,7 @@ impl Workspace {
                 ctx.notify();
             }
             pane_group::Event::ClearHoveredTabIndex => self.hovered_tab_index = None,
-            pane_group::Event::ZapDriveObjectInPane(uid) => {
+            pane_group::Event::ZaplexDriveObjectInPane(uid) => {
                 self.open_warp_drive_object_in_new_pane(uid, ctx);
             }
             pane_group::Event::OpenSuggestedAgentModeWorkflowModal { workflow_and_id } => {
@@ -13460,7 +13460,7 @@ impl Workspace {
                     self.left_panel_view
                         .read(ctx, |left_panel, _| match target_view {
                             LeftPanelTargetView::FileTree => left_panel.is_file_tree_active(),
-                            LeftPanelTargetView::ZapDrive => left_panel.is_warp_drive_active(),
+                            LeftPanelTargetView::ZaplexDrive => left_panel.is_warp_drive_active(),
                         });
 
                 if self.active_tab_pane_group().as_ref(ctx).left_panel_open && is_target_active {
@@ -13475,7 +13475,7 @@ impl Workspace {
                     self.left_panel_view.update(ctx, |left_panel, ctx| {
                         let action = match target_view {
                             LeftPanelTargetView::FileTree => LeftPanelAction::ProjectExplorer,
-                            LeftPanelTargetView::ZapDrive => LeftPanelAction::ZapDrive,
+                            LeftPanelTargetView::ZaplexDrive => LeftPanelAction::ZaplexDrive,
                         };
                         left_panel.handle_action_with_force_open(&action, *force_open, ctx);
                     });
@@ -13988,7 +13988,7 @@ impl Workspace {
             DrivePanelEvent::RunWorkflow(workflow) => {
                 self.run_cloud_workflow_in_active_input(
                     workflow.as_ref().clone(),
-                    WorkflowSelectionSource::ZapDrive,
+                    WorkflowSelectionSource::ZaplexDrive,
                     TerminalSessionFallbackBehavior::default(),
                     ctx,
                 );
@@ -14016,27 +14016,27 @@ impl Workspace {
             DrivePanelEvent::OpenWorkflowModalWithWorkflowObject(workflow_id) => {
                 self.open_workflow_with_existing(
                     *workflow_id,
-                    &ZapDriveObjectSettings::default(),
+                    &ZaplexDriveObjectSettings::default(),
                     ctx,
                 );
             }
             DrivePanelEvent::OpenSearch => {
                 self.open_palette_action(
-                    PaletteMode::ZapDrive,
-                    PaletteSource::ZapDrive,
+                    PaletteMode::ZaplexDrive,
+                    PaletteSource::ZaplexDrive,
                     None,
                     ctx,
                 );
             }
             DrivePanelEvent::OpenNotebook(source) => {
-                self.open_notebook(source, &ZapDriveObjectSettings::default(), ctx, true)
+                self.open_notebook(source, &ZaplexDriveObjectSettings::default(), ctx, true)
             }
             DrivePanelEvent::OpenEnvVarCollection(source) => {
                 self.open_env_var_collection(source, false, ctx)
             }
             DrivePanelEvent::OpenWorkflowInPane(source, mode) => self.open_workflow_in_pane(
                 source,
-                &ZapDriveObjectSettings::default(),
+                &ZaplexDriveObjectSettings::default(),
                 *mode,
                 ctx,
             ),
@@ -14044,7 +14044,7 @@ impl Workspace {
                 self.open_ai_fact_collection_pane(None, None, ctx);
                 send_telemetry_from_ctx!(
                     TelemetryEvent::KnowledgePaneOpened {
-                        entrypoint: KnowledgePaneEntrypoint::ZapDrive,
+                        entrypoint: KnowledgePaneEntrypoint::ZaplexDrive,
                     },
                     ctx
                 );
@@ -14054,7 +14054,7 @@ impl Workspace {
 
                 send_telemetry_from_ctx!(
                     TelemetryEvent::MCPServerCollectionPaneOpened {
-                        entrypoint: MCPServerCollectionPaneEntrypoint::ZapDrive,
+                        entrypoint: MCPServerCollectionPaneEntrypoint::ZaplexDrive,
                     },
                     ctx
                 );
@@ -14457,7 +14457,7 @@ impl Workspace {
                     AcceptNotebook(sync_id) => {
                         self.open_notebook(
                             &NotebookSource::Existing(*sync_id),
-                            &ZapDriveObjectSettings::default(),
+                            &ZaplexDriveObjectSettings::default(),
                             ctx,
                             true,
                         );
@@ -14469,7 +14469,7 @@ impl Workspace {
                             ctx,
                         );
                     }
-                    ZapAI => {
+                    ZaplexAI => {
                         if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                             return;
                         }
@@ -15303,11 +15303,11 @@ impl Workspace {
 
     fn handle_zap_launch_modal_event(
         &mut self,
-        event: &ZapLaunchModalEvent,
+        event: &ZaplexLaunchModalEvent,
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            ZapLaunchModalEvent::Close => {
+            ZaplexLaunchModalEvent::Close => {
                 OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
                     model.mark_zap_launch_modal_dismissed(ctx);
                 });
@@ -15684,7 +15684,7 @@ impl Workspace {
     fn open_workflow_with_existing(
         &mut self,
         workflow_id: SyncId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<Self>,
     ) {
         let source = WorkflowOpenSource::Existing(workflow_id);
@@ -15704,7 +15704,7 @@ impl Workspace {
         };
         self.open_workflow_in_pane(
             &source,
-            &ZapDriveObjectSettings::default(),
+            &ZaplexDriveObjectSettings::default(),
             WorkflowViewMode::Create,
             ctx,
         );
@@ -15725,7 +15725,7 @@ impl Workspace {
         };
         self.open_workflow_in_pane(
             &source,
-            &ZapDriveObjectSettings::default(),
+            &ZaplexDriveObjectSettings::default(),
             WorkflowViewMode::Create,
             ctx,
         );
@@ -15943,7 +15943,7 @@ impl Workspace {
                         .left_panel_views
                         .first()
                         .copied()
-                        .unwrap_or(ToolPanelView::ZapDrive)
+                        .unwrap_or(ToolPanelView::ZaplexDrive)
                     {
                         ToolPanelView::ProjectExplorer => {
                             crate::t!("workspace-left-panel-project-explorer")
@@ -15951,7 +15951,7 @@ impl Workspace {
                         ToolPanelView::GlobalSearch { .. } => {
                             crate::t!("workspace-left-panel-global-search")
                         }
-                        ToolPanelView::ZapDrive => crate::t!("workspace-left-panel-warp-drive"),
+                        ToolPanelView::ZaplexDrive => crate::t!("workspace-left-panel-warp-drive"),
                         ToolPanelView::ConversationListView => {
                             crate::t!("workspace-left-panel-agent-conversations")
                         }
@@ -16012,7 +16012,7 @@ impl Workspace {
                 .left_panel_views
                 .first()
                 .copied()
-                .unwrap_or(ToolPanelView::ZapDrive)
+                .unwrap_or(ToolPanelView::ZaplexDrive)
             {
                 ToolPanelView::ProjectExplorer => {
                     crate::t!("workspace-left-panel-project-explorer")
@@ -16020,7 +16020,7 @@ impl Workspace {
                 ToolPanelView::GlobalSearch { .. } => {
                     crate::t!("workspace-left-panel-global-search")
                 }
-                ToolPanelView::ZapDrive => crate::t!("workspace-left-panel-warp-drive"),
+                ToolPanelView::ZaplexDrive => crate::t!("workspace-left-panel-warp-drive"),
                 ToolPanelView::ConversationListView => {
                     crate::t!("workspace-left-panel-agent-conversations")
                 }
@@ -18787,7 +18787,7 @@ impl Workspace {
             });
         }
         if WarpDriveSettings::is_warp_drive_enabled(ctx) {
-            views.push(ToolPanelView::ZapDrive);
+            views.push(ToolPanelView::ZaplexDrive);
         }
         // openWarp-only: the SSH manager, no feature flag, always shown by default.
         views.push(ToolPanelView::SshManager);
@@ -19266,7 +19266,7 @@ impl TypedActionView for Workspace {
                             owner: personal_drive,
                             initial_folder_id: None,
                         },
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         ctx,
                         true,
                     );
@@ -19296,7 +19296,7 @@ impl TypedActionView for Workspace {
                     };
                     self.open_workflow_in_pane(
                         &source,
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         WorkflowViewMode::Create,
                         ctx,
                     );
@@ -19322,9 +19322,9 @@ impl TypedActionView for Workspace {
                 self.finish_tab_rename(ctx);
                 self.current_workspace_state.is_tab_being_dragged = true;
             }
-            ZapDrive => {
+            ZaplexDrive => {
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
-                    self.open_left_panel_view(&LeftPanelAction::ZapDrive, ctx);
+                    self.open_left_panel_view(&LeftPanelAction::ZaplexDrive, ctx);
                 }
             }
             ToggleLeftPanel => {
@@ -19800,7 +19800,7 @@ impl TypedActionView for Workspace {
                 });
                 self.open_workflow_with_existing(
                     *workflow_id,
-                    &ZapDriveObjectSettings::default(),
+                    &ZaplexDriveObjectSettings::default(),
                     ctx,
                 );
             }
@@ -20082,7 +20082,7 @@ impl TypedActionView for Workspace {
             }
             OpenNotebook { id } => self.open_notebook(
                 &NotebookSource::Existing(*id),
-                &ZapDriveObjectSettings::default(),
+                &ZaplexDriveObjectSettings::default(),
                 ctx,
                 true,
             ),
@@ -20232,7 +20232,7 @@ impl TypedActionView for Workspace {
                     };
                     self.open_workflow_in_pane(
                         &source,
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         WorkflowViewMode::Create,
                         ctx,
                     );
@@ -20290,7 +20290,7 @@ impl TypedActionView for Workspace {
                     "Zaplex launch modal state: old={}, new={}, feature_flag_enabled={}",
                     old_value,
                     new_value,
-                    FeatureFlag::ZapLaunchModal.is_enabled()
+                    FeatureFlag::ZaplexLaunchModal.is_enabled()
                 );
             }
             #[cfg(debug_assertions)]
@@ -20397,8 +20397,8 @@ impl TypedActionView for Workspace {
             ToggleWarpDrive => {
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
                     let is_showing =
-                        self.left_panel_view.as_ref(ctx).active_view() == ToolPanelView::ZapDrive;
-                    self.toggle_left_panel_view(&LeftPanelAction::ZapDrive, is_showing, ctx);
+                        self.left_panel_view.as_ref(ctx).active_view() == ToolPanelView::ZaplexDrive;
+                    self.toggle_left_panel_view(&LeftPanelAction::ZaplexDrive, is_showing, ctx);
                 }
             }
             ToggleSshManager => {

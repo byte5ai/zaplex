@@ -53,7 +53,7 @@ use crate::{
     drive::{
         drive_helpers::has_feature_gated_anonymous_user_reached_notebook_limit,
         export::ExportManager, items::WarpDriveItemId, ObjectTypeAndId,
-        ZapDriveObjectSettings,
+        ZaplexDriveObjectSettings,
     },
     editor::{
         EditOrigin, EditorView, Event as EditorEvent, InteractionState,
@@ -1515,7 +1515,7 @@ impl NotebookView {
     pub fn wait_for_initial_load_then_load(
         &mut self,
         notebook_id: SyncId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         window_id: WindowId,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -1562,7 +1562,7 @@ impl NotebookView {
     fn fetch_and_load_notebook(
         &mut self,
         notebook_id: ServerId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         window_id: WindowId,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -1606,7 +1606,7 @@ impl NotebookView {
     pub fn load(
         &mut self,
         notebook: NotebookObject,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<Self>,
     ) -> SpawnedFutureHandle {
         self.set_title(&notebook.model().title, ctx);
@@ -1855,7 +1855,7 @@ impl NotebookView {
         if let Some(notebook) = ObjectStoreModel::as_ref(ctx).get_notebook(&id) {
             self.load(
                 notebook.clone(),
-                &ZapDriveObjectSettings::default(),
+                &ZaplexDriveObjectSettings::default(),
                 ctx,
             );
         }

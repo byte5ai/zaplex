@@ -2601,7 +2601,7 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         #[cfg(feature = "bundled_skills")]
         FeatureFlag::BundledSkills,
         #[cfg(feature = "open_warp_launch_modal")]
-        FeatureFlag::ZapLaunchModal,
+        FeatureFlag::ZaplexLaunchModal,
         #[cfg(feature = "new_tab_styling")]
         FeatureFlag::NewTabStyling,
         #[cfg(feature = "skill_arguments")]
@@ -2623,7 +2623,7 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         #[cfg(feature = "directory_tab_colors")]
         FeatureFlag::DirectoryTabColors,
         #[cfg(feature = "open_warp_new_settings_modes")]
-        FeatureFlag::ZapNewSettingsModes,
+        FeatureFlag::ZaplexNewSettingsModes,
         #[cfg(feature = "hoa_code_review")]
         FeatureFlag::HoaCodeReview,
         #[cfg(feature = "vertical_tabs")]
