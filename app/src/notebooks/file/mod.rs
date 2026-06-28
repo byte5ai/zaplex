@@ -80,7 +80,7 @@ pub enum MarkdownDisplayMode {
     Raw,
 }
 
-/// View for a read-only notebook backed by a file, rather than Zap Drive.
+/// View for a read-only notebook backed by a file, rather than Zaplex Drive.
 pub struct FileNotebookView {
     /// The location of the open file. This is cached for displaying the title and breadcrumbs.
     location: Option<FileLocation>,

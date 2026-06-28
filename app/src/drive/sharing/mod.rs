@@ -19,7 +19,7 @@ use crate::{
     workspaces::{user_profiles::UserProfiles, user_workspaces::UserWorkspaces},
 };
 
-// Zap Phase 2a: `dialog/` (cloud sharing modal UI) deleted along with
+// Zaplex Phase 2a: `dialog/` (cloud sharing modal UI) deleted along with
 // all consumer triggers. `style.rs` is retained because the Subject /
 // UserKind avatar helpers in this module still depend on it.
 mod style;
@@ -161,11 +161,11 @@ impl PartialEq for UserKind {
     }
 }
 
-/// Identifier for an object that's shareable via the Zap Drive ACL model. Not all sharing in Zap
+/// Identifier for an object that's shareable via the Zaplex Drive ACL model. Not all sharing in Zaplex
 /// is _currently_ tied into this model (e.g. block sharing).
 #[derive(Debug, Clone)]
 pub enum ShareableObject {
-    /// A shareable Zap Drive object.
+    /// A shareable Zaplex Drive object.
     WarpDriveObject(ServerId),
 }
 

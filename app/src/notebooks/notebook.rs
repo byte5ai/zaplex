@@ -224,7 +224,7 @@ enum NotebookSyncError {
     FeatureNotAvailable,
 }
 
-/// A view that allows viewing/execution and editing of a Zap notebook.
+/// A view that allows viewing/execution and editing of a Zaplex notebook.
 /// We don't currently persist any data.
 pub struct NotebookView {
     /// This is a stateful component that shows information about the notebook like its location
@@ -1679,7 +1679,7 @@ impl NotebookView {
             }
         });
         self.update_breadcrumbs(ctx);
-        // Zap Phase 2a: invitee-driven sharing dialog removed.
+        // Zaplex Phase 2a: invitee-driven sharing dialog removed.
         if let Some(focused_folder_id) = settings.focused_folder_id.map(SyncId::ServerId) {
             self.view_in_warp_drive(
                 WarpDriveItemId::Object(ObjectTypeAndId::Folder(focused_folder_id)),

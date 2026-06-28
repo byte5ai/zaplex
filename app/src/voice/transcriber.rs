@@ -8,7 +8,7 @@ pub enum TranscribeError {
     #[error("Request failed due to lack of Voice quota.")]
     QuotaLimit,
 
-    #[error("Zap is currently overloaded. Please try again later.")]
+    #[error("Zaplex is currently overloaded. Please try again later.")]
     ServerOverloaded,
 
     #[error("Internal error occurred at transport layer.")]
@@ -17,8 +17,8 @@ pub enum TranscribeError {
     #[error("Failed to deserialize JSON.")]
     Deserialization,
 
-    /// Zap has disabled voice transcription (the BYOP genai protocol cannot carry audio).
-    #[error("Voice transcription is unavailable in Zap.")]
+    /// Zaplex has disabled voice transcription (the BYOP genai protocol cannot carry audio).
+    #[error("Voice transcription is unavailable in Zaplex.")]
     Disabled,
 
     #[error(transparent)]
@@ -55,7 +55,7 @@ impl VoiceTranscriber {
         }
     }
 
-    /// Zap (localization, Phase 4): creates a disabled transcriber. In the original
+    /// Zaplex (localization, Phase 4): creates a disabled transcriber. In the original
     /// semantics `Some(...)` meant a cloud STT backend was available and `None` meant
     /// "transcriber disabled"; after localization the cloud `ServerVoiceTranscriber`
     /// (which calls server_api.transcribe to send Wispr STT) is unavailable, so this constructor is used instead.

@@ -219,12 +219,12 @@ pub struct AIConversation {
     /// Legacy cloud event cursor retained only for deserializing older conversations.
     last_event_sequence: Option<i64>,
 
-    /// Zap BYOP local session compaction sidecar — decoupled from warp protobuf message,
+    /// Zaplex BYOP local session compaction sidecar — decoupled from warp protobuf message,
     /// indexed by message_id to attach metadata like "is_summary / tool_output_compacted_at / synthetic_continue".
     /// Empty by default = uncompacted state, fully non-invasive.
     /// See [`crate::ai::byop_compaction`] for details.
     pub(crate) compaction_state: crate::ai::byop_compaction::state::CompactionState,
-    /// Zap BYOP repair sidecar. Invalid sidecars must be preserved as-is to avoid silently
+    /// Zaplex BYOP repair sidecar. Invalid sidecars must be preserved as-is to avoid silently
     /// authorizing repair or erasing corrupted metadata during save.
     pub(crate) byop_repair_state: RepairStateStatus,
 }
@@ -1157,7 +1157,7 @@ impl AIConversation {
         });
     }
 
-    /// Updates the notebook_uid for a plan artifact when it's synced to Zap Drive.
+    /// Updates the notebook_uid for a plan artifact when it's synced to Zaplex Drive.
     pub fn update_plan_notebook_uid(
         &mut self,
         document_uid: AIDocumentId,
@@ -2507,7 +2507,7 @@ impl AIConversation {
                     })
                     .ok_or(UpdateConversationError::ExchangeNotFound)?;
 
-                // Zap optimization 1: Fast path for text/reasoning streams.
+                // Zaplex optimization 1: Fast path for text/reasoning streams.
                 // When mask is `agent_output.text` or `agent_reasoning.reasoning`,
                 // todos_op is not triggered (only UpdateTodos message does),
                 // and current_todo_list / current_comment_state are
@@ -2693,7 +2693,7 @@ impl AIConversation {
         new_task_id
     }
 
-    /// Zap BYOP-specific: When agent self-initiates LRC and receives snapshot,
+    /// Zaplex BYOP-specific: When agent self-initiates LRC and receives snapshot,
     /// directly land a Server-backed cli subagent task in conversation.
     ///
     /// Does not use `create_optimistic_cli_subagent_task` (which produces `TaskImpl::Optimistic` and
@@ -3479,7 +3479,7 @@ impl AIConversation {
     }
 }
 
-/// Zap optimization 1: Detect if AppendToMessageContent mask is purely text/reasoning append.
+/// Zaplex optimization 1: Detect if AppendToMessageContent mask is purely text/reasoning append.
 /// These two mask paths:
 /// - `agent_output.text` — BYOP / cloud path text chunk
 /// - `agent_reasoning.reasoning` — BYOP / cloud path reasoning chunk
@@ -3705,7 +3705,7 @@ pub enum AIAgentSerializedBlockFormat {
 /// Describes the format capabilities of a conversation.
 #[derive(Debug, Clone)]
 pub struct AIAgentConversationFormat {
-    /// Whether there is a Zap MAA task list available for this conversation.
+    /// Whether there is a Zaplex MAA task list available for this conversation.
     pub has_task_list: bool,
     /// The format of the TUI serialized block, if available.
     pub block_snapshot: Option<AIAgentSerializedBlockFormat>,

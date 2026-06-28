@@ -7,8 +7,8 @@ use crate::auth::AuthState;
 
 /// Construct auth context for use by remote-server module.
 ///
-/// Zap Wave 3-1: `AuthClient` trait already physically deleted. Bearer token source changed to directly read
-/// `AuthState::get_access_token_ignoring_validity()`(on Zap path only returns `Some` when user has BYOP API key mounted,
+/// Zaplex Wave 3-1: `AuthClient` trait already physically deleted. Bearer token source changed to directly read
+/// `AuthState::get_access_token_ignoring_validity()`(on Zaplex path only returns `Some` when user has BYOP API key mounted,
 /// otherwise always `None`).
 pub fn server_api_auth_context(auth_state: Arc<AuthState>) -> RemoteServerAuthContext {
     let token_auth_state = auth_state.clone();
@@ -24,7 +24,7 @@ pub fn server_api_auth_context(auth_state: Arc<AuthState>) -> RemoteServerAuthCo
 }
 
 fn remote_server_identity_key(auth_state: &AuthState) -> String {
-    // Zap no longer distinguishes anonymous / authenticated identity, uniformly uses `user_id()` (local test UID).
+    // Zaplex no longer distinguishes anonymous / authenticated identity, uniformly uses `user_id()` (local test UID).
     auth_state
         .user_id()
         .map(|uid| uid.as_string())

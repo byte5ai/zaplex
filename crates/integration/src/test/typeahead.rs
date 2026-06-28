@@ -74,7 +74,7 @@ macro_rules! check_command {
     };
 }
 
-/// Tests that the shell reports its input buffer to the Zap typeahead model after
+/// Tests that the shell reports its input buffer to the Zaplex typeahead model after
 /// a long-running command completes.
 pub fn test_input_reporting_posix_shells() -> Builder {
     // When the shell can report its input buffer, we can handle typeahead with

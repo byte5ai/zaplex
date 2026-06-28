@@ -310,7 +310,7 @@ pub(super) fn vscode_2026_dark_colors() -> TerminalColors {
 }
 
 /// VS Code 2026 Dark built-in theme; color source: vscode/extensions/theme-defaults/themes/2026-dark.json.
-/// Includes complete UiColors coverage, mapping VS Code's editor/panel colors to Zap UI components.
+/// Includes complete UiColors coverage, mapping VS Code's editor/panel colors to Zaplex UI components.
 pub(super) fn vscode_2026_dark() -> WarpTheme {
     WarpTheme::new(
         Fill::Solid(ColorU::from_u32(0x191A1BFF)),
@@ -738,7 +738,7 @@ pub(super) fn sent_referral_reward() -> WarpTheme {
             source: bundled_or_fetched_asset!("jpg/sent_referral_reward_bg.jpg"),
             opacity: 100,
         }),
-        Some("Zap Referral".to_string()),
+        Some("Zaplex Referral".to_string()),
         None,
     )
 }

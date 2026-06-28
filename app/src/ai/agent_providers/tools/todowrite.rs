@@ -18,7 +18,7 @@
 //! `update_todo_list_from_todo_op` moves items matching the second message from pending to completed
 //! (`mark_todos_complete` looks up id in pending), resulting in final `AIAgentTodoList` state:
 //! `completed_items = [completed]`, `pending_items = [pending + in_progress]`.
-//! Zap UI's `in_progress_item()` calls `pending_items.first()`, so the in_progress todo
+//! Zaplex UI's `in_progress_item()` calls `pending_items.first()`, so the in_progress todo
 //! should be the first item in the `todos` array with `status != completed/cancelled`.
 //!
 //! Then synthesize a pair `Message::ToolCall`(carrier, tool=None) + `Message::ToolCallResult`
@@ -47,7 +47,7 @@ pub struct TodoArg {
     /// parsing defaults unrecognized values to `pending`.
     #[serde(default)]
     pub status: String,
-    /// opencode protocol includes priority; Zap data model does not differentiate.
+    /// opencode protocol includes priority; Zaplex data model does not differentiate.
     /// Accepted but unused; retained to allow the model to send parameters per opencode convention without errors.
     #[serde(default, rename = "priority")]
     pub _priority: Option<String>,

@@ -320,7 +320,7 @@ impl SshInstallTmuxBlock {
     ) -> Box<dyn Element> {
         let header_contents = render::build_header_row(
             "Install tmux?",
-            Icon::new(UiIcon::Zap.into(), theme.active_ui_detail()),
+            Icon::new(UiIcon::Zaplex.into(), theme.active_ui_detail()),
             theme,
             appearance,
         )

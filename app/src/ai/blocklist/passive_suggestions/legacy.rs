@@ -256,7 +256,7 @@ impl PassiveSuggestionsModel {
         };
 
         // BYOP path: replace the ServerApi call with a BYOP one-shot completion.
-        // Zap has stripped out the Zap Inc cloud; with no BYOP config this is a silent no-op.
+        // Zaplex has stripped out the Zaplex Inc cloud; with no BYOP config this is a silent no-op.
         let Some(rendered) = build_prompt_suggestions_byop_request(
             &block_completed,
             execution_context,

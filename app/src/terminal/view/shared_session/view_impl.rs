@@ -164,12 +164,12 @@ impl TerminalView {
     }
 
     fn update_shared_session_pane_header(&mut self, _ctx: &mut ViewContext<Self>) {
-        // Zap Phase 2a: pane-header sharing UI is gone, so the pane no
+        // Zaplex Phase 2a: pane-header sharing UI is gone, so the pane no
         // longer tracks `ShareableObject::Session`. The shared-session itself
         // still runs; it just doesn't surface a "share" button in the header.
     }
 
-    // Zap: Share Session path is cut off, the following two methods retain signatures but are no-op,
+    // Zaplex: Share Session path is cut off, the following two methods retain signatures but are no-op,
     // no longer emit `Event::OpenShareSessionModal{,DeniedModal}`, nor reach cloud collaboration session service.
     pub fn open_share_session_modal(
         &mut self,
@@ -206,7 +206,7 @@ impl TerminalView {
     /// 5. Once the session is registered with [`shared_session::manager::Manager`], it
     ///    will emit an event for relevant subscribers (e.g. the Workspace will need to
     ///    re-render when a share starts for tab indicator, share button, etc.)
-    // Zap: Shared Session network entry is cut off, attempt_to_share_session is overall no-op,
+    // Zaplex: Shared Session network entry is cut off, attempt_to_share_session is overall no-op,
     // no longer set SharePending state, no longer emit StartSharingCurrentSession, no longer trigger telemetry.
     pub fn attempt_to_share_session(
         &mut self,
@@ -259,7 +259,7 @@ impl TerminalView {
 
         self.pane_configuration.update(ctx, |pane_config, ctx| {
             pane_config.refresh_pane_header_overflow_menu_items(ctx);
-            // Zap Phase 2a: sharing dialog + pane-header `ShareableObject`
+            // Zaplex Phase 2a: sharing dialog + pane-header `ShareableObject`
             // bookkeeping removed; the shared session continues without a UI
             // entry point.
             pane_config.notify_header_content_changed(ctx);
@@ -349,7 +349,7 @@ impl TerminalView {
 
         self.pane_configuration.update(ctx, |pane_config, ctx| {
             pane_config.refresh_pane_header_overflow_menu_items(ctx);
-            // Zap Phase 2a: removed `set_shareable_object` (cloud sharing UI gone).
+            // Zaplex Phase 2a: removed `set_shareable_object` (cloud sharing UI gone).
             pane_config.notify_header_content_changed(ctx);
         });
 

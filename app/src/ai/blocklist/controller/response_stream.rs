@@ -103,7 +103,7 @@ fn byop_dispatch_info(
 
     // Title generation: only trigger in first round (avoid repeating title per round).
     // Parse active title_model: may be base_model itself or another BYOP model independently selected by user.
-    // If either model is not BYOP-encoded (e.g., fallback to non-BYOP default), skip it — Zap main path is all BYOP;
+    // If either model is not BYOP-encoded (e.g., fallback to non-BYOP default), skip it — Zaplex main path is all BYOP;
     // when actually falling back to base, base itself is BYOP.
     let llm_prefs = crate::ai::llms::LLMPreferences::as_ref(ctx);
     let title_gen = if needs_create_task {
@@ -333,7 +333,7 @@ impl ResponseStream {
         self.params.lrc_should_spawn_subagent
     }
 
-    /// Zap BYOP local session compression: returns whether this stream is running SummarizeConversation
+    /// Zaplex BYOP local session compression: returns whether this stream is running SummarizeConversation
     /// and the overflow flag. Controller calls commit_summarization in the Done branch of
     /// handle_response_stream_finished to persist the summary to conversation.compaction_state.
     pub fn summarization_overflow(&self) -> Option<bool> {
@@ -650,10 +650,10 @@ impl Entity for ResponseStream {
 async fn byop_required_response_stream(
     cancellation_rx: oneshot::Receiver<()>,
 ) -> Result<api::ResponseStream, ConvertToAPITypeError> {
-    log::debug!("No BYOP provider selected for Zap agent request");
+    log::debug!("No BYOP provider selected for Zaplex agent request");
     let error_stream = futures::stream::once(async {
         Err(Arc::new(AIApiError::Other(anyhow!(
-            "Zap requires a configured BYOP provider in Settings"
+            "Zaplex requires a configured BYOP provider in Settings"
         ))))
     })
     .take_until(cancellation_rx);

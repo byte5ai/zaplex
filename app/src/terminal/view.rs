@@ -791,16 +791,16 @@ impl NotificationsTrigger {
     pub fn discovery_banner_copy(&self) -> &'static str {
         match self {
             NotificationsTrigger::LongRunningCommand(..) => {
-                "Zap can notify you when long-running commands finish."
+                "Zaplex can notify you when long-running commands finish."
             }
             NotificationsTrigger::AgentTaskCompleted(..) => {
-                "Zap can notify you when an agent finishes responding."
+                "Zaplex can notify you when an agent finishes responding."
             }
             NotificationsTrigger::NeedsAttention => {
-                "Zap can notify you when a command or agent needs your attention."
+                "Zaplex can notify you when a command or agent needs your attention."
             }
             NotificationsTrigger::PasswordPrompt => {
-                "Zap can notify you when you're prompted to enter a password."
+                "Zaplex can notify you when you're prompted to enter a password."
             }
         }
     }
@@ -1673,7 +1673,7 @@ pub enum Event {
     BlockStarted {
         is_for_in_band_command: bool,
     },
-    /// Tell the pane group to open a file within Zap.
+    /// Tell the pane group to open a file within Zaplex.
     OpenFileInWarp {
         path: PathBuf,
         /// The session that the file belongs to.
@@ -1804,7 +1804,7 @@ pub enum Event {
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
     },
-    /// Zap: emitted when Ctrl/Cmd+clicking a file path in the output of a remote SSH session in the terminal.
+    /// Zaplex: emitted when Ctrl/Cmd+clicking a file path in the output of a remote SSH session in the terminal.
     /// Opens the remote file in the editor via the buffer-sync protocol, rather than the local `OpenFileWithTarget`.
     #[cfg(all(feature = "local_tty", feature = "local_fs"))]
     OpenRemoteFileFromTerminal {
@@ -2232,7 +2232,7 @@ impl Default for TerminalViewStateChange {
 }
 
 /// Whether or not this is the active terminal session. The active session for a pane group
-/// is the one used for executing workflows, Zap AI suggestions, etc.
+/// is the one used for executing workflows, Zaplex AI suggestions, etc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveSessionState {
     Active,
@@ -2412,7 +2412,7 @@ pub struct TerminalView {
     control_master_error_banner_state: ControlMasterErrorBannerState,
 
     /// Banner to show if we detect a configuration in the user's rc files that
-    /// is incompatible with Zap.
+    /// is incompatible with Zaplex.
     incompatible_configuration_banner: ViewHandle<Banner<TerminalAction>>,
     is_incompatible_configuration_banner_open: bool,
 
@@ -2440,7 +2440,7 @@ pub struct TerminalView {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     file_link_scanning_join_handle: Option<JoinHandle<()>>,
 
-    /// Zap: cache of cwd directory listings for remote SSH sessions, used to precisely validate terminal file links.
+    /// Zaplex: cache of cwd directory listings for remote SSH sessions, used to precisely validate terminal file links.
     ///
     /// The key is `(session_id, cwd absolute path)`, the value is the directory's actual list of children; `None`
     /// means the listing for that cwd is being fetched asynchronously (daemon `ListDirectory` RPC).
@@ -3483,7 +3483,7 @@ impl TerminalView {
             &ai_action_model.as_ref(ctx).shell_command_executor(ctx),
             Self::handle_shell_command_executor_event,
         );
-        // Zap BYOP: subscribe to the suggest_prompt tool's chip event, rendering the prompt actively
+        // Zaplex BYOP: subscribe to the suggest_prompt tool's chip event, rendering the prompt actively
         // suggested by the model as a chip above the input. The original emit is gated by the PromptSuggestionsViaMAA cargo feature
         // (`action_model/execute/suggest_prompt.rs:56`); in OSS nobody subscribes by default → the chip
         // is never shown → the oneshot channel hangs forever → the conversation deadlocks. We removed the emit gate
@@ -4346,7 +4346,7 @@ impl TerminalView {
     /// Returns whether this terminal view should subscribe to git status
     /// updates. We subscribe when:
     /// 1. Agent mode is active and its chip list includes `GitDiffStats`, or
-    /// 2. Terminal mode with the Zap prompt enabled and the git stats chip
+    /// 2. Terminal mode with the Zaplex prompt enabled and the git stats chip
     ///    configured.
     #[cfg(feature = "local_fs")]
     fn should_subscribe_to_git_status(&self, ctx: &AppContext) -> bool {
@@ -4358,7 +4358,7 @@ impl TerminalView {
                 .contains(&ContextChipKind::GitDiffStats);
         }
 
-        // Terminal prompt path: the Zap prompt is active when honor_ps1 is
+        // Terminal prompt path: the Zaplex prompt is active when honor_ps1 is
         // off, or when UDI overrides PS1. GitDiffStats must also be in the
         // configured chip list.
         let is_using_warp_prompt = !*SessionSettings::as_ref(ctx).honor_ps1
@@ -8244,11 +8244,11 @@ impl TerminalView {
 
         let a11y_message = match &zaplexify_keybinding {
             Some(keystroke) => format!(
-                "You can press {} to Zaplexify this {} for more Zap features.",
+                "You can press {} to Zaplexify this {} for more Zaplex features.",
                 keystroke.displayed(),
                 lowercase_title
             ),
-            None => format!("You can Zaplexify this {lowercase_title} for more Zap features."),
+            None => format!("You can Zaplexify this {lowercase_title} for more Zaplex features."),
         };
 
         model
@@ -8411,7 +8411,7 @@ impl TerminalView {
 
         let a11y_content = AccessibilityContent::new(
             banner_title,
-            "Make sure you have enabled access for Zap notifications in System Preferences.",
+            "Make sure you have enabled access for Zaplex notifications in System Preferences.",
             WarpA11yRole::TextRole,
         );
         ctx.emit_a11y_content(a11y_content);
@@ -8487,7 +8487,7 @@ impl TerminalView {
         let should_start_new_conversation = suggestion.should_start_new_conversation;
         let conversation_id = banner_state.conversation_id;
         let trigger_block_id = trigger.as_ref().and_then(|t| t.block_id());
-        // Zap BYOP: clone byop_action_id + prompt, used at the end of accept to notify the executor
+        // Zaplex BYOP: clone byop_action_id + prompt, used at the end of accept to notify the executor
         // (`complete_suggest_prompt_action(Accepted { query })` closes the oneshot channel).
         let byop_banner_for_completion = banner_state
             .byop_action_id
@@ -8586,7 +8586,7 @@ impl TerminalView {
             );
         }
 
-        // Zap BYOP: the chip actively suggested by the model was accepted by the user → notify the executor to close
+        // Zaplex BYOP: the chip actively suggested by the model was accepted by the user → notify the executor to close
         // the oneshot channel, so the BYOP loop gets the `Accepted{query}` result, and on its next turn the model
         // can see the tool_result of "the user has adopted and submitted that prompt".
         if let Some(banner) = byop_banner_for_completion.as_ref() {
@@ -9133,7 +9133,7 @@ impl TerminalView {
         reset_focus
     }
 
-    /// Recomputes the chip values for the Zap prompt (i.e. _not_ PS1).
+    /// Recomputes the chip values for the Zaplex prompt (i.e. _not_ PS1).
     fn refresh_warp_prompt(&mut self, ctx: &mut ViewContext<Self>) {
         // Ask the per-repo sub-model to re-fetch metadata so the chip values
         // reflect the latest git state (branch, diff stats, etc.).
@@ -9969,7 +9969,7 @@ impl TerminalView {
                         );
 
                         // On dogfood only, we're interested in the block commands, durations,
-                        // and exit codes to trial Zap Analytics.
+                        // and exit codes to trial Zaplex Analytics.
                         if ChannelState::channel().is_dogfood() {
                             send_telemetry_from_ctx!(
                                 TelemetryEvent::BlockCompletedOnDogfoodOnly {
@@ -11244,7 +11244,7 @@ impl TerminalView {
 
         // Desktop notifications for CLI agents use the user's notification settings
         // directly. CLI agent notifications are explicit agent lifecycle events,
-        // so they should still notify when Zap is focused.
+        // so they should still notify when Zaplex is focused.
         if matches!(status, CLIAgentSessionStatus::InProgress) {
             return;
         }
@@ -11450,7 +11450,7 @@ impl TerminalView {
 
         // Now that the session is bootstrapped, update any restored AI blocks that were
         // created before bootstrapping with the shell launch data. This enables file link
-        // detection and the "Open in Zap" button on code blocks in restored conversations.
+        // detection and the "Open in Zaplex" button on code blocks in restored conversations.
         if let Some(shell_launch_data) = self.active_session.as_ref(ctx).shell_launch_data(ctx) {
             let ai_block_handles: Vec<_> = self
                 .rich_content_views
@@ -12409,7 +12409,7 @@ impl TerminalView {
 
     fn clear_prompt_suggestions(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(banner) = self.inline_banners_state.prompt_suggestions_banner.take() {
-            // Zap BYOP: if this chip came from the suggest_prompt tool, we need to cancel
+            // Zaplex BYOP: if this chip came from the suggest_prompt tool, we need to cancel
             // the corresponding oneshot channel, otherwise the BYOP loop hangs forever waiting for the result.
             self.complete_byop_suggest_prompt_if_needed(&banner, None, ctx);
             self.input.update(ctx, |input, ctx| {
@@ -12579,7 +12579,7 @@ impl TerminalView {
         self.update_scroll_position_locking(ScrollPositionUpdate::AfterEnd, ctx);
     }
 
-    /// Zap BYOP: when the model actively calls the `suggest_prompt` tool, the executor emits this event carrying
+    /// Zaplex BYOP: when the model actively calls the `suggest_prompt` tool, the executor emits this event carrying
     /// prompt + label + action_id.
     ///
     /// **Design semantics**: `suggest_prompt` is fire-and-forget (aligned with opencode agentic tool behavior)
@@ -13258,7 +13258,7 @@ impl TerminalView {
     }
 
     /// Shared logic for sending a desktop notification (or showing a discovery banner)
-    /// for any agent status change (both Zap's agent and any CLI agent).
+    /// for any agent status change (both Zaplex's agent and any CLI agent).
     fn send_agent_desktop_notification_or_show_banner(
         &mut self,
         trigger: NotificationsTrigger,
@@ -13977,7 +13977,7 @@ impl TerminalView {
                                         .with_on_select_action(TerminalAction::OpenFileInWarp(path))
                                         .into_item(),
                                 );
-                                // Because the default for cmd-click is to open in Zap, we also
+                                // Because the default for cmd-click is to open in Zaplex, we also
                                 // have an open-in-editor option.
                                 items.push(
                                     MenuItemFields::new(crate::t!("menu-block-open-in-editor"))
@@ -14098,7 +14098,7 @@ impl TerminalView {
                 let is_copy_both_disabled =
                     is_copy_commands_disabled && tail_block.output_to_string().trim().is_empty();
 
-                // Zap: removed the "Share block..." / "Share session..." entries (cloud dependency)
+                // Zaplex: removed the "Share block..." / "Share session..." entries (cloud dependency)
                 let _ = is_share_disabled;
 
                 let mut items = vec![
@@ -14280,7 +14280,7 @@ impl TerminalView {
             ) => {
                 // If selection is empty, only show non-block related options
                 let items: Vec<MenuItem<TerminalAction>> = Vec::new();
-                // Zap: removed session_sharing_context_menu_items (cloud shared session entry)
+                // Zaplex: removed session_sharing_context_menu_items (cloud shared session entry)
                 items
             }
             _ => vec![],
@@ -14675,9 +14675,9 @@ impl TerminalView {
                 .into_item(),
         );
 
-        // Zap: removed session_sharing_context_menu_items (cloud shared session entry)
+        // Zaplex: removed session_sharing_context_menu_items (cloud shared session entry)
 
-        // Section 2: AI Command Search, Ask Zap AI
+        // Section 2: AI Command Search, Ask Zaplex AI
         items.extend([
             MenuItem::Separator,
             MenuItemFields::new(crate::t!("menu-input-command-search"))
@@ -14909,7 +14909,7 @@ impl TerminalView {
             }
         }
 
-        // Zap: removed session_sharing_context_menu_items (cloud shared session entry)
+        // Zaplex: removed session_sharing_context_menu_items (cloud shared session entry)
         let current_shell = model.shell_launch_state().available_shell();
         let mut pane_context_menu_items = self.pane_context_menu_items(current_shell, ctx);
         if !menu_items.is_empty() && !pane_context_menu_items.is_empty() {
@@ -15174,7 +15174,7 @@ impl TerminalView {
         );
         items.push(MenuItem::Separator);
 
-        // Remote conversation sharing was removed in Zap; share-conversation menu item omitted.
+        // Remote conversation sharing was removed in Zaplex; share-conversation menu item omitted.
         let _ = ai_conversation_id;
 
         items.push(
@@ -16200,7 +16200,7 @@ impl TerminalView {
         }
     }
 
-    /// Zap: if the session that owns the currently active block is a remote-server session, returns its `HostId`.
+    /// Zaplex: if the session that owns the currently active block is a remote-server session, returns its `HostId`.
     ///
     /// Used when Ctrl/Cmd+clicking a file path in the terminal, to decide whether to take the local or remote buffer-sync
     /// open flow. Non-remote-server sessions return `None` (keeping local behavior unchanged).
@@ -16222,7 +16222,7 @@ impl TerminalView {
         }
     }
 
-    /// Zap: treats the absolute path resolved from a terminal file link as a remote path and constructs a `RemotePath`.
+    /// Zaplex: treats the absolute path resolved from a terminal file link as a remote path and constructs a `RemotePath`.
     /// Remote SSH hosts are all Unix, and the path string is assembled from the remote cwd reported by shell-integration.
     #[cfg(all(feature = "local_tty", feature = "local_fs"))]
     fn remote_path_from_terminal_path(
@@ -16241,7 +16241,7 @@ impl TerminalView {
         ))
     }
 
-    /// Zap: determines whether the remote path in a terminal file link points to a directory.
+    /// Zaplex: determines whether the remote path in a terminal file link points to a directory.
     ///
     /// This is based on the cached remote cwd directory listing (fetched and written by `link_detection.rs`).
     /// Returns `false` if not cached or not a directory (treated as a file).
@@ -16263,7 +16263,7 @@ impl TerminalView {
         })
     }
 
-    /// Zap: `cd` into the given directory in the current (remote) terminal session.
+    /// Zaplex: `cd` into the given directory in the current (remote) terminal session.
     ///
     /// Aligned with the behavior of clicking a directory link locally — a remote directory cannot be opened in the editor, so instead
     /// run `cd <dir>` in that remote shell session.
@@ -16285,7 +16285,7 @@ impl TerminalView {
     ) {
         ctx.notify();
 
-        // Zap: remote SSH sessions open remote files via the buffer-sync protocol.
+        // Zaplex: remote SSH sessions open remote files via the buffer-sync protocol.
         #[cfg(all(feature = "local_tty", feature = "local_fs"))]
         if let Some(host_id) = self.active_session_remote_host_id(ctx) {
             // Remote directory click: do not open in the editor; instead `cd` into it in that remote session.
@@ -16325,7 +16325,7 @@ impl TerminalView {
     ) {
         ctx.notify();
 
-        // Zap: remote SSH sessions open remote files via the buffer-sync protocol.
+        // Zaplex: remote SSH sessions open remote files via the buffer-sync protocol.
         // Remote files are always opened in the embedded code editor, ignoring `target` (an external editor cannot access remote files).
         #[cfg(all(feature = "local_tty", feature = "local_fs"))]
         if let Some(host_id) = self.active_session_remote_host_id(ctx) {
@@ -16413,7 +16413,7 @@ impl TerminalView {
         self.paste(true, ctx);
     }
 
-    /// Tell the pane group to open a file within Zap.
+    /// Tell the pane group to open a file within Zaplex.
     fn open_file_in_warp(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {
         if let Some(session) = self
             .active_block_session_id()
@@ -18146,7 +18146,7 @@ impl TerminalView {
                     ctx.emit(Event::ZapDriveObjectInPane(uid.clone()));
                 }
                 AIAgentCitation::WarpDocumentation { path: _ } => {
-                    // The Zap fork does not inherit the upstream docs.warp.dev documentation site,
+                    // The Zaplex fork does not inherit the upstream docs.warp.dev documentation site,
                     // so clicking this kind of citation does not navigate anywhere for now.
                 }
                 AIAgentCitation::WebPage { url } => {
@@ -20408,7 +20408,7 @@ impl TerminalView {
                     self.update_incompatible_configuration_banner(session.shell().plugins(), ctx)
                 }
 
-                // honor_ps1 affects whether the Zap prompt is active, which
+                // honor_ps1 affects whether the Zaplex prompt is active, which
                 // determines if we need git status updates.
                 self.update_git_status_subscription(ctx);
             }
@@ -21086,10 +21086,10 @@ impl TerminalView {
         let render_context = self.get_terminal_view_render_context(model, app);
 
         let enforce_minimum_contrast = *FontSettings::as_ref(app).enforce_minimum_contrast;
-        // Zap: the condition for alt-screen to render the cli subagent overlay is relaxed from the original
+        // Zaplex: the condition for alt-screen to render the cli subagent overlay is relaxed from the original
         // `is_agent_in_control()` to `is_agent_in_control_or_tagged_in()`. The original condition only considered the handoff path
         // (the agent takes over LRC control), missing the user-initiated tag-in path (`SetInputModeAgent` →
-        // `tag_in_agent_for_user_long_running_command`). The latter is the main entry point for the overlay under the Zap BYOP
+        // `tag_in_agent_for_user_long_running_command`). The latter is the main entry point for the overlay under the Zaplex BYOP
         // pipeline (controller `send_request_input` detects tagged-in → injects
         // `lrc_command_id` → chat_stream synthesizes a virtual subagent → spawns CLISubagentView);
         // without relaxing it, even if the view is created, alt-screen still does not mount it, and the model's reply is never seen.

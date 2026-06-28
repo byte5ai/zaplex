@@ -312,7 +312,7 @@ pub fn binary_name() -> &'static str {
 /// Returns the full path to the remote binary corresponding to the current channel and client version.
 ///
 /// Local builds preserve an unversioned suffix path so that `script/deploy_remote_server` can
-/// overwrite the same development slot. Zap release builds with `GIT_RELEASE_TAG` use a versioned
+/// overwrite the same development slot. Zaplex release builds with `GIT_RELEASE_TAG` use a versioned
 /// suffix, allowing new versions to naturally trigger reinstalls. Source-built local builds without
 /// a release tag still use an unversioned path.
 pub fn remote_server_binary() -> String {
@@ -360,7 +360,7 @@ pub fn install_script(staging_tarball_path: Option<&str>) -> String {
         .replace("{staging_tarball_path}", staging_tarball_path.unwrap_or(""))
 }
 
-/// Constructs the base URL for downloading Zap CLI release assets.
+/// Constructs the base URL for downloading Zaplex CLI release assets.
 fn download_url() -> String {
     let release_path = match ChannelState::app_version() {
         Some(tag) => format!("download/{tag}"),
@@ -379,7 +379,7 @@ fn version_suffix() -> String {
     }
 }
 
-/// Returns the Zap CLI tarball URL for the specified remote platform.
+/// Returns the Zaplex CLI tarball URL for the specified remote platform.
 pub fn download_tarball_url(platform: &RemotePlatform) -> String {
     format!(
         "{}/zap-{}-{}.tar.gz",
@@ -389,7 +389,7 @@ pub fn download_tarball_url(platform: &RemotePlatform) -> String {
     )
 }
 
-/// Zap fork: In development mode (DEBUG source builds without release tags),
+/// Zaplex fork: In development mode (DEBUG source builds without release tags),
 /// the SSH transport no longer downloads stale releases from GitHub. Instead, it cross-compiles
 /// the current `warp` binary locally and uploads it. The constants below describe the cross-compilation
 /// artifacts, coordinated with `script/deploy_remote_server` (same profile / features / target)

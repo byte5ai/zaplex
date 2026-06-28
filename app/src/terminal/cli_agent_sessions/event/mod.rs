@@ -57,7 +57,7 @@ pub struct CLIAgentEvent {
 #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
 const VERSIONED_PARSERS: &[EventParser] = &[v1::parse];
 
-/// The current CLI agent protocol version this build of Zap supports.
+/// The current CLI agent protocol version this build of Zaplex supports.
 /// Exported as the `ZAPLEX_CLI_AGENT_PROTOCOL_VERSION` env var on the PTY
 /// so plugins can negotiate a compatible payload format.
 #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
@@ -82,7 +82,7 @@ pub fn parse_event(title: Option<&str>, body: &str) -> Option<CLIAgentEvent> {
         None => {
             log::error!(
                 "Received CLI agent event with unsupported schema version \
-                 {version}. The CLI agent plugin or Zap may need to be updated."
+                 {version}. The CLI agent plugin or Zaplex may need to be updated."
             );
             None
         }

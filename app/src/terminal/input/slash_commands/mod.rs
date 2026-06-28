@@ -791,7 +791,7 @@ impl Input {
                 self.open_repos_menu(ctx);
             }
             compact if command.name == commands::COMPACT.name => {
-                // Zap: `/compact` and `/compact-and` share the local session compression path --
+                // Zaplex: `/compact` and `/compact-and` share the local session compression path --
                 // dispatch `WorkspaceAction::SummarizeAIConversation`, initial_prompt: None
                 // means "compress but don't send follow-up prompt", only summarize silently into conversation.
                 // Custom instructions (`/compact <instruction>`) go into the prompt field; in BYOP build_chat_request

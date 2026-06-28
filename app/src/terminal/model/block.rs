@@ -635,7 +635,7 @@ pub enum BlockState {
     /// any particular execution or command.
     Background,
 
-    /// This block holds static content and is programmatically added to the blocklist by Zap. An
+    /// This block holds static content and is programmatically added to the blocklist by Zaplex. An
     /// example is the information subshell bootstrap "success" block.
     Static,
 }
@@ -1526,7 +1526,7 @@ impl Block {
     }
 
     /// Whether we render the prompt on the same line, in the context of a finished block. Post-same
-    /// line prompt, we render on the same line for PS1, but not for Zap prompt!
+    /// line prompt, we render on the same line for PS1, but not for Zaplex prompt!
     pub fn render_prompt_on_same_line(&self) -> bool {
         self.honor_ps1()
     }
@@ -1664,7 +1664,7 @@ impl Block {
 
     /// A command-grid is active in the period after we have received the precmd
     /// hook but before the command has started executing. This includes the time
-    /// when the shell echoes the command bytes that Zap wrote to the PTY.
+    /// when the shell echoes the command bytes that Zaplex wrote to the PTY.
     pub fn is_command_grid_active(&self) -> bool {
         self.state == BlockState::BeforeExecution
     }
@@ -1882,7 +1882,7 @@ impl Block {
         if self.header_grid.honor_ps1() {
             self.block_banner_height() + self.padding_top()
         } else {
-            // Grid is drawn below custom Zap prompt in finished blocks.
+            // Grid is drawn below custom Zaplex prompt in finished blocks.
             self.block_banner_height()
                 + self.padding_top()
                 + self.prompt_height()
@@ -1911,7 +1911,7 @@ impl Block {
     }
 
     /// Returns the ENTIRE HEIGHT of the prompt and command (no padding top or middle included).
-    /// In the case of combined grid: for Zap prompt, this includes the height of both the Zap prompt
+    /// In the case of combined grid: for Zaplex prompt, this includes the height of both the Zaplex prompt
     /// AND combined grid; for PS1, this is just the combined grid (PS1 is included there).
     pub fn prompt_and_command_height(&self) -> Lines {
         if !self.ready_to_render() {
@@ -1920,7 +1920,7 @@ impl Block {
             // No padding between prompt and command in the case of PS1 (combined grid).
             self.header_grid.prompt_and_command_height()
         } else {
-            // Handle the case of Zap built-in prompt with combined grid.
+            // Handle the case of Zaplex built-in prompt with combined grid.
             // Note that we have non-zero `command_padding_top` in this case, unlike above!
             if self.header_grid.is_command_empty() {
                 Lines::zero()
@@ -2971,7 +2971,7 @@ impl ansi::Handler for Block {
         // If we're processing a prompt and we receive an initial blank line,
         // ignore it.  This is sometimes used in prompts (e.g.: oh-my-zsh's
         // "re5et" theme) to separate the previous command's output from the
-        // prompt, but this is not needed in Zap due to us visually separating
+        // prompt, but this is not needed in Zaplex due to us visually separating
         // blocks.
         match self.header_grid.receiving_chars_for_prompt {
             Some(ansi::PromptKind::Initial) if !self.header_grid.prompt_has_received_content() => {

@@ -150,7 +150,7 @@ fn render_lrc_request_context(params: &RequestParams) -> Option<String> {
         })
 }
 
-/// Zap: render an SSH session status block and append it to the end of the system prompt.
+/// Zaplex: render an SSH session status block and append it to the end of the system prompt.
 ///
 /// Trigger condition: `SessionContext.is_legacy_ssh()` is true (the user manually typed
 /// `ssh xx@xx` in a local PTY to enter a remote host that has no warp shell hook installed). For such sessions:
@@ -396,7 +396,7 @@ fn build_user_message_with_binaries(
     let mut error_replacements: Vec<(String, String)> = Vec::new();
     for bin in binaries {
         if !caps.supports_mime(&bin.content_type) {
-            // Zap aligns with opencode `unsupportedParts` (packages/opencode/src/provider/transform.ts:305-341):
+            // Zaplex aligns with opencode `unsupportedParts` (packages/opencode/src/provider/transform.ts:305-341):
             // mimes the model does not support are not silently dropped; instead an ERROR text part is inserted, letting the LLM tell the user itself.
             // The wording strictly copies opencode's `ERROR: Cannot read {name} (this model does not support
             // {modality} input). Inform the user.`; modality is mapped from the mime prefix, and name prefers the filename.
@@ -1191,7 +1191,7 @@ fn build_chat_request(
         plan_mode,
         &params.user_rules,
     );
-    // Zap: legacy SSH session profile patch. `render_system` goes through AIAgentContext,
+    // Zaplex: legacy SSH session profile patch. `render_system` goes through AIAgentContext,
     // so the OS/shell it gets is the local client; under legacy SSH the PTY is actually on the remote,
     // so append an SSH status block to correct the LLM's inference.
     if let Some(ssh_block) = render_ssh_session_block(&params.session_context) {
@@ -1212,7 +1212,7 @@ fn build_chat_request(
     // reordered to the end, or duplication caused by LRC subagent copies). See that function's docs for details.
     let all_msgs: Vec<&api::Message> = collect_linearized_task_messages(&params.tasks);
 
-    // Zap BYOP local conversation compaction: apply conversation.compaction_state to the message sequence.
+    // Zaplex BYOP local conversation compaction: apply conversation.compaction_state to the message sequence.
     //   1. filter out the (user, assistant) pairs already covered by some compaction (`hidden_message_ids`)
     //   2. at the position of the hidden range, insert a synthesized pair of (user "compacted, summary follows" + assistant summary text) messages —
     //      this step is emitted in place within the main loop via the `summary_inserts` index
@@ -1306,7 +1306,7 @@ fn build_chat_request(
     )?;
 
     let mut buf = AssistantBuffer::new(force_echo_reasoning);
-    // Zap: the call_ids of subagent ToolCalls that were skipped in the history —— their
+    // Zaplex: the call_ids of subagent ToolCalls that were skipped in the history —— their
     // ToolCallResults must also be skipped, otherwise they become orphan tool_responses and Anthropic returns 400 outright:
     // `unexpected tool_use_id ... no corresponding tool_use block`.
     let mut skipped_subagent_call_ids: std::collections::HashSet<String> =
@@ -1335,7 +1335,7 @@ fn build_chat_request(
         match inner {
             api::message::Message::UserQuery(u) => {
                 flush_assistant_buffer(&mut buf, &mut messages, &mut outbound_tool_groups);
-                // Zap: multimodal keep-alive across historical turns. warp's own path relies on the cloud server re-injecting InputContext;
+                // Zaplex: multimodal keep-alive across historical turns. warp's own path relies on the cloud server re-injecting InputContext;
                 // the BYOP direct connection has no such layer, so when `make_user_query_message` persists, it stuffs all binaries
                 // (image / pdf / audio) into `UserQuery.context.images`, and here we restore them back into
                 // UserBinary via `build_user_message_with_binaries`, so later turns the model can still see the previously
@@ -1407,7 +1407,7 @@ fn build_chat_request(
                 buf.text = Some(a.text.clone());
             }
             api::message::Message::ToolCall(tc) => {
-                // Zap BYOP: **the virtual subagent tool_call is not sent to the upstream model**.
+                // Zaplex BYOP: **the virtual subagent tool_call is not sent to the upstream model**.
                 // In the LRC tag-in scenario, we synthesize a `Tool::Subagent { metadata: Cli }` at the head of the chat_stream
                 // and write it into root.task.messages, solely to trigger the conversation creating a cli subtask + spawning the floating window;
                 // it is not a tool call the model actually produced, and the model would be confused if it saw it (a spurious tool call + nothing to respond to).
@@ -1448,7 +1448,7 @@ fn build_chat_request(
             }
             api::message::Message::ToolCallResult(tcr) => {
                 flush_assistant_buffer(&mut buf, &mut messages, &mut outbound_tool_groups);
-                // Zap: the corresponding ToolCall was skipped (subagent virtual call) → skip the result too,
+                // Zaplex: the corresponding ToolCall was skipped (subagent virtual call) → skip the result too,
                 // otherwise an orphan tool_response is left behind, causing an upstream 400.
                 if skipped_subagent_call_ids.contains(&tcr.tool_call_id) {
                     continue;
@@ -1494,7 +1494,7 @@ fn build_chat_request(
                 // Environment-type context (env / git / skills / ...) is rendered into the system prompt by prompt_renderer,
                 // and does not overlap with this path.
                 //
-                // Zap: in the LRC tag-in scenario, `running_command: Some(...)` contains the full PTY context
+                // Zaplex: in the LRC tag-in scenario, `running_command: Some(...)` contains the full PTY context
                 // (alt-screen grid_contents + command + is_alt_screen_active flag), rendered into an
                 // `<attached_running_command>` XML block via `render_running_command_context`.
                 // The model decides based on this whether to call write_to_long_running_shell_command.
@@ -1607,7 +1607,7 @@ fn build_chat_request(
                 prompt,
                 overflow: _,
             } => {
-                // Zap BYOP local conversation compaction entry point — 1:1 aligned with opencode `compaction.ts processCompaction`.
+                // Zaplex BYOP local conversation compaction entry point — 1:1 aligned with opencode `compaction.ts processCompaction`.
                 //
                 // The earlier messages loop already cut the sequence to the head (dropping the tail) based on `summarize_head_end`;
                 // here we append the final user message: `build_prompt(previous_summary, plugin_context)`,
@@ -2625,7 +2625,7 @@ fn is_plan_mode_turn(input: &[AIAgentInput]) -> bool {
 /// a tool not in the tool list cannot be called (the provider protocol layer rejects unknown functions outright).
 ///
 /// **Write-class tools NOT blocked**: `create_documents` / `edit_documents`. They only touch
-/// Zap Drive local document storage (AIDocumentModel), do not touch the file system, and do not run commands; semantically
+/// Zaplex Drive local document storage (AIDocumentModel), do not touch the file system, and do not run commands; semantically
 /// they are exactly the output-archiving action of Plan Mode —— the model deposits the final plan as a Drive document,
 /// which the user can later view / edit / drag into their own PLAN folder in the Drive UI for reuse.
 ///
@@ -2679,7 +2679,7 @@ pub fn available_tool_names(params: &RequestParams) -> Vec<String> {
 }
 
 fn build_tools_array(params: &RequestParams) -> Vec<GenaiTool> {
-    // Zap A2: in the LRC tag-in scenario, drop `run_shell_command` to force the model to pick a PTY-operation tool.
+    // Zaplex A2: in the LRC tag-in scenario, drop `run_shell_command` to force the model to pick a PTY-operation tool.
     //
     // Under alt-screen long-running commands (nvim/htop) + the user tagged-in state, **the mistake the model is most prone to**
     // is calling `run_shell_command` to run `taskkill nvim` / `Stop-Process nvim` (spawning a new process),
@@ -2696,7 +2696,7 @@ fn build_tools_array(params: &RequestParams) -> Vec<GenaiTool> {
     let is_lrc = params.lrc_command_id.is_some();
     let web_enabled = params.web_search_enabled;
     let plan_mode = is_plan_mode_turn(&params.input);
-    // Zap BYOP: the `suggest_prompt` chip UI has been restored via the view layer subscribing to
+    // Zaplex BYOP: the `suggest_prompt` chip UI has been restored via the view layer subscribing to
     // PromptSuggestionExecutorEvent (see `terminal/view.rs::
     // handle_suggest_prompt_executor_event`), so it can be exposed to the model.
     // `suggest_new_conversation` is still filtered: the UX has no ready-made popup component, and the executor was changed to
@@ -2719,7 +2719,7 @@ fn build_tools_array(params: &RequestParams) -> Vec<GenaiTool> {
             {
                 return false;
             }
-            // suggest_new_conversation: no UI implementation; in Zap the executor was changed to
+            // suggest_new_conversation: no UI implementation; in Zaplex the executor was changed to
             // fast-fail Cancelled. Filter it out here to avoid a model call producing a meaningless
             // tool_call→cancelled round trip (pure token waste).
             if t.name == "suggest_new_conversation" {
@@ -2862,7 +2862,7 @@ pub(super) fn build_client(
         },
     );
 
-    // Zap BYOP: the SSE stream must not carry gzip. `Accept-Encoding: gzip` makes nginx-style
+    // Zaplex BYOP: the SSE stream must not carry gzip. `Accept-Encoding: gzip` makes nginx-style
     // proxies compress the response, and the server must flush a complete deflate frame before the client can decode
     // the plaintext, breaking streaming semantics into ~K-byte bursts that feel like "a stutter every few hundred ms". zed/opencode
     // use native fetch / std HTTP and do not actively negotiate gzip on SSE, so the same proxy is fine.
@@ -2870,7 +2870,7 @@ pub(super) fn build_client(
     // We explicitly construct `WebConfig` here even though the genai default is already `gzip=false` (fork modification).
     //
     // User-Agent dynamically binds the current application name (taken from `ChannelState::app_id().application_name()`,
-    // registered by the entry bin: `bin/oss.rs` → "Zap"; other channels carry their own names).
+    // registered by the entry bin: `bin/oss.rs` → "Zaplex"; other channels carry their own names).
     // This way the upstream service can identify which fork build the request comes from, and it automatically follows any later rename.
     let mut headers = reqwest::header::HeaderMap::new();
     if let Ok(value) = build_user_agent_header() {
@@ -2899,11 +2899,11 @@ pub(super) fn build_client(
 }
 
 /// Construct the `User-Agent` header for BYOP outbound requests, with a value like:
-/// - `Zap/<git-tag>` —— for release builds where `GIT_RELEASE_TAG` is injected
-/// - `Zap` —— for Dev / local builds with no version
+/// - `Zaplex/<git-tag>` —— for release builds where `GIT_RELEASE_TAG` is injected
+/// - `Zaplex` —— for Dev / local builds with no version
 ///
 /// The application name is always taken from `ChannelState::app_id().application_name()`, ensuring consistency with the `AppId`
-/// registered by the entry bin (`bin/oss.rs` registers "Zap").
+/// registered by the entry bin (`bin/oss.rs` registers "Zaplex").
 fn build_user_agent_header(
 ) -> Result<reqwest::header::HeaderValue, reqwest::header::InvalidHeaderValue> {
     let app_name = warp_core::channel::ChannelState::app_id()
@@ -2968,7 +2968,7 @@ fn dashscope_needs_enable_thinking(
 /// `opencode*` send it. All other providers (including all OpenAI-compatible
 /// relays / local services / most Chinese clouds) never send it.
 ///
-/// Zap has no `providerID` dimension, only the user-provided `base_url`.
+/// Zaplex has no `providerID` dimension, only the user-provided `base_url`.
 /// So we infer it from `base_url`:
 /// - `api.openai.com`           → "openai"
 /// - `*.openai.azure.com`       → "azure"
@@ -3024,7 +3024,7 @@ fn build_chat_options(
     //    `openai` / `azure` / `openrouter` / `venice` / `opencode`. All other providers
     //    (including all OpenAI-compatible relays / Chinese clouds / local services) never send it.
     //
-    //    opencode decides via `providerID` (the string the user picks in config); Zap has no
+    //    opencode decides via `providerID` (the string the user picks in config); Zaplex has no
     //    `providerID`, so it can only infer from `base_url` → see `opencode_compatible_cache_provider`.
     //    This is base_url's only semantic use; do not extend it to decide behavior beyond caching.
     //
@@ -3056,7 +3056,7 @@ fn build_chat_options(
     //   (`lib/rust-genai/src/adapter/adapters/anthropic/adapter_impl.rs:121-135`
     //   does not read whether effort is `None`).
     // - **Off + DeepSeek**: the server's `thinking_mode` is on by default (deepseek-v4-flash etc.),
-    //   and an explicit `extra_body.thinking.type=disabled` is needed to turn it off. Zap's local fork
+    //   and an explicit `extra_body.thinking.type=disabled` is needed to turn it off. Zaplex's local fork
     //   of genai already supports top-level merging of `ChatOptions::extra_body`.
     // - **Off + OpenAI / OpenAiResp**: take the `reasoning_effort: "none"` path
     //   (GPT-5 / codex accept the `none` tier; o-series is filtered by the capability table).
@@ -3261,7 +3261,7 @@ pub async fn generate_byop_output(
     //
     // The emit timing must be after CreateTask (the task has been upgraded to Server state),
     // and before the model response begins (UI order: user shown → thinking/answer).
-    // Zap: multimodal keep-alive across historical turns. Besides the query text, package all of this turn's
+    // Zaplex: multimodal keep-alive across historical turns. Besides the query text, package all of this turn's
     // multimodal binaries (image / pdf / audio / ...) from UserQuery.context into `UserQuery.context.images`
     // for persistence (the proto field is named images, but semantically it is a generic BinaryFile —— `bytes data + mime_type`,
     // equivalent to opencode FilePart), so that when build_chat_request rebuilds messages on the next turn it can restore the binary
@@ -3517,7 +3517,7 @@ pub async fn generate_byop_output(
             //    takes the `Task::new_subtask` path, automatically binding SubagentParams.
             yield Ok(create_subtask_event(&subtask_id, &task_id));
 
-            // c) Zap A1: also copy this turn's UserQuery into the subtask, to initialize the subtask's
+            // c) Zaplex A1: also copy this turn's UserQuery into the subtask, to initialize the subtask's
             //    exchange.output.messages. Otherwise when CLISubagentView renders, the subtask's exchanges
             //    output is empty, and the floating window forever shows only a 49.6-height empty dialog box with no content.
             //    The upstream cloud has a full ClientAction sequence filling exchange.output on the cli subagent task,
@@ -4009,7 +4009,7 @@ pub async fn generate_byop_output(
                 );
             }
 
-            // Zap BYOP todowrite interception: not mapped to the protobuf executor; synthesize
+            // Zaplex BYOP todowrite interception: not mapped to the protobuf executor; synthesize
             // `Message::UpdateTodos` to write conversation.todo_lists directly, triggering the chip + popup
             // UI (aligned with the server-side ClientAction::AddMessagesToTask::UpdateTodos path).
             // Then append a carrier ToolCall + ToolCallResult to unblock the model.
@@ -4099,7 +4099,7 @@ pub async fn generate_byop_output(
                 continue;
             }
 
-            // Zap BYOP web tool interception: webfetch / websearch are not mapped to a protobuf
+            // Zaplex BYOP web tool interception: webfetch / websearch are not mapped to a protobuf
             // executor variant; run local HTTP directly here, synthesizing a (carrier ToolCall,
             // ToolCallResult) pair of messages, bypassing parse_incoming_tool_call.
             //
@@ -4700,7 +4700,7 @@ fn make_user_query_message(
     query: String,
     binaries: &[user_context::UserBinary],
 ) -> api::Message {
-    // Zap: write the multimodal binaries (image / pdf / audio etc.) into `UserQuery.context.images`
+    // Zaplex: write the multimodal binaries (image / pdf / audio etc.) into `UserQuery.context.images`
     // (an InputContext field; the proto Image is actually a generic container `bytes data + string mime_type`,
     // named images for historical reasons). UserBinary.data is a base64 string while proto.data is raw bytes,
     // so decode once here; skip entries that fail to decode, without blocking the model stream (a decode failure already means this entry
@@ -5467,7 +5467,7 @@ mod cache_boundary_stability_tests {
     fn build_three_turn_conversation() -> Vec<ChatMessage> {
         vec![
             ChatMessage::system(
-                "You are a helpful coding assistant for Zap BYOP.\n\
+                "You are a helpful coding assistant for Zaplex BYOP.\n\
                  Guidelines: be concise, prefer code over prose.",
             ),
             ChatMessage::user("What is rust borrow checker?"),

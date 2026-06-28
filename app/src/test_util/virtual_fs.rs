@@ -4,15 +4,15 @@ pub use virtual_fs::{Dirs, Stub, VirtualFS};
 pub trait WarpDirs {
     #[allow(dead_code)]
     fn git_repository_fixture(&self) -> PathBuf {
-        Zap::fixtures().join("git_repository")
+        Zaplex::fixtures().join("git_repository")
     }
 }
 
 impl WarpDirs for Dirs {}
 
-pub struct Zap;
+pub struct Zaplex;
 
-impl Zap {
+impl Zaplex {
     #[allow(dead_code)]
     pub fn executable() -> PathBuf {
         let mut path = {

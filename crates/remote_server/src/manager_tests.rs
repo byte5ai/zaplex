@@ -43,7 +43,7 @@ fn version_compat_client_tagged_server_untagged() {
 
 #[test]
 fn version_compat_client_untagged_server_tagged() {
-    // **Critical scenario**: Zap client has no tag (cargo build),
+    // **Critical scenario**: Zaplex client has no tag (cargo build),
     // server is a release from official CDN (with tag). Original helper
     // would judge as incompatible, triggering `remove_remote_server_binary` → infinite loop.
     // This test only records that `version_is_compatible` behavior itself does not change;
@@ -57,7 +57,7 @@ fn version_compat_client_untagged_server_tagged() {
 
 #[test]
 fn enforce_version_check_skipped_on_oss() {
-    // When Zap temporarily reuses official release binaries, client and server versions
+    // When Zaplex temporarily reuses official release binaries, client and server versions
     // are always inconsistent; strict validation must be skipped.
     assert!(!should_enforce_remote_version_check(Channel::Oss));
 }

@@ -2,7 +2,7 @@
 //! to the host system.
 //!
 //! For example, on macOS, this module sets up integrations with
-//! Finder such that the user can open a new Zap tab or window
+//! Finder such that the user can open a new Zaplex tab or window
 //! in a given directory.
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]

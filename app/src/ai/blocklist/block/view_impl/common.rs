@@ -127,7 +127,7 @@ pub const WAITING_FOR_USER_INPUT_MESSAGE: &str = "Agent waiting for instructions
 const IMAGE_SOURCE_LINK_LINE_INDEX: usize = 1;
 
 const ERROR_APOLOGY_TEXT: &str = "I'm sorry, I couldn't complete that request.";
-const INTERNAL_ZAPLEX_ERROR: &str = "Internal Zap error.";
+const INTERNAL_ZAPLEX_ERROR: &str = "Internal Zaplex error.";
 
 pub const LOAD_OUTPUT_MESSAGE: &str = "Warping...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_ADJUSTING: &str = "Adjusting tasks...";
@@ -545,7 +545,7 @@ pub fn render_warping_indicator_base(
         is_passive_code_diff,
         secondary_element,
     } = props;
-    // Unicode code point for the Zap glyph that is embedded in the version of Roboto we bundle
+    // Unicode code point for the Zaplex glyph that is embedded in the version of Roboto we bundle
     // into the app. This code point MUST be rendered using Roboto (the default ui font) or else the
     // glyph may not be rendered.
     const ZAPLEX_GLYPH: &str = "\u{E500}";
@@ -580,7 +580,7 @@ pub fn render_warping_indicator_base(
 
     let mut text_col = Flex::column();
     if let Some(sub_element) = secondary_element {
-        // Our warping indicator text prepends the Zap glyph (and a space) to the label.
+        // Our warping indicator text prepends the Zaplex glyph (and a space) to the label.
         // If we render the tip directly underneath, it will align to the glyph instead of
         // the start of the actual warping text.
         let sub_element = if should_indent_tip_for_warp_glyph {
@@ -1724,7 +1724,7 @@ struct VisualMarkdownBlockOptions<A: 'static> {
     alignment: VisualMarkdownAlignment,
     lightbox_trigger: Option<VisualMarkdownLightboxTrigger>,
     /// When `Some(non_empty)`, the rendered image is wrapped in the standard
-    /// Zap tooltip primitive so hovering surfaces the CommonMark image title.
+    /// Zaplex tooltip primitive so hovering surfaces the CommonMark image title.
     /// Mermaid diagrams pass `None` here because CommonMark titles do not
     /// apply to them.
     tooltip: Option<String>,
@@ -2157,7 +2157,7 @@ fn render_visual_markdown_block<A: Action>(
         VisualMarkdownAlignment::Center => Align::new(content).finish(),
     };
 
-    // Wrap the rendered image in the standard Zap tooltip when the source
+    // Wrap the rendered image in the standard Zaplex tooltip when the source
     // carried a CommonMark `title`. Branching on `Some(non_empty)` here means
     // untitled images remain un-wrapped, matching `specs/GH849/product.md`
     // invariant 6 (no tooltip for empty or absent titles). The tooltip's
@@ -2963,12 +2963,12 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
 
     let error_text = match props.error {
         RenderableAIError::QuotaLimit => {
-            // Zap(Phase 3c A1): remove logic in QuotaLimit that depends on `AIRequestUsageModel`
+            // Zaplex(Phase 3c A1): remove logic in QuotaLimit that depends on `AIRequestUsageModel`
             // for refreshing rendered time. After localization, cloud quota no longer applies; keep only generic error text.
             format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_ZAPLEX_ERROR}")
         }
         RenderableAIError::ServerOverloaded => {
-            "Zap is currently overloaded. Please try again later.".to_string()
+            "Zaplex is currently overloaded. Please try again later.".to_string()
         }
         RenderableAIError::InternalWarpError => {
             format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_ZAPLEX_ERROR}")
@@ -3356,7 +3356,7 @@ pub(crate) fn render_debug_footer<V: View>(
     );
     debug_row.add_child(copy_button_with_tooltip);
 
-    // Zap: no longer use `Expanded` — in alt-screen / long-command take-over scenarios, parent container
+    // Zaplex: no longer use `Expanded` — in alt-screen / long-command take-over scenarios, parent container
     // has infinite constraint along main axis (BYOP error block render path), and `Flex + Expanded`
     // directly panics with `flex contains flexible children but has an infinite constraint`.
     // debug_row's width is controlled by its internal Shrinkable; no need to actively fill parent.

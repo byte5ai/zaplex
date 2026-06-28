@@ -119,7 +119,7 @@ pub(super) async fn prepare_local_harness_child_launch(
         Harness::Gemini => unreachable!("normalize_local_child_harness filters out Gemini"),
     };
 
-    // Zap (localization, Phase 3b-4): local harness child task startup no longer goes through the cloud
+    // Zaplex (localization, Phase 3b-4): local harness child task startup no longer goes through the cloud
     // `create_agent_task` mutation; instead, task_id is generated locally as UUID v4.
     // The `local_child_task_config(harness)` parameter is no longer used.
     let _ = local_child_task_config(harness);

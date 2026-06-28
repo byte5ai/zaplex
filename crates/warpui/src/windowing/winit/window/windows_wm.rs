@@ -15,7 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 use super::get_monitor_logical_bounds;
 
 impl WindowManager {
-    /// Returns the active Zap window. This will return an error if a different app's window is
+    /// Returns the active Zaplex window. This will return an error if a different app's window is
     /// active.
     fn get_active_window_handle(&self) -> Result<Arc<WinitWindow>> {
         let window_id = &self

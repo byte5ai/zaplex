@@ -11,7 +11,7 @@ pub(super) enum PluginLoadError {
     MissingBuiltin(BuiltInPluginType),
 }
 
-/// Represents "Built-in" plugins. Each variant corresponds to a plugin bundled with Zap by
+/// Represents "Built-in" plugins. Each variant corresponds to a plugin bundled with Zaplex by
 /// default (e.g. Completions/Command Signatures)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum BuiltInPluginType {
@@ -41,7 +41,7 @@ pub(super) enum PluginRef {
     /// Refers to plugin source on disk.
     Path(PathBuf),
 
-    /// Refers to a "built-in" plugin bundled with the Zap binary.
+    /// Refers to a "built-in" plugin bundled with the Zaplex binary.
     BuiltIn(BuiltInPluginType),
 }
 

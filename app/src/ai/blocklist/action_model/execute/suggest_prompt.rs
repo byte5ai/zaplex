@@ -52,7 +52,7 @@ impl PromptSuggestionExecutor {
             return ActionExecution::InvalidAction;
         };
 
-        // Zap: emit unconditionally (upstream gated this behind the PromptSuggestionsViaMAA cargo
+        // Zaplex: emit unconditionally (upstream gated this behind the PromptSuggestionsViaMAA cargo
         // feature, which OSS leaves off by default → the chip never shows → the oneshot hangs
         // forever). In the BYOP scenario, when the model actively calls suggest_prompt, the view
         // layer must subscribe to this event to show the chip to the user; once accepted, it calls

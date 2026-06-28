@@ -2,10 +2,10 @@ use super::is_zap_bundle;
 
 #[test]
 fn is_zap_bundle_recognises_zap_channels() {
-    // OSS (Zap) itself.
-    assert!(is_zap_bundle("dev.zap.Zap"));
+    // OSS (Zaplex) itself.
+    assert!(is_zap_bundle("dev.zap.Zaplex"));
     // Upstream Warp channels — also considered part of this app family, allowing default-app redirection.
-    assert!(is_zap_bundle("dev.warp.Zap"));
+    assert!(is_zap_bundle("dev.warp.Zaplex"));
     assert!(is_zap_bundle("dev.warp.WarpDev"));
     assert!(is_zap_bundle("dev.warp.WarpPreview"));
     assert!(is_zap_bundle("dev.warp.WarpOss"));

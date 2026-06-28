@@ -892,7 +892,7 @@ impl BlocklistAIActionModel {
     /// (internally takes `is_user_initiated=true` path, bypassing `NeedsConfirmation` checks),
     /// instead of the default `try_to_execute_available_actions`(`is_user_initiated=false`).
     ///
-    /// Purpose: Zap BYOP path LRC tag-in scenario — user actively SetInputModeAgent to
+    /// Purpose: Zaplex BYOP path LRC tag-in scenario — user actively SetInputModeAgent to
     /// give control to agent, but cannot see RequestedCommand's Accept button in alt-screen fullscreen,
     /// controller detects LRC state then uses this method to bypass manual confirmation deadlock.
     pub(super) fn queue_actions_with_options(
@@ -988,7 +988,7 @@ impl BlocklistAIActionModel {
             }
         }
         if auto_accept && !auto_accept_ids.is_empty() {
-            // Zap: LRC tag-in auto-authorization path. Bypass the default
+            // Zaplex: LRC tag-in auto-authorization path. Bypass the default
             // try_to_execute_available_actions(is_user_initiated=false),
             // directly call execute_action for each action just pushed (equivalent to user Accept).
             log::info!(

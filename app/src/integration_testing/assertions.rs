@@ -41,7 +41,7 @@ pub fn go_online() -> TestStep {
 }
 
 pub fn join_a_workspace() -> TestStep {
-    TestStep::new("Join a Zap Drive workspace")
+    TestStep::new("Join a Zaplex Drive workspace")
         .with_action(move |app, _, _| {
             UserWorkspaces::handle(app).update(app, |user_workspaces, ctx| {
                 let workspace_uid = "workspace_uid123456789".to_string().into();
@@ -141,6 +141,6 @@ pub fn assert_binding_display_string(
     )
 }
 
-// Zap (localization, Phase 2d-4a-1): original `assert_websocket_has_started` /
+// Zaplex (localization, Phase 2d-4a-1): original `assert_websocket_has_started` /
 // `assert_websocket_has_not_started` assertions depended on physically removed `Listener` singleton;
 // no callers, removed together.

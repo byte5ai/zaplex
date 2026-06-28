@@ -89,7 +89,7 @@ pub struct RequestParams {
     pub cli_agent_model: LLMId,
     pub computer_use_model: LLMId,
     pub is_memory_enabled: bool,
-    /// Zap BYOP exclusive: snapshot of global Rules (`AIFact::Memory`)
+    /// Zaplex BYOP exclusive: snapshot of global Rules (`AIFact::Memory`)
     /// created by the user in Settings → Agents → Rules. Fetched once from `ObjectStoreModel`
     /// in `new()` and plumbed with the request to `chat_stream::build_chat_request` → `prompt_renderer`,
     /// where `partials/user_rules.j2` renders them into the system prompt.
@@ -112,22 +112,22 @@ pub struct RequestParams {
     pub ask_user_question_enabled: bool,
     pub research_agent_enabled: bool,
     pub supported_tools_override: Option<Vec<warp_multi_agent_api::ToolType>>,
-    /// Zap BYOP exclusive: local session id, used only for request-readiness diagnostic logs.
+    /// Zaplex BYOP exclusive: local session id, used only for request-readiness diagnostic logs.
     pub byop_conversation_id: Option<AIConversationId>,
-    /// Zap BYOP exclusive: non-persistent diagnostic correlation id within a single request.
+    /// Zaplex BYOP exclusive: non-persistent diagnostic correlation id within a single request.
     pub byop_readiness_attempt_id: Option<String>,
     /// The conversation ID of the parent agent that spawned this child agent, if any.
     pub parent_agent_id: Option<String>,
     /// The display name for this agent (e.g. "Agent 1"), assigned by the orchestrator.
     pub agent_name: Option<String>,
-    /// Zap BYOP exclusive: the LRC (Long Running Command) block id associated when initiating this request.
+    /// Zaplex BYOP exclusive: the LRC (Long Running Command) block id associated when initiating this request.
     /// Populated in the first turn after tag-in and subsequent turns of CLI subagent under agent control,
     /// used to keep BYOP prompt/tools bound to the current PTY, preventing the model from spawning a new shell for the same TUI.
     pub lrc_command_id: Option<String>,
-    /// Zap BYOP exclusive: current LRC snapshot. `UserQuery.running_command` only covers user input turns;
+    /// Zaplex BYOP exclusive: current LRC snapshot. `UserQuery.running_command` only covers user input turns;
     /// auto-resume / tool result subsequent turns need to carry the latest PTY content via this field.
     pub lrc_running_command: Option<RunningCommand>,
-    /// Zap BYOP local session compression sidecar snapshot (controller injects conversation.compaction_state.clone() here).
+    /// Zaplex BYOP local session compression sidecar snapshot (controller injects conversation.compaction_state.clone() here).
     /// `chat_stream::build_chat_request` uses this to:
     ///   1. Filter messages in [`crate::ai::byop_compaction::state::CompactionState::hidden_message_ids`]
     ///   2. Insert "summary user/assistant pairs" at hidden interval boundaries
@@ -136,12 +136,12 @@ pub struct RequestParams {
     ///
     /// Default `None` = compatibility path (no compression).
     pub compaction_state: Option<crate::ai::byop_compaction::state::CompactionState>,
-    /// Zap BYOP repair sidecar snapshot. serializer uses read-only, does not deserialize persisted JSON during request construction.
+    /// Zaplex BYOP repair sidecar snapshot. serializer uses read-only, does not deserialize persisted JSON during request construction.
     pub byop_repair_state: crate::ai::byop_readiness::RepairStateStatus,
-    /// Zap BYOP exclusive: whether this turn needs to simulate upstream CreateTask flow to upgrade optimistic CLI subtask.
+    /// Zaplex BYOP exclusive: whether this turn needs to simulate upstream CreateTask flow to upgrade optimistic CLI subtask.
     /// Only required on the first turn after user tag-in; subsequent turns with existing CLI subagent reuse the task and cannot re-spawn.
     pub lrc_should_spawn_subagent: bool,
-    /// Zap BYOP exclusive: the task that this turn's response should be written to. Normal conversations use root task;
+    /// Zaplex BYOP exclusive: the task that this turn's response should be written to. Normal conversations use root task;
     /// CLI subagent subsequent turns use the corresponding subtask.
     pub byop_target_task_id: Option<String>,
 }
@@ -251,7 +251,7 @@ impl RequestParams {
         let is_memory_enabled = ai_settings.is_memory_enabled(app);
         let warp_drive_context_enabled = ai_settings.is_warp_drive_context_enabled(app);
 
-        // Zap BYOP fix for Issue #116: gate on `is_memory_enabled`, collection logic
+        // Zaplex BYOP fix for Issue #116: gate on `is_memory_enabled`, collection logic
         // extracted to `collect_user_rules` pure function that takes only `&ObjectStoreModel` parameter for testing,
         // does not depend on full AppContext singleton.
         let user_rules = if is_memory_enabled {

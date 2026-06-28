@@ -42,7 +42,7 @@ pub enum StripeSubscriptionPlan {
 
 /// Global model for server-side pricing information.
 ///
-/// In Zap it is a local no-op stub: the OSS channel has no cloud service pushing pricing data,
+/// In Zaplex it is a local no-op stub: the OSS channel has no cloud service pushing pricing data,
 /// so during the process lifetime `pricing_info` typically remains `None`, and all getters return `None`.
 /// The model is temporarily retained for a few usage quota and billing compatibility call sites;
 /// after cloud cleanup is complete, it can be removed entirely.

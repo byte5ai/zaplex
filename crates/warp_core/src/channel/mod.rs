@@ -18,7 +18,7 @@ pub enum Channel {
     /// The internal-only HEAD build.
     Local,
 
-    /// The open-source build of Zap.
+    /// The open-source build of Zaplex.
     Oss,
 
     /// The integration test build.

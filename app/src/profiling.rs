@@ -66,12 +66,12 @@ pub fn dump_dhat_heap_profile() {
 /// This spawns `go tool pprof`, fetches the heap profile from the local HTTP server, and symbolizes it.
 #[cfg(feature = "heap_usage_tracking")]
 pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
-    // Zap only writes the profile data and memory_breakdown to local logs.
+    // Zaplex only writes the profile data and memory_breakdown to local logs.
     let result = dump_jemalloc_heap_profile_inner().await;
     match result {
         Ok(profile_data) => {
             log::warn!(
-                "Zap: Detected abnormal memory usage (heap profile size {} bytes, memory breakdown: {})",
+                "Zaplex: Detected abnormal memory usage (heap profile size {} bytes, memory breakdown: {})",
                 profile_data.len(),
                 memory_breakdown
             );

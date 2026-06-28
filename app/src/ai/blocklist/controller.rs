@@ -89,7 +89,7 @@ pub struct SessionContext {
     session_type: Option<SessionType>,
     shell: Option<ShellLaunchData>,
     current_working_directory: Option<String>,
-    /// Zap: connection info for a legacy SSH session (the user manually typed `ssh xxx@yyy` in a local PTY,
+    /// Zaplex: connection info for a legacy SSH session (the user manually typed `ssh xxx@yyy` in a local PTY,
     /// with no warp shell hook installed on the remote). `session_type` is still `Local`,
     /// but the PTY actually runs on the remote, so we must tell the LLM in the prompt, otherwise the model assumes the local OS.
     ssh_connection_info: Option<InteractiveSshCommand>,
@@ -144,12 +144,12 @@ impl SessionContext {
         matches!(self.session_type, Some(SessionType::ZaplexifiedRemote { .. }))
     }
 
-    /// Zap: legacy SSH connection info (host/port); only meaningful when `is_legacy_ssh()` is true.
+    /// Zaplex: legacy SSH connection info (host/port); only meaningful when `is_legacy_ssh()` is true.
     pub fn ssh_connection_info(&self) -> Option<&InteractiveSshCommand> {
         self.ssh_connection_info.as_ref()
     }
 
-    /// Zap: whether this session is a legacy SSH session (the user manually typed ssh, with no warp hook on the remote).
+    /// Zaplex: whether this session is a legacy SSH session (the user manually typed ssh, with no warp hook on the remote).
     /// For such sessions `session_type` is still `Local`, but the PTY actually runs on the remote, so
     /// the `host_info`/`shell` profile reflects the local client rather than the remote shell.
     pub fn is_legacy_ssh(&self) -> bool {
@@ -359,7 +359,7 @@ pub struct BlocklistAIController {
     shared_session_state: shared_session::SharedSessionState,
 
     /// Ambient agent task ID attached to this controller. This is a property of the controller, and not an individual
-    /// conversation, because the ambient agent task driver owns the entire Zap window working on a task, and any
+    /// conversation, because the ambient agent task driver owns the entire Zaplex window working on a task, and any
     /// sessions within it. In the future, one task may span several sessions with background processes.
     ambient_agent_task_id: Option<AmbientAgentTaskId>,
 
@@ -2994,7 +2994,7 @@ impl BlocklistAIController {
                         conversation_data.id,
                         request_params.model.clone(),
                         is_queued_prompt,
-                        "Zap couldn't save the BYOP conversation state needed to send this \
+                        "Zaplex couldn't save the BYOP conversation state needed to send this \
                          request. Check that conversation persistence is enabled and that there \
                          is enough disk space, then try again."
                             .to_owned(),
@@ -3350,7 +3350,7 @@ impl BlocklistAIController {
                                         );
                                     }
                                 }
-                                // Zap BYOP local session compression: fetch summarization flag before stream finishes
+                                // Zaplex BYOP local session compression: fetch summarization flag before stream finishes
                                 let summarize_overflow =
                                     response_stream.as_ref(ctx).summarization_overflow();
                                 self.handle_response_stream_finished(
@@ -3384,7 +3384,7 @@ impl BlocklistAIController {
                     }
                     Err(e) => {
                         if matches!(e.as_ref(), AIApiError::QuotaLimit) {
-                            // Zap(Phase 3c A1): remove
+                            // Zaplex(Phase 3c A1): remove
                             // `AIRequestUsageModel::enable_buy_credits_banner` call.
                             // After localization, BYOP scenarios do not have "buy additional credits" business logic.
                         }
@@ -3445,7 +3445,7 @@ impl BlocklistAIController {
                 let mut was_passive_request = false;
                 let mut is_any_exchange_unfinished = false;
                 let mut actions_to_queue = vec![];
-                // Zap BYOP: collect newly-added message ids this round, used later to detect
+                // Zaplex BYOP: collect newly-added message ids this round, used later to detect
                 // synthetic invalid_arguments error markers in the EMPTY branch. **Only look at
                 // newly added** to avoid repeatedly hitting markers in history and causing auto-resume
                 // loops (markers persist once persisted).
@@ -3512,7 +3512,7 @@ impl BlocklistAIController {
                             .join(", "),
                         conversation_id,
                     );
-                    // Zap: LRC tag-in auto-authorizes agent tool execution on the first round.
+                    // Zaplex: LRC tag-in auto-authorizes agent tool execution on the first round.
                     //
                     // Trigger condition: when initiating this request, active_block is in
                     // InteractionMode::User { did_user_tag_in_agent: true }. Cannot fall back to the current
@@ -3535,7 +3535,7 @@ impl BlocklistAIController {
                         );
                     });
                 } else {
-                    // Zap BYOP: when from_args parsing fails, chat_stream falls back to emitting
+                    // Zaplex BYOP: when from_args parsing fails, chat_stream falls back to emitting
                     // a carrier ToolCall(tool=None) + synthetic error ToolCallResult(result=None,
                     // server_message_data is invalid_arguments JSON). Both walk NoClientRepresentation,
                     // not entering actions_to_queue, exchange ends silently → the model never receives
@@ -3548,7 +3548,7 @@ impl BlocklistAIController {
                     // bad args, which would cause a deadloop.
                     // Only search newly-added messages for synthetic error markers to avoid repeating
                     // hits on historically-persisted markers, which would cause deadloops.
-                    // Zap BYOP: synthetic ToolCallResults that don't enter the AIAgentAction queue
+                    // Zaplex BYOP: synthetic ToolCallResults that don't enter the AIAgentAction queue
                     // need auto-resume, otherwise the exchange ends silently and the model gets stuck waiting.
                     // 1. invalid_arguments — fallback for from_args parsing failure (original).
                     // 2. _byop_intercepted — results from locally-intercepted tools like todowrite / webfetch / websearch.
@@ -3645,7 +3645,7 @@ impl BlocklistAIController {
                     stream_id,
                     conversation_id,
                 });
-                // Zap(Phase 3c A1): remove
+                // Zaplex(Phase 3c A1): remove
                 // `AIRequestUsageModel::refresh_request_usage_async` and
                 // `maybe_refresh_ai_overages` calls. Both are essentially server-side metering sync RPCs,
                 // which have no effect after localization.
@@ -3671,7 +3671,7 @@ impl BlocklistAIController {
         });
     }
 
-    // Zap(Phase 3c A1): remove `maybe_refresh_ai_overages` function.
+    // Zaplex(Phase 3c A1): remove `maybe_refresh_ai_overages` function.
     // The original implementation was an optimization path for “fetch the latest overage status
     // from the server when local limit is exhausted”. After BYOP localization, there is neither a
     // limit nor overage; both the function body and its only call site must be removed together.
@@ -3685,7 +3685,7 @@ impl BlocklistAIController {
         summarize_overflow: Option<bool>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Zap BYOP local session compression: aggregate before token_usage moves into the closure below,
+        // Zaplex BYOP local session compression: aggregate before token_usage moves into the closure below,
         // used for auto overflow checks (in the Done branch below).
         let aggregate_token_count: usize = finished_event
             .token_usage
@@ -3712,7 +3712,7 @@ impl BlocklistAIController {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         match finished_event.reason {
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None => {
-                // Zap BYOP local session compression - write back summary
+                // Zaplex BYOP local session compression - write back summary
                 if let Some(overflow) = summarize_overflow {
                     let compaction_cfg = crate::ai::byop_compaction::CompactionConfig::from_settings(ctx);
                     history_model.update(ctx, |history_model, _ctx| {
@@ -3734,7 +3734,7 @@ impl BlocklistAIController {
                     );
                 });
 
-                // Zap BYOP local session compression - auto overflow trigger (aligned with opencode `processor.ts:395-403`)
+                // Zaplex BYOP local session compression - auto overflow trigger (aligned with opencode `processor.ts:395-403`)
                 // Only check when this stream is not itself a summary, to prevent recursion.
                 if summarize_overflow.is_none() {
                     let aggregate_count = aggregate_token_count;
@@ -4022,9 +4022,9 @@ fn get_running_command(terminal_model: &TerminalModel) -> Option<RunningCommand>
     })
 }
 
-/// Zap BYOP specific: extract RunningCommand in LRC tag-in / agent-monitored scenarios.
+/// Zaplex BYOP specific: extract RunningCommand in LRC tag-in / agent-monitored scenarios.
 ///
-/// Upstream `get_running_command` returns None when `is_agent_monitoring()` because in Zap's own
+/// Upstream `get_running_command` returns None when `is_agent_monitoring()` because in Zaplex's own
 /// LRC path, after spawning cli subagent, the server persists this state, so subsequent client
 /// rounds don't need to resend running_command. However, BYOP directly connects to the model with
 /// no server-side persistence, so **every round must re-provide the current PTY grid contents**

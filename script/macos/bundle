@@ -80,7 +80,7 @@ cleanup_dmg_files() {
         find "$target_dir" -name "rw.*.dmg" -type f -delete
     fi
     # Also check if any volumes are mounted and unmount them
-    hdiutil info | grep "/Volumes/Zap.*" | awk '{print $1}' | while read -r disk; do
+    hdiutil info | grep "/Volumes/Zaplex.*" | awk '{print $1}' | while read -r disk; do
         echo "Unmounting disk image: $disk"
         hdiutil detach "$disk" -force || true
     done
@@ -146,7 +146,7 @@ while (( "$#" )); do
       SELFSIGN=false
       shift
       ;;
-    # Sign with a local Apple Development cert instead of the official Zap cert.
+    # Sign with a local Apple Development cert instead of the official Zaplex cert.
     # Useful for local debug builds when you don't have access to the company signing key.
     # Falls back to ad-hoc signing if no Apple Development cert is found.
     --selfsign)
@@ -308,14 +308,15 @@ elif [[ $RELEASE_CHANNEL = "preview" ]]; then
 elif [[ $RELEASE_CHANNEL = "stable" ]]; then
     ZAPLEX_BIN="stable"
     BUNDLE_ID="dev.warp.Zap-Stable"
-    ZAPLEX_APP_NAME="Zap"
+    ZAPLEX_APP_NAME="Zaplex"
     ZAPLEX_SCHEME_NAME="warp"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
     ZAPLEX_BIN="zap-oss"
-    BUNDLE_ID="dev.zap.Zap"
-    ZAPLEX_APP_NAME="Zap"
-    ZAPLEX_SCHEME_NAME="zap"
-    # autoupdate 走 GitHub Release(zerx-lab/warp),仅下载 DMG 到 Downloads,不自动覆盖 .app。
+    BUNDLE_ID="dev.zaplex.Zaplex"
+    ZAPLEX_APP_NAME="Zaplex"
+    ZAPLEX_SCHEME_NAME="zaplex"
+    # autoupdate via GitHub Release (zerx-lab/warp): only downloads the DMG to
+    # Downloads, does not auto-overwrite the .app.
     FEATURES="release_bundle,extern_plist,autoupdate"
 fi
 
@@ -453,7 +454,7 @@ if [[ "$ARTIFACT" == "app" ]]; then
     </array>" "$BUNDLE_DIR"/$ZAPLEX_APP_NAME.app/Contents/Info.plist
   fi
 
-  # Temporary key that ChatGPT Desktop can use to determine if the latest version of Zap supports the ChatGPT integration.
+  # Temporary key that ChatGPT Desktop can use to determine if the latest version of Zaplex supports the ChatGPT integration.
   # Once support has been rolled out for a sufficient amount of time we (and ChatGPT) can remove this.
   plutil -insert SUPPORTS_CHAT_GPT_WORK_WITH_APPS -bool true "$BUNDLE_DIR"/$ZAPLEX_APP_NAME.app/Contents/Info.plist
 
@@ -721,10 +722,10 @@ if [[ "$ARTIFACT" = app ]]; then
     local source_folder="$1"
 
     local args=(
-      --volname Zap
+      --volname "$ZAPLEX_APP_NAME"
       # For --no-internet-enable, see https://github.com/create-dmg/create-dmg/issues/179
       --no-internet-enable
-      --background app/assets/resources/mac/warp_install_image.png
+      --background app/assets/resources/mac/zaplex_install_image.png
       --icon-size 128
       --window-size 700 500
       --format UDZO

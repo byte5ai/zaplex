@@ -415,7 +415,7 @@ pub fn init(ctx: &mut AppContext) {
         // This might seem like a no-op since `ctrl-right` changes desktops on Mac by default.
         // However, many Mac users coming from fish shell have asked for this binding.
         // They've already disabled the desktop change shortcut, and are expecting that this
-        // binding also works in Zap. We should not break their workflow.
+        // binding also works in Zaplex. We should not break their workflow.
         FixedBinding::new(
             "ctrl-right",
             EditorAction::MoveForwardOneWord,
@@ -8548,7 +8548,7 @@ impl TypedActionView for EditorView {
             UnhandledModifierKey(keystroke) => {
                 if self.can_select(ctx) {
                     // This event helps us to keep track of what key bindings users
-                    // try to use in the editor but are currently not available in Zap.
+                    // try to use in the editor but are currently not available in Zaplex.
                     ctx.emit(Event::UnhandledModifierKeyOnEditor(keystroke.clone()))
                 }
             }

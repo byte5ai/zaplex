@@ -61,7 +61,7 @@ async fn byop_generate_input_suggestions(
     user_rules: Vec<(Option<String>, String)>,
 ) -> Result<GenerateAIInputSuggestionsResponseV2, AIApiError> {
     let Some(cfg) = byop_cfg else {
-        // Zap is cloud-removed; without BYOP config, no longer fallback to ServerApi ——
+        // Zaplex is cloud-removed; without BYOP config, no longer fallback to ServerApi ——
         // return empty response, UI naturally won't show suggestions or spam error logs.
         return Ok(GenerateAIInputSuggestionsResponseV2::default());
     };

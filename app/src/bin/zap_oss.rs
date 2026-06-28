@@ -21,12 +21,12 @@ pub static NvOptimusEnablement: u32 = 1;
 #[used]
 pub static AmdPowerXpressRequestHighPerformance: u32 = 1;
 
-// Zap OSS build entry point, simple wrapper around warp::run().
+// Zaplex OSS build entry point, simple wrapper around warp::run().
 fn main() -> Result<()> {
     let mut state = ChannelState::new(
         Channel::Oss,
         ChannelConfig {
-            app_id: AppId::new("dev", "zap", "Zap"),
+            app_id: AppId::new("dev", "zap", "Zaplex"),
             logfile_name: "zap.log".into(),
             autoupdate_config: None,
             mcp_static_config: None,
@@ -36,7 +36,7 @@ fn main() -> Result<()> {
         state = state.with_additional_features(DEBUG_FLAGS);
     }
     // Always enable IME marked-text rendering: winit's IME path is supported on both macOS / Windows,
-    // but if not explicitly enabled here, Zap will discard preedit / input composition updates entirely, leaving only OS candidate window
+    // but if not explicitly enabled here, Zaplex will discard preedit / input composition updates entirely, leaving only OS candidate window
     // visible — on Windows, this constitutes significant breakage for Japanese / Chinese / Korean input.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
@@ -58,11 +58,11 @@ embed_plist::embed_info_plist_bytes!(r#"
     <key>CFBundleDevelopmentRegion</key>
     <string>English</string>
     <key>CFBundleDisplayName</key>
-    <string>Zap</string>
+    <string>Zaplex</string>
     <key>CFBundleExecutable</key>
     <string>zap-oss</string>
     <key>CFBundleIdentifier</key>
-    <string>dev.zap.Zap</string>
+    <string>dev.zap.Zaplex</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleLocalizations</key>
@@ -70,7 +70,7 @@ embed_plist::embed_info_plist_bytes!(r#"
     <string>en</string>
     </array>
     <key>CFBundleName</key>
-    <string>Zap</string>
+    <string>Zaplex</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -84,7 +84,7 @@ embed_plist::embed_info_plist_bytes!(r#"
     <key>CFBundleURLTypes</key>
     <array><dict><key>CFBundleURLName</key><string>Custom App</string><key>CFBundleURLSchemes</key><array><string>zap</string></array></dict></array>
     <key>NSHumanReadableCopyright</key>
-    <string>© 2026, Zap</string>
+    <string>© 2026, Zaplex</string>
     </dict>
     </plist>
 "#.as_bytes());

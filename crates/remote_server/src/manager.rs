@@ -147,7 +147,7 @@ fn version_is_compatible(client: Option<&str>, server: &str) -> bool {
 
 /// Whether to enforce strict tag matching for the remote `server_version`.
 ///
-/// For [`Channel::Oss`](Zap), locally-built source has no `GIT_RELEASE_TAG`,
+/// For [`Channel::Oss`](Zaplex), locally-built source has no `GIT_RELEASE_TAG`,
 /// but SSH Extension may install a latest-release remote-server.
 /// Enforcing strict version check would cause a delete/reinstall/mismatch loop
 /// when client is `None` and server has a non-empty tag. Release builds avoid stale binaries
@@ -872,7 +872,7 @@ impl RemoteServerManager {
         // tag than the client expects, the binary on disk is stale. Remove it so
         // the next reconnect (or explicit reconnect by the user) will reinstall.
         //
-        // Under `Channel::Oss`(Zap), we temporarily reuse the official release binary;
+        // Under `Channel::Oss`(Zaplex), we temporarily reuse the official release binary;
         // the client has no `GIT_RELEASE_TAG`, so it will never match the server.
         // Therefore, strict version checking is skipped. See [`should_enforce_remote_version_check`] for details.
         let client_version = ChannelState::app_version();

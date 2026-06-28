@@ -540,7 +540,7 @@ fn make_new_drive_menu(ctx: &AppContext) -> Menu {
         updateable_custom_item_without_checkmark(CustomAction::OpenMCPServerCollection, ctx),
     ]);
 
-    // Zap Phase 2a: removed `Share pane contents` menu item (cloud
+    // Zaplex Phase 2a: removed `Share pane contents` menu item (cloud
     // sharing UI gone) — keeping the entry would render a clickable menu
     // item that does nothing.
 
@@ -799,7 +799,7 @@ fn debug_menu_items() -> Vec<MenuItem> {
             None,
         )));
 
-        // Zap Wave 3-1:"Create anonymous user" debug menu item 随
+        // Zaplex Wave 3-1:"Create anonymous user" debug menu item 随
         // `workspace:debug_create_anonymous_user` global action + AuthClient 一同物理删。
     }
 
@@ -1024,7 +1024,7 @@ fn open_new_agent_tab_or_window(ctx: &mut AppContext) {
     }
 }
 
-/// Dispatch event to open a new Zap window
+/// Dispatch event to open a new Zaplex window
 fn open_new_window(ctx: &mut AppContext) {
     ctx.dispatch_global_action("root_view:open_new", &());
     ctx.dispatch_global_action("workspace:save_app", &());

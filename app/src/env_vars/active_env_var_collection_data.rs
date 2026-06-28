@@ -43,7 +43,7 @@ pub struct ActiveEnvVarCollectionData {
 
 impl ActiveEnvVarCollectionData {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        // Zap: the original `UpdateManager` subscription received cloud-sync completion events (Create/Update/Trash
+        // Zaplex: the original `UpdateManager` subscription received cloud-sync completion events (Create/Update/Trash
         // /Untrash::Success); with no cloud it never fires, and `trash_object`/`untrash_object` are now local-only
         // and no longer emit `ObjectOperationComplete`. Phase 2c-1 removes the subscription + handler.
         // The `ObjectStoreModel` subscription is kept (local object changes still need a breadcrumbs refresh).

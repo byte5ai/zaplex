@@ -108,7 +108,7 @@ pub enum ClientEvent {
 /// This type does **not** own the child subprocess whose stdio backs it.
 /// For transports that spawn a subprocess (e.g. SSH), the caller is
 /// responsible for holding the `Child` for the lifetime of the session
-/// so that `kill_on_drop` fires when teardown occurs. In Zap this is
+/// so that `kill_on_drop` fires when teardown occurs. In Zaplex this is
 /// the `RemoteServerManager`, which stores the child in
 /// `RemoteSessionState` alongside the `Arc<RemoteServerClient>`. That
 /// way the child's lifetime is gated by the manager's session map
@@ -141,7 +141,7 @@ impl RemoteServerClient {
     /// The caller retains ownership of the `Child` itself. Typically the
     /// caller spawns the `Command` with `kill_on_drop(true)` and stashes
     /// the returned `Child` somewhere whose lifetime matches the
-    /// session's (in Zap, on the `RemoteServerManager`'s
+    /// session's (in Zaplex, on the `RemoteServerManager`'s
     /// `RemoteSessionState`). Dropping the `Child` there triggers
     /// SIGKILL on the subprocess, regardless of how many
     /// `Arc<RemoteServerClient>` clones are still alive.
@@ -389,7 +389,7 @@ impl RemoteServerClient {
         }
     }
 
-    /// Zap: List direct children of a directory on the remote host.
+    /// Zaplex: List direct children of a directory on the remote host.
     ///
     /// Used by terminal file link detection to precisely verify remote path form
     /// (local sessions use `fs::metadata` for this; remote files are not on the
@@ -556,7 +556,7 @@ impl RemoteServerClient {
 
     /// Sends a buffer edit notification to the remote host.
     ///
-    /// Zap: Unlike other fire-and-forget notifications, buffer edit delivery failures must
+    /// Zaplex: Unlike other fire-and-forget notifications, buffer edit delivery failures must
     /// be reported. If we silently drop when `outbound_tx` is closed (connection dead), the
     /// local buffer continues to advance while the daemon doesn't receive the edit, causing
     /// invisible desynchronization. Return `Err` on failure to let the caller handle it.

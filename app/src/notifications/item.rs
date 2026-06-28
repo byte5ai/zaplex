@@ -42,7 +42,7 @@ impl NotificationFilter {
     }
 }
 
-/// Source agent of a notification. `Oz` is Zap's native local BYOP agent; `CLI(...)` is a
+/// Source agent of a notification. `Oz` is Zaplex's native local BYOP agent; `CLI(...)` is a
 /// third-party CLI agent (Claude Code / Codex / DeepSeek, etc.).
 #[derive(Debug, Clone, Copy)]
 #[allow(clippy::upper_case_acronyms)]

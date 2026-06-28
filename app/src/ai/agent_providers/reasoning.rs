@@ -76,7 +76,7 @@ pub fn model_reasoning_variants(
             vec![]
         }
         // DeepSeek thinking-mode models (deepseek-reasoner / v4 / thinking / r1).
-        // Zap's local fork (`lib/rust-genai`) relaxes the injection condition in
+        // Zaplex's local fork (`lib/rust-genai`) relaxes the injection condition in
         // adapter_shared.rs so the top-level `reasoning_effort` field is sent per the
         // DeepSeek thinking_mode documentation.
         //

@@ -44,12 +44,12 @@ impl LocalWorkflows {
         }
     }
 
-    /// Returns an iterator over hardcoded "application" workflows included in the Zap binary.
+    /// Returns an iterator over hardcoded "application" workflows included in the Zaplex binary.
     pub fn app_workflows(&self) -> impl Iterator<Item = &Workflow> {
         self.app_workflows.iter()
     }
 
-    /// Returns an iterator over the static set of workflows for 3rd party tools loaded from Zap's
+    /// Returns an iterator over the static set of workflows for 3rd party tools loaded from Zaplex's
     /// workflows GitHub repo.
     pub fn global_workflows(
         &self,
@@ -224,7 +224,7 @@ pub fn prompt_chip_logging_workflow(shell_family: ShellFamily) -> Option<Workflo
         ),
         arguments: vec![],
         source_url: None,
-        author: Some("Zap".into()),
+        author: Some("Zaplex".into()),
         author_url: None,
         shells: vec![],
         environment_variables: None,

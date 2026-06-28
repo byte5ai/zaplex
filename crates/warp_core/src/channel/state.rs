@@ -37,7 +37,7 @@ pub struct ChannelState {
 impl ChannelState {
     pub fn init() -> Self {
         let channel = Channel::Oss;
-        let app_id = AppId::new("dev", "zap", "Zap");
+        let app_id = AppId::new("dev", "zap", "Zaplex");
         Self {
             channel,
             additional_features: Default::default(),
@@ -89,7 +89,7 @@ impl ChannelState {
     /// Returns a profile name for isolating user data. This should be used to
     /// sandbox how user data is stored.
     ///
-    /// This is a debugging tool for isolating development instances of Zap, and is not
+    /// This is a debugging tool for isolating development instances of Zaplex, and is not
     /// supported in release builds.
     pub fn data_profile() -> Option<String> {
         if cfg!(debug_assertions) {
@@ -250,7 +250,7 @@ impl ChannelState {
     }
 }
 
-/// Zap Wave 5-5: `derive_http_origin_from_ws_url` was physically removed together with `rtc_http_url()`.
+/// Zaplex Wave 5-5: `derive_http_origin_from_ws_url` was physically removed together with `rtc_http_url()`.
 
 #[cfg(all(test, not(feature = "test-util")))]
 #[path = "state_tests.rs"]

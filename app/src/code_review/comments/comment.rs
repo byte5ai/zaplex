@@ -10,7 +10,7 @@ use warp_multi_agent_api::{self as api};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum CommentOrigin {
-    /// Comments originally created in the Zap UI.
+    /// Comments originally created in the Zaplex UI.
     #[default]
     Native,
     /// Comments imported from a GitHub pull request.

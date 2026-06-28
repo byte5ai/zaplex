@@ -143,7 +143,7 @@ impl Workspace {
         intention: OnboardingIntention,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Zap agents are always enabled; we keep this runtime guard to avoid accidentally launching onboarding if the platform policy changes in the future.
+        // Zaplex agents are always enabled; we keep this runtime guard to avoid accidentally launching onboarding if the platform policy changes in the future.
         if FeatureFlag::ZapNewSettingsModes.is_enabled()
             && !AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
         {

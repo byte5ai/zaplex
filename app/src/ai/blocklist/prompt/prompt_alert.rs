@@ -90,14 +90,14 @@ impl PromptAlertView {
             return PromptAlertState::NoAlert;
         }
 
-        // Zap: BYOP / local providers handle connection state themselves, including localhost
+        // Zaplex: BYOP / local providers handle connection state themselves, including localhost
         // providers like Ollama. The global offline state only blocks built-in cloud usage.
         if !NetworkStatus::as_ref(app).is_online() {
             return PromptAlertState::NoConnection;
         }
 
         let request_usage_model = AIRequestUsageModel::as_ref(app);
-        // Zap (Phase 3c A1): after localization, `has_requests_remaining` is always true, so of the
+        // Zaplex (Phase 3c A1): after localization, `has_requests_remaining` is always true, so of the
         // original if/else split only the SoftGate branch is reachable; we just take the true branch.
         let auth_state = AuthStateProvider::as_ref(app).get();
 

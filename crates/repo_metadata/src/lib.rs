@@ -1,4 +1,4 @@
-//! Repository metadata utilities for Zap.
+//! Repository metadata utilities for Zaplex.
 //!
 //! This crate provides utilities for managing repository metadata, including file trees,
 //! gitignore processing, and filesystem watching capabilities.s

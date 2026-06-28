@@ -38,7 +38,7 @@ impl CustomSecretRegexUpdater {
 
         set_user_and_enterprise_secret_regexes(user_secrets, enterprise_secrets);
 
-        // Zap (Wave1-S4): the original telemetry-side `update_telemetry_secrets_regex` call
+        // Zaplex (Wave1-S4): the original telemetry-side `update_telemetry_secrets_regex` call
         // was removed entirely along with `server/telemetry/secret_redaction.rs`. The visual blurring of safety mode
         // is already fully covered by `set_user_and_enterprise_secret_regexes`; the telemetry-side
         // defence-in-depth redaction is now meaningless because there is no longer any outbound path.

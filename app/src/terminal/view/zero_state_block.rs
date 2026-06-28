@@ -151,7 +151,7 @@ impl View for TerminalViewZeroStateBlock {
             .with_child(
                 Container::new(
                     ConstrainedBox::new(
-                        Icon::Zap
+                        Icon::Zaplex
                             .to_warpui_icon(theme.main_text_color(theme.background()))
                             .finish(),
                     )

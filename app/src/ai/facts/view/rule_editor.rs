@@ -73,7 +73,7 @@ pub struct RuleEditorView {
 
 impl RuleEditorView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        // Zap (localization, Phase 2d-1): original NetworkStatus subscription was for redrawing on online/offline state change
+        // Zaplex (localization, Phase 2d-1): original NetworkStatus subscription was for redrawing on online/offline state change
         // (coupled with `is_delete_allowed` predicate); after localization the predicate is always true, subscription is dead code, removed.
         let appearance = Appearance::as_ref(ctx);
         let font_family = appearance.ui_font_family();
@@ -377,7 +377,7 @@ impl View for RuleEditorView {
             .with_child(self.render_header(appearance))
             .with_child(self.render_form(appearance));
 
-        // Zap (localization, Phase 2d-1): original `is_delete_allowed` depended on network online + server_id;
+        // Zaplex (localization, Phase 2d-1): original `is_delete_allowed` depended on network online + server_id;
         // after localization, deletion is allowed whenever editing an existing rule, predicate is removed.
         if self.ai_fact.is_some() {
             col.add_child(ChildView::new(&self.delete_button).finish());

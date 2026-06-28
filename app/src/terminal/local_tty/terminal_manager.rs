@@ -556,7 +556,7 @@ impl TerminalManager {
         });
     }
 
-    /// Sends bindkey to notify shell process to switch to Zap prompt logic for prompt
+    /// Sends bindkey to notify shell process to switch to Zaplex prompt logic for prompt
     /// with the combined prompt/command grid (we unset the PS1, but save the value for potential
     /// future restoration).
     pub fn send_switch_to_warp_prompt_bindkey(&self, app_ctx: &mut AppContext) {

@@ -148,7 +148,7 @@ impl Input {
 
     /// Keep the rich input editor's text colors legible when it's rendered on
     /// top of an alt-screen CLI agent's inferred background (e.g. OpenCode),
-    /// which does not respect the Zap theme. When no alt-screen-backed CLI
+    /// which does not respect the Zaplex theme. When no alt-screen-backed CLI
     /// agent rich input is active, restores the theme default text colors.
     ///
     /// This mirrors the contrast-adjustment pattern used for the use-agent

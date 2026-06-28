@@ -236,28 +236,28 @@ pub trait Handler {
     /// Report text area size in characters.
     fn text_area_size_chars<W: io::Write>(&mut self, _: &mut W);
 
-    /// Callback for the Zap CommandFinished hook.
+    /// Callback for the Zaplex CommandFinished hook.
     fn command_finished(&mut self, _data: CommandFinishedValue) {}
 
     /// Process a prompt marker control sequence.
     fn prompt_marker(&mut self, _marker: PromptMarker) {}
 
-    /// Callback for the Zap precmd hook.
+    /// Callback for the Zaplex precmd hook.
     fn precmd(&mut self, _data: PrecmdValue) {}
 
-    /// Callback for the Zap preexec hook.
+    /// Callback for the Zaplex preexec hook.
     fn preexec(&mut self, _data: PreexecValue) {}
 
-    /// Callback for the Zap bootstrapped hook - called once when the shell is
+    /// Callback for the Zaplex bootstrapped hook - called once when the shell is
     /// bootstrapped
     fn bootstrapped(&mut self, _data: BootstrappedValue) {}
 
-    /// Callback for the Zap pre-interactive SSH session hook - called once
+    /// Callback for the Zaplex pre-interactive SSH session hook - called once
     /// before initiating an interactive SSH session (either with or without the
     /// SSH wrapper).
     fn pre_interactive_ssh_session(&mut self, _data: PreInteractiveSSHSessionValue) {}
 
-    /// Callback for the Zap ssh hook - called once after successfully connecting to
+    /// Callback for the Zaplex ssh hook - called once after successfully connecting to
     /// an SSH server
     fn ssh(&mut self, _data: SSHValue) {}
 
@@ -265,8 +265,8 @@ pub trait Handler {
     /// logic into the PTY
     fn init_shell(&mut self, _data: InitShellValue) {}
 
-    /// Callback for the Zap exit-shell hook — emitted by the remote shell right
-    /// before it exits. Gives the Zap client a chance to drop per-session
+    /// Callback for the Zaplex exit-shell hook — emitted by the remote shell right
+    /// before it exits. Gives the Zaplex client a chance to drop per-session
     /// resources (e.g. the `ssh … remote-server-proxy` child) before the outer
     /// ssh tunnel starts tearing down, so its ControlMaster can exit cleanly
     /// rather than hanging on orphaned multiplexed channels.
@@ -276,7 +276,7 @@ pub trait Handler {
     fn clear(&mut self, _data: ClearValue) {}
 
     /// Callback for the terminal when the shell reports the current line editor
-    /// input buffer (the reporting is itself triggered by Zap).
+    /// input buffer (the reporting is itself triggered by Zaplex).
     fn input_buffer(&mut self, _data: InputBufferValue) {}
 
     /// Callback emitted during the initialization process for subshells with where the shell type
@@ -284,7 +284,7 @@ pub trait Handler {
     fn init_subshell(&mut self, _data: InitSubshellValue) {}
 
     /// Callback emitted when executing the user's RC file, which signals a new session is being
-    /// created. If the session is for a subshell, this should triggers Zap's bootstrap process.
+    /// created. If the session is for a subshell, this should triggers Zaplex's bootstrap process.
     /// Otherwise, it's ignored.
     fn sourced_rc_file(&mut self, _data: SourcedRcFileForWarpValue) {}
 
@@ -395,7 +395,7 @@ pub trait Handler {
     }
 
     /// Callback for pluggable notifications triggered via OSC 9 or OSC 777 escape sequences.
-    /// These allow external programs to trigger notifications in Zap.
+    /// These allow external programs to trigger notifications in Zaplex.
     /// - OSC 9: Simple notification with just a body (iTerm2/Windows Terminal style)
     /// - OSC 777: Notification with title and body (urxvt style)
     fn pluggable_notification(&mut self, _title: Option<String>, _body: String) {}

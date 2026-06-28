@@ -39,7 +39,7 @@ pub enum WorkflowOpenSource {
 
 impl WorkflowManager {
     pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
-        // Zap: no cloud backend = no client_id→server_id conversion events. Original UpdateManager
+        // Zaplex: no cloud backend = no client_id→server_id conversion events. Original UpdateManager
         // subscriptions + handle_update_manager_event are dead code; delete in Phase 2c-1.
         WorkflowManager {
             panes_by_hashed_id: HashMap::new(),

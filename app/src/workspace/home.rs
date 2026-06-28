@@ -1,4 +1,4 @@
-//! Zap Home
+//! Zaplex Home
 //!
 //! This is the landing page for new tabs if session creation isn't supported (e.g. on the web).
 //! It's intentionally small and local-only.
@@ -8,12 +8,12 @@ use warpui::ViewContext;
 use super::view::Workspace;
 use crate::pane_group::{AnyPaneContent, FilePane};
 
-const ZAPLEX_HOME_TITLE: &str = "Welcome to Zap";
+const ZAPLEX_HOME_TITLE: &str = "Welcome to Zaplex";
 const ZAPLEX_HOME_CONTENT: &str = r#"
-Welcome to Zap.
+Welcome to Zaplex.
 
 Use this local workspace to:
-* Create, view, and edit Zap Drive objects
+* Create, view, and edit Zaplex Drive objects
 * Manage local settings
 * Work with local agent sessions, notebooks, and workflows"#;
 

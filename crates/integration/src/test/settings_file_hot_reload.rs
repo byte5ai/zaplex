@@ -2,7 +2,7 @@
 //!
 //! Verifies that changes to `settings.toml` on disk are picked up by the
 //! filesystem watcher and pushed into the in-memory setting models, on every
-//! platform where Zap watches `config_local_dir()`.
+//! platform where Zaplex watches `config_local_dir()`.
 
 use settings::Setting as _;
 use std::time::Duration;

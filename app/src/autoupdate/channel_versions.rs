@@ -5,7 +5,7 @@ use channel_versions::{ChannelChangelogs, ChannelVersion, ChannelVersions, Versi
 
 use crate::channel::ChannelState;
 
-// Load channel versions only from local state. Zap no longer requests release-channel metadata from Zap or GCP.
+// Load channel versions only from local state. Zaplex no longer requests release-channel metadata from Zaplex or GCP.
 pub async fn fetch_channel_versions(
     nonce: &str,
     client: &http_client::Client,

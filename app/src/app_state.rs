@@ -127,7 +127,7 @@ pub enum LeafContents {
     AIDocument(AIDocumentPaneSnapshot),
     Code(CodePaneSnapShot),
     EnvVarCollection(EnvVarCollectionPaneSnapshot),
-    // Zap Wave 7-3: the `EnvironmentManagement` LeafContents variant was physically removed
+    // Zaplex Wave 7-3: the `EnvironmentManagement` LeafContents variant was physically removed
     // along with the Ambient Agent UI subsystem.
     Workflow(WorkflowPaneSnapshot),
     Settings(SettingsPaneSnapshot),
@@ -167,7 +167,7 @@ impl LeafContents {
     /// restoration to fail and the whole tab to disappear on restart.
     pub(crate) fn is_persisted(&self) -> bool {
         match self {
-            // Zap Wave 7-3: the `EnvironmentManagement` arm was physically removed along with the variant.
+            // Zaplex Wave 7-3: the `EnvironmentManagement` arm was physically removed along with the variant.
             // SSH server editor: the data (host/user/...) is persisted in the ssh_servers table,
             // the pane itself is just a view, so closing and reopening makes no difference.
             LeafContents::SshServer { .. } => false,
@@ -289,7 +289,7 @@ pub enum EnvVarCollectionPaneSnapshot {
     },
 }
 
-// Zap Wave 7-3: `EnvironmentManagementPaneSnapshot` was physically removed along with the LeafContents variant.
+// Zaplex Wave 7-3: `EnvironmentManagementPaneSnapshot` was physically removed along with the LeafContents variant.
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SettingsPaneSnapshot {

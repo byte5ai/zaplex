@@ -710,7 +710,7 @@ pub enum FeaturesPageAction {
     ToggleShowAutosuggestionIgnoreButton,
     ToggleAtContextMenuInTerminalMode,
     ToggleSlashCommandsInTerminalMode,
-    // Zap: `ToggleOutlineCodebaseSymbolsForAtContextMenu` deleted when outline / RAG went offline.
+    // Zaplex: `ToggleOutlineCodebaseSymbolsForAtContextMenu` deleted when outline / RAG went offline.
     ToggleAutoOpenCodeReviewPane,
     ToggleShowTerminalInputMessageLine,
     ToggleAgentInAppNotifications,
@@ -1188,7 +1188,7 @@ impl FeaturesPageAction {
                         .value(),
                 ),
             },
-            // Zap: ToggleOutlineCodebaseSymbolsForAtContextMenu went offline,
+            // Zaplex: ToggleOutlineCodebaseSymbolsForAtContextMenu went offline,
             // telemetry branch deleted together.
             Self::MakeWarpDefaultTerminal => TelemetryEvent::FeaturesPageAction {
                 action: "MakeWarpDefaultTerminal".to_string(),
@@ -1923,7 +1923,7 @@ impl TypedActionView for FeaturesPageView {
                         .toggle_and_save_value(ctx));
                 });
             }
-            // Zap: `ToggleOutlineCodebaseSymbolsForAtContextMenu` action deleted when outline went offline.
+            // Zaplex: `ToggleOutlineCodebaseSymbolsForAtContextMenu` action deleted when outline went offline.
             ToggleAutoOpenCodeReviewPane => {
                 GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings

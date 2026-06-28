@@ -30,7 +30,7 @@ pub(crate) struct StoredWorkflowsSnapshot {
     filter_to_command_workflows: bool,
 }
 
-/// Creates an async data source for cloud workflows (i.e. those that exist in Zap Drive).
+/// Creates an async data source for cloud workflows (i.e. those that exist in Zaplex Drive).
 pub fn stored_workflows_data_source(
 ) -> AsyncSnapshotDataSource<StoredWorkflowsSnapshot, CommandSearchItemAction> {
     AsyncSnapshotDataSource::new(

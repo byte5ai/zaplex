@@ -20,7 +20,7 @@ fn test_search_cjk_literal() {
     // CJK literal search test
     App::test((), |mut app| async move {
         let (buffer, _selection) = Buffer::mock_from_markdown(
-            "Zap 是基于 Zap 的社区分支，保留账户与同步能力。",
+            "Zaplex 是基于 Zaplex 的社区分支，保留账户与同步能力。",
             None,
             Box::new(|_, _| IndentBehavior::Ignore),
             &mut app,

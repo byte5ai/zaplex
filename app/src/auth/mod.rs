@@ -1,4 +1,4 @@
-//! Zap local-identity facade.
+//! Zaplex local-identity facade.
 //!
 //! This module preserves the public type surface of `AuthState` / `AuthStateProvider` /
 //! `AuthManager` / `User` / `UserUid` / `Credentials` and their pub method signatures, while
@@ -40,7 +40,7 @@ pub enum OwnerType {
     User,
 }
 
-/// Zap local API key prefix.
+/// Zaplex local API key prefix.
 ///
 /// Historically used to identify "a string starting with wk- is a managed API key". On the BYOP
 /// path there is no longer any managed-account API key concept. The constant is still consumed
@@ -51,20 +51,20 @@ pub const API_KEY_PREFIX: &str = "wk-";
 // ---------- Credentials / AuthToken / LoginToken ----------
 //
 // Originally the runtime branches for several authentication methods: managed token / API key /
-// session cookie. After Zap's localization, only the two variants actually used -- `ApiKey` and
+// session cookie. After Zaplex's localization, only the two variants actually used -- `ApiKey` and
 // `Test` -- are kept. The managed-token and cookie variants have been physically deleted; under
-// Zap all former external-account branches always take the `None` path / return early.
+// Zaplex all former external-account branches always take the `None` path / return early.
 
-/// Represents how the user authenticates with Zap.
+/// Represents how the user authenticates with Zaplex.
 ///
-/// Zap localization branches:
+/// Zaplex localization branches:
 /// - `ApiKey`: on the BYOP path, the user's own LLM provider API key, actually managed by
 ///   settings/keychain respectively; here we only keep the enum facade for reader methods like
 ///   `AuthState::credentials()`.
 /// - `Test`: used in test / `skip_login` builds.
 #[derive(Clone, Debug)]
 pub enum Credentials {
-    /// BYOP / Zap Inc API key; owner_type is kept for legacy code to read (always `None`).
+    /// BYOP / Zaplex Inc API key; owner_type is kept for legacy code to read (always `None`).
     ApiKey {
         key: String,
         owner_type: Option<OwnerType>,
@@ -82,7 +82,7 @@ impl Credentials {
         }
     }
 
-    /// Returns the API key owner type (always `None` on the Zap path).
+    /// Returns the API key owner type (always `None` on the Zaplex path).
     pub fn api_key_owner_type(&self) -> Option<OwnerType> {
         match self {
             Credentials::ApiKey { owner_type, .. } => *owner_type,
@@ -107,7 +107,7 @@ impl Credentials {
 pub enum AuthToken {
     /// BYOP / platform-layer API key.
     ApiKey(String),
-    /// No token at all (session cookie / test / Zap local mode).
+    /// No token at all (session cookie / test / Zaplex local mode).
     NoAuth,
 }
 
@@ -131,8 +131,8 @@ impl AuthToken {
 
 // ---------- User metadata ----------
 
-/// Anonymous-user type facade. After Zap's localization there is no anonymous-user concept; the
-/// enum is kept so that the match arms scattered across telemetry / settings still compile. No Zap
+/// Anonymous-user type facade. After Zaplex's localization there is no anonymous-user concept; the
+/// enum is kept so that the match arms scattered across telemetry / settings still compile. No Zaplex
 /// code path ever constructs `Some(AnonymousUserType::...)`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AnonymousUserType {
@@ -141,7 +141,7 @@ pub enum AnonymousUserType {
     WebClientAnonymousUser,
 }
 
-/// Authentication principal-type facade. Under Zap this is always equivalent to `User`.
+/// Authentication principal-type facade. Under Zaplex this is always equivalent to `User`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PrincipalType {
     #[default]
@@ -149,7 +149,7 @@ pub enum PrincipalType {
     ServiceAccount,
 }
 
-/// Personal object-limits facade (originally the anonymous-user Free Tier limits). Zap never
+/// Personal object-limits facade (originally the anonymous-user Free Tier limits). Zaplex never
 /// constructs this value, but the struct is kept so consumers keep compiling.
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct PersonalObjectLimits {
@@ -194,7 +194,7 @@ impl User {
         self.metadata.display_name.clone()
     }
 
-    /// Test/default user placeholder. Zap uses this user on all paths.
+    /// Test/default user placeholder. Zaplex uses this user on all paths.
     pub fn test() -> Self {
         Self {
             local_id: UserUid::new(TEST_USER_UID),
@@ -213,7 +213,7 @@ impl User {
         }
     }
 
-    /// Whether the user is anonymous. Zap always returns `false`.
+    /// Whether the user is anonymous. Zaplex always returns `false`.
     pub fn is_user_anonymous(&self) -> bool {
         false
     }
@@ -282,17 +282,17 @@ impl AuthState {
         state
     }
 
-    /// Whether the user is logged in. Zap always returns `true`.
+    /// Whether the user is logged in. Zaplex always returns `true`.
     pub fn is_logged_in(&self) -> bool {
         true
     }
 
-    /// Whether anonymous or logged out. Zap always returns `false`.
+    /// Whether anonymous or logged out. Zaplex always returns `false`.
     pub fn is_anonymous_or_logged_out(&self) -> bool {
         false
     }
 
-    /// Returns the cached access token (ignoring validity). On the Zap path this only has a value
+    /// Returns the cached access token (ignoring validity). On the Zaplex path this only has a value
     /// when the user has a `Credentials::ApiKey` attached.
     pub fn get_access_token_ignoring_validity(&self) -> Option<String> {
         self.credentials
@@ -347,7 +347,7 @@ impl AuthState {
         Some(false)
     }
 
-    /// The Zap local user never hits the Free Tier limit.
+    /// The Zaplex local user never hits the Free Tier limit.
     pub fn is_anonymous_user_past_object_limit(
         &self,
         _object_type: crate::cloud_object::ObjectType,
@@ -386,19 +386,19 @@ impl AuthState {
         self.user.read().as_ref().map(|user| user.local_id)
     }
 
-    /// Returns the nil UUID string. After Zap's localization, this ID no longer appears in any
+    /// Returns the nil UUID string. After Zaplex's localization, this ID no longer appears in any
     /// outgoing HTTP header; it only serves as a formal placeholder for the telemetry context /
     /// session header.
     pub fn anonymous_id(&self) -> String {
         Uuid::nil().to_string()
     }
 
-    /// Returns whether reauthentication is needed. Zap always returns `false`.
+    /// Returns whether reauthentication is needed. Zaplex always returns `false`.
     pub fn needs_reauth(&self) -> bool {
         false
     }
 
-    /// Returns whether the current user's anonymous renotification block has expired. Zap users are
+    /// Returns whether the current user's anonymous renotification block has expired. Zaplex users are
     /// not treated as anonymous, so this function returns `false` (the signup prompt never pops up).
     pub fn anonymous_user_renotification_block_expired(
         &self,
@@ -474,7 +474,7 @@ impl AuthStateProvider {
 
     /// Constructs a "logged out" AuthState provider.
     ///
-    /// Zap no longer has a genuine logged-out state, so this function returns a "logged-in test
+    /// Zaplex no longer has a genuine logged-out state, so this function returns a "logged-in test
     /// user" provider equivalent to `new_for_test`, to keep legacy test code compiling.
     pub fn new_logged_out_for_test() -> Self {
         Self::new_for_test()
@@ -499,11 +499,11 @@ pub type LoginGatedFeature = &'static str;
 /// The URL-construction callback for `AuthManager::open_url_maybe_with_anonymous_token`.
 ///
 /// In the original UI, this callback received the anonymous-user token and assembled an
-/// "open browser, optionally carrying identity" URL. Under Zap there is no longer any anonymous
+/// "open browser, optionally carrying identity" URL. Under Zaplex there is no longer any anonymous
 /// identity, so the callback is discarded.
 pub type AnonymousTokenUrlBuilder = Box<dyn FnOnce(Option<&str>) -> String>;
 
-/// AuthView variant facade. Zap has physically deleted the AuthView UI; in the stub all dispatch
+/// AuthView variant facade. Zaplex has physically deleted the AuthView UI; in the stub all dispatch
 /// points only produce a log, but the enum surface is kept so legacy `match` arms still compile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuthViewVariant {
@@ -541,13 +541,13 @@ impl AuthView {
         self.variant = variant;
     }
 
-    /// Returns the current variant. Unused on the Zap path.
+    /// Returns the current variant. Unused on the Zaplex path.
     pub fn variant(&self) -> AuthViewVariant {
         self.variant
     }
 
     /// In the original native login UI, this skipped the "enter passcode" step and went straight to
-    /// the subsequent "open in browser" step. Zap: no-op.
+    /// the subsequent "open in browser" step. Zaplex: no-op.
     pub fn skip_to_browser_open_step(&mut self, _ctx: &mut ViewContext<Self>) {}
 }
 
@@ -696,7 +696,7 @@ pub enum AuthManagerEvent {
 }
 
 /// User-authentication error facade. A few subscribers still match the variants, so the enum is
-/// kept; Zap no longer triggers construction of any variant.
+/// kept; Zaplex no longer triggers construction of any variant.
 #[derive(Debug, thiserror::Error)]
 pub enum UserAuthenticationError {
     #[error("Access token denied")]
@@ -725,7 +725,7 @@ pub struct PersistedCurrentUserInformation {
     pub email: String,
 }
 
-/// AuthManager facade. After Zap's localization all external-account / RPC entry points become
+/// AuthManager facade. After Zaplex's localization all external-account / RPC entry points become
 /// no-ops, but `AuthManager` is still mounted in the App as a singleton model, so that
 /// `subscribe_to_model` / `handle(ctx).update(...)` calls need zero changes, while preserving the
 /// local identity / onboarded flag / logout-reset semantics.
@@ -748,13 +748,13 @@ impl AuthManager {
 
     /// Refreshes the current user state.
     ///
-    /// Historically this performed a cloud token refresh; after Zap's localization the auth state
+    /// Historically this performed a cloud token refresh; after Zaplex's localization the auth state
     /// is already locally initialized at startup, so no external-account request is ever sent.
     pub fn refresh_user(&self, _ctx: &mut ModelContext<Self>) {}
 
     /// Actively logs out.
     ///
-    /// Zap no longer enters a "cloud logged-out" state; this only restores the local identity
+    /// Zaplex no longer enters a "cloud logged-out" state; this only restores the local identity
     /// snapshot to the default placeholder user, for reuse by call sites such as settings reset /
     /// session cleanup.
     pub(crate) fn log_out(&mut self, _ctx: &mut ModelContext<Self>) {
@@ -804,8 +804,8 @@ impl AuthManager {
     // ---------- URL-construction facade ----------
     //
     // Before being physically deleted, the legacy UI (login_slide / paste_auth_token_modal /
-    // auth_view_modal) called these methods to populate the historical login prompt links; Zap no
-    // longer opens the Zap cloud login page. After the UI was physically deleted there are no
+    // auth_view_modal) called these methods to populate the historical login prompt links; Zaplex no
+    // longer opens the Zaplex cloud login page. After the UI was physically deleted there are no
     // callers, but the enum/trait may still be consumed reflectively, so the stubs are kept.
 
     pub fn sign_up_url(&self) -> String {
@@ -848,7 +848,7 @@ impl SingletonEntity for AuthManager {}
 
 // ---------- module-wide init ----------
 
-/// init for the Zap local-identity facade (no-op).
+/// init for the Zaplex local-identity facade (no-op).
 ///
 /// The submodules previously mounted in the original `init` -- `init` / `auth_view_body::init` /
 /// `auth_override_warning_body::init` / `login_slide::init` / `paste_auth_token_modal::init` --

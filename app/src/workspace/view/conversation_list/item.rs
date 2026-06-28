@@ -379,7 +379,7 @@ pub fn render_item(props: ItemProps<'_>, app: &AppContext) -> Box<dyn Element> {
         )
         .finish();
 
-    // Zap Phase 2a: sharing dialog overlay removed.
+    // Zaplex Phase 2a: sharing dialog overlay removed.
     let position_id = conversation_item_position_id(&conversation_id);
     let item_stack = Stack::new().with_child(event_handler);
 

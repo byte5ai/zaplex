@@ -22,7 +22,7 @@ pub struct CommandBindingDataSource {
 impl CommandBindingDataSource {
     #[cfg(not(target_family = "wasm"))]
     pub fn new(binding_source: ModelHandle<BindingSource>, ctx: &mut ModelContext<Self>) -> Self {
-        // Zap: command-palette actions always use character-level fuzzy matching (SkimMatcherV2).
+        // Zaplex: command-palette actions always use character-level fuzzy matching (SkimMatcherV2).
         // Tantivy's default tokenizer does not segment CJK, so it treats an entire Chinese
         // description as a single token and prefix-matches it, which means that searching for
         // "theme" fails to match a localized "open theme chooser" description.
@@ -157,7 +157,7 @@ impl ActionSearcher for FuzzyActionSearcher {
                 // both the search term and the description to ensure that we are matching the two
                 // with the same casing.
                 //
-                // Zap: also append binding.name (the action identifier, e.g. `workspace:show_theme_chooser`)
+                // Zaplex: also append binding.name (the action identifier, e.g. `workspace:show_theme_chooser`)
                 // into the searchable string, replacing `:` and `_` with spaces, to make subsequence matching easier.
                 // This way, typing "theme" can also match a localized "open theme chooser" description.
                 let mut searchable = binding

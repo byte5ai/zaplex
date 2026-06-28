@@ -209,7 +209,7 @@ struct ProjectRuleCtx {
     content: String,
 }
 
-/// Zap BYOP fix for Issue #116: a flat view of the global Rules (created by the user under
+/// Zaplex BYOP fix for Issue #116: a flat view of the global Rules (created by the user under
 /// Settings → Agents → Rules), fed to `partials/user_rules.j2` to be rendered into the system prompt.
 #[derive(Debug, Serialize)]
 struct UserRuleCtx {
@@ -230,7 +230,7 @@ struct PromptContext {
     git: Option<GitCtx>,
     skills: Vec<SkillCtx>,
     project_rules: Vec<ProjectRuleCtx>,
-    /// Zap BYOP fix for Issue #116: injected by the caller (`render_system`) from
+    /// Zaplex BYOP fix for Issue #116: injected by the caller (`render_system`) from
     /// `RequestParams.user_rules` and rendered via `partials/user_rules.j2`.
     user_rules: Vec<UserRuleCtx>,
     current_time: String,
@@ -284,7 +284,7 @@ fn collect_prompt_context(model_id: &str, ctx: &[AIAgentContext]) -> PromptConte
             }
             AIAgentContext::CurrentTime { current_time } => {
                 // P0-1: consistent with the default value, keep only calendar-day granularity.
-                // Upstream Zap may pass a second-precision timestamp, so we normalize it down to "current date" here.
+                // Upstream Zaplex may pass a second-precision timestamp, so we normalize it down to "current date" here.
                 out.current_time = current_time.format("%Y-%m-%d").to_string();
             }
             // Code indexing is not implemented, so Codebase context does not go into the system prompt.
@@ -442,7 +442,7 @@ fn fallback_init_project_command(arguments: &str) -> String {
 /// Renders the fallback system prompt (used only when template loading/rendering fails; should not be triggered on the normal path).
 fn fallback_system(model_id: &str) -> String {
     format!(
-        "You are the AI coding agent inside Zap, an AI Development Environment (ADE). \
+        "You are the AI coding agent inside Zaplex, an AI Development Environment (ADE). \
          Model: {model_id}. \
          Use the registered tools (run_shell_command / read_files / apply_file_diffs / grep / file_glob / ...) \
          to take actions on the user's behalf. Be concise."
@@ -551,7 +551,7 @@ mod tests {
 
     #[test]
     fn render_produces_non_empty_for_all_families() {
-        // Any model id should render a non-empty string (containing Zap's self-identification).
+        // Any model id should render a non-empty string (containing Zaplex's self-identification).
         for id in [
             "claude-sonnet-4-5",
             "gpt-4o",
@@ -570,8 +570,8 @@ mod tests {
                 &[],
             );
             assert!(
-                out.contains("Zap"),
-                "id={id} should mention Zap, got: {out}"
+                out.contains("Zaplex"),
+                "id={id} should mention Zaplex, got: {out}"
             );
         }
     }
@@ -626,7 +626,7 @@ mod tests {
             name: "find-skills".into(),
             description: "Help discover and install new agent skills.".into(),
             scope: SkillScope::Bundled,
-            provider: SkillProvider::Zap,
+            provider: SkillProvider::Zaplex,
             icon_override: Some(Icon::WarpLogoLight),
         };
         let ctx = vec![AIAgentContext::Skills {

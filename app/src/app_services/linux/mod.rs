@@ -64,7 +64,7 @@ pub fn pass_startup_args_to_existing_instance(
 #[derive(Debug, thiserror::Error)]
 #[cfg(feature = "release_bundle")]
 pub enum StartupArgsForwardingError {
-    /// There's no instance of Zap already running.
+    /// There's no instance of Zaplex already running.
     #[error("no existing instance found to forward args to")]
     NoExistingInstance,
     /// This instance was launched after an auto-update and should not forward
@@ -81,7 +81,7 @@ impl From<zbus::fdo::Error> for StartupArgsForwardingError {
     fn from(value: zbus::fdo::Error) -> Self {
         // While ServiceUnknown usually means that D-Bus doesn't know how to
         // _launch_ something to handle your message, in our case, we're not
-        // registering a service, so this really means that Zap is not already
+        // registering a service, so this really means that Zaplex is not already
         // running.
         if matches!(value, zbus::fdo::Error::ServiceUnknown(_)) {
             StartupArgsForwardingError::NoExistingInstance
@@ -149,17 +149,17 @@ impl ApplicationService {
     }
 }
 
-// A D-Bus client for connecting to an already-running instance of Zap and
+// A D-Bus client for connecting to an already-running instance of Zaplex and
 // invoking org.freedesktop.Application IPC methods.
 //
 // `default_service` / `default_path` are overridden at the call site (`pass_startup_args_to_existing_instance`)
 // via `.destination(well_known_name())` / `.path(application_service_path())` on the builder,
 // so the constants here will not actually be used; but to avoid misleading future callers who might
-// use `Proxy::new` directly with defaults, these still point to the OSS default `dev.zap.Zap`.
+// use `Proxy::new` directly with defaults, these still point to the OSS default `dev.zap.Zaplex`.
 #[proxy(
     interface = "org.freedesktop.Application",
-    default_service = "dev.zap.Zap",
-    default_path = "/dev/zap/Zap",
+    default_service = "dev.zap.Zaplex",
+    default_path = "/dev/zap/Zaplex",
     gen_blocking = false
 )]
 trait ExistingApplication {

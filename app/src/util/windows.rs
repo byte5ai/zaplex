@@ -17,7 +17,7 @@ static POWERSHELL_7_PATH: LazyLock<Option<PathBuf>> = LazyLock::new(find_powersh
 static POWERSHELL_5_PATH: LazyLock<Option<PathBuf>> = LazyLock::new(find_powershell_5_path);
 static WSL_PATH: LazyLock<Option<PathBuf>> = LazyLock::new(find_wsl_path);
 
-/// Returns the location which Zap was installed to.
+/// Returns the location which Zaplex was installed to.
 #[cfg(feature = "local_fs")]
 pub fn install_dir() -> Result<path::PathBuf> {
     let current_exe = env::current_exe()?;

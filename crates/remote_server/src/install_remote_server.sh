@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 在远端主机安装 Zap CLI 二进制,用于 remote-server-proxy。
+# 在远端主机安装 Zaplex CLI 二进制,用于 remote-server-proxy。
 #
 # setup.rs 会在运行时替换这些占位符:
 #   {download_base_url}     - 例如 https://github.com/zerx-lab/warp/releases/latest/download

@@ -50,7 +50,7 @@ maybe_define_setting!(EnableSshZaplexification, group: ZaplexifySettings, {
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "zaplexify.ssh.enable_ssh_zaplexification",
-    description: "Whether to enable Zap features in SSH sessions.",
+    description: "Whether to enable Zaplex features in SSH sessions.",
 });
 
 maybe_define_setting!(UseSshTmuxWrapper, group: ZaplexifySettings, {
@@ -63,7 +63,7 @@ maybe_define_setting!(UseSshTmuxWrapper, group: ZaplexifySettings, {
     description: "Whether to use a tmux-based wrapper for SSH zaplexification.",
 });
 
-/// Controls how Zap handles the SSH extension (remote server binary) when connecting
+/// Controls how Zaplex handles the SSH extension (remote server binary) when connecting
 /// to a remote host that does not already have it installed.
 #[derive(
     Default,

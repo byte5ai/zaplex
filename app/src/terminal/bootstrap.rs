@@ -27,7 +27,7 @@ lazy_static! {
 /// errors
 const BYTE_ORDER_MARK: &str = "\u{FEFF}";
 
-/// Returns `true` if Zap should use an RC-file based bootstrap (e.g. dump the bootstrap script to
+/// Returns `true` if Zaplex should use an RC-file based bootstrap (e.g. dump the bootstrap script to
 /// a temp file and `source` it) for a newly spawned session with the given `shell_type`, and
 /// associated `session_type` and `subshell_initialization_info`.
 ///

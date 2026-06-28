@@ -1,5 +1,5 @@
 //! Inline block view that asks the user whether they want to install
-//! Zap's SSH extension on the remote host the shell just connected to,
+//! Zaplex's SSH extension on the remote host the shell just connected to,
 //! or continue without installing (falling back to the existing
 //! ControlMaster zaplexification path).
 //!
@@ -8,7 +8,7 @@
 //!
 //! The view owns:
 //! - a child [`KeyboardNavigableButtons`] handle for the two selectable
-//!   cards ("Install Zap's SSH extension" / "Continue without installing"),
+//!   cards ("Install Zaplex's SSH extension" / "Continue without installing"),
 //! - the [`SessionId`] this prompt is scoped to (used for event forwarding),
 //! - the current "Don't ask me this again" checked state (purely local to
 //!   this prompt instance; persisted to `ssh_extension_install_mode` only

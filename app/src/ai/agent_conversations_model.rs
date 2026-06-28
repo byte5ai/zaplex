@@ -667,7 +667,7 @@ pub struct AgentConversationsModel {
     /// A map of conversation IDs to local conversations.
     conversations: HashMap<AIConversationId, ConversationMetadata>,
     /// Set of view IDs actively consuming this model's data per window.
-    /// Zap: After localization, there is no polling; this is only used as a placeholder record for register_view_open/closed.
+    /// Zaplex: After localization, there is no polling; this is only used as a placeholder record for register_view_open/closed.
     active_data_consumers_per_window: HashMap<WindowId, HashSet<EntityId>>,
     /// Whether we have finished the initial task load
     has_finished_initial_load: bool,
@@ -698,7 +698,7 @@ impl SingletonEntity for AgentConversationsModel {}
 
 impl AgentConversationsModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        // Zap (localization, Phase 3b-1 / Wave 6-6): AgentConversationsModel originally polled/probed
+        // Zaplex (localization, Phase 3b-1 / Wave 6-6): AgentConversationsModel originally polled/probed
         // for remote ambient agent tasks and conversation metadata. In the localized scenario:
         //   - No polling subsystem (physically removed in Wave 6-6)
         //   - has_finished_initial_load is directly set to true, so UI queries return empty sets
@@ -963,7 +963,7 @@ impl AgentConversationsModel {
 
     /// Retrieves locally cached task data by task ID.
     ///
-    /// Zap no longer fetches ambient agent tasks from the cloud. If a caller restores an old layout
+    /// Zaplex no longer fetches ambient agent tasks from the cloud. If a caller restores an old layout
     /// but the local model has no corresponding task, this returns `None`, which is handled by
     /// the existing panel fallback path.
     pub fn get_or_async_fetch_task_data(

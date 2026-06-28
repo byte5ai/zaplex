@@ -180,7 +180,7 @@ pub enum QueryFilter {
     /// Filter results for launch configurations.
     LaunchConfigurations,
 
-    /// Filter for objects in Zap Drive
+    /// Filter for objects in Zaplex Drive
     Drive,
 
     /// Filter results for environment variables.

@@ -177,7 +177,7 @@ fn collect_buttons(
                 description: _,
                 size_bytes: _,
             } => {
-                // Zap no longer has cloud artifact storage; file and screenshot artifacts
+                // Zaplex no longer has cloud artifact storage; file and screenshot artifacts
                 // cannot be fetched. Keep deserialization for legacy history support,
                 // but do not render buttons that can only fail.
             }

@@ -37,7 +37,7 @@ pub fn banner_metadata(ctx: &AppContext) -> Option<WorkspaceBannerFields> {
         // We don't show any information to the user for the disable OpenGL / force Vulkan recovery
         // mechanisms. These set of crashes occur before there is a visible window, so any
         // information surfaced to the user would be unactionable noise that the user would see on
-        // every invocation of Zap.
+        // every invocation of Zaplex.
         RecoveryMechanism::DisableOpenGL | RecoveryMechanism::ForceVulkan => None,
     }
 }

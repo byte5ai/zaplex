@@ -1171,7 +1171,7 @@ impl Default for PerAgentSettings {
 impl settings_value::SettingsValue for PerAgentSettings {}
 
 define_settings_group!(AISettings, settings: [
-    // Legacy setting. Zap's Zap agent is now always enabled; do not use this field to determine enablement status.
+    // Legacy setting. Zaplex's Zaplex agent is now always enabled; do not use this field to determine enablement status.
     is_any_ai_enabled: IsAnyAIEnabled {
         type: bool,
         default: true,
@@ -1470,7 +1470,7 @@ define_settings_group!(AISettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "cloud_platform.third_party_api_keys.aws_bedrock_credentials_enabled",
-        description: "Whether Zap should use your local AWS credentials for Bedrock-enabled requests.",
+        description: "Whether Zaplex should use your local AWS credentials for Bedrock-enabled requests.",
     }
     // Whether to automatically run the AWS login command when Bedrock credentials are expired.
     //
@@ -1533,7 +1533,7 @@ define_settings_group!(AISettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "agents.knowledge.warp_drive_context_enabled",
-        description: "Whether Zap Drive context is included in AI requests.",
+        description: "Whether Zaplex Drive context is included in AI requests.",
     }
 
     // Whether the agent mode setup banner has been shown for a given repo path.
@@ -1590,7 +1590,7 @@ define_settings_group!(AISettings, settings: [
         private: true,
     }
 
-    // Whether or not the user has enabled the ability to use Zap credits even when providing
+    // Whether or not the user has enabled the ability to use Zaplex credits even when providing
     // their own LLM provider API key.
     can_use_warp_credits_with_byok: CanUseWarpCreditsWithByok {
         type: bool,
@@ -1599,7 +1599,7 @@ define_settings_group!(AISettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "cloud_platform.third_party_api_keys.can_use_warp_credits_with_byok",
-        description: "Whether Zap credits can be used even when providing your own API key.",
+        description: "Whether Zaplex credits can be used even when providing your own API key.",
     }
 
     should_render_use_agent_footer_for_user_commands: ShouldRenderUseAgentToolbarForUserCommands {
@@ -1795,7 +1795,7 @@ define_settings_group!(AISettings, settings: [
         description: "Whether agent notifications are shown.",
     }
 
-    // Zap T1-2: completed tool cards are hidden by default (aligned with opencode TUI showDetails behavior).
+    // Zaplex T1-2: completed tool cards are hidden by default (aligned with opencode TUI showDetails behavior).
     // true → by default hide cards in status.is_done() such as RequestCommandOutput / ReadFiles /
     // Grep / FileGlob / RequestFileEdits, keeping only in-progress + error,
     // so long sessions are not flooded with piled-up historical cards burying new content. The folded state can be toggled from the appearance settings panel.
@@ -1845,7 +1845,7 @@ define_settings_group!(AISettings, settings: [
         description: "User-configured custom Agent providers (OpenAI-compatible).",
     }
 
-    // Zap BYOP local conversation compaction — 1:1 aligned with opencode `Config.compaction.auto`.
+    // Zaplex BYOP local conversation compaction — 1:1 aligned with opencode `Config.compaction.auto`.
     // When true, summarization is triggered automatically on token-overflow; when false, only manual /compact /compact-and triggers it.
     byop_compaction_auto: ByopCompactionAuto {
         type: bool,
@@ -1857,7 +1857,7 @@ define_settings_group!(AISettings, settings: [
         description: "Enable BYOP automatic conversation compaction on context overflow.",
     }
 
-    // Zap BYOP local conversation compaction — 1:1 aligned with opencode `Config.compaction.prune`.
+    // Zaplex BYOP local conversation compaction — 1:1 aligned with opencode `Config.compaction.prune`.
     // When true, old tool output is cleared before each LLM request (replaced with placeholders).
     byop_compaction_prune: ByopCompactionPrune {
         type: bool,
@@ -1869,7 +1869,7 @@ define_settings_group!(AISettings, settings: [
         description: "Auto-prune older tool outputs to free BYOP context.",
     }
 
-    // Zap BYOP local conversation compaction — 1:1 aligned with opencode `Config.compaction.tail_turns` (default 2).
+    // Zaplex BYOP local conversation compaction — 1:1 aligned with opencode `Config.compaction.tail_turns` (default 2).
     // Keep the most recent N user turns as the tail; earlier ones go into the head for the summarization LLM. 0 disables compaction.
     byop_compaction_tail_turns: ByopCompactionTailTurns {
         type: u32,
@@ -1881,7 +1881,7 @@ define_settings_group!(AISettings, settings: [
         description: "Number of recent user turns to keep verbatim during compaction.",
     }
 
-    // Zap BYOP local conversation compaction — 1:1 aligned with `Config.compaction.preserve_recent_tokens`.
+    // Zaplex BYOP local conversation compaction — 1:1 aligned with `Config.compaction.preserve_recent_tokens`.
     // 0 = computed automatically by formula (min(MAX=8000, max(MIN=2000, usable * 0.25))); > 0 forces an override.
     byop_compaction_preserve_recent_tokens: ByopCompactionPreserveRecentTokens {
         type: u32,
@@ -1893,7 +1893,7 @@ define_settings_group!(AISettings, settings: [
         description: "Override the recent-tokens preservation budget (0 = auto).",
     }
 
-    // Zap BYOP local conversation compaction — 1:1 aligned with `Config.compaction.reserved`.
+    // Zaplex BYOP local conversation compaction — 1:1 aligned with `Config.compaction.reserved`.
     // For the overflow check, usable = input_limit - reserved. 0 = computed automatically as min(20_000, max_output).
     byop_compaction_reserved: ByopCompactionReserved {
         type: u32,
@@ -1905,7 +1905,7 @@ define_settings_group!(AISettings, settings: [
         description: "Reserved buffer tokens for compaction overflow check (0 = auto).",
     }
 
-    // Zap BYOP local conversation compaction — dedicated summarization model (optional).
+    // Zaplex BYOP local conversation compaction — dedicated summarization model (optional).
     // When set: summarization LLM calls use this provider+model instead of the current conversation model.
     // Leaving both fields empty = use the conversation's current model.
     byop_compaction_model_provider_id: ByopCompactionModelProviderId {
@@ -1928,7 +1928,7 @@ define_settings_group!(AISettings, settings: [
         description: "Optional dedicated model id for compaction LLM calls.",
     }
 
-    // Zap BYOP model + thinking-depth persistence (written immediately after a picker switch, carried over to new tabs/restarts).
+    // Zaplex BYOP model + thinking-depth persistence (written immediately after a picker switch, carried over to new tabs/restarts).
     // The model uses the LLMId string form; empty string = no last_used, falling back to the profile default.
     byop_last_used_model_id: ByopLastUsedModelId {
         type: String,
@@ -1940,7 +1940,7 @@ define_settings_group!(AISettings, settings: [
         description: "Last selected BYOP model id (picker hydrates new tabs/sessions from this).",
     }
 
-    // Zap BYOP per-(api_type, model) thinking-depth memory.
+    // Zaplex BYOP per-(api_type, model) thinking-depth memory.
     // key = `<api_type>:<model_id>`, value = ReasoningEffortSetting. Written on picker switch.
     byop_last_used_reasoning: ByopLastUsedReasoning {
         type: BYOPLastUsedReasoningMap,
@@ -1996,7 +1996,7 @@ impl AISettings {
     }
 
     pub fn is_any_ai_enabled(&self, _app: &AppContext) -> bool {
-        // Zap no longer allows disabling the Zap agent via settings. A persisted
+        // Zaplex no longer allows disabling the Zaplex agent via settings. A persisted
         // `agents.warp_agent.is_any_ai_enabled = false` in old config files is ignored.
         true
     }

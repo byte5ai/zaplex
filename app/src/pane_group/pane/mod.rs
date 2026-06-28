@@ -14,7 +14,7 @@ pub(super) mod code_diff_pane;
 pub(super) mod code_diff_pane_model;
 pub(super) mod code_pane;
 pub(super) mod env_var_collection_pane;
-// Zap Wave 7-3: `environment_management_pane` physically removed with ambient-agent UI subsystem.
+// Zaplex Wave 7-3: `environment_management_pane` physically removed with ambient-agent UI subsystem.
 pub(super) mod execution_profile_editor_pane;
 pub(super) mod file_pane;
 pub(super) mod get_started_pane;
@@ -144,7 +144,7 @@ pub(crate) enum IPaneType {
     Code,
     CodeDiff,
     EnvVarCollection,
-    // Zap Wave 7-3: `EnvironmentManagement` IPaneType physically removed with ambient-agent UI subsystem.
+    // Zaplex Wave 7-3: `EnvironmentManagement` IPaneType physically removed with ambient-agent UI subsystem.
     Workflow,
     Settings,
     AIFact,
@@ -170,7 +170,7 @@ impl Display for IPaneType {
             IPaneType::Code => write!(f, "Code"),
             IPaneType::CodeDiff => write!(f, "Code Diff"),
             IPaneType::EnvVarCollection => write!(f, "Environment Variable Collection"),
-            // Zap Wave 7-3: `EnvironmentManagement` Display arm physically removed with variant.
+            // Zaplex Wave 7-3: `EnvironmentManagement` Display arm physically removed with variant.
             IPaneType::Workflow => write!(f, "Workflow"),
             IPaneType::Settings => write!(f, "Settings"),
             IPaneType::AIFact => write!(f, "AI Fact"),
@@ -229,7 +229,7 @@ impl PaneId {
         Self::new_from_ctx(IPaneType::EnvVarCollection, ctx)
     }
 
-    // Zap Wave 7-3: `from_environment_management_pane_ctx` physically removed with ambient-agent UI subsystem.
+    // Zaplex Wave 7-3: `from_environment_management_pane_ctx` physically removed with ambient-agent UI subsystem.
 
     /// Creates a [`PaneId`] from a [`ViewContext<PaneView<WorkflowView>>`]
     pub fn from_workflow_pane_ctx(ctx: &ViewContext<PaneView<WorkflowView>>) -> Self {
@@ -328,7 +328,7 @@ impl PaneId {
         Self::new(IPaneType::EnvVarCollection, env_var_collection_view)
     }
 
-    // Zap Wave 7-3: `from_environment_management_pane_view` physically removed with ambient-agent UI subsystem.
+    // Zaplex Wave 7-3: `from_environment_management_pane_view` physically removed with ambient-agent UI subsystem.
 
     /// Creates a [`PaneId`] from a [`PaneView<WorkflowView>`] entity ID.
     pub fn from_workflow_pane_view(
@@ -444,12 +444,12 @@ impl PaneId {
     }
 
     pub fn is_environment_management_pane(&self) -> bool {
-        // Zap Wave 7-3: ambient-agent UI subsystem physically removed;
+        // Zaplex Wave 7-3: ambient-agent UI subsystem physically removed;
         // no pane is an environment management pane. Kept for progressive cleanup, returns false.
         false
     }
 
-    /// Returns true if this pane contains a Zap Drive object (notebook, workflow, etc.).
+    /// Returns true if this pane contains a Zaplex Drive object (notebook, workflow, etc.).
     pub fn is_warp_drive_object_pane(&self) -> bool {
         matches!(
             self.0.pane_type,
@@ -484,7 +484,7 @@ impl PaneId {
             IPaneType::EnvVarCollection => {
                 ChildView::<PaneView<EnvVarCollectionView>>::with_id(self.0.pane_view_id).finish()
             }
-            // Zap Wave 7-3: `EnvironmentManagement` render arm physically removed with variant.
+            // Zaplex Wave 7-3: `EnvironmentManagement` render arm physically removed with variant.
             IPaneType::Workflow => {
                 ChildView::<PaneView<WorkflowView>>::with_id(self.0.pane_view_id).finish()
             }
@@ -841,7 +841,7 @@ impl PaneConfiguration {
         ctx.emit(PaneConfigurationEvent::HeaderContentChanged);
     }
 
-    // Zap Phase 2a: `set_shareable_object` / `toggle_sharing_dialog` removed
+    // Zaplex Phase 2a: `set_shareable_object` / `toggle_sharing_dialog` removed
     // along with the pane-header sharing UI.
 
     /// Notifies that the header content has changed and the pane header should re-render.

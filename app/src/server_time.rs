@@ -34,7 +34,7 @@ impl From<DateTime<Utc>> for ServerTimestamp {
 
 /// Locally estimated server time.
 ///
-/// Zap no longer requests cloud `/current_time`; startup path initializes with local current time,
+/// Zaplex no longer requests cloud `/current_time`; startup path initializes with local current time,
 /// callers can still get wall-clock time that advances with the monotonic clock via this type.
 #[derive(Debug, Clone)]
 pub struct ServerTime {

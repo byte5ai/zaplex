@@ -73,7 +73,7 @@ fn register_aumid_in_registry(app_id: &str) -> std::io::Result<()> {
     let subkey = format!("Software\\Classes\\AppUserModelId\\{app_id}");
     let (key, _) = hkcu.create_subkey(&subkey)?;
 
-    // Derive a presentable display name from the AUMID suffix (e.g. dev.zap.Zap → Zap).
+    // Derive a presentable display name from the AUMID suffix (e.g. dev.zap.Zaplex → Zaplex).
     let display_name = app_id.rsplit('.').next().unwrap_or(app_id);
     key.set_value("DisplayName", &display_name.to_string())?;
     Ok(())

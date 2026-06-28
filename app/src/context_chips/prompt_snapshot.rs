@@ -15,7 +15,7 @@ pub struct PromptSnapshot {
     chips: Vec<ChipResult>,
 
     same_line_prompt_enabled: bool,
-    /// The separator to use as a trailing character at the end of Zap prompt, if any.
+    /// The separator to use as a trailing character at the end of Zaplex prompt, if any.
     separator: WarpPromptSeparator,
 }
 

@@ -166,7 +166,7 @@ fn test_retry_menu_item_logic() {
         let object_type_and_id: ObjectTypeAndId =
             ObjectTypeAndId::from_id_and_type(sync_id, ObjectType::Workflow);
 
-        // Zap (Wave 4): SyncQueue entirely removed; assertions that previously validated SyncQueue changes
+        // Zaplex (Wave 4): SyncQueue entirely removed; assertions that previously validated SyncQueue changes
         // are now meaningless. Skip validation and leave the call flow itself to verify it doesn't panic.
 
         index.update(&mut app, |index, ctx| {
@@ -180,9 +180,9 @@ fn test_retry_menu_item_logic() {
             }
         });
 
-        // Zap (Wave 4): Previously verified that the SyncQueue head is CreateWorkflow; no longer applicable after SyncQueue removal.
+        // Zaplex (Wave 4): Previously verified that the SyncQueue head is CreateWorkflow; no longer applicable after SyncQueue removal.
 
-        // Zap (Wave 4): Previously verified SyncQueue length + UpdateWorkflow tag; no longer applicable after SyncQueue removal.
+        // Zaplex (Wave 4): Previously verified SyncQueue length + UpdateWorkflow tag; no longer applicable after SyncQueue removal.
     })
 }
 

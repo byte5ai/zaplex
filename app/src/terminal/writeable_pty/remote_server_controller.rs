@@ -12,7 +12,7 @@ use crate::terminal::zaplexify::settings::SshExtensionInstallMode;
 
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::remote_server::ssh_transport::SshTransport;
-// Zap Wave 3-1: `ServerApiProvider` no longer used by this file — `auth_client`
+// Zaplex Wave 3-1: `ServerApiProvider` no longer used by this file — `auth_client`
 // call sites physically deleted along with AuthClient.
 use crate::terminal::model::session::{IsLegacySSHSession, SessionInfo};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};

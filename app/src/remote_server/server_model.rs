@@ -192,7 +192,7 @@ pub struct ServerModel {
     /// Per-connection outbound channels, keyed by `ConnectionId`.
     ///
     /// The daemon can serve multiple proxy connections simultaneously — one
-    /// per SSH session / Zap tab connecting to this host.  Each entry maps
+    /// per SSH session / Zaplex tab connecting to this host.  Each entry maps
     /// a connection's `Uuid` to the channel the connection task drains to
     /// write `ServerMessage`s back to its proxy.
     connection_senders: HashMap<ConnectionId, async_channel::Sender<ServerMessage>>,
@@ -702,7 +702,7 @@ impl ServerModel {
             Some(client_message::Message::ResolveConflict(msg)) => {
                 self.handle_resolve_conflict(msg, &request_id, conn_id, ctx)
             }
-            // Zap: Remote terminal file link directory listing (for path form validation).
+            // Zaplex: Remote terminal file link directory listing (for path form validation).
             #[cfg(feature = "local_fs")]
             Some(client_message::Message::ListDirectory(msg)) => self.handle_list_directory(msg),
             #[cfg(feature = "local_fs")]
@@ -1623,7 +1623,7 @@ impl ServerModel {
         }
     }
 
-    /// Zap: Handle `ListDirectory` — sync listing of direct children in a directory.
+    /// Zaplex: Handle `ListDirectory` — sync listing of direct children in a directory.
     ///
     /// For precise validation by remote terminal file link detection: client caches real directory
     /// entries under a cwd, link detector uses this to extract correct filenames from `ls -l` lines.

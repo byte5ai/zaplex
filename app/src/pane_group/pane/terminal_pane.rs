@@ -739,7 +739,7 @@ fn handle_terminal_view_event(
                 group.terminal_with_open_summarization_dialog = is_open.then_some(terminal_pane_id);
                 ctx.notify();
             }
-            // Zap Wave 7-3: `Event::EnvironmentSetupModeSelectorToggled` handler removed with
+            // Zaplex Wave 7-3: `Event::EnvironmentSetupModeSelectorToggled` handler removed with
             // ambient-agent UI subsystem physical deletion.
             #[cfg(feature = "local_fs")]
             Event::OpenFileWithTarget {
@@ -753,7 +753,7 @@ fn handle_terminal_view_event(
                     line_col: *line_col,
                 });
             }
-            // Zap: transparently forward "open remote file" event from terminal to pane_group → workspace.
+            // Zaplex: transparently forward "open remote file" event from terminal to pane_group → workspace.
             #[cfg(all(feature = "local_tty", feature = "local_fs"))]
             Event::OpenRemoteFileFromTerminal {
                 remote_path,
@@ -848,7 +848,7 @@ fn handle_terminal_view_event(
                     initial_content: initial_content.clone(),
                 });
             }
-            // Zap Wave 7-3: `OpenEnvironmentManagementPane` event forwarding removed with ambient-agent UI
+            // Zaplex Wave 7-3: `OpenEnvironmentManagementPane` event forwarding removed with ambient-agent UI
             // subsystem physical deletion.
             #[cfg(feature = "local_fs")]
             Event::FileRenamed { old_path, new_path } => {

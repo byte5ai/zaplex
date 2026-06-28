@@ -672,7 +672,7 @@ impl BlocklistAIContextModel {
     /// If false, excludes these user-specific contexts but includes everything else.
     pub fn pending_context(&self, app: &AppContext, is_user_query: bool) -> Vec<AIAgentContext> {
         let pwd = self.current_pwd();
-        // Zap: used to check RepoOutlines to determine if the repo at pwd was indexed,
+        // Zaplex: used to check RepoOutlines to determine if the repo at pwd was indexed,
         // allowing optional “Use codebase semantic search” as context. Now outlines are offline;
         // always false.
         let is_pwd_indexed = false;
@@ -772,7 +772,7 @@ impl BlocklistAIContextModel {
                 }
             }
 
-            // Zap P0/P1: sync-read PendingFile and push as AIAgentContext::File to context.
+            // Zaplex P0/P1: sync-read PendingFile and push as AIAgentContext::File to context.
             // - text-like (UTF-8 parse success) → StringContent → rendered as <file> XML block via
             //   user_context.rs::render_file (BYOP) / api::input_context::File (warp-own).
             // - binary (PDF, audio, etc.) → BinaryContent → upgrade path via BYOP user_context Binary

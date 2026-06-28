@@ -1,6 +1,6 @@
 //! Global HTTP proxy configuration.
 //!
-//! See Issue #72: Zap needs a globally-configurable proxy setting that uniformly covers
+//! See Issue #72: Zaplex needs a globally-configurable proxy setting that uniformly covers
 //! all outbound HTTP requests (BYOP model list fetching, autoupdate, conversation loading, etc.).
 //!
 //! Design points:

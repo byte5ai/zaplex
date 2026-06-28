@@ -194,7 +194,7 @@ impl Task {
         }
     }
 
-    /// Zap BYOP-exclusive: when an agent's self-hosted LRC receives a snapshot, create a Server-backed subagent task
+    /// Zaplex BYOP-exclusive: when an agent's self-hosted LRC receives a snapshot, create a Server-backed subagent task
     /// directly in the conversation.
     ///
     /// Cannot reuse `new_optimistic_cli_agent_subtask` because its resulting `TaskImpl::Optimistic`

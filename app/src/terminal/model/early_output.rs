@@ -22,17 +22,17 @@ mod tests;
 /// The approach we're using to detect user typeahead.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum TypeaheadMode {
-    /// The shell reports its input buffer to Zap, and we use that for typeahead.
+    /// The shell reports its input buffer to Zaplex, and we use that for typeahead.
     ShellReported,
-    /// Zap matches user input against characters echoed to the PTY to estimate typeahead.
+    /// Zaplex matches user input against characters echoed to the PTY to estimate typeahead.
     /// This is only used on bash 3.2 and should be removed if we stop supporting
     /// such old bash versions.
     InputMatching,
 }
 
-/// Model for "early" terminal output. Early output is output that Zap receives
+/// Model for "early" terminal output. Early output is output that Zaplex receives
 /// from the PTY while no block is running. In concrete terms, it's output received
-/// after a `BlockFinished` hook but before Zap has written the next command from
+/// after a `BlockFinished` hook but before Zaplex has written the next command from
 /// the input editor to the PTY.
 ///
 /// This output belongs to one of two categories:
@@ -207,9 +207,9 @@ impl EarlyOutput {
             // For most user-entered commands, we know when to switch from background
             // output to the active block's command grid because the input editor
             // marks the block as started right before it sends the command to the pty.
-            // When the command doesn't come from Zap, however, the active block isn't
+            // When the command doesn't come from Zaplex, however, the active block isn't
             // started until we receive the preexec hook. At this point, the shell has
-            // already written the command to the pty, resulting in Zap treating it as
+            // already written the command to the pty, resulting in Zaplex treating it as
             // background output.
             // We can't correctly identify the command in advance when this happens, so
             // instead we fix the block list afterwards.

@@ -1,7 +1,7 @@
 use super::hoa_onboarding;
 use crate::auth::{AuthManager, AuthManagerEvent};
 use crate::channel::{Channel, ChannelState};
-// Zap(localization, Phase 5): `PreferencesSyncer` has been physically deleted.
+// Zaplex(localization, Phase 5): `PreferencesSyncer` has been physically deleted.
 use crate::settings::CodeSettings;
 use crate::terminal::general_settings::GeneralSettings;
 use settings::Setting as _;
@@ -15,7 +15,7 @@ use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
 /// a modal is currently being shown and automatically triggers the modal when appropriate
 /// conditions are met (e.g., user becomes onboarded).
 pub struct OneTimeModalModel {
-    /// Whether the Zap launch modal is currently being shown.
+    /// Whether the Zaplex launch modal is currently being shown.
     is_zap_launch_modal_open: bool,
     /// Whether the HOA onboarding flow is currently being shown.
     is_hoa_onboarding_open: bool,
@@ -41,7 +41,7 @@ impl OneTimeModalModel {
                         .did_check_to_trigger_zap_launch_modal
                         .set_value(true, ctx)
                     {
-                        log::warn!("Failed to mark Zap launch modal as dismissed: {e}");
+                        log::warn!("Failed to mark Zaplex launch modal as dismissed: {e}");
                     }
                 });
             }
@@ -59,7 +59,7 @@ impl OneTimeModalModel {
         self.target_window_id
     }
 
-    /// Returns whether the Zap launch modal is currently open.
+    /// Returns whether the Zaplex launch modal is currently open.
     pub fn is_zap_launch_modal_open(&self) -> bool {
         self.is_zap_launch_modal_open && self.target_window_id.is_some()
     }
@@ -183,7 +183,7 @@ impl OneTimeModalModel {
                 .did_check_to_trigger_zap_launch_modal
                 .set_value(true, ctx)
             {
-                log::warn!("Failed to mark Zap launch modal as dismissed: {e}");
+                log::warn!("Failed to mark Zaplex launch modal as dismissed: {e}");
             }
         });
 

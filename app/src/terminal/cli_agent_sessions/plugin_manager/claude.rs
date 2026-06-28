@@ -118,11 +118,11 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
     }
 
     fn install_success_message(&self) -> &'static str {
-        "Zap plugin installed. Please run /reload-plugins to activate."
+        "Zaplex plugin installed. Please run /reload-plugins to activate."
     }
 
     fn update_success_message(&self) -> &'static str {
-        "Zap plugin updated. Please run /reload-plugins to activate."
+        "Zaplex plugin updated. Please run /reload-plugins to activate."
     }
 
     fn install_instructions(&self) -> &'static PluginInstructions {
@@ -212,7 +212,7 @@ fn check_installed(claude_dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Reads the installed version string for the Zap plugin, if present.
+/// Reads the installed version string for the Zaplex plugin, if present.
 fn installed_version(claude_dir: &Path) -> Option<String> {
     let plugins_path = claude_dir.join("plugins").join("installed_plugins.json");
     let contents = fs::read_to_string(plugins_path).ok()?;

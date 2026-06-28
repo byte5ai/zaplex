@@ -395,7 +395,7 @@ unsafe fn init_logging() {
             // According to the docs, this error means that the database file was moved (or deleted),
             // so SQLite can't safely modify it and the rollback journal:
             //     https://www.sqlite.org/rescode.html#readonly_dbmoved
-            // This is mostly outside of Zap's control (e.g. the user or some system program is
+            // This is mostly outside of Zaplex's control (e.g. the user or some system program is
             // moving around files in the user data directory), so downgrade to a warning.
             (_, sqlite3::SQLITE_READONLY_DBMOVED) => log::Level::Warn,
             _ => log::Level::Error,
@@ -459,7 +459,7 @@ pub(super) fn init_db() -> Result<SqliteConnection> {
     if warp_core::channel::ChannelState::channel() == warp_core::channel::Channel::Oss {
         if let Some(legacy_dir) = zap_legacy_app_group_sqlite_dir() {
             if let Err(err) = migrate_zap_app_group_sqlite_if_needed(&db_path, &legacy_dir)
-                .context("Failed to migrate Zap SQLite database out of legacy App Group")
+                .context("Failed to migrate Zaplex SQLite database out of legacy App Group")
             {
                 report_error!(err);
                 log::warn!("Skipping legacy App Group SQLite migration and continuing startup");
@@ -556,8 +556,8 @@ fn migrate_zap_app_group_sqlite_if_needed(target_db: &Path, legacy_dir: &Path) -
     write_zap_app_group_sqlite_migration_marker(&marker)?;
 
     safe_info!(
-        safe: ("Migrated Zap SQLite database out of legacy App Group"),
-        full: ("Migrated Zap SQLite database from `{}` to `{}`", legacy_db.display(), target_db.display())
+        safe: ("Migrated Zaplex SQLite database out of legacy App Group"),
+        full: ("Migrated Zaplex SQLite database from `{}` to `{}`", legacy_db.display(), target_db.display())
     );
 
     Ok(())
@@ -1266,7 +1266,7 @@ fn save_pane_state(
         LeafContents::GetStarted => GET_STARTED_PANE_KIND,
         LeafContents::Welcome { .. } => WELCOME_PANE_KIND,
         LeafContents::AIDocument(_) => AI_DOCUMENT_PANE_KIND,
-        // Zap Wave 7-3: `EnvironmentManagement` arm physically removed along with variant.
+        // Zaplex Wave 7-3: `EnvironmentManagement` arm physically removed along with variant.
         LeafContents::SshServer { .. } => {
             // These pane types are filtered out before this function is
             // called; see `LeafContents::is_persisted` and the skip in
@@ -1435,7 +1435,7 @@ fn save_pane_state(
                 .values(workflow)
                 .execute(conn)?;
         }
-        // Zap Wave 7-3: `EnvironmentManagement` LeafContents arm physically removed along with variant.
+        // Zaplex Wave 7-3: `EnvironmentManagement` LeafContents arm physically removed along with variant.
         LeafContents::Settings(settings_pane_snapshot) => {
             let current_page = match settings_pane_snapshot {
                 SettingsPaneSnapshot::Local { current_page, .. } => current_page,

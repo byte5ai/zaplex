@@ -269,12 +269,12 @@ fn test_global_warp_server_from_managed_home_root_always_spawns() {
         let manager = setup_app(&mut app);
         let events = subscribe_events(&mut app, &manager);
 
-        // Toggle is off by default; the watcher-produced Zap root should still
-        // be classified as the global Zap config and auto-spawn.
+        // Toggle is off by default; the watcher-produced Zaplex root should still
+        // be classified as the global Zaplex config and auto-spawn.
         manager.update(&mut app, |m, ctx| {
             m.apply_parsed_servers(
                 warp_mcp_config_path.root_path.clone(),
-                MCPProvider::Zap,
+                MCPProvider::Zaplex,
                 parsed,
                 ctx,
             );
@@ -284,24 +284,24 @@ fn test_global_warp_server_from_managed_home_root_always_spawns() {
             assert_eq!(
                 e.spawned_uuids.len(),
                 1,
-                "Managed Zap MCP config should auto-spawn regardless of toggle"
+                "Managed Zaplex MCP config should auto-spawn regardless of toggle"
             );
         });
 
-        // Flipping the toggle must not despawn the global Zap server.
+        // Flipping the toggle must not despawn the global Zaplex server.
         set_file_based_mcp_enabled(&mut app, true);
         set_file_based_mcp_enabled(&mut app, false);
 
         events.update(&mut app, |e, _| {
             assert!(
                 e.despawned_uuids.is_empty(),
-                "Managed Zap MCP config should never be despawned by toggle changes, got: {:?}",
+                "Managed Zaplex MCP config should never be despawned by toggle changes, got: {:?}",
                 e.despawned_uuids
             );
         });
     });
 }
-/// A globally-scoped non-Zap installation only auto-spawns when the toggle is on.
+/// A globally-scoped non-Zaplex installation only auto-spawns when the toggle is on.
 #[test]
 fn test_global_non_warp_server_respects_toggle() {
     let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
@@ -323,7 +323,7 @@ fn test_global_non_warp_server_respects_toggle() {
         events.update(&mut app, |e, _| {
             assert!(
                 e.spawned_uuids.is_empty(),
-                "Global non-Zap server must not auto-spawn while toggle is off, got: {:?}",
+                "Global non-Zaplex server must not auto-spawn while toggle is off, got: {:?}",
                 e.spawned_uuids
             );
         });
@@ -334,29 +334,29 @@ fn test_global_non_warp_server_respects_toggle() {
             servers[0].uuid()
         });
 
-        // Toggle on: the global non-Zap server should be spawned.
+        // Toggle on: the global non-Zaplex server should be spawned.
         set_file_based_mcp_enabled(&mut app, true);
         events.update(&mut app, |e, _| {
             assert_eq!(
                 e.spawned_uuids,
                 vec![installation_uuid],
-                "Global non-Zap server should spawn when toggle flips on"
+                "Global non-Zaplex server should spawn when toggle flips on"
             );
         });
 
-        // Toggle off: the global non-Zap server should be despawned.
+        // Toggle off: the global non-Zaplex server should be despawned.
         set_file_based_mcp_enabled(&mut app, false);
         events.update(&mut app, |e, _| {
             assert_eq!(
                 e.despawned_uuids,
                 vec![installation_uuid],
-                "Global non-Zap server should despawn when toggle flips off"
+                "Global non-Zaplex server should despawn when toggle flips off"
             );
         });
     });
 }
 
-/// Project-scoped installations (both Zap and third-party) never auto-spawn on
+/// Project-scoped installations (both Zaplex and third-party) never auto-spawn on
 /// detection, and the toggle must not spawn or despawn them either.
 #[test]
 fn test_project_scoped_servers_never_auto_spawn() {
@@ -372,7 +372,7 @@ fn test_project_scoped_servers_never_auto_spawn() {
 
         manager.update(&mut app, |m, ctx| {
             m.apply_parsed_servers(repo_path.clone(), MCPProvider::Claude, claude_parsed, ctx);
-            m.apply_parsed_servers(repo_path.clone(), MCPProvider::Zap, warp_parsed, ctx);
+            m.apply_parsed_servers(repo_path.clone(), MCPProvider::Zaplex, warp_parsed, ctx);
         });
 
         // Neither detection should emit a spawn event.
@@ -413,7 +413,7 @@ fn test_project_scoped_servers_never_auto_spawn() {
 }
 
 /// An installation referenced from both a global location and a project location
-/// is considered global (and thus gated only by the toggle for non-Zap providers).
+/// is considered global (and thus gated only by the toggle for non-Zaplex providers).
 #[test]
 fn test_server_referenced_from_both_global_and_project_is_global() {
     let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);

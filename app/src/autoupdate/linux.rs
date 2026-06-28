@@ -31,7 +31,7 @@ pub(super) async fn download_update_and_cleanup(
                 .await
         }
         UpdateMethod::PackageManager(package_manager) => {
-            log::info!("Detected that Zap was installed using {package_manager:?}");
+            log::info!("Detected that Zaplex was installed using {package_manager:?}");
             Ok(DownloadReady::NeedsAuthorization)
         }
     }
@@ -45,7 +45,7 @@ pub(super) fn apply_update() -> Result<ReadyForRelaunch> {
         UpdateMethod::Unknown => bail!("Cannot apply update for unknown update method!"),
         UpdateMethod::AppImage(_) => Ok(ReadyForRelaunch::Yes),
         UpdateMethod::PackageManager(package_manager) => bail!(
-            "Zap does not support package-manager autoupdate for {package_manager}; install the new release manually"
+            "Zaplex does not support package-manager autoupdate for {package_manager}; install the new release manually"
         ),
     }
 }
@@ -185,7 +185,7 @@ mod appimage {
             .as_file_mut()
             .set_permissions(appimage_path.metadata()?.permissions())?;
 
-        // Move new AppImage over the one that launched the current Zap instance.
+        // Move new AppImage over the one that launched the current Zaplex instance.
         let new_appimage_path = new_appimage.into_temp_path();
         let mv_status = command::r#async::Command::new("mv")
             .arg(new_appimage_path.as_os_str())
@@ -256,14 +256,14 @@ mod package_manager {
     }
 }
 
-/// Returns which method should be used to update Zap.
+/// Returns which method should be used to update Zaplex.
 #[derive(Debug)]
 pub(crate) enum UpdateMethod {
-    /// We don't know how to update Zap.
+    /// We don't know how to update Zaplex.
     Unknown,
-    /// Zap is running as an AppImage and should be updated in-place.
+    /// Zaplex is running as an AppImage and should be updated in-place.
     AppImage(PathBuf),
-    /// Zap can be updated using the given package manager.
+    /// Zaplex can be updated using the given package manager.
     PackageManager(PackageManager),
 }
 
@@ -420,7 +420,7 @@ impl PackageManager {
     }
 
     /// Write the "command the user should run to upgrade" to logs. OSS users can find the exact command
-    /// in logs under ~/.local/share/dev.zap.Zap/; the UI still falls back to "go to GitHub to download", not distinguishing by package manager.
+    /// in logs under ~/.local/share/dev.zap.Zaplex/; the UI still falls back to "go to GitHub to download", not distinguishing by package manager.
     fn log_upgrade_hint(&self) {
         let hint = match self {
             Self::Apt { package_name } => {

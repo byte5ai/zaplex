@@ -30,9 +30,9 @@ fn open_file_tree_panel(app: &mut App) {
     });
 }
 
-/// Test that clicking a file in the file tree opens it in Zap's editor.
+/// Test that clicking a file in the file tree opens it in Zaplex's editor.
 /// This is a regression test for the bug where files were being opened in
-/// external editors instead of Zap's built-in editor.
+/// external editors instead of Zaplex's built-in editor.
 pub fn test_file_tree_opens_files_in_warp() -> Builder {
     new_builder()
         .with_setup(|utils| {
@@ -79,7 +79,7 @@ pub fn test_file_tree_opens_files_in_warp() -> Builder {
                 }),
         )
         .with_step(
-            new_step_with_default_assertions("Verify file opened in Zap editor").add_assertion(
+            new_step_with_default_assertions("Verify file opened in Zaplex editor").add_assertion(
                 assert_pane_title(0, 1, Regex::new(r"test_file\.txt$").unwrap()),
             ),
         )
@@ -238,7 +238,7 @@ pub fn test_file_tree_non_openable_files() -> Builder {
                 .expect("Should be able to convert test dir to str");
             write_all_rc_files_for_test(&test_dir, format!("cd {dir_string}"));
 
-            // Create a binary file that shouldn't be opened in Zap
+            // Create a binary file that shouldn't be opened in Zaplex
             std::fs::write(test_dir.join("test.bin"), vec![0u8, 1, 2, 3, 255])
                 .expect("Failed to create binary file");
         })
@@ -251,14 +251,14 @@ pub fn test_file_tree_non_openable_files() -> Builder {
             new_step_with_default_assertions("Click on binary file")
                 .with_click_on_saved_position("file_tree_item:test.bin")
                 .add_assertion(|app, window_id| {
-                    // The binary file should NOT open in a new pane in Zap
+                    // The binary file should NOT open in a new pane in Zaplex
                     // It should fall back to system default behavior
                     let pane_group = pane_group_view(app, window_id, 0);
                     pane_group.read(app, |pane_group, _ctx| {
                         async_assert_eq!(
                             pane_group.pane_count(),
                             1,
-                            "Binary file should not open in Zap, should stay at 1 pane"
+                            "Binary file should not open in Zaplex, should stay at 1 pane"
                         )
                     })
                 }),

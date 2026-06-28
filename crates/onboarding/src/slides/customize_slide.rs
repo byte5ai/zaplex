@@ -147,7 +147,7 @@ impl CustomizeUISlide {
             .ui_builder()
             .paragraph(localized(
                 "onboarding-customize-title",
-                "Customize your Zap",
+                "Customize your Zaplex",
             ))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
@@ -326,7 +326,7 @@ impl CustomizeUISlide {
             });
 
             chips.push(ChipSpec {
-                label: localized("onboarding-customize-warp-drive", "Zap Drive"),
+                label: localized("onboarding-customize-warp-drive", "Zaplex Drive"),
                 is_enabled: ui.show_warp_drive,
                 mouse_state: self.chip_warp_drive_mouse.clone(),
                 on_click: Box::new(|ctx, _, _| {

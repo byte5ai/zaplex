@@ -317,7 +317,7 @@ impl ShellCommandExecutor {
                         RequestCommandOutputResult::CancelledBeforeExecution,
                     ));
                 }
-                // Zap: synchronous wait-style commands (wait_until_completion=true) unconditionally
+                // Zaplex: synchronous wait-style commands (wait_until_completion=true) unconditionally
                 // disable the pager.
                 //
                 // The model's self-reported `uses_pager` is unreliable -- small models such as
@@ -879,7 +879,7 @@ fn effective_read_shell_command_delay(
 
 /// Determines whether `command` starts an interactive session that **never exits on its own**.
 /// Matching rules:
-/// - For a command wrapped by the Zap generator wrapper, recursively evaluate the inner command.
+/// - For a command wrapped by the Zaplex generator wrapper, recursively evaluate the inner command.
 /// - Bare `ssh ...` (via `parse_interactive_ssh_command`, which correctly excludes non-interactive
 ///   forms such as `-T` / `-W`).
 /// - ssh with a path or `.exe` suffix (rewritten to bare `ssh` and then evaluated).
@@ -905,7 +905,7 @@ fn command_starts_non_terminating_session(command: &str) -> bool {
         })
 }
 
-/// Unwraps Zap's own generator wrapper to extract the actual command to run from inside it.
+/// Unwraps Zaplex's own generator wrapper to extract the actual command to run from inside it.
 ///
 /// The wrapper protocol looks like: `<wrapper> <generator_id> '<inner_command>' [extra flags...]`
 /// where:

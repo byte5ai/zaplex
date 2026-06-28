@@ -149,7 +149,7 @@ const OFFLINE_BANNER_PADDING_VERTICAL: f32 = 4.;
 
 pub const DRIVE_INDEX_VIEW_POSITION_ID: &str = "drive_index_view_id";
 
-// Sets the speed of the autoscroll that occurs when you drag an item near the Zap Drive border.
+// Sets the speed of the autoscroll that occurs when you drag an item near the Zaplex Drive border.
 pub const AUTOSCROLL_SPEED_MULTIPLIER: f32 = 10.;
 // Sets the distance from a border at which scroll events start to occur.
 pub const AUTOSCROLL_DETECTION_DISTANCE: f32 = 30.0;
@@ -286,10 +286,10 @@ pub enum DriveIndexAction {
     CloseTrashIndex,
     FocusPreviousItem,
     FocusNextItem,
-    /// Hitting one of the l/r arrow keys on a Zap Drive item.
+    /// Hitting one of the l/r arrow keys on a Zaplex Drive item.
     LeftArrowKey,
     RightArrowKey,
-    /// Hitting enter key on a Zap Drive item.
+    /// Hitting enter key on a Zaplex Drive item.
     EnterKey,
     /// Hitting escape key from trash index returns to main drive index.
     EscapeKey,
@@ -420,10 +420,10 @@ struct SpaceMenuState {
     offset: Vector2F,
 }
 
-/// The main view for the Zap Drive sidebar.
+/// The main view for the Zaplex Drive sidebar.
 /// `DriveIndex` is different from `DrivePanel` in that it is responsible for
-/// all the logic within Zap Drive, whereas `DrivePanel` is responsible for
-/// how Zap Drive interacts with the workspace and the rest of the app.
+/// all the logic within Zaplex Drive, whereas `DrivePanel` is responsible for
+/// how Zaplex Drive interacts with the workspace and the rest of the app.
 #[derive(Clone)]
 pub struct DriveIndex {
     window_id: WindowId,
@@ -431,7 +431,7 @@ pub struct DriveIndex {
     /// default, should get the menu fields on open, example: + button to add notebook)
     menu: ViewHandle<Menu<DriveIndexAction>>,
 
-    /// Variant of the index, determines whether base Zap Drive or trash is viewed.
+    /// Variant of the index, determines whether base Zaplex Drive or trash is viewed.
     index_variant: DriveIndexVariant,
     /// If None, the context menu is closed. Otherwise, this contains the ID of the object it's open on.
     menu_object_id_if_open: Option<WarpDriveItemId>,
@@ -456,7 +456,7 @@ pub struct DriveIndex {
     /// A hashmap of location (space/folder) to a list of hashed IDs of objects inside
     /// the space/folder, used for rendering our objects
     sorted_orders_by_location: HashMap<StoredObjectLocation, Vec<ObjectUid>>,
-    /// A sorted list of all the items (spaces + objects) in Zap Drive
+    /// A sorted list of all the items (spaces + objects) in Zaplex Drive
     /// Unlike sorted_orders_by_location, this is not used for rendering
     /// This is used for object focusing and WD keyboard navigation
     ordered_items: Vec<WarpDriveItemId>,
@@ -466,7 +466,7 @@ pub struct DriveIndex {
     /// from links before everything has been set up.
     has_initialized_sections: Condition,
 
-    /// The number of objects in Zap Drive that have errored.
+    /// The number of objects in Zaplex Drive that have errored.
     /// This value is cached so that we can determine whether to render the "retry all"
     /// objects button in the case of syncing failures.
     num_errored_objects: usize,
@@ -941,7 +941,7 @@ impl DriveIndex {
         app: &AppContext,
     ) -> bool {
         if let Some(object) = ObjectStoreModel::as_ref(app).get_by_uid(&object_type_and_id.uid()) {
-            // Zap (decentralized branch): local objects (no server_id, no-op upstream in SyncQueue)
+            // Zaplex (decentralized branch): local objects (no server_id, no-op upstream in SyncQueue)
             // previously could never access trash/move menus. Here we treat "no server_id" as a local object,
             // allowing it to perform local-side operations (trash uses sqlite, no server coordination needed).
             if !object_type_and_id.has_server_id() {
@@ -2308,7 +2308,7 @@ impl DriveIndex {
         let access_level =
             ObjectStoreViewModel::as_ref(app).access_level(&row_object_id.uid(), app);
 
-        // Zap Phase 2a: sharing dialog removed; pass `false` for the
+        // Zaplex Phase 2a: sharing dialog removed; pass `false` for the
         // legacy `share_dialog_open` slot in `WarpDriveRow::new_from_cloud_object`.
         let share_dialog_open = false;
         let menu_open = self.menu_object_id_if_open == Some(warp_drive_item_id);
@@ -2340,7 +2340,7 @@ impl DriveIndex {
             share_dialog_open,
             is_selected,
             is_focused,
-            false, /* Zap (Wave 4): SyncQueue completely removed, is_dequeueing always false */
+            false, /* Zaplex (Wave 4): SyncQueue completely removed, is_dequeueing always false */
             tools_panel_menu_direction(app),
             appearance,
         )?;
@@ -2746,7 +2746,7 @@ impl DriveIndex {
         if self.focused_index.is_some() {
             let DriveIndexSection::Space(space) = *section;
             self.set_focused_item(WarpDriveItemId::Space(space), true, ctx);
-            // Need to re-render focused index in Zap Drive after a space has been toggled
+            // Need to re-render focused index in Zaplex Drive after a space has been toggled
             if let Some(focused_index) = self.focused_index {
                 self.update_focused_params(focused_index, ObjectStoreModel::as_ref(ctx));
             }
@@ -3375,7 +3375,7 @@ impl DriveIndex {
     }
 
     fn retry_all_failed(&mut self, ctx: &mut ViewContext<Self>) {
-        // Zap (Wave 4): After SyncQueue is completely removed, the original “retry” semantics
+        // Zaplex (Wave 4): After SyncQueue is completely removed, the original “retry” semantics
         // (re-submit to server) no longer apply; after localization, objects never enter errored state, this path is dead code.
         let _ = ctx;
     }
@@ -3757,7 +3757,7 @@ impl DriveIndex {
         let object = ObjectStoreModel::as_ref(app).get_by_uid(&object_type_and_id.uid());
 
         if let ObjectTypeAndId::Folder(folder_id) = object_type_and_id {
-            // Zap: local folders (ClientId, no-op upstream in SyncQueue) never get a server_id.
+            // Zaplex: local folders (ClientId, no-op upstream in SyncQueue) never get a server_id.
             // The original `SyncId::ServerId(_) && is_online` double gate would mean local folders
             // never get the "create child/Rename" context menu. Here we treat "local folder" as always ready.
             let is_local_folder = matches!(folder_id, SyncId::ClientId(_));
@@ -3879,7 +3879,7 @@ impl DriveIndex {
                 );
 
                 if let Some(object) = object {
-                    // Zap (Wave 6-7): “Leave shared object” menu retired along with `leave_object` pub fn.
+                    // Zaplex (Wave 6-7): “Leave shared object” menu retired along with `leave_object` pub fn.
                     let _ = object;
                 }
             }
@@ -4066,7 +4066,7 @@ impl DriveIndex {
                                     .into_item(),
                             );
                         }
-                        // Zap Phase 2a: drive-share menu item removed (sharing dialog gone).
+                        // Zaplex Phase 2a: drive-share menu item removed (sharing dialog gone).
                         if !warpui::platform::is_mobile_device()
                             && !ContextFlag::HideOpenOnDesktopButton.is_enabled()
                             && *UserAppInstallDetectionSettings::as_ref(app)
@@ -4117,7 +4117,7 @@ impl DriveIndex {
                 }
 
                 if FeatureFlag::SharedWithMe.is_enabled() && object.can_leave(app) {
-                    // Zap (Wave 6-7): “Leave shared object” menu retired along with `leave_object` pub fn.
+                    // Zaplex (Wave 6-7): “Leave shared object” menu retired along with `leave_object` pub fn.
                 }
             }
         }
@@ -4138,7 +4138,7 @@ impl DriveIndex {
         menu_items
     }
 
-    /// Builder for a menu item to open a Zap Drive object in a pane. The icon and label depend
+    /// Builder for a menu item to open a Zaplex Drive object in a pane. The icon and label depend
     /// on whether the object is editable or not.
     ///
     /// If `prefer_open` is `true`, the item defaults to view/open mode rather than edit mode.

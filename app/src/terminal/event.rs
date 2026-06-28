@@ -94,8 +94,8 @@ pub enum Event {
     SourcedRcFileInSubshell(SourcedRcFileInSubshellEvent),
     /// Emitted when the active block's prompt has been updated.
     PromptUpdated,
-    /// Emitted when the honor_ps1 state of the shell is out-of-sync with Zap's settings.
-    /// This can happen in cases such as when the user changes between PS1 and Zap prompt inside
+    /// Emitted when the honor_ps1 state of the shell is out-of-sync with Zaplex's settings.
+    /// This can happen in cases such as when the user changes between PS1 and Zaplex prompt inside
     /// of an SSH session (the bindkeys are sent to the SSH session but not the local session, so
     /// they are out-of-sync when the user exits SSH).
     HonorPS1OutOfSync,
@@ -140,7 +140,7 @@ pub enum Event {
     },
     BootstrapPrecmdDone,
     /// A pluggable notification triggered via OSC 9 or OSC 777 escape sequences.
-    /// External programs can use this to trigger notifications in Zap.
+    /// External programs can use this to trigger notifications in Zaplex.
     ///
     /// References:
     /// - OSC 9: <https://conemu.github.io/en/AnsiEscapeCodes.html#OSC_Operating_system_commands>

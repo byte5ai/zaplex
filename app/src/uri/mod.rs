@@ -49,7 +49,7 @@ pub struct OpenMCPSettingsArgs {
 }
 
 /// Source query parameter value indicating auth was initiated from agent setup.
-/// Zap Wave 7-3: URI handler / Settings UI removed; only used by `update_environment_form` as a transitional bridge
+/// Zaplex Wave 7-3: URI handler / Settings UI removed; only used by `update_environment_form` as a transitional bridge
 /// during agent UI refactoring (the latter doesn't use the URL it constructs anyway).
 pub const CLOUD_SETUP_SOURCE: &str = "cloud_setup";
 
@@ -103,8 +103,8 @@ impl UriHost {
         match self {
             UriHost::Auth => {
                 safe_info!(
-                    safe: ("Ignored auth URL because Zap has no cloud login flow"),
-                    full: ("Ignored auth URL {url} because Zap has no cloud login flow")
+                    safe: ("Ignored auth URL because Zaplex has no cloud login flow"),
+                    full: ("Ignored auth URL {url} because Zaplex has no cloud login flow")
                 );
             }
             UriHost::Action => {
@@ -255,7 +255,7 @@ impl UriHost {
                 if let Some(settings_sub_page) = settings_sub_page {
                     match settings_sub_page.as_str() {
                         "environments" => {
-                            // Zap Wave 7-3: warp://settings/environments URI handler removed along with ambient-agent UI subsystem.
+                            // Zaplex Wave 7-3: warp://settings/environments URI handler removed along with ambient-agent UI subsystem.
                             // Still retaining GitHub auth completion notification — other independent components may need to listen.
                             GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
                                 notifier.notify_auth_completed(ctx);
@@ -276,12 +276,12 @@ impl UriHost {
                                 ctx,
                             );
                         }
-                        // Zap Wave 3-1: "platform" URI route originally pointed to
+                        // Zaplex Wave 3-1: "platform" URI route originally pointed to
                         // `SettingsSection::OzCloudAPIKeys` (cloud API key management page),
                         // physically removed along with the UI. Arm retained to record original intent, physically handled as no-op.
                         "platform" => {
                             log::warn!(
-                                "warp://settings/platform route is retired in Zap; ignoring request"
+                                "warp://settings/platform route is retired in Zaplex; ignoring request"
                             );
                         }
                         "appearance" => {
@@ -659,7 +659,7 @@ impl Action {
             Self::Docker | Self::OpenRepo | Self::NewAgentConversation => W::default(),
             Self::NewTab => W::ShowPrimaryWindow(WindowActivationFallbackBehavior::Notify {
                 title: "New tab created".to_owned(),
-                description: "Go to Zap to see your new tab.".to_owned(),
+                description: "Go to Zaplex to see your new tab.".to_owned(),
             }),
             Self::NewWindow => W::Nothing,
         }
@@ -743,7 +743,7 @@ fn get_primary_window(
 enum OpenFileAction {
     /// Open in the markdown notebook pane.
     Notebook,
-    /// Open in Zap's code/text editor pane.
+    /// Open in Zaplex's code/text editor pane.
     Editor,
     /// Open a session at the parent directory and queue the file as the pending command,
     /// or just open a session at the directory path if `path` is a directory.
@@ -805,7 +805,7 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
                 openable_file_type::resolve_file_target_to_open_in_warp,
             };
 
-            // Open text/code files in Zap's code editor, respecting the user's layout preference.
+            // Open text/code files in Zaplex's code editor, respecting the user's layout preference.
             let editor_settings = EditorSettings::as_ref(ctx);
             let target = resolve_file_target_to_open_in_warp(&path, editor_settings, None);
 

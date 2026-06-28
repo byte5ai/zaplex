@@ -382,11 +382,11 @@ pub struct SubshellSuccessBlockInfo {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TmuxInstallationState {
-    /// This means tmux was installed by Zap in this session, successfully or unsuccessfully.
+    /// This means tmux was installed by Zaplex in this session, successfully or unsuccessfully.
     /// It also means we had root access and used a package manager to install tmux and all
     /// dependencies.
     InstalledByWarpRootInThisSession,
-    /// This means tmux was installed by Zap in this session, successfully or unsuccessfully.
+    /// This means tmux was installed by Zaplex in this session, successfully or unsuccessfully.
     InstalledByWarpInThisSession,
     InstalledByWarpInPriorSession,
     /// This means that warp did not install it locally. It was either installed by the user
@@ -1011,7 +1011,7 @@ impl SelectedBlocks {
 pub enum TerminalInputState {
     /// Alt-screen on which programs like vim run is visible.
     AltScreen,
-    /// Zap Input View is visible.
+    /// Zaplex Input View is visible.
     InputEditor,
     /// Block-list is visible but input will go to the running command.
     LongRunningCommand,
@@ -2176,7 +2176,7 @@ impl TerminalModel {
     pub fn set_custom_title(&mut self, custom_title: Option<String>) {
         self.custom_title.clone_from(&custom_title);
         // If the custom title set by the user is None, we "reset" to whatever the title was set by
-        // the shell / Zap itself.
+        // the shell / Zaplex itself.
         self.send_title_event(match custom_title {
             Some(_) => custom_title,
             None => self.title.clone(),

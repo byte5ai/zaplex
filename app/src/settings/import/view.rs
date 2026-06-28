@@ -1080,7 +1080,7 @@ impl TypedActionView for SettingsImportView {
 
                 // Handle should_import within the model.
 
-                // set_preferences should not fail because it is writing directly to Zap's preferences.
+                // set_preferences should not fail because it is writing directly to Zaplex's preferences.
                 self.set_preferences(ctx, terminal_type_and_profile);
 
                 // write_theme can fail because we write themes in a separate directory.

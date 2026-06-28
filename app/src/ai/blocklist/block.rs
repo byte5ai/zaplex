@@ -1018,7 +1018,7 @@ impl AIBlock {
             ActiveSessionEvent::Bootstrapped => {}
         });
 
-        // Zap: Previously subscribed to GetRelevantFilesController Success event to refresh UI with `ctx.notify` after RAG
+        // Zaplex: Previously subscribed to GetRelevantFilesController Success event to refresh UI with `ctx.notify` after RAG
         // completion. That controller was decommissioned with outline push, subscription point deleted as well.
 
         let manage_rules_button = ctx.add_typed_action_view(|_| {
@@ -1026,7 +1026,7 @@ impl AIBlock {
                 .on_click(|ctx| ctx.dispatch_typed_action(AIBlockAction::OpenAIFactCollection))
         });
 
-        // Zap(Phase 3c A1): Removed subscription to `AIRequestUsageModelEvent::RequestBonusRefunded`.
+        // Zaplex(Phase 3c A1): Removed subscription to `AIRequestUsageModelEvent::RequestBonusRefunded`.
         // After localization this event will never emit (no `provide_negative_feedback_response`
         // RPC call), subscription itself has become permanent no-op dead code. `request_refunded_count` field retained
         // but always initial value None.
@@ -5112,7 +5112,7 @@ pub enum AIBlockEvent {
     },
     ToggleCodeDiffVisibility,
 
-    /// Open a Zap Text instance with the requested code diff.
+    /// Open a Zaplex Text instance with the requested code diff.
     OpenCodeWithDiff {
         view: ViewHandle<CodeDiffView>,
     },
@@ -5326,7 +5326,7 @@ pub enum AIBlockAction {
     DisableRuleSuggestions,
     /// Copy the debug ID to clipboard
     CopyDebugId(String),
-    /// Open Zap feedback documentation
+    /// Open Zaplex feedback documentation
     OpenFeedbackDocs,
     /// Toggle the usage summary footer expansion state
     ToggleIsUsageFooterExpanded,

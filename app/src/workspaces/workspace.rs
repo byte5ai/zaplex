@@ -552,9 +552,9 @@ impl BillingMetadata {
             || self.delinquency_status == DelinquencyStatus::Unpaid
     }
 
-    // Whether the enterprise customer is our Stable Zap Enterprise team (internal team of Warpers).
+    // Whether the enterprise customer is our Stable Zaplex Enterprise team (internal team of Warpers).
     pub fn is_warp_plan(&self) -> bool {
-        self.tier.name == "Zap Plan"
+        self.tier.name == "Zaplex Plan"
     }
 
     pub fn has_active_subscription(&self) -> bool {

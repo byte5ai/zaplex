@@ -9,9 +9,9 @@ use windows_result::HRESULT;
 
 pub struct RegistryBackedPreferences {
     app_key_path: String,
-    /// Caches `HKCU\Software\Zap\<channel>` registry Key handle.
+    /// Caches `HKCU\Software\Zaplex\<channel>` registry Key handle.
     ///
-    /// Zap startup sequentially calls `read_value` on ~100 settings.
+    /// Zaplex startup sequentially calls `read_value` on ~100 settings.
     /// Each `CURRENT_USER.create(...)` call is a ~3ms synchronous system call,
     /// totaling 300ms+ (dominating the cold-startup `READ_USER_DEFAULTS_AND_INITIALIZE_SETTINGS` phase).
     /// The first successfully opened Key is cached here; subsequent reads reuse it,
@@ -23,7 +23,7 @@ pub struct RegistryBackedPreferences {
     cached_key: Mutex<Option<Key>>,
 }
 
-static ZAPLEX_REGISTRY_BASE_PATH: &str = "Software\\Zap\\";
+static ZAPLEX_REGISTRY_BASE_PATH: &str = "Software\\Zaplex\\";
 pub const KEY_NOT_FOUND_ERR: HRESULT = HRESULT::from_win32(0x80070002);
 
 impl RegistryBackedPreferences {
@@ -44,7 +44,7 @@ impl RegistryBackedPreferences {
         }
     }
 
-    /// Operates on the cached Zap registry Key via callback. First call invokes
+    /// Operates on the cached Zaplex registry Key via callback. First call invokes
     /// `CURRENT_USER.create(...)`; subsequent calls reuse the cached Key.
     /// If the Key lock is poisoned (previous panic), falls back to a one-time create
     /// without caching — behavior degrades but does not panic further.
@@ -60,7 +60,7 @@ impl RegistryBackedPreferences {
                 let key = CURRENT_USER
                     .create(self.app_key_path.clone())
                     .map_err(|e| {
-                        log::error!("unable to access Zap app key in Windows Registry: {e:#}");
+                        log::error!("unable to access Zaplex app key in Windows Registry: {e:#}");
                         super::Error::IoError(io::Error::from(e))
                     })?;
                 return f(&key);
@@ -71,7 +71,7 @@ impl RegistryBackedPreferences {
             let key = CURRENT_USER
                 .create(self.app_key_path.clone())
                 .map_err(|e| {
-                    log::error!("unable to access Zap app key in Windows Registry: {e:#}");
+                    log::error!("unable to access Zaplex app key in Windows Registry: {e:#}");
                     super::Error::IoError(io::Error::from(e))
                 })?;
             *guard = Some(key);

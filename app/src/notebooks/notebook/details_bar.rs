@@ -30,7 +30,7 @@ use crate::{
 use super::{super::active_notebook_data::ActiveNotebookData, NotebookAction, EDIT_BUTTON_MARGIN};
 
 /// Component to show details about a notebook:
-/// * Interactive breadcrumbs for its location within Zap Drive
+/// * Interactive breadcrumbs for its location within Zaplex Drive
 /// * The current editor of the notebook
 /// * Grab-the-baton UI controls
 pub struct DetailsBar {

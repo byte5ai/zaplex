@@ -118,7 +118,7 @@ impl ZaplexifySuccessBlock {
                 description: (if !output_grid.is_empty() {
                     "Run the following to automatically Zaplexify in the future:"
                 } else {
-                    "In remote subshells, Zap runs commands in the background to power completions, syntax highlighting, and other features."
+                    "In remote subshells, Zaplex runs commands in the background to power completions, syntax highlighting, and other features."
                 }).into(),
                 output_grid: output_grid.into(),
                 selection_handle: Default::default(),
@@ -157,7 +157,7 @@ impl ZaplexifySuccessBlock {
     pub fn render_title_ui(&self, theme: &WarpTheme, appearance: &Appearance) -> Box<dyn Element> {
         let header_contents = render::build_header_row(
             "Session Zaplexified",
-            Icon::new(UiIcon::Zap.into(), theme.active_ui_detail()),
+            Icon::new(UiIcon::Zaplex.into(), theme.active_ui_detail()),
             theme,
             appearance,
         )

@@ -101,7 +101,7 @@ pub enum Event {
     InvokeEnvironmentVariables { id: SyncId },
     /// Open a notebook identified by `id`.
     OpenNotebook { id: SyncId },
-    /// View the relevant object in the Zap Drive sidebar.
+    /// View the relevant object in the Zaplex Drive sidebar.
     ViewInWarpDrive { id: ObjectTypeAndId },
     /// Open a file at the given path.
     OpenFile {

@@ -422,7 +422,7 @@ pub enum AgentViewZeroStateAction {
         conversation_id: AIConversationId,
     },
     /// Click "×" button on the right side of title: permanently hide zero-state keystroke hints (including message bar row).
-    /// User can re-enable in "Settings → Zap Agent → AI Input".
+    /// User can re-enable in "Settings → Zaplex Agent → AI Input".
     HideZeroStateHints,
 }
 

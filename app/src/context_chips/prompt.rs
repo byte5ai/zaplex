@@ -97,7 +97,7 @@ pub struct PromptConfiguration {
 
     #[schemars(description = "Whether the prompt is displayed on the same line as the input.")]
     same_line_prompt_enabled: bool,
-    /// The separator to use as a trailing character at the end of Zap prompt, if any.
+    /// The separator to use as a trailing character at the end of Zaplex prompt, if any.
     #[schemars(description = "Trailing separator character for the prompt.")]
     separator: WarpPromptSeparator,
 }
@@ -196,7 +196,7 @@ impl Prompt {
         })
     }
 
-    /// Reset to the default Zap prompt.
+    /// Reset to the default Zaplex prompt.
     pub fn reset<C: UpdateModel + GetSingletonModelHandle>(
         &mut self,
         ctx: &mut C,
@@ -246,12 +246,12 @@ impl Prompt {
         }
     }
 
-    /// Whether same line prompt is enabled for Zap prompt.
+    /// Whether same line prompt is enabled for Zaplex prompt.
     pub fn same_line_prompt_enabled(&self) -> bool {
         self.config.same_line_prompt_enabled
     }
 
-    /// The separator to be used for the Zap prompt.
+    /// The separator to be used for the Zaplex prompt.
     pub fn separator(&self) -> WarpPromptSeparator {
         self.config.separator
     }
@@ -317,7 +317,7 @@ impl Entity for Prompt {
 impl SingletonEntity for Prompt {}
 
 impl PromptConfiguration {
-    /// The default Zap prompt, synthesized from legacy prompt settings.
+    /// The default Zaplex prompt, synthesized from legacy prompt settings.
     /// The order of chips is important and would affect a lot of users if rearranged.
     pub fn default_prompt() -> Self {
         Self::default_prompt_with_pr_chip_suppressed(false)

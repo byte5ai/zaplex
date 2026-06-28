@@ -416,7 +416,7 @@ fn write_log_bundle_zip_inner(zip_path: &Path, extras: &LogBundleExtras) -> Resu
 /// and any older logs for the active instance, written into the active
 /// log directory. Returns the resulting zip path.
 ///
-/// Used for the "show in file manager after bundling" flow (Help menu → View Zap Logs).
+/// Used for the "show in file manager after bundling" flow (Help menu → View Zaplex Logs).
 ///
 /// `extras` lets the caller append other diagnostic artifacts (MCP logs, autoupdate logs, diagnostic
 /// summaries, etc.); any missing or unreadable extra files are skipped and logged via `log::warn!`,

@@ -73,7 +73,7 @@ enum CodexServerEntry {
         #[serde(default)]
         env_vars: Vec<String>,
         /// Working directory for the server process.
-        /// Mapped to `working_directory` in Zap JSON.
+        /// Mapped to `working_directory` in Zaplex JSON.
         cwd: Option<String>,
     },
     /// A remote server reached over streamable HTTP.

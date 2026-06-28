@@ -109,7 +109,7 @@ pub struct PromptSuggestionBannerState {
     /// The server request token, used to construct a debug link (dogfood only).
     pub server_request_token: Option<String>,
 
-    /// Zap BYOP: chips generated when the model actively calls the `suggest_prompt` tool carry an action_id;
+    /// Zaplex BYOP: chips generated when the model actively calls the `suggest_prompt` tool carry an action_id;
     /// when accept/reject is called, `complete_suggest_prompt_action` must be called to close the oneshot channel
     /// so the BYOP loop gets the result and continues to the next iteration. `None` means this chip came from a different path
     /// (e.g., passive suggestion from MAA server side), no need to go through BYOP completion callback.

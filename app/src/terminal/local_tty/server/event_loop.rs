@@ -212,7 +212,7 @@ impl EventLoop {
             }
 
             // If we've been reparented to a different process, stop running -
-            // the original host Zap process died and we're now an orphan.
+            // the original host Zaplex process died and we're now an orphan.
             if nix::unistd::Pid::parent() != self.original_parent_pid {
                 log::info!("Detected a change in parent process; shutting down terminal server.");
                 break 'event_loop;

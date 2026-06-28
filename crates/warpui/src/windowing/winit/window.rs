@@ -90,7 +90,7 @@ pub(crate) struct WindowManager {
     windows: HashMap<WindowId, Rc<Window>>,
     event_loop_proxy: EventLoopProxy<CustomEvent>,
     window_ordering: Mutex<WindowOrderingState>,
-    /// We assume this won't change throughout the life of the Zap process.
+    /// We assume this won't change throughout the life of the Zaplex process.
     os_window_manager_name: OnceCell<Option<String>>,
     /// This is a client for talking to the Xorg server directly instead of through winit.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

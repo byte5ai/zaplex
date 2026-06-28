@@ -90,7 +90,7 @@ pub enum TipAction {
     AiCommandSearch,
     SaveNewLaunchConfig,
     WarpAI,
-    // This toggles Zap Drive rather than opening it. This enum can't directly be
+    // This toggles Zaplex Drive rather than opening it. This enum can't directly be
     // renamed because we serialize it into the welcome tips.
     ZapDrive,
     Changelog,

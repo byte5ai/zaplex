@@ -30,7 +30,7 @@ pub use localization::set_localizer;
 /// Shared by the intention slide's agent card checklist and the login slide's
 /// skip-login confirmation dialog so the two always stay in sync.
 pub const AI_FEATURES: &[&str] = &[
-    "Zap agents",
+    "Zaplex agents",
     "Oz local agents platform",
     "Next command predictions",
     "Prompt suggestions",
@@ -38,11 +38,11 @@ pub const AI_FEATURES: &[&str] = &[
     "Agents over SSH",
 ];
 
-/// User-facing names of the Zap Drive features enabled when the terminal
-/// intention is selected with Zap Drive turned on. Shared by the login slide's
+/// User-facing names of the Zaplex Drive features enabled when the terminal
+/// intention is selected with Zaplex Drive turned on. Shared by the login slide's
 /// skip-login confirmation dialog so the list stays in sync with any future
 /// surfaces that need it.
-pub const ZAPLEX_DRIVE_FEATURES: &[&str] = &["Zap Drive", "Session Sharing"];
+pub const ZAPLEX_DRIVE_FEATURES: &[&str] = &["Zaplex Drive", "Session Sharing"];
 
 pub mod components;
 mod visuals;

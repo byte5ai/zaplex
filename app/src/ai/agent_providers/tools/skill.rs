@@ -1,8 +1,8 @@
-//! `read_skill`: read Zap's Skill markdown template.
+//! `read_skill`: read Zaplex's Skill markdown template.
 //!
 //! Skills are user/project-defined, reusable workflows (`SKILL.md` file + optional metadata).
 //! After the model reads a skill, it can advance tasks following the steps the user expects.
-//! Zap maintains a `SkillManager` that indexes all available skills; they can be referenced
+//! Zaplex maintains a `SkillManager` that indexes all available skills; they can be referenced
 //! either by name (frontmatter `name` field), by absolute path, or by bundled ID.
 //!
 //! ## Input Contract

@@ -173,7 +173,7 @@ pub fn init(app: &mut AppContext) {
 }
 
 fn theme_chooser_items(theme_config: &WarpThemeConfig) -> Vec<ThemeChooserItem> {
-    // Zap decentralization: no more referral concept, all themes (including the two originally referral-gated themes)
+    // Zaplex decentralization: no more referral concept, all themes (including the two originally referral-gated themes)
     // are always visible to local users.
     let mut theme_items: Vec<ThemeChooserItem> = theme_config
         .theme_items()

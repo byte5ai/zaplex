@@ -465,7 +465,7 @@ fn make_skill(name: &str, provider_dir: &str) -> ParsedSkill {
         provider: get_provider_for_path(&PathBuf::from(format!(
             "/repo/{provider_dir}/skills/{name}/SKILL.md"
         )))
-        .unwrap_or(SkillProvider::Zap),
+        .unwrap_or(SkillProvider::Zaplex),
         scope: SkillScope::Project,
     }
 }

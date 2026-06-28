@@ -137,7 +137,7 @@ impl ResourceCenterMainView {
                             }
                             None => !is_tips_completed && !is_onboarded,
                         },
-                        // Expand Maximize Zap section once user has completed welcome tips,
+                        // Expand Maximize Zaplex section once user has completed welcome tips,
                         // and keep open after users have completed/skipped all tips
                         FeatureSection::MaximizeWarp => match ChannelState::app_version() {
                             Some(version) => {
@@ -394,7 +394,7 @@ impl ResourceCenterMainView {
                 .with_text_and_icon_label(
                     TextAndIcon::new(
                         TextAndIconAlignment::IconFirst,
-                        "Invite a friend to Zap",
+                        "Invite a friend to Zaplex",
                         Icon::new(SEND_SVG_PATH, appearance.theme().accent()),
                         MainAxisSize::Max,
                         MainAxisAlignment::Center,

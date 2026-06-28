@@ -48,7 +48,7 @@ pub struct SessionContext {
 
     cached_directory_entries: dashmap::DashMap<TypedPathBuf, Arc<Vec<EngineDirEntry>>>,
 
-    /// Snapshot of all Zap workflow aliases.
+    /// Snapshot of all Zaplex workflow aliases.
     workflow_aliases: HashMap<String, String>,
 }
 
@@ -230,7 +230,7 @@ impl GeneratorContext for SessionContext {
     ) -> Result<CommandOutput> {
         let mut env_vars = session_env_vars.unwrap_or_default();
         // We need to run the command with the PATH var set explicitly even if we have session env vars
-        // because if the user opened Zap through a parent process that didn't have the PATH var set
+        // because if the user opened Zaplex through a parent process that didn't have the PATH var set
         // (i.e. outside of a shell, for example opening the app via Finder),
         // the subshell won't inherit the PATH var, but we need the PATH var
         // to reference executables we might run as part of generators.

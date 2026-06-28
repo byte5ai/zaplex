@@ -137,7 +137,7 @@ impl CreateDocumentsExecutor {
             model.clear_streaming_documents_for_action(&conversation_id, action_id, ctx);
         });
 
-        // openWarp no longer pushes plan to Zap Drive; plan content written to local SQLite
+        // openWarp no longer pushes plan to Zaplex Drive; plan content written to local SQLite
         // ai_document_panes table via AIDocumentModel::enqueue_save. Users can view and
         // edit directly in right-side pane.
 

@@ -233,7 +233,7 @@ impl View for SuggestedAgentModeWorkflowModal {
         if let Some(modal) = &self.modal {
             ChildView::new(modal).finish()
         } else {
-            // Zap: this view is always attached to the workspace tree; modal=None by default is normal
+            // Zaplex: this view is always attached to the workspace tree; modal=None by default is normal
             // (cloud ShowSuggestions is disabled, chip won't appear, modal won't be populated).
             // Don't log a warning to avoid polluting the log every frame.
             Empty::new().finish()

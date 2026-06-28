@@ -82,9 +82,9 @@ fn regex_right() {
     #[rustfmt::skip]
     let blockgrid = mock_blockgrid("\
         testing66\r\n\
-        Zap\n\
+        Zaplex\n\
         123\r\n\
-        Zap\r\n\
+        Zaplex\r\n\
         123\
     ");
 
@@ -107,9 +107,9 @@ fn regex_left() {
     #[rustfmt::skip]
     let blockgrid = mock_blockgrid("\
         testing66\r\n\
-        Zap\n\
+        Zaplex\n\
         123\r\n\
-        Zap\r\n\
+        Zaplex\r\n\
         123\
     ");
 
@@ -131,7 +131,7 @@ fn regex_left() {
 fn nested_regex() {
     #[rustfmt::skip]
     let blockgrid = mock_blockgrid("\
-        Wa -> Zap -> rp\r\n\
+        Wa -> Zaplex -> rp\r\n\
         rp\
     ");
 
@@ -760,7 +760,7 @@ fn test_find_url_omits_trailing_periods() {
     );
 
     // Test that it handles a period in the middle of the URL path somewhere.
-    let blockgrid = mock_blockgrid("Visit https://github.com/warp.dev/Zap/issues.");
+    let blockgrid = mock_blockgrid("Visit https://github.com/warp.dev/Zaplex/issues.");
     assert_eq!(
         blockgrid
             .grid_handler

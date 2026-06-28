@@ -156,7 +156,7 @@ fn should_skip_scp_fallback(error: &InstallError) -> bool {
 }
 
 // ===========================================================================
-// Zap fork: dev-mode remote-server installation path
+// Zaplex fork: dev-mode remote-server installation path
 //
 // Upstream/release builds have the remote install script download pre-built
 // remote-server binaries from GitHub releases. However, during local source
@@ -317,12 +317,12 @@ async fn cross_compile_remote_server(backend: &DevBuildBackend) -> Result<PathBu
         remote_server::setup::DEV_REMOTE_PROFILE,
     );
     // First-time compilation of the entire warp typically takes several minutes.
-    // stdout/stderr are directly inherited to the terminal running Zap, so developers
+    // stdout/stderr are directly inherited to the terminal running Zaplex, so developers
     // can see cargo's real-time progress (otherwise completely silent, easy to think
     // it's stuck).
     log::info!(
         "dev remote-server: cross-compiling now, first time typically takes several minutes — \
-         cargo progress will be printed to the terminal running Zap"
+         cargo progress will be printed to the terminal running Zaplex"
     );
 
     let status = async {
@@ -380,7 +380,7 @@ async fn cross_compile_remote_server(backend: &DevBuildBackend) -> Result<PathBu
     if !status.success() {
         let code = status.code().unwrap_or(-1);
         return Err(anyhow!(
-            "cargo cross-compilation failed (exit {code}); see cargo output in the terminal running Zap"
+            "cargo cross-compilation failed (exit {code}); see cargo output in the terminal running Zaplex"
         ));
     }
 
@@ -662,7 +662,7 @@ impl RemoteTransport for SshTransport {
                 remote_server::setup::remote_server_binary()
             );
 
-            // Zap fork: DEBUG source build (no release tag) uses dev mode,
+            // Zaplex fork: DEBUG source build (no release tag) uses dev mode,
             // cross-compiling local `warp` and uploading instead of downloading stale GitHub release.
             // On failure (cross-compile prerequisites missing, etc.), print warning and fall back
             // to download-install, preserving dev experience. Release builds skip this entire block.

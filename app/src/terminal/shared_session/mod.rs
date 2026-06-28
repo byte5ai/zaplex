@@ -21,7 +21,7 @@ pub mod presence_manager;
 pub mod render_util;
 pub(crate) mod selections;
 pub mod settings;
-// Zap: removed share_modal (cloud shared session modal)
+// Zaplex: removed share_modal (cloud shared session modal)
 pub mod viewer;
 
 #[cfg(test)]

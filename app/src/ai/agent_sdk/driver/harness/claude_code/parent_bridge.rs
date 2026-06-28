@@ -6,7 +6,7 @@
 //! - `staged/` holds newly observed message IDs from the event stream.
 //! - `surfaced/` holds the fully hydrated records currently exposed to Claude.
 //! - `pending-hook-output.json` plus `pending-hook-output.ack` coordinates the
-//!   handoff between Zap's driver and the Claude hook process.
+//!   handoff between Zaplex's driver and the Claude hook process.
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;

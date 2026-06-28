@@ -715,7 +715,7 @@ impl<'a> WarpDriveRow<'a> {
     }
 }
 
-/// Generate a callback for calculating the Drag bounds within Zap Drive
+/// Generate a callback for calculating the Drag bounds within Zaplex Drive
 fn drag_bounds_callback() -> impl Fn(&PositionCache, Vector2F) -> Option<RectF> {
     move |position_cache, window: Vector2F| {
         let drive_index = position_cache.get_position(ZAPLEX_DRIVE_POSITION_ID)?;

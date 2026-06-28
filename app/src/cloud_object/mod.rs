@@ -1,10 +1,10 @@
-//! # Zap Localization Notes (Phase 2d-4b, 2026-05-11)
+//! # Zaplex Localization Notes (Phase 2d-4b, 2026-05-11)
 //!
-//! This module previously handled "cloud object" abstractions upstream in Zap, unifying descriptions
+//! This module previously handled "cloud object" abstractions upstream in Zaplex, unifying descriptions
 //! of Notebook / Workflow / EnvVar / Fact / MCP / ExecutionProfile / AIDocument and other object types
 //! that need to sync across devices.
 //!
-//! The cloud sync pipeline in Zap (RTC / UpdateManager / SyncQueue / ServerApiProvider) has been removed
+//! The cloud sync pipeline in Zaplex (RTC / UpdateManager / SyncQueue / ServerApiProvider) has been removed
 //! (see `docs/zap-cloud-removal-plan.md`), and this module is now a pure local object abstraction:
 //!
 //! - `StoredObject` trait → actual semantics are "local domain object trait", carrying metadata / permissions /
@@ -64,7 +64,7 @@ pub use server_types::*;
 
 /// Newtype wrapping a serialized model string.
 ///
-/// Zap (Wave 4): originally defined in `crate::server::sync_queue`; after SyncQueue was entirely removed,
+/// Zaplex (Wave 4): originally defined in `crate::server::sync_queue`; after SyncQueue was entirely removed,
 /// it was moved here. Multiple models' `serialized()` still returns it (used when writing to local sqlite).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerializedModel(String);
@@ -193,8 +193,8 @@ pub trait StoredObject: Debug {
         true
     }
 
-    /// Creates a new Zap Drive item for this object.  Returns None if this
-    /// object is not rendered in Zap Drive.
+    /// Creates a new Zaplex Drive item for this object.  Returns None if this
+    /// object is not rendered in Zaplex Drive.
     fn to_warp_drive_item(&self, appearance: &Appearance) -> Option<Box<dyn WarpDriveItem>>;
 
     /// Returns the web link of this object. Will return none if we do not support web links
@@ -480,7 +480,7 @@ pub trait StoredObjectModel: Debug + Clone + Send + Sync {
     }
 
     /// Creates a new zap drive item for this model type. Returns None
-    /// if this object does not render in Zap Drive.
+    /// if this object does not render in Zaplex Drive.
     fn to_warp_drive_item(
         &self,
         id: SyncId,
@@ -488,10 +488,10 @@ pub trait StoredObjectModel: Debug + Clone + Send + Sync {
         object: &Self::StoredObjectType,
     ) -> Option<Box<dyn WarpDriveItem>>;
 
-    /// Returns the display name for this model (e.g. to show in the Zap Drive index)
+    /// Returns the display name for this model (e.g. to show in the Zaplex Drive index)
     fn display_name(&self) -> String;
 
-    /// Sets the display name to show in the Zap Drive Index.  Setting the name
+    /// Sets the display name to show in the Zaplex Drive Index.  Setting the name
     /// is not currently supported by all object types, hence the default empty
     /// implementation.
     fn set_display_name(&mut self, _name: &str) {}
@@ -824,8 +824,8 @@ where
 }
 
 /// Extracts the server id and object type from a (caller validated) Drive link.
-/// Intended use is deriving metadata from links such that Zap objects
-/// can be opened natively in Zap with no web interaction.
+/// Intended use is deriving metadata from links such that Zaplex objects
+/// can be opened natively in Zaplex with no web interaction.
 pub fn extract_server_id_and_object_type_from_warp_drive_link(
     url: &Url,
 ) -> Option<ZapDriveObjectArgs> {

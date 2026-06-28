@@ -836,19 +836,19 @@ impl SessionInfo {
 /// which happens *after* the session is bootstrapped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BootstrapSessionType {
-    /// The session host is the same host where Zap is running.
+    /// The session host is the same host where Zaplex is running.
     Local,
 
-    /// The session host is a different host from where Zap is running.
+    /// The session host is a different host from where Zaplex is running.
     ZaplexifiedRemote,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionType {
-    /// The session host is the same host where Zap is running.
+    /// The session host is the same host where Zaplex is running.
     Local,
 
-    /// The session host is a different host from where Zap is running.
+    /// The session host is a different host from where Zaplex is running.
     /// Note that we only know this for sure when we Zaplexify a block.
     ///
     /// `host_id` is `Some` when the remote server feature flag is enabled and
@@ -1529,7 +1529,7 @@ impl Display for Session {
     }
 }
 
-/// Returns the hostname for the local machine where Zap is running.
+/// Returns the hostname for the local machine where Zaplex is running.
 pub fn get_local_hostname() -> Result<String> {
     cfg_if::cfg_if! {
         if #[cfg(not(target_family = "wasm"))] {

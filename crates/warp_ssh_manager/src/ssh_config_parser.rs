@@ -16,7 +16,7 @@ use std::path::PathBuf;
 ///
 /// Fields are a subset of OpenSSH `ssh_config` — the minimal set selected by
 /// PRODUCT.md decisions I/J/K. `alias` is the literal alias from the `Host` line,
-/// used as the `host` field when importing to `SshServerInfo`, so that when Zap
+/// used as the `host` field when importing to `SshServerInfo`, so that when Zaplex
 /// subsequently starts `ssh`, OpenSSH can still apply advanced directives
 /// (`ProxyJump` etc.) corresponding to this alias in `~/.ssh/config`.
 #[derive(Clone, Debug, PartialEq, Eq)]

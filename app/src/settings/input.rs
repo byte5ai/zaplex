@@ -156,7 +156,7 @@ define_settings_group!(InputSettings,
         // Control whether shortcut hints are shown in Agent view zero-state:
         // 1) "ctrl+shift+enter start new conversation / /model switch model / esc return to terminal" three lines in zero_state_block;
         // 2) "? view help / / view commands / open conversation / enter code review" four items at Agent message bar bottom.
-        // After closing, user can re-enable in "Settings → Zap Agent → AI Input".
+        // After closing, user can re-enable in "Settings → Zaplex Agent → AI Input".
         show_agent_zero_state_hints: ShowAgentZeroStateHints {
             type: bool,
             default: true,
@@ -213,7 +213,7 @@ impl InputSettings {
         };
 
         // PS1 input is only valid when honor_ps1 is active. If the user has PS1 selected
-        // but the shell has not signalled PS1 support, fall back to Zap input.
+        // but the shell has not signalled PS1 support, fall back to Zaplex input.
         let is_ps1_enabled = *SessionSettings::as_ref(app).honor_ps1
             && computed_input_type_value == InputBoxType::Classic;
         if is_ps1_enabled {

@@ -32,10 +32,10 @@ use super::Message;
 /// Byte sequence to emulate the user pressing ENTER, used to execute a command in the shell.
 const COMMAND_ENTER: &[u8] = &[escape_sequences::C0::CR, escape_sequences::C0::LF];
 /// Used to let the shell know we are switching to the PS1 prompt via a bindkey \ep. This will
-/// restore the PS1 from the saved PS1 value (we had unset the PS1 for Zap prompt).
+/// restore the PS1 from the saved PS1 value (we had unset the PS1 for Zaplex prompt).
 const SWITCH_TO_PS1_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'p'];
-/// Used to let the shell know we are switching to the Zap prompt via a bindkey \ew. This will
-/// unset the PS1 to ensure we don't have a double prompt (PS1 and Zap prompt).
+/// Used to let the shell know we are switching to the Zaplex prompt via a bindkey \ew. This will
+/// unset the PS1 to ensure we don't have a double prompt (PS1 and Zaplex prompt).
 const SWITCH_TO_ZAPLEX_PROMPT_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'w'];
 
 /// Represents a single call to write bytes to the PTY asynchronously.
@@ -149,7 +149,7 @@ impl<T: EventLoopSender> PtyController<T> {
                 me.tmux_control_mode = None;
             }
             ModelEvent::HonorPS1OutOfSync => {
-                // We force re-sync the PS1 state of Zap settings with the shell's environment variable, $ZAPLEX_HONOR_PS1, via
+                // We force re-sync the PS1 state of Zaplex settings with the shell's environment variable, $ZAPLEX_HONOR_PS1, via
                 // a bindkey (which triggers a shell function).
                 let honor_ps1 = *SessionSettings::as_ref(ctx).honor_ps1;
                 if honor_ps1 {
@@ -289,7 +289,7 @@ impl<T: EventLoopSender> PtyController<T> {
         }
     }
 
-    /// Sends bindkey to notify shell process to switch to Zap prompt logic for prompt
+    /// Sends bindkey to notify shell process to switch to Zaplex prompt logic for prompt
     /// with the combined prompt/command grid (we unset the PS1, but save the value for potential
     /// future restoration).
     pub fn send_switch_to_warp_prompt_bindkey(&mut self, ctx: &mut ModelContext<Self>) {

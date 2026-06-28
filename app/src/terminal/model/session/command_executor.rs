@@ -336,7 +336,7 @@ fn new_command_executor_for_local_tty_session(
                 // This code path exists as a fail-safe for disabling in-band
                 // generators if some unforeseen severe issue surfaces during or
                 // shortly after subshells launch. The setting that triggers this
-                // codepath is only accessible via a user defaults command that a Zap
+                // codepath is only accessible via a user defaults command that a Zaplex
                 // engineer would have given to the user via some first-hand
                 // correspondence (e.g. GitHub issues).
                 log::info!("creating a no-op executor!");

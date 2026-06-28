@@ -81,7 +81,7 @@ pub(super) struct State {
     pub obfuscate_secrets: ObfuscateSecrets,
 
     /// Whether this Grid is in a shell context which supports handling the emoji presentation selector
-    /// correctly. Notably, Zsh does NOT support this well in bracketed paste mode (which we use for all Zap
+    /// correctly. Notably, Zsh does NOT support this well in bracketed paste mode (which we use for all Zaplex
     /// commands), which can lead to cursor misalignment issues.
     pub supports_emoji_presentation_selector: bool,
 
@@ -408,7 +408,7 @@ impl ansi::Handler for GridHandler {
                 // was introduced[2] - version 277.
                 //
                 // Since we didn't want to claim xterm functionalities that we haven't yet implemented in
-                // Zap, rather than passing the higher `Pv` value, we decided to use one of the
+                // Zaplex, rather than passing the higher `Pv` value, we decided to use one of the
                 // hardcoded ones. `0;95;0` is set what iTerm2 sends.
 
                 // [1] https://github.com/vim/vim/blob/20c370d9f2ee89cb854054edf71f5004f6efff77/src/term.c#L4630
@@ -428,7 +428,7 @@ impl ansi::Handler for GridHandler {
     fn report_xtversion<W: std::io::Write>(&mut self, writer: &mut W) {
         log::trace!("Reporting xtversion");
         let version = ChannelState::app_version().unwrap_or("");
-        let _ = writer.write_all(format!("\x1bP>|Zap({version})\x1b\\").as_bytes());
+        let _ = writer.write_all(format!("\x1bP>|Zaplex({version})\x1b\\").as_bytes());
     }
 
     fn device_status<W: std::io::Write>(&mut self, writer: &mut W, arg: usize) {

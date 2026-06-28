@@ -57,7 +57,7 @@ impl ProviderCommandRunner {
             return Err(anyhow::anyhow!("User is not on a team"));
         }
 
-        println!("Provider OAuth setup for {slug} is disabled in Zap.");
+        println!("Provider OAuth setup for {slug} is disabled in Zaplex.");
 
         ctx.terminate_app(TerminationMode::ForceTerminate, None);
 

@@ -1,6 +1,6 @@
 use super::ChannelState;
 
-// Zap Wave 5-5: `derive_http_origin_from_ws_url` call + 3 wss/ws path tests
+// Zaplex Wave 5-5: `derive_http_origin_from_ws_url` call + 3 wss/ws path tests
 // to be physically deleted along with `ChannelState::rtc_http_url()`.
 
 /// `ChannelState::init()` (the static default for OSS builds) must satisfy

@@ -1,7 +1,7 @@
 //! This module should houses all horizontal/cross-cutting AI functionality throughout
-//! Zap (including Agent Mode).
+//! Zaplex (including Agent Mode).
 //!
-//! The side panel Zap AI implementation lives in `super::ai_assistant`.
+//! The side panel Zaplex AI implementation lives in `super::ai_assistant`.
 pub(crate) mod agent;
 pub(crate) mod agent_conversations_model;
 pub(crate) mod agent_events;
@@ -38,12 +38,12 @@ pub use request_usage_model::*;
 use warpui::AppContext;
 #[cfg(not(target_family = "wasm"))]
 pub mod agent_sdk;
-// Zap Wave 7-3: `ambient_agent_settings` was physically removed along with the ambient-agent UI subsystem.
-// Zap Wave 7-2: the CLI / form / environment-preparation paths for Cloud environments have been removed;
+// Zaplex Wave 7-3: `ambient_agent_settings` was physically removed along with the ambient-agent UI subsystem.
+// Zaplex Wave 7-2: the CLI / form / environment-preparation paths for Cloud environments have been removed;
 // the local object data types are still kept here for ObjectStoreModel deserialization and existing view filtering.
 pub mod execution_profiles;
 pub mod facts;
-// Zap Wave 6-8: `generate_block_title` was removed along with the
+// Zaplex Wave 6-8: `generate_block_title` was removed along with the
 // `BlockClient::generate_shared_block_title` stub -- its only consumer was the BlockClient trait signature, with no other local code path.
 pub(crate) mod loading;
 pub mod mcp;

@@ -43,7 +43,7 @@ pub enum LinkTarget {
         /// The base session when the link was resolved. It's stored here in case it changes
         /// between resolving and opening the link.
         session: Arc<Session>,
-        /// Whether or not this file is a Markdown file viewable in Zap.
+        /// Whether or not this file is a Markdown file viewable in Zaplex.
         is_markdown: bool,
     },
     LocalDirectory {
@@ -261,7 +261,7 @@ impl NotebookLinks {
 
     /// Open a resolved link:
     /// * URLs are opened in the web browser or system-default application.
-    /// * Markdown files are opened in Zap (if the `FileNotebooks` feature flag is enabled).
+    /// * Markdown files are opened in Zaplex (if the `FileNotebooks` feature flag is enabled).
     /// * Other files are opened in the configured editor or system-default application.
     pub fn open(&self, link: LinkTarget, ctx: &mut ModelContext<Self>) {
         match link {
@@ -303,7 +303,7 @@ impl NotebookLinks {
                 is_markdown: true,
                 ..
             } => {
-                // The default action for Markdown file links is to open them in Zap. As a
+                // The default action for Markdown file links is to open them in Zaplex. As a
                 // secondary action, open them in an external app.
                 open_file(path.clone(), *line_and_column, ctx)
             }
@@ -420,7 +420,7 @@ pub enum LinkEvent {
     /// resolution has changed.
     RefreshLinks,
     #[cfg(feature = "local_fs")]
-    /// Emitted when a file should be opened in Zap (code editor or markdown viewer).
+    /// Emitted when a file should be opened in Zaplex (code editor or markdown viewer).
     OpenFileWithTarget {
         path: PathBuf,
         target: FileTarget,

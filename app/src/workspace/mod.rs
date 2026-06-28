@@ -1160,7 +1160,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Workspace") & id!(flags::IS_ANY_AI_ENABLED))
         .with_group(bindings::BindingGroup::WarpAi.as_str())
         // We use the same custom action as AM so that we don't have
-        // two mac menu items for AM vs Zap AI since they are mutually exclusive.
+        // two mac menu items for AM vs Zaplex AI since they are mutually exclusive.
         .with_custom_action(CustomAction::NewAgentModePane),
     ]);
 
@@ -1343,7 +1343,7 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
         )
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
-        // Zap Wave 6-8: `workspace:show_settings_shared_blocks_page` keybinding physically removed
+        // Zaplex Wave 6-8: `workspace:show_settings_shared_blocks_page` keybinding physically removed
         // together with `ShowBlocksView` settings page and `CustomAction::ViewSharedBlocks`.
         EditableBinding::new(
             "workspace:show_settings_keyboard_shortcuts_page",
@@ -1397,9 +1397,9 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
         )
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
-        // Zap Wave 6-8: `workspace:show_settings_referrals_page` keybinding physically removed
+        // Zaplex Wave 6-8: `workspace:show_settings_referrals_page` keybinding physically removed
         // with `ReferralsPageView` settings page.
-        // Zap Wave 7-3: `workspace:show_settings_environments_page` keybinding physically removed
+        // Zaplex Wave 7-3: `workspace:show_settings_environments_page` keybinding physically removed
         // with ambient-agent UI subsystem.
         EditableBinding::new(
             "workspace:show_mcp_servers_settings_page",

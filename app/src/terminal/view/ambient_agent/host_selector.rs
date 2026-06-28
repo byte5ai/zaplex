@@ -39,13 +39,13 @@ const MENU_HEADER_LABEL: &str = "Execution host";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Host {
-    Zap,
+    Zaplex,
 }
 
 impl Host {
     fn display_name(self) -> &'static str {
         match self {
-            Host::Zap => "Zap",
+            Host::Zaplex => "Zaplex",
         }
     }
 }
@@ -77,7 +77,7 @@ impl HostSelector {
         // field is exercised at construction time (not just written to on
         // `SelectHost`), so it stays out of clippy's `field is never read`
         // warning while still serving as the source of truth for the label.
-        let selected = Host::Zap;
+        let selected = Host::Zaplex;
 
         let button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new(selected.display_name(), NakedHeaderButtonTheme)
@@ -190,7 +190,7 @@ fn build_menu_items(
         )
     };
 
-    vec![header, item_for(Host::Zap)]
+    vec![header, item_for(Host::Zaplex)]
 }
 
 impl Entity for HostSelector {

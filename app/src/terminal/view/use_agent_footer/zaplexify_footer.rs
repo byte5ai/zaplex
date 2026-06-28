@@ -37,7 +37,7 @@ impl ZaplexifyFooterView {
                 crate::t!("terminal-zaplexify-subshell"),
                 AgentFooterButtonTheme::new(None),
             )
-            .with_icon(Icon::Zap)
+            .with_icon(Icon::Zaplex)
             .with_size(button_size)
             .with_tooltip(crate::t!("terminal-zaplexify-subshell-tooltip"))
             .with_tooltip_alignment(TooltipAlignment::Left)

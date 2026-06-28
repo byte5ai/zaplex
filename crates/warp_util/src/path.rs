@@ -1,4 +1,4 @@
-//! This module contains utilities for dealing with file/directory paths throughout Zap.
+//! This module contains utilities for dealing with file/directory paths throughout Zaplex.
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env::{self, VarError};

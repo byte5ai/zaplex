@@ -1,4 +1,4 @@
-//! Context chips built into Zap
+//! Context chips built into Zaplex
 
 use chrono::Local;
 use warp_util::path::user_friendly_path;

@@ -102,7 +102,7 @@ impl Pipeline {
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             // Don't use a pipeline cache. Most desktop GPU drivers have their own internal caches,
-            // so we are unlikely to get much value out of this for the platforms Zap supports.
+            // so we are unlikely to get much value out of this for the platforms Zaplex supports.
             cache: None,
         });
 

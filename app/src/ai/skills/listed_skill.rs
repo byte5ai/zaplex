@@ -9,7 +9,7 @@ pub struct SkillDescriptor {
     pub description: String,
     /// The scope of the skill.
     pub scope: SkillScope,
-    /// The provider/origin of the skill (Claude, Codex, or Zap).
+    /// The provider/origin of the skill (Claude, Codex, or Zaplex).
     /// None if the skill path didn't match a known provider directory.
     pub provider: SkillProvider,
     /// Override icon for this skill. When set, rendering code should use this
@@ -26,7 +26,7 @@ impl SkillDescriptor {
 
     pub fn new_bundled(id: String, skill: ParsedSkill, icon: Icon) -> Self {
         Self {
-            provider: SkillProvider::Zap,
+            provider: SkillProvider::Zaplex,
             scope: SkillScope::Bundled,
             reference: SkillReference::BundledSkillId(id),
             name: skill.name,

@@ -1,5 +1,5 @@
 // We can use `std::process:Command` here because this is invoked within a build script,
-// _not_ within the Zap binary (where it could cause a terminal to temporarily flash on
+// _not_ within the Zaplex binary (where it could cause a terminal to temporarily flash on
 // Windows).
 #![allow(clippy::disallowed_types)]
 
@@ -168,7 +168,7 @@ fn generate_channel_config_if_needed(target_family: &str, target_os: &str) {
     let config_bin = "warp-channel-config";
 
     // Check if the config binary is available on PATH. If not, we can't generate embedded
-    // configs. This is expected for external contributors building Zap OSS.
+    // configs. This is expected for external contributors building Zaplex OSS.
     if Command::new(config_bin)
         .arg("--help")
         .stdout(std::process::Stdio::null())
@@ -286,7 +286,7 @@ fn copy_async_assets() {
     }
 }
 
-/// Copies the DLLs needed to run Zap on Windows.
+/// Copies the DLLs needed to run Zaplex on Windows.
 ///
 /// They are organized as follows:
 /// - `conpty.dll`
@@ -367,19 +367,19 @@ fn embed_resource_file(target_dir: &Path) {
     use std::io::Write;
 
     let version = env::var("GIT_RELEASE_TAG").unwrap_or("v0".to_owned());
-    // Default value aligns with publisher and is set to "Zap", aligned globally with
-    // `script/windows/bundle.ps1` OSS branch (`$APP_NAME = 'Zap'`) + AUMID `dev.zap.Zap` + Cargo bundle
+    // Default value aligns with publisher and is set to "Zaplex", aligned globally with
+    // `script/windows/bundle.ps1` OSS branch (`$APP_NAME = 'Zaplex'`) + AUMID `dev.zap.Zaplex` + Cargo bundle
     // metadata. Windows Task Manager's process grouping name actually comes from PE resources
-    // `FileDescription` / `ProductName` (not the window title), so if we fall back to default "Zap" here,
-    // a dev binary built directly via `cargo build` will display as `Zap(N)` in Task Manager.
+    // `FileDescription` / `ProductName` (not the window title), so if we fall back to default "Zaplex" here,
+    // a dev binary built directly via `cargo build` will display as `Zaplex(N)` in Task Manager.
     // Upstream official CI pipeline overrides this explicitly via `export ZAPLEX_APP_NAME=...` before calling, unaffected.
-    let app_name = env::var("ZAPLEX_APP_NAME").unwrap_or_else(|_| "Zap".to_owned());
+    let app_name = env::var("ZAPLEX_APP_NAME").unwrap_or_else(|_| "Zaplex".to_owned());
     let bin_name = env::var("CARGO_BIN_NAME").unwrap_or("oss".to_owned());
-    // Override with `ZAPLEX_APP_PUBLISHER`; default aligns with installer / AUMID as "Zap".
+    // Override with `ZAPLEX_APP_PUBLISHER`; default aligns with installer / AUMID as "Zaplex".
     // Keep installer `MyAppPublisher`, Cargo bundle metadata `copyright`, and process AUMID
-    // `dev.zap.Zap` globally aligned across three places, avoiding Windows Shell missing the
+    // `dev.zap.Zaplex` globally aligned across three places, avoiding Windows Shell missing the
     // icon cache due to publisher / product name fingerprint mismatch.
-    let publisher = env::var("ZAPLEX_APP_PUBLISHER").unwrap_or_else(|_| "Zap".to_owned());
+    let publisher = env::var("ZAPLEX_APP_PUBLISHER").unwrap_or_else(|_| "Zaplex".to_owned());
     let (ver_major, ver_minor, ver_patch, ver_build) = parse_file_version_quad(&version);
 
     let icon_path = Path::new("channels")

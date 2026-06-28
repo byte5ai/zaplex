@@ -13,7 +13,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "general.show_warning_before_quitting",
-        description: "Whether to show a warning dialog before quitting Zap.",
+        description: "Whether to show a warning dialog before quitting Zaplex.",
     },
     quit_on_last_window_closed: QuitOnLastWindowClosed {
         type: bool,
@@ -22,7 +22,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "general.quit_on_last_window_closed",
-        description: "Whether to quit Zap when the last window is closed.",
+        description: "Whether to quit Zaplex when the last window is closed.",
     },
     restore_session: RestoreSession {
         type: bool,
@@ -31,7 +31,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "general.restore_session",
-        description: "Whether to restore the previous session when Zap starts up.",
+        description: "Whether to restore the previous session when Zaplex starts up.",
     },
     persist_conversations: PersistConversations {
         type: bool,
@@ -100,7 +100,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Never,
         private: true,
     },
-    // One-time flag tracking whether the Zap launch modal has already been
+    // One-time flag tracking whether the Zaplex launch modal has already been
     // shown to the user. Not user-visible; modeled as a setting so it's only
     // shown once per user regardless of the number of devices they use.
     did_check_to_trigger_zap_launch_modal: DidShowZapLaunchModal {

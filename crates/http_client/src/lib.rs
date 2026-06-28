@@ -26,23 +26,23 @@ pub mod proxy;
 pub use proxy::{ProxyConfig, ProxyMode, current_proxy_config, set_global_proxy_config};
 
 pub mod headers {
-    /// Custom Zap header indicating the version of the Zap app.
+    /// Custom Zaplex header indicating the version of the Zaplex app.
     pub const CLIENT_RELEASE_VERSION_HEADER_KEY: &str = "X-Zap-Client-Version";
 
-    /// Custom Zap header indicating the OS category the request was sent from.
+    /// Custom Zaplex header indicating the OS category the request was sent from.
     pub(crate) const ZAPLEX_OS_CATEGORY: &str = "X-Zap-OS-Category";
-    /// Custom Zap header indicating the OS name the request was sent from. On Linux this is the
+    /// Custom Zaplex header indicating the OS name the request was sent from. On Linux this is the
     /// name of the distribution. On all other platforms it should be equivalent to
     /// `ZAPLEX_OS_CATEGORY`.
     pub(crate) const ZAPLEX_OS_NAME: &str = "X-Zap-OS-Name";
-    /// Custom Zap header indicating the version of the operating system. On Linux this is the
+    /// Custom Zaplex header indicating the version of the operating system. On Linux this is the
     /// version of the distribution, not the Linux kernel version.
     pub(crate) const ZAPLEX_OS_VERSION: &str = "X-Zap-OS-Version";
 
-    /// Custom Zap header indicating the linux kernel version. This is only sent from Linux.
+    /// Custom Zaplex header indicating the linux kernel version. This is only sent from Linux.
     pub(crate) const ZAPLEX_OS_LINUX_KERNEL_VERSION: &str = "X-Zap-OS-Linux-Kernel-Version";
 
-    /// Custom Zap header indicating the client role. We don't use the User-Agent header
+    /// Custom Zaplex header indicating the client role. We don't use the User-Agent header
     /// because it can't be set from WASM.
     pub(crate) const ZAPLEX_CLIENT_ID: &str = "X-Zap-Client-ID";
 }

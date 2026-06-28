@@ -253,13 +253,13 @@ pub enum WorkspaceAction {
         tab_position: RectF,
     },
     DropTab,
-    /// Toggles the left panel. In Code Mode V1 this toggles Zap Drive.
+    /// Toggles the left panel. In Code Mode V1 this toggles Zaplex Drive.
     /// In Code Mode V2 this toggles the left panel which contains both the project explorer and
-    /// Zap Drive. This happens as explicit action from the user.
+    /// Zaplex Drive. This happens as explicit action from the user.
     ToggleLeftPanel,
-    /// Toggles directly to the Zap Drive tab of the left panel in Code Mode V2
+    /// Toggles directly to the Zaplex Drive tab of the left panel in Code Mode V2
     ToggleWarpDrive,
-    /// Unconditionally opens Zap Drive. This is used in the case of user lifecycle
+    /// Unconditionally opens Zaplex Drive. This is used in the case of user lifecycle
     /// events like new user onboarding or when the user joins a team.
     ZapDrive,
     /// Toggles the right panel. This happens as an explicit action from the user.
@@ -319,7 +319,7 @@ pub enum WorkspaceAction {
     },
     // Decentralized branch: `Reauth` / `SignupAnonymousUser` / `SignInAnonymousWebUser` have been removed.
     OpenLink(String),
-    /// On WASM, opens a given URL in the desktop Zap app (if installed) or redirects to download page.
+    /// On WASM, opens a given URL in the desktop Zaplex app (if installed) or redirects to download page.
     #[cfg(target_family = "wasm")]
     OpenLinkOnDesktop(url::Url),
     ReopenClosedSession,
@@ -344,7 +344,7 @@ pub enum WorkspaceAction {
     },
     TerminateApp,
     CloseWindow,
-    /// Help the user call the Zap executable with the [`crate::args::DEBUG_DUMP_FLAG`].
+    /// Help the user call the Zaplex executable with the [`crate::args::DEBUG_DUMP_FLAG`].
     DumpDebugInfo,
     /// Log review comment send eligibility for panes in the active tab.
     LogReviewCommentSendStatusForActiveTab,
@@ -386,7 +386,7 @@ pub enum WorkspaceAction {
     },
     OpenAIFactCollection,
     OpenMCPServerCollection,
-    // Zap Wave 7-3: `OpenEnvironmentManagementPane` WorkspaceAction physically removed along with ambient-agent UI subsystem.
+    // Zaplex Wave 7-3: `OpenEnvironmentManagementPane` WorkspaceAction physically removed along with ambient-agent UI subsystem.
     ToggleAIDocumentPane {
         document_id: AIDocumentId,
         document_version: AIDocumentVersion,
@@ -474,10 +474,10 @@ pub enum WorkspaceAction {
     QueuePromptForConversation {
         prompt: String,
     },
-    /// Install the Zap CLI command to /usr/local/bin
+    /// Install the Zaplex CLI command to /usr/local/bin
     #[cfg(target_os = "macos")]
     InstallCLI,
-    /// Uninstall the Zap CLI command from /usr/local/bin
+    /// Uninstall the Zaplex CLI command from /usr/local/bin
     #[cfg(target_os = "macos")]
     UninstallCLI,
     UndoRevertInCodeReviewPane {
@@ -519,10 +519,10 @@ pub enum WorkspaceAction {
     /// Reset the AWS Bedrock login banner dismissed state (for debugging).
     #[cfg(debug_assertions)]
     DebugResetAwsBedrockLoginBannerDismissed,
-    /// Open the Zap Launch Modal (for debugging)
+    /// Open the Zaplex Launch Modal (for debugging)
     #[cfg(debug_assertions)]
     OpenZapLaunchModal,
-    /// Reset the Zap launch modal dismissed state (for debugging)
+    /// Reset the Zaplex launch modal dismissed state (for debugging)
     #[cfg(debug_assertions)]
     ResetZapLaunchModalState,
     /// Install the opencode-warp plugin from GitHub into the global opencode config.
@@ -875,7 +875,7 @@ impl WorkspaceAction {
             FileRenamed { .. } => false, // File rename doesn't change workspace state
             #[cfg(feature = "local_fs")]
             FileDeleted { .. } => false, // File deletion doesn't change workspace state
-            // Zap Wave 7-3: `OpenEnvironmentManagementPane` WorkspaceAction physically removed along with ambient-agent UI subsystem.
+            // Zaplex Wave 7-3: `OpenEnvironmentManagementPane` WorkspaceAction physically removed along with ambient-agent UI subsystem.
             #[cfg(target_os = "linux")]
             DismissWaylandCrashRecoveryBannerAndOpenLink => false,
             #[cfg(target_family = "wasm")]

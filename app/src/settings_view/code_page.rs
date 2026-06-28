@@ -1,4 +1,4 @@
-//! Code settings page: after Zap's full LSP stack + persisted workspace history sunset,
+//! Code settings page: after Zaplex's full LSP stack + persisted workspace history sunset,
 //! this page only retains local switches related to "editor and code review".
 //!
 //! Historically this also hosted LSP management subpage + codebase indexing, both now sunset;

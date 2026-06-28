@@ -6,7 +6,7 @@
 //!   3. Add a case for `Display` + `to_locale_str`
 //!
 //! Language switching takes full effect after restart (already-rendered UI text won't auto-reflow; views need rebuilding).
-//! Settings page dropdown should include a hint: "takes full effect after restarting Zap".
+//! Settings page dropdown should include a hint: "takes full effect after restarting Zaplex".
 
 use enum_iterator::Sequence;
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,7 @@ use warp_core::settings::{macros::define_settings_group, SupportedPlatforms, Syn
     settings_value::SettingsValue,
 )]
 #[schemars(
-    description = "The language used in Zap's user interface.",
+    description = "The language used in Zaplex's user interface.",
     rename_all = "snake_case"
 )]
 pub enum Language {
@@ -68,6 +68,6 @@ define_settings_group!(LanguageSettings, settings: [
         private: false,
         storage_key: "Language",
         toml_path: "appearance.language",
-        description: "The language used in Zap's user interface. Falls back to English when the chosen language is not fully translated.",
+        description: "The language used in Zaplex's user interface. Falls back to English when the chosen language is not fully translated.",
     },
 ]);
