@@ -102,10 +102,13 @@ impl EventLoop {
             {
                 me.reattach(ctx);
             }
-            RemoteServerManagerEvent::SessionConnectionFailed { session_id, .. }
-                if *session_id == me.connection_session_id =>
+            RemoteServerManagerEvent::SessionConnectionFailed {
+                session_id,
+                phase,
+                error,
+            } if *session_id == me.connection_session_id =>
             {
-                me.on_connect_failed();
+                me.on_connect_failed(&format!("{phase:?}"), error);
             }
             _ => {}
         });
@@ -226,15 +229,16 @@ impl EventLoop {
         });
     }
 
-    fn on_connect_failed(&mut self) {
+    fn on_connect_failed(&mut self, phase: &str, error: &str) {
         log::error!(
-            "Daemon session transport failed to connect for {:?}",
+            "daemon connect failed for {:?} at {phase}: {error}",
             self.connection_session_id
         );
-        // Stage 3+: surface a clear error block into the terminal model. For now,
-        // drop the pending open so a later spurious event can't reopen it.
+        // Surface the failure in the tab so the user sees *why* instead of a
+        // blank/hung view (the connection never produced any PTY output).
+        self.write_notice(&format!("connection failed ({phase}): {error}"));
+        // Drop the pending open so a later spurious event can't reopen it.
         self.pending_open = None;
-        self.channel_event_listener.send_wakeup_event();
     }
 
     fn on_session_opened(&mut self, pty_session_id: String, ctx: &mut ModelContext<Self>) {
@@ -289,9 +293,19 @@ impl EventLoop {
             "Daemon session {:?} exited (code {exit_code:?})",
             self.pty_session_id
         );
-        // Stage 3+: surface the exit to the terminal model / close the block.
-        // For now, request a repaint so the final output is shown.
-        self.channel_event_listener.send_wakeup_event();
+        let notice = match exit_code {
+            Some(code) => format!("session ended (exit code {code})"),
+            None => "session ended".to_string(),
+        };
+        self.write_notice(&notice);
+    }
+
+    /// Writes a Zaplex notice line (e.g. a connection error or session-ended
+    /// message) into the terminal via the normal ANSI path, so the user sees it
+    /// in the tab rather than a blank/hung view. Rendered in bold red.
+    fn write_notice(&mut self, text: &str) {
+        let line = format!("\r\n\x1b[1;31m[zaplex] {text}\x1b[0m\r\n");
+        self.process_pty_bytes(line.as_bytes());
     }
 
     /// Processes a byte slice through the [`Processor`], identical to the
@@ -488,6 +502,25 @@ mod tests {
                 assert_eq!(me.pty_session_id.as_deref(), Some("pty-late"));
                 assert!(me.pending_input.is_empty(), "buffer must flush on open");
             });
+        });
+    }
+
+    /// A connect failure must surface in the tab — `on_connect_failed` renders a
+    /// notice through the terminal (so the user sees *why* instead of a blank /
+    /// hung view), which requests a repaint.
+    #[test]
+    fn connect_failure_writes_a_visible_notice() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(11u64);
+            let (_manager, event_loop, _model, wakeups_rx) = start_adopted_loop(&mut app, conn);
+            drain(&wakeups_rx);
+            event_loop.update(&mut app, |me, _| {
+                me.on_connect_failed("Connect", "ssh: connect timed out")
+            });
+            assert!(
+                !wakeups_rx.is_empty(),
+                "a connect failure must render a notice and request a repaint"
+            );
         });
     }
 }

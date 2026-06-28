@@ -291,10 +291,12 @@ impl SshServerView {
                     // When losing focus, clear own selection too, to prevent
                     // "old editor still highlighted/selected after clicking another editor".
                     source.update(ctx, |e, ctx| e.clear_selections(ctx));
-                    if me.status.is_some() {
-                        me.status = None;
-                        ctx.notify();
-                    }
+                    // Do NOT clear `status` on blur: clicking the Save button
+                    // blurs the focused field, which would immediately wipe the
+                    // "Saved." confirmation that on_save just set (the user saw
+                    // no feedback at all). The status is cleared when the user
+                    // actually edits a field (the Edited/Enter arm) — i.e. once
+                    // the saved state has become stale.
                 }
                 EditorEvent::Focused | EditorEvent::ClearParentSelections => {
                     me.clear_other_editors_selections(&source, ctx);
