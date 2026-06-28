@@ -28,8 +28,8 @@ use super::proto::{
 use zaplex_remote_session::types::supported_features;
 #[cfg(unix)]
 use super::proto::{
-    CloseSession, OpenSession, ResizeSession, SessionExited, SessionInput, SessionOpened,
-    SessionOutput,
+    AttachSession, CloseSession, DetachSession, OpenSession, ResizeSession, SessionAttached,
+    SessionExited, SessionInput, SessionOpened, SessionOutput, SessionSize,
 };
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -564,10 +564,31 @@ impl ServerModel {
         let remaining = self.connection_senders.len();
         log::info!("Daemon: connection {conn_id} deregistered — {remaining} active remaining");
         if remaining == 0 {
-            log::info!("Daemon: grace timer started ({GRACE_PERIOD:?})");
-            self.start_grace_timer(ctx);
+            // Persistent sessions keep the daemon alive across client
+            // disconnects (the whole point of the native session layer): only
+            // arm the shutdown grace timer when nothing is still running.
+            // (A detached-idle GC for long-abandoned sessions is Stage 4.)
+            if self.has_live_sessions() {
+                log::info!("Daemon: no connections, but live session(s) remain — staying up");
+            } else {
+                log::info!("Daemon: grace timer started ({GRACE_PERIOD:?})");
+                self.start_grace_timer(ctx);
+            }
         }
         ctx.notify();
+    }
+
+    /// Whether any daemon-hosted session is still alive. Keeps the daemon up
+    /// across client disconnects so the session survives until reattach.
+    fn has_live_sessions(&self) -> bool {
+        #[cfg(unix)]
+        {
+            !self.sessions.is_empty()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
     }
 
     /// Starts (or restarts) a timer that shuts the daemon down after
@@ -695,15 +716,32 @@ impl ServerModel {
                 self.handle_close_session(msg);
                 return;
             }
-            // Attach/detach/list are not implemented yet (Stages 3-4) — reject
-            // honestly on all platforms.
+            // Re-attach a reconnecting client to a still-running session and
+            // replay the output it missed (Stage 3).
+            #[cfg(unix)]
+            Some(client_message::Message::AttachSession(msg)) => {
+                self.handle_attach_session(conn_id, msg)
+            }
+            #[cfg(unix)]
+            Some(client_message::Message::DetachSession(msg)) => {
+                self.handle_detach_session(msg);
+                return;
+            }
+            // ListSessions (multi-session UI / adopt) is Stage 4.
+            Some(client_message::Message::ListSessions(_)) => {
+                HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: "ListSessions is not implemented yet".to_string(),
+                }))
+            }
+            // Non-unix daemons have no session host (PTY ownership is unix-only).
+            #[cfg(not(unix))]
             Some(
                 client_message::Message::AttachSession(_)
-                | client_message::Message::DetachSession(_)
-                | client_message::Message::ListSessions(_),
+                | client_message::Message::DetachSession(_),
             ) => HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                 code: ErrorCode::InvalidRequest.into(),
-                message: "session attach/detach/list is not implemented yet".to_string(),
+                message: "zaplex session host requires a unix daemon".to_string(),
             })),
             // Non-unix daemons have no session host (PTY ownership is unix-only).
             #[cfg(not(unix))]
@@ -1954,6 +1992,54 @@ impl ServerModel {
             if let Err(e) = session.input_tx.try_send(msg.bytes) {
                 log::warn!("Daemon: dropping input for session {}: {e}", msg.session_id);
             }
+        }
+    }
+
+    /// Re-attaches a (possibly reconnected) connection to a still-running
+    /// session and replays the output it missed. Re-points the session's live
+    /// stream at `conn_id`, so subsequent `SessionOutput` pushes go to the
+    /// reconnected client. This is the heart of "survives the drop": the session
+    /// kept running and buffering into its ring while the client was gone.
+    fn handle_attach_session(
+        &mut self,
+        conn_id: ConnectionId,
+        msg: AttachSession,
+    ) -> HandlerOutcome {
+        let Some(session) = self.sessions.get_mut(&msg.session_id) else {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: format!("no such session: {}", msg.session_id),
+            }));
+        };
+        let (base_seq, replay) = session.ring.replay_from(msg.last_seq);
+        // Route live output to the reconnected connection from now on.
+        session.attached = conn_id;
+        let size = SessionSize {
+            rows: session.rows as u32,
+            cols: session.cols as u32,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        log::info!(
+            "Daemon: attached conn {conn_id} to session {} (replay {} bytes from seq {base_seq})",
+            msg.session_id,
+            replay.len()
+        );
+        HandlerOutcome::Sync(server_message::Message::SessionAttached(SessionAttached {
+            session_id: msg.session_id,
+            size: Some(size),
+            base_seq,
+            replay,
+        }))
+    }
+
+    /// Detaches a connection from a session without ending it: the session keeps
+    /// running and its output accumulates in the ring (live pushes to the now
+    /// non-attached connection become harmless no-ops) until a later attach.
+    fn handle_detach_session(&mut self, msg: DetachSession) {
+        if let Some(session) = self.sessions.get_mut(&msg.session_id) {
+            session.attached = uuid::Uuid::nil();
+            log::info!("Daemon: detached session {} (still running)", msg.session_id);
         }
     }
 

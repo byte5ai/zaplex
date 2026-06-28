@@ -43,6 +43,9 @@ pub(super) struct EventLoop {
     /// The `OpenSession` request, held until the transport is `Connected`. Taken
     /// (once) by `try_open`. `None` after the session has been opened.
     pending_open: Option<(OpenSessionParams, SizeInfo)>,
+    /// Byte offset just past the last `SessionOutput` byte we've rendered. Sent
+    /// as `last_seq` on re-attach so the daemon replays only what we missed.
+    last_seq: u64,
 }
 
 impl EventLoop {
@@ -67,10 +70,12 @@ impl EventLoop {
         ctx.subscribe_to_model(&manager, |me, event, ctx| match event {
             RemoteServerManagerEvent::SessionOutput {
                 pty_session_id,
+                seq,
                 bytes,
                 ..
             } if me.is_our_session(pty_session_id) => {
                 me.process_pty_bytes(bytes);
+                me.last_seq = *seq + bytes.len() as u64;
             }
             RemoteServerManagerEvent::SessionExited {
                 pty_session_id,
@@ -83,6 +88,13 @@ impl EventLoop {
                 if *session_id == me.connection_session_id =>
             {
                 me.try_open(ctx);
+            }
+            // Transport reconnected (SSH blip): the daemon session kept running —
+            // re-attach and replay what we missed (§9).
+            RemoteServerManagerEvent::SessionReconnected { session_id, .. }
+                if *session_id == me.connection_session_id =>
+            {
+                me.reattach(ctx);
             }
             RemoteServerManagerEvent::SessionConnectionFailed { session_id, .. }
                 if *session_id == me.connection_session_id =>
@@ -116,7 +128,33 @@ impl EventLoop {
             pty_session_id: None,
             pending_input: Vec::new(),
             pending_open: None,
+            last_seq: 0,
         }
+    }
+
+    /// On transport reconnect: re-attach to the still-running daemon session and
+    /// replay everything produced while we were gone, reconstructing the grid.
+    /// Falls back to opening the session if it was never opened (reconnect raced
+    /// the initial open).
+    fn reattach(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(pty_session_id) = self.pty_session_id.clone() else {
+            self.try_open(ctx);
+            return;
+        };
+        let Some(client) = self.client(ctx) else {
+            return; // The reconnected client isn't registered yet.
+        };
+        let last_seq = self.last_seq;
+        let future = async move { client.attach_session(pty_session_id, last_seq).await };
+        ctx.spawn(future, |me, result, _ctx| match result {
+            Ok(attached) => {
+                if !attached.replay.is_empty() {
+                    me.process_pty_bytes(&attached.replay);
+                }
+                me.last_seq = attached.base_seq + attached.replay.len() as u64;
+            }
+            Err(err) => log::error!("Failed to re-attach daemon session: {err:?}"),
+        });
     }
 
     fn is_our_session(&self, pty_session_id: &str) -> bool {

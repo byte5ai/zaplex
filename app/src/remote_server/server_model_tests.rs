@@ -248,8 +248,8 @@ fn create_directory_creates_nested_directories() {
 mod daemon_session {
     use super::test_model;
     use crate::remote_server::proto::{
-        client_message, server_message, ClientMessage, CloseSession, OpenSession, ServerMessage,
-        SessionInput, SessionSize,
+        client_message, server_message, AttachSession, ClientMessage, CloseSession, OpenSession,
+        ServerMessage, SessionInput, SessionSize,
     };
     use futures::future::Either;
     use std::time::Duration;
@@ -404,6 +404,116 @@ mod daemon_session {
                 wait_for_exit(&conn_rx, &session_id, Duration::from_secs(10)).await,
                 "expected SessionExited after CloseSession"
             );
+        });
+    }
+
+    fn input_msg(session_id: &str, bytes: &[u8]) -> ClientMessage {
+        ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::SessionInput(SessionInput {
+                session_id: session_id.to_string(),
+                bytes: bytes.to_vec(),
+            })),
+        }
+    }
+
+    fn attach_msg(session_id: &str, last_seq: u64) -> ClientMessage {
+        ClientMessage {
+            request_id: "attach-1".to_string(),
+            message: Some(client_message::Message::AttachSession(AttachSession {
+                session_id: session_id.to_string(),
+                last_seq,
+            })),
+        }
+    }
+
+    fn close_msg(session_id: &str) -> ClientMessage {
+        ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::CloseSession(CloseSession {
+                session_id: session_id.to_string(),
+            })),
+        }
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// Stage 3 core: a session keeps running while the client is gone, buffers
+    /// its output in the ring, and replays it on re-attach — then live output
+    /// re-routes to the reconnected connection.
+    #[test]
+    fn detached_session_buffers_output_and_replays_on_reattach() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
+
+            let session_id = match recv_deadline(&conn_rx, Duration::from_secs(10)).await {
+                Some(m) => match m.message {
+                    Some(server_message::Message::SessionOpened(o)) => o.session_id,
+                    other => panic!("expected SessionOpened, got {other:?}"),
+                },
+                None => panic!("no SessionOpened before deadline"),
+            };
+
+            // Output produced while attached streams normally.
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, input_msg(&session_id, b"echo BEFOR3\n"), ctx)
+            });
+            assert!(
+                wait_for_output(&conn_rx, b"BEFOR3", Duration::from_secs(15)).await,
+                "pre-drop output should stream to the attached connection"
+            );
+
+            // Simulate a client drop. The session must keep running (no grace
+            // shutdown while a session is alive).
+            model.update(&mut app, |m, ctx| m.deregister_connection(conn_id, ctx));
+
+            // Output produced WHILE detached can only land in the ring.
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, input_msg(&session_id, b"echo WH1LE_GONE\n"), ctx)
+            });
+
+            // Reconnect on a fresh connection and re-attach from seq 0; replay
+            // must contain both pre-drop and while-detached output.
+            let (conn_tx2, conn_rx2) = async_channel::unbounded::<ServerMessage>();
+            let conn_id2 = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| m.register_connection(conn_id2, conn_tx2, ctx));
+
+            let mut replay_ok = false;
+            for _ in 0..50 {
+                model.update(&mut app, |m, ctx| {
+                    m.handle_message(conn_id2, attach_msg(&session_id, 0), ctx)
+                });
+                if let Some(msg) = recv_deadline(&conn_rx2, Duration::from_secs(2)).await {
+                    if let Some(server_message::Message::SessionAttached(a)) = msg.message {
+                        if contains(&a.replay, b"BEFOR3") && contains(&a.replay, b"WH1LE_GONE") {
+                            replay_ok = true;
+                            break;
+                        }
+                    }
+                }
+                async_io::Timer::after(Duration::from_millis(100)).await;
+            }
+            assert!(
+                replay_ok,
+                "re-attach replay must include both pre-drop and while-detached output"
+            );
+
+            // Live output now re-routes to the re-attached connection.
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id2, input_msg(&session_id, b"echo L1V3_NOW\n"), ctx)
+            });
+            assert!(
+                wait_for_output(&conn_rx2, b"L1V3_NOW", Duration::from_secs(15)).await,
+                "live output should re-route to the re-attached connection"
+            );
+
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id2, close_msg(&session_id), ctx));
         });
     }
 }
