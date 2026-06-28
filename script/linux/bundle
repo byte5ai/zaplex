@@ -199,7 +199,7 @@ elif [[ $RELEASE_CHANNEL = "oss" ]]; then
   ZAPLEX_BIN="zaplex"
   BINARY_NAME="zaplex"
   APP_NAME="Zaplex"
-  # OSS channel 使用本地 crash reporting,不启用 release 默认特性集合。
+  # OSS channel uses local crash reporting, does not enable release default feature set.
   FEATURES="release_bundle"
 fi
 
@@ -221,10 +221,10 @@ elif [[ "$ARTIFACT" == "app" ]]; then
 fi
 
 if [[ $RELEASE_CHANNEL = "oss" ]]; then
-  # OSS(Zaplex) bundle id 与运行时 app id (`dev.zaplex.Zaplex`, 见
-  # `app/src/bin/oss.rs` / Cargo bundle metadata) 对齐, 否则 Linux 桌面
-  # (尤其是 Wayland) 会按 desktop-file ID 而非 StartupWMClass 关联窗口,
-  # 导致 icon 找不到.
+  # OSS (Zaplex) bundle id aligns with runtime app id (`dev.zaplex.Zaplex`, see
+  # `app/src/bin/oss.rs` / Cargo bundle metadata), otherwise Linux desktop
+  # (especially Wayland) will associate windows by desktop-file ID instead of StartupWMClass,
+  # causing icons to not be found.
   BUNDLE_ID="dev.zaplex.Zaplex"
 else
   BUNDLE_ID="dev.warp.$APP_NAME"
@@ -256,10 +256,10 @@ fi
 
 # Build the binary.
 #
-# `USE_ZIGBUILD=true` 时改用 `cargo zigbuild`:zig 自带完整 C/C++ 交叉工具链,
-# musl 目标下不需要手工准备 `musl-gcc`/`musl-g++`,也不需要给 cc-rs 装
-# `<triple>-{gcc,g++}` 符号链接。CI 的静态 musl CLI build 走这条路。
-# 本地不设置该变量时维持原有 `cargo build` 行为(host glibc 路径不受影响)。
+# When `USE_ZIGBUILD=true`, use `cargo zigbuild` instead: zig includes complete C/C++ cross-compilation toolchain,
+# no need to manually prepare `musl-gcc`/`musl-g++` for musl targets, no need to set up
+# `<triple>-{gcc,g++}` symlinks for cc-rs. CI's static musl CLI build takes this path.
+# When this variable is not set locally, maintain the existing `cargo build` behavior (host glibc path unaffected).
 if [[ "$BUILD" == "true" ]]; then
   echo "Building and bundling Zaplex for channel $RELEASE_CHANNEL and bundle id $BUNDLE_ID"
   if [[ "${USE_ZIGBUILD:-false}" == "true" ]]; then

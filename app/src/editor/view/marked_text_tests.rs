@@ -15,7 +15,7 @@ fn test_set_marked_text() {
         app.add_window(WindowStyle::NotStealFocus, |ctx| {
             let mut editor = EditorView::new_with_base_text("", Default::default(), ctx);
 
-            // Simulate typing in "nihao" into the IME and then selecting "你好" as the candidate.
+            // Simulate typing in "nihao" into the IME and then selecting "nihao" (Chinese) as the candidate.
             editor.set_marked_text("nihao", &(5..5), ctx);
             assert_eq!(editor.selected_text(ctx), "nihao");
             editor.ime_commit("你好", ctx);
@@ -24,7 +24,7 @@ fn test_set_marked_text() {
             editor.user_insert(", I am Teddy ", ctx);
             assert_eq!(editor.buffer_text(ctx), "你好, I am Teddy ".to_owned());
 
-            // Simulate typing in "xiong" into the IME and selecting "熊" as the candidate.
+            // Simulate typing in "xiong" into the IME and selecting "xiong" (bear) as the candidate.
             editor.set_marked_text("xiong", &(5..5), ctx);
             assert_eq!(editor.selected_text(ctx), "xiong");
             editor.ime_commit("熊", ctx);

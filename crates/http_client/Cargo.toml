@@ -32,6 +32,6 @@ gloo.workspace = true
 wasm-bindgen-futures.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# 仅用于单测: 装载 rustls 默认 crypto provider,避免 reqwest::ClientBuilder::build()
-# 在裸单测进程里 panic。生产代码中该安装动作由 `app/src/lib.rs::init_common` 负责。
+# Test-only: load rustls default crypto provider to avoid reqwest::ClientBuilder::build()
+# panicking in bare test processes. In production code, this initialization is handled by `app/src/lib.rs::init_common`.
 rustls.workspace = true

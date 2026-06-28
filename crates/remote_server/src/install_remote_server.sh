@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# 在远端主机安装 Zaplex CLI 二进制,用于 remote-server-proxy。
+# Install Zaplex CLI binary on remote host for remote-server-proxy.
 #
-# setup.rs 会在运行时替换这些占位符:
-#   {download_base_url}     - 例如 https://github.com/zerx-lab/warp/releases/latest/download
-#   {install_dir}           - 例如 ~/.zap/remote-server
-#   {binary_name}           - 例如 zaplex
-#   {version_suffix}        - 例如 -v0.2026...,没有 release tag 时为空
-#   {staging_tarball_path}  - SCP fallback 预上传 tarball 路径,常规下载路径为空
+# setup.rs will replace these placeholders at runtime:
+#   {download_base_url}     - e.g. https://github.com/zerx-lab/warp/releases/latest/download
+#   {install_dir}           - e.g. ~/.zap/remote-server
+#   {binary_name}           - e.g. zaplex
+#   {version_suffix}        - e.g. -v0.2026..., empty when no release tag
+#   {staging_tarball_path}  - SCP fallback pre-uploaded tarball path, empty for normal download path
 set -e
 
 arch=$(uname -m)
@@ -30,9 +30,9 @@ esac
 mkdir -p "$install_dir"
 
 tmpdir=$(mktemp -d "$install_dir/.install.XXXXXX")
-# 尽力清理 staging 目录。这里失败不能覆盖真正的安装结果:
-# trap 触发时二进制要么已经移动到最终路径,要么脚本已经因为
-# 其他原因失败,后者的错误更值得暴露给调用方。
+# Best-effort cleanup of staging directory. Failure here should not override actual installation result:
+# when trap triggers, the binary is either already moved to final path, or
+# the script failed for other reasons, the latter error is more important to expose to caller.
 cleanup() {
   rm -rf "$tmpdir" 2>/dev/null || true
 }

@@ -38,11 +38,11 @@ runs:
     - name: Add Strawberry Perl to PATH and point openssl-src at it (Windows)
       if: ${{ inputs.target_os == 'windows' }}
       shell: bash
-      # openssl-sys (vendored) 用 openssl-src 跑 `perl ./Configure` 编译 OpenSSL。
-      # 仅把 Strawberry 加进 PATH 不可靠:cargo build script spawn 的裸 `perl` 仍会
-      # 解析到 Git 自带的 MSYS perl(缺 Locale::Maketext::Simple,Configure 报错退出 2)。
-      # 显式设 OPENSSL_SRC_PERL 指向 Strawberry perl 绝对路径,绕开 PATH 解析,
-      # 与 openssl-src 官方 CI 做法一致。
+      # openssl-sys (vendored) uses openssl-src to run `perl ./Configure` to compile OpenSSL.
+      # Just adding Strawberry to PATH is unreliable; perl spawned by cargo build scripts still
+      # resolves to the built-in MSYS perl from Git (lacking Locale::Maketext::Simple, Configure fails with exit 2).
+      # Explicitly set OPENSSL_SRC_PERL to point to the absolute path of Strawberry perl, bypassing PATH resolution,
+      # consistent with the official openssl-src CI approach.
       run: |
         echo "C:/Strawberry/perl/bin" >> $GITHUB_PATH
         echo "OPENSSL_SRC_PERL=C:/Strawberry/perl/bin/perl" >> $GITHUB_ENV

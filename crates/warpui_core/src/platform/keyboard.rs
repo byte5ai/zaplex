@@ -84,7 +84,7 @@ pub enum PhysicalKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum KeyCode {
     /// <kbd>`</kbd> on a US keyboard. This is also called a backtick or grave.
-    /// This is the <kbd>半角</kbd>/<kbd>全角</kbd>/<kbd>漢字</kbd>
+    /// This is the <kbd>half-width</kbd>/<kbd>full-width</kbd>/<kbd>kanji</kbd>
     /// (hankaku/zenkaku/kanji) key on Japanese keyboards
     Backquote,
     /// Used for both the US <kbd>\\</kbd> (on the 101-key layout) and also for the key
@@ -229,18 +229,18 @@ pub enum KeyCode {
     Space,
     /// <kbd>Tab</kbd> or <kbd>⇥</kbd>
     Tab,
-    /// Japanese: <kbd>変</kbd> (henkan)
+    /// Japanese: <kbd>convert</kbd> (henkan)
     Convert,
-    /// Japanese: <kbd>カタカナ</kbd>/<kbd>ひらがな</kbd>/<kbd>ローマ字</kbd>
+    /// Japanese: <kbd>katakana</kbd>/<kbd>hiragana</kbd>/<kbd>romaji</kbd>
     /// (katakana/hiragana/romaji)
     KanaMode,
-    /// Korean: HangulMode <kbd>한/영</kbd> (han/yeong)
+    /// Korean: HangulMode <kbd>Korean/English</kbd> (han/yeong)
     ///
-    /// Japanese (Mac keyboard): <kbd>か</kbd> (kana)
+    /// Japanese (Mac keyboard): <kbd>kana</kbd> (kana)
     Lang1,
-    /// Korean: Hanja <kbd>한</kbd> (hanja)
+    /// Korean: Hanja <kbd>Korean</kbd> (hanja)
     ///
-    /// Japanese (Mac keyboard): <kbd>英</kbd> (eisu)
+    /// Japanese (Mac keyboard): <kbd>English</kbd> (eisu)
     Lang2,
     /// Japanese (word-processing keyboard): Katakana
     Lang3,
@@ -248,7 +248,7 @@ pub enum KeyCode {
     Lang4,
     /// Japanese (word-processing keyboard): Zenkaku/Hankaku
     Lang5,
-    /// Japanese: <kbd>無変換</kbd> (muhenkan)
+    /// Japanese: <kbd>no conversion</kbd> (muhenkan)
     NonConvert,
     /// <kbd>⌦</kbd>. The forward delete key.
     /// Note that on Apple keyboards, the key labelled <kbd>Delete</kbd> on the main part of
@@ -428,9 +428,9 @@ pub enum KeyCode {
     Select,
     /// Found on Sun’s USB keyboard.
     Undo,
-    /// Use for dedicated <kbd>ひらがな</kbd> key found on some Japanese word processing keyboards.
+    /// Use for dedicated <kbd>hiragana</kbd> key found on some Japanese word processing keyboards.
     Hiragana,
-    /// Use for dedicated <kbd>カタカナ</kbd> key found on some Japanese word processing keyboards.
+    /// Use for dedicated <kbd>katakana</kbd> key found on some Japanese word processing keyboards.
     Katakana,
     /// General-purpose function key.
     /// Usually found at the top of the keyboard.

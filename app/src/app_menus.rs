@@ -799,8 +799,8 @@ fn debug_menu_items() -> Vec<MenuItem> {
             None,
         )));
 
-        // Zaplex Wave 3-1:"Create anonymous user" debug menu item 随
-        // `workspace:debug_create_anonymous_user` global action + AuthClient 一同物理删。
+        // Zaplex Wave 3-1: "Create anonymous user" debug menu item
+        // deleted together with `workspace:debug_create_anonymous_user` global action + AuthClient.
     }
 
     if FeatureFlag::RuntimeFeatureFlags.is_enabled() {
