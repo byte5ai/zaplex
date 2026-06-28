@@ -5319,6 +5319,18 @@ impl Workspace {
             LeftPanelEvent::OpenSftpPane { node_id, server: _ } => {
                 self.open_sftp_pane(node_id.clone(), ctx);
             }
+            LeftPanelEvent::AdoptDaemonSession {
+                server,
+                pty_session_id,
+            } => {
+                #[cfg(unix)]
+                self.adopt_daemon_session(server.clone(), pty_session_id.clone(), ctx);
+                #[cfg(not(unix))]
+                {
+                    let _ = (server, pty_session_id);
+                    log::warn!("AdoptDaemonSession ignored: daemon sessions are unix-only");
+                }
+            }
         }
     }
 

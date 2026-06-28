@@ -34,6 +34,8 @@ use warp_ssh_manager::{
     SshServerInfo,
 };
 
+use remote_server::proto::SessionInfo;
+
 use settings::Setting;
 
 use crate::editor::{
@@ -57,7 +59,7 @@ const PANEL_HORIZONTAL_PADDING: f32 = 8.0;
 const CONTEXT_MENU_WIDTH: f32 = 200.0;
 const CONTEXT_MENU_ITEM_PADDING_V: f32 = 7.0;
 const CONTEXT_MENU_ITEM_PADDING_H: f32 = 12.0;
-const MAX_CONTEXT_MENU_ITEMS: usize = 5;
+const MAX_CONTEXT_MENU_ITEMS: usize = 6;
 const SSH_PANEL_POSITION_ID: &str = "ssh_manager_panel_root";
 
 #[derive(Clone, Debug)]
@@ -71,6 +73,14 @@ pub enum SshManagerPanelAction {
     Connect,
     Edit,
     CloneServer(String),
+    /// Context menu on a server: toggle the inline list of its running daemon
+    /// sessions (fetched via connect-to-list on first expand).
+    ToggleSessions(String),
+    /// Click a listed daemon session: adopt it (attach + replay) in a new tab.
+    AdoptSession {
+        node_id: String,
+        pty_session_id: String,
+    },
     /// Click a row; the handling depends on the node kind:
     /// - server: select + emit OpenSshTerminal (connect directly)
     /// - folder: select only
@@ -123,6 +133,13 @@ pub enum SshManagerPanelEvent {
     OpenSftpPane {
         node_id: String,
         server: SshServerInfo,
+    },
+    /// The user clicked a listed (running) daemon session under a host, asking to
+    /// adopt it in a new tab (attach + replay). The list comes from the
+    /// multi-session sidebar (`headless_connect::list_daemon_sessions`).
+    AdoptDaemonSession {
+        server: SshServerInfo,
+        pty_session_id: String,
     },
     PersistenceError(String),
 }
@@ -194,6 +211,20 @@ pub struct SshManagerPanel {
     /// Hover state for the section header's Refresh / Toggle buttons.
     candidates_refresh_btn: MouseStateHandle,
     candidates_toggle_btn: MouseStateHandle,
+
+    // --- Adopt-sidebar: per-host running daemon sessions (multi-session) ---
+    /// Running daemon sessions per server node, fetched on demand via
+    /// `headless_connect::list_daemon_sessions` (connect-to-list, so it also
+    /// surfaces sessions that survived a restart / drop — the main use case).
+    host_sessions: HashMap<String, Vec<SessionInfo>>,
+    /// Server node_ids whose session list is currently shown (expanded).
+    sessions_expanded: std::collections::HashSet<String>,
+    /// Server node_ids with an in-flight session fetch.
+    sessions_loading: std::collections::HashSet<String>,
+    /// Last fetch error per server node_id (shown inline under the host).
+    sessions_error: HashMap<String, String>,
+    /// Hover/click state per session row (key = "<node_id>:<pty_session_id>").
+    session_row_states: HashMap<String, MouseStateHandle>,
 }
 
 impl SshManagerPanel {
@@ -220,6 +251,11 @@ impl SshManagerPanel {
             candidate_add_states: HashMap::new(),
             candidates_refresh_btn: MouseStateHandle::default(),
             candidates_toggle_btn: MouseStateHandle::default(),
+            host_sessions: HashMap::new(),
+            sessions_expanded: std::collections::HashSet::new(),
+            sessions_loading: std::collections::HashSet::new(),
+            sessions_error: HashMap::new(),
+            session_row_states: HashMap::new(),
         };
         // First time the panel opens → read ssh_config once immediately (PRODUCT.md decision A).
         me.candidates.update(ctx, |vm, ctx| vm.refresh(ctx));
@@ -554,6 +590,99 @@ impl SshManagerPanel {
             ctx.emit(SshManagerPanelEvent::OpenSshTerminal {
                 node_id: id.to_string(),
                 server,
+            });
+        }
+    }
+
+    /// Whether `server` can host a persistent daemon session (key/onekey auth +
+    /// session_resilience enabled) — only those have sessions to list / adopt.
+    fn is_daemon_capable(server: &SshServerInfo) -> bool {
+        server.session_resilience.is_enabled()
+            && matches!(server.auth_type, AuthType::Key | AuthType::OneKey)
+    }
+
+    /// Toggle the inline running-sessions list for a server node; the first
+    /// expand kicks off a connect-to-list fetch.
+    fn on_toggle_sessions(&mut self, id: String, ctx: &mut ViewContext<Self>) {
+        if self.sessions_expanded.remove(&id) {
+            ctx.notify();
+            return;
+        }
+        self.sessions_expanded.insert(id.clone());
+        self.fetch_sessions(id, ctx);
+        ctx.notify();
+    }
+
+    /// Fetches a server's running daemon sessions via connect-to-list and stores
+    /// them in `host_sessions` (or records `sessions_error`).
+    #[allow(unused_variables)]
+    fn fetch_sessions(&mut self, id: String, ctx: &mut ViewContext<Self>) {
+        let server = warp_ssh_manager::with_conn(|c| Ok(SshRepository::get_server(c, &id)?))
+            .ok()
+            .flatten();
+        let Some(server) = server else {
+            return;
+        };
+        self.sessions_error.remove(&id);
+
+        #[cfg(unix)]
+        {
+            use crate::auth::AuthStateProvider;
+            use crate::remote_server::auth_context::server_api_auth_context;
+            use crate::remote_server::headless_connect;
+
+            if !Self::is_daemon_capable(&server) {
+                self.sessions_error.insert(
+                    id,
+                    crate::t!("workspace-left-panel-ssh-manager-sessions-not-persistent"),
+                );
+                return;
+            }
+            self.sessions_loading.insert(id.clone());
+            let auth_context = std::sync::Arc::new(server_api_auth_context(
+                AuthStateProvider::as_ref(ctx).get().clone(),
+            ));
+            let socket_path = headless_connect::control_socket_path(&server);
+            let executor = ctx.background_executor().clone();
+            ctx.spawn(
+                headless_connect::list_daemon_sessions(server, socket_path, auth_context, executor),
+                move |me, result, ctx| {
+                    me.sessions_loading.remove(&id);
+                    match result {
+                        Ok(sessions) => {
+                            me.host_sessions.insert(id, sessions);
+                        }
+                        Err(e) => {
+                            me.sessions_error.insert(id, e);
+                        }
+                    }
+                    ctx.notify();
+                },
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            self.sessions_error.insert(
+                id,
+                "Daemon sessions are only supported on Unix hosts.".to_string(),
+            );
+        }
+    }
+
+    /// Adopt a listed daemon session in a new tab (attach + replay).
+    fn on_adopt_session(
+        &mut self,
+        node_id: String,
+        pty_session_id: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let server = warp_ssh_manager::with_conn(|c| Ok(SshRepository::get_server(c, &node_id)?))
+            .ok()
+            .flatten();
+        if let Some(server) = server {
+            ctx.emit(SshManagerPanelEvent::AdoptDaemonSession {
+                server,
+                pty_session_id,
             });
         }
     }
@@ -1373,6 +1502,113 @@ impl SshManagerPanel {
         .finish()
     }
 
+    /// Renders the inline running-daemon-session rows shown under an expanded
+    /// host: a loading / error / empty message, or one clickable row per session
+    /// (click → adopt). Indented one level past the host row.
+    fn render_session_rows(
+        &self,
+        node: &SshNode,
+        appearance: &warp_core::ui::appearance::Appearance,
+    ) -> Vec<Box<dyn Element>> {
+        let theme = appearance.theme();
+        let muted = theme.sub_text_color(theme.background());
+        let depth = self.depths.get(&node.id).copied().unwrap_or(0);
+        let indent = (depth as f32 + 1.0) * FOLDER_DEPTH_INDENT + ITEM_ICON_SIZE;
+
+        let message = |text: String| -> Box<dyn Element> {
+            Container::new(
+                Text::new_inline(
+                    text,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_subheading(),
+                )
+                .with_color(muted.into())
+                .finish(),
+            )
+            .with_padding_top(ITEM_PADDING_VERTICAL)
+            .with_padding_bottom(ITEM_PADDING_VERTICAL)
+            .with_padding_left(indent)
+            .with_padding_right(ITEM_PADDING_HORIZONTAL)
+            .with_margin_bottom(ITEM_MARGIN_BOTTOM)
+            .finish()
+        };
+
+        if self.sessions_loading.contains(&node.id) {
+            return vec![message(crate::t!(
+                "workspace-left-panel-ssh-manager-sessions-loading"
+            ))];
+        }
+        if let Some(err) = self.sessions_error.get(&node.id) {
+            return vec![message(format!("⚠ {err}"))];
+        }
+        let sessions = match self.host_sessions.get(&node.id) {
+            Some(sessions) if !sessions.is_empty() => sessions,
+            _ => {
+                return vec![message(crate::t!(
+                    "workspace-left-panel-ssh-manager-sessions-empty"
+                ))]
+            }
+        };
+
+        sessions
+            .iter()
+            .map(|session| {
+                let key = format!("{}:{}", node.id, session.session_id);
+                let state = self
+                    .session_row_states
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_default();
+                let node_id = node.id.clone();
+                let pty_session_id = session.session_id.clone();
+                let title = if !session.title.is_empty() {
+                    session.title.clone()
+                } else if !session.cwd.is_empty() {
+                    session.cwd.clone()
+                } else {
+                    pty_session_id.clone()
+                };
+                let row = Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(ITEM_ICON_TEXT_SPACING)
+                    .with_child(
+                        ConstrainedBox::new(Empty::new().finish())
+                            .with_width(indent)
+                            .finish(),
+                    )
+                    .with_child(
+                        Text::new_inline(
+                            title,
+                            appearance.ui_font_family(),
+                            appearance.ui_font_subheading(),
+                        )
+                        .with_color(theme.main_text_color(theme.background()).into())
+                        .finish(),
+                    )
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .finish();
+                Hoverable::new(state, move |_| {
+                    Container::new(row)
+                        .with_padding_top(ITEM_PADDING_VERTICAL)
+                        .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                        .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                        .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                        .with_margin_bottom(ITEM_MARGIN_BOTTOM)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                        .finish()
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(SshManagerPanelAction::AdoptSession {
+                        node_id: node_id.clone(),
+                        pty_session_id: pty_session_id.clone(),
+                    });
+                })
+                .finish()
+            })
+            .collect()
+    }
+
     fn render_tree(&self, appearance: &warp_core::ui::appearance::Appearance) -> Box<dyn Element> {
         let mut col = Flex::column();
 
@@ -1401,6 +1637,14 @@ impl SshManagerPanel {
                     continue;
                 }
                 col.add_child(self.render_row(node, appearance));
+                // Adopt-sidebar: inline running daemon sessions under an expanded host.
+                if matches!(node.kind, NodeKind::Server)
+                    && self.sessions_expanded.contains(&node.id)
+                {
+                    for child in self.render_session_rows(node, appearance) {
+                        col.add_child(child);
+                    }
+                }
             }
         }
         let inner = col
@@ -1665,6 +1909,10 @@ impl SshManagerPanel {
                             SshManagerPanelAction::Connect,
                         ),
                         (
+                            crate::t!("workspace-left-panel-ssh-manager-menu-sessions"),
+                            SshManagerPanelAction::ToggleSessions(id.clone()),
+                        ),
+                        (
                             crate::t!("workspace-left-panel-ssh-manager-menu-sftp"),
                             SshManagerPanelAction::OpenSftp,
                         ),
@@ -1762,6 +2010,11 @@ impl TypedActionView for SshManagerPanel {
             SshManagerPanelAction::Connect => self.on_connect(ctx),
             SshManagerPanelAction::Edit => self.on_edit(ctx),
             SshManagerPanelAction::CloneServer(id) => self.on_clone_server(id, ctx),
+            SshManagerPanelAction::ToggleSessions(id) => self.on_toggle_sessions(id.clone(), ctx),
+            SshManagerPanelAction::AdoptSession {
+                node_id,
+                pty_session_id,
+            } => self.on_adopt_session(node_id.clone(), pty_session_id.clone(), ctx),
             SshManagerPanelAction::Click(id) => self.on_click(id.clone(), ctx),
             SshManagerPanelAction::StartRename(id) => self.enter_rename(id.clone(), false, ctx),
             SshManagerPanelAction::CommitRename => self.commit_rename(ctx),

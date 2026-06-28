@@ -139,6 +139,12 @@ pub enum LeftPanelEvent {
         node_id: String,
         server: warp_ssh_manager::SshServerInfo,
     },
+    /// User clicked a listed running daemon session in the SSH manager → main
+    /// window adopts it (attach + replay) in a new tab.
+    AdoptDaemonSession {
+        server: warp_ssh_manager::SshServerInfo,
+        pty_session_id: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -284,6 +290,15 @@ impl LeftPanelView {
                     ctx.emit(LeftPanelEvent::OpenSftpPane {
                         node_id: node_id.clone(),
                         server: server.clone(),
+                    });
+                }
+                SshManagerPanelEvent::AdoptDaemonSession {
+                    server,
+                    pty_session_id,
+                } => {
+                    ctx.emit(LeftPanelEvent::AdoptDaemonSession {
+                        server: server.clone(),
+                        pty_session_id: pty_session_id.clone(),
                     });
                 }
                 SshManagerPanelEvent::PersistenceError(msg) => {

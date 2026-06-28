@@ -20,9 +20,11 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use remote_server::auth::RemoteServerAuthContext;
-use remote_server::transport::RemoteTransport;
+use remote_server::proto::SessionInfo;
+use remote_server::transport::{Connection, RemoteTransport};
 use warp_core::SessionId;
 use warp_ssh_manager::{AuthType, SshServerInfo};
+use warpui::r#async::executor::Background;
 
 use super::ssh_transport::SshTransport;
 
@@ -208,6 +210,43 @@ pub async fn prepare_daemon_transport(
         Err(e) => return Err(format!("remote-server binary check failed: {e}")),
     }
     Ok(())
+}
+
+/// Connects to `server`'s daemon (a transient connection) and returns the
+/// sessions it currently owns — including ones that survived an app restart or
+/// transport drop, which is the whole point of the adopt-sidebar. Self-contained:
+/// brings up the ControlMaster + binary, connects, runs the initialize handshake,
+/// calls `list_sessions`, then tears the transient connection down again (the
+/// daemon and its sessions persist independently of this connection).
+///
+/// Request/response works without draining the client event channel — responses
+/// are routed to per-request oneshots; the event channel is unbounded so the
+/// reader never blocks on our ignoring it.
+pub async fn list_daemon_sessions(
+    server: SshServerInfo,
+    socket_path: PathBuf,
+    auth_context: Arc<RemoteServerAuthContext>,
+    executor: Arc<Background>,
+) -> std::result::Result<Vec<SessionInfo>, String> {
+    prepare_daemon_transport(server, socket_path.clone(), auth_context.clone()).await?;
+    let transport = SshTransport::new(socket_path, auth_context.clone());
+    let Connection { client, child, .. } = transport
+        .connect(executor)
+        .await
+        .map_err(|e| format!("daemon connect failed: {e:#}"))?;
+    // Keep the proxy/ssh child alive for the duration of the requests; it is torn
+    // down when this returns. The daemon itself keeps running.
+    let _child = child;
+    let auth_token = auth_context.get_auth_token().await;
+    client
+        .initialize(auth_token.as_deref())
+        .await
+        .map_err(|e| format!("daemon handshake failed: {e:#}"))?;
+    let list = client
+        .list_sessions()
+        .await
+        .map_err(|e| format!("list_sessions failed: {e:#}"))?;
+    Ok(list.sessions)
 }
 
 #[cfg(test)]
