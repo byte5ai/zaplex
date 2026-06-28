@@ -671,12 +671,20 @@ mod daemon_session {
         });
     }
 
-    /// The daemon bootstraps the spawned shell with the Zaplexify integration, so
-    /// a daemon session is a real Zaplex terminal (blocks/prompt/completions), not
-    /// a bare VT. Proven by the bootstrap exporting TERM_PROGRAM=ZaplexTerminal —
-    /// `echo TP=$TERM_PROGRAM` then prints the executed value (the echoed input
-    /// holds the literal `$TERM_PROGRAM`, so `TP=ZaplexTerminal` appears only if
-    /// the integration script actually ran).
+    /// A daemon session must be a real Zaplex terminal (blocks / prompt marks /
+    /// completions), not a bare VT. That takes two *independent* pieces, and this
+    /// test pins both so a regression in either fails loudly:
+    ///
+    ///   1. **Shell integration ran** — the daemon injects the Zaplexify init
+    ///      script as the session's first input. On startup that script emits the
+    ///      InitShell DCS hook (`ESC P $ d …`); it appears in the session output
+    ///      only if the bootstrap injection actually happened. (The script does
+    ///      *not* set TERM_PROGRAM — that is piece 2.)
+    ///   2. **Terminal identity** — the shell is spawned with
+    ///      `TERM_PROGRAM=ZaplexTerminal` (a spawn env var in `spawn_session_pty`,
+    ///      not from the script). Proven by `echo TP=$TERM_PROGRAM` printing the
+    ///      executed value: the echoed input carries the literal `$TERM_PROGRAM`,
+    ///      so `TP=ZaplexTerminal` appears only if the env var is really set.
     #[test]
     fn daemon_session_runs_zaplexify_bootstrap() {
         App::test((), |mut app| async move {
@@ -687,12 +695,21 @@ mod daemon_session {
             model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
             let session_id = recv_session_opened(&conn_rx).await.expect("session opened");
 
+            // (1) The integration script runs on open and emits the InitShell DCS
+            // hook (ESC P $ d …) before any input of ours — this is what no bare
+            // VT would produce.
+            assert!(
+                wait_for_output(&conn_rx, b"\x1bP$d", Duration::from_secs(20)).await,
+                "daemon shell should run the Zaplexify integration (InitShell DCS hook in output)"
+            );
+
+            // (2) The shell carries the Zaplex terminal identity env.
             model.update(&mut app, |m, ctx| {
                 m.handle_message(conn_id, input_msg(&session_id, b"echo TP=$TERM_PROGRAM\n"), ctx)
             });
             assert!(
                 wait_for_output(&conn_rx, b"TP=ZaplexTerminal", Duration::from_secs(20)).await,
-                "daemon shell should be Zaplexify-bootstrapped (TERM_PROGRAM=ZaplexTerminal)"
+                "daemon shell should be spawned with TERM_PROGRAM=ZaplexTerminal"
             );
 
             model.update(&mut app, |m, ctx| m.handle_message(conn_id, close_msg(&session_id), ctx));

@@ -2018,11 +2018,12 @@ impl ServerModel {
         // Bootstrap the daemon-spawned shell with the Zaplexify shell integration
         // (blocks, prompt marks, completions) by writing the init script as the
         // session's first input — the ordered writer delivers it ahead of any
-        // user input. The script self-sets TERM_PROGRAM, emits the InitShell DCS
-        // hook, and is idempotent (ZAPLEX_BOOTSTRAPPED guard), so a later
-        // re-attach won't double-run it. Without this the session would be a
-        // bare VT (no blocks) — this is what makes a daemon session a real
-        // Zaplex terminal.
+        // user input. The script emits the InitShell DCS hook and is idempotent
+        // (ZAPLEX_BOOTSTRAPPED guard), so a later re-attach won't double-run it.
+        // The terminal *identity* (TERM_PROGRAM=ZaplexTerminal etc.) is set as a
+        // spawn env var in `spawn_session_pty`, not by this script. Together the
+        // identity env and the integration script are what make a daemon session
+        // a real Zaplex terminal rather than a bare VT.
         match crate::terminal::shell::ShellType::from_name(&shell) {
             Some(shell_type) => {
                 let mut bootstrap =

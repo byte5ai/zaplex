@@ -535,6 +535,34 @@ pub(crate) fn spawn_session_pty(
     if !env.contains_key("TERM") {
         command.env("TERM", "xterm-256color");
     }
+    // Give the daemon-spawned shell the same Zaplex terminal *identity* that a
+    // locally spawned shell gets (see `build_host_shell_command`). TERM_PROGRAM
+    // is what the shell integration and plugins key off to recognize a Zaplex
+    // terminal; the bootstrap *script* (injected separately) supplies the shell
+    // integration, but the identity lives in the spawn env — without it the
+    // bootstrapped shell renders as a generic VT. The client may override any of
+    // these via `env`; otherwise we assert the Zaplex defaults.
+    if !env.contains_key("TERM_PROGRAM") {
+        command.env("TERM_PROGRAM", "ZaplexTerminal");
+    }
+    if !env.contains_key("COLORTERM") {
+        command.env("COLORTERM", "truecolor");
+    }
+    match ChannelState::app_version() {
+        Some(version) => {
+            if !env.contains_key("TERM_PROGRAM_VERSION") {
+                command.env("TERM_PROGRAM_VERSION", version);
+            }
+            if !env.contains_key("ZAPLEX_CLIENT_VERSION") {
+                command.env("ZAPLEX_CLIENT_VERSION", version);
+            }
+        }
+        None => {
+            if !env.contains_key("ZAPLEX_CLIENT_VERSION") {
+                command.env("ZAPLEX_CLIENT_VERSION", "local");
+            }
+        }
+    }
     let size = SizeInfo::new_without_font_metrics(rows, cols);
     let info = spawn_command_in_pty(command, &size, true)?;
     // SAFETY: `leader_fd` is a freshly-opened PTY master fd that we now own.
