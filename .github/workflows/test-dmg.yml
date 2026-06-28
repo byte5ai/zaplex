@@ -1,0 +1,88 @@
+# Test-DMG-Pipeline — schlanker macOS-Build NUR fürs Testen.
+#
+# Baut ausschließlich das macOS-Build, das gerade getestet werden soll, und lädt
+# es als Workflow-Artefakt hoch. KEIN Windows/Linux/Intel, KEIN GitHub-Release
+# (anders als zap_release.yml). Gedacht für den schnellen Test-Loop — analog zu
+# test-dispatch.yml für Rust-Tests.
+#
+# Aufruf:  gh workflow run test-dmg.yml -R byte5ai/zaplex --ref <branch> \
+#            [-f arch=aarch64|x86_64] [-f dmg_tag=v0.daemontest]
+#
+# Das .dmg ist ad-hoc-signiert (wie zap_release.yml, --selfsign) → beim ersten
+# Öffnen auf dem Mac einmal:  xattr -rd com.apple.quarantine /Applications/Zap.app
+# (bzw. das .dmg), siehe issue #51. Kein Developer-ID/Notarize im OSS-Channel.
+#
+# `dmg_tag` wird als GIT_RELEASE_TAG eingebrannt und bestimmt den remote-server-
+# Pfad, den der Client auf dem Ziel-Host prüft: ~/.zap/remote-server/zap-oss-<tag>.
+# Fixer Default, damit das Daemon-Binary auf dem Ziel-Host deterministisch
+# vorab platziert werden kann.
+
+name: Test DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "macOS-Architektur (aarch64 = Apple Silicon, x86_64 = Intel)"
+        type: choice
+        default: aarch64
+        options:
+          - aarch64
+          - x86_64
+      dmg_tag:
+        description: "GIT_RELEASE_TAG (bestimmt den remote-server-Pfad auf dem Ziel-Host)"
+        type: string
+        default: v0.daemontest
+
+env:
+  CARGO_TERM_COLOR: always
+  CHANNEL: oss
+
+jobs:
+  build_dmg:
+    name: Build Test DMG (macOS ${{ inputs.arch }})
+    runs-on: ${{ inputs.arch == 'x86_64' && 'macos-26-intel' || 'macos-26' }}
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          cache_key: macos-${{ inputs.arch }}
+          is_self_hosted: false
+          install_release_deps: true
+
+      - name: Ensure rust target is installed
+        run: rustup target add ${{ inputs.arch }}-apple-darwin
+        shell: bash
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: stable
+
+      - name: Install cargo-bundle
+        run: script/install_cargo_bundle
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      # --selfsign = ad-hoc-Signatur (kein Developer-ID-Cert nötig), identisch zu
+      # zap_release.yml. dmg_name_suffix nur fürs Dateinaming.
+      - name: Build ${{ inputs.arch }} bundle (ad-hoc signed)
+        id: bundle_app
+        run: |
+          script/bundle --channel "$CHANNEL" --arch ${{ inputs.arch }} \
+            --dmg-name-suffix "${{ inputs.arch == 'x86_64' && 'intel' || 'arm64' }}" --selfsign
+        shell: bash
+        env:
+          GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zap-test-dmg-${{ inputs.arch }}
+          path: ${{ steps.bundle_app.outputs.dmg_path }}
+          if-no-files-found: error
+          retention-days: 7
