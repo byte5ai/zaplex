@@ -1,0 +1,92 @@
+# Build-remote-server — baut NUR das Linux-remote-server-Binary (statisch musl),
+# das auf dem SSH-Ziel-Host (z.B. devhost) als Daemon läuft.
+#
+# Hintergrund: zaplex ist eine macOS-App, aber die persistente Remote-Session
+# läuft als Daemon auf dem Linux-Ziel-Host. Der Client (DMG) erwartet das Binary
+# unter ~/.zap/remote-server/zap-oss-<GIT_RELEASE_TAG>. Im Fork-Setup schlägt der
+# Auto-Download (zerx-lab/warp releases) fehl, daher wird dieses Binary als
+# Artefakt gebaut und manuell auf den Ziel-Host gelegt (check_binary besteht dann,
+# der Download-Pfad wird nie genommen).
+#
+# Aufruf:  gh workflow run build-remote-server.yml -R byte5ai/zaplex --ref <branch> \
+#            [-f dmg_tag=v0.daemontest]
+# Danach:  gh run download <id> -R byte5ai/zaplex -n zap-remote-server-linux-x86_64
+#          → Binary nach  ~/.zap/remote-server/zap-oss-<dmg_tag>  auf dem Ziel-Host,
+#            chmod 755.  (muss zum dmg_tag des getesteten DMG passen.)
+#
+# Statischer musl-Build (zigbuild) → läuft auf jedem Linux x86_64 unabhängig von
+# der glibc-Version des Hosts. Spiegelt den CLI-Build aus zap_release.yml.
+
+name: Build remote-server (Linux)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dmg_tag:
+        description: "GIT_RELEASE_TAG — muss zum getesteten DMG passen (kosmetisch für die Binary-Version)"
+        type: string
+        default: v0.daemontest
+
+env:
+  CARGO_TERM_COLOR: always
+  CHANNEL: oss
+
+jobs:
+  build_remote_server:
+    name: Build Linux remote-server (musl x86_64)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Free up disk space
+        shell: bash
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift || true
+          df -h /
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          install_release_deps: true
+
+      - name: Install zig + cargo-zigbuild for static musl build
+        run: |
+          set -euo pipefail
+          rustup target add x86_64-unknown-linux-musl
+          ZIG_VERSION="0.13.0"
+          ZIG_DIR="$HOME/.local/zig-${ZIG_VERSION}"
+          if [ ! -x "${ZIG_DIR}/zig" ]; then
+            mkdir -p "${ZIG_DIR}"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+              | tar -xJ -C "${ZIG_DIR}" --strip-components=1
+          fi
+          echo "${ZIG_DIR}" >> "$GITHUB_PATH"
+          cargo install --locked cargo-zigbuild --version ^0.19
+        shell: bash
+
+      - name: Build remote-server CLI (static musl via zigbuild)
+        id: bundle_cli
+        run: |
+          script/bundle --channel "$CHANNEL" --arch x86_64 --artifact cli --packages none \
+            --target x86_64-unknown-linux-musl
+        shell: bash
+        env:
+          GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          USE_ZIGBUILD: "true"
+          PKG_CONFIG_ALLOW_CROSS: 1
+
+      - name: Stage binary as zap-oss
+        run: cp "${{ steps.bundle_cli.outputs.executable_path }}" zap-oss
+        shell: bash
+
+      - name: Upload remote-server binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zap-remote-server-linux-x86_64
+          path: zap-oss
+          if-no-files-found: error
+          retention-days: 7
