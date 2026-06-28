@@ -616,4 +616,58 @@ mod daemon_session {
             model.update(&mut app, |m, ctx| m.handle_message(conn_id, close_msg(&id_b), ctx));
         });
     }
+
+    /// Stage 4 memory governor: the GC reaps idle detached sessions (age) and,
+    /// when over the host ring cap, the oldest detached ones — never live ones.
+    #[test]
+    fn gc_reaps_idle_then_over_cap_detached_sessions() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().to_string_lossy().to_string();
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_in(&path), ctx));
+            let id1 = recv_session_opened(&conn_rx).await.expect("session 1 opened");
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_in(&path), ctx));
+            let id2 = recv_session_opened(&conn_rx).await.expect("session 2 opened");
+
+            // Drop the connection: both sessions detach but keep running (the
+            // grace guard keeps the daemon up).
+            model.update(&mut app, |m, ctx| m.deregister_connection(conn_id, ctx));
+            model.update(&mut app, |m, _ctx| {
+                m.sessions.get_mut(&id1).unwrap().last_attached_ms = 0;
+                m.sessions.get_mut(&id2).unwrap().last_attached_ms = 1_000_000_000_000;
+            });
+
+            // Age GC (60s max, unlimited cap): reap ancient id1, keep recent id2.
+            let reaped = model.update(&mut app, |m, _ctx| {
+                m.gc_sessions(1_000_000_000_000, 60_000, usize::MAX)
+            });
+            assert_eq!(reaped, 1, "ancient detached session reaped");
+            model.update(&mut app, |m, _ctx| {
+                assert!(!m.sessions.contains_key(&id1), "id1 reaped");
+                assert!(m.sessions.contains_key(&id2), "id2 kept");
+            });
+
+            // Give id2 ring bytes, then a zero host cap reaps it (poll until its
+            // shell output has landed in the ring).
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(uuid::Uuid::new_v4(), input_msg(&id2, b"echo GC\n"), ctx)
+            });
+            let mut reaped2 = 0;
+            for _ in 0..50 {
+                reaped2 =
+                    model.update(&mut app, |m, _ctx| m.gc_sessions(1_000_000_000_000, u64::MAX, 0));
+                if reaped2 == 1 {
+                    break;
+                }
+                async_io::Timer::after(Duration::from_millis(100)).await;
+            }
+            assert_eq!(reaped2, 1, "over-cap detached session reaped once it has ring bytes");
+            model.update(&mut app, |m, _ctx| assert!(m.sessions.is_empty(), "all sessions reaped"));
+        });
+    }
 }

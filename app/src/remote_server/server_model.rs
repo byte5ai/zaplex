@@ -57,6 +57,21 @@ use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent
 /// How long the daemon waits with no connections before exiting.
 pub const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
+/// Reap a session that has had no attached connection for this long. Detached
+/// sessions otherwise live indefinitely so a client can reconnect (laptop
+/// closed, etc.); this bounds memory against truly abandoned ones (Stage 4).
+#[cfg(unix)]
+const MAX_DETACHED_SESSION_AGE: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
+/// Soft cap on total output-ring bytes across all of this host's sessions. When
+/// exceeded, the oldest *detached* sessions are reaped until back under it
+/// (live, attached sessions are never reaped).
+#[cfg(unix)]
+const HOST_RING_CAP_BYTES: usize = 256 * 1024 * 1024;
+/// How often the detached-session GC sweep runs.
+#[cfg(unix)]
+const GC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 /// Unique identifier for a connected proxy session in daemon mode.
 pub type ConnectionId = uuid::Uuid;
 use super::protocol::RequestId;
@@ -523,6 +538,9 @@ impl ServerModel {
         // register_connection will cancel the timer the moment the first proxy
         // arrives.
         model.start_grace_timer(ctx);
+        // Periodic memory governor for detached sessions (Stage 4).
+        #[cfg(unix)]
+        model.start_gc_timer(ctx);
         model
     }
 
@@ -2094,6 +2112,101 @@ impl ServerModel {
             })
             .collect();
         HandlerOutcome::Sync(server_message::Message::SessionList(SessionList { sessions }))
+    }
+
+    /// Memory governor (Stage 4): reaps detached sessions that are either idle
+    /// past `max_detached_age_ms`, or — if total ring bytes exceed
+    /// `host_ring_cap_bytes` — the oldest detached ones until back under the cap.
+    /// Never touches a session with a live attached connection. Returns the
+    /// number reaped. Wall-clock is passed in (`now_ms`) so it is unit-testable.
+    fn gc_sessions(
+        &mut self,
+        now_ms: u64,
+        max_detached_age_ms: u64,
+        host_ring_cap_bytes: usize,
+    ) -> usize {
+        let mut reaped = 0;
+
+        // Phase 1: detached and idle longer than the max age.
+        let aged: Vec<String> = {
+            let senders = &self.connection_senders;
+            self.sessions
+                .iter()
+                .filter(|(_, s)| {
+                    let detached =
+                        s.attached == uuid::Uuid::nil() || !senders.contains_key(&s.attached);
+                    detached && now_ms.saturating_sub(s.last_attached_ms) >= max_detached_age_ms
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for id in aged {
+            if let Some(mut session) = self.sessions.remove(&id) {
+                let _ = session.child.kill();
+                let _ = session.child.wait();
+                reaped += 1;
+            }
+        }
+
+        // Phase 2: enforce the host-wide ring-bytes cap by reaping oldest
+        // detached sessions until back under it.
+        let total: usize = self.sessions.values().map(|s| s.ring.len()).sum();
+        if total > host_ring_cap_bytes {
+            let mut over = total - host_ring_cap_bytes;
+            let mut candidates: Vec<(u64, String)> = {
+                let senders = &self.connection_senders;
+                self.sessions
+                    .iter()
+                    .filter(|(_, s)| {
+                        s.attached == uuid::Uuid::nil() || !senders.contains_key(&s.attached)
+                    })
+                    .map(|(id, s)| (s.last_attached_ms, id.clone()))
+                    .collect()
+            };
+            candidates.sort_by_key(|(age, _)| *age); // oldest (smallest ms) first
+            for (_, id) in candidates {
+                if over == 0 {
+                    break;
+                }
+                if let Some(mut session) = self.sessions.remove(&id) {
+                    over = over.saturating_sub(session.ring.len());
+                    let _ = session.child.kill();
+                    let _ = session.child.wait();
+                    reaped += 1;
+                }
+            }
+        }
+
+        if reaped > 0 {
+            log::info!("Daemon GC: reaped {reaped} detached session(s)");
+        }
+        reaped
+    }
+
+    /// Starts the periodic detached-session GC sweep on the background executor,
+    /// re-entering the model each tick. Runs for the daemon's lifetime.
+    fn start_gc_timer(&self, ctx: &mut ModelContext<Self>) {
+        let spawner = ctx.spawner();
+        ctx.background_executor()
+            .spawn(async move {
+                loop {
+                    async_io::Timer::after(GC_INTERVAL).await;
+                    let now = now_epoch_millis();
+                    let outcome = spawner
+                        .spawn(move |me, _ctx| {
+                            me.gc_sessions(
+                                now,
+                                MAX_DETACHED_SESSION_AGE.as_millis() as u64,
+                                HOST_RING_CAP_BYTES,
+                            );
+                        })
+                        .await;
+                    if outcome.is_err() {
+                        break; // model gone — daemon shutting down
+                    }
+                }
+            })
+            .detach();
     }
 
     /// Applies a window resize to the session's PTY (TIOCSWINSZ).
