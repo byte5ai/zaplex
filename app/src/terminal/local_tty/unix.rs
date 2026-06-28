@@ -563,6 +563,19 @@ pub(crate) fn spawn_session_pty(
             }
         }
     }
+    // The daemon owns session persistence itself (its PTY + OutputRing survive
+    // drops); it must NOT be composed with the user's terminal multiplexer. We
+    // spawn a *login* shell (for the user's PATH/profile), but many users have
+    // their profile auto-launch byobu/tmux on login (e.g.
+    // `. /usr/bin/byobu-launch` in ~/.profile). Without suppressing it, the
+    // daemon's login shell joins the user's *existing* byobu session group,
+    // cross-contaminating I/O (the bootstrap script leaking into the user's
+    // live session, the daemon tab mirroring it). `BYOBU_DISABLE=1` is byobu's
+    // documented opt-out and makes the daemon shell stand alone. The client may
+    // still override via `env`.
+    if !env.contains_key("BYOBU_DISABLE") {
+        command.env("BYOBU_DISABLE", "1");
+    }
     let size = SizeInfo::new_without_font_metrics(rows, cols);
     let info = spawn_command_in_pty(command, &size, true)?;
     // SAFETY: `leader_fd` is a freshly-opened PTY master fd that we now own.

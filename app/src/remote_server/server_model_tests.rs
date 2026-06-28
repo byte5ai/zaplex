@@ -712,6 +712,18 @@ mod daemon_session {
                 "daemon shell should be spawned with TERM_PROGRAM=ZaplexTerminal"
             );
 
+            // (3) The daemon owns persistence itself, so its login shell must NOT
+            // auto-launch the user's terminal multiplexer (byobu/tmux) — otherwise
+            // it joins the user's existing session group and cross-contaminates
+            // I/O. `BYOBU_DISABLE=1` must be set in the spawn env.
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, input_msg(&session_id, b"echo BD=$BYOBU_DISABLE\n"), ctx)
+            });
+            assert!(
+                wait_for_output(&conn_rx, b"BD=1", Duration::from_secs(20)).await,
+                "daemon shell must set BYOBU_DISABLE=1 (no multiplexer auto-attach)"
+            );
+
             model.update(&mut app, |m, ctx| m.handle_message(conn_id, close_msg(&session_id), ctx));
         });
     }
