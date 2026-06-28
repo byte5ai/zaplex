@@ -175,3 +175,16 @@ runs:
       if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
       with:
         xcode-version: '26'
+
+    # Xcode 26 ships the Metal toolchain as a separately downloadable component;
+    # without it `xcrun metal` is missing and crates/warpui/build.rs fails to
+    # compile the .metal shaders ("cannot execute tool 'metal' due to missing
+    # Metal Toolchain"). Must run AFTER setup-xcode so it targets the selected
+    # Xcode. `script/macos/install_build_deps` runs `xcodebuild -downloadComponent
+    # MetalToolchain`.
+    - name: Install macOS build deps (Metal toolchain)
+      if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
+      shell: bash
+      run: |
+        cd "${{ steps.repo-root.outputs.path }}"
+        ./script/macos/install_build_deps
