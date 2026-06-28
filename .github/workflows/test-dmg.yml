@@ -33,6 +33,10 @@ on:
         description: "GIT_RELEASE_TAG (bestimmt den remote-server-Pfad auf dem Ziel-Host)"
         type: string
         default: v0.daemontest
+      fast:
+        description: "Schnell bauen (Debug-Profil: Minuten statt ~Stunde). Für Funktionstests. Aus = release-lto (langsam, optimiert)."
+        type: boolean
+        default: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -74,7 +78,8 @@ jobs:
         id: bundle_app
         run: |
           script/bundle --channel "$CHANNEL" --arch ${{ inputs.arch }} \
-            --dmg-name-suffix "${{ inputs.arch == 'x86_64' && 'intel' || 'arm64' }}" --selfsign
+            --dmg-name-suffix "${{ inputs.arch == 'x86_64' && 'intel' || 'arm64' }}" --selfsign \
+            ${{ inputs.fast && '--debug' || '' }}
         shell: bash
         env:
           GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}
