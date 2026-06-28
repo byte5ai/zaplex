@@ -14,10 +14,10 @@ use crate::terminal::cli_agent_sessions::{
 };
 use base64::Engine;
 use warpui::clipboard::{ClipboardContent, ImageData};
-mod warpify_footer;
+mod zaplexify_footer;
 
 pub use crate::terminal::CLIAgent;
-use warpify_footer::{WarpifyFooterView, WarpifyFooterViewEvent};
+use zaplexify_footer::{ZaplexifyFooterView, ZaplexifyFooterViewEvent};
 
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -74,7 +74,7 @@ use crate::{
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
 
 use super::{RichContentInsertionPosition, TerminalAction, TerminalView};
-use crate::terminal::view::block_banner::WarpificationMode;
+use crate::terminal::view::block_banner::ZaplexificationMode;
 
 /// Small delay inserted between separate PTY writes to CLI agents.
 /// (Used both for the mode-switch prefix split and for the `DelayedEnter`
@@ -243,18 +243,18 @@ impl TerminalView {
             UseAgentToolbarEvent::HideRichInput => {
                 self.close_cli_agent_rich_input_and_disable_auto_toggle(ctx);
             }
-            UseAgentToolbarEvent::Warpify { mode } => {
+            UseAgentToolbarEvent::Zaplexify { mode } => {
                 self.hide_use_agent_footer_in_blocklist(ctx);
                 match mode {
-                    WarpificationMode::Ssh { .. } => {
-                        self.handle_action(&TerminalAction::WarpifySSHSession, ctx);
+                    ZaplexificationMode::Ssh { .. } => {
+                        self.handle_action(&TerminalAction::ZaplexifySSHSession, ctx);
                     }
-                    WarpificationMode::Subshell { .. } => {
+                    ZaplexificationMode::Subshell { .. } => {
                         self.handle_action(&TerminalAction::TriggerSubshellBootstrap, ctx);
                     }
                 }
                 send_telemetry_from_ctx!(
-                    TelemetryEvent::WarpifyFooterAcceptedWarpify {
+                    TelemetryEvent::ZaplexifyFooterAcceptedZaplexify {
                         is_ssh: mode.is_ssh()
                     },
                     ctx
@@ -280,11 +280,11 @@ impl TerminalView {
     ) -> bool {
         let ai_settings = AISettings::as_ref(app);
 
-        // If a warpify mode is set, that means ssh or subshell is detected and we should show the footer.
+        // If a zaplexify mode is set, that means ssh or subshell is detected and we should show the footer.
         if self
             .use_agent_footer
             .as_ref(app)
-            .warpify_mode(app)
+            .zaplexify_mode(app)
             .is_some()
         {
             return true;
@@ -415,7 +415,7 @@ impl TerminalView {
 
         if !self.model.lock().is_alt_screen_active() {
             self.use_agent_footer.update(ctx, |footer, ctx| {
-                footer.clear_warpify_mode(ctx);
+                footer.clear_zaplexify_mode(ctx);
             });
             self.hide_use_agent_footer_in_blocklist(ctx);
         }
@@ -955,8 +955,8 @@ pub struct UseAgentToolbar {
     // Shared agent input footer (renders CLI agent mode when a CLI session is active).
     agent_input_footer: ViewHandle<AgentInputFooter>,
 
-    // Warpify footer UI (shown when a subshell/SSH command is detected).
-    warpify_footer_view: ViewHandle<WarpifyFooterView>,
+    // Zaplexify footer UI (shown when a subshell/SSH command is detected).
+    zaplexify_footer_view: ViewHandle<ZaplexifyFooterView>,
 
     // `true` if the user has dismissed the footer.
     //
@@ -1029,11 +1029,11 @@ impl UseAgentToolbar {
             me.handle_agent_input_footer_event(event, ctx);
         });
 
-        let warpify_footer_view =
-            ctx.add_typed_action_view(|ctx| WarpifyFooterView::new(terminal_model.clone(), ctx));
+        let zaplexify_footer_view =
+            ctx.add_typed_action_view(|ctx| ZaplexifyFooterView::new(terminal_model.clone(), ctx));
 
-        ctx.subscribe_to_view(&warpify_footer_view, |me, _, event, ctx| {
-            me.handle_warpify_footer_event(event, ctx);
+        ctx.subscribe_to_view(&zaplexify_footer_view, |me, _, event, ctx| {
+            me.handle_zaplexify_footer_event(event, ctx);
         });
 
         ctx.subscribe_to_model(model_event_dispatcher, |me, _, event, ctx| {
@@ -1059,7 +1059,7 @@ impl UseAgentToolbar {
             dismiss_button,
             dont_show_again_button,
             agent_input_footer,
-            warpify_footer_view,
+            zaplexify_footer_view,
             terminal_model,
             did_user_dismiss: false,
         }
@@ -1095,19 +1095,19 @@ impl UseAgentToolbar {
         }
     }
 
-    fn handle_warpify_footer_event(
+    fn handle_zaplexify_footer_event(
         &mut self,
-        event: &WarpifyFooterViewEvent,
+        event: &ZaplexifyFooterViewEvent,
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            WarpifyFooterViewEvent::Warpify { mode } => {
-                ctx.emit(UseAgentToolbarEvent::Warpify { mode: mode.clone() });
+            ZaplexifyFooterViewEvent::Zaplexify { mode } => {
+                ctx.emit(UseAgentToolbarEvent::Zaplexify { mode: mode.clone() });
             }
-            WarpifyFooterViewEvent::UseAgent => {
+            ZaplexifyFooterViewEvent::UseAgent => {
                 ctx.emit(UseAgentToolbarEvent::UseAgent);
             }
-            WarpifyFooterViewEvent::Dismiss => {
+            ZaplexifyFooterViewEvent::Dismiss => {
                 ctx.emit(UseAgentToolbarEvent::Dismiss);
             }
         }
@@ -1116,7 +1116,7 @@ impl UseAgentToolbar {
     pub(in crate::terminal) fn notify_and_notify_children(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.notify();
         self.agent_input_footer.update(ctx, |_, ctx| ctx.notify());
-        self.warpify_footer_view.update(ctx, |_, ctx| ctx.notify());
+        self.zaplexify_footer_view.update(ctx, |_, ctx| ctx.notify());
         self.button.update(ctx, |_, ctx| ctx.notify());
         self.give_control_back_button
             .update(ctx, |_, ctx| ctx.notify());
@@ -1136,30 +1136,30 @@ impl UseAgentToolbar {
             .map(|session| session.agent)
     }
 
-    /// Sets the current warpification mode. When set, the footer shows the
-    /// warpify view instead of the CLI agent or regular "Use agent" views.
-    pub(in crate::terminal) fn set_warpify_mode(
+    /// Sets the current zaplexification mode. When set, the footer shows the
+    /// zaplexify view instead of the CLI agent or regular "Use agent" views.
+    pub(in crate::terminal) fn set_zaplexify_mode(
         &mut self,
-        mode: WarpificationMode,
+        mode: ZaplexificationMode,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.warpify_footer_view.update(ctx, |view, ctx| {
+        self.zaplexify_footer_view.update(ctx, |view, ctx| {
             view.set_mode(mode, ctx);
         });
         ctx.notify();
     }
 
-    /// Clears the warpification mode so the footer reverts to its default behavior.
-    pub(in crate::terminal) fn clear_warpify_mode(&mut self, ctx: &mut ViewContext<Self>) {
-        self.warpify_footer_view.update(ctx, |view, ctx| {
+    /// Clears the zaplexification mode so the footer reverts to its default behavior.
+    pub(in crate::terminal) fn clear_zaplexify_mode(&mut self, ctx: &mut ViewContext<Self>) {
+        self.zaplexify_footer_view.update(ctx, |view, ctx| {
             view.clear_mode(ctx);
         });
         ctx.notify();
     }
 
-    /// Returns the current warpification mode, if set.
-    pub(in crate::terminal) fn warpify_mode(&self, app: &AppContext) -> Option<WarpificationMode> {
-        self.warpify_footer_view.as_ref(app).mode().cloned()
+    /// Returns the current zaplexification mode, if set.
+    pub(in crate::terminal) fn zaplexify_mode(&self, app: &AppContext) -> Option<ZaplexificationMode> {
+        self.zaplexify_footer_view.as_ref(app).mode().cloned()
     }
 
     /// Returns whether there's a current CLI agent (like Claude Code).
@@ -1185,8 +1185,8 @@ pub enum UseAgentToolbarEvent {
     OpenRichInput,
     /// Hide the rich input editor (same as Escape).
     HideRichInput,
-    /// User chose to warpify the subshell/SSH session.
-    Warpify { mode: WarpificationMode },
+    /// User chose to zaplexify the subshell/SSH session.
+    Zaplexify { mode: ZaplexificationMode },
     /// User chose to use the agent.
     UseAgent,
 }
@@ -1201,9 +1201,9 @@ impl View for UseAgentToolbar {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        // If a warpify mode is set, delegate rendering to the warpify footer view.
-        if self.warpify_footer_view.as_ref(app).mode().is_some() {
-            return ChildView::new(&self.warpify_footer_view).finish();
+        // If a zaplexify mode is set, delegate rendering to the zaplexify footer view.
+        if self.zaplexify_footer_view.as_ref(app).mode().is_some() {
+            return ChildView::new(&self.zaplexify_footer_view).finish();
         }
 
         // Hide the toolbar entirely when CLI rich input is open,

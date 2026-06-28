@@ -515,7 +515,7 @@ fn init_internal(
 
     let stdout_is_a_tty = std::io::stdout().is_terminal();
     let in_ci = env::var("CI").is_ok();
-    let integration_test = env::var("WARP_INTEGRATION").is_ok();
+    let integration_test = env::var("ZAPLEX_INTEGRATION").is_ok();
     let use_logfile = match log_destination {
         Some(LogDestination::File) => true,
         Some(LogDestination::Stderr) => false,
@@ -585,7 +585,7 @@ fn init_log_directory() -> Result<std::path::PathBuf> {
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             Ok(warp_core::paths::state_dir())
         } else if #[cfg(windows)] {
-            Ok(warp_core::paths::state_dir().join(warp_core::paths::WARP_LOGS_DIR))
+            Ok(warp_core::paths::state_dir().join(warp_core::paths::ZAPLEX_LOGS_DIR))
         } else {
             Err(anyhow::anyhow!("Have not configured file-based logging for the current platform!"))
         }

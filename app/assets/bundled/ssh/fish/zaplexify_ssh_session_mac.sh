@@ -8,7 +8,7 @@ function _l
 end
 
 function _e
-    _l RemoteWarpificationIsUnavailable $argv[1]
+    _l RemoteZaplexificationIsUnavailable $argv[1]
 end
 
 function _sd

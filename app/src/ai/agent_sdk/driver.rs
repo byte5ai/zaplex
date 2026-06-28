@@ -74,7 +74,7 @@ use terminal::TerminalDriverEvent;
 
 const MCP_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
-pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const ZAPLEX_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 const SETUP_FAILED_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Maximum time to wait for an automatic error resume before propagating the error.
 /// If no follow-up status arrives within this window, the driver terminates with the

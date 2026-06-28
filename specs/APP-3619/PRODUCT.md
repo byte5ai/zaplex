@@ -13,7 +13,7 @@ When the Warp notification plugin can't be auto-installed (SSH session, or a pre
 
 ## Chip Visibility Fix (Remote Sessions)
 
-`should_show_install_plugin_button` hides the chip when `manager.is_installed()` returns true. But `is_installed()` reads the **local** filesystem (`~/.claude/plugins/installed_plugins.json`), not the remote machine's. In any remote session (warpified SSH, legacy SSH, Docker via SSH) where Claude Code runs on the remote, this check is wrong:
+`should_show_install_plugin_button` hides the chip when `manager.is_installed()` returns true. But `is_installed()` reads the **local** filesystem (`~/.claude/plugins/installed_plugins.json`), not the remote machine's. In any remote session (zaplexified SSH, legacy SSH, Docker via SSH) where Claude Code runs on the remote, this check is wrong:
 
 - Plugin installed locally but not on remote → chip hidden, user stuck with no instructions
 
@@ -114,4 +114,4 @@ Failure state is not persisted. A new terminal session starts fresh in Mode 1 (a
 - **User installs plugin manually mid-session (without using the chip):** The listener will connect on next `SessionStart` event, chip disappears automatically.
 - **User clicks chip in Mode 2 then installs manually:** Modal stays open until dismissed. Chip disappears on next render once listener is present.
 - **Multiple terminal tabs with same agent:** Each tab has its own `AgentInputFooter` with independent failure tracking. This is correct — one tab's failure shouldn't affect another.
-- **Warpified SSH (tmux wrapper):** Even though the local filesystem is accessible via tmux, the agent runs on the remote machine. The `is_remote` flag is set for all SSH sessions (warpified or legacy), so Mode 2 applies to all remote sessions.
+- **Zaplexified SSH (tmux wrapper):** Even though the local filesystem is accessible via tmux, the agent runs on the remote machine. The `is_remote` flag is set for all SSH sessions (zaplexified or legacy), so Mode 2 applies to all remote sessions.

@@ -1,13 +1,13 @@
-name: SSH Warpify (tmux) Issue
-description: "SSH Warpification with tmux fails in Zap. Use this template for that specific scenario."
+name: SSH Zaplexify (tmux) Issue
+description: "SSH Zaplexification with tmux fails in Zap. Use this template for that specific scenario."
 labels: ["bug", "area:ssh"]
 body:
   - type: markdown
     attributes:
       value: |
-        Use this template only when SSH **Warpification** (subshell bootstrap over SSH with tmux) fails in **Zap**.
+        Use this template only when SSH **Zaplexification** (subshell bootstrap over SSH with tmux) fails in **Zap**.
 
-        - Cloud-account or Warpify-SSO issues belong to upstream Zap, not Zap.
+        - Cloud-account or Zaplexify-SSO issues belong to upstream Zap, not Zap.
         - For non-tmux SSH bootstrap failures, use the *Legacy SSH* template instead.
   - type: checkboxes
     attributes:

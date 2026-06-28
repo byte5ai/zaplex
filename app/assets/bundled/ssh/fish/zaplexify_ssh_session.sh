@@ -10,7 +10,7 @@ function _log
 end
 
 function _err
-    _log RemoteWarpificationIsUnavailable $argv[1]
+    _log RemoteZaplexificationIsUnavailable $argv[1]
 end
 
 function _system_details

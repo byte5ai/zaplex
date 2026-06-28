@@ -23,13 +23,13 @@ pub struct RegistryBackedPreferences {
     cached_key: Mutex<Option<Key>>,
 }
 
-static WARP_REGISTRY_BASE_PATH: &str = "Software\\Zap\\";
+static ZAPLEX_REGISTRY_BASE_PATH: &str = "Software\\Zap\\";
 pub const KEY_NOT_FOUND_ERR: HRESULT = HRESULT::from_win32(0x80070002);
 
 impl RegistryBackedPreferences {
     /// Construct a separate registry path for each channel (stable, dev, local, etc.)
     pub fn new(app_name: &str) -> Self {
-        let app_key_path = WARP_REGISTRY_BASE_PATH.to_owned() + app_name;
+        let app_key_path = ZAPLEX_REGISTRY_BASE_PATH.to_owned() + app_name;
         // Warm up the Key at startup so the first setting read also avoids synchronous system calls.
         // Warmup failure is not an error: `with_warp_registry` will retry when needed.
         let initial_key = CURRENT_USER

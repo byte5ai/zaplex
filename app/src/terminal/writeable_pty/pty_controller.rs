@@ -36,7 +36,7 @@ const COMMAND_ENTER: &[u8] = &[escape_sequences::C0::CR, escape_sequences::C0::L
 const SWITCH_TO_PS1_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'p'];
 /// Used to let the shell know we are switching to the Zap prompt via a bindkey \ew. This will
 /// unset the PS1 to ensure we don't have a double prompt (PS1 and Zap prompt).
-const SWITCH_TO_WARP_PROMPT_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'w'];
+const SWITCH_TO_ZAPLEX_PROMPT_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'w'];
 
 /// Represents a single call to write bytes to the PTY asynchronously.
 enum PtyWrite {
@@ -149,7 +149,7 @@ impl<T: EventLoopSender> PtyController<T> {
                 me.tmux_control_mode = None;
             }
             ModelEvent::HonorPS1OutOfSync => {
-                // We force re-sync the PS1 state of Zap settings with the shell's environment variable, $WARP_HONOR_PS1, via
+                // We force re-sync the PS1 state of Zap settings with the shell's environment variable, $ZAPLEX_HONOR_PS1, via
                 // a bindkey (which triggers a shell function).
                 let honor_ps1 = *SessionSettings::as_ref(ctx).honor_ps1;
                 if honor_ps1 {
@@ -294,7 +294,7 @@ impl<T: EventLoopSender> PtyController<T> {
     /// future restoration).
     pub fn send_switch_to_warp_prompt_bindkey(&mut self, ctx: &mut ModelContext<Self>) {
         self.pending_writes.push_back(PtyWrite::Bytes {
-            bytes: SWITCH_TO_WARP_PROMPT_ESCAPE_SEQUENCE.into(),
+            bytes: SWITCH_TO_ZAPLEX_PROMPT_ESCAPE_SEQUENCE.into(),
         });
         self.execute_next_queued_write(ctx);
 

@@ -247,7 +247,7 @@ begin
     { Create the helper CMD script }
     CmdScriptPath := BinDir + '\' + CmdScriptName;
     CmdScriptContent := '@echo off' + #13#10 +
-                       'set "WARP_CLI_MODE=1"' + #13#10 +
+                       'set "ZAPLEX_CLI_MODE=1"' + #13#10 +
                        '"' + ExpandConstant('{app}\{#MyAppExeName}') + '" %*' + #13#10;
 
     SaveStringToFile(CmdScriptPath, CmdScriptContent, False);

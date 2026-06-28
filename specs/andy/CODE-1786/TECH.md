@@ -6,7 +6,7 @@ The macOS "Start Warp at login" feature is already plumbed end-to-end. This tick
 Relevant code today:
 - `app/src/terminal/general_settings.rs:36-55` — `add_app_as_login_item` (`LoginItem`) and `app_added_as_login_item` (`AppAddedAsLoginItem`), both gated on `SupportedPlatforms::MAC` with defaults `true` / `false` respectively. The second setting is the "already registered" bookkeeping that prevents clobbering a manual unregister.
 - `app/src/lib.rs:2229-2239` — startup wiring. Subscribes to `GeneralSettingsChangedEvent::LoginItem` and calls `maybe_register_app_as_login_item` on change + once at launch. Entire block is `#[cfg(target_os = "macos")]`.
-- `app/src/lib.rs:2279-2362` — `maybe_register_app_as_login_item`. macOS-only. Guards on `WARP_INTEGRATION`, skips when bundle identifier is missing or equals `dev.warp.Warp-Local`, runs `SMAppService register/unregisterAndReturnError:` off the UI thread, then writes the result back to `app_added_as_login_item`.
+- `app/src/lib.rs:2279-2362` — `maybe_register_app_as_login_item`. macOS-only. Guards on `ZAPLEX_INTEGRATION`, skips when bundle identifier is missing or equals `dev.warp.Warp-Local`, runs `SMAppService register/unregisterAndReturnError:` off the UI thread, then writes the result back to `app_added_as_login_item`.
 - `app/src/settings_view/features_page.rs` — toggle UI:
   - action enum: `FeaturesPageAction::ToggleLoginItem` (~l618)
   - telemetry: `ToggleLoginItem` branch (~l975-978)
@@ -24,7 +24,7 @@ Create `app/src/login_item/mod.rs` (or reuse an existing "platform adapters" spo
 ```rust path=null start=null
 // app/src/login_item/mod.rs
 pub fn maybe_register_app_as_login_item(ctx: &mut AppContext) {
-    if std::env::var("WARP_INTEGRATION").is_ok() {
+    if std::env::var("ZAPLEX_INTEGRATION").is_ok() {
         log::debug!("Not registering as a login item in integration tests");
         return;
     }
@@ -99,7 +99,7 @@ Unit tests (Windows, gated with `#[cfg(target_os = "windows")]`):
 Because the real `Software\Microsoft\Windows\CurrentVersion\Run` hive is shared user state that should not be mutated by tests, the registry helpers should accept an injectable subkey path (e.g. `register_with_subkey(subkey, …)`) and the tests should drive them against `Software\Warp\TestRun\<uuid>` under HKCU, cleaning up on drop. Follow the `crates/warpui/src/windowing/winit/windows/registry.rs` style for the read-side helper for consistency.
 Cross-platform tests (run on every OS):
 - **Invariant 1/13 (platform gate).** Assert `LoginItem::supported_platforms().matches_current_platform()` is true on mac+windows, false on wasm. This is already covered structurally by `SupportedPlatforms::OR`; a small regression test in `general_settings`/`features_page` confirms the intent stays stable.
-- **Invariant 9 (integration test guard).** With `WARP_INTEGRATION` set, calling `maybe_register_app_as_login_item` does no registry I/O. Can be asserted by calling with a mock subkey provider that panics if invoked.
+- **Invariant 9 (integration test guard).** With `ZAPLEX_INTEGRATION` set, calling `maybe_register_app_as_login_item` does no registry I/O. Can be asserted by calling with a mock subkey provider that panics if invoked.
 Manual validation (Windows):
 1. **Invariants 1, 2, 11.** Install a release-bundle Windows build, verify **Features → General** shows *Start Warp at login*, toggle default is on, and `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Warp` exists with the installed exe path. Confirm the entry is visible in **Settings → Apps → Startup** and **Task Manager → Startup apps** with the display name "Warp".
 2. **Invariant 3–4.** Toggle off; confirm the registry value is gone and Windows UIs no longer show the entry. Toggle back on; confirm value is rewritten.

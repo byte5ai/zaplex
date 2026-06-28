@@ -58,6 +58,47 @@ impl AuthType {
     }
 }
 
+/// Per-host opt-in for the native persistent remote-session layer.
+///
+/// `Off` (the default) keeps today's behavior: SSH is a local PTY running the
+/// `ssh` binary. The other tiers make the session daemon-hosted — the remote
+/// daemon owns the PTY and a replay buffer, so the session survives transport
+/// drops and can be reattached.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default, Serialize, Deserialize)]
+pub enum SessionResilience {
+    /// No persistence; classic local-PTY-runs-ssh.
+    #[default]
+    Off,
+    /// Daemon-hosted session with server-side persistence + replay/reattach.
+    PersistOnly,
+    /// Persistence plus the mosh-grade UDP transport (Phase B3).
+    PersistPlusMosh,
+}
+
+impl SessionResilience {
+    pub fn as_db_str(&self) -> &'static str {
+        match self {
+            SessionResilience::Off => "off",
+            SessionResilience::PersistOnly => "persist_only",
+            SessionResilience::PersistPlusMosh => "persist_plus_mosh",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "off" => Some(SessionResilience::Off),
+            "persist_only" => Some(SessionResilience::PersistOnly),
+            "persist_plus_mosh" => Some(SessionResilience::PersistPlusMosh),
+            _ => None,
+        }
+    }
+
+    /// Whether this host should run as a daemon-hosted session at all.
+    pub fn is_enabled(&self) -> bool {
+        !matches!(self, SessionResilience::Off)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum OneKeyCredentialKind {
     Password,
@@ -110,6 +151,8 @@ pub struct SshServerInfo {
     pub startup_command: Option<String>,
     pub notes: Option<String>,
     pub last_connected_at: Option<NaiveDateTime>,
+    /// Per-host opt-in for the native persistent remote-session layer.
+    pub session_resilience: SessionResilience,
 }
 
 impl SshServerInfo {
@@ -125,6 +168,7 @@ impl SshServerInfo {
             startup_command: None,
             notes: None,
             last_connected_at: None,
+            session_resilience: SessionResilience::default(),
         }
     }
 
@@ -141,6 +185,7 @@ impl SshServerInfo {
             startup_command: source.startup_command.clone(),
             notes: source.notes.clone(),
             last_connected_at: None,
+            session_resilience: source.session_resilience,
         }
     }
 }

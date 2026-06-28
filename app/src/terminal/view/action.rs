@@ -74,7 +74,7 @@ pub enum OnboardingVersion {
 /// This represents whether entering a subshell for a particular command should become automatic in
 /// the future, or to ask again.
 #[derive(Clone, Debug)]
-pub enum RememberForWarpification {
+pub enum RememberForZaplexification {
     /// If yes, need to transmit the command itself so it can be persisted to user-defaults
     RememberSubshellCommand(String),
     RememberSSHHost(String),
@@ -82,22 +82,22 @@ pub enum RememberForWarpification {
     DoNotRememberSSHHost,
 }
 
-impl RememberForWarpification {
+impl RememberForZaplexification {
     pub fn as_bool(&self) -> bool {
         match self {
-            RememberForWarpification::RememberSubshellCommand(_) => true,
-            RememberForWarpification::RememberSSHHost(_) => true,
-            RememberForWarpification::DoNotRememberSubshellCommand => false,
-            RememberForWarpification::DoNotRememberSSHHost => false,
+            RememberForZaplexification::RememberSubshellCommand(_) => true,
+            RememberForZaplexification::RememberSSHHost(_) => true,
+            RememberForZaplexification::DoNotRememberSubshellCommand => false,
+            RememberForZaplexification::DoNotRememberSSHHost => false,
         }
     }
 
     pub fn is_ssh(&self) -> bool {
         match self {
-            RememberForWarpification::RememberSSHHost(_) => true,
-            RememberForWarpification::DoNotRememberSSHHost => true,
-            RememberForWarpification::RememberSubshellCommand(_) => false,
-            RememberForWarpification::DoNotRememberSubshellCommand => false,
+            RememberForZaplexification::RememberSSHHost(_) => true,
+            RememberForZaplexification::DoNotRememberSSHHost => true,
+            RememberForZaplexification::RememberSubshellCommand(_) => false,
+            RememberForZaplexification::DoNotRememberSubshellCommand => false,
         }
     }
 }
@@ -295,14 +295,14 @@ pub enum TerminalAction {
     },
     /// Starts a subshell in the active session.
     TriggerSubshellBootstrap,
-    /// If the user says "no" to Warpification, possibly requesting not to be asked again
-    DismissWarpifyBanner(RememberForWarpification),
+    /// If the user says "no" to Zaplexification, possibly requesting not to be asked again
+    DismissZaplexifyBanner(RememberForZaplexification),
     /// Triggers the banner asking to turn the running block into a subshell. The String is the
     /// command that the user entered.
     ShowSubshellBanner(String),
-    /// Triggers the banner asking to Warpify the active ssh session. The String is the
+    /// Triggers the banner asking to Zaplexify the active ssh session. The String is the
     /// command that the user entered.
-    ShowWarpifySshBanner(String, Option<String>),
+    ShowZaplexifySshBanner(String, Option<String>),
     InsertMostRecentCommandCorrection,
     AliasExpansionBanner(AliasExpansionBannerAction),
     OpenInWarpBanner(OpenInWarpBannerAction),
@@ -319,8 +319,8 @@ pub enum TerminalAction {
     /// it if possible.
     SelectAIAttachedBlock(BlockIndex),
     DragAndDropFiles(Vec<String>),
-    /// Triggers an ssh session to warpify, even if there is no Warpify Block.
-    WarpifySSHSession,
+    /// Triggers an ssh session to zaplexify, even if there is no Zaplexify Block.
+    ZaplexifySSHSession,
     NotifySshErrorBlock(SshErrorBlockAction),
     /// Sets the input mode to Agent Mode
     SetInputModeAgent,
@@ -343,7 +343,7 @@ pub enum TerminalAction {
     ShowInitializationBlock,
     /// This is for debugging, dev only for now
     LoadAgentModeConversation,
-    ShowWarpifySettings,
+    ShowZaplexifySettings,
     /// Removes a pending attachment (image or file) by index in the unified list.
     DeleteAttachment {
         index: usize,
@@ -551,9 +551,9 @@ impl fmt::Debug for TerminalAction {
             OpenBlockListContextMenu => f.write_str("OpenBlockListContextMenu"),
             AskAIAssistant { block_index } => write!(f, "AskAIAssistant({block_index:?})"),
             TriggerSubshellBootstrap => f.write_str("TriggerSubshellBootstrap"),
-            DismissWarpifyBanner(remember) => write!(f, "DismissWarpifyBanner({remember:?})"),
+            DismissZaplexifyBanner(remember) => write!(f, "DismissZaplexifyBanner({remember:?})"),
             ShowSubshellBanner(_) => f.write_str("ShowSubshellBanner"),
-            ShowWarpifySshBanner(_, _) => f.write_str("ShowWarpifySshBanner"),
+            ShowZaplexifySshBanner(_, _) => f.write_str("ShowZaplexifySshBanner"),
             InsertMostRecentCommandCorrection => f.write_str("InsertMostRecentCommandCorrection"),
             AliasExpansionBanner(action) => write!(f, "AliasExpansionBanner({action:?}"),
             OpenInWarpBanner(action) => write!(f, "OpenInWarpBanner({action:?})"),
@@ -581,7 +581,7 @@ impl fmt::Debug for TerminalAction {
             ExecuteRewindFromInlineMenu { .. } => write!(f, "ExecuteRewindFromInlineMenu"),
             SelectAIAttachedBlock(_) => write!(f, "SelectAIAttachedBlock"),
             DragAndDropFiles(_) => write!(f, "DragAndDropFiles"),
-            WarpifySSHSession => write!(f, "WarpifySSHSession"),
+            ZaplexifySSHSession => write!(f, "ZaplexifySSHSession"),
             NotifySshErrorBlock(action) => write!(f, "NotifySshErrorBlock({action:?})"),
             SetInputModeAgent => write!(f, "SetInputModeAgent"),
             SetInputModeTerminal => write!(f, "SetInputModeTerminal"),
@@ -602,7 +602,7 @@ impl fmt::Debug for TerminalAction {
             SelectAgenticSuggestion(index) => write!(f, "SelectAgenticSuggestion({index:?})"),
             ShowInitializationBlock => write!(f, "ShowInitializationBlock"),
             LoadAgentModeConversation => write!(f, "LoadAgentModeConversation"),
-            ShowWarpifySettings => write!(f, "ShowWarpifySettings"),
+            ShowZaplexifySettings => write!(f, "ShowZaplexifySettings"),
             DeleteAttachment { index } => write!(f, "DeleteAttachment({index:?})"),
             ToggleAutoexecuteMode => write!(f, "ToggleAutoexecuteMode"),
             ToggleQueueNextPrompt => write!(f, "ToggleQueueNextPrompt"),

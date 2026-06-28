@@ -85,12 +85,12 @@ use super::view::{
     BlocklistAIRenderContext, InlineBannerId, RichContentMetadata, SeparatorId,
     SharedSessionBanners, TerminalEditor, TerminalViewRenderContext, BLOCK_BANNER_HEIGHT,
 };
-use super::warpify::render::{draw_flag_pole, render_subshell_flag};
+use super::zaplexify::render::{draw_flag_pole, render_subshell_flag};
 use super::TerminalModel;
 use super::{heights_approx_eq, HEIGHT_FUDGE_FACTOR_LINES};
 use crate::terminal::blockgrid_renderer::BlockGridParams;
 use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::warpify::SubshellSource;
+use crate::terminal::zaplexify::SubshellSource;
 
 use crate::terminal::model::escape_sequences::{
     maybe_kitty_keyboard_escape_sequence, KeystrokeWithDetails, ToEscapeSequence,

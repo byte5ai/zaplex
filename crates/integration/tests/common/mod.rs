@@ -27,7 +27,7 @@ pub fn run_integration_test(name: &str) -> Result<(), String> {
                 // Propagate any Rust-related variables.
                 || k.starts_with("RUST_")
                 // Propagate any Zap-specific variables.
-                || k.starts_with("WARP_")
+                || k.starts_with("ZAPLEX_")
                 || k.starts_with("WARPUI_")
                 // Propagate any wgpu-specific variables.
                 || k.starts_with("WGPU_")
@@ -46,7 +46,7 @@ pub fn run_integration_test(name: &str) -> Result<(), String> {
             .arg(name)
             .env_clear()
             .envs(inherited_envs)
-            .env("WARP_INTEGRATION", "1")
+            .env("ZAPLEX_INTEGRATION", "1")
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .status()
@@ -121,7 +121,7 @@ pub fn run_integration_test(name: &str) -> Result<(), String> {
                 // Propagate any Rust-related variables.
                 || k.starts_with("RUST_")
                 // Propagate any Zap-specific variables.
-                || k.starts_with("WARP_")
+                || k.starts_with("ZAPLEX_")
                 || k.starts_with("WARPUI_")
                 // Propagate any wgpu-specific variables.
                 || k.starts_with("WGPU_")
@@ -157,7 +157,7 @@ pub fn run_integration_test(name: &str) -> Result<(), String> {
             .arg(name)
             .env_clear()
             .envs(inherited_envs)
-            .env("WARP_INTEGRATION", "1")
+            .env("ZAPLEX_INTEGRATION", "1")
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .stdin(Stdio::null())

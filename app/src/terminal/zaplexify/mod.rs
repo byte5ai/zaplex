@@ -10,7 +10,7 @@ use channel_versions::overrides::TargetOS;
 use warpui::AssetProvider;
 
 #[derive(Debug)]
-pub enum WarpificationSource {
+pub enum ZaplexificationSource {
     Ssh,
     Subshell,
 }
@@ -33,7 +33,7 @@ fn get_subshell_bootstrap_success_block_path(shell_type: ShellType) -> Option<&'
     }
 }
 
-/// Returns OutputGrid bytes to be rendered in the hardcoded "Warpified subshell" block that's added
+/// Returns OutputGrid bytes to be rendered in the hardcoded "Zaplexified subshell" block that's added
 /// to the blocklist upon successful subshell bootstrap.
 ///
 /// The exact block contents varies based on whether or not the session is local or remote, in

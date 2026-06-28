@@ -24,11 +24,11 @@ FEATURES="gui"
 
 # If warp_channel_config is on PATH, build the Local channel binary; otherwise build the OSS channel.
 if command -v warp-channel-config &>/dev/null; then
-    WARP_BIN_NAME="warp"
-    WARP_CHANNEL="local"
+    ZAPLEX_BIN_NAME="warp"
+    ZAPLEX_CHANNEL="local"
 else
-    WARP_BIN_NAME="zap-oss"
-    WARP_CHANNEL="oss"
+    ZAPLEX_BIN_NAME="zap-oss"
+    ZAPLEX_CHANNEL="oss"
 fi
 
 # Shared argument parsing. macOS-specific flags (--dont-open,
@@ -36,13 +36,13 @@ fi
 # silently ignored on other platforms.
 MAC_ARGS=()
 CARGO_PARAMS=()
-WARP_ARGS=()
+ZAPLEX_ARGS=()
 
 while (( "$#" )); do
   case "$1" in
     --)
       shift
-      WARP_ARGS=("$@")
+      ZAPLEX_ARGS=("$@")
       break
       ;;
     --features)
@@ -56,7 +56,7 @@ while (( "$#" )); do
       ;;
     --host-id)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
-        export WARP_CLOUD_MODE_DEFAULT_HOST="$2"
+        export ZAPLEX_CLOUD_MODE_DEFAULT_HOST="$2"
         shift 2
       else
         echo "Error: Argument for $1 is missing" >&2
@@ -105,21 +105,21 @@ for mapping in \
 done
 
 export FEATURES
-export WARP_BIN_NAME
-export WARP_CHANNEL
+export ZAPLEX_BIN_NAME
+export ZAPLEX_CHANNEL
 
 if [[ "$OS_TYPE" = "Darwin" ]]; then
-  if [[ ${#WARP_ARGS[@]} -gt 0 ]]; then
-    exec ./script/macos/run "${MAC_ARGS[@]}" -- "${WARP_ARGS[@]}"
+  if [[ ${#ZAPLEX_ARGS[@]} -gt 0 ]]; then
+    exec ./script/macos/run "${MAC_ARGS[@]}" -- "${ZAPLEX_ARGS[@]}"
   else
     exec ./script/macos/run "${MAC_ARGS[@]}"
   fi
 elif [[ "$OS_TYPE" = "Linux" ]] || [[ "$OS_TYPE" =~ ^(MINGW64_NT|MSYS_NT) ]]; then
-  echo "Running cargo run --bin $WARP_BIN_NAME --features \"$FEATURES\" ${CARGO_PARAMS[*]}"
-  if [[ ${#WARP_ARGS[@]} -gt 0 ]]; then
-    cargo run --bin "$WARP_BIN_NAME" --features "$FEATURES" "${CARGO_PARAMS[@]}" -- "${WARP_ARGS[@]}"
+  echo "Running cargo run --bin $ZAPLEX_BIN_NAME --features \"$FEATURES\" ${CARGO_PARAMS[*]}"
+  if [[ ${#ZAPLEX_ARGS[@]} -gt 0 ]]; then
+    cargo run --bin "$ZAPLEX_BIN_NAME" --features "$FEATURES" "${CARGO_PARAMS[@]}" -- "${ZAPLEX_ARGS[@]}"
   else
-    cargo run --bin "$WARP_BIN_NAME" --features "$FEATURES" "${CARGO_PARAMS[@]}"
+    cargo run --bin "$ZAPLEX_BIN_NAME" --features "$FEATURES" "${CARGO_PARAMS[@]}"
   fi
 else
   echo "No run script defined for the current platform ($OS_TYPE)!" >&2

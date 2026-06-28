@@ -33,8 +33,8 @@ use warpui::{
 
 use warp_ssh_manager::{
     AuthType, ConnectionStatus, KeychainSecretStore, NodeKind, OneKeyCredentialKind, SecretKind,
-    SshNode, SshOneKeyCredential, SshRepository, SshSecretStore, SshSecretStoreError,
-    SshServerInfo,
+    SessionResilience, SshNode, SshOneKeyCredential, SshRepository, SshSecretStore,
+    SshSecretStoreError, SshServerInfo,
 };
 use zeroize::Zeroizing;
 
@@ -57,6 +57,9 @@ pub enum SshServerAction {
     SetAuthPassword,
     SetAuthKey,
     SetAuthOneKey,
+    /// Toggle session persistence (native remote-session layer). `true` selects
+    /// the persistent tier, `false` selects standard (non-persistent) SSH.
+    SetSessionResilience(bool),
     /// Open system file picker to select private key file and write path to key_path editor.
     PickKeyFile,
     /// Select group (None means root level, Some(index) means self.folders[index]).
@@ -114,12 +117,18 @@ pub struct SshServerView {
     /// Currently selected authentication method. Save button submits this value to DB.
     auth_type: AuthType,
 
+    /// Currently selected session-persistence tier (native remote-session layer).
+    /// Save/Connect submit this value.
+    session_resilience: SessionResilience,
+
     save_btn_state: MouseStateHandle,
     connect_btn_state: MouseStateHandle,
     test_btn_state: MouseStateHandle,
     auth_password_btn_state: MouseStateHandle,
     auth_key_btn_state: MouseStateHandle,
     auth_onekey_btn_state: MouseStateHandle,
+    resilience_off_btn_state: MouseStateHandle,
+    resilience_on_btn_state: MouseStateHandle,
     key_path_picker_btn_state: MouseStateHandle,
     onekey_manager_btn_state: MouseStateHandle,
     onekey_manager_close_btn_state: MouseStateHandle,
@@ -216,12 +225,15 @@ impl SshServerView {
             startup_command_editor,
             notes_editor,
             auth_type: AuthType::Password,
+            session_resilience: SessionResilience::default(),
             save_btn_state: MouseStateHandle::default(),
             connect_btn_state: MouseStateHandle::default(),
             test_btn_state: MouseStateHandle::default(),
             auth_password_btn_state: MouseStateHandle::default(),
             auth_key_btn_state: MouseStateHandle::default(),
             auth_onekey_btn_state: MouseStateHandle::default(),
+            resilience_off_btn_state: MouseStateHandle::default(),
+            resilience_on_btn_state: MouseStateHandle::default(),
             key_path_picker_btn_state: MouseStateHandle::default(),
             onekey_manager_btn_state: MouseStateHandle::default(),
             onekey_manager_close_btn_state: MouseStateHandle::default(),
@@ -374,6 +386,7 @@ impl SshServerView {
 
         if let Some(srv) = self.server.clone() {
             self.auth_type = srv.auth_type;
+            self.session_resilience = srv.session_resilience;
             self.selected_onekey_credential_id = srv.credential_id.clone();
             let host = srv.host.clone();
             let port_str = srv.port.to_string();
@@ -693,6 +706,7 @@ impl SshServerView {
                 Some(notes_text.trim().to_string())
             },
             last_connected_at: self.server.as_ref().and_then(|s| s.last_connected_at),
+            session_resilience: self.session_resilience,
         };
 
         // 2. Write to DB (rename + update_server + possible move_node)
@@ -814,6 +828,11 @@ impl SshServerView {
                 Some(notes_text.trim().to_string())
             },
             last_connected_at: self.server.as_ref().and_then(|s| s.last_connected_at),
+            session_resilience: self
+                .server
+                .as_ref()
+                .map(|s| s.session_resilience)
+                .unwrap_or_default(),
         };
         ctx.dispatch_typed_action(&crate::workspace::WorkspaceAction::OpenSshTerminal {
             node_id: self.node_id.clone(),
@@ -855,6 +874,8 @@ impl SshServerView {
             startup_command: None,
             notes: None,
             last_connected_at: None,
+            // Ephemeral object for the connection test only; never persisted.
+            session_resilience: SessionResilience::default(),
         };
 
         let (server, password) = match resolve_test_server_and_password(
@@ -962,6 +983,25 @@ impl SshServerView {
             // Clear password buffer when switching auth type — password and passphrase have different semantics.
             self.password_editor
                 .update(ctx, |e, ctx| e.set_buffer_text("", ctx));
+            self.status = None;
+            ctx.notify();
+        }
+    }
+
+    fn on_set_session_resilience(&mut self, on: bool, ctx: &mut ViewContext<Self>) {
+        let next = if on {
+            // Preserve a higher tier (e.g. PersistPlusMosh) if already selected;
+            // the UI only distinguishes off vs. on for now (B3 mosh not built).
+            if self.session_resilience.is_enabled() {
+                self.session_resilience
+            } else {
+                SessionResilience::PersistOnly
+            }
+        } else {
+            SessionResilience::Off
+        };
+        if self.session_resilience != next {
+            self.session_resilience = next;
             self.status = None;
             ctx.notify();
         }
@@ -1361,6 +1401,82 @@ impl SshServerView {
                     appearance,
                 ))
                 .with_child(auth_row.finish())
+                .finish(),
+        )
+        .with_margin_bottom(FIELD_BLOCK_MARGIN_BOTTOM)
+        .finish()
+    }
+
+    /// Session-persistence toggle (native remote-session layer). Two pills,
+    /// styled like the auth toggle: Standard (non-persistent) vs. Persistent.
+    fn render_resilience_toggle(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+
+        let make_pill = |label: String,
+                         active: bool,
+                         state: MouseStateHandle,
+                         action: SshServerAction|
+         -> Box<dyn Element> {
+            let main_color = if active {
+                theme.main_text_color(theme.accent())
+            } else {
+                theme.sub_text_color(theme.background())
+            };
+            let bg = if active {
+                theme.accent()
+            } else {
+                theme.surface_2()
+            };
+            let label_el = Text::new_inline(
+                label,
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(main_color.into())
+            .finish();
+
+            Hoverable::new(state, move |_| {
+                Container::new(label_el)
+                    .with_padding_left(AUTH_TOGGLE_PADDING_H)
+                    .with_padding_right(AUTH_TOGGLE_PADDING_H)
+                    .with_padding_top(AUTH_TOGGLE_PADDING_V)
+                    .with_padding_bottom(AUTH_TOGGLE_PADDING_V)
+                    .with_background(bg)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                    .finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action))
+            .finish()
+        };
+
+        let enabled = self.session_resilience.is_enabled();
+        let mut row = Wrap::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(8.0)
+            .with_run_spacing(8.0)
+            .with_main_axis_size(MainAxisSize::Min);
+        row.add_child(make_pill(
+            crate::t!("workspace-left-panel-ssh-manager-resilience-off"),
+            !enabled,
+            self.resilience_off_btn_state.clone(),
+            SshServerAction::SetSessionResilience(false),
+        ));
+        row.add_child(make_pill(
+            crate::t!("workspace-left-panel-ssh-manager-resilience-on"),
+            enabled,
+            self.resilience_on_btn_state.clone(),
+            SshServerAction::SetSessionResilience(true),
+        ));
+
+        Container::new(
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(self.render_label(
+                    &crate::t!("workspace-left-panel-ssh-manager-detail-resilience"),
+                    appearance,
+                ))
+                .with_child(row.finish())
                 .finish(),
         )
         .with_margin_bottom(FIELD_BLOCK_MARGIN_BOTTOM)
@@ -1966,6 +2082,7 @@ impl TypedActionView for SshServerView {
             SshServerAction::SetAuthPassword => self.on_set_auth(AuthType::Password, ctx),
             SshServerAction::SetAuthKey => self.on_set_auth(AuthType::Key, ctx),
             SshServerAction::SetAuthOneKey => self.on_set_auth(AuthType::OneKey, ctx),
+            SshServerAction::SetSessionResilience(on) => self.on_set_session_resilience(*on, ctx),
             SshServerAction::PickKeyFile => self.on_pick_key_file(ctx),
             SshServerAction::PickOneKeyKeyFile => self.on_pick_onekey_key_file(ctx),
             SshServerAction::OpenOneKeyManager => {
@@ -2198,6 +2315,8 @@ impl View for SshServerView {
             &self.notes_editor,
             appearance,
         ));
+        // Session persistence (native remote-session layer)
+        col.add_child(self.render_resilience_toggle(appearance));
 
         let theme = appearance.theme();
         let inner = ConstrainedBox::new(

@@ -275,7 +275,7 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
             kind: AgentTipKind::Context,
         },
         AgentTip {
-            description: crate::t!("agent-tip-warpify-ssh"),
+            description: crate::t!("agent-tip-zaplexify-ssh"),
             link: Some("".to_string()),
             binding_name: None,
             action: None,

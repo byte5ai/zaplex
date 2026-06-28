@@ -16,7 +16,7 @@ Two consequences:
    re-enter every host/user/port/key by hand before the SSH Manager UI is
    useful to them.
 2. **Inconsistency across SSH entry paths.** Zap has two SSH paths:
-   - Path ① — typing `ssh prodbox` in any terminal tab triggers Warpification
+   - Path ① — typing `ssh prodbox` in any terminal tab triggers Zaplexification
      and `exec`s the system `ssh`, which transparently reads `~/.ssh/config`
      and resolves the `prodbox` alias.
    - Path ② — the SSH Manager panel completely ignores the same file.

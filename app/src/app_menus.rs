@@ -588,7 +588,7 @@ fn block_menu_debug_items() -> Vec<MenuItem> {
     )));
 
     items.push(MenuItem::Custom(CustomMenuItem::new(
-        &crate::t!("app-menu-show-warpified-ssh-blocks"),
+        &crate::t!("app-menu-show-zaplexified-ssh-blocks"),
         move |ctx| {
             let handle = BlockVisibilitySettings::handle(ctx);
             handle.update(ctx, |block_visibility_settings, ctx| {
@@ -605,9 +605,9 @@ fn block_menu_debug_items() -> Vec<MenuItem> {
             let name = if BlockVisibilitySettings::handle(ctx).read(ctx, |settings, _ctx| {
                 *settings.should_show_ssh_block.value()
             }) {
-                crate::t!("app-menu-hide-warpified-ssh-blocks")
+                crate::t!("app-menu-hide-zaplexified-ssh-blocks")
             } else {
-                crate::t!("app-menu-show-warpified-ssh-blocks")
+                crate::t!("app-menu-show-zaplexified-ssh-blocks")
             };
 
             MenuItemPropertyChanges {

@@ -391,6 +391,7 @@ diesel::table! {
         notes -> Nullable<Text>,
         last_connected_at -> Nullable<Timestamp>,
         credential_id -> Nullable<Text>,
+        session_resilience -> Text,
     }
 }
 

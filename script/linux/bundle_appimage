@@ -85,9 +85,9 @@ rm -rf "$APP_DIR"
 # deploys the binary, desktop file, and icons by default.
 cd "$OUT_DIR"
 echo "Running linuxdeploy to create the AppImage"
-export WARP_BINARY_NAME="$BINARY_NAME"
-export WARP_OPT_DIR="$OPT_DIR"
-export WARP_BUNDLED_RESOURCES_DIR="${STAGE_DIR}${OPT_DIR}/resources"
+export ZAPLEX_BINARY_NAME="$BINARY_NAME"
+export ZAPLEX_OPT_DIR="$OPT_DIR"
+export ZAPLEX_BUNDLED_RESOURCES_DIR="${STAGE_DIR}${OPT_DIR}/resources"
 export PATH="$WORKSPACE_ROOT_DIR/script/linux:$PATH"
 linuxdeploy \
   --appdir "$APP_DIR" \

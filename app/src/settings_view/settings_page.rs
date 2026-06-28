@@ -16,7 +16,7 @@ use super::{
     mcp_servers_page::MCPServersSettingsPageView,
     network_page::NetworkPageView,
     warp_drive_page::WarpDriveSettingsPageView,
-    warpify_page::WarpifyPageView,
+    zaplexify_page::ZaplexifyPageView,
     SettingsSection,
 };
 use crate::{
@@ -105,7 +105,7 @@ pub enum SettingsPageViewHandle {
     // Zap Wave 6-8: `SharedBlocks` / `Referrals` variant removed together with `ShowBlocksView` /
     // `ReferralsPageView` and the corresponding ServerApi client trait.
     // Zap Wave 7-3: `CloudEnvironments` variant removed together with ambient-agent UI subsystem.
-    Warpify(ViewHandle<WarpifyPageView>),
+    Zaplexify(ViewHandle<ZaplexifyPageView>),
     AI(ViewHandle<AISettingsPageView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
     ZapDrive(ViewHandle<WarpDriveSettingsPageView>),
@@ -127,7 +127,7 @@ impl SettingsPageViewHandle {
             // Zap Wave 3-1: `OzCloudAPIKeys` arm removed together with `platform_page`.
             // Zap Wave 6-8: `SharedBlocks` / `Referrals` arm removed together with variant.
             // Zap Wave 7-3: `CloudEnvironments` arm removed together with ambient-agent UI.
-            Warpify(view_handle) => ChildView::new(view_handle).finish(),
+            Zaplexify(view_handle) => ChildView::new(view_handle).finish(),
             AI(view_handle) => ChildView::new(view_handle).finish(),
             MCPServers(view_handle) => ChildView::new(view_handle).finish(),
             ZapDrive(view_handle) => ChildView::new(view_handle).finish(),

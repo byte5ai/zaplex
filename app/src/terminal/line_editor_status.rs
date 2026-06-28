@@ -29,8 +29,8 @@ pub struct LineEditorStatus {
     ///
     /// When receiving an end prompt marker in zsh, this is used as a proxy to determine if the
     /// session is bootstrapped -- the prompt markers are emitted by zsh regardless of whether or
-    /// not its a Warpified session, so to in order properly signal downstream that the line editor
-    /// (for Warpified sessions) is active, we must check if there was a corresponding precmd
+    /// not its a Zaplexified session, so to in order properly signal downstream that the line editor
+    /// (for Zaplexified sessions) is active, we must check if there was a corresponding precmd
     /// emitted prior to the end prompt marker.
     ///
     /// Precmd is always emitted before prompt markers.

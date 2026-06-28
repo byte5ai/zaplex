@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use crate::secrets::SecretKind;
 use crate::types::{
-    AuthType, NodeKind, OneKeyCredentialKind, ResolvedSshAuth, SshNode, SshOneKeyCredential,
-    SshServerInfo,
+    AuthType, NodeKind, OneKeyCredentialKind, ResolvedSshAuth, SessionResilience, SshNode,
+    SshOneKeyCredential, SshServerInfo,
 };
 use persistence::model::{
     NewSshNode, NewSshOneKeyCredential, NewSshServer, NewSyncMeta, SshNodeRow,
@@ -102,6 +102,7 @@ impl SshRepository {
                     startup_command: info.startup_command.as_deref(),
                     notes: info.notes.as_deref(),
                     credential_id: info.credential_id.as_deref(),
+                    session_resilience: info.session_resilience.as_db_str(),
                 })
                 .execute(conn)?;
             Ok(())
@@ -142,6 +143,7 @@ impl SshRepository {
                 ssh_servers::startup_command.eq(info.startup_command.as_deref()),
                 ssh_servers::notes.eq(info.notes.as_deref()),
                 ssh_servers::credential_id.eq(info.credential_id.as_deref()),
+                ssh_servers::session_resilience.eq(info.session_resilience.as_db_str()),
             ))
             .execute(conn)?;
         if n == 0 {
@@ -453,6 +455,9 @@ fn server_from_row(r: SshServerRow) -> Result<SshServerInfo, SshRepositoryError>
         notes: r.notes,
         last_connected_at: r.last_connected_at,
         credential_id: r.credential_id,
+        // Lenient on purpose: an unknown value (e.g. written by a newer client)
+        // degrades to `Off` rather than making the whole server unloadable.
+        session_resilience: SessionResilience::parse(&r.session_resilience).unwrap_or_default(),
     })
 }
 
@@ -602,6 +607,7 @@ mod tests {
             startup_command: None,
             notes: None,
             last_connected_at: None,
+            session_resilience: SessionResilience::default(),
         }
     }
 

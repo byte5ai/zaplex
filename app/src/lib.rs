@@ -316,7 +316,7 @@ pub enum LaunchMode {
     /// Run the regular GUI application.
     App {
         args: warp_cli::AppArgs,
-        /// API key for server authentication, if provided via `--api-key` or `WARP_API_KEY`.
+        /// API key for server authentication, if provided via `--api-key` or `ZAPLEX_API_KEY`.
         /// Only used on dogfood channels.
         api_key: Option<String>,
     },
@@ -660,7 +660,7 @@ pub fn run() -> Result<()> {
     // instead of launching the GUI app.
     let is_cli_binary = cfg!(feature = "standalone")
         || warp_cli::binary_name().is_some_and(|name| name.starts_with("oz"))
-        || std::env::var_os("WARP_CLI_MODE").is_some();
+        || std::env::var_os("ZAPLEX_CLI_MODE").is_some();
     if is_cli_binary {
         warp_cli::Args::clap_command().print_help()?;
         return Ok(());
@@ -675,7 +675,7 @@ pub fn run() -> Result<()> {
 
 /// Runs an integration test using the provided test driver.
 pub fn run_integration_test(driver: TestDriver) -> Result<()> {
-    let is_integration_test = std::env::var("WARP_INTEGRATION").is_ok();
+    let is_integration_test = std::env::var("ZAPLEX_INTEGRATION").is_ok();
     let launch = LaunchMode::Test {
         driver: Box::new(Some(driver)),
         is_integration_test,
@@ -902,7 +902,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
         let force_x11 = ForceX11::read_from_preferences(prefs_for_public_settings)
             .unwrap_or(ForceX11::default_value());
-        // Force use of wayland if the user has passed the `WARP_ENABLE_WAYLAND` env var.
+        // Force use of wayland if the user has passed the `ZAPLEX_ENABLE_WAYLAND` env var.
         let allow_wayland = linux::is_wayland_env_var_set() || !force_x11;
         app_builder.force_x11(!allow_wayland);
     }
@@ -1331,7 +1331,7 @@ fn initialize_app(
         ctx.on_first_frame_drawn(move |ctx| {
             let timing_data = IntervalTimer::handle(ctx).update(ctx, |timer, _| {
                 timer.mark_interval_end("FIRST_FRAME_DRAWN");
-                // Local tuning exit: when WARP_STARTUP_TRACE=1, dump complete startup sequence table to stderr.
+                // Local tuning exit: when ZAPLEX_STARTUP_TRACE=1, dump complete startup sequence table to stderr.
                 // Does not affect telemetry logic, for developer use only.
                 timer.print_trace_to_stderr_if_enabled();
                 timer.compute_stats()
@@ -1371,7 +1371,7 @@ fn initialize_app(
         // This is sent immediately in case they quit the app on the signup screen.
         send_telemetry_sync_from_app_ctx!(TelemetryEvent::LoggedOutStartup, ctx);
         // Unauthenticated users also need to see startup sequence (BYOP scenarios are majority), after first frame
-        // dump WARP_STARTUP_TRACE table once. No telemetry, does not affect logic.
+        // dump ZAPLEX_STARTUP_TRACE table once. No telemetry, does not affect logic.
         ctx.on_first_frame_drawn(move |ctx| {
             IntervalTimer::handle(ctx).update(ctx, |timer, _| {
                 timer.mark_interval_end("FIRST_FRAME_DRAWN");
@@ -1482,7 +1482,7 @@ fn initialize_app(
     // main subsystem.
     env_vars::env_var_collection_block::init(ctx);
     terminal::ssh::install_tmux::init(ctx);
-    terminal::ssh::warpify::init(ctx);
+    terminal::ssh::zaplexify::init(ctx);
     terminal::ssh::error::init(ctx);
     context_chips::display_menu::init(ctx);
     context_chips::node_version_popup::init(ctx);
@@ -2642,8 +2642,8 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CLIAgentRichInput,
         #[cfg(feature = "transfer_control_tool")]
         FeatureFlag::TransferControlTool,
-        #[cfg(feature = "warpify_footer")]
-        FeatureFlag::WarpifyFooter,
+        #[cfg(feature = "zaplexify_footer")]
+        FeatureFlag::ZaplexifyFooter,
         #[cfg(feature = "solo_user_byok")]
         FeatureFlag::SoloUserByok,
         #[cfg(feature = "hoa_onboarding_flow")]

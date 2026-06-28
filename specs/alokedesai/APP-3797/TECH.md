@@ -77,12 +77,12 @@ The setup runs as an async task, using the existing SSH ControlMaster socket (fr
      *) echo "unsupported arch: $arch" >&2; exit 2 ;;
    esac
    mkdir -p "$HOME/.warp/remote-server"
-   curl -fSL "$WARP_GET_URL?package=$pkg" -o "$HOME/.warp/remote-server/oz.tar.gz"
+   curl -fSL "$ZAPLEX_GET_URL?package=$pkg" -o "$HOME/.warp/remote-server/oz.tar.gz"
    tar -xzf "$HOME/.warp/remote-server/oz.tar.gz" -C "$HOME/.warp/remote-server"
    chmod +x "$HOME/.warp/remote-server/oz"
    ```
 
-   `$WARP_GET_URL` is substituted at runtime from the configured server root URL (`SERVER_ROOT_URL` env var or its compiled-in default), pointing at `/download/cli`. Exit code 2 is mapped to `ErrorReason::UnsupportedPlatform`. The script is shipped as a constant `&str` in the install module. Parse `curl` stderr for download progress if available.
+   `$ZAPLEX_GET_URL` is substituted at runtime from the configured server root URL (`SERVER_ROOT_URL` env var or its compiled-in default), pointing at `/download/cli`. Exit code 2 is mapped to `ErrorReason::UnsupportedPlatform`. The script is shipped as a constant `&str` in the install module. Parse `curl` stderr for download progress if available.
 3. **Launch**: `ssh -o ControlPath={socket} placeholder@placeholder '~/.warp/remote-server/oz'` — keep the SSH channel open, forwarding stdin/stdout.
 4. **Initialize**: Send a `ClientMessage { request_id, initialize: Initialize {} }` (length-prefixed protobuf) to the process's stdin. Read a `ServerMessage { initialize_response }` from stdout. Timeout after 10 seconds.
 

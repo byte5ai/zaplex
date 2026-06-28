@@ -211,7 +211,7 @@ impl SearchItemIcon for BindingGroup {
             | Self::Terminal
             | Self::Notifications => appearance.theme().foreground().into_solid(),
             Self::WarpAi if !FeatureFlag::AgentMode.is_enabled() => {
-                ColorU::from_u32(colors::WARP_AI)
+                ColorU::from_u32(colors::ZAPLEX_AI)
             }
             Self::WarpAi => appearance.theme().foreground().into_solid(),
             Self::Workflow => warp_drive_icon_color(appearance, DriveObjectType::Workflow),

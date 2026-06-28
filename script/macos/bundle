@@ -25,11 +25,11 @@
 # Once the stapling is done, the app can be shared.
 #
 # Three passwords are read from GCP Secret Manager (or from env if --read-passwords-from-env is set) if you are codesigning.
-# 1) WARP_NOTARIZATION_PASSWORD:  This is an "app-specific password" that
+# 1) ZAPLEX_NOTARIZATION_PASSWORD:  This is an "app-specific password" that
 #    is tied to the zach@warp.dev account.  See https://support.apple.com/en-us/HT204397
-# 2) WARP_DEVELOPER_ID_CERT_PASSWORD: This is a password tied to the private key
+# 2) ZAPLEX_DEVELOPER_ID_CERT_PASSWORD: This is a password tied to the private key
 #    of our cert - it is needed to use the cert to sign our binary.
-# 3) WARP_CODESIGN_KEYCHAIN_PASSWORD: This is an arbitrary password only used
+# 3) ZAPLEX_CODESIGN_KEYCHAIN_PASSWORD: This is an arbitrary password only used
 #    in the lifetime of this app for creating the keychain used to sign.  Can
 #    be anything.
 #
@@ -279,18 +279,18 @@ if [[ "$CARGO_PROFILE" == "dev" ]]; then
 fi
 
 if [[ $RELEASE_CHANNEL = "local" ]]; then
-    WARP_BIN="warp"
+    ZAPLEX_BIN="warp"
     BUNDLE_ID="dev.warp.Zap-Local"
-    WARP_APP_NAME="WarpLocal"
-    WARP_SCHEME_NAME="warplocal"
+    ZAPLEX_APP_NAME="WarpLocal"
+    ZAPLEX_SCHEME_NAME="warplocal"
     FEATURES="$FEATURES,agent_mode_debug"
     # 本地构建可覆盖 bundled framework 版本,供 app/build.rs 在 cargo bundle 期间读取。
     export FRAMEWORK_OVERRIDE="dev"
 elif [[ $RELEASE_CHANNEL = "dev" ]]; then
-    WARP_BIN="dev"
+    ZAPLEX_BIN="dev"
     BUNDLE_ID="dev.warp.Zap-Dev"
-    WARP_APP_NAME="WarpDev"
-    WARP_SCHEME_NAME="warpdev"
+    ZAPLEX_APP_NAME="WarpDev"
+    ZAPLEX_SCHEME_NAME="warpdev"
     FEATURES="$FEATURES,agent_mode_debug"
     # Enable heap usage tracking & profiling using jemalloc through pprof.
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
@@ -298,23 +298,23 @@ elif [[ $RELEASE_CHANNEL = "dev" ]]; then
     export FRAMEWORK_OVERRIDE="dev"
     export HANDLE_MARKDOWN=1
 elif [[ $RELEASE_CHANNEL = "preview" ]]; then
-    WARP_BIN="preview"
+    ZAPLEX_BIN="preview"
     BUNDLE_ID="dev.warp.Zap-Preview"
-    WARP_APP_NAME="WarpPreview"
-    WARP_SCHEME_NAME="warppreview"
+    ZAPLEX_APP_NAME="WarpPreview"
+    ZAPLEX_SCHEME_NAME="warppreview"
     FEATURES="$FEATURES,preview_channel"
     # Enable heap usage tracking & profiling using jemalloc through pprof.
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
 elif [[ $RELEASE_CHANNEL = "stable" ]]; then
-    WARP_BIN="stable"
+    ZAPLEX_BIN="stable"
     BUNDLE_ID="dev.warp.Zap-Stable"
-    WARP_APP_NAME="Zap"
-    WARP_SCHEME_NAME="warp"
+    ZAPLEX_APP_NAME="Zap"
+    ZAPLEX_SCHEME_NAME="warp"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-    WARP_BIN="zap-oss"
+    ZAPLEX_BIN="zap-oss"
     BUNDLE_ID="dev.zap.Zap"
-    WARP_APP_NAME="Zap"
-    WARP_SCHEME_NAME="zap"
+    ZAPLEX_APP_NAME="Zap"
+    ZAPLEX_SCHEME_NAME="zap"
     # autoupdate 走 GitHub Release(zerx-lab/warp),仅下载 DMG 到 Downloads,不自动覆盖 .app。
     FEATURES="release_bundle,extern_plist,autoupdate"
 fi
@@ -367,24 +367,24 @@ fi
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
 # using the same feature flags and profile that we would be using in production.
 if [[ "$CHECK_ONLY" == "true" ]]; then
-  cargo check --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
+  cargo check --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
   if [[ $UNIVERSAL_BINARY = true && "$ARTIFACT" != "cli" ]]; then
-    cargo check --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$ADDITIONAL_TARGET" --features "$FEATURES"
+    cargo check --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --target "$ADDITIONAL_TARGET" --features "$FEATURES"
   fi
   exit 0
 fi
 
-DMG_DIR="$BUNDLE_DIR/dmg/$WARP_BIN"
-DMG_NAME="$WARP_APP_NAME.dmg"
+DMG_DIR="$BUNDLE_DIR/dmg/$ZAPLEX_BIN"
+DMG_NAME="$ZAPLEX_APP_NAME.dmg"
 if [[ -z "$FINAL_DMG_NAME" && -n "$DMG_NAME_SUFFIX" ]]; then
-  FINAL_DMG_NAME="$WARP_APP_NAME-$DMG_NAME_SUFFIX.dmg"
+  FINAL_DMG_NAME="$ZAPLEX_APP_NAME-$DMG_NAME_SUFFIX.dmg"
 else
-  FINAL_DMG_NAME="$WARP_APP_NAME.dmg"
+  FINAL_DMG_NAME="$ZAPLEX_APP_NAME.dmg"
 fi
 
 # First clean up and prep the outdir
 mkdir -p "$OUT_DIR"
-rm -R "$OUT_DIR/$WARP_APP_NAME.app" || echo "No old app to remove"
+rm -R "$OUT_DIR/$ZAPLEX_APP_NAME.app" || echo "No old app to remove"
 rm -R "$OUT_DIR/$FINAL_DMG_NAME" || echo "No old dmg to remove"
 
 ###########################
@@ -399,14 +399,14 @@ if [[ "$ARTIFACT" == "app" ]]; then
 
   pushd app > /dev/null
   echo "Building and bundling $DEFAULT_TARGET for channel $RELEASE_CHANNEL and bundle id $BUNDLE_ID with profile $CARGO_PROFILE"
-  cargo bundle --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
+  cargo bundle --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
   popd > /dev/null
 
   echo "Adding rpath to support mac frameworks"
-  install_name_tool -add_rpath "@executable_path/../Frameworks" "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/MacOS/$WARP_BIN"
+  install_name_tool -add_rpath "@executable_path/../Frameworks" "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app/Contents/MacOS/$ZAPLEX_BIN"
 
-  export WARP_SCHEME_NAME
-  export WARP_PLIST_PATH="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Info.plist"
+  export ZAPLEX_SCHEME_NAME
+  export ZAPLEX_PLIST_PATH="$BUNDLE_DIR/$ZAPLEX_APP_NAME.app/Contents/Info.plist"
   ./script/update_plist
 
   if [[ $REGISTER_SERVICES = true ]]; then
@@ -416,7 +416,7 @@ if [[ "$ARTIFACT" == "app" ]]; then
         <key>NSMenuItem</key>
         <dict>
           <key>default</key>
-          <string>New $WARP_APP_NAME Tab Here</string>
+          <string>New $ZAPLEX_APP_NAME Tab Here</string>
         </dict>
         <key>NSMessage</key>
         <string>openTab</string>
@@ -435,7 +435,7 @@ if [[ "$ARTIFACT" == "app" ]]; then
         <key>NSMenuItem</key>
         <dict>
           <key>default</key>
-          <string>New $WARP_APP_NAME Window Here</string>
+          <string>New $ZAPLEX_APP_NAME Window Here</string>
         </dict>
         <key>NSMessage</key>
         <string>openWindow</string>
@@ -450,25 +450,25 @@ if [[ "$ARTIFACT" == "app" ]]; then
           <string>public.plain-text</string>
         </array>
       </dict>
-    </array>" "$BUNDLE_DIR"/$WARP_APP_NAME.app/Contents/Info.plist
+    </array>" "$BUNDLE_DIR"/$ZAPLEX_APP_NAME.app/Contents/Info.plist
   fi
 
   # Temporary key that ChatGPT Desktop can use to determine if the latest version of Zap supports the ChatGPT integration.
   # Once support has been rolled out for a sufficient amount of time we (and ChatGPT) can remove this.
-  plutil -insert SUPPORTS_CHAT_GPT_WORK_WITH_APPS -bool true "$BUNDLE_DIR"/$WARP_APP_NAME.app/Contents/Info.plist
+  plutil -insert SUPPORTS_CHAT_GPT_WORK_WITH_APPS -bool true "$BUNDLE_DIR"/$ZAPLEX_APP_NAME.app/Contents/Info.plist
 
   # Add LSBackgroundOnly key and set it to false since we need a UI app
-  plutil -insert LSBackgroundOnly -bool false "$BUNDLE_DIR"/$WARP_APP_NAME.app/Contents/Info.plist
+  plutil -insert LSBackgroundOnly -bool false "$BUNDLE_DIR"/$ZAPLEX_APP_NAME.app/Contents/Info.plist
 
   # Add SMAuthorizedClients for macOS 13+ (Ventura) to support login item functionality
-  plutil -insert SMAuthorizedClients -xml "<array><string>$BUNDLE_ID</string></array>" "$BUNDLE_DIR"/$WARP_APP_NAME.app/Contents/Info.plist
+  plutil -insert SMAuthorizedClients -xml "<array><string>$BUNDLE_ID</string></array>" "$BUNDLE_DIR"/$ZAPLEX_APP_NAME.app/Contents/Info.plist
 
   if [[ $UNIVERSAL_BINARY = true ]]; then
       if [[ $BUILD_BINARY = true ]]; then
           echo "Building $ADDITIONAL_TARGET to include in universal binary"
 
           pushd app > /dev/null
-          cargo build --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$ADDITIONAL_TARGET" --features "$FEATURES"
+          cargo build --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --target "$ADDITIONAL_TARGET" --features "$FEATURES"
           popd > /dev/null
       else
           echo "Skipping build of $ADDITIONAL_TARGET due to --skip-build flag"
@@ -477,13 +477,13 @@ if [[ "$ARTIFACT" == "app" ]]; then
       tmp_bundle_dir=$(mktemp -d -t ci-XXXXXXXXXX)
 
       echo "Adding rpath to both binaries for universal executable"
-      install_name_tool -add_rpath "@executable_path/../Frameworks" "target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN"
-      install_name_tool -add_rpath "@executable_path/../Frameworks"  "target/$ARM_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN"
+      install_name_tool -add_rpath "@executable_path/../Frameworks" "target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN"
+      install_name_tool -add_rpath "@executable_path/../Frameworks"  "target/$ARM_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN"
 
       echo "Building universal binary using lipo."
-      lipo -create -output "$tmp_bundle_dir/$WARP_BIN" \
-          "target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN" \
-          "target/$ARM_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN"
+      lipo -create -output "$tmp_bundle_dir/$ZAPLEX_BIN" \
+          "target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN" \
+          "target/$ARM_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN"
 
       # Compute the real absolute path to the dSYM file, factoring in symlinks.
       # Starting in Rust 1.56, the generated dSYMs are symlinks to files within the target/dep directory. For example,
@@ -491,35 +491,35 @@ if [[ "$ARTIFACT" == "app" ]]; then
       # would be located at dev.dSYM/Contents/Resources/DWARF/dev-080cf7e291fb066d.dSYM where dev.dSYM is symlink to
       # deps/dev-080cf7e291fb066d.dSYM. To fix this, parse out the actual name of the directory that the dSYM is
       # symlinked to, since this is also the name of file that contains the debug symbols within the dSYM.
-      INTEL_DSYM_NAME=$(basename "$(realpath target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM)" .dSYM)
-      INTEL_DSYM_PATH="target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM/Contents/Resources/DWARF/$INTEL_DSYM_NAME"
-      ARM_DSYM_NAME=$(basename "$(realpath target/$ARM_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM)" .dSYM)
-      ARM_DSYM_PATH="target/$ARM_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM/Contents/Resources/DWARF/$ARM_DSYM_NAME"
+      INTEL_DSYM_NAME=$(basename "$(realpath target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN.dSYM)" .dSYM)
+      INTEL_DSYM_PATH="target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN.dSYM/Contents/Resources/DWARF/$INTEL_DSYM_NAME"
+      ARM_DSYM_NAME=$(basename "$(realpath target/$ARM_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN.dSYM)" .dSYM)
+      ARM_DSYM_PATH="target/$ARM_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN.dSYM/Contents/Resources/DWARF/$ARM_DSYM_NAME"
       if [[ -e "$INTEL_DSYM_PATH" && -e "$ARM_DSYM_PATH" ]]; then
-        echo "Building universal binary .dSYM using lipo and storing in $OUT_DIR/$WARP_BIN.dSYM"
+        echo "Building universal binary .dSYM using lipo and storing in $OUT_DIR/$ZAPLEX_BIN.dSYM"
 
         # Use lipo to merge the .dSYM files into a single universal .dSYM file.
         # It expects the base name for the file (with the .dSYM suffix removed).
-        lipo -create -output "$OUT_DIR/$WARP_BIN.dSYM" "${INTEL_DSYM_PATH}" "${ARM_DSYM_PATH}"
+        lipo -create -output "$OUT_DIR/$ZAPLEX_BIN.dSYM" "${INTEL_DSYM_PATH}" "${ARM_DSYM_PATH}"
       fi
 
       echo "Storing result in $BUNDLE_DIR, replacing $DEFAULT_TARGET binary with fat binary."
-      mv "$tmp_bundle_dir/$WARP_BIN" "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/MacOS"
-  elif [[ -n "$TARGET_ARCH" && -e "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" ]]; then
-    echo "Copying .dSYM into $OUT_DIR/$WARP_BIN.dSYM"
-    cp -HR "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" "$OUT_DIR/"
+      mv "$tmp_bundle_dir/$ZAPLEX_BIN" "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app/Contents/MacOS"
+  elif [[ -n "$TARGET_ARCH" && -e "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN.dSYM" ]]; then
+    echo "Copying .dSYM into $OUT_DIR/$ZAPLEX_BIN.dSYM"
+    cp -HR "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN.dSYM" "$OUT_DIR/"
   fi
 
   # Note that the dock tile plugin is pre-built for both arm64 and x86_64 so we don't need to run lipo on it.
   echo "Creating PlugIns directory and copying pre-built DockTilePlugin..."
-  mkdir -p "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/PlugIns"
-  cp -R "$DOCK_TILE_PLUGIN_DIR" "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/PlugIns/"
+  mkdir -p "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app/Contents/PlugIns"
+  cp -R "$DOCK_TILE_PLUGIN_DIR" "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app/Contents/PlugIns/"
 
   echo "Updating plist with dock tile plugin entries"
-  plutil -insert NSDockTilePlugIn -string "ZapDockTilePlugin.docktileplugin" "$BUNDLE_DIR"/$WARP_APP_NAME.app/Contents/Info.plist
-  plutil -insert MainAppBundleIdentifier -string "$BUNDLE_ID" "$BUNDLE_DIR"/$WARP_APP_NAME.app/Contents/PlugIns/ZapDockTilePlugin.docktileplugin/Contents/Info.plist
+  plutil -insert NSDockTilePlugIn -string "ZapDockTilePlugin.docktileplugin" "$BUNDLE_DIR"/$ZAPLEX_APP_NAME.app/Contents/Info.plist
+  plutil -insert MainAppBundleIdentifier -string "$BUNDLE_ID" "$BUNDLE_DIR"/$ZAPLEX_APP_NAME.app/Contents/PlugIns/ZapDockTilePlugin.docktileplugin/Contents/Info.plist
 
-  BUNDLED_RESOURCES_DIR="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Resources"
+  BUNDLED_RESOURCES_DIR="$BUNDLE_DIR/$ZAPLEX_APP_NAME.app/Contents/Resources"
   echo "Preparing bundled resources..."
   # Only forward --target to the schema generator when the build target is
   # runnable on the host; otherwise `cargo run` would try to execute a
@@ -531,9 +531,9 @@ if [[ "$ARTIFACT" == "app" ]]; then
   fi
   "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE" "$FEATURES" "$SCHEMA_CARGO_TARGET"
 
-  "$WORKSPACE_ROOT_DIR/script/compile_icon" "$RELEASE_CHANNEL" "$BUNDLE_DIR/$WARP_APP_NAME.app"
+  "$WORKSPACE_ROOT_DIR/script/compile_icon" "$RELEASE_CHANNEL" "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app"
 
-  HELPERS_DIR="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Helpers"
+  HELPERS_DIR="$BUNDLE_DIR/$ZAPLEX_APP_NAME.app/Contents/Helpers"
   if [[ ",$FEATURES," =~ ",heap_usage_tracking," ]]; then
     echo "Bundling pprof..."
     "$WORKSPACE_ROOT_DIR/script/prepare_bundled_pprof" "$HELPERS_DIR"
@@ -555,17 +555,17 @@ if [[ "$ARTIFACT" == "app" ]]; then
   cat > "$CLI_SCRIPT_PATH" << 'EOF'
 #!/bin/bash
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec -a "$0" "$script_dir/../../MacOS/WARP_BIN_PLACEHOLDER" "$@"
+exec -a "$0" "$script_dir/../../MacOS/ZAPLEX_BIN_PLACEHOLDER" "$@"
 EOF
   
   # Replace the placeholder with the actual binary name
-  sed -i '' "s/WARP_BIN_PLACEHOLDER/$WARP_BIN/" "$CLI_SCRIPT_PATH"
+  sed -i '' "s/ZAPLEX_BIN_PLACEHOLDER/$ZAPLEX_BIN/" "$CLI_SCRIPT_PATH"
   
   # Make the script executable
   chmod +x "$CLI_SCRIPT_PATH"
 
   # Store the built artifact locations for GitHub Actions outputs.
-  BINARY_PATH="target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN"
+  BINARY_PATH="target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN"
   DMG_PATH="$OUT_DIR/$FINAL_DMG_NAME"
 elif [[ "$ARTIFACT" == "cli" ]]; then
   if [[ $BUILD_BINARY == true ]]; then
@@ -573,30 +573,30 @@ elif [[ "$ARTIFACT" == "cli" ]]; then
     # Apple's codesigning tools will detect Info.plist files in the same directory as an executable.
     # This breaks the code signature, so we must use a different location for the file.
     mkdir -p "$BUNDLE_DIR"
-    export WARP_PLIST_PATH="$BUNDLE_DIR/cli-info.plist"
-    cp app/assets/resources/mac/CLI-Info.plist "$WARP_PLIST_PATH"
+    export ZAPLEX_PLIST_PATH="$BUNDLE_DIR/cli-info.plist"
+    cp app/assets/resources/mac/CLI-Info.plist "$ZAPLEX_PLIST_PATH"
 
-    export WARP_PLIST_NO_FILE_TYPES=true
+    export ZAPLEX_PLIST_NO_FILE_TYPES=true
     ./script/update_plist
-    plutil -insert CFBundleIdentifier -string "$BUNDLE_ID" "$WARP_PLIST_PATH"
-    plutil -insert CFBundleName -string "$WARP_BIN" "$WARP_PLIST_PATH"
-    plutil -insert CFBundleExecutable -string "$WARP_BIN" "$WARP_PLIST_PATH"
+    plutil -insert CFBundleIdentifier -string "$BUNDLE_ID" "$ZAPLEX_PLIST_PATH"
+    plutil -insert CFBundleName -string "$ZAPLEX_BIN" "$ZAPLEX_PLIST_PATH"
+    plutil -insert CFBundleExecutable -string "$ZAPLEX_BIN" "$ZAPLEX_PLIST_PATH"
 
-    export "INFO_PLIST_PATH=$(realpath "$WARP_PLIST_PATH")"
+    export "INFO_PLIST_PATH=$(realpath "$ZAPLEX_PLIST_PATH")"
     pushd app > /dev/null
     echo "Building $DEFAULT_TARGET for channel $RELEASE_CHANNEL with profile $CARGO_PROFILE"
-    cargo build --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
+    cargo build --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
     popd > /dev/null
   else
     echo "Skipping binary build due to --skip-build flag"
   fi
 
-  echo "Copying binary into $OUT_DIR/$WARP_BIN"
-  cp "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN" "$OUT_DIR/$WARP_BIN"
+  echo "Copying binary into $OUT_DIR/$ZAPLEX_BIN"
+  cp "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN" "$OUT_DIR/$ZAPLEX_BIN"
 
-  if [[ -n "$TARGET_ARCH" && -e "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" ]]; then
-    echo "Copying .dSYM into $OUT_DIR/$WARP_BIN.dSYM"
-    cp -HR "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" "$OUT_DIR/"
+  if [[ -n "$TARGET_ARCH" && -e "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN.dSYM" ]]; then
+    echo "Copying .dSYM into $OUT_DIR/$ZAPLEX_BIN.dSYM"
+    cp -HR "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$ZAPLEX_BIN.dSYM" "$OUT_DIR/"
   fi
 
   echo "Preparing CLI resources directory"
@@ -613,7 +613,7 @@ elif [[ "$ARTIFACT" == "cli" ]]; then
 
 
   # Set the primary binary path to output.
-  BINARY_PATH="$OUT_DIR/$WARP_BIN"
+  BINARY_PATH="$OUT_DIR/$ZAPLEX_BIN"
 else
   echo "Unsupported artifact: $ARTIFACT" >&2
   exit 1
@@ -629,25 +629,25 @@ if [[ $READ_PASSWORDS_FROM_ENV != true ]]; then
 fi
 
 if [[ $CODESIGN = true ]]; then
-  # TODO - does this need to change per user?  Seems like it's tied to the WARP_NOTARIZATION_PASSWORD password.
+  # TODO - does this need to change per user?  Seems like it's tied to the ZAPLEX_NOTARIZATION_PASSWORD password.
   APPLE_TEAM_ID="2BBY89MBSN"
   CODESIGN_KEYCHAIN_NAME="warp-codesign-keychain"
 
   echo "Starting codesigning..."
 
   if [[ $READ_PASSWORDS_FROM_ENV = true ]]; then
-    if [ -z "$WARP_NOTARIZATION_PASSWORD" ] ; then
-      echo "WARP_NOTARIZATION_PASSWORD must be set for code signing"
+    if [ -z "$ZAPLEX_NOTARIZATION_PASSWORD" ] ; then
+      echo "ZAPLEX_NOTARIZATION_PASSWORD must be set for code signing"
       exit 1
     fi
 
-    if [ -z "$WARP_DEVELOPER_ID_CERT_PASSWORD" ] ; then
-      echo "WARP_DEVELOPER_ID_CERT_PASSWORD must be set for code signing"
+    if [ -z "$ZAPLEX_DEVELOPER_ID_CERT_PASSWORD" ] ; then
+      echo "ZAPLEX_DEVELOPER_ID_CERT_PASSWORD must be set for code signing"
       exit 1
     fi
 
-    if [ -z "$WARP_CODESIGN_KEYCHAIN_PASSWORD" ] ; then
-      echo "WARP_CODESIGN_KEYCHAIN_PASSWORD must be set for code signing"
+    if [ -z "$ZAPLEX_CODESIGN_KEYCHAIN_PASSWORD" ] ; then
+      echo "ZAPLEX_CODESIGN_KEYCHAIN_PASSWORD must be set for code signing"
       exit 1
     fi
   fi
@@ -655,14 +655,14 @@ if [[ $CODESIGN = true ]]; then
   security delete-keychain $CODESIGN_KEYCHAIN_NAME || echo "No existing keychain to clean up".
 
   echo "Creating $CODESIGN_KEYCHAIN_NAME keychain."
-  security create-keychain -p "$WARP_CODESIGN_KEYCHAIN_PASSWORD" $CODESIGN_KEYCHAIN_NAME
+  security create-keychain -p "$ZAPLEX_CODESIGN_KEYCHAIN_PASSWORD" $CODESIGN_KEYCHAIN_NAME
   security list-keychains -s $CODESIGN_KEYCHAIN_NAME
   security set-keychain-settings -t 3600 -u $CODESIGN_KEYCHAIN_NAME
 
   echo "Unlocking keychain and setting cert."
-  security unlock-keychain -p "$WARP_CODESIGN_KEYCHAIN_PASSWORD" $CODESIGN_KEYCHAIN_NAME
-  security import <(echo "$WARP_DEVELOPER_ID_CERT" | base64 -d) -f pkcs12 -P "$WARP_DEVELOPER_ID_CERT_PASSWORD" -k $CODESIGN_KEYCHAIN_NAME -T /usr/bin/codesign
-  security set-key-partition-list -S "apple-tool:,apple:" -s -k "$WARP_CODESIGN_KEYCHAIN_PASSWORD" $CODESIGN_KEYCHAIN_NAME
+  security unlock-keychain -p "$ZAPLEX_CODESIGN_KEYCHAIN_PASSWORD" $CODESIGN_KEYCHAIN_NAME
+  security import <(echo "$ZAPLEX_DEVELOPER_ID_CERT" | base64 -d) -f pkcs12 -P "$ZAPLEX_DEVELOPER_ID_CERT_PASSWORD" -k $CODESIGN_KEYCHAIN_NAME -T /usr/bin/codesign
+  security set-key-partition-list -S "apple-tool:,apple:" -s -k "$ZAPLEX_CODESIGN_KEYCHAIN_PASSWORD" $CODESIGN_KEYCHAIN_NAME
 fi
 
 ##############################
@@ -678,31 +678,31 @@ if [[ $SELFSIGN = true ]]; then
     echo "Found Apple Development certificate"
   fi
   if [[ "$ARTIFACT" == app ]]; then
-    echo "Self-signing $BUNDLE_DIR/$WARP_APP_NAME.app with ${SIGNING_CERT}..."
-    codesign --force --deep --options runtime --sign "$SIGNING_CERT" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements script/Debug-Entitlements.plist
+    echo "Self-signing $BUNDLE_DIR/$ZAPLEX_APP_NAME.app with ${SIGNING_CERT}..."
+    codesign --force --deep --options runtime --sign "$SIGNING_CERT" "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app" --entitlements script/Debug-Entitlements.plist
   elif [[ "$ARTIFACT" == cli ]]; then
-    echo "Self-signing $OUT_DIR/$WARP_BIN with ${SIGNING_CERT}..."
-    codesign --force --options runtime --sign "$SIGNING_CERT" "$OUT_DIR/$WARP_BIN" --entitlements script/Debug-Entitlements.plist
+    echo "Self-signing $OUT_DIR/$ZAPLEX_BIN with ${SIGNING_CERT}..."
+    codesign --force --options runtime --sign "$SIGNING_CERT" "$OUT_DIR/$ZAPLEX_BIN" --entitlements script/Debug-Entitlements.plist
   fi
 elif [[ $CODESIGN = true ]]; then
   if [[ "$ARTIFACT" == app ]]; then
-    echo "Codesigning $BUNDLE_DIR/$WARP_APP_NAME.app..."
+    echo "Codesigning $BUNDLE_DIR/$ZAPLEX_APP_NAME.app..."
     # Use --deep so we sign bundled frameworks as well
-    codesign --deep -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements script/Entitlements.plist
+    codesign --deep -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app" --entitlements script/Entitlements.plist
   elif [[ "$ARTIFACT" == cli ]]; then
-    echo "Codesigning $OUT_DIR/$WARP_BIN..."
-    codesign -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$OUT_DIR/$WARP_BIN" --entitlements script/Entitlements.plist
+    echo "Codesigning $OUT_DIR/$ZAPLEX_BIN..."
+    codesign -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$OUT_DIR/$ZAPLEX_BIN" --entitlements script/Entitlements.plist
 
     # Create the .zip for notarization in a separate location - otherwise, Apple's codesigning
     # tools decide that it's a sealed resource that belongs to the binary and needs to also be signed.
-    NOTARIZATION_ARTIFACT="$BUNDLE_DIR/${WARP_BIN}_notarize.zip"
+    NOTARIZATION_ARTIFACT="$BUNDLE_DIR/${ZAPLEX_BIN}_notarize.zip"
     if [[ -e "$NOTARIZATION_ARTIFACT" ]]; then
       echo "Removing old notarization artifact..."
       rm "$NOTARIZATION_ARTIFACT"
     fi
 
     # Create a .zip archive to notarize.
-    ditto -c -k "$OUT_DIR/$WARP_BIN" "$NOTARIZATION_ARTIFACT"
+    ditto -c -k "$OUT_DIR/$ZAPLEX_BIN" "$NOTARIZATION_ARTIFACT"
     
     # It's not possible to staple notarization tickets to standalone binaries:
     # https://developer.apple.com/documentation/security/customizing-the-notarization-workflow?language=objc#Staple-the-ticket-to-your-distribution
@@ -729,7 +729,7 @@ if [[ "$ARTIFACT" = app ]]; then
       --window-size 700 500
       --format UDZO
       --app-drop-link 550 250
-      --icon "$WARP_APP_NAME.app" 150 250
+      --icon "$ZAPLEX_APP_NAME.app" 150 250
       # macOS 26.4 Beta has issues with mounting HFS+ DMGs, so we're using APFS instead.
       # APFS has been supported as a DMG filesystem since macOS 10.13, and we target 10.14
       # as our minimum version.
@@ -758,7 +758,7 @@ if [[ "$ARTIFACT" = app ]]; then
     fi
     echo "Creating $DMG_DIR"
     mkdir -p "$DMG_DIR"
-    cp -R "$BUNDLE_DIR/$WARP_APP_NAME.app" "$DMG_DIR"
+    cp -R "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app" "$DMG_DIR"
 
     create_warp_dmg "$DMG_DIR"
 
@@ -784,7 +784,7 @@ fi
 
 if [[ $CODESIGN = true ]]; then
   echo "Uploading $NOTARIZATION_ARTIFACT to Apple for notarization..."
-  xcrun notarytool submit "$NOTARIZATION_ARTIFACT" --apple-id "$WARP_NOTARIZATION_APPLE_ID" --password "$WARP_NOTARIZATION_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+  xcrun notarytool submit "$NOTARIZATION_ARTIFACT" --apple-id "$ZAPLEX_NOTARIZATION_APPLE_ID" --password "$ZAPLEX_NOTARIZATION_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
 
   if [[ $STAPLE_TICKET = true ]]; then
     echo "Attempting to staple the notarization ticket to $NOTARIZATION_ARTIFACT..."
@@ -801,7 +801,7 @@ if [[ $CODESIGN = true ]]; then
   if [[ "$ARTIFACT" = app ]]; then
     xcrun stapler validate "$DMG_DIR/$DMG_NAME"
   elif [[ "$ARTIFACT" = cli ]]; then
-    spctl -a -t open --context context:primary-signature -vv "$OUT_DIR/$WARP_BIN"
+    spctl -a -t open --context context:primary-signature -vv "$OUT_DIR/$ZAPLEX_BIN"
   fi
 fi
 
@@ -812,7 +812,7 @@ fi
 
 if [[ "$ARTIFACT" = app ]]; then
   echo "Copying dmg and app to $OUT_DIR"
-  cp -R "$BUNDLE_DIR/$WARP_APP_NAME.app" "$OUT_DIR"
+  cp -R "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app" "$OUT_DIR"
   cp "$DMG_DIR/$DMG_NAME" "$OUT_DIR/$FINAL_DMG_NAME"
 fi
 

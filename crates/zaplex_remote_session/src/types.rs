@@ -16,6 +16,14 @@ use serde::{Deserialize, Serialize};
 /// "SSH PTY + no persistence" behaviour.
 pub const FEATURE_SESSION_HOST: &str = "session-host";
 
+/// Reserved capability name for the Phase B3 native UDP transport (mosh-grade
+/// roaming + low latency). **Not yet advertised** by [`supported_features`] —
+/// the transport is unimplemented; this only reserves the negotiation name so
+/// client and daemon agree on it once it lands, keeping the capability handshake
+/// honest (never advertise what we can't fulfil). See
+/// `docs/superpowers/specs/2026-06-28-stage-b3-udp-transport-design.md`.
+pub const FEATURE_UDP_TRANSPORT: &str = "udp-transport";
+
 /// A persistent session identifier assigned by the daemon.
 ///
 /// Unlike the protocol's existing `session_id: uint64` (which is the client's

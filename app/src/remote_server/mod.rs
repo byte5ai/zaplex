@@ -4,6 +4,8 @@ pub use remote_server::*;
 
 #[cfg(not(target_family = "wasm"))]
 pub mod auth_context;
+#[cfg(unix)]
+pub mod headless_connect;
 #[cfg(not(target_family = "wasm"))]
 pub mod server_buffer_tracker;
 #[cfg(not(target_family = "wasm"))]

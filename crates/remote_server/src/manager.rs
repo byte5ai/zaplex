@@ -372,6 +372,26 @@ pub enum RemoteServerManagerEvent {
     },
     /// A server message could not be decoded (no parseable request_id).
     ServerMessageDecodingError { session_id: SessionId },
+
+    // --- Native session host (Stage 2) ---
+    /// Live PTY output for a daemon-hosted session. `session_id` is the
+    /// manager/connection session; `pty_session_id` is the daemon's PTY session
+    /// id (from OpenSession/AttachSession). `seq` is the byte offset of the
+    /// first byte in `bytes` (monotonic), for replay alignment.
+    SessionOutput {
+        session_id: SessionId,
+        host_id: HostId,
+        pty_session_id: String,
+        seq: u64,
+        bytes: Vec<u8>,
+    },
+    /// A daemon-hosted session's shell exited.
+    SessionExited {
+        session_id: SessionId,
+        host_id: HostId,
+        pty_session_id: String,
+        exit_code: Option<i32>,
+    },
 }
 
 impl RemoteServerManagerEvent {
@@ -390,7 +410,9 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::BinaryCheckComplete { session_id, .. }
             | RemoteServerManagerEvent::BinaryInstallComplete { session_id, .. }
             | RemoteServerManagerEvent::ClientRequestFailed { session_id, .. }
-            | RemoteServerManagerEvent::ServerMessageDecodingError { session_id } => {
+            | RemoteServerManagerEvent::ServerMessageDecodingError { session_id }
+            | RemoteServerManagerEvent::SessionOutput { session_id, .. }
+            | RemoteServerManagerEvent::SessionExited { session_id, .. } => {
                 Some(*session_id)
             }
             RemoteServerManagerEvent::HostConnected { .. }
@@ -1255,6 +1277,30 @@ impl RemoteServerManager {
                     new_server_version,
                     expected_client_version,
                     edits,
+                });
+            }
+            ClientEvent::SessionOutput {
+                session_id: pty_session_id,
+                seq,
+                bytes,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::SessionOutput {
+                    session_id,
+                    host_id,
+                    pty_session_id,
+                    seq,
+                    bytes,
+                });
+            }
+            ClientEvent::SessionExited {
+                session_id: pty_session_id,
+                exit_code,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::SessionExited {
+                    session_id,
+                    host_id,
+                    pty_session_id,
+                    exit_code,
                 });
             }
             ClientEvent::MessageDecodingError => {

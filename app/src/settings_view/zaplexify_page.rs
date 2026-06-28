@@ -20,16 +20,16 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
-use crate::terminal::warpify::settings::{
-    EnableSshWarpification, SshExtensionInstallMode, SshExtensionInstallModeSetting,
-    UseSshTmuxWrapper, WarpifySettingsChangedEvent,
+use crate::terminal::zaplexify::settings::{
+    EnableSshZaplexification, SshExtensionInstallMode, SshExtensionInstallModeSetting,
+    UseSshTmuxWrapper, ZaplexifySettingsChangedEvent,
 };
 use crate::ui_components::blended_colors;
 use crate::{
     appearance::Appearance,
     report_if_error, send_telemetry_from_ctx,
     server::telemetry::TelemetryEvent,
-    terminal::warpify::settings::WarpifySettings,
+    terminal::zaplexify::settings::ZaplexifySettings,
     view_components::{SubmittableTextInput, SubmittableTextInputEvent},
 };
 
@@ -53,14 +53,14 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     context: &ContextPredicate,
     builder: fn(SettingsAction) -> T,
 ) {
-    // Add all of the toggle settings from the Warpify Page that you want to show up on the Command Palette here.
+    // Add all of the toggle settings from the Zaplexify Page that you want to show up on the Command Palette here.
     let mut toggle_binding_pairs = vec![];
 
     if FeatureFlag::SSHTmuxWrapper.is_enabled() {
         toggle_binding_pairs.push(ToggleSettingActionPair::new(
-            &crate::t!("settings-warpify-ssh-tmux-toggle-binding-label"),
-            builder(SettingsAction::WarpifyPageToggle(
-                WarpifyPageAction::ToggleTmuxWarpification,
+            &crate::t!("settings-zaplexify-ssh-tmux-toggle-binding-label"),
+            builder(SettingsAction::ZaplexifyPageToggle(
+                ZaplexifyPageAction::ToggleTmuxZaplexification,
             )),
             context,
             flags::SSH_TMUX_WRAPPER_CONTEXT_FLAG,
@@ -75,12 +75,12 @@ const ITEM_VERTICAL_SPACING: f32 = 24.;
 const BUILT_IN_TEXT_INPUT_MARGIN: f32 = 10.;
 const SPACE_AFTER_TEXT_INPUT: f32 = ITEM_VERTICAL_SPACING - BUILT_IN_TEXT_INPUT_MARGIN;
 
-/// This page lets users configure when they get asked to warpify a session. Some shell commands
+/// This page lets users configure when they get asked to zaplexify a session. Some shell commands
 /// are recognized by default. Users can add new shell commands, or prevent the default ones from
 /// asking. Users can also enable the SSH wrapper, and add hosts to a denylist.
 /// This page is essentially the View for the SubshellSettings model, as well as the SshSettings
-/// related to warpification.
-pub struct WarpifyPageView {
+/// related to zaplexification.
+pub struct ZaplexifyPageView {
     page: PageType<Self>,
     /// This needs to mirror the length of SubshellSettings::added_remove_button_states.
     remove_added_command_button_states: Vec<MouseStateHandle>,
@@ -92,19 +92,19 @@ pub struct WarpifyPageView {
     remove_denylisted_ssh_button_states: Vec<MouseStateHandle>,
     add_denylisted_ssh_editor: ViewHandle<SubmittableTextInput>,
 
-    ssh_extension_install_mode_dropdown: ViewHandle<Dropdown<WarpifyPageAction>>,
+    ssh_extension_install_mode_dropdown: ViewHandle<Dropdown<ZaplexifyPageAction>>,
 }
 
-impl WarpifyPageView {
+impl ZaplexifyPageView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let warpify_settings_handle = WarpifySettings::handle(ctx);
+        let zaplexify_settings_handle = ZaplexifySettings::handle(ctx);
 
-        ctx.observe(&warpify_settings_handle, Self::update_button_states);
-        ctx.subscribe_to_model(&warpify_settings_handle, move |me, model, event, ctx| {
+        ctx.observe(&zaplexify_settings_handle, Self::update_button_states);
+        ctx.subscribe_to_model(&zaplexify_settings_handle, move |me, model, event, ctx| {
             me.update_button_states(model, ctx);
             if matches!(
                 event,
-                WarpifySettingsChangedEvent::SshExtensionInstallModeSetting { .. }
+                ZaplexifySettingsChangedEvent::SshExtensionInstallModeSetting { .. }
             ) {
                 me.update_dropdown(ctx);
             }
@@ -116,7 +116,7 @@ impl WarpifyPageView {
         let add_added_commands_editor = ctx.add_typed_action_view(|ctx| {
             let mut input =
                 SubmittableTextInput::new(ctx).validate_on_edit(|regex| Regex::new(regex).is_ok());
-            input.set_placeholder_text(crate::t!("settings-warpify-command-placeholder"), ctx);
+            input.set_placeholder_text(crate::t!("settings-zaplexify-command-placeholder"), ctx);
             input
         });
 
@@ -127,7 +127,7 @@ impl WarpifyPageView {
 
         let add_denylisted_commands_editor = ctx.add_typed_action_view(|ctx| {
             let mut input = SubmittableTextInput::new(ctx);
-            input.set_placeholder_text(crate::t!("settings-warpify-command-placeholder"), ctx);
+            input.set_placeholder_text(crate::t!("settings-zaplexify-command-placeholder"), ctx);
             input
         });
 
@@ -138,7 +138,7 @@ impl WarpifyPageView {
 
         let add_denylisted_ssh_editor = ctx.add_typed_action_view(|ctx| {
             let mut input = SubmittableTextInput::new(ctx);
-            input.set_placeholder_text(crate::t!("settings-warpify-host-placeholder"), ctx);
+            input.set_placeholder_text(crate::t!("settings-zaplexify-host-placeholder"), ctx);
             input
         });
 
@@ -161,7 +161,7 @@ impl WarpifyPageView {
             ssh_extension_install_mode_dropdown,
         };
 
-        instance.update_button_states(warpify_settings_handle, ctx);
+        instance.update_button_states(zaplexify_settings_handle, ctx);
         instance
     }
 
@@ -169,27 +169,27 @@ impl WarpifyPageView {
         let mut categories = vec![
             Category::new("", vec![Box::new(TitleWidget::default())]),
             Category::new(
-                Box::leak(crate::t!("settings-warpify-section-subshells").into_boxed_str()),
+                Box::leak(crate::t!("settings-zaplexify-section-subshells").into_boxed_str()),
                 vec![Box::new(SubshellsWidget::default())],
             )
             .with_subtitle(Box::leak(
-                crate::t!("settings-warpify-section-subshells-subtitle").into_boxed_str(),
+                crate::t!("settings-zaplexify-section-subshells-subtitle").into_boxed_str(),
             )),
         ];
 
-        let warpify_settings = WarpifySettings::as_ref(ctx);
+        let zaplexify_settings = ZaplexifySettings::as_ref(ctx);
         if FeatureFlag::SSHTmuxWrapper.is_enabled()
-            && warpify_settings
-                .enable_ssh_warpification
+            && zaplexify_settings
+                .enable_ssh_zaplexification
                 .is_supported_on_current_platform()
         {
             categories.push(
                 Category::new(
-                    Box::leak(crate::t!("settings-warpify-section-ssh").into_boxed_str()),
+                    Box::leak(crate::t!("settings-zaplexify-section-ssh").into_boxed_str()),
                     vec![Box::new(SSHWidget::default())],
                 )
                 .with_subtitle(Box::leak(
-                    crate::t!("settings-warpify-section-ssh-subtitle").into_boxed_str(),
+                    crate::t!("settings-zaplexify-section-ssh-subtitle").into_boxed_str(),
                 )),
             );
         }
@@ -200,21 +200,21 @@ impl WarpifyPageView {
     /// its delete button in the View.
     fn update_button_states(
         &mut self,
-        warpify_settings_handle: ModelHandle<WarpifySettings>,
+        zaplexify_settings_handle: ModelHandle<ZaplexifySettings>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let warpify_settings = warpify_settings_handle.as_ref(ctx);
-        self.remove_denylisted_command_button_states = warpify_settings
+        let zaplexify_settings = zaplexify_settings_handle.as_ref(ctx);
+        self.remove_denylisted_command_button_states = zaplexify_settings
             .subshell_command_denylist
             .iter()
             .map(|_| Default::default())
             .collect();
-        self.remove_added_command_button_states = warpify_settings
+        self.remove_added_command_button_states = zaplexify_settings
             .added_subshell_commands
             .iter()
             .map(|_| Default::default())
             .collect();
-        self.remove_denylisted_ssh_button_states = warpify_settings
+        self.remove_denylisted_ssh_button_states = zaplexify_settings
             .ssh_hosts_denylist
             .iter()
             .map(|_| Default::default())
@@ -223,16 +223,16 @@ impl WarpifyPageView {
     }
 
     /// Syncs the install-mode dropdown selection with the current
-    /// `WarpifySettings::ssh_extension_install_mode` value (e.g. after it
+    /// `ZaplexifySettings::ssh_extension_install_mode` value (e.g. after it
     /// was changed from the SSH remote server choice view).
     fn update_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
-        let current_mode = *WarpifySettings::as_ref(ctx)
+        let current_mode = *ZaplexifySettings::as_ref(ctx)
             .ssh_extension_install_mode
             .value();
         self.ssh_extension_install_mode_dropdown
             .update(ctx, |dropdown, ctx| {
                 dropdown.set_selected_by_action(
-                    WarpifyPageAction::SetSshExtensionInstallMode(current_mode),
+                    ZaplexifyPageAction::SetSshExtensionInstallMode(current_mode),
                     ctx,
                 );
             });
@@ -246,8 +246,8 @@ impl WarpifyPageView {
     ) {
         match event {
             SubmittableTextInputEvent::Submit(new_command) => {
-                WarpifySettings::handle(ctx).update(ctx, |warpify_settings, ctx| {
-                    warpify_settings.add_subshell_command(new_command, ctx);
+                ZaplexifySettings::handle(ctx).update(ctx, |zaplexify_settings, ctx| {
+                    zaplexify_settings.add_subshell_command(new_command, ctx);
                 });
 
                 send_telemetry_from_ctx!(TelemetryEvent::AddAddedSubshellCommand, ctx);
@@ -264,8 +264,8 @@ impl WarpifyPageView {
     ) {
         match event {
             SubmittableTextInputEvent::Submit(new_command) => {
-                WarpifySettings::handle(ctx).update(ctx, |warpify_settings, ctx| {
-                    warpify_settings.denylist_subshell_command(new_command, ctx);
+                ZaplexifySettings::handle(ctx).update(ctx, |zaplexify_settings, ctx| {
+                    zaplexify_settings.denylist_subshell_command(new_command, ctx);
                 });
 
                 send_telemetry_from_ctx!(TelemetryEvent::AddDenylistedSubshellCommand, ctx);
@@ -282,8 +282,8 @@ impl WarpifyPageView {
     ) {
         match event {
             SubmittableTextInputEvent::Submit(new_command) => {
-                WarpifySettings::handle(ctx).update(ctx, |warpify_settings, ctx| {
-                    warpify_settings.denylist_ssh_host(new_command, ctx);
+                ZaplexifySettings::handle(ctx).update(ctx, |zaplexify_settings, ctx| {
+                    zaplexify_settings.denylist_ssh_host(new_command, ctx);
                 });
 
                 send_telemetry_from_ctx!(TelemetryEvent::AddDenylistedSshTmuxWrapperHost, ctx);
@@ -294,27 +294,27 @@ impl WarpifyPageView {
 
     fn remove_denylisted_command(&self, index: usize, ctx: &mut ViewContext<Self>) {
         send_telemetry_from_ctx!(TelemetryEvent::RemoveDenylistedSubshellCommand, ctx);
-        WarpifySettings::handle(ctx).update(ctx, |warpify, ctx| {
-            warpify.remove_denylisted_subshell_command(index, ctx)
+        ZaplexifySettings::handle(ctx).update(ctx, |zaplexify, ctx| {
+            zaplexify.remove_denylisted_subshell_command(index, ctx)
         });
     }
 
     fn remove_added_command(&self, index: usize, ctx: &mut ViewContext<Self>) {
         send_telemetry_from_ctx!(TelemetryEvent::RemoveAddedSubshellCommand, ctx);
-        WarpifySettings::handle(ctx).update(ctx, |warpify, ctx| {
-            warpify.remove_added_subshell_command(index, ctx)
+        ZaplexifySettings::handle(ctx).update(ctx, |zaplexify, ctx| {
+            zaplexify.remove_added_subshell_command(index, ctx)
         });
     }
 
     fn remove_denylisted_ssh_host(&self, index: usize, ctx: &mut ViewContext<Self>) {
         send_telemetry_from_ctx!(TelemetryEvent::RemoveDenylistedSshTmuxWrapperHost, ctx);
-        WarpifySettings::handle(ctx).update(ctx, |warpify, ctx| {
-            warpify.remove_denylisted_ssh_host(index, ctx)
+        ZaplexifySettings::handle(ctx).update(ctx, |zaplexify, ctx| {
+            zaplexify.remove_denylisted_ssh_host(index, ctx)
         });
     }
 }
 
-impl Entity for WarpifyPageView {
+impl Entity for ZaplexifyPageView {
     type Event = SettingsPageEvent;
 }
 
@@ -331,24 +331,24 @@ fn build_sub_sub_title(title: String, appearance: &Appearance) -> Container {
 
 const SSH_EXTENSION_DROPDOWN_WIDTH: f32 = 250.;
 
-impl WarpifyPageView {
+impl ZaplexifyPageView {
     fn create_ssh_extension_install_mode_dropdown(
         ctx: &mut ViewContext<Self>,
-    ) -> ViewHandle<Dropdown<WarpifyPageAction>> {
-        let items: Vec<DropdownItem<WarpifyPageAction>> = SshExtensionInstallMode::iter()
+    ) -> ViewHandle<Dropdown<ZaplexifyPageAction>> {
+        let items: Vec<DropdownItem<ZaplexifyPageAction>> = SshExtensionInstallMode::iter()
             .map(|mode| {
                 DropdownItem::new(
                     mode.display_name(),
-                    WarpifyPageAction::SetSshExtensionInstallMode(mode),
+                    ZaplexifyPageAction::SetSshExtensionInstallMode(mode),
                 )
             })
             .collect();
 
-        let current_mode = *WarpifySettings::as_ref(ctx)
+        let current_mode = *ZaplexifySettings::as_ref(ctx)
             .ssh_extension_install_mode
             .value();
-        let enable_ssh_warpification = *WarpifySettings::as_ref(ctx)
-            .enable_ssh_warpification
+        let enable_ssh_zaplexification = *ZaplexifySettings::as_ref(ctx)
+            .enable_ssh_zaplexification
             .value();
 
         ctx.add_typed_action_view(move |ctx| {
@@ -357,10 +357,10 @@ impl WarpifyPageView {
             dropdown.set_menu_width(SSH_EXTENSION_DROPDOWN_WIDTH, ctx);
             dropdown.add_items(items, ctx);
             dropdown.set_selected_by_action(
-                WarpifyPageAction::SetSshExtensionInstallMode(current_mode),
+                ZaplexifyPageAction::SetSshExtensionInstallMode(current_mode),
                 ctx,
             );
-            if !enable_ssh_warpification {
+            if !enable_ssh_zaplexification {
                 dropdown.set_disabled(ctx);
             }
             dropdown
@@ -411,9 +411,9 @@ impl WarpifyPageView {
     }
 }
 
-impl View for WarpifyPageView {
+impl View for ZaplexifyPageView {
     fn ui_name() -> &'static str {
-        "WarpifyPageView"
+        "ZaplexifyPageView"
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
@@ -422,40 +422,40 @@ impl View for WarpifyPageView {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum WarpifyPageAction {
+pub enum ZaplexifyPageAction {
     RemoveAddedCommand(usize),
     RemoveDenylistedCommand(usize),
     RemoveDenylistedSshHost(usize),
-    /// If disabled, auto-Warpification and the SSH Warpification prompt will be disabled.
-    ToggleTmuxWarpification,
-    ToggleSshWarpification,
+    /// If disabled, auto-Zaplexification and the SSH Zaplexification prompt will be disabled.
+    ToggleTmuxZaplexification,
+    ToggleSshZaplexification,
     /// Set the SSH extension installation mode (always ask / always install / always skip).
     SetSshExtensionInstallMode(SshExtensionInstallMode),
     OpenUrl(String),
 }
 
-impl TypedActionView for WarpifyPageView {
-    type Action = WarpifyPageAction;
+impl TypedActionView for ZaplexifyPageView {
+    type Action = ZaplexifyPageAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
-        use WarpifyPageAction::*;
+        use ZaplexifyPageAction::*;
         match action {
             RemoveDenylistedCommand(index) => self.remove_denylisted_command(*index, ctx),
             RemoveAddedCommand(index) => self.remove_added_command(*index, ctx),
-            ToggleSshWarpification => {
-                WarpifySettings::handle(ctx).update(ctx, |ssh_settings, ctx| {
+            ToggleSshZaplexification => {
+                ZaplexifySettings::handle(ctx).update(ctx, |ssh_settings, ctx| {
                     report_if_error!(ssh_settings
-                        .enable_ssh_warpification
+                        .enable_ssh_zaplexification
                         .toggle_and_save_value(ctx));
                     send_telemetry_from_ctx!(
-                        TelemetryEvent::ToggleSshWarpification {
-                            enabled: *ssh_settings.enable_ssh_warpification.value(),
+                        TelemetryEvent::ToggleSshZaplexification {
+                            enabled: *ssh_settings.enable_ssh_zaplexification.value(),
                         },
                         ctx
                     );
                 });
-                let enabled = *WarpifySettings::as_ref(ctx)
-                    .enable_ssh_warpification
+                let enabled = *ZaplexifySettings::as_ref(ctx)
+                    .enable_ssh_zaplexification
                     .value();
                 self.ssh_extension_install_mode_dropdown
                     .update(ctx, |dropdown, ctx| {
@@ -466,8 +466,8 @@ impl TypedActionView for WarpifyPageView {
                         }
                     });
             }
-            ToggleTmuxWarpification => {
-                WarpifySettings::handle(ctx).update(ctx, |ssh_settings, ctx| {
+            ToggleTmuxZaplexification => {
+                ZaplexifySettings::handle(ctx).update(ctx, |ssh_settings, ctx| {
                     report_if_error!(ssh_settings.use_ssh_tmux_wrapper.toggle_and_save_value(ctx));
                     send_telemetry_from_ctx!(
                         TelemetryEvent::ToggleSshTmuxWrapper {
@@ -478,8 +478,8 @@ impl TypedActionView for WarpifyPageView {
                 });
             }
             SetSshExtensionInstallMode(mode) => {
-                WarpifySettings::handle(ctx).update(ctx, |warpify_settings, ctx| {
-                    report_if_error!(warpify_settings
+                ZaplexifySettings::handle(ctx).update(ctx, |zaplexify_settings, ctx| {
+                    report_if_error!(zaplexify_settings
                         .ssh_extension_install_mode
                         .set_value(*mode, ctx));
                     send_telemetry_from_ctx!(
@@ -490,7 +490,7 @@ impl TypedActionView for WarpifyPageView {
                     );
                 });
             }
-            WarpifyPageAction::RemoveDenylistedSshHost(index) => {
+            ZaplexifyPageAction::RemoveDenylistedSshHost(index) => {
                 self.remove_denylisted_ssh_host(*index, ctx);
             }
             OpenUrl(url) => {
@@ -500,9 +500,9 @@ impl TypedActionView for WarpifyPageView {
     }
 }
 
-impl SettingsPageMeta for WarpifyPageView {
+impl SettingsPageMeta for ZaplexifyPageView {
     fn section() -> SettingsSection {
-        SettingsSection::Warpify
+        SettingsSection::Zaplexify
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {
@@ -522,9 +522,9 @@ impl SettingsPageMeta for WarpifyPageView {
     }
 }
 
-impl From<ViewHandle<WarpifyPageView>> for SettingsPageViewHandle {
-    fn from(view_handle: ViewHandle<WarpifyPageView>) -> Self {
-        SettingsPageViewHandle::Warpify(view_handle)
+impl From<ViewHandle<ZaplexifyPageView>> for SettingsPageViewHandle {
+    fn from(view_handle: ViewHandle<ZaplexifyPageView>) -> Self {
+        SettingsPageViewHandle::Zaplexify(view_handle)
     }
 }
 
@@ -535,16 +535,16 @@ struct TitleWidget {
 
 impl TitleWidget {
     fn render_top_of_page(&self, appearance: &Appearance, _app: &AppContext) -> Box<dyn Element> {
-        let warpify_description = vec![
-            FormattedTextFragment::plain_text(crate::t!("settings-warpify-description-prefix")),
+        let zaplexify_description = vec![
+            FormattedTextFragment::plain_text(crate::t!("settings-zaplexify-description-prefix")),
             FormattedTextFragment::hyperlink(
-                crate::t!("settings-warpify-learn-more"),
+                crate::t!("settings-zaplexify-learn-more"),
                 "",
             ),
         ];
 
-        let warpify_description = FormattedTextElement::new(
-            FormattedText::new([FormattedTextLine::Line(warpify_description)]),
+        let zaplexify_description = FormattedTextElement::new(
+            FormattedText::new([FormattedTextLine::Line(zaplexify_description)]),
             appearance.ui_font_body(),
             appearance.ui_font_family(),
             appearance.ui_font_family(),
@@ -560,19 +560,19 @@ impl TitleWidget {
 
         Flex::column()
             .with_child(render_page_title(
-                &crate::t!("settings-warpify-page-title"),
+                &crate::t!("settings-zaplexify-page-title"),
                 appearance,
             ))
-            .with_child(warpify_description)
+            .with_child(zaplexify_description)
             .finish()
     }
 }
 
 impl SettingsWidget for TitleWidget {
-    type View = WarpifyPageView;
+    type View = ZaplexifyPageView;
 
     fn search_terms(&self) -> &str {
-        "ssh subshell warpify session"
+        "ssh subshell zaplexify session"
     }
 
     fn render(
@@ -593,20 +593,20 @@ struct SubshellsWidget {}
 impl SubshellsWidget {
     fn render_subshells_section(
         &self,
-        view: &WarpifyPageView,
+        view: &ZaplexifyPageView,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let mut column = Flex::column();
 
-        let warpify_settings = WarpifySettings::as_ref(app);
+        let zaplexify_settings = ZaplexifySettings::as_ref(app);
 
         column.add_child(
             view.build_input_list(
-                crate::t!("settings-warpify-added-commands"),
-                &warpify_settings.added_subshell_commands,
+                crate::t!("settings-zaplexify-added-commands"),
+                &zaplexify_settings.added_subshell_commands,
                 &view.remove_added_command_button_states,
-                WarpifyPageAction::RemoveAddedCommand,
+                ZaplexifyPageAction::RemoveAddedCommand,
                 &view.add_added_commands_editor,
                 appearance,
             )
@@ -615,10 +615,10 @@ impl SubshellsWidget {
 
         column.add_child(
             view.build_input_list(
-                crate::t!("settings-warpify-denylisted-commands"),
-                &warpify_settings.subshell_command_denylist,
+                crate::t!("settings-zaplexify-denylisted-commands"),
+                &zaplexify_settings.subshell_command_denylist,
                 &view.remove_denylisted_command_button_states,
-                WarpifyPageAction::RemoveDenylistedCommand,
+                ZaplexifyPageAction::RemoveDenylistedCommand,
                 &view.add_denylisted_commands_editor,
                 appearance,
             )
@@ -631,10 +631,10 @@ impl SubshellsWidget {
 }
 
 impl SettingsWidget for SubshellsWidget {
-    type View = WarpifyPageView;
+    type View = ZaplexifyPageView;
 
     fn search_terms(&self) -> &str {
-        "warpify subshell"
+        "zaplexify subshell"
     }
 
     fn render(
@@ -651,17 +651,17 @@ impl SettingsWidget for SubshellsWidget {
 
 #[derive(Default)]
 struct SSHWidget {
-    tmux_warpification_switch_state: SwitchStateHandle,
-    enable_ssh_warpification_switch_state: SwitchStateHandle,
+    tmux_zaplexification_switch_state: SwitchStateHandle,
+    enable_ssh_zaplexification_switch_state: SwitchStateHandle,
     additional_info_mouse_state: MouseStateHandle,
     local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
 }
 
 impl SettingsWidget for SSHWidget {
-    type View = WarpifyPageView;
+    type View = ZaplexifyPageView;
 
     fn search_terms(&self) -> &str {
-        "warpify ssh"
+        "zaplexify ssh"
     }
 
     fn render(
@@ -676,34 +676,34 @@ impl SettingsWidget for SSHWidget {
             .theme()
             .sub_text_color(appearance.theme().surface_2());
 
-        let enable_ssh_warpification = *WarpifySettings::as_ref(app)
-            .enable_ssh_warpification
+        let enable_ssh_zaplexification = *ZaplexifySettings::as_ref(app)
+            .enable_ssh_zaplexification
             .value();
 
         let should_prompt_ssh_tmux_wrapper =
-            *WarpifySettings::as_ref(app).use_ssh_tmux_wrapper.value();
+            *ZaplexifySettings::as_ref(app).use_ssh_tmux_wrapper.value();
 
         add_setting(
             &mut column,
-            &WarpifySettings::as_ref(app).enable_ssh_warpification,
+            &ZaplexifySettings::as_ref(app).enable_ssh_zaplexification,
             move || {
-                render_body_item::<WarpifyPageAction>(
-                    crate::t!("settings-warpify-enable-ssh"),
+                render_body_item::<ZaplexifyPageAction>(
+                    crate::t!("settings-zaplexify-enable-ssh"),
                     None,
                     LocalOnlyIconState::for_setting(
-                        EnableSshWarpification::storage_key(),
-                        EnableSshWarpification::sync_to_cloud(),
+                        EnableSshZaplexification::storage_key(),
+                        EnableSshZaplexification::sync_to_cloud(),
                         &mut self.local_only_icon_tooltip_states.borrow_mut(),
                         app,
                     ),
                     ToggleState::Enabled,
                     appearance,
                     ui_builder
-                        .switch(self.enable_ssh_warpification_switch_state.clone())
-                        .check(enable_ssh_warpification)
+                        .switch(self.enable_ssh_zaplexification_switch_state.clone())
+                        .check(enable_ssh_zaplexification)
                         .build()
                         .on_click(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(WarpifyPageAction::ToggleSshWarpification);
+                            ctx.dispatch_typed_action(ZaplexifyPageAction::ToggleSshZaplexification);
                         })
                         .finish(),
                     None,
@@ -712,18 +712,18 @@ impl SettingsWidget for SSHWidget {
         );
 
         if FeatureFlag::SshRemoteServer.is_enabled() {
-            let label_color_override = if !enable_ssh_warpification {
+            let label_color_override = if !enable_ssh_zaplexification {
                 Some(appearance.theme().disabled_ui_text_color())
             } else {
                 None
             };
             add_setting(
                 &mut column,
-                &WarpifySettings::as_ref(app).ssh_extension_install_mode,
+                &ZaplexifySettings::as_ref(app).ssh_extension_install_mode,
                 move || {
-                    let install_ssh_label = crate::t!("settings-warpify-install-ssh-extension");
+                    let install_ssh_label = crate::t!("settings-zaplexify-install-ssh-extension");
                     let install_ssh_desc =
-                        crate::t!("settings-warpify-install-ssh-extension-description");
+                        crate::t!("settings-zaplexify-install-ssh-extension-description");
                     Container::new(render_dropdown_item(
                         appearance,
                         &install_ssh_label,
@@ -746,15 +746,15 @@ impl SettingsWidget for SSHWidget {
 
         add_setting(
             &mut column,
-            &WarpifySettings::as_ref(app).use_ssh_tmux_wrapper,
+            &ZaplexifySettings::as_ref(app).use_ssh_tmux_wrapper,
             move || {
                 let mut column = Flex::column();
 
-                column.add_child(render_body_item::<WarpifyPageAction>(
-                    crate::t!("settings-warpify-use-tmux"),
+                column.add_child(render_body_item::<ZaplexifyPageAction>(
+                    crate::t!("settings-zaplexify-use-tmux"),
                     Some(AdditionalInfo {
                         mouse_state: self.additional_info_mouse_state.clone(),
-                        on_click_action: Some(WarpifyPageAction::OpenUrl(
+                        on_click_action: Some(ZaplexifyPageAction::OpenUrl(
                             "".into(),
                         )),
                         secondary_text: None,
@@ -766,19 +766,19 @@ impl SettingsWidget for SSHWidget {
                         &mut self.local_only_icon_tooltip_states.borrow_mut(),
                         app,
                     ),
-                    enable_ssh_warpification.into(),
+                    enable_ssh_zaplexification.into(),
                     appearance,
                     ui_builder
-                        .switch(self.tmux_warpification_switch_state.clone())
+                        .switch(self.tmux_zaplexification_switch_state.clone())
                         .check(should_prompt_ssh_tmux_wrapper)
-                        .with_disabled(!enable_ssh_warpification)
+                        .with_disabled(!enable_ssh_zaplexification)
                         .build()
                         .on_click(move |ctx, _, _| {
-                            if !enable_ssh_warpification {
+                            if !enable_ssh_zaplexification {
                                 return;
                             }
 
-                            ctx.dispatch_typed_action(WarpifyPageAction::ToggleTmuxWarpification);
+                            ctx.dispatch_typed_action(ZaplexifyPageAction::ToggleTmuxZaplexification);
                         })
                         .finish(),
                     None,
@@ -786,7 +786,7 @@ impl SettingsWidget for SSHWidget {
 
                 column.add_child(
                     ui_builder
-                        .paragraph(crate::t!("settings-warpify-tmux-description"))
+                        .paragraph(crate::t!("settings-zaplexify-tmux-description"))
                         .with_style(UiComponentStyles {
                             font_color: Some(description_text_color.into_solid()),
                             margin: Some(
@@ -800,14 +800,14 @@ impl SettingsWidget for SSHWidget {
                         .finish(),
                 );
 
-                if enable_ssh_warpification && should_prompt_ssh_tmux_wrapper {
-                    let warpify_settings = WarpifySettings::as_ref(app);
+                if enable_ssh_zaplexification && should_prompt_ssh_tmux_wrapper {
+                    let zaplexify_settings = ZaplexifySettings::as_ref(app);
                     column.add_child(
                         view.build_input_list(
-                            crate::t!("settings-warpify-denylisted-hosts"),
-                            &warpify_settings.ssh_hosts_denylist,
+                            crate::t!("settings-zaplexify-denylisted-hosts"),
+                            &zaplexify_settings.ssh_hosts_denylist,
                             &view.remove_denylisted_ssh_button_states,
-                            WarpifyPageAction::RemoveDenylistedSshHost,
+                            ZaplexifyPageAction::RemoveDenylistedSshHost,
                             &view.add_denylisted_ssh_editor,
                             appearance,
                         )

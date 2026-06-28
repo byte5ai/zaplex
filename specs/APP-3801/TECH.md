@@ -275,7 +275,7 @@ Why rejected:
 - **Leaks via `ps`.** On any shared-user remote host, argv is world-readable. Disqualifying on security grounds before even considering the daemon.
 - **No refresh channel; stale at spawn.** Firebase ID tokens expire in ~1 hour. A startup-only credential cannot be updated once baked into argv: even if a later tab on the same daemon has a fresher token, there is no protocol path for it to land on the already-spawned daemon. The runtime `Authenticate` message this spec introduces is the only way to ship a rotation-capable credential.
 
-### 4.2 Environment variable (`WARP_REMOTE_AUTH_TOKEN`)
+### 4.2 Environment variable (`ZAPLEX_REMOTE_AUTH_TOKEN`)
 
 Why rejected:
 

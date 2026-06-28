@@ -170,16 +170,16 @@ mkdir -p "$OUT_DIR"
 # APP_NAME here must match the value used in Rust as the
 # application name; see app/src/channel.rs.
 #
-# WARP_BIN is the name of the binary produced by cargo;
+# ZAPLEX_BIN is the name of the binary produced by cargo;
 # BINARY_NAME is the desired name of the binary in the final package.
 if [[ $RELEASE_CHANNEL = "local" ]]; then
-  WARP_BIN="warp"
+  ZAPLEX_BIN="warp"
   BINARY_NAME="warp-local"
   APP_NAME="WarpLocal"
   FEATURES="$FEATURES,agent_mode_debug"
   export HANDLE_MARKDOWN=1
 elif [[ $RELEASE_CHANNEL = "dev" ]]; then
-  WARP_BIN="dev"
+  ZAPLEX_BIN="dev"
   BINARY_NAME="warp-dev"
   APP_NAME="WarpDev"
   FEATURES="$FEATURES,agent_mode_debug"
@@ -187,16 +187,16 @@ elif [[ $RELEASE_CHANNEL = "dev" ]]; then
   FEATURES="$FEATURES,jemalloc_pprof"
   export HANDLE_MARKDOWN=1
 elif [[ $RELEASE_CHANNEL = "preview" ]]; then
-  WARP_BIN="preview"
+  ZAPLEX_BIN="preview"
   BINARY_NAME="warp-preview"
   APP_NAME="WarpPreview"
   FEATURES="$FEATURES,preview_channel"
 elif [[ $RELEASE_CHANNEL = "stable" ]]; then
-  WARP_BIN="stable"
+  ZAPLEX_BIN="stable"
   BINARY_NAME="warp"
   APP_NAME="Zap"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-  WARP_BIN="zap-oss"
+  ZAPLEX_BIN="zap-oss"
   BINARY_NAME="zap-oss"
   APP_NAME="Zap"
   # OSS channel 使用本地 crash reporting,不启用 release 默认特性集合。
@@ -229,7 +229,7 @@ if [[ $RELEASE_CHANNEL = "oss" ]]; then
 else
   BUNDLE_ID="dev.warp.$APP_NAME"
 fi
-EXECUTABLE_PATH="$CARGO_TARGET_OUTPUT_DIR/$WARP_BIN"
+EXECUTABLE_PATH="$CARGO_TARGET_OUTPUT_DIR/$ZAPLEX_BIN"
 DEBUG_EXECUTABLE_PATH="$EXECUTABLE_PATH.debug"
 
 # Note that this variable must be set (and exported!) before we compile the
@@ -250,7 +250,7 @@ fi
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
 # using the same feature flags and profile that we would be using in production.
 if [[ "$CHECK_ONLY" == "true" ]]; then
-  cargo check -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
+  cargo check -p warp --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
   exit 0
 fi
 
@@ -264,9 +264,9 @@ if [[ "$BUILD" == "true" ]]; then
   echo "Building and bundling Zap for channel $RELEASE_CHANNEL and bundle id $BUNDLE_ID"
   if [[ "${USE_ZIGBUILD:-false}" == "true" ]]; then
     echo "Using cargo zigbuild (zig-backed cross toolchain)"
-    cargo zigbuild -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
+    cargo zigbuild -p warp --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
   else
-    cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
+    cargo build -p warp --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
   fi
   echo "Making debug copy of '$EXECUTABLE_PATH' at '$DEBUG_EXECUTABLE_PATH'"
   cp "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"

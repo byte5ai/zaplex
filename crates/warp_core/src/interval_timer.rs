@@ -61,14 +61,14 @@ impl IntervalTimer {
             })
     }
 
-    /// When the `WARP_STARTUP_TRACE=1` environment variable is set, writes the timing
+    /// When the `ZAPLEX_STARTUP_TRACE=1` environment variable is set, writes the timing
     /// table collected by the IntervalTimer (per-step marginal_ms / cumulative_ms / name)
     /// to stderr as an ASCII table.
     /// Mainly used for local tuning -- it depends on no telemetry backend and is purely
     /// local diagnostics.
     /// Has no side effects and does not modify any state.
     pub fn print_trace_to_stderr_if_enabled(&self) {
-        let enabled = std::env::var("WARP_STARTUP_TRACE")
+        let enabled = std::env::var("ZAPLEX_STARTUP_TRACE")
             .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
         if !enabled {
@@ -76,7 +76,7 @@ impl IntervalTimer {
         }
         let stats = self.compute_stats();
         eprintln!();
-        eprintln!("=== WARP_STARTUP_TRACE ===");
+        eprintln!("=== ZAPLEX_STARTUP_TRACE ===");
         eprintln!("{:>8} {:>10}  name", "step_ms", "total_ms");
         for point in &stats {
             eprintln!(

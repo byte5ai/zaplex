@@ -161,7 +161,7 @@ use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::ligature_settings::should_use_ligature_rendering;
-use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::zaplexify::settings::ZaplexifySettings;
 use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
 
 #[cfg(target_family = "wasm")]
@@ -562,7 +562,7 @@ pub(crate) const TOGGLE_NOTIFICATION_MAILBOX_BINDING_NAME: &str =
 
 // these won't have to be public after we deprecate the code mode v1 project explorer which is defined in terminal
 pub(crate) const TOGGLE_PROJECT_EXPLORER_BINDING_NAME: &str = "workspace:toggle_project_explorer";
-pub(crate) const TOGGLE_WARP_DRIVE_BINDING_NAME: &str = "workspace:toggle_warp_drive";
+pub(crate) const TOGGLE_ZAPLEX_DRIVE_BINDING_NAME: &str = "workspace:toggle_warp_drive";
 pub(crate) const TOGGLE_RIGHT_PANEL_BINDING_NAME: &str = "workspace:toggle_right_panel";
 pub(crate) const TOGGLE_VERTICAL_TABS_PANEL_BINDING_NAME: &str =
     "workspace:toggle_vertical_tabs_panel";
@@ -578,7 +578,7 @@ pub(crate) const TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME: &str = "workspace:toggle_
 pub(crate) const LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME: &str =
     "workspace:left_panel_project_explorer";
 pub(crate) const LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME: &str = "workspace:left_panel_global_search";
-pub(crate) const LEFT_PANEL_WARP_DRIVE_BINDING_NAME: &str = "workspace:left_panel_warp_drive";
+pub(crate) const LEFT_PANEL_ZAPLEX_DRIVE_BINDING_NAME: &str = "workspace:left_panel_warp_drive";
 pub(crate) const LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME: &str =
     "workspace:left_panel_agent_conversations";
 pub(crate) const LEFT_PANEL_SSH_MANAGER_BINDING_NAME: &str = "workspace:left_panel_ssh_manager";
@@ -612,7 +612,7 @@ const MAX_WINDOW_TITLE_LENGTH: usize = 80;
 pub const DEFAULT_USER_DISPLAY_NAME: &str = "User";
 
 lazy_static! {
-    static ref OPENING_WARP_DRIVE_ON_START_UP: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    static ref OPENING_ZAPLEX_DRIVE_ON_START_UP: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     static ref PANEL_CORNER_RADIUS: CornerRadius = CornerRadius::with_all(Radius::Pixels(8.));
     static ref PANEL_HEADER_CORNER_RADIUS: CornerRadius =
         CornerRadius::with_top(Radius::Pixels(8.));
@@ -5445,6 +5445,18 @@ impl Workspace {
                     (server.clone(), node_id.clone(), fallback_kind)
                 }
             };
+
+        // Native persistent remote-session layer (Option B): a host with
+        // `session_resilience` enabled opens directly as a daemon-hosted session
+        // instead of a local PTY running `ssh`. Falls through to the normal path
+        // if the host isn't resilient or the auth isn't headless-capable.
+        #[cfg(unix)]
+        {
+            if self.try_open_daemon_ssh_terminal(&server_for_connection, ctx) {
+                return;
+            }
+        }
+
         let cmd = warp_ssh_manager::build_ssh_command_line(&server_for_connection);
         let window_id = ctx.window_id();
 
@@ -5531,6 +5543,160 @@ impl Workspace {
         terminal_view.update(ctx, |view, ctx| {
             view.execute_command_or_set_pending(&cmd, ctx);
         });
+    }
+
+    /// Native persistent remote-session path (Stage 2, Option B). Returns `true`
+    /// if the host was opened as a daemon-hosted session (caller should stop), or
+    /// `false` to fall through to the ordinary local-PTY SSH path. v1 only takes
+    /// the daemon path for resilient hosts with headless-capable (key) auth.
+    #[cfg(unix)]
+    fn try_open_daemon_ssh_terminal(
+        &mut self,
+        server: &warp_ssh_manager::SshServerInfo,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        use crate::remote_server::headless_connect;
+
+        if !server.session_resilience.is_enabled() {
+            return false;
+        }
+        if !headless_connect::is_headless_capable(server) {
+            log::info!(
+                "Host {} has session_resilience enabled but its auth is not \
+                 headless-capable (v1: key auth only); using the normal SSH path",
+                server.host
+            );
+            return false;
+        }
+
+        let session_id = headless_connect::alloc_daemon_session_id();
+        let request = crate::terminal::daemon_tty::DaemonSessionRequest {
+            connection_session_id: session_id,
+            open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+            adopt_pty_session_id: None,
+        };
+
+        // Create the daemon-backed tab first: its event loop subscribes for
+        // `SessionConnected` on `session_id` before we kick off the connect.
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                hide_homepage: true,
+                daemon_request: Some(request),
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None, /* custom_tab_title */
+            ctx,
+        );
+
+        self.spawn_daemon_session_connect(server.clone(), session_id, ctx);
+        true
+    }
+
+    /// Adopts an already-running daemon session in a new tab: attaches to
+    /// `pty_session_id` (replay + live) instead of opening a fresh one. This is
+    /// the entry point the multi-session sidebar calls when the user picks a
+    /// listed session (the listing comes from `RemoteServerClient::list_sessions`).
+    #[cfg(unix)]
+    pub fn adopt_daemon_session(
+        &mut self,
+        server: warp_ssh_manager::SshServerInfo,
+        pty_session_id: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::remote_server::headless_connect;
+
+        let session_id = headless_connect::alloc_daemon_session_id();
+        let request = crate::terminal::daemon_tty::DaemonSessionRequest {
+            connection_session_id: session_id,
+            open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+            adopt_pty_session_id: Some(pty_session_id),
+        };
+
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                hide_homepage: true,
+                daemon_request: Some(request),
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None, /* custom_tab_title */
+            ctx,
+        );
+
+        self.spawn_daemon_session_connect(server, session_id, ctx);
+    }
+
+    /// Establishes the headless SSH ControlMaster for a daemon session, then
+    /// connects the remote-server session on `session_id`. The daemon terminal
+    /// (already created) issues `OpenSession` once `SessionConnected` fires.
+    #[cfg(unix)]
+    fn spawn_daemon_session_connect(
+        &mut self,
+        server: warp_ssh_manager::SshServerInfo,
+        session_id: SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::remote_server::auth_context::server_api_auth_context;
+        use crate::remote_server::headless_connect;
+        use crate::remote_server::manager::RemoteServerManager;
+        use crate::remote_server::ssh_transport::SshTransport;
+        use remote_server::transport::RemoteTransport;
+
+        let auth_context = std::sync::Arc::new(server_api_auth_context(
+            AuthStateProvider::as_ref(ctx).get().clone(),
+        ));
+        let socket_path = headless_connect::control_socket_path(&server);
+        let host = server.host.clone();
+
+        let server_for_master = server.clone();
+        let socket_for_check = socket_path.clone();
+        let auth_for_check = auth_context.clone();
+        let host_for_async = host.clone();
+
+        // Off the main thread: bring up the ControlMaster, then make sure the
+        // remote-server binary is installed (auto-install if missing), so the
+        // connect below doesn't silently fail on a host that's never been used.
+        ctx.spawn(
+            async move {
+                log::info!("daemon connect [{host_for_async}]: establishing ControlMaster");
+                headless_connect::ensure_control_master(&server_for_master, &socket_for_check)
+                    .await
+                    .map_err(|e| format!("ControlMaster setup failed: {e:#}"))?;
+
+                let transport = SshTransport::new(socket_for_check, auth_for_check);
+                log::info!("daemon connect [{host_for_async}]: checking remote-server binary");
+                match transport.check_binary().await {
+                    Ok(true) => log::info!("daemon connect [{host_for_async}]: binary present"),
+                    Ok(false) => {
+                        log::info!(
+                            "daemon connect [{host_for_async}]: binary missing — installing"
+                        );
+                        transport
+                            .install_binary()
+                            .await
+                            .map_err(|e| format!("remote-server install failed: {e}"))?;
+                        log::info!("daemon connect [{host_for_async}]: install complete");
+                    }
+                    Err(e) => return Err(format!("remote-server binary check failed: {e}")),
+                }
+                Ok::<(), String>(())
+            },
+            move |_workspace, result, ctx| match result {
+                Ok(()) => {
+                    log::info!(
+                        "daemon connect [{host}]: transport ready — connecting session {session_id:?}"
+                    );
+                    let transport = SshTransport::new(socket_path, auth_context.clone());
+                    RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+                        mgr.connect_session(session_id, transport, auth_context, ctx);
+                    });
+                }
+                Err(e) => {
+                    log::error!("daemon connect [{host}] failed: {e}");
+                }
+            },
+        );
     }
 
     fn handle_right_panel_event(&mut self, event: RightPanelEvent, ctx: &mut ViewContext<Self>) {
@@ -13634,7 +13800,7 @@ impl Workspace {
     }
 
     /// Insert the given command that should open a subshell. And set a flag that we should
-    /// automatically bootstrap AKA "warpify" that subshell if we support it. No-op if there is
+    /// automatically bootstrap AKA "zaplexify" that subshell if we support it. No-op if there is
     /// no active terminal session.
     pub fn insert_subshell_command_and_bootstrap_if_supported(
         &mut self,
@@ -13730,7 +13896,7 @@ impl Workspace {
 
             // Check whether this remote session has an active remote server
             // connection (or is in the process of connecting). This is only
-            // true for Auto SSH Warpification (mode 1) sessions where
+            // true for Auto SSH Zaplexification (mode 1) sessions where
             // `connect_session` was called at `InitShell` time.
             let has_remote_server = is_remote
                 && FeatureFlag::SshRemoteServer.is_enabled()
@@ -18184,7 +18350,7 @@ impl Workspace {
         let general_settings = GeneralSettings::as_ref(app);
         let theme_settings = ThemeSettings::as_ref(app);
         let ssh_settings = SshSettings::as_ref(app);
-        let warpify_settings = WarpifySettings::as_ref(app);
+        let zaplexify_settings = ZaplexifySettings::as_ref(app);
         let terminal_settings = TerminalSettings::as_ref(app);
         let pane_settings = PaneSettings::as_ref(app);
         let keys_settings = KeysSettings::as_ref(app);
@@ -18225,7 +18391,7 @@ impl Workspace {
             .value()
             .same_line_prompt_enabled()
         {
-            context.set.insert(flags::WARP_SAME_LINE_PROMPT_FLAG);
+            context.set.insert(flags::ZAPLEX_SAME_LINE_PROMPT_FLAG);
         }
 
         if *ssh_settings.enable_legacy_ssh_wrapper.value() {
@@ -18237,7 +18403,7 @@ impl Workspace {
             context.set.insert(flags::SSH_AUTO_DISCOVERY_CONTEXT_FLAG);
         }
 
-        if *warpify_settings.use_ssh_tmux_wrapper.value() {
+        if *zaplexify_settings.use_ssh_tmux_wrapper.value() {
             context.set.insert(flags::SSH_TMUX_WRAPPER_CONTEXT_FLAG);
         }
 
@@ -20533,7 +20699,7 @@ impl View for Workspace {
         };
 
         if WarpDriveSettings::is_warp_drive_enabled(app) {
-            context.set.insert(flags::ENABLE_WARP_DRIVE);
+            context.set.insert(flags::ENABLE_ZAPLEX_DRIVE);
         }
 
         if AISettings::as_ref(app).is_any_ai_enabled(app)
@@ -20574,7 +20740,7 @@ impl View for Workspace {
 
         let default_terminal = DefaultTerminal::as_ref(app);
         if default_terminal.is_warp_default() {
-            context.set.insert(flags::WARP_IS_DEFAULT_TERMINAL);
+            context.set.insert(flags::ZAPLEX_IS_DEFAULT_TERMINAL);
         }
 
         if FeatureFlag::DebugMode.is_enabled() {

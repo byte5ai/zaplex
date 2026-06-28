@@ -133,10 +133,10 @@ const COMMANDS_COUNT_LIMIT: i64 = 10000;
 
 use crate::persistence::cloud_objects::{upsert_stored_object, StoredObjectId};
 
-const WARP_SQLITE_FILE_NAME: &str = "warp.sqlite";
+const ZAPLEX_SQLITE_FILE_NAME: &str = "warp.sqlite";
 const ZAP_APP_GROUP_SQLITE_MIGRATION_MARKER: &str = ".zap-app-group-sqlite-migrated";
 #[cfg(target_os = "macos")]
-const WARP_APP_GROUP_ID: &str = "2BBY89MBSN.dev.warp";
+const ZAPLEX_APP_GROUP_ID: &str = "2BBY89MBSN.dev.warp";
 
 /// Callback used when deleting a local stored object. Parameter is the ID of the object to be deleted.
 /// The passed-in conn has already started a transaction.
@@ -468,7 +468,7 @@ pub(super) fn init_db() -> Result<SqliteConnection> {
     }
 
     // Migrate old SQLite files into the secure application container.
-    let old_db_path = warp_core::paths::state_dir().join(WARP_SQLITE_FILE_NAME);
+    let old_db_path = warp_core::paths::state_dir().join(ZAPLEX_SQLITE_FILE_NAME);
     if old_db_path != db_path && old_db_path.exists() && !db_path.exists() {
         match std::fs::rename(&old_db_path, &db_path) {
             Ok(_) => {
@@ -516,7 +516,7 @@ fn zap_legacy_app_group_sqlite_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home_dir| {
         home_dir
             .join("Library/Group Containers")
-            .join(WARP_APP_GROUP_ID)
+            .join(ZAPLEX_APP_GROUP_ID)
             .join("Library/Application Support")
             .join(warp_core::channel::ChannelState::app_id().to_string())
     })
@@ -533,7 +533,7 @@ fn migrate_zap_app_group_sqlite_if_needed(target_db: &Path, legacy_dir: &Path) -
         return Ok(());
     }
 
-    let legacy_db = legacy_dir.join(WARP_SQLITE_FILE_NAME);
+    let legacy_db = legacy_dir.join(ZAPLEX_SQLITE_FILE_NAME);
     if !legacy_db.exists() {
         write_zap_app_group_sqlite_migration_marker(&marker)?;
         return Ok(());
@@ -652,7 +652,7 @@ fn setup_database(database_path: &Path) -> Result<SqliteConnection> {
 pub fn database_file_path() -> PathBuf {
     warp_core::paths::secure_state_dir()
         .unwrap_or_else(warp_core::paths::state_dir)
-        .join(WARP_SQLITE_FILE_NAME)
+        .join(ZAPLEX_SQLITE_FILE_NAME)
 }
 
 pub(super) fn remove(sender: SyncSender<ModelEvent>) {

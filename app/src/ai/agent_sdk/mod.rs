@@ -590,7 +590,7 @@ fn launch_command(
 /// within a Zap terminal session).
 pub fn is_running_in_warp() -> bool {
     std::env::var("TERM_PROGRAM")
-        .map(|v| v == "WarpTerminal")
+        .map(|v| v == "ZaplexTerminal")
         .unwrap_or(false)
 }
 

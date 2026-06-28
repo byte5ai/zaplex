@@ -16,7 +16,7 @@ use warpui::ui_components::components::UiComponent as _;
 use warpui::ui_components::components::UiComponentStyles;
 use warpui::{AppContext, Element, EventContext, PaintContext, SingletonEntity as _};
 
-use super::settings::WarpifySettings;
+use super::settings::ZaplexifySettings;
 use super::SubshellSource;
 
 /// The flag font size varies with the monospace font width, but if it gets too big it will start
@@ -28,7 +28,7 @@ const SUBSHELL_FLAG_HORIZONTAL_PADDING: f32 = 8.;
 const SUBSHELL_FLAG_VERTICAL_PADDING: f32 = 1.;
 
 // TODO(liam): remove this once figuring out how to get theme color in layout()
-const WARP_DRIVE_ENV_VAR_COLLECTION_ICON_COLOR: u32 = 0xC464FFFF;
+const ZAPLEX_DRIVE_ENV_VAR_COLLECTION_ICON_COLOR: u32 = 0xC464FFFF;
 const ICON_MARGIN: f32 = 4.;
 const TERMINAL_ICON: &str = "bundled/svg/terminal.svg";
 pub const HORIZONTAL_TEXT_MARGIN: f32 = 20.;
@@ -93,7 +93,7 @@ fn green_check_icon(appearance: &Appearance, size: f32) -> Box<dyn Element> {
         .finish()
 }
 
-/// UI helper to render the ssh command that caused the warpification prompt.
+/// UI helper to render the ssh command that caused the zaplexification prompt.
 pub fn build_command_row(
     command: String,
     theme: &WarpTheme,
@@ -162,32 +162,32 @@ pub fn description_row(text: &str, theme: &WarpTheme, appearance: &Appearance) -
     .finish()
 }
 
-/// Renders a "Never Warpify this host" link or nothing.
-pub fn render_never_warpify_ssh_link(
+/// Renders a "Never Zaplexify this host" link or nothing.
+pub fn render_never_zaplexify_ssh_link(
     ssh_host: &Option<String>,
     app: &AppContext,
     appearance: &Appearance,
     mouse_state_handle: MouseStateHandle,
-    on_never_warpify: fn(&mut EventContext<'_>, ssh_host: String),
+    on_never_zaplexify: fn(&mut EventContext<'_>, ssh_host: String),
 ) -> Option<Box<dyn Element>> {
     let Some(ssh_host) = ssh_host else {
         return None;
     };
 
-    let settings = WarpifySettings::handle(app);
+    let settings = ZaplexifySettings::handle(app);
     if settings.as_ref(app).is_ssh_host_denylisted(ssh_host) {
-        // Should only happen if user manually attempts to Warpify a denylisted host.
+        // Should only happen if user manually attempts to Zaplexify a denylisted host.
         return None;
     }
 
     let link = appearance
         .ui_builder()
         .link(
-            "Never Warpify this host".into(),
+            "Never Zaplexify this host".into(),
             None,
             Some(Box::new({
                 let ssh_host = ssh_host.clone();
-                move |ctx| on_never_warpify(ctx, ssh_host.to_owned())
+                move |ctx| on_never_zaplexify(ctx, ssh_host.to_owned())
             })),
             mouse_state_handle,
         )
@@ -207,7 +207,7 @@ fn get_subshell_flag_info(subshell_source: &SubshellSource, theme: &WarpTheme) -
     match subshell_source {
         SubshellSource::EnvVarCollection(environment_name) => (
             environment_name.to_string(),
-            Fill::Solid(ColorU::from_u32(WARP_DRIVE_ENV_VAR_COLLECTION_ICON_COLOR)),
+            Fill::Solid(ColorU::from_u32(ZAPLEX_DRIVE_ENV_VAR_COLLECTION_ICON_COLOR)),
         ),
         SubshellSource::Command(command) => (command.to_string(), theme.subshell_background()),
     }

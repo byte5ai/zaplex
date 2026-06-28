@@ -2087,7 +2087,7 @@ impl RootView {
     }
 
     /// Insert a command that should create a subshell. If we support bootstrapping AKA
-    /// "warpifying" its [`ShellType`], set a flag to automatically bootstrap it when the command's
+    /// "zaplexifying" its [`ShellType`], set a flag to automatically bootstrap it when the command's
     /// block receives the [`AfterBlockStarted`] event.
     pub fn insert_subshell_command_and_bootstrap_if_supported(
         &mut self,

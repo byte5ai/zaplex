@@ -7,7 +7,7 @@ use futures::TryFutureExt;
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, SingletonEntity as _};
 
-use crate::ai::agent_sdk::driver::WARP_DRIVE_SYNC_TIMEOUT;
+use crate::ai::agent_sdk::driver::ZAPLEX_DRIVE_SYNC_TIMEOUT;
 
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::auth::AuthStateProvider;
@@ -90,7 +90,7 @@ pub fn refresh_warp_drive(
 ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
     ObjectStoreModel::as_ref(ctx)
         .initial_load_complete()
-        .with_timeout(WARP_DRIVE_SYNC_TIMEOUT)
+        .with_timeout(ZAPLEX_DRIVE_SYNC_TIMEOUT)
         .map_err(|_| anyhow::anyhow!("Timed out waiting for Zap Drive to sync"))
 }
 

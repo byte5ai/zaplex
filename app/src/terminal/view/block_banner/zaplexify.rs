@@ -16,8 +16,8 @@ use warpui::{
 use crate::{
     appearance::Appearance,
     terminal::{
-        ssh::warpify::warpify_description,
-        view::{RememberForWarpification, TerminalAction},
+        ssh::zaplexify::zaplexify_description,
+        view::{RememberForZaplexification, TerminalAction},
     },
     themes::theme::Fill,
     ui_components::blended_colors,
@@ -29,7 +29,7 @@ const CLOSE_BUTTON_DIAMETER: f32 = 20.0;
 const STANDARD_PADDING: f32 = 8.0;
 
 #[derive(Clone)]
-pub enum WarpificationMode {
+pub enum ZaplexificationMode {
     Ssh {
         command: String,
         host: Option<String>,
@@ -40,7 +40,7 @@ pub enum WarpificationMode {
     },
 }
 
-impl WarpificationMode {
+impl ZaplexificationMode {
     pub fn ssh(command: String, host: Option<String>) -> Self {
         Self::Ssh {
             command,
@@ -58,32 +58,32 @@ impl WarpificationMode {
     }
 }
 
-impl WarpificationMode {
+impl ZaplexificationMode {
     pub fn is_ssh(&self) -> bool {
         matches!(self, Self::Ssh { .. })
     }
 }
 
-pub struct WarpifyBannerState {
-    pub mode: WarpificationMode,
+pub struct ZaplexifyBannerState {
+    pub mode: ZaplexificationMode,
     pub height: f32,
     pub accept_button_mouse_state: MouseStateHandle,
     pub dont_ask_button_mouse_state: MouseStateHandle,
     pub dismiss_button_mouse_state: MouseStateHandle,
 
-    /// This keybinding gets rendered in the Warpification banner, but we can't look it up
+    /// This keybinding gets rendered in the Zaplexification banner, but we can't look it up
     /// during render as a &mut AppContext is not available then. This needs to get
     /// looked up during action handling and cached here.
-    pub initialize_warpify_keybinding: Option<Keystroke>,
+    pub initialize_zaplexify_keybinding: Option<Keystroke>,
     pub hover_state: MouseStateHandle,
 }
 
-impl WarpifyBannerState {
-    pub fn new(mode: WarpificationMode, initialize_warpify_keybinding: Option<Keystroke>) -> Self {
+impl ZaplexifyBannerState {
+    pub fn new(mode: ZaplexificationMode, initialize_zaplexify_keybinding: Option<Keystroke>) -> Self {
         Self {
             mode,
             height: 0.0,
-            initialize_warpify_keybinding,
+            initialize_zaplexify_keybinding,
             accept_button_mouse_state: Default::default(),
             dont_ask_button_mouse_state: Default::default(),
             dismiss_button_mouse_state: Default::default(),
@@ -97,40 +97,40 @@ impl WarpifyBannerState {
 
     pub fn title(&self) -> &str {
         match &self.mode {
-            WarpificationMode::Ssh { .. } => "Warpify SSH session",
-            WarpificationMode::Subshell { .. } => "Warpify subshell",
+            ZaplexificationMode::Ssh { .. } => "Zaplexify SSH session",
+            ZaplexificationMode::Subshell { .. } => "Zaplexify subshell",
         }
     }
 
     pub fn action(&self) -> TerminalAction {
         match &self.mode {
-            WarpificationMode::Ssh { .. } => TerminalAction::WarpifySSHSession,
-            WarpificationMode::Subshell { .. } => TerminalAction::TriggerSubshellBootstrap,
+            ZaplexificationMode::Ssh { .. } => TerminalAction::ZaplexifySSHSession,
+            ZaplexificationMode::Subshell { .. } => TerminalAction::TriggerSubshellBootstrap,
         }
     }
 
-    fn remember_for_warpification(&self, should_remember: bool) -> RememberForWarpification {
+    fn remember_for_zaplexification(&self, should_remember: bool) -> RememberForZaplexification {
         match &self.mode {
-            WarpificationMode::Ssh { command, host, .. } => {
+            ZaplexificationMode::Ssh { command, host, .. } => {
                 let Some(host) = host else {
                     if should_remember {
-                        return RememberForWarpification::RememberSubshellCommand(
+                        return RememberForZaplexification::RememberSubshellCommand(
                             command.to_owned(),
                         );
                     }
-                    return RememberForWarpification::DoNotRememberSSHHost;
+                    return RememberForZaplexification::DoNotRememberSSHHost;
                 };
                 if should_remember {
-                    RememberForWarpification::RememberSSHHost(host.to_owned())
+                    RememberForZaplexification::RememberSSHHost(host.to_owned())
                 } else {
-                    RememberForWarpification::DoNotRememberSSHHost
+                    RememberForZaplexification::DoNotRememberSSHHost
                 }
             }
-            WarpificationMode::Subshell { command } => {
+            ZaplexificationMode::Subshell { command } => {
                 if should_remember {
-                    RememberForWarpification::RememberSubshellCommand(command.to_owned())
+                    RememberForZaplexification::RememberSubshellCommand(command.to_owned())
                 } else {
-                    RememberForWarpification::DoNotRememberSubshellCommand
+                    RememberForZaplexification::DoNotRememberSubshellCommand
                 }
             }
         }
@@ -140,19 +140,19 @@ impl WarpifyBannerState {
 /// This banner is shown when the user runs a command which is recognized as a subshell-compatible
 /// command. It asks if they want to bootstrap a subshell and, if so, whether we should ask again
 /// next time they run the same command.
-pub fn render_warpification_banner(
-    state: &WarpifyBannerState,
+pub fn render_zaplexification_banner(
+    state: &ZaplexifyBannerState,
     appearance: &Appearance,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let yes_button = render_yes_button(
         state,
-        &state.initialize_warpify_keybinding,
+        &state.initialize_zaplexify_keybinding,
         &state.accept_button_mouse_state,
         appearance,
     );
 
-    let remember = state.remember_for_warpification(true);
+    let remember = state.remember_for_zaplexification(true);
     let dont_ask_button = Container::new(
         appearance
             .ui_builder()
@@ -163,7 +163,7 @@ pub fn render_warpification_banner(
             .with_text_label(crate::t!("common-do-not-show-again"))
             .build()
             .on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(TerminalAction::DismissWarpifyBanner(
+                ctx.dispatch_typed_action(TerminalAction::DismissZaplexifyBanner(
                     remember.to_owned(),
                 ));
             })
@@ -172,7 +172,7 @@ pub fn render_warpification_banner(
     .with_margin_right(16.)
     .finish();
 
-    let do_not_remember = state.remember_for_warpification(false);
+    let do_not_remember = state.remember_for_zaplexification(false);
     let close_button = appearance
         .ui_builder()
         .close_button(
@@ -181,7 +181,7 @@ pub fn render_warpification_banner(
         )
         .build()
         .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(TerminalAction::DismissWarpifyBanner(
+            ctx.dispatch_typed_action(TerminalAction::DismissZaplexifyBanner(
                 do_not_remember.to_owned(),
             ));
         })
@@ -202,11 +202,11 @@ pub fn render_warpification_banner(
 
     render_block_banner(
         |hover_state| {
-            if let WarpificationMode::Ssh {
+            if let ZaplexificationMode::Ssh {
                 hyperlink_index, ..
             } = &state.mode
             {
-                let description = Container::new(warpify_description(app, hyperlink_index))
+                let description = Container::new(zaplexify_description(app, hyperlink_index))
                     .with_uniform_margin(STANDARD_PADDING)
                     .with_margin_top(4.)
                     .finish();
@@ -227,12 +227,12 @@ pub fn render_warpification_banner(
 }
 
 fn render_yes_button(
-    state: &WarpifyBannerState,
-    initialize_warpification_keybinding: &Option<Keystroke>,
+    state: &ZaplexifyBannerState,
+    initialize_zaplexification_keybinding: &Option<Keystroke>,
     mouse_state: &MouseStateHandle,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let yes_button = match initialize_warpification_keybinding {
+    let yes_button = match initialize_zaplexification_keybinding {
         Some(keystroke) => appearance
             .ui_builder()
             .keyboard_shortcut_button(state.title().to_owned(), keystroke, mouse_state.clone())

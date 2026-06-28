@@ -14,12 +14,12 @@ use crate::terminal::{
     },
     settings::TerminalSettings,
     shell::ShellType,
-    ssh::{error::SshErrorBlock, install_tmux::SshInstallTmuxBlock, warpify::SshWarpifyBlock},
+    ssh::{error::SshErrorBlock, install_tmux::SshInstallTmuxBlock, zaplexify::SshZaplexifyBlock},
     TerminalModel, TerminalView,
 };
 use std::{collections::HashMap, sync::Arc};
 
-use super::success_block::WarpifySuccessBlock;
+use super::success_block::ZaplexifySuccessBlock;
 
 /// A unique identifier for a subshell separator.
 pub type SeparatorId = usize;
@@ -47,11 +47,11 @@ impl SubshellSeparatorState {
 
 #[derive(Debug)]
 pub enum SshBlockState {
-    Warpifying {
-        handle: ViewHandle<SshWarpifyBlock>,
+    Zaplexifying {
+        handle: ViewHandle<SshZaplexifyBlock>,
     },
-    WarpifySuccess {
-        handle: ViewHandle<WarpifySuccessBlock>,
+    ZaplexifySuccess {
+        handle: ViewHandle<ZaplexifySuccessBlock>,
     },
     InstallTmux {
         handle: ViewHandle<SshInstallTmuxBlock>,
@@ -68,8 +68,8 @@ impl SshBlockState {
 
     pub fn get_block_view_id(&self) -> EntityId {
         match self {
-            SshBlockState::Warpifying { handle, .. } => handle.id(),
-            SshBlockState::WarpifySuccess { handle, .. } => handle.id(),
+            SshBlockState::Zaplexifying { handle, .. } => handle.id(),
+            SshBlockState::ZaplexifySuccess { handle, .. } => handle.id(),
             SshBlockState::InstallTmux { handle, .. } => handle.id(),
             SshBlockState::Error { handle } => handle.id(),
         }
@@ -81,18 +81,18 @@ impl SshBlockState {
             SshBlockState::InstallTmux { handle, .. } => {
                 handle.update(ctx, |block, ctx| block.collapse_script(ctx))
             }
-            SshBlockState::Warpifying { .. } => false,
-            SshBlockState::WarpifySuccess { .. } => false,
+            SshBlockState::Zaplexifying { .. } => false,
+            SshBlockState::ZaplexifySuccess { .. } => false,
             SshBlockState::Error { .. } => false,
         }
     }
 
     pub fn focus(&mut self, ctx: &mut ViewContext<TerminalView>) {
         match self {
-            SshBlockState::Warpifying { handle } => {
+            SshBlockState::Zaplexifying { handle } => {
                 handle.update(ctx, |block, ctx| block.focus(ctx));
             }
-            SshBlockState::WarpifySuccess { .. } => {}
+            SshBlockState::ZaplexifySuccess { .. } => {}
             SshBlockState::InstallTmux { handle } => {
                 handle.update(ctx, |block, ctx| block.focus(ctx));
             }
@@ -107,24 +107,24 @@ impl SshBlockState {
             SshBlockState::InstallTmux { handle, .. } => {
                 Some(handle.read(app, |view, _| view.system_details()))
             }
-            SshBlockState::Warpifying { .. } => None,
-            SshBlockState::WarpifySuccess { .. } => None,
+            SshBlockState::Zaplexifying { .. } => None,
+            SshBlockState::ZaplexifySuccess { .. } => None,
             SshBlockState::Error { .. } => None,
         }
     }
 
-    pub fn on_warpified_session_complete(
+    pub fn on_zaplexified_session_complete(
         &self,
         ctx: &mut ViewContext<TerminalView>,
     ) -> Option<EntityId> {
         match self {
-            SshBlockState::InstallTmux { .. } | SshBlockState::Warpifying { .. } => {
+            SshBlockState::InstallTmux { .. } | SshBlockState::Zaplexifying { .. } => {
                 let block_id = self.get_block_view_id();
                 return Some(block_id);
             }
-            SshBlockState::WarpifySuccess { handle } => {
+            SshBlockState::ZaplexifySuccess { handle } => {
                 handle.update(ctx, |block, ctx| {
-                    block.on_warpified_session_complete(ctx);
+                    block.on_zaplexified_session_complete(ctx);
                 });
             }
             SshBlockState::Error { .. } => {}
@@ -133,29 +133,29 @@ impl SshBlockState {
     }
 }
 
-/// Temporary state used to trigger Warpification.
+/// Temporary state used to trigger Zaplexification.
 #[derive(Default)]
-struct WarpifyTriggerState {
+struct ZaplexifyTriggerState {
     block_id: Option<BlockId>,
 
-    /// Lets us abort an attempt to auto warpify if the subshell command
+    /// Lets us abort an attempt to auto zaplexify if the subshell command
     /// hasn't completed.
-    auto_warpify_abort_handle: Option<SpawnedFutureHandle>,
+    auto_zaplexify_abort_handle: Option<SpawnedFutureHandle>,
 
     /// The subshell banner waits 1s before showing. This is to see that the command stays running
     /// for a while without exiting. We store the abort handle here so that the
     /// TerminalEvent::BlockCompleted event can abort the banner.
     subshell_banner_abort_handle: Option<SpawnedFutureHandle>,
 
-    /// The command which may trigger ssh Warpification
+    /// The command which may trigger ssh Zaplexification
     pending_command: Option<String>,
-    /// The Host which may trigger ssh Warpification
-    pending_warpify_ssh_host: Option<String>,
+    /// The Host which may trigger ssh Zaplexification
+    pending_zaplexify_ssh_host: Option<String>,
 
     /// Which, if any, SSH block is currently added to the blocklist.
     ssh_block_state: Option<SshBlockState>,
 
-    ssh_warpify_timeout_handle: Option<SpawnedFutureHandle>,
+    ssh_zaplexify_timeout_handle: Option<SpawnedFutureHandle>,
 
     shell_type: Option<ShellType>,
 
@@ -165,17 +165,17 @@ struct WarpifyTriggerState {
 }
 
 #[derive(Default)]
-pub struct WarpifyState {
+pub struct ZaplexifyState {
     session_id: Option<SessionId>,
 
-    pending_state: Option<WarpifyTriggerState>,
+    pending_state: Option<ZaplexifyTriggerState>,
     /// Stores the metadata needed to render any separators above the first block of a subshell.
     subshell_separator_state: SubshellSeparatorState,
     /// A unique-enough ID that is used to validate that a timeout is still valid.
     timeout_id: u8,
 }
 
-impl WarpifyState {
+impl ZaplexifyState {
     pub fn delete_state(&mut self) {
         self.pending_state.take();
     }
@@ -244,32 +244,32 @@ impl WarpifyState {
             .and_then(|state| state.subshell_banner_abort_handle.take())
     }
 
-    pub fn add_auto_warpify_abort_handle(&mut self, spawned_future_handle: SpawnedFutureHandle) {
+    pub fn add_auto_zaplexify_abort_handle(&mut self, spawned_future_handle: SpawnedFutureHandle) {
         let pending_state = self.pending_state.get_or_insert_with(Default::default);
-        pending_state.auto_warpify_abort_handle = Some(spawned_future_handle);
+        pending_state.auto_zaplexify_abort_handle = Some(spawned_future_handle);
     }
 
-    pub fn abort_auto_warpify(&mut self) {
+    pub fn abort_auto_zaplexify(&mut self) {
         if let Some(abort_handle) = self
             .pending_state
             .as_mut()
-            .and_then(|state| state.auto_warpify_abort_handle.take())
+            .and_then(|state| state.auto_zaplexify_abort_handle.take())
         {
             abort_handle.abort();
         };
     }
 
-    pub fn add_ssh_warpify_timeout_handle(&mut self, spawned_future_handle: SpawnedFutureHandle) {
+    pub fn add_ssh_zaplexify_timeout_handle(&mut self, spawned_future_handle: SpawnedFutureHandle) {
         let pending_state = self.pending_state.get_or_insert_with(Default::default);
-        pending_state.ssh_warpify_timeout_handle = Some(spawned_future_handle);
+        pending_state.ssh_zaplexify_timeout_handle = Some(spawned_future_handle);
     }
 
-    pub fn abort_ssh_warpify_timeout(&mut self) {
+    pub fn abort_ssh_zaplexify_timeout(&mut self) {
         self.replace_timeout_id();
         if let Some(handle) = self
             .pending_state
             .as_mut()
-            .and_then(|state| state.ssh_warpify_timeout_handle.take())
+            .and_then(|state| state.ssh_zaplexify_timeout_handle.take())
         {
             handle.abort();
         };
@@ -312,31 +312,31 @@ impl WarpifyState {
     pub fn get_pending_ssh_host(&self) -> Option<String> {
         self.pending_state
             .as_ref()
-            .and_then(|state: &WarpifyTriggerState| state.pending_warpify_ssh_host.clone())
+            .and_then(|state: &ZaplexifyTriggerState| state.pending_zaplexify_ssh_host.clone())
     }
 
     pub fn get_pending_ssh_command(&self) -> Option<String> {
         self.pending_state
             .as_ref()
-            .and_then(|state: &WarpifyTriggerState| state.pending_command.clone())
+            .and_then(|state: &ZaplexifyTriggerState| state.pending_command.clone())
     }
 
     pub fn take_pending_ssh_host(&mut self) -> Option<String> {
         self.pending_state
             .as_mut()
-            .and_then(|state: &mut WarpifyTriggerState| state.pending_warpify_ssh_host.take())
+            .and_then(|state: &mut ZaplexifyTriggerState| state.pending_zaplexify_ssh_host.take())
     }
 
     pub fn clear_pending_ssh_host(&mut self) {
         if let Some(ref mut pending_state) = self.pending_state.as_mut() {
-            pending_state.pending_warpify_ssh_host = None;
+            pending_state.pending_zaplexify_ssh_host = None;
         }
     }
 
     pub fn set_pending_ssh_host(&mut self, command: String, ssh_host: Option<String>) {
         let pending_state = self.pending_state.get_or_insert_with(Default::default);
         pending_state.pending_command = Some(command);
-        pending_state.pending_warpify_ssh_host = ssh_host;
+        pending_state.pending_zaplexify_ssh_host = ssh_host;
     }
 
     pub fn set_tmux_installation_state(&mut self, tmux_installation: TmuxInstallationState) {
@@ -383,10 +383,10 @@ impl WarpifyState {
     }
 
     /// Called once whenever we get a local block completed, as opposed to a remote ssh block
-    /// and we have a Warpify Success block.
-    fn on_warpified_session_complete(
+    /// and we have a Zaplexify Success block.
+    fn on_zaplexified_session_complete(
         &mut self,
-        state: WarpifyTriggerState,
+        state: ZaplexifyTriggerState,
         ctx: &mut ViewContext<TerminalView>,
     ) -> Option<EntityId> {
         self.clear_ssh_block_state();
@@ -394,16 +394,16 @@ impl WarpifyState {
         let Some(block) = &state.ssh_block_state else {
             return None;
         };
-        block.on_warpified_session_complete(ctx)
+        block.on_zaplexified_session_complete(ctx)
     }
 
-    pub fn on_warpify_start(&mut self, active_session_id: Option<SessionId>) {
+    pub fn on_zaplexify_start(&mut self, active_session_id: Option<SessionId>) {
         self.session_id = active_session_id;
     }
 
-    /// Called whenever a block is completed, to determine whether a Warpified session
+    /// Called whenever a block is completed, to determine whether a Zaplexified session
     /// has been completed.
-    pub fn get_completed_warpify_session_id(
+    pub fn get_completed_zaplexify_session_id(
         &mut self,
         active_session_id: Option<SessionId>,
         ctx: &mut ViewContext<TerminalView>,
@@ -412,7 +412,7 @@ impl WarpifyState {
             return None;
         }
         if let Some(state) = self.pending_state.take() {
-            return self.on_warpified_session_complete(state, ctx);
+            return self.on_zaplexified_session_complete(state, ctx);
         };
         None
     }

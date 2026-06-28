@@ -221,7 +221,7 @@ fn resolve_tab_config_shell(name: &str, ctx: &AppContext) -> Option<AvailableShe
 
     AvailableShell::try_from(name).ok()
 }
-const WARP_SHELL_COMPATIBILITY_DOCS: &str =
+const ZAPLEX_SHELL_COMPATIBILITY_DOCS: &str =
     "";
 // Default minimum width for a newly created Agent Mode pane so that it is legible. Called "default"
 // because this value may be too large for small windows. In that case, we fall back to 50% of the
@@ -719,6 +719,10 @@ pub struct NewTerminalOptions {
     pub is_shared_session_creator: IsSharedSessionCreator,
     /// The AI conversation to restore when the terminal is created.
     pub conversation_restoration: Option<ConversationRestorationInNewPaneType>,
+    /// If set, back this terminal with a daemon-hosted (native persistent)
+    /// session instead of a local PTY. Set only by the resilient-SSH path
+    /// (`open_ssh_terminal`); `None` for ordinary terminals.
+    pub daemon_request: Option<crate::terminal::daemon_tty::DaemonSessionRequest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1242,6 +1246,7 @@ impl PaneGroup {
                         model_event_sender.clone(),
                         chosen_shell,
                         None,
+                        None, // daemon_request: ordinary terminal
                         ctx,
                     ),
                 };
@@ -1534,6 +1539,7 @@ impl PaneGroup {
                     model_event_sender.clone(),
                     chosen_shell,
                     terminal_snapshot.input_config,
+                    None, // daemon_request: restored snapshot is a local session
                     ctx,
                 );
 
@@ -2432,7 +2438,7 @@ impl PaneGroup {
                     ),
                     FormattedTextFragment::hyperlink(
                         crate::t!("common-learn-more"),
-                        WARP_SHELL_COMPATIBILITY_DOCS,
+                        ZAPLEX_SHELL_COMPATIBILITY_DOCS,
                     ),
                 ]),
             )
@@ -2876,6 +2882,7 @@ impl PaneGroup {
             model_event_sender.clone(),
             options.shell,
             None,
+            options.daemon_request,
             ctx,
         );
         let uuid = Uuid::new_v4();
@@ -4814,11 +4821,33 @@ impl PaneGroup {
         model_event_sender: Option<SyncSender<ModelEvent>>,
         chosen_shell: Option<AvailableShell>,
         initial_input_config: Option<InputConfig>,
+        daemon_request: Option<crate::terminal::daemon_tty::DaemonSessionRequest>,
         ctx: &mut ViewContext<Self>,
     ) -> (
         ViewHandle<TerminalView>,
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
+        // Daemon-hosted (native persistent) session: bytes come from the remote
+        // daemon over the protocol, not a local PTY. Additive — `local_tty`
+        // remains the default for every ordinary terminal (`daemon_request` is
+        // `None`).
+        if let Some(request) = daemon_request {
+            let terminal_manager: ModelHandle<Box<dyn TerminalManager>> =
+                crate::terminal::daemon_tty::TerminalManager::create_model(
+                    resources,
+                    initial_size,
+                    model_event_sender,
+                    ctx.window_id(),
+                    initial_input_config,
+                    request.connection_session_id,
+                    request.open_params,
+                    request.adopt_pty_session_id,
+                    ctx,
+                );
+            let terminal_view = terminal_manager.as_ref(ctx).view();
+            return (terminal_view, terminal_manager);
+        }
+
         cfg_if::cfg_if! {
             if #[cfg(feature = "remote_tty")] {
                 let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = crate::terminal::remote_tty::TerminalManager::create_model(
@@ -5079,6 +5108,7 @@ impl PaneGroup {
             self.model_event_sender.clone(),
             None, // chosen_shell
             None, // initial_input_config
+            None, // daemon_request: conversation restoration is a local session
             ctx,
         );
 
@@ -5204,6 +5234,7 @@ impl PaneGroup {
             self.model_event_sender.clone(),
             chosen_shell,
             None,
+            None, // daemon_request: ordinary local terminal pane
             ctx,
         );
 
