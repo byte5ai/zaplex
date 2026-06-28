@@ -172,3 +172,52 @@ pub async fn ensure_control_master(server: &SshServerInfo, socket_path: &Path) -
         socket_path.display()
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use warp_ssh_manager::{AuthType, SshServerInfo};
+
+    fn server(auth: AuthType) -> SshServerInfo {
+        let mut s = SshServerInfo::new_default("node-1".to_string());
+        s.host = "example.com".to_string();
+        s.username = "me".to_string();
+        s.port = 22;
+        s.auth_type = auth;
+        s
+    }
+
+    #[test]
+    fn headless_capable_only_for_key_auth() {
+        assert!(is_headless_capable(&server(AuthType::Key)));
+        assert!(!is_headless_capable(&server(AuthType::Password)));
+        // OneKey is resolved to Key/Password upstream (resolve_server_auth); the
+        // bare OneKey marker is not headless-capable on its own.
+        assert!(!is_headless_capable(&server(AuthType::OneKey)));
+    }
+
+    #[test]
+    fn control_socket_path_is_stable_and_per_host() {
+        let a1 = control_socket_path(&server(AuthType::Key));
+        let a2 = control_socket_path(&server(AuthType::Key));
+        assert_eq!(a1, a2, "same host → same socket path (run-to-run stable)");
+
+        let mut other = server(AuthType::Key);
+        other.host = "other.example.com".to_string();
+        assert_ne!(
+            a1,
+            control_socket_path(&other),
+            "different host → different socket"
+        );
+        assert!(a1.to_string_lossy().contains(".ssh/zaplex-daemon-"));
+    }
+
+    #[test]
+    fn daemon_session_ids_are_unique_and_in_top_half() {
+        let a = alloc_daemon_session_id();
+        let b = alloc_daemon_session_id();
+        assert_ne!(a, b, "each allocation is unique");
+        assert!(a.as_u64() >= DAEMON_SESSION_ID_BASE, "top-half id (no collision with shell ids)");
+        assert!(b.as_u64() >= DAEMON_SESSION_ID_BASE);
+    }
+}

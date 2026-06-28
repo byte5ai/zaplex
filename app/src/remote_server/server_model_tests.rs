@@ -670,4 +670,32 @@ mod daemon_session {
             model.update(&mut app, |m, _ctx| assert!(m.sessions.is_empty(), "all sessions reaped"));
         });
     }
+
+    /// The daemon bootstraps the spawned shell with the Zaplexify integration, so
+    /// a daemon session is a real Zaplex terminal (blocks/prompt/completions), not
+    /// a bare VT. Proven by the bootstrap exporting TERM_PROGRAM=ZaplexTerminal —
+    /// `echo TP=$TERM_PROGRAM` then prints the executed value (the echoed input
+    /// holds the literal `$TERM_PROGRAM`, so `TP=ZaplexTerminal` appears only if
+    /// the integration script actually ran).
+    #[test]
+    fn daemon_session_runs_zaplexify_bootstrap() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
+            let session_id = recv_session_opened(&conn_rx).await.expect("session opened");
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, input_msg(&session_id, b"echo TP=$TERM_PROGRAM\n"), ctx)
+            });
+            assert!(
+                wait_for_output(&conn_rx, b"TP=ZaplexTerminal", Duration::from_secs(20)).await,
+                "daemon shell should be Zaplexify-bootstrapped (TERM_PROGRAM=ZaplexTerminal)"
+            );
+
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, close_msg(&session_id), ctx));
+        });
+    }
 }
