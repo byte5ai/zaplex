@@ -1948,13 +1948,15 @@ impl SshManagerPanel {
         let id_for_right_click = node.id.clone();
 
         // While renaming, don't accept clicks/right-clicks (let EditorView handle them).
+        // Padding must match the normal (hoverable) branch exactly so the row does
+        // not shift when rename mode toggles — the normal branch adds no bottom
+        // margin, so this one must not either.
         if is_renaming {
             return Container::new(row)
                 .with_padding_top(ITEM_PADDING_VERTICAL)
                 .with_padding_bottom(ITEM_PADDING_VERTICAL)
                 .with_padding_left(ITEM_PADDING_HORIZONTAL)
                 .with_padding_right(ITEM_PADDING_HORIZONTAL)
-                .with_margin_bottom(ITEM_MARGIN_BOTTOM)
                 .finish();
         }
 
