@@ -45,6 +45,10 @@ const SAVE_BUTTON_WIDTH: f32 = 96.0;
 const SAVE_BUTTON_HEIGHT: f32 = 28.0;
 const AUTH_TOGGLE_PADDING_H: f32 = 14.0;
 const AUTH_TOGGLE_PADDING_V: f32 = 6.0;
+/// Per-host daemon scrollback-ceiling presets shown as pills: (MiB, label).
+/// 0 = the daemon's built-in default ceiling.
+const RING_CEILING_PRESETS: [(u32, &str); 4] =
+    [(0, "Default"), (64, "64 MB"), (256, "256 MB"), (1024, "1 GB")];
 const ONEKEY_MANAGER_WIDTH: f32 = 680.0;
 const ONEKEY_MANAGER_HEIGHT: f32 = 500.0;
 const ONEKEY_MANAGER_LIST_WIDTH: f32 = 220.0;
@@ -60,6 +64,8 @@ pub enum SshServerAction {
     /// Toggle session persistence (native remote-session layer). `true` selects
     /// the persistent tier, `false` selects standard (non-persistent) SSH.
     SetSessionResilience(bool),
+    /// Pick the per-host daemon scrollback ceiling, in MiB (0 = daemon default).
+    SetRingCeiling(u32),
     /// Open system file picker to select private key file and write path to key_path editor.
     PickKeyFile,
     /// Select group (None means root level, Some(index) means self.folders[index]).
@@ -120,6 +126,9 @@ pub struct SshServerView {
     /// Currently selected session-persistence tier (native remote-session layer).
     /// Save/Connect submit this value.
     session_resilience: SessionResilience,
+    /// Per-host daemon scrollback ceiling in MiB (0 = daemon default). Only
+    /// meaningful when `session_resilience` is enabled.
+    ring_ceiling_mb: u32,
 
     save_btn_state: MouseStateHandle,
     connect_btn_state: MouseStateHandle,
@@ -129,6 +138,8 @@ pub struct SshServerView {
     auth_onekey_btn_state: MouseStateHandle,
     resilience_off_btn_state: MouseStateHandle,
     resilience_on_btn_state: MouseStateHandle,
+    /// Hover/click state per ring-ceiling preset pill (see RING_CEILING_PRESETS).
+    ring_ceiling_btn_states: Vec<MouseStateHandle>,
     key_path_picker_btn_state: MouseStateHandle,
     onekey_manager_btn_state: MouseStateHandle,
     onekey_manager_close_btn_state: MouseStateHandle,
@@ -226,6 +237,7 @@ impl SshServerView {
             notes_editor,
             auth_type: AuthType::Password,
             session_resilience: SessionResilience::default(),
+            ring_ceiling_mb: 0,
             save_btn_state: MouseStateHandle::default(),
             connect_btn_state: MouseStateHandle::default(),
             test_btn_state: MouseStateHandle::default(),
@@ -234,6 +246,10 @@ impl SshServerView {
             auth_onekey_btn_state: MouseStateHandle::default(),
             resilience_off_btn_state: MouseStateHandle::default(),
             resilience_on_btn_state: MouseStateHandle::default(),
+            ring_ceiling_btn_states: RING_CEILING_PRESETS
+                .iter()
+                .map(|_| MouseStateHandle::default())
+                .collect(),
             key_path_picker_btn_state: MouseStateHandle::default(),
             onekey_manager_btn_state: MouseStateHandle::default(),
             onekey_manager_close_btn_state: MouseStateHandle::default(),
@@ -389,6 +405,7 @@ impl SshServerView {
         if let Some(srv) = self.server.clone() {
             self.auth_type = srv.auth_type;
             self.session_resilience = srv.session_resilience;
+            self.ring_ceiling_mb = srv.ring_ceiling_mb;
             self.selected_onekey_credential_id = srv.credential_id.clone();
             let host = srv.host.clone();
             let port_str = srv.port.to_string();
@@ -709,6 +726,7 @@ impl SshServerView {
             },
             last_connected_at: self.server.as_ref().and_then(|s| s.last_connected_at),
             session_resilience: self.session_resilience,
+            ring_ceiling_mb: self.ring_ceiling_mb,
         };
 
         // 2. Write to DB (rename + update_server + possible move_node)
@@ -835,6 +853,7 @@ impl SshServerView {
                 .as_ref()
                 .map(|s| s.session_resilience)
                 .unwrap_or_default(),
+            ring_ceiling_mb: self.server.as_ref().map(|s| s.ring_ceiling_mb).unwrap_or(0),
         };
         ctx.dispatch_typed_action(&crate::workspace::WorkspaceAction::OpenSshTerminal {
             node_id: self.node_id.clone(),
@@ -878,6 +897,7 @@ impl SshServerView {
             last_connected_at: None,
             // Ephemeral object for the connection test only; never persisted.
             session_resilience: SessionResilience::default(),
+            ring_ceiling_mb: self.ring_ceiling_mb,
         };
 
         let (server, password) = match resolve_test_server_and_password(
@@ -1004,6 +1024,14 @@ impl SshServerView {
         };
         if self.session_resilience != next {
             self.session_resilience = next;
+            self.status = None;
+            ctx.notify();
+        }
+    }
+
+    fn on_set_ring_ceiling(&mut self, mb: u32, ctx: &mut ViewContext<Self>) {
+        if self.ring_ceiling_mb != mb {
+            self.ring_ceiling_mb = mb;
             self.status = None;
             ctx.notify();
         }
@@ -1476,6 +1504,83 @@ impl SshServerView {
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .with_child(self.render_label(
                     &crate::t!("workspace-left-panel-ssh-manager-detail-resilience"),
+                    appearance,
+                ))
+                .with_child(row.finish())
+                .finish(),
+        )
+        .with_margin_bottom(FIELD_BLOCK_MARGIN_BOTTOM)
+        .finish()
+    }
+
+    /// Per-host daemon scrollback-ceiling picker (preset pills). Only rendered
+    /// when session persistence is enabled — the ceiling sizes the daemon-side
+    /// replay/scrollback buffer (OutputRing).
+    fn render_ring_ceiling(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+
+        let make_pill = |label: String,
+                         active: bool,
+                         state: MouseStateHandle,
+                         action: SshServerAction|
+         -> Box<dyn Element> {
+            let main_color = if active {
+                theme.main_text_color(theme.accent())
+            } else {
+                theme.sub_text_color(theme.background())
+            };
+            let bg = if active {
+                theme.accent()
+            } else {
+                theme.surface_2()
+            };
+            let label_el = Text::new_inline(
+                label,
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(main_color.into())
+            .finish();
+
+            Hoverable::new(state, move |_| {
+                Container::new(label_el)
+                    .with_padding_left(AUTH_TOGGLE_PADDING_H)
+                    .with_padding_right(AUTH_TOGGLE_PADDING_H)
+                    .with_padding_top(AUTH_TOGGLE_PADDING_V)
+                    .with_padding_bottom(AUTH_TOGGLE_PADDING_V)
+                    .with_background(bg)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                    .finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action))
+            .finish()
+        };
+
+        let mut row = Wrap::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(8.0)
+            .with_run_spacing(8.0)
+            .with_main_axis_size(MainAxisSize::Min);
+        for (i, (mb, label)) in RING_CEILING_PRESETS.iter().enumerate() {
+            let state = self
+                .ring_ceiling_btn_states
+                .get(i)
+                .cloned()
+                .unwrap_or_default();
+            row.add_child(make_pill(
+                (*label).to_string(),
+                self.ring_ceiling_mb == *mb,
+                state,
+                SshServerAction::SetRingCeiling(*mb),
+            ));
+        }
+
+        Container::new(
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(self.render_label(
+                    &crate::t!("workspace-left-panel-ssh-manager-detail-ring-ceiling"),
                     appearance,
                 ))
                 .with_child(row.finish())
@@ -2085,6 +2190,7 @@ impl TypedActionView for SshServerView {
             SshServerAction::SetAuthKey => self.on_set_auth(AuthType::Key, ctx),
             SshServerAction::SetAuthOneKey => self.on_set_auth(AuthType::OneKey, ctx),
             SshServerAction::SetSessionResilience(on) => self.on_set_session_resilience(*on, ctx),
+            SshServerAction::SetRingCeiling(mb) => self.on_set_ring_ceiling(*mb, ctx),
             SshServerAction::PickKeyFile => self.on_pick_key_file(ctx),
             SshServerAction::PickOneKeyKeyFile => self.on_pick_onekey_key_file(ctx),
             SshServerAction::OpenOneKeyManager => {
@@ -2319,6 +2425,10 @@ impl View for SshServerView {
         ));
         // Session persistence (native remote-session layer)
         col.add_child(self.render_resilience_toggle(appearance));
+        // The scrollback-ceiling picker only matters for daemon-hosted sessions.
+        if self.session_resilience.is_enabled() {
+            col.add_child(self.render_ring_ceiling(appearance));
+        }
 
         let theme = appearance.theme();
         let inner = ConstrainedBox::new(

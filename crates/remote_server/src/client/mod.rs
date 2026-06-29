@@ -646,6 +646,7 @@ impl RemoteServerClient {
         env: std::collections::HashMap<String, String>,
         rows: u32,
         cols: u32,
+        ring_ceiling_bytes: Option<u64>,
     ) -> Result<SessionOpened, ClientError> {
         let request_id = RequestId::new();
         let msg = ClientMessage {
@@ -660,6 +661,7 @@ impl RemoteServerClient {
                     pixel_width: 0,
                     pixel_height: 0,
                 }),
+                ring_ceiling_bytes,
             })),
         };
         let response = self.send_request(request_id, msg).await?;

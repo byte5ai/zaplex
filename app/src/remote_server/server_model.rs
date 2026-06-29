@@ -1956,6 +1956,14 @@ impl ServerModel {
             .or_else(|| std::env::var("SHELL").ok())
             .unwrap_or_else(|| "/bin/bash".to_string());
         let cwd = msg.cwd.filter(|c| !c.is_empty());
+        // Per-host scrollback ceiling (bytes) for this session's OutputRing;
+        // 0/absent → daemon default. Clamp to the host cap so a client can't
+        // request an unbounded buffer.
+        let ring_ceiling = msg
+            .ring_ceiling_bytes
+            .filter(|&b| b > 0)
+            .map(|b| (b as usize).min(HOST_RING_CAP_BYTES))
+            .unwrap_or(super::session_host::RING_CEILING_BYTES);
 
         let (leader_fd, child) = match crate::terminal::local_tty::spawn_session_pty(
             cwd.as_deref().map(std::path::Path::new),
@@ -1991,9 +1999,7 @@ impl ServerModel {
             super::session_host::Session {
                 leader: async_leader.clone(),
                 child,
-                ring: zaplex_remote_session::server::output_ring::OutputRing::new(
-                    super::session_host::RING_CEILING_BYTES,
-                ),
+                ring: zaplex_remote_session::server::output_ring::OutputRing::new(ring_ceiling),
                 rows,
                 cols,
                 attached: conn_id,

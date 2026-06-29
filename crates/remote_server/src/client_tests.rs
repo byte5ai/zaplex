@@ -426,6 +426,7 @@ async fn open_session_round_trip() {
                 assert_eq!(open.cwd.as_deref(), Some("/home/me"));
                 assert_eq!(open.shell.as_deref(), Some("/bin/zsh"));
                 assert_eq!(open.env.get("FOO").map(String::as_str), Some("bar"));
+                assert_eq!(open.ring_ceiling_bytes, Some(8 * 1024 * 1024));
             }
             other => panic!("expected OpenSession, got {other:?}"),
         }
@@ -443,6 +444,7 @@ async fn open_session_round_trip() {
             env,
             30,
             100,
+            Some(8 * 1024 * 1024),
         )
         .await
         .unwrap();

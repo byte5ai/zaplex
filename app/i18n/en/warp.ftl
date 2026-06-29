@@ -2771,6 +2771,7 @@ workspace-left-panel-ssh-manager-auth-onekey = OneKey
 workspace-left-panel-ssh-manager-detail-resilience = Session persistence
 workspace-left-panel-ssh-manager-resilience-off = Standard
 workspace-left-panel-ssh-manager-resilience-on = Persistent
+workspace-left-panel-ssh-manager-detail-ring-ceiling = Scrollback buffer
 workspace-left-panel-ssh-manager-onekey-credential = Credential
 workspace-left-panel-ssh-manager-onekey-new = New credential
 workspace-left-panel-ssh-manager-onekey-label = Credential name

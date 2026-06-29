@@ -51,6 +51,10 @@ pub struct SyncServer {
     /// payloads written by older clients deserialize cleanly.
     #[serde(default = "default_session_resilience")]
     pub session_resilience: String,
+    /// Per-host daemon scrollback ceiling in MiB (0 = daemon default). Defaults
+    /// to 0 so payloads written by older clients deserialize cleanly.
+    #[serde(default)]
+    pub ring_ceiling_mb: u32,
     pub password_encrypted: Option<String>,
     pub passphrase_encrypted: Option<String>,
     pub root_password_encrypted: Option<String>,
@@ -161,6 +165,7 @@ impl SyncDataProvider for SshSyncProvider {
                         notes: server.notes.clone(),
                         credential_id: server.credential_id.clone(),
                         session_resilience: server.session_resilience.as_db_str().to_string(),
+                        ring_ceiling_mb: server.ring_ceiling_mb,
                         password_encrypted: encrypt_optional(token, password.as_deref())?,
                         passphrase_encrypted: encrypt_optional(token, passphrase.as_deref())?,
                         root_password_encrypted: encrypt_optional(token, root_password.as_deref())?,
@@ -345,6 +350,7 @@ impl SyncDataProvider for SshSyncProvider {
                             notes: server.notes.as_deref(),
                             credential_id: server.credential_id.as_deref(),
                             session_resilience: &server.session_resilience,
+                            ring_ceiling_mb: server.ring_ceiling_mb as i32,
                         })
                         .execute(conn)?;
                 }

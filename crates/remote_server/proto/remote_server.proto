@@ -596,6 +596,9 @@ message OpenSession {
   map<string, string> env = 3;
   // Initial window size.
   SessionSize size = 4;
+  // Per-host scrollback/replay buffer ceiling in bytes for this session's
+  // OutputRing. Absent or 0 means the daemon uses its built-in default.
+  optional uint64 ring_ceiling_bytes = 5;
 }
 
 // Daemon → client: OpenSession succeeded, returns the newly assigned

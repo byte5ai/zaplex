@@ -5584,7 +5584,12 @@ impl Workspace {
         let session_id = headless_connect::alloc_daemon_session_id();
         let request = crate::terminal::daemon_tty::DaemonSessionRequest {
             connection_session_id: session_id,
-            open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+            open_params: crate::terminal::daemon_tty::OpenSessionParams {
+                // Per-host scrollback ceiling (MiB → bytes); 0 → daemon default.
+                ring_ceiling_bytes: (server.ring_ceiling_mb > 0)
+                    .then(|| server.ring_ceiling_mb as u64 * 1024 * 1024),
+                ..Default::default()
+            },
             adopt_pty_session_id: None,
         };
 

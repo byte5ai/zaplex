@@ -1477,6 +1477,7 @@ pub struct SshServerRow {
     pub last_connected_at: Option<NaiveDateTime>,
     pub credential_id: Option<String>,
     pub session_resilience: String,
+    pub ring_ceiling_mb: i32,
 }
 
 #[derive(Insertable, AsChangeset, Clone, Debug)]
@@ -1492,6 +1493,7 @@ pub struct NewSshServer<'a> {
     pub notes: Option<&'a str>,
     pub credential_id: Option<&'a str>,
     pub session_resilience: &'a str,
+    pub ring_ceiling_mb: i32,
 }
 
 // --- Sync Meta ---------------------------------------------------------

@@ -329,6 +329,7 @@ mod daemon_session {
             request_id: "open-1".to_string(),
             message: Some(client_message::Message::OpenSession(OpenSession {
                 cwd: None,
+                ring_ceiling_bytes: None,
                 shell: Some("/bin/bash".to_string()),
                 env: std::collections::HashMap::new(),
                 size: Some(SessionSize {
@@ -522,6 +523,7 @@ mod daemon_session {
             request_id: "open".to_string(),
             message: Some(client_message::Message::OpenSession(OpenSession {
                 cwd: Some(cwd.to_string()),
+                ring_ceiling_bytes: None,
                 shell: Some("/bin/bash".to_string()),
                 env: std::collections::HashMap::new(),
                 size: Some(SessionSize {

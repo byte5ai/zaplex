@@ -218,11 +218,17 @@ impl EventLoop {
         size_info: SizeInfo,
         ctx: &mut ModelContext<Self>,
     ) {
-        let OpenSessionParams { cwd, shell, env } = open_params;
+        let OpenSessionParams {
+            cwd,
+            shell,
+            env,
+            ring_ceiling_bytes,
+        } = open_params;
         let rows = size_info.rows as u32;
         let cols = size_info.columns as u32;
-        log::info!("daemon_tty: issuing OpenSession (cwd={cwd:?}, shell={shell:?}, {rows}x{cols})");
-        let future = async move { client.open_session(cwd, shell, env, rows, cols).await };
+        log::info!("daemon_tty: issuing OpenSession (cwd={cwd:?}, shell={shell:?}, {rows}x{cols}, ring_ceiling={ring_ceiling_bytes:?})");
+        let future =
+            async move { client.open_session(cwd, shell, env, rows, cols, ring_ceiling_bytes).await };
         ctx.spawn(future, |me, result, ctx| match result {
             Ok(opened) => me.on_session_opened(opened.session_id, ctx),
             Err(err) => log::error!("daemon_tty: OpenSession failed: {err:?}"),

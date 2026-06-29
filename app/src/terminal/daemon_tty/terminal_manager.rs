@@ -33,6 +33,9 @@ pub struct OpenSessionParams {
     pub cwd: Option<String>,
     pub shell: Option<String>,
     pub env: HashMap<String, String>,
+    /// Per-host scrollback ceiling in bytes for the daemon-side OutputRing.
+    /// `None`/0 → daemon default. Derived from the host's `ring_ceiling_mb`.
+    pub ring_ceiling_bytes: Option<u64>,
 }
 
 /// A request to back a newly created terminal with a daemon-hosted session on an

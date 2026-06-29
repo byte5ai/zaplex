@@ -392,6 +392,7 @@ diesel::table! {
         last_connected_at -> Nullable<Timestamp>,
         credential_id -> Nullable<Text>,
         session_resilience -> Text,
+        ring_ceiling_mb -> Integer,
     }
 }
 

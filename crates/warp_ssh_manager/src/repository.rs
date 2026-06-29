@@ -103,6 +103,7 @@ impl SshRepository {
                     notes: info.notes.as_deref(),
                     credential_id: info.credential_id.as_deref(),
                     session_resilience: info.session_resilience.as_db_str(),
+                    ring_ceiling_mb: info.ring_ceiling_mb as i32,
                 })
                 .execute(conn)?;
             Ok(())
@@ -144,6 +145,7 @@ impl SshRepository {
                 ssh_servers::notes.eq(info.notes.as_deref()),
                 ssh_servers::credential_id.eq(info.credential_id.as_deref()),
                 ssh_servers::session_resilience.eq(info.session_resilience.as_db_str()),
+                ssh_servers::ring_ceiling_mb.eq(info.ring_ceiling_mb as i32),
             ))
             .execute(conn)?;
         if n == 0 {
@@ -458,6 +460,7 @@ fn server_from_row(r: SshServerRow) -> Result<SshServerInfo, SshRepositoryError>
         // Lenient on purpose: an unknown value (e.g. written by a newer client)
         // degrades to `Off` rather than making the whole server unloadable.
         session_resilience: SessionResilience::parse(&r.session_resilience).unwrap_or_default(),
+        ring_ceiling_mb: r.ring_ceiling_mb.max(0) as u32,
     })
 }
 
@@ -608,6 +611,7 @@ mod tests {
             notes: None,
             last_connected_at: None,
             session_resilience: SessionResilience::default(),
+            ring_ceiling_mb: 0,
         }
     }
 

@@ -153,6 +153,10 @@ pub struct SshServerInfo {
     pub last_connected_at: Option<NaiveDateTime>,
     /// Per-host opt-in for the native persistent remote-session layer.
     pub session_resilience: SessionResilience,
+    /// Per-host scrollback/replay buffer ceiling for a daemon session, in MiB.
+    /// `0` means "use the daemon default". Only meaningful when
+    /// `session_resilience` is enabled (it sizes the daemon-side OutputRing).
+    pub ring_ceiling_mb: u32,
 }
 
 impl SshServerInfo {
@@ -169,6 +173,7 @@ impl SshServerInfo {
             notes: None,
             last_connected_at: None,
             session_resilience: SessionResilience::default(),
+            ring_ceiling_mb: 0,
         }
     }
 
@@ -186,6 +191,7 @@ impl SshServerInfo {
             notes: source.notes.clone(),
             last_connected_at: None,
             session_resilience: source.session_resilience,
+            ring_ceiling_mb: source.ring_ceiling_mb,
         }
     }
 }
