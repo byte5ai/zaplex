@@ -329,6 +329,23 @@ impl SshManagerPanel {
             self.row_drag_states.entry(n.id.clone()).or_default();
         }
 
+        // Prune per-host adopt-session state for nodes that were deleted, so these
+        // maps don't grow unbounded across deletions (keyed by node_id; the
+        // row-state map is keyed by "<node_id>:<pty_session_id>").
+        self.host_sessions
+            .retain(|k, _| active_ids.contains(k.as_str()));
+        self.sessions_expanded
+            .retain(|k| active_ids.contains(k.as_str()));
+        self.sessions_loading
+            .retain(|k| active_ids.contains(k.as_str()));
+        self.sessions_error
+            .retain(|k, _| active_ids.contains(k.as_str()));
+        self.session_row_states.retain(|k, _| {
+            k.split(':')
+                .next()
+                .is_some_and(|node_id| active_ids.contains(node_id))
+        });
+
         // Tree changed → recompute the "Added" set (PRODUCT.md decision E). "Imported" is determined by
         // `server.host == candidate.alias` — aligned with ImportCandidate's write
         // semantics (decision I: on import, `server.host = alias`).

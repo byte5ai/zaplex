@@ -1739,6 +1739,9 @@ impl RemoteServerManager {
                 "Reconnect exhausted for session {session_id:?} after {} attempt(s)",
                 params.attempt
             );
+            // Terminal state — drop the persistent flag so the id doesn't linger
+            // in the set (daemon session ids are monotonic and never reused).
+            self.persistent_session_ids.remove(&session_id);
             self.sessions
                 .insert(session_id, RemoteSessionState::Disconnected);
             ctx.emit(RemoteServerManagerEvent::SessionDisconnected {

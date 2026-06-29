@@ -173,6 +173,15 @@ impl EventLoop {
         let future = async move { client.attach_session(pty_session_id, last_seq).await };
         ctx.spawn(future, |me, result, ctx| match result {
             Ok(attached) => {
+                // If the daemon's ring evicted output we never saw, the replay
+                // starts past our cursor (base_seq > last_seq) — a hole. Applying
+                // post-gap bytes (which may omit the clears/cursor moves that were
+                // evicted) onto the stale grid corrupts it, so reset the screen
+                // first and tell the user scrollback was truncated.
+                if attached.base_seq > me.last_seq {
+                    me.process_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
+                    me.write_notice("scrollback truncated during a long disconnect");
+                }
                 if !attached.replay.is_empty() {
                     me.process_pty_bytes(&attached.replay);
                 }
@@ -181,7 +190,12 @@ impl EventLoop {
                 // during the outage so keystrokes/resizes aren't lost (§9).
                 me.flush_pending_input(ctx);
             }
-            Err(err) => log::error!("Failed to re-attach daemon session: {err:?}"),
+            Err(err) => {
+                // Surface attach failure (e.g. the session exited in the race
+                // between listing and adopting) instead of a blank tab.
+                log::error!("Failed to re-attach daemon session: {err:?}");
+                me.write_notice(&format!("could not re-attach session: {err}"));
+            }
         });
     }
 
@@ -242,7 +256,15 @@ impl EventLoop {
             async move { client.open_session(cwd, shell, env, rows, cols, ring_ceiling_bytes).await };
         ctx.spawn(future, |me, result, ctx| match result {
             Ok(opened) => me.on_session_opened(opened.session_id, ctx),
-            Err(err) => log::error!("daemon_tty: OpenSession failed: {err:?}"),
+            Err(err) => {
+                // The transport is up (so the connect-failure path never fired),
+                // but the daemon refused to open the session (bad cwd, unspawnable
+                // shell, fd exhaustion, …). Surface it instead of leaving a blank,
+                // hung tab; drop the pending open so a later event can't reopen it.
+                log::error!("daemon_tty: OpenSession failed: {err:?}");
+                me.write_notice(&format!("could not start session: {err}"));
+                me.pending_open = None;
+            }
         });
     }
 
