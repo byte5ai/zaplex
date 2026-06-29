@@ -5656,7 +5656,7 @@ impl Workspace {
     ) {
         use crate::remote_server::auth_context::server_api_auth_context;
         use crate::remote_server::headless_connect;
-        use crate::remote_server::manager::RemoteServerManager;
+        use crate::remote_server::manager::{RemoteServerInitPhase, RemoteServerManager};
         use crate::remote_server::ssh_transport::SshTransport;
 
         let auth_context = std::sync::Arc::new(server_api_auth_context(
@@ -5683,7 +5683,15 @@ impl Workspace {
                         mgr.connect_session(session_id, transport, auth_context, ctx);
                     });
                 }
-                Err(e) => log::error!("daemon connect [{host}] failed: {e}"),
+                Err(e) => {
+                    log::error!("daemon connect [{host}] failed: {e}");
+                    // The daemon tab is already open and its event loop is waiting
+                    // for manager events. Surface the failure so it shows the error
+                    // instead of hanging on a blank view.
+                    RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+                        mgr.fail_session(session_id, RemoteServerInitPhase::Connect, e, ctx);
+                    });
+                }
             },
         );
     }

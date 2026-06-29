@@ -673,6 +673,54 @@ mod daemon_session {
         });
     }
 
+    /// Regression: when the GC reaps the *last* session while no proxies are
+    /// connected, the daemon must arm its shutdown grace timer. Otherwise it
+    /// lingers forever — `deregister_connection` deliberately skips the timer
+    /// while a session still exists, and nothing re-evaluated idleness after the
+    /// session was later reaped. Covers `maybe_arm_grace_after_gc`.
+    #[test]
+    fn gc_reaping_last_session_arms_grace_timer() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().to_string_lossy().to_string();
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_in(&path), ctx));
+            let _id = recv_session_opened(&conn_rx).await.expect("session opened");
+
+            // Client drops but the session keeps running: no grace timer yet.
+            model.update(&mut app, |m, ctx| m.deregister_connection(conn_id, ctx));
+            model.update(&mut app, |m, _ctx| {
+                assert!(
+                    m.grace_timer_cancel.is_none(),
+                    "session still alive — daemon stays up without a grace timer"
+                );
+                // Age the session so the next GC sweep reaps it.
+                for s in m.sessions.values_mut() {
+                    s.last_attached_ms = 0;
+                }
+            });
+
+            // GC reaps the now-ancient last session, then re-evaluates idleness.
+            model.update(&mut app, |m, ctx| {
+                let reaped = m.gc_sessions(1_000_000_000_000, 60_000, usize::MAX);
+                assert_eq!(reaped, 1, "the last detached session is reaped");
+                m.maybe_arm_grace_after_gc(ctx);
+            });
+
+            model.update(&mut app, |m, _ctx| {
+                assert!(m.sessions.is_empty(), "no sessions remain");
+                assert!(
+                    m.grace_timer_cancel.is_some(),
+                    "GC emptied the daemon with no connections — grace timer must be armed"
+                );
+            });
+        });
+    }
+
     /// A daemon session must be a real Zaplex terminal (blocks / prompt marks /
     /// completions), not a bare VT. That takes two *independent* pieces, and this
     /// test pins both so a regression in either fails loudly:

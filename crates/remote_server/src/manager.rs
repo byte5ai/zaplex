@@ -941,6 +941,34 @@ impl RemoteServerManager {
     ///   was in, because the entry is being removed from `sessions`
     ///   outright. Unlike `SessionDisconnected`, this one never fires for
     ///   spontaneous drops -- only for explicit teardown.
+    /// Surface a *pre-connect* setup failure for `session_id` to subscribers,
+    /// for callers that fail before they could even invoke `connect_session`
+    /// (e.g. bringing up the ControlMaster or installing the remote-server
+    /// binary failed). Without this, a tab created for the session would hang
+    /// forever waiting for output. Emits the same `SessionConnectionFailed`
+    /// event the normal connect path emits on handshake failure, so consumers
+    /// (e.g. the daemon terminal) render the error instead of a blank view.
+    pub fn fail_session(
+        &mut self,
+        session_id: SessionId,
+        phase: RemoteServerInitPhase,
+        error: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        log::error!("Pre-connect setup failed for session {session_id:?} at {phase:?}: {error}");
+        ctx.emit(RemoteServerManagerEvent::SetupStateChanged {
+            session_id,
+            state: RemoteServerSetupState::Failed {
+                error: error.clone(),
+            },
+        });
+        ctx.emit(RemoteServerManagerEvent::SessionConnectionFailed {
+            session_id,
+            phase,
+            error,
+        });
+    }
+
     pub fn deregister_session(&mut self, session_id: SessionId, ctx: &mut ModelContext<Self>) {
         self.last_navigated_path.remove(&session_id);
         self.session_bootstrap_info.remove(&session_id);

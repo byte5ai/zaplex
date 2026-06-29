@@ -2220,6 +2220,25 @@ impl ServerModel {
         reaped
     }
 
+    /// After a GC sweep, arm the shutdown grace timer if the daemon is now fully
+    /// idle: no connected proxies *and* no live sessions. This closes the leak
+    /// where `deregister_connection` left the daemon up because sessions still
+    /// existed, and those sessions were later reaped by the GC (age / RAM cap) —
+    /// leaving a daemon with nothing to do and no timer to retire it. The
+    /// `grace_timer_cancel.is_none()` guard avoids restarting an already-running
+    /// timer (which would reset the countdown each tick).
+    fn maybe_arm_grace_after_gc(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.connection_senders.is_empty()
+            && !self.has_live_sessions()
+            && self.grace_timer_cancel.is_none()
+        {
+            log::info!(
+                "Daemon: idle after GC (no connections, no sessions) — grace timer started ({GRACE_PERIOD:?})"
+            );
+            self.start_grace_timer(ctx);
+        }
+    }
+
     /// Starts the periodic detached-session GC sweep on the background executor,
     /// re-entering the model each tick. Runs for the daemon's lifetime.
     fn start_gc_timer(&self, ctx: &mut ModelContext<Self>) {
@@ -2230,12 +2249,18 @@ impl ServerModel {
                     async_io::Timer::after(GC_INTERVAL).await;
                     let now = now_epoch_millis();
                     let outcome = spawner
-                        .spawn(move |me, _ctx| {
+                        .spawn(move |me, ctx| {
                             me.gc_sessions(
                                 now,
                                 MAX_DETACHED_SESSION_AGE.as_millis() as u64,
                                 HOST_RING_CAP_BYTES,
                             );
+                            // GC may have reaped the last session. If no proxies
+                            // are connected either, the daemon is now fully idle —
+                            // arm the grace timer so it exits. deregister_connection
+                            // deliberately skipped the timer while sessions existed,
+                            // so without this the daemon would linger forever.
+                            me.maybe_arm_grace_after_gc(ctx);
                         })
                         .await;
                     if outcome.is_err() {

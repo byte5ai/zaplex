@@ -166,12 +166,15 @@ impl EventLoop {
         let last_seq = self.last_seq;
         log::info!("daemon_tty: re-attaching pty_session_id={pty_session_id} from seq {last_seq}");
         let future = async move { client.attach_session(pty_session_id, last_seq).await };
-        ctx.spawn(future, |me, result, _ctx| match result {
+        ctx.spawn(future, |me, result, ctx| match result {
             Ok(attached) => {
                 if !attached.replay.is_empty() {
                     me.process_pty_bytes(&attached.replay);
                 }
                 me.last_seq = attached.base_seq + attached.replay.len() as u64;
+                // Transport is back and we're re-attached — flush input buffered
+                // during the outage so keystrokes/resizes aren't lost (§9).
+                me.flush_pending_input(ctx);
             }
             Err(err) => log::error!("Failed to re-attach daemon session: {err:?}"),
         });
@@ -249,8 +252,20 @@ impl EventLoop {
 
     fn on_session_opened(&mut self, pty_session_id: String, ctx: &mut ModelContext<Self>) {
         log::info!("daemon_tty: session opened, pty_session_id={pty_session_id}");
-        self.pty_session_id = Some(pty_session_id.clone());
+        self.pty_session_id = Some(pty_session_id);
         // Flush any input that arrived before the session was addressable.
+        self.flush_pending_input(ctx);
+    }
+
+    /// Flush input buffered while the session wasn't addressable — either before
+    /// the first open (pre-`pty_session_id`) or while the transport was down
+    /// mid-session (the reconnect window). A no-op when nothing is pending or no
+    /// session id exists yet. Any message whose client is *still* unavailable is
+    /// re-buffered by `dispatch_message`, so it survives until the next flush.
+    fn flush_pending_input(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(pty_session_id) = self.pty_session_id.clone() else {
+            return;
+        };
         let pending = std::mem::take(&mut self.pending_input);
         for message in pending {
             self.dispatch_message(&pty_session_id, message, ctx);
@@ -271,7 +286,15 @@ impl EventLoop {
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(client) = self.client(ctx) else {
-            log::warn!("Dropping {message:?} for daemon session {pty_session_id}: no live client");
+            // Transport is down (e.g. an SSH blip mid-session). Buffer instead of
+            // dropping so keystrokes/resizes survive the outage — `reattach`
+            // flushes them once the transport reconnects (§9 resilience). This is
+            // the whole point of the native session layer: a drop must not lose
+            // input that was typed during the gap.
+            log::debug!(
+                "daemon_tty: buffering {message:?} for {pty_session_id} (transport down, will flush on reattach)"
+            );
+            self.pending_input.push(message);
             return;
         };
         let result = match message {
@@ -462,10 +485,11 @@ mod tests {
     }
 
     /// Keystrokes that arrive before `OpenSession` resolves are buffered in order
-    /// and flushed once the daemon session id is known — so nothing typed during
-    /// the connect window is lost.
+    /// so nothing typed during the connect window is lost. On open we attempt to
+    /// flush; with no live client the input is *retained* (re-buffered), never
+    /// dropped — it flushes for real once a client is available.
     #[test]
-    fn input_before_session_open_is_buffered_then_flushed() {
+    fn input_before_session_open_is_buffered_and_not_lost() {
         App::test((), |mut app| async move {
             // Held for the duration so the singleton stays registered.
             let _manager = app.add_singleton_model(RemoteServerManager::new);
@@ -499,14 +523,56 @@ mod tests {
                 assert_eq!(me.pending_input.len(), 2, "input must be buffered before open");
             });
 
-            // Opening drains the buffer (dispatch drops without a live client, but
-            // the buffer must be flushed and the id recorded).
+            // Opening records the id and attempts to flush. With no live client
+            // the input can't be sent yet, so it must be *retained* (re-buffered),
+            // not dropped — preserving the no-loss guarantee until a client exists.
             event_loop.update(&mut app, |me, ctx| {
                 me.on_session_opened("pty-late".to_string(), ctx);
             });
             event_loop.read(&app, |me, _| {
                 assert_eq!(me.pty_session_id.as_deref(), Some("pty-late"));
-                assert!(me.pending_input.is_empty(), "buffer must flush on open");
+                assert_eq!(
+                    me.pending_input.len(),
+                    2,
+                    "without a live client the flushed input must be retained, not lost"
+                );
+            });
+        });
+    }
+
+    /// Regression (§9 resilience): once a session is open, input that arrives
+    /// while the transport is down (the reconnect window) must be buffered, not
+    /// dropped — otherwise keystrokes typed during an SSH blip are lost. The
+    /// adopted loop has a `pty_session_id` but no registered client, which is
+    /// exactly the "session open, transport down" state.
+    #[test]
+    fn input_during_transport_outage_is_buffered_not_dropped() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(13u64);
+            let (_manager, event_loop, _model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
+
+            event_loop.read(&app, |me, _| {
+                assert_eq!(
+                    me.pty_session_id.as_deref(),
+                    Some(OUR_PTY),
+                    "adopted loop is open (has a pty id) but has no live client"
+                );
+            });
+
+            // Session is open, transport is down (no client): input must buffer.
+            event_loop.update(&mut app, |me, ctx| {
+                me.on_event_loop_message(EventLoopMessage::Input(Cow::Owned(b"x".to_vec())), ctx);
+                me.on_event_loop_message(
+                    EventLoopMessage::Resize(SizeInfo::new_without_font_metrics(40, 100)),
+                    ctx,
+                );
+            });
+            event_loop.read(&app, |me, _| {
+                assert_eq!(
+                    me.pending_input.len(),
+                    2,
+                    "input during the outage must be buffered (flushed on reattach), not dropped"
+                );
             });
         });
     }
