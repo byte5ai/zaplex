@@ -3,15 +3,15 @@
 #
 # Hintergrund: zaplex ist eine macOS-App, aber die persistente Remote-Session
 # läuft als Daemon auf dem Linux-Ziel-Host. Der Client (DMG) erwartet das Binary
-# unter ~/.zap/remote-server/zap-oss-<GIT_RELEASE_TAG>. Im Fork-Setup schlägt der
+# unter ~/.zaplex/remote-server/zaplex-<GIT_RELEASE_TAG>. Im Fork-Setup schlägt der
 # Auto-Download (zerx-lab/warp releases) fehl, daher wird dieses Binary als
 # Artefakt gebaut und manuell auf den Ziel-Host gelegt (check_binary besteht dann,
 # der Download-Pfad wird nie genommen).
 #
 # Aufruf:  gh workflow run build-remote-server.yml -R byte5ai/zaplex --ref <branch> \
 #            [-f dmg_tag=v0.daemontest]
-# Danach:  gh run download <id> -R byte5ai/zaplex -n zap-remote-server-linux-x86_64
-#          → Binary nach  ~/.zap/remote-server/zap-oss-<dmg_tag>  auf dem Ziel-Host,
+# Danach:  gh run download <id> -R byte5ai/zaplex -n zaplex-remote-server-linux-x86_64
+#          → Binary nach  ~/.zaplex/remote-server/zaplex-<dmg_tag>  auf dem Ziel-Host,
 #            chmod 755.  (muss zum dmg_tag des getesteten DMG passen.)
 #
 # Statischer musl-Build (zigbuild) → läuft auf jedem Linux x86_64 unabhängig von
@@ -79,14 +79,17 @@ jobs:
           USE_ZIGBUILD: "true"
           PKG_CONFIG_ALLOW_CROSS: 1
 
-      - name: Stage binary as zap-oss
-        run: cp "${{ steps.bundle_cli.outputs.executable_path }}" zap-oss
+      - name: Stage binary under the name the client expects
+        # The client looks for ~/.zaplex/remote-server/zaplex-<GIT_RELEASE_TAG>
+        # (remote_server_binary(): binary_name()=`zaplex` + `-<tag>` suffix), so
+        # stage the artifact under exactly that name for drop-in placement.
+        run: cp "${{ steps.bundle_cli.outputs.executable_path }}" "zaplex-${{ inputs.dmg_tag }}"
         shell: bash
 
       - name: Upload remote-server binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: zap-remote-server-linux-x86_64
-          path: zap-oss
+          name: zaplex-remote-server-linux-x86_64
+          path: zaplex-${{ inputs.dmg_tag }}
           if-no-files-found: error
           retention-days: 7

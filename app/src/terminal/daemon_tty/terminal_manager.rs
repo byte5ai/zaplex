@@ -36,6 +36,9 @@ pub struct OpenSessionParams {
     /// Per-host scrollback ceiling in bytes for the daemon-side OutputRing.
     /// `None`/0 → daemon default. Derived from the host's `ring_ceiling_mb`.
     pub ring_ceiling_bytes: Option<u64>,
+    /// The host's saved startup command, run once after the session opens
+    /// (mirrors the local-PTY SSH path). `None`/empty → nothing is run.
+    pub startup_command: Option<String>,
 }
 
 /// A request to back a newly created terminal with a daemon-hosted session on an

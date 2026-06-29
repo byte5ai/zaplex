@@ -43,6 +43,10 @@ pub(super) struct EventLoop {
     /// The `OpenSession` request, held until the transport is `Connected`. Taken
     /// (once) by `try_open`. `None` after the session has been opened.
     pending_open: Option<(OpenSessionParams, SizeInfo)>,
+    /// The host's startup command, captured from `OpenSessionParams` and run once
+    /// (taken) when the session opens — the daemon-path analog of the local-PTY
+    /// SSH startup-command injector. `None` for adopted sessions.
+    startup_command: Option<String>,
     /// Byte offset just past the last `SessionOutput` byte we've rendered. Sent
     /// as `last_seq` on re-attach so the daemon replays only what we missed.
     last_seq: u64,
@@ -147,6 +151,7 @@ impl EventLoop {
             pty_session_id: None,
             pending_input: Vec::new(),
             pending_open: None,
+            startup_command: None,
             last_seq: 0,
         }
     }
@@ -226,7 +231,10 @@ impl EventLoop {
             shell,
             env,
             ring_ceiling_bytes,
+            startup_command,
         } = open_params;
+        // Run once when the session opens (see `on_session_opened`).
+        self.startup_command = startup_command;
         let rows = size_info.rows as u32;
         let cols = size_info.columns as u32;
         log::info!("daemon_tty: issuing OpenSession (cwd={cwd:?}, shell={shell:?}, {rows}x{cols}, ring_ceiling={ring_ceiling_bytes:?})");
@@ -252,7 +260,22 @@ impl EventLoop {
 
     fn on_session_opened(&mut self, pty_session_id: String, ctx: &mut ModelContext<Self>) {
         log::info!("daemon_tty: session opened, pty_session_id={pty_session_id}");
-        self.pty_session_id = Some(pty_session_id);
+        self.pty_session_id = Some(pty_session_id.clone());
+        // Run the host's startup command once, after the session is open — the
+        // daemon-path analog of the local-PTY SSH startup-command injector. Sent
+        // as input + newline (bash/zsh execute byte), the same way the daemon
+        // injects its own bootstrap. `take()` ensures it never re-runs on reattach.
+        if let Some(cmd) = self.startup_command.take() {
+            if !cmd.is_empty() {
+                let mut bytes = cmd.into_bytes();
+                bytes.push(b'\n');
+                self.dispatch_message(
+                    &pty_session_id,
+                    EventLoopMessage::Input(std::borrow::Cow::Owned(bytes)),
+                    ctx,
+                );
+            }
+        }
         // Flush any input that arrived before the session was addressable.
         self.flush_pending_input(ctx);
     }
@@ -573,6 +596,51 @@ mod tests {
                     2,
                     "input during the outage must be buffered (flushed on reattach), not dropped"
                 );
+            });
+        });
+    }
+
+    /// The host's startup command runs once when the session opens — the
+    /// daemon-path analog of the local-PTY SSH startup-command injector. With no
+    /// live client the queued command lands in `pending_input` (sent for real on
+    /// reattach), so we assert it was queued as `command + "\n"`.
+    #[test]
+    fn startup_command_is_queued_as_input_on_open() {
+        App::test((), |mut app| async move {
+            let _manager = app.add_singleton_model(RemoteServerManager::new);
+            let conn = SessionId::from(17u64);
+            let (listener, _wakeups_rx) = test_listener();
+            let model = Arc::new(FairMutex::new(TerminalModel::mock(None, Some(listener.clone()))));
+            let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+            let size = SizeInfo::new_without_font_metrics(24, 80);
+            let model_for_loop = model.clone();
+            let event_loop = app.add_model(|ctx| {
+                EventLoop::start(
+                    model_for_loop,
+                    event_loop_rx,
+                    listener,
+                    size,
+                    conn,
+                    OpenSessionParams::default(),
+                    None,
+                    ctx,
+                )
+            });
+
+            event_loop.update(&mut app, |me, ctx| {
+                me.startup_command = Some("tmux attach".to_string());
+                me.on_session_opened("pty-x".to_string(), ctx);
+            });
+
+            event_loop.read(&app, |me, _| {
+                assert!(me.startup_command.is_none(), "startup command must be taken (run once)");
+                assert_eq!(me.pending_input.len(), 1, "startup command queued as input");
+                match &me.pending_input[0] {
+                    EventLoopMessage::Input(bytes) => {
+                        assert_eq!(&**bytes, b"tmux attach\n", "command + execute newline");
+                    }
+                    other => panic!("expected Input, got {other:?}"),
+                }
             });
         });
     }

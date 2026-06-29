@@ -5588,6 +5588,9 @@ impl Workspace {
                 // Per-host scrollback ceiling (MiB → bytes); 0 → daemon default.
                 ring_ceiling_bytes: (server.ring_ceiling_mb > 0)
                     .then(|| server.ring_ceiling_mb as u64 * 1024 * 1024),
+                // Honor the host's saved startup command on the daemon path too,
+                // matching the local-PTY SSH path (run once after the session opens).
+                startup_command: server.startup_command.clone(),
                 ..Default::default()
             },
             adopt_pty_session_id: None,

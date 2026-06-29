@@ -13,7 +13,7 @@
 # (bzw. das .dmg), siehe issue #51. Kein Developer-ID/Notarize im OSS-Channel.
 #
 # `dmg_tag` wird als GIT_RELEASE_TAG eingebrannt und bestimmt den remote-server-
-# Pfad, den der Client auf dem Ziel-Host prüft: ~/.zap/remote-server/zap-oss-<tag>.
+# Pfad, den der Client auf dem Ziel-Host prüft: ~/.zaplex/remote-server/zaplex-<tag>.
 # Fixer Default, damit das Daemon-Binary auf dem Ziel-Host deterministisch
 # vorab platziert werden kann.
 
