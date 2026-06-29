@@ -1163,14 +1163,17 @@ impl SshManagerPanel {
         )
         .with_color(muted.into())
         .finish();
-        let cancel_btn = Hoverable::new(self.add_cancel_btn.clone(), move |_| {
-            Container::new(cancel_label)
+        let cancel_btn = Hoverable::new(self.add_cancel_btn.clone(), move |mouse| {
+            let mut c = Container::new(cancel_label)
                 .with_padding_top(ITEM_PADDING_VERTICAL)
                 .with_padding_bottom(ITEM_PADDING_VERTICAL)
                 .with_padding_left(ITEM_PADDING_HORIZONTAL)
                 .with_padding_right(ITEM_PADDING_HORIZONTAL)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                .finish()
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+            if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_3(theme));
+            }
+            c.finish()
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(|ctx, _, _| {
@@ -1215,14 +1218,17 @@ impl SshManagerPanel {
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::Start)
             .finish();
-        let blank_btn = Hoverable::new(self.add_blank_btn.clone(), move |_| {
-            Container::new(blank_row)
+        let blank_btn = Hoverable::new(self.add_blank_btn.clone(), move |mouse| {
+            let mut c = Container::new(blank_row)
                 .with_padding_top(ITEM_PADDING_VERTICAL)
                 .with_padding_bottom(ITEM_PADDING_VERTICAL)
                 .with_padding_left(ITEM_PADDING_HORIZONTAL)
                 .with_padding_right(ITEM_PADDING_HORIZONTAL)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                .finish()
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+            if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_3(theme));
+            }
+            c.finish()
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(|ctx, _, _| {
@@ -1234,8 +1240,16 @@ impl SshManagerPanel {
         col.add_child(header_row);
         col.add_child(blank_btn);
         // Suggestions from ~/.ssh/config — renders nothing when auto-discovery is
-        // off or the config has no importable hosts.
-        col.add_child(self.render_candidates(appearance, app));
+        // off or the config has no importable hosts. When present, give it a small
+        // top margin so the "from ~/.ssh/config" suggestions read as a distinct
+        // group from the blank-server CTA above (no dangling gap when empty).
+        if !self.candidates.as_ref(app).rows().is_empty() {
+            col.add_child(
+                Container::new(self.render_candidates(appearance, app))
+                    .with_margin_top(ITEM_PADDING_VERTICAL)
+                    .finish(),
+            );
+        }
         col.with_main_axis_size(MainAxisSize::Min).finish()
     }
 
@@ -1399,7 +1413,7 @@ impl SshManagerPanel {
             Hoverable::new(refresh_state, move |_| {
                 Container::new(refresh_icon)
                     .with_uniform_padding(2.0)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
                     .finish()
             })
             .with_cursor(Cursor::PointingHand)
@@ -1411,34 +1425,38 @@ impl SshManagerPanel {
             refresh_icon
         };
 
-        // The whole row: chevron + label (takes the middle space) + count + Refresh button.
-        // Use MainAxisSize::Max so the row fills the panel width, eliminating the gap on the right.
-        let row = Flex::row()
+        // chevron + label + count grouped at the left; the Refresh button pinned to
+        // the right edge via SpaceBetween (same pattern as render_toolbar) so the
+        // trailing action right-aligns instead of floating after the label.
+        let left_group = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(ITEM_ICON_TEXT_SPACING)
             .with_child(chevron_el)
             .with_child(label)
             .with_child(count_label)
-            .with_child(
-                ConstrainedBox::new(Empty::new().finish())
-                    .with_width(8.0)
-                    .finish(),
-            )
-            .with_child(refresh_btn)
+            .with_main_axis_size(MainAxisSize::Min)
+            .finish();
+        let row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::Start)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_child(left_group)
+            .with_child(refresh_btn)
             .finish();
 
         // Clicking the whole header = toggle (similar to a folder row's single-click).
         let toggle_state = self.candidates_toggle_btn.clone();
-        Hoverable::new(toggle_state, move |_| {
-            Container::new(row)
+        Hoverable::new(toggle_state, move |mouse| {
+            let mut c = Container::new(row)
                 .with_padding_top(ITEM_PADDING_VERTICAL)
                 .with_padding_bottom(ITEM_PADDING_VERTICAL)
                 .with_padding_left(ITEM_PADDING_HORIZONTAL)
                 .with_padding_right(ITEM_PADDING_HORIZONTAL)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                .finish()
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+            if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_3(theme));
+            }
+            c.finish()
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(|ctx, _, _| {
@@ -1597,7 +1615,7 @@ impl SshManagerPanel {
             Hoverable::new(add_state, move |_| {
                 Container::new(plus_icon)
                     .with_uniform_padding(2.0)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
                     .finish()
             })
             .with_cursor(Cursor::PointingHand)
@@ -1609,8 +1627,10 @@ impl SshManagerPanel {
             .finish()
         };
 
-        // Use MainAxisSize::Max so the candidate row fills the panel width, eliminating the gap on the right.
-        let row = Flex::row()
+        // indent + icon + label grouped at the left; the trailing "+"/"Added"
+        // pinned to the right edge via SpaceBetween, so it right-aligns instead of
+        // floating right after the label.
+        let left_group = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(ITEM_ICON_TEXT_SPACING)
             .with_child(
@@ -1620,13 +1640,14 @@ impl SshManagerPanel {
             )
             .with_child(icon_el)
             .with_child(label_block)
-            .with_child(
-                ConstrainedBox::new(Empty::new().finish())
-                    .with_width(8.0)
-                    .finish(),
-            )
-            .with_child(trailing)
+            .with_main_axis_size(MainAxisSize::Min)
+            .finish();
+        let row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_child(left_group)
+            .with_child(trailing)
             .finish();
 
         let row_state = self
@@ -1658,19 +1679,19 @@ impl SshManagerPanel {
         appearance: &warp_core::ui::appearance::Appearance,
     ) -> Vec<Box<dyn Element>> {
         let theme = appearance.theme();
-        let muted = theme.sub_text_color(theme.background());
+        let muted: pathfinder_color::ColorU = theme.sub_text_color(theme.background()).into();
         let depth = self.depths.get(&node.id).copied().unwrap_or(0);
-        let indent = (depth as f32 + 1.0) * FOLDER_DEPTH_INDENT + ITEM_ICON_SIZE;
+        // Align the session title under the host *name*: the tree row places its
+        // label after the depth indent + chevron + icon (each ITEM_ICON_SIZE) with
+        // ITEM_ICON_TEXT_SPACING between, so a child session lines up on that grid.
+        let indent =
+            depth as f32 * FOLDER_DEPTH_INDENT + 2.0 * ITEM_ICON_SIZE + 2.0 * ITEM_ICON_TEXT_SPACING;
 
-        let message = |text: String| -> Box<dyn Element> {
+        let message = |text: String, color: pathfinder_color::ColorU| -> Box<dyn Element> {
             Container::new(
-                Text::new_inline(
-                    text,
-                    appearance.ui_font_family(),
-                    appearance.ui_font_subheading(),
-                )
-                .with_color(muted.into())
-                .finish(),
+                Text::new_inline(text, appearance.ui_font_family(), appearance.ui_font_body())
+                    .with_color(color)
+                    .finish(),
             )
             .with_padding_top(ITEM_PADDING_VERTICAL)
             .with_padding_bottom(ITEM_PADDING_VERTICAL)
@@ -1681,19 +1702,23 @@ impl SshManagerPanel {
         };
 
         if self.sessions_loading.contains(&node.id) {
-            return vec![message(crate::t!(
-                "workspace-left-panel-ssh-manager-sessions-loading"
-            ))];
+            return vec![message(
+                crate::t!("workspace-left-panel-ssh-manager-sessions-loading"),
+                muted,
+            )];
         }
         if let Some(err) = self.sessions_error.get(&node.id) {
-            return vec![message(format!("⚠ {err}"))];
+            // A failed session fetch is an error — render it in the theme's error
+            // color, matching the candidates error row (no glyph needed).
+            return vec![message(err.clone(), theme.ui_error_color())];
         }
         let sessions = match self.host_sessions.get(&node.id) {
             Some(sessions) if !sessions.is_empty() => sessions,
             _ => {
-                return vec![message(crate::t!(
-                    "workspace-left-panel-ssh-manager-sessions-empty"
-                ))]
+                return vec![message(
+                    crate::t!("workspace-left-panel-ssh-manager-sessions-empty"),
+                    muted,
+                )]
             }
         };
 
@@ -1734,15 +1759,18 @@ impl SshManagerPanel {
                     )
                     .with_main_axis_size(MainAxisSize::Max)
                     .finish();
-                Hoverable::new(state, move |_| {
-                    Container::new(row)
+                Hoverable::new(state, move |mouse| {
+                    let mut c = Container::new(row)
                         .with_padding_top(ITEM_PADDING_VERTICAL)
                         .with_padding_bottom(ITEM_PADDING_VERTICAL)
                         .with_padding_left(ITEM_PADDING_HORIZONTAL)
                         .with_padding_right(ITEM_PADDING_HORIZONTAL)
                         .with_margin_bottom(ITEM_MARGIN_BOTTOM)
-                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                        .finish()
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+                    if mouse.is_hovered() {
+                        c = c.with_background(internal_colors::fg_overlay_3(theme));
+                    }
+                    c.finish()
                 })
                 .with_cursor(Cursor::PointingHand)
                 .on_click(move |ctx, _, _| {
@@ -2209,7 +2237,7 @@ impl View for SshManagerPanel {
         let appearance = warp_core::ui::appearance::Appearance::as_ref(app);
 
         let toolbar = Container::new(self.render_toolbar(appearance))
-            .with_uniform_padding(8.0)
+            .with_uniform_padding(PANEL_HORIZONTAL_PADDING)
             .finish();
 
         // The saved tree shows **only** what the user deliberately added. The
@@ -2221,6 +2249,9 @@ impl View for SshManagerPanel {
             Container::new(self.render_add_block(appearance, app))
                 .with_padding_left(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
                 .with_padding_right(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
+                // Separate the "Add a host" block from the saved tree below, so
+                // "what I can add" reads as distinct from "what I have".
+                .with_padding_bottom(ITEM_ICON_TEXT_SPACING)
                 .finish()
         } else {
             Empty::new().finish()

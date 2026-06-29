@@ -1835,23 +1835,26 @@ impl SshServerView {
             .finish()
         };
 
-        let row = Flex::row()
+        // Wrap::row (like the auth/resilience/ring pill groups) so the type pills
+        // wrap on a narrow form instead of overflowing.
+        let mut row = Wrap::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(8.0)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_child(make_pill(
-                crate::t!("workspace-left-panel-ssh-manager-onekey-type-password"),
-                self.managed_onekey_kind == OneKeyCredentialKind::Password,
-                self.onekey_manager_password_btn_state.clone(),
-                SshServerAction::SetManagedOneKeyPassword,
-            ))
-            .with_child(make_pill(
-                crate::t!("workspace-left-panel-ssh-manager-onekey-type-key"),
-                self.managed_onekey_kind == OneKeyCredentialKind::Key,
-                self.onekey_manager_key_btn_state.clone(),
-                SshServerAction::SetManagedOneKeyKey,
-            ))
-            .finish();
+            .with_run_spacing(8.0)
+            .with_main_axis_size(MainAxisSize::Min);
+        row.add_child(make_pill(
+            crate::t!("workspace-left-panel-ssh-manager-onekey-type-password"),
+            self.managed_onekey_kind == OneKeyCredentialKind::Password,
+            self.onekey_manager_password_btn_state.clone(),
+            SshServerAction::SetManagedOneKeyPassword,
+        ));
+        row.add_child(make_pill(
+            crate::t!("workspace-left-panel-ssh-manager-onekey-type-key"),
+            self.managed_onekey_kind == OneKeyCredentialKind::Key,
+            self.onekey_manager_key_btn_state.clone(),
+            SshServerAction::SetManagedOneKeyKey,
+        ));
+        let row = row.finish();
 
         Container::new(
             Flex::column()
