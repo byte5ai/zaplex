@@ -19,6 +19,10 @@ use remote_server::setup::{
 };
 use remote_server::ssh::ssh_args;
 use remote_server::transport::{Connection, RemoteTransport};
+// ControlMaster self-healing is unix-only (the `headless_connect` module is
+// `#[cfg(unix)]`), so the related field/import are gated to match.
+#[cfg(unix)]
+use warp_ssh_manager::SshServerInfo;
 
 /// SSH transport: connects via a ControlMaster socket.
 ///
@@ -30,6 +34,12 @@ use remote_server::transport::{Connection, RemoteTransport};
 pub struct SshTransport {
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
+    /// When set (daemon sessions), `connect` first re-establishes the per-host
+    /// shared ControlMaster if its socket went stale/dead — so a persistent
+    /// session can reconnect after a network drop killed the master. `None` for
+    /// non-daemon callers, whose ControlMaster lifecycle is managed elsewhere.
+    #[cfg(unix)]
+    self_heal_server: Option<SshServerInfo>,
 }
 
 impl fmt::Debug for SshTransport {
@@ -45,7 +55,19 @@ impl SshTransport {
         Self {
             socket_path,
             auth_context,
+            #[cfg(unix)]
+            self_heal_server: None,
         }
+    }
+
+    /// Opt into ControlMaster self-healing on `connect` (daemon sessions). The
+    /// `server` provides the SSH parameters needed to respawn a dead master.
+    /// The same transport instance is reused for reconnect attempts, so this is
+    /// what lets a persistent session re-attach after the master died.
+    #[cfg(unix)]
+    pub fn with_self_heal(mut self, server: SshServerInfo) -> Self {
+        self.self_heal_server = Some(server);
+        self
     }
 
     pub fn socket_path(&self) -> &PathBuf {
@@ -705,7 +727,18 @@ impl RemoteTransport for SshTransport {
     ) -> Pin<Box<dyn Future<Output = Result<Connection>> + Send>> {
         let socket_path = self.socket_path.clone();
         let remote_proxy_command = self.remote_proxy_command();
+        #[cfg(unix)]
+        let self_heal_server = self.self_heal_server.clone();
         Box::pin(async move {
+            // For daemon sessions, re-establish the shared ControlMaster if its
+            // socket went stale/dead (e.g. the master died on a network drop).
+            // Without this, reconnect attempts reuse a dead master and all fail
+            // even though the remote daemon session is still alive and attachable.
+            #[cfg(unix)]
+            if let Some(server) = self_heal_server.as_ref() {
+                crate::remote_server::headless_connect::ensure_control_master(server, &socket_path)
+                    .await?;
+            }
             let mut args = ssh_args(&socket_path);
             args.push(remote_proxy_command);
 

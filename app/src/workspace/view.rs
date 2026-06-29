@@ -5667,6 +5667,8 @@ impl Workspace {
         ));
         let socket_path = headless_connect::control_socket_path(&server);
         let host = server.host.clone();
+        // Kept for the transport so reconnect can re-heal a dead ControlMaster.
+        let server_for_transport = server.clone();
 
         // Off the main thread: bring up the ControlMaster + ensure the
         // remote-server binary is installed, then connect the session.
@@ -5681,7 +5683,8 @@ impl Workspace {
                     log::info!(
                         "daemon connect [{host}]: transport ready — connecting session {session_id:?}"
                     );
-                    let transport = SshTransport::new(socket_path, auth_context.clone());
+                    let transport = SshTransport::new(socket_path, auth_context.clone())
+                        .with_self_heal(server_for_transport);
                     RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
                         // Persistent: a transport drop (ssh slave exit) must trigger
                         // reconnect — the daemon keeps the session alive (§9).

@@ -529,19 +529,17 @@ impl From<ViewHandle<ZaplexifyPageView>> for SettingsPageViewHandle {
 }
 
 #[derive(Default)]
-struct TitleWidget {
-    learn_more_highlight_index: HighlightedHyperlink,
-}
+struct TitleWidget;
 
 impl TitleWidget {
     fn render_top_of_page(&self, appearance: &Appearance, _app: &AppContext) -> Box<dyn Element> {
-        let zaplexify_description = vec![
-            FormattedTextFragment::plain_text(crate::t!("settings-zaplexify-description-prefix")),
-            FormattedTextFragment::hyperlink(
-                crate::t!("settings-zaplexify-learn-more"),
-                "",
-            ),
-        ];
+        // No "Learn more" link yet: there is no Zaplexify docs page, and an empty
+        // href renders a broken/no-op hyperlink. The description stands alone as a
+        // complete sentence; restore the link once a real docs URL exists.
+        let zaplexify_description =
+            vec![FormattedTextFragment::plain_text(crate::t!(
+                "settings-zaplexify-description-prefix"
+            ))];
 
         let zaplexify_description = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(zaplexify_description)]),
@@ -549,13 +547,9 @@ impl TitleWidget {
             appearance.ui_font_family(),
             appearance.ui_font_family(),
             blended_colors::text_sub(appearance.theme(), appearance.theme().surface_1()),
-            self.learn_more_highlight_index.clone(),
+            HighlightedHyperlink::default(),
         )
         .with_heading_to_font_size_multipliers(appearance.heading_font_size_multipliers().clone())
-        .with_hyperlink_font_color(appearance.theme().accent().into_solid())
-        .register_default_click_handlers(|url, _, ctx| {
-            ctx.open_url(&url.url);
-        })
         .finish();
 
         Flex::column()

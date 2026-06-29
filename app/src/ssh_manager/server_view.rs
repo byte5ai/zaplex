@@ -848,12 +848,11 @@ impl SshServerView {
                 Some(notes_text.trim().to_string())
             },
             last_connected_at: self.server.as_ref().and_then(|s| s.last_connected_at),
-            session_resilience: self
-                .server
-                .as_ref()
-                .map(|s| s.session_resilience)
-                .unwrap_or_default(),
-            ring_ceiling_mb: self.server.as_ref().map(|s| s.ring_ceiling_mb).unwrap_or(0),
+            // Use the live editor state (like host/auth/startup above), not the
+            // last-saved server — so toggling Persistent / scrollback and hitting
+            // Connect without Save first takes effect immediately.
+            session_resilience: self.session_resilience,
+            ring_ceiling_mb: self.ring_ceiling_mb,
         };
         ctx.dispatch_typed_action(&crate::workspace::WorkspaceAction::OpenSshTerminal {
             node_id: self.node_id.clone(),
