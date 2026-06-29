@@ -3261,7 +3261,7 @@ impl SettingsWidget for LanguageWidget {
     type View = AppearanceSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "language locale 语言 中文 english 翻译 international i18n"
+        "language locale english translation international i18n"
     }
 
     fn render(

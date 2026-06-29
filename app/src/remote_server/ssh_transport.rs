@@ -371,11 +371,11 @@ async fn cross_compile_remote_server(backend: &DevBuildBackend) -> Result<PathBu
     .await
     .map_err(|_| {
         anyhow!(
-            "dev remote-server 交叉编译超时(>{:?})",
+            "dev remote-server cross-compilation timeout (>{:?})",
             remote_server::setup::DEV_CROSS_COMPILE_TIMEOUT
         )
     })?
-    .map_err(|e| anyhow!("无法启动 cargo 构建: {e}"))?;
+    .map_err(|e| anyhow!("Failed to start cargo build: {e}"))?;
 
     if !status.success() {
         let code = status.code().unwrap_or(-1);
@@ -411,7 +411,7 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
     // Prerequisite check: missing any item returns error, caller falls back to download-install.
     if !musl_target_installed().await {
         return Err(anyhow!(
-            "未安装 rust target {};可执行 `rustup target add {}`",
+            "Rust target {} not installed; run `rustup target add {}`",
             remote_server::setup::DEV_MUSL_TARGET,
             remote_server::setup::DEV_MUSL_TARGET,
         ));
@@ -421,9 +421,9 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
     // If neither available, error.
     let backend = select_dev_build_backend().ok_or_else(|| {
         anyhow!(
-            "未找到可用的 musl 交叉编译后端。建议安装 cargo-zigbuild + zig\
-             (`cargo install cargo-zigbuild`,并用包管理器安装 `zig`),\
-             或安装完整的 musl C/C++ 交叉工具链({})",
+            "No available musl cross-compilation backend found. Recommended: install cargo-zigbuild + zig\
+             (`cargo install cargo-zigbuild`, and install `zig` via package manager),\
+             or install a complete musl C/C++ cross-toolchain ({})",
             DEV_MUSL_LINKER_CANDIDATES.join(" / ")
         )
     })?;

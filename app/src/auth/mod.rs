@@ -759,7 +759,7 @@ impl AuthManager {
     /// session cleanup.
     pub(crate) fn log_out(&mut self, _ctx: &mut ModelContext<Self>) {
         self.auth_state.reset_local_defaults();
-        log::debug!("AuthManager::log_out 已本地 reset: 已切换为本地占位用户态");
+        log::debug!("AuthManager::log_out local reset: switched to local placeholder user state");
     }
 
     /// Marks that reauthentication is needed. Localized: no-op.

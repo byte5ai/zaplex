@@ -5936,14 +5936,14 @@ impl Workspace {
                 .unwrap_or_else(|| "<unknown>".to_string());
 
             format!(
-                "Zaplex 日志导出\n\
-                 生成时间: {now}\n\
-                 版本: {version}\n\
+                "Zaplex Log Export\n\
+                 Generated at: {now}\n\
+                 Version: {version}\n\
                  channel: {channel}\n\
-                 执行模式: {execution_mode:?}\n\
+                 Execution mode: {execution_mode:?}\n\
                  OS: {os}\n\
                  ARCH: {arch}\n\
-                 日志目录: {log_dir_str}\n",
+                 Log directory: {log_dir_str}\n",
                 os = std::env::consts::OS,
                 arch = std::env::consts::ARCH,
             )

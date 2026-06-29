@@ -2333,16 +2333,16 @@ fn test_unified_new_session_menu_includes_reopen_closed_session() {
 
 #[cfg(feature = "local_fs")]
 #[test]
-#[ignore = "依赖已下线的 PersistedWorkspace"]
+#[ignore = "depends on the decommissioned PersistedWorkspace"]
 fn test_worktree_sidecar_search_editor_proxies_navigation_and_escape() {
-    unimplemented!("PersistedWorkspace 已下线,worktree sidecar 仓库列表测试暂停");
+    unimplemented!("PersistedWorkspace has been decommissioned, worktree sidecar repository list testing is paused");
 }
 
 #[cfg(feature = "local_fs")]
 #[test]
-#[ignore = "依赖已下线的 PersistedWorkspace"]
+#[ignore = "depends on the decommissioned PersistedWorkspace"]
 fn test_worktree_sidecar_hides_linked_worktrees_from_repo_list() {
-    unimplemented!("PersistedWorkspace 已下线,worktree sidecar 仓库列表测试暂停");
+    unimplemented!("PersistedWorkspace has been decommissioned, worktree sidecar repository list testing is paused");
 }
 
 #[test]

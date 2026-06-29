@@ -4382,7 +4382,7 @@ impl SettingsWidget for ConversationPersistenceWidget {
     type View = FeaturesPageView;
 
     fn search_terms(&self) -> &str {
-        "persist conversations agent history database save 历史 对话 保存"
+        "persist conversations agent history database save"
     }
 
     fn render(

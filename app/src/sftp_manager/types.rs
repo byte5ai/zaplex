@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn test_format_size_u64_max() {
         let result = format_size(u64::MAX);
-        assert!(result.contains("GB"), "u64::MAX 应以 GB 为单位: {result}");
+        assert!(result.contains("GB"), "u64::MAX should be in GB units: {result}");
     }
 
     /// Test format_size near MB boundary
@@ -505,7 +505,7 @@ mod tests {
         );
         task.transferred = 200;
         let pct = task.progress_percent();
-        assert_eq!(pct, 100, "transferred > total_size 时进度限制为 100%");
+        assert_eq!(pct, 100, "when transferred > total_size progress is capped to 100%");
     }
 
     /// Test TransferTask progress_percent fractional truncation
@@ -520,7 +520,7 @@ mod tests {
         );
         task.transferred = 1;
         let pct = task.progress_percent();
-        assert_eq!(pct, 14, "1/7 ≈ 14.28%，截断为 14");
+        assert_eq!(pct, 14, "1/7 ≈ 14.28%, truncated to 14");
     }
 
     /// Test TransferTask cancel idempotency

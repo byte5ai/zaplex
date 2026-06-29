@@ -44,7 +44,7 @@ fn only_environment_context_returns_none() {
     ];
     assert!(
         render_user_attachments(&ctx).is_none(),
-        "环境型 context 不应进 user message"
+        "environment-type context should not enter user message"
     );
 }
 
@@ -57,7 +57,7 @@ fn single_block_renders_required_fields() {
         1,
         false,
     )))];
-    let out = render_user_attachments(&ctx).expect("应当渲染");
+    let out = render_user_attachments(&ctx).expect("should render");
     assert!(out.starts_with("<attached_context>"));
     assert!(out.ends_with("</attached_context>"));
     assert!(out.contains("command_id=\"b-1\""));
@@ -171,7 +171,7 @@ fn file_binary_empty_omits_size_attr() {
     assert!(out.contains("binary=\"true\""));
     assert!(
         !out.contains("size="),
-        "空 BinaryContent 不应输出 size 属性"
+        "empty BinaryContent should not output size attribute"
     );
     // The default mime for .exe is application/vnd.microsoft.portable-executable or octet-stream,
     // so do not assert the specific value, only verify that the mime_type attribute exists
@@ -190,7 +190,7 @@ fn image_renders_placeholder_only() {
     assert!(out.contains("<image file_name=\"shot.png\" mime_type=\"image/png\" />"));
     assert!(
         !out.contains("BASE64DATA"),
-        "首版不应内联 base64,避免上下文被填爆"
+        "first version should not inline base64 to avoid filling the context"
     );
 }
 
@@ -208,7 +208,7 @@ fn referenced_notebook_renders_full_payload() {
         },
     );
 
-    let out = render_referenced_attachments(&attachments).expect("应当渲染");
+    let out = render_referenced_attachments(&attachments).expect("should render");
     assert!(out.contains("<attached_context>"));
     assert!(out.contains("reference=\"@base\""));
     assert!(out.contains("uid=\"Client-1\""));
@@ -230,7 +230,7 @@ fn referenced_document_content_renders_full_payload() {
         },
     );
 
-    let out = render_referenced_attachments(&attachments).expect("应当渲染");
+    let out = render_referenced_attachments(&attachments).expect("should render");
     assert!(out.contains("<document_content"));
     assert!(out.contains("reference=\"@plan\""));
     assert!(out.contains("document_id=\"doc-1\""));

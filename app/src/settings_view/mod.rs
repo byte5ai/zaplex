@@ -301,8 +301,8 @@ impl FromStr for SettingsSection {
             "Knowledge" => Ok(Self::Knowledge),
             "Third party CLI agents" | "ThirdPartyCLIAgents" => Ok(Self::ThirdPartyCLIAgents),
             "Editor and Code Review" | "EditorAndCodeReview" => Ok(Self::EditorAndCodeReview),
-            "Network" | "网络" => Ok(Self::Network),
-            "CloudSync" | "Cloud Sync" | "云同步" => Ok(Self::CloudSync),
+            "Network" => Ok(Self::Network),
+            "CloudSync" | "Cloud Sync" => Ok(Self::CloudSync),
             // Zaplex Wave 3-1: `OzCloudAPIKeys` removed with UI.
             // Zaplex Wave 7-3: `CloudEnvironments` FromStr arm removed with variant.
             _ => Err(()),

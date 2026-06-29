@@ -5155,7 +5155,7 @@ impl TerminalView {
                 log::info!(
                     "[byop-diag] CLISubagentEvent::SpawnedSubagent received: \
                      block_id={block_id:?} task_id={task_id:?} conv={conversation_id:?} \
-                     → 创建 CLISubagentView 加进 cli_subagent_views map"
+                     → Creating CLISubagentView and adding to cli_subagent_views map"
                 );
                 let subagent_view = ctx.add_typed_action_view(|ctx| {
                     CLISubagentView::new(
@@ -16232,7 +16232,7 @@ impl TerminalView {
         let path_str = path.to_str()?;
         let standardized = warp_util::standardized_path::StandardizedPath::try_new(path_str)
             .map_err(|e| {
-                log::warn!("无法将终端文件路径转换为远端路径 {path_str:?}: {e}");
+                log::warn!("Failed to convert terminal file path to remote path {path_str:?}: {e}");
             })
             .ok()?;
         Some(crate::code::buffer_location::RemotePath::new(

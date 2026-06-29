@@ -2458,7 +2458,7 @@ fn resolve_test_password(
         Ok(None) => None,
         Err(SshSecretStoreError::NoBackend) => None,
         Err(SshSecretStoreError::Keyring(msg)) => {
-            log::warn!("keychain 读取失败,fallback 失败: {msg}");
+            log::warn!("keychain: read failed, fallback failed: {msg}");
             None
         }
     }

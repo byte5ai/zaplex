@@ -6,7 +6,7 @@ fn deserialize_empty_ui_colors() {
     let yaml = r##"---
 {}
 "##;
-    let colors: UiColors = serde_yaml::from_str(yaml).expect("反序列化失败");
+    let colors: UiColors = serde_yaml::from_str(yaml).expect("deserialization failed");
     assert!(colors.surface_1.is_none());
     assert!(colors.border.is_none());
     assert!(colors.main_text.is_none());
@@ -24,7 +24,7 @@ focus_border: "#3994BCB3"
 selection: "#3994BC33"
 hover: "#FFFFFF0D"
 "##;
-    let colors: UiColors = serde_yaml::from_str(yaml).expect("反序列化失败");
+    let colors: UiColors = serde_yaml::from_str(yaml).expect("deserialization failed");
 
     assert_eq!(colors.surface_1.unwrap(), ColorU { r: 0x20, g: 0x21, b: 0x22, a: 255 });
     assert_eq!(colors.surface_2.unwrap(), ColorU { r: 0x24, g: 0x25, b: 0x26, a: 255 });
@@ -58,7 +58,7 @@ fn serialize_ui_colors_skips_none() {
         success: None,
         link: None,
     };
-    let yaml = serde_yaml::to_string(&colors).expect("序列化失败");
+    let yaml = serde_yaml::to_string(&colors).expect("serialization failed");
     assert!(yaml.contains("surface_1"));
     assert!(yaml.contains("border"));
     assert!(!yaml.contains("surface_2"));

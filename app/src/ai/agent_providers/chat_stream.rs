@@ -1575,11 +1575,11 @@ fn build_chat_request(
                 skill, user_query, ..
             } => {
                 let mut composed = format!(
-                    "请按下面的技能 \"{}\" 指引执行任务:\n\n{}\n\n---\n",
+                    "Please execute the task following the skill \"{}\" guidance below:\n\n{}\n\n---\n",
                     skill.name, skill.content,
                 );
                 if let Some(uq) = user_query {
-                    composed.push_str(&format!("用户进一步指令: {}", uq.query));
+                    composed.push_str(&format!("Further user instruction: {}", uq.query));
                 }
                 messages.push(ChatMessage::user(composed));
             }
@@ -1720,7 +1720,7 @@ const REPAIR_PLACEHOLDER_NOTE: &str =
     "tool result was unavailable in repaired conversation history";
 
 fn is_placeholder_tool_response_content(content: &str) -> bool {
-    if content == "(tool 执行结果未保留)" {
+    if content == "(tool result not retained)" {
         return true;
     }
 
@@ -2273,7 +2273,7 @@ fn repair_tool_call_pairs_for_accepted_history_gaps(
 
     if !orphan_call_ids.is_empty() {
         log::warn!(
-            "[byop-diag] accepted_history_repair: 丢弃 {} 个孤儿 ToolResponse: \
+            "[byop-diag] accepted_history_repair: discarded {} orphan ToolResponse(s): \
              orphan_call_ids={:?}",
             orphan_call_ids.len(),
             orphan_call_ids
@@ -2281,8 +2281,8 @@ fn repair_tool_call_pairs_for_accepted_history_gaps(
     }
     if !placeholders_inserted.is_empty() {
         log::info!(
-            "[byop-diag] accepted_history_repair: 给 {} 个 ToolCall 补 repair placeholder \
-             ToolResponse: missing_call_ids={:?}",
+            "[byop-diag] accepted_history_repair: inserted repair placeholder ToolResponse for {} ToolCall(s): \
+             missing_call_ids={:?}",
             placeholders_inserted.len(),
             placeholders_inserted
         );
@@ -2294,7 +2294,7 @@ fn repair_tool_call_pairs_for_accepted_history_gaps(
         // outbound_tool_groups construction logic introduced a difference). At this point we cannot continue emitting
         // an illegal request with a missing ToolResponse, so we must block.
         log::error!(
-            "[byop-diag] accepted_history_repair: readiness 未授权的缺失 ToolResponse: \
+            "[byop-diag] accepted_history_repair: readiness has unauthorized missing ToolResponse: \
              missing_call_ids={:?}",
             missing_without_repair
         );
@@ -2889,7 +2889,7 @@ pub(super) fn build_client(
             &proxy_cfg.password,
             &proxy_cfg.no_proxy,
         ) {
-            log::warn!("[byop] proxy URL '{}' 无效,跳过代理配置: {err}", proxy_cfg.url);
+            log::warn!("[byop] proxy URL '{}' is invalid, skipping proxy config: {err}", proxy_cfg.url);
         }
     }
     Client::builder()
@@ -3629,7 +3629,7 @@ pub async fn generate_byop_output(
                         let byte_len = body.len();
                         let start = col.saturating_sub(200).min(byte_len);
                         let end = (col + 200).min(byte_len);
-                        let context = body.get(start..end).unwrap_or("(slice failed: 非 char 边界)");
+                        let context = body.get(start..end).unwrap_or("(slice failed: not a char boundary)");
                         log::error!(
                             "[byop] error column={col} diag_body_len={byte_len} context[{start}..{end}]={context:?}"
                         );
@@ -3944,7 +3944,7 @@ pub async fn generate_byop_output(
         if chunk_count == 0 && reasoning_count == 0 && total_tools == 0 {
             log::warn!(
                 "[byop] stream returned 0 content / 0 reasoning / 0 tool_calls — \
-                 上游可能返回空响应(model_id 错? max_tokens 缺? proxy 异常?)"
+                 upstream may have returned an empty response (invalid model_id? missing max_tokens? proxy error?)"
             );
         }
 
@@ -4396,10 +4396,6 @@ fn sanitize_title(raw: &str) -> Option<String> {
         "title:",
         "subject:",
         "thread:",
-        "标题:",
-        "标题：",
-        "主题:",
-        "主题：",
     ];
     loop {
         let lower = s.to_lowercase();
@@ -5139,7 +5135,7 @@ mod assistant_buffer_tests {
         buf.reasoning = Some("planning".to_string());
         let mut msgs = Vec::new();
         buf.flush_into(&mut msgs);
-        assert_eq!(msgs.len(), 2, "text + tool_calls flush 成两条");
+        assert_eq!(msgs.len(), 2, "text + tool_calls should flush into two messages");
         for m in &msgs {
             assert!(
                 reasoning_part(m).is_none(),
@@ -5342,11 +5338,11 @@ mod build_chat_options_off_tests {
         let o = opts(AgentProviderApiType::Anthropic, "claude-sonnet-4-6", R::Off);
         assert!(
             o.reasoning_effort.is_none(),
-            "Anthropic+Off 必须不传 reasoning_effort,避免 4.6 系强插 adaptive thinking"
+            "Anthropic+Off must not send reasoning_effort to avoid 4.6 forcing adaptive thinking"
         );
         assert!(
             o.extra_body.is_none(),
-            "Anthropic+Off 也不应注入 extra_body"
+            "Anthropic+Off should also not inject extra_body"
         );
     }
 
@@ -5402,13 +5398,13 @@ mod build_chat_options_off_tests {
         let o = opts(AgentProviderApiType::DeepSeek, "deepseek-v4-flash", R::Off);
         assert!(
             o.reasoning_effort.is_none(),
-            "DeepSeek+Off 不能走 reasoning_effort=none"
+            "DeepSeek+Off must not use reasoning_effort=none"
         );
         let body = o.extra_body.as_ref().expect("extra_body must be set");
         assert_eq!(
             body.pointer("/thinking/type"),
             Some(&serde_json::Value::String("disabled".to_string())),
-            "DeepSeek+Off 必须发 thinking.type=disabled"
+            "DeepSeek+Off must send thinking.type=disabled"
         );
     }
 
@@ -5426,7 +5422,7 @@ mod build_chat_options_off_tests {
         let o = opts(AgentProviderApiType::OpenAi, "gpt-5", R::Off);
         assert!(
             matches!(o.reasoning_effort, Some(GE::None)),
-            "OpenAI+GPT-5+Off 应发 reasoning_effort=none"
+            "OpenAI+GPT-5+Off should send reasoning_effort=none"
         );
     }
 
@@ -5501,7 +5497,7 @@ mod cache_boundary_stability_tests {
         assert_eq!(
             cache_signature(&a),
             cache_signature(&b),
-            "同输入 × 多次调用 cache 标记必须一致"
+            "same input × multiple invocations: cache marks must be consistent"
         );
     }
 
@@ -5515,7 +5511,7 @@ mod cache_boundary_stability_tests {
             .iter()
             .filter(|m| extract_cache_control(m).is_some())
             .collect();
-        assert!(!tagged.is_empty(), "必须至少打一个 breakpoint");
+        assert!(!tagged.is_empty(), "must set at least one cache breakpoint");
         for m in &tagged {
             let cc = extract_cache_control(m).unwrap();
             let expected = if matches!(m.role, ChatRole::System) {
@@ -5523,7 +5519,7 @@ mod cache_boundary_stability_tests {
             } else {
                 CacheControl::Ephemeral5m
             };
-            assert_eq!(cc, expected, "role={:?} 的 TTL 不匹配预期", m.role);
+            assert_eq!(cc, expected, "role={:?} cache TTL does not match expected value", m.role);
         }
     }
 
@@ -5540,13 +5536,13 @@ mod cache_boundary_stability_tests {
             .map(|(i, _)| i)
             .collect();
         // Verify that system (idx=0) and the last 2 non-system (idx=4, idx=5) are all marked.
-        assert!(tagged_indices.contains(&0), "首 system 未被标记");
-        assert!(tagged_indices.contains(&4), "倒数第 2 条未被标记");
-        assert!(tagged_indices.contains(&5), "末条未被标记");
+        assert!(tagged_indices.contains(&0), "first system message was not marked");
+        assert!(tagged_indices.contains(&4), "second-to-last message was not marked");
+        assert!(tagged_indices.contains(&5), "last message was not marked");
         assert_eq!(
             tagged_indices.len(),
             3,
-            "总计 3 个 breakpoint(1 system + 2 tail)"
+            "total 3 breakpoints (1 system + 2 tail)"
         );
     }
 
@@ -5573,13 +5569,13 @@ mod cache_boundary_stability_tests {
         // The first system's cache_control is consistent across turns → means the upstream hash is unchanged → subsequent hits.
         assert_eq!(
             sys_t1_cc, sys_t2_cc,
-            "首 system breakpoint 的 TTL/位置跨轮应一致"
+            "first system breakpoint TTL/position should be consistent across turns"
         );
         // turn 1's user position is marked (the tail); turn 2 no longer marks it.
         assert!(extract_cache_control(&t1[1]).is_some());
         assert!(
             extract_cache_control(&t2[1]).is_none(),
-            "turn 2 的旧 user 不再是 tail"
+            "turn 2's old user message is no longer the tail"
         );
     }
 
@@ -5631,11 +5627,11 @@ mod cache_boundary_stability_tests {
             assert_eq!(
                 opts.prompt_cache_key.as_deref(),
                 Some("conv-1"),
-                "{url}: 白名单 provider 应下发 prompt_cache_key=conversation_id"
+                "{url}: whitelisted provider should send prompt_cache_key=conversation_id"
             );
             assert!(
                 opts.cache_control.is_none(),
-                "{url}: cache_control 永远不发(opencode 不使用 prompt_cache_retention)"
+                "{url}: cache_control should never be sent (opencode does not use prompt_cache_retention)"
             );
         }
     }
@@ -5673,11 +5669,11 @@ mod cache_boundary_stability_tests {
             );
             assert!(
                 opts.cache_control.is_none(),
-                "{url}: 非白名单不应下发 cache_control"
+                "{url}: non-whitelisted provider should not send cache_control"
             );
             assert!(
                 opts.prompt_cache_key.is_none(),
-                "{url}: 非白名单不应下发 prompt_cache_key"
+                "{url}: non-whitelisted provider should not send prompt_cache_key"
             );
         }
     }
@@ -5724,9 +5720,9 @@ mod cache_boundary_stability_tests {
         );
         assert!(
             opts.prompt_cache_key.is_none(),
-            "空 conversation_id 应跳过 prompt_cache_key"
+            "empty conversation_id should skip prompt_cache_key"
         );
-        assert!(opts.cache_control.is_none(), "cache_control 永远不发");
+        assert!(opts.cache_control.is_none(), "cache_control should never be sent");
     }
 
     /// **The Anthropic path's build_chat_options does not send cache_control**
@@ -5744,11 +5740,11 @@ mod cache_boundary_stability_tests {
         );
         assert!(
             opts.cache_control.is_none(),
-            "Anthropic 的 ChatOptions 不能带 cache_control(走 per-message)"
+            "Anthropic ChatOptions must not include cache_control (uses per-message instead)"
         );
         assert!(
             opts.prompt_cache_key.is_none(),
-            "Anthropic 不走 prompt_cache_key"
+            "Anthropic does not use prompt_cache_key"
         );
     }
 
@@ -5771,7 +5767,7 @@ mod cache_boundary_stability_tests {
             );
             assert!(
                 opts.cache_control.is_none(),
-                "{api:?} 不应下发 cache_control"
+                "{api:?} should not send cache_control"
             );
         }
     }
@@ -6649,7 +6645,7 @@ mod serializer_readiness_tests {
             payload["note"],
             "tool result was unavailable in repaired conversation history"
         );
-        assert!(!response.content.contains("(tool 执行结果未保留)"));
+        assert!(!response.content.contains("(tool result not retained)"));
         assert!(
             params.tasks[0].messages.iter().all(|message| !matches!(
                 message.message,
@@ -6882,7 +6878,7 @@ mod accepted_history_repair_tests {
         ];
         repair_messages(&mut msgs);
 
-        assert_eq!(msgs.len(), 3, "两条相邻 Tool 合并为一条");
+        assert_eq!(msgs.len(), 3, "two adjacent Tool messages should merge into one");
         assert_eq!(msgs[0].role, ChatRole::User);
         assert_eq!(msgs[1].role, ChatRole::Assistant);
         assert_eq!(msgs[2].role, ChatRole::Tool);
@@ -6892,7 +6888,7 @@ mod accepted_history_repair_tests {
                 ("a".to_owned(), "resp_a".to_owned()),
                 ("b".to_owned(), "resp_b".to_owned()),
             ],
-            "bundled response 顺序必须与 Assistant.tool_calls 一致"
+            "bundled response order must match Assistant.tool_calls"
         );
     }
 
@@ -6903,7 +6899,7 @@ mod accepted_history_repair_tests {
         let mut msgs = vec![ChatMessage::user("q"), assistant_with_calls(&["a", "b"])];
         repair_messages(&mut msgs);
 
-        assert_eq!(msgs.len(), 3, "Assistant 后必须补一条 Tool message");
+        assert_eq!(msgs.len(), 3, "Tool message must be added after Assistant");
         assert_eq!(msgs[2].role, ChatRole::Tool);
         let responses = responses_of(&msgs[2]);
         assert_eq!(
@@ -6945,12 +6941,12 @@ mod accepted_history_repair_tests {
         ];
         repair_messages(&mut msgs);
 
-        assert_eq!(msgs.len(), 3, "两条相邻 Tool 合并,孤儿 z 丢弃");
+        assert_eq!(msgs.len(), 3, "two adjacent Tool messages merge, orphan z is dropped");
         let responses = responses_of(&msgs[2]);
         assert_eq!(
             responses,
             vec![("a".to_owned(), "real_a".to_owned())],
-            "只保留 Assistant 认识的 call_id"
+            "only keep call_ids known to Assistant"
         );
     }
 
@@ -7016,7 +7012,7 @@ mod accepted_history_repair_tests {
         assert_eq!(
             responses_of(&msgs[2]),
             vec![("a".to_owned(), "real_a_v2".to_owned())],
-            "同 call_id 多条真实 response,后到者胜出"
+            "multiple real responses for the same call_id: later one wins"
         );
     }
 
@@ -7029,7 +7025,7 @@ mod accepted_history_repair_tests {
             ChatMessage::user("q1"),
             assistant_with_calls(&["a"]),
             tool_response("a", "real_a"),
-            tool_response("a", "(tool 执行结果未保留)"),
+            tool_response("a", "(tool result not retained)"),
         ];
         repair_messages(&mut msgs);
 
@@ -7037,7 +7033,7 @@ mod accepted_history_repair_tests {
         assert_eq!(
             responses_of(&msgs[2]),
             vec![("a".to_owned(), "real_a".to_owned())],
-            "placeholder 不能覆盖真实值"
+            "placeholder must not overwrite real value"
         );
     }
 
@@ -7047,7 +7043,7 @@ mod accepted_history_repair_tests {
         let mut msgs = vec![
             ChatMessage::user("q1"),
             assistant_with_calls(&["a"]),
-            tool_response("a", "(tool 执行结果未保留)"),
+            tool_response("a", "(tool result not retained)"),
             ChatMessage::user("interrupt"),
             tool_response("a", "real_a"),
         ];
@@ -7142,7 +7138,7 @@ mod accepted_history_repair_tests {
         assert_eq!(
             responses_of(&msgs[5]),
             vec![("dup".to_owned(), "real_second".to_owned())],
-            "重复 call_id 的真实结果必须留在自己的 Assistant group 后"
+            "duplicate call_id real result must remain after its own Assistant group"
         );
     }
 
@@ -7173,7 +7169,7 @@ mod accepted_history_repair_tests {
         assert_eq!(
             responses_of(&msgs[2]),
             vec![("a".to_owned(), real_unavailable.to_owned())],
-            "真实 unavailable JSON 不能被 repair placeholder 覆盖"
+            "real unavailable JSON must not be overwritten by repair placeholder"
         );
     }
 }
@@ -7281,23 +7277,23 @@ mod issue_94_task_linearization_tests {
         assert_eq!(
             count_user_queries(&root_first_refs),
             2,
-            "朴素拼接会让同一条 user query 出现两次 —— 这正是 Issue #94 的 bug"
+            "naive concatenation causes the same user query to appear twice — this is Issue #94 bug"
         );
 
         // (2) Order drifts with input task order —— when the subtask is first, the historical user (m1) is thrown to the end.
         assert_ne!(
             root_first, subtask_first,
-            "朴素拼接结果依赖 task 顺序,非确定性"
+            "naive concatenation result depends on task order, non-deterministic"
         );
         assert_eq!(
             subtask_first.last().map(String::as_str),
             Some("m3"),
-            "subtask 排前时 root 的消息整体后移"
+            "when subtask is first, root messages shift to the end"
         );
         assert!(
             subtask_first.iter().position(|id| id == "s1").unwrap()
                 < subtask_first.iter().position(|id| id == "m1").unwrap(),
-            "subtask 的 UserQuery 副本(s1)排到了 root 原件(m1)之前"
+            "subtask UserQuery copy (s1) comes before root original (m1)"
         );
     }
 
@@ -7317,14 +7313,14 @@ mod issue_94_task_linearization_tests {
         assert_eq!(
             message_ids(&a),
             message_ids(&b),
-            "结果必须与 params.tasks 的输入顺序无关"
+            "result must be independent of params.tasks input order"
         );
 
         // UserQuery deduplication: the LRC-copied subtask duplicate (s1) is dropped.
         assert_eq!(
             count_user_queries(&a),
             1,
-            "重复的 UserQuery 必须被去重为一条"
+            "duplicate UserQuery must be deduplicated into one"
         );
 
         // DFS linear order: root's messages come first, descending into the subtask on a Subagent ToolCall.
@@ -7364,7 +7360,7 @@ mod issue_94_task_linearization_tests {
         assert_eq!(
             count_user_queries(&out),
             2,
-            "request_id 不同的两轮 user 消息都要保留"
+            "both user messages with different request_ids must be preserved"
         );
         assert_eq!(message_ids(&out), vec!["m1", "m2", "m3"]);
     }

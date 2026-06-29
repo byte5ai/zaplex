@@ -37,11 +37,11 @@ pub enum SftpOpsError {
 impl std::fmt::Display for SftpOpsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SftpOpsError::Connection(msg) => write!(f, "连接错误: {msg}"),
-            SftpOpsError::Operation(msg) => write!(f, "操作错误: {msg}"),
-            SftpOpsError::LocalIo(msg) => write!(f, "本地 IO 错误: {msg}"),
-            SftpOpsError::NoCredentials(msg) => write!(f, "未找到凭据: {msg}"),
-            SftpOpsError::Cancelled => write!(f, "传输已取消"),
+            SftpOpsError::Connection(msg) => write!(f, "Connection error: {msg}"),
+            SftpOpsError::Operation(msg) => write!(f, "Operation error: {msg}"),
+            SftpOpsError::LocalIo(msg) => write!(f, "Local I/O error: {msg}"),
+            SftpOpsError::NoCredentials(msg) => write!(f, "Credentials not found: {msg}"),
+            SftpOpsError::Cancelled => write!(f, "Transfer cancelled"),
         }
     }
 }

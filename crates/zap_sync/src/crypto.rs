@@ -200,13 +200,13 @@ mod tests {
     #[test]
     fn test_crypto_error_display_encrypt() {
         let err = CryptoError::Encrypt("something went wrong".to_string());
-        assert_eq!(format!("{err}"), "加密失败: something went wrong");
+        assert_eq!(format!("{err}"), "Encryption failed: something went wrong");
     }
 
     #[test]
     fn test_crypto_error_display_decrypt() {
         let err = CryptoError::Decrypt("bad data".to_string());
-        assert_eq!(format!("{err}"), "解密失败: bad data");
+        assert_eq!(format!("{err}"), "Decryption failed: bad data");
     }
 
     #[test]
