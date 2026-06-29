@@ -106,6 +106,10 @@ pub enum SshManagerPanelAction {
     DoubleClick(String),
     /// Right-click a server → "File management": open the SFTP file browser pane.
     OpenSftp,
+    /// Toolbar "+": open/close the guided "Add a host" block (blank server +
+    /// on-demand `~/.ssh/config` suggestions). The saved list stays untouched
+    /// until the user explicitly creates or imports.
+    ToggleAddMode,
     /// "Candidates" section: copy one candidate from `~/.ssh/config` into the saved tree.
     ImportCandidate {
         alias: String,
@@ -211,6 +215,15 @@ pub struct SshManagerPanel {
     /// Hover state for the section header's Refresh / Toggle buttons.
     candidates_refresh_btn: MouseStateHandle,
     candidates_toggle_btn: MouseStateHandle,
+    /// "Add a host" guided block is open (toggled by the toolbar "+").
+    /// The `~/.ssh/config` suggestions are shown **only** while this is true, so
+    /// nothing unsolicited ever appears in the saved list (PRODUCT decision:
+    /// suggestions on-demand-when-adding, not always-on).
+    adding_mode: bool,
+    /// Hover state for the "Create a blank server" button in the add block.
+    add_blank_btn: MouseStateHandle,
+    /// Hover state for the "Cancel" button in the add block.
+    add_cancel_btn: MouseStateHandle,
 
     // --- Adopt-sidebar: per-host running daemon sessions (multi-session) ---
     /// Running daemon sessions per server node, fetched on demand via
@@ -251,14 +264,18 @@ impl SshManagerPanel {
             candidate_add_states: HashMap::new(),
             candidates_refresh_btn: MouseStateHandle::default(),
             candidates_toggle_btn: MouseStateHandle::default(),
+            adding_mode: false,
+            add_blank_btn: MouseStateHandle::default(),
+            add_cancel_btn: MouseStateHandle::default(),
             host_sessions: HashMap::new(),
             sessions_expanded: std::collections::HashSet::new(),
             sessions_loading: std::collections::HashSet::new(),
             sessions_error: HashMap::new(),
             session_row_states: HashMap::new(),
         };
-        // First time the panel opens → read ssh_config once immediately (PRODUCT.md decision A).
-        me.candidates.update(ctx, |vm, ctx| vm.refresh(ctx));
+        // `~/.ssh/config` is read on-demand only when the user opens the "Add a
+        // host" block (`on_toggle_add_mode`) — never unsolicited on mount, so the
+        // saved list never shows hosts the user didn't deliberately add.
         me.refresh_tree(ctx);
 
         ctx.subscribe_to_model(
@@ -390,6 +407,8 @@ impl SshManagerPanel {
     /// On completion it emits `OpenServerEditor` (same as manual creation) + broadcasts
     /// `SshTreeChangedEvent::TreeChanged` so the `Added` badge flips immediately.
     fn on_import_candidate(&mut self, alias: String, ctx: &mut ViewContext<Self>) {
+        // Picking a suggestion is an explicit, deliberate add — close the add block.
+        self.adding_mode = false;
         let candidate = self
             .candidates
             .read(ctx, |vm, _| vm.find_candidate(&alias).cloned());
@@ -457,7 +476,22 @@ impl SshManagerPanel {
         }
     }
 
+    /// Toolbar "+" — toggle the guided "Add a host" block. When opening, re-read
+    /// `~/.ssh/config` so the suggestions reflect the current file (the user may
+    /// have edited it since the panel mounted). Closing is a pure UI toggle; it
+    /// never touches the saved list.
+    fn on_toggle_add_mode(&mut self, ctx: &mut ViewContext<Self>) {
+        self.adding_mode = !self.adding_mode;
+        if self.adding_mode {
+            self.candidates.update(ctx, |vm, ctx| vm.refresh(ctx));
+            self.sync_candidate_row_states(ctx);
+        }
+        ctx.notify();
+    }
+
     fn on_add_server(&mut self, ctx: &mut ViewContext<Self>) {
+        // Either path out of the add block (create blank / import) closes it.
+        self.adding_mode = false;
         let parent = self.parent_for_new_node();
         let info_template = SshServerInfo::new_default(String::new());
         let result = warp_ssh_manager::with_conn(|c| {
@@ -790,6 +824,9 @@ impl SshManagerPanel {
         // — the clear only applies to exit paths with no new selection (Enter/ESC/blur to empty space); a click
         // itself already provides a new selection context.
         self.selected_id = Some(id.clone());
+        // Navigating the tree dismisses the guided add block — it's only relevant
+        // while the user is actively adding a host from the toolbar.
+        self.adding_mode = false;
         let kind = self.nodes.iter().find(|n| n.id == id).map(|n| n.kind);
         match kind {
             Some(NodeKind::Server) => {
@@ -1062,7 +1099,7 @@ impl SshManagerPanel {
             .with_child(make_btn(
                 crate::ui_components::icons::Icon::Plus,
                 self.add_server_btn.clone(),
-                SshManagerPanelAction::AddServer,
+                SshManagerPanelAction::ToggleAddMode,
             ))
             .with_main_axis_size(MainAxisSize::Min)
             .finish();
@@ -1094,11 +1131,120 @@ impl SshManagerPanel {
             .finish()
     }
 
+    /// Guided "Add a host" block (toolbar "+"). Renders a prominent
+    /// "Create a blank server" action plus the on-demand `~/.ssh/config`
+    /// suggestions (`render_candidates`, which renders nothing when
+    /// auto-discovery is off or the config has no importable hosts).
+    ///
+    /// Shown only while `adding_mode` is true; the saved tree below stays
+    /// untouched until the user explicitly creates or imports.
+    fn render_add_block(
+        &self,
+        appearance: &warp_core::ui::appearance::Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let muted = theme.sub_text_color(theme.background());
+        let main = theme.main_text_color(theme.background());
+        let icon_color = muted;
+
+        // Header: "Add a host" + a Cancel button on the right.
+        let heading = Text::new_inline(
+            crate::t!("workspace-left-panel-ssh-manager-add-heading"),
+            appearance.ui_font_family(),
+            appearance.ui_font_subheading(),
+        )
+        .with_color(muted.into())
+        .finish();
+        let cancel_label = Text::new_inline(
+            crate::t!("workspace-left-panel-ssh-manager-add-cancel"),
+            appearance.ui_font_family(),
+            appearance.ui_font_body(),
+        )
+        .with_color(muted.into())
+        .finish();
+        let cancel_btn = Hoverable::new(self.add_cancel_btn.clone(), move |_| {
+            Container::new(cancel_label)
+                .with_padding_top(ITEM_PADDING_VERTICAL)
+                .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(SshManagerPanelAction::ToggleAddMode);
+        })
+        .finish();
+        let header_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_child(
+                Container::new(heading)
+                    .with_padding_top(ITEM_PADDING_VERTICAL)
+                    .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                    .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                    .finish(),
+            )
+            .with_child(cancel_btn)
+            .finish();
+
+        // Primary action: create a blank server (the manual path) and open its editor.
+        let plus_icon = ConstrainedBox::new(
+            crate::ui_components::icons::Icon::Plus
+                .to_warpui_icon(icon_color)
+                .finish(),
+        )
+        .with_width(ITEM_ICON_SIZE)
+        .with_height(ITEM_ICON_SIZE)
+        .finish();
+        let blank_label = Text::new_inline(
+            crate::t!("workspace-left-panel-ssh-manager-add-blank"),
+            appearance.ui_font_family(),
+            appearance.ui_font_subheading(),
+        )
+        .with_color(main.into())
+        .finish();
+        let blank_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(ITEM_ICON_TEXT_SPACING)
+            .with_child(plus_icon)
+            .with_child(blank_label)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::Start)
+            .finish();
+        let blank_btn = Hoverable::new(self.add_blank_btn.clone(), move |_| {
+            Container::new(blank_row)
+                .with_padding_top(ITEM_PADDING_VERTICAL)
+                .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(SshManagerPanelAction::AddServer);
+        })
+        .finish();
+
+        let mut col = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        col.add_child(header_row);
+        col.add_child(blank_btn);
+        // Suggestions from ~/.ssh/config — renders nothing when auto-discovery is
+        // off or the config has no importable hosts.
+        col.add_child(self.render_candidates(appearance, app));
+        col.with_main_axis_size(MainAxisSize::Min).finish()
+    }
+
     /// "Candidates" section — the list of importable hosts parsed from `~/.ssh/config`.
     ///
-    /// The section is shown **above** the saved tree; its layout style (row height, indent, font size) matches the tree,
-    /// with just an extra Refresh button + collapse chevron in the section header. Each candidate row ends with
-    /// a "+" or "Added" badge (PRODUCT.md decision E).
+    /// Rendered inside the guided "Add a host" block (`render_add_block`), shown only while the user is
+    /// actively adding. Its layout style (row height, indent, font size) matches the tree, with just an extra
+    /// Refresh button + collapse chevron in the section header. Each candidate row ends with a "+" or "Added"
+    /// badge (PRODUCT.md decision E). Returns Empty when auto-discovery is off or the config has no hosts.
     fn render_candidates(
         &self,
         appearance: &warp_core::ui::appearance::Appearance,
@@ -2006,6 +2152,7 @@ impl TypedActionView for SshManagerPanel {
                 let parent = self.parent_for_new_node();
                 self.on_add_folder_with_parent(parent, ctx)
             }
+            SshManagerPanelAction::ToggleAddMode => self.on_toggle_add_mode(ctx),
             SshManagerPanelAction::AddServer => self.on_add_server(ctx),
             SshManagerPanelAction::DeleteSelected => self.on_delete_selected(ctx),
             SshManagerPanelAction::Connect => self.on_connect(ctx),
@@ -2065,12 +2212,13 @@ impl View for SshManagerPanel {
             .with_uniform_padding(8.0)
             .finish();
 
-        // PRODUCT.md §2: the Candidates section sits **above** the saved tree, sharing the same panel
-        // horizontal padding. Before the view-model has refreshed, the section returns Empty and takes
-        // no height. When auto-discovery is off, the section is not rendered.
-        let auto_discover = *SshSettings::as_ref(app).enable_ssh_auto_discovery.value();
-        let candidates_section = if auto_discover {
-            Container::new(self.render_candidates(appearance, app))
+        // The saved tree shows **only** what the user deliberately added. The
+        // guided "Add a host" block — a blank-server action plus on-demand
+        // `~/.ssh/config` suggestions — is shown above the tree only while the
+        // user is actively adding (toolbar "+"), so nothing unsolicited ever
+        // appears in the list.
+        let candidates_section = if self.adding_mode {
+            Container::new(self.render_add_block(appearance, app))
                 .with_padding_left(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
                 .with_padding_right(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
                 .finish()

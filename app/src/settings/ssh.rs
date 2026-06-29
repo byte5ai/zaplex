@@ -22,7 +22,7 @@ define_settings_group!(SshSettings,
             private: false,
             storage_key: "EnableSSHAutoDiscovery",
             toml_path: "zaplexify.ssh.enable_ssh_auto_discovery",
-            description: "Whether to auto-discover SSH hosts from ~/.ssh/config.",
+            description: "Whether to suggest SSH hosts from ~/.ssh/config when adding a server. Suggestions never enter the saved list automatically; the user imports them explicitly.",
         },
     ]
 );
