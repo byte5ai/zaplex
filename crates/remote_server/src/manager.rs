@@ -467,6 +467,12 @@ pub struct RemoteServerManager {
     /// Detected remote platform per session, populated during the binary check
     /// phase via `detect_platform()`. Used for telemetry.
     session_platforms: HashMap<SessionId, RemotePlatform>,
+    /// Sessions backed by a persistent daemon (native remote-session layer). For
+    /// these, a transport-child exit on a network blip does NOT mean the remote
+    /// session died — the daemon keeps it running — so `mark_session_disconnected`
+    /// must still attempt reconnect (the generic path skips reconnect on child
+    /// exit). Populated by `mark_session_persistent`; cleared on teardown.
+    persistent_session_ids: HashSet<SessionId>,
 }
 
 impl Entity for RemoteServerManager {
@@ -485,7 +491,15 @@ impl RemoteServerManager {
             session_bootstrap_info: HashMap::new(),
             auth_context: None,
             session_platforms: HashMap::new(),
+            persistent_session_ids: HashSet::new(),
         }
+    }
+
+    /// Marks `session_id` as backed by a persistent daemon, so a transport-child
+    /// exit is treated as a recoverable transport drop (reconnect) rather than a
+    /// terminal disconnect. Call before `connect_session` on the daemon path.
+    pub fn mark_session_persistent(&mut self, session_id: SessionId) {
+        self.persistent_session_ids.insert(session_id);
     }
 
     /// Returns a connected client for the given host by picking an arbitrary
@@ -969,10 +983,26 @@ impl RemoteServerManager {
         });
     }
 
-    pub fn deregister_session(&mut self, session_id: SessionId, ctx: &mut ModelContext<Self>) {
+    /// Tears down the manager's tracking for `session_id` and drops its transport
+    /// (killing the per-session `ssh … remote-server-proxy` child via
+    /// `kill_on_drop`).
+    ///
+    /// `stop_control_master` controls whether the local SSH ControlMaster is also
+    /// forced to exit. Pass `true` for per-session masters (the legacy ssh-wrapper
+    /// path) so the foreground ssh can exit cleanly. Pass `false` for daemon
+    /// sessions: their ControlMaster is **per-host and shared** across daemon tabs,
+    /// so stopping it would drop sibling tabs' transports — leave it for reuse /
+    /// its own ControlPersist timeout.
+    pub fn deregister_session(
+        &mut self,
+        session_id: SessionId,
+        stop_control_master: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         self.last_navigated_path.remove(&session_id);
         self.session_bootstrap_info.remove(&session_id);
         self.session_platforms.remove(&session_id);
+        self.persistent_session_ids.remove(&session_id);
 
         // Remove the session entry. Dropping the `RemoteSessionState`
         // here drops the transport's owned `Child` (if any), which
@@ -1015,13 +1045,16 @@ impl RemoteServerManager {
         // Force the local SSH ControlMaster to exit after teardown.
         // Spawned detached because the ssh subcommand may take a moment
         // to complete and we don't want to block the main thread on it.
+        // Skipped for daemon sessions (shared per-host master — see the doc above).
         #[cfg(not(target_family = "wasm"))]
-        if let Some(control_path) = control_path {
-            ctx.background_executor()
-                .spawn(async move {
-                    crate::ssh::stop_control_master(&control_path).await;
-                })
-                .detach();
+        if stop_control_master {
+            if let Some(control_path) = control_path {
+                ctx.background_executor()
+                    .spawn(async move {
+                        crate::ssh::stop_control_master(&control_path).await;
+                    })
+                    .detach();
+            }
         }
     }
 
@@ -1477,7 +1510,16 @@ impl RemoteServerManager {
             // terminal pane to hang 2-4 seconds before terminating; so skip auto-reconnect and go straight to Disconnected.
             // Only `exit_status.is_none()` (child still running but reader got EOF) — true transient network hiccup —
             // retains the reconnect logic.
-            let child_already_exited = exit_status.is_some();
+            //
+            // EXCEPTION — persistent daemon sessions: the transport child is the
+            // per-connection ssh/proxy slave, which exits on a network blip while
+            // the remote daemon (a separate process) keeps the PTY session alive.
+            // So for these we must NOT skip reconnect on child exit; the
+            // self-healing ControlMaster + `SessionReconnected`/reattach path then
+            // restores the live view. (If the daemon truly died, reconnect just
+            // fails after the bounded retries.)
+            let is_persistent = self.persistent_session_ids.contains(&session_id);
+            let child_already_exited = exit_status.is_some() && !is_persistent;
             let Some(auth_context) = self.auth_context.clone().filter(|_| !child_already_exited)
             else {
                 if child_already_exited {
@@ -1492,6 +1534,7 @@ impl RemoteServerManager {
                          but no auth context is available for reconnect"
                     );
                 }
+                self.persistent_session_ids.remove(&session_id);
                 self.sessions
                     .insert(session_id, RemoteSessionState::Disconnected);
                 self.remove_from_host_index(&host_id, session_id);

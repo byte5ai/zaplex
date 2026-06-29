@@ -248,8 +248,8 @@ fn create_directory_creates_nested_directories() {
 mod daemon_session {
     use super::test_model;
     use crate::remote_server::proto::{
-        client_message, server_message, AttachSession, ClientMessage, CloseSession, ListSessions,
-        OpenSession, ServerMessage, SessionInput, SessionList, SessionSize,
+        client_message, server_message, AttachSession, ClientMessage, CloseSession, DetachSession,
+        ListSessions, OpenSession, ServerMessage, SessionInput, SessionList, SessionSize,
     };
     use futures::future::Either;
     use std::time::Duration;
@@ -432,6 +432,15 @@ mod daemon_session {
         ClientMessage {
             request_id: String::new(),
             message: Some(client_message::Message::CloseSession(CloseSession {
+                session_id: session_id.to_string(),
+            })),
+        }
+    }
+
+    fn detach_msg(session_id: &str) -> ClientMessage {
+        ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::DetachSession(DetachSession {
                 session_id: session_id.to_string(),
             })),
         }
@@ -670,6 +679,51 @@ mod daemon_session {
             }
             assert_eq!(reaped2, 1, "over-cap detached session reaped once it has ring bytes");
             model.update(&mut app, |m, _ctx| assert!(m.sessions.is_empty(), "all sessions reaped"));
+        });
+    }
+
+    /// Regression: a `DetachSession` from a connection that no longer owns the
+    /// attachment must be ignored. Otherwise a late detach from a closed/old tab
+    /// would steal the attachment from a newer tab that adopted the same session,
+    /// silently cutting off the new tab's live output.
+    #[test]
+    fn stale_detach_does_not_steal_a_newer_attachment() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_a = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| m.register_connection(conn_a, conn_tx, ctx));
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().to_string_lossy().to_string();
+            model.update(&mut app, |m, ctx| m.handle_message(conn_a, open_in(&path), ctx));
+            let id = recv_session_opened(&conn_rx).await.expect("session opened");
+
+            // A newer tab (conn_b) adopts the session — it now owns the attachment.
+            let conn_b = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, _| {
+                m.sessions.get_mut(&id).unwrap().attached = conn_b;
+            });
+
+            // A stale detach from the OLD connection must NOT clear it.
+            model.update(&mut app, |m, ctx| m.handle_message(conn_a, detach_msg(&id), ctx));
+            model.update(&mut app, |m, _| {
+                assert_eq!(
+                    m.sessions.get(&id).unwrap().attached,
+                    conn_b,
+                    "stale detach from a non-owner must be ignored"
+                );
+            });
+
+            // The current owner's detach does clear it.
+            model.update(&mut app, |m, ctx| m.handle_message(conn_b, detach_msg(&id), ctx));
+            model.update(&mut app, |m, _| {
+                assert_eq!(
+                    m.sessions.get(&id).unwrap().attached,
+                    uuid::Uuid::nil(),
+                    "the owning connection's detach clears the attachment"
+                );
+            });
         });
     }
 

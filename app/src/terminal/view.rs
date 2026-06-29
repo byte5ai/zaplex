@@ -10740,7 +10740,9 @@ impl TerminalView {
                     RemoteServerManager::handle(ctx).update(
                         ctx,
                         |mgr: &mut RemoteServerManager, ctx| {
-                            mgr.deregister_session(*session_id, ctx);
+                            // Legacy ssh-wrapper path: per-session ControlMaster, stop it
+                            // so the foreground ssh can exit cleanly.
+                            mgr.deregister_session(*session_id, true, ctx);
                         },
                     );
                 }

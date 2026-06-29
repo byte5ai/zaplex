@@ -5683,6 +5683,9 @@ impl Workspace {
                     );
                     let transport = SshTransport::new(socket_path, auth_context.clone());
                     RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+                        // Persistent: a transport drop (ssh slave exit) must trigger
+                        // reconnect — the daemon keeps the session alive (§9).
+                        mgr.mark_session_persistent(session_id);
                         mgr.connect_session(session_id, transport, auth_context, ctx);
                     });
                 }

@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use warp_core::SessionId;
-use warpui::{AppContext, ModelHandle, ViewHandle, WindowId};
+use warpui::{AppContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
 
 // Reuses the same `EventLoopSender` impl for `Sender<Message>` defined by
 // `remote_tty`; do not re-implement it here (it would violate coherence).
@@ -71,6 +71,11 @@ pub struct TerminalManager {
     _event_loop: ModelHandle<EventLoop>,
 
     view: ViewHandle<TerminalView>,
+
+    /// The manager/connection session this daemon tab rides on. Used to
+    /// deregister the local connection when the tab is permanently closed (the
+    /// remote daemon session keeps running for later re-adopt).
+    connection_session_id: SessionId,
 }
 
 impl TerminalManager {
@@ -188,6 +193,7 @@ impl TerminalManager {
             view,
             _pty_controller: pty_controller,
             _event_loop: event_loop,
+            connection_session_id,
         };
 
         ctx.add_model(|_ctx| {
@@ -225,6 +231,27 @@ impl TerminalManager {
 impl crate::terminal::TerminalManager for TerminalManager {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
+    }
+
+    /// On a *permanent* tab close, tear down the local connection so it doesn't
+    /// leak until app exit. We only drop the per-session transport (the ssh/proxy
+    /// slave) + the manager's bookkeeping; the remote daemon session is left
+    /// running (detached) for later re-adopt, and the per-host shared
+    /// ControlMaster is preserved for sibling tabs (`stop_control_master = false`).
+    /// `Moved`/`HiddenForClose` keep the tab alive, so they must not tear down.
+    fn on_view_detached(
+        &self,
+        detach_type: crate::pane_group::pane::DetachType,
+        app: &mut AppContext,
+    ) {
+        if matches!(detach_type, crate::pane_group::pane::DetachType::Closed) {
+            crate::remote_server::manager::RemoteServerManager::handle(app).update(
+                app,
+                |mgr, ctx| {
+                    mgr.deregister_session(self.connection_session_id, false, ctx);
+                },
+            );
+        }
     }
 
     fn view(&self) -> ViewHandle<TerminalView> {

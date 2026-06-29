@@ -743,7 +743,7 @@ impl ServerModel {
             }
             #[cfg(unix)]
             Some(client_message::Message::DetachSession(msg)) => {
-                self.handle_detach_session(msg);
+                self.handle_detach_session(conn_id, msg);
                 return;
             }
             // Multi-session listing for the sidebar / adopt-by-id (Stage 4).
@@ -2109,10 +2109,23 @@ impl ServerModel {
     /// Detaches a connection from a session without ending it: the session keeps
     /// running and its output accumulates in the ring (live pushes to the now
     /// non-attached connection become harmless no-ops) until a later attach.
-    fn handle_detach_session(&mut self, msg: DetachSession) {
+    fn handle_detach_session(&mut self, conn_id: ConnectionId, msg: DetachSession) {
         if let Some(session) = self.sessions.get_mut(&msg.session_id) {
-            session.attached = uuid::Uuid::nil();
-            log::info!("Daemon: detached session {} (still running)", msg.session_id);
+            // Only the connection that currently owns the attachment may clear it.
+            // A late DetachSession from a previously-attached tab must not steal
+            // the attachment from a newer tab that has since adopted this session
+            // (which would silently cut off the new tab's live output).
+            if session.attached == conn_id {
+                session.attached = uuid::Uuid::nil();
+                log::info!("Daemon: detached session {} (still running)", msg.session_id);
+            } else {
+                log::debug!(
+                    "Daemon: ignoring stale detach for session {} from conn {conn_id} \
+                     (currently attached to {})",
+                    msg.session_id,
+                    session.attached
+                );
+            }
         }
     }
 
