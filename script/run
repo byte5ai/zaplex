@@ -27,7 +27,7 @@ if command -v warp-channel-config &>/dev/null; then
     ZAPLEX_BIN_NAME="warp"
     ZAPLEX_CHANNEL="local"
 else
-    ZAPLEX_BIN_NAME="zap-oss"
+    ZAPLEX_BIN_NAME="zaplex"
     ZAPLEX_CHANNEL="oss"
 fi
 
