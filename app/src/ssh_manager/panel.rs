@@ -646,13 +646,6 @@ impl SshManagerPanel {
         }
     }
 
-    /// Whether `server` can host a persistent daemon session (key/onekey auth +
-    /// session_resilience enabled) — only those have sessions to list / adopt.
-    fn is_daemon_capable(server: &SshServerInfo) -> bool {
-        server.session_resilience.is_enabled()
-            && matches!(server.auth_type, AuthType::Key | AuthType::OneKey)
-    }
-
     /// Toggle the inline running-sessions list for a server node; the first
     /// expand kicks off a connect-to-list fetch.
     fn on_toggle_sessions(&mut self, id: String, ctx: &mut ViewContext<Self>) {
@@ -683,10 +676,26 @@ impl SshManagerPanel {
             use crate::remote_server::auth_context::server_api_auth_context;
             use crate::remote_server::headless_connect;
 
-            if !Self::is_daemon_capable(&server) {
+            if !server.session_resilience.is_enabled() {
                 self.sessions_error.insert(
                     id,
                     crate::t!("workspace-left-panel-ssh-manager-sessions-not-persistent"),
+                );
+                return;
+            }
+            // Resolve OneKey → effective auth: the daemon listing runs headless
+            // (BatchMode), which only works with key auth. Without this, a
+            // OneKey/Password host would reach `list_daemon_sessions` and surface a
+            // confusing ssh batch-mode error instead of a clear reason.
+            let resolves_to_key = warp_ssh_manager::with_conn(|c| {
+                Ok(SshRepository::resolve_server_auth(c, &server)?.auth_type)
+            })
+            .map(|auth| auth == AuthType::Key)
+            .unwrap_or(false);
+            if !resolves_to_key {
+                self.sessions_error.insert(
+                    id,
+                    crate::t!("workspace-left-panel-ssh-manager-sessions-needs-key"),
                 );
                 return;
             }

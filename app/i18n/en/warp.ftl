@@ -2802,6 +2802,7 @@ workspace-left-panel-ssh-manager-menu-sftp = File Manager
 workspace-left-panel-ssh-manager-sessions-loading = Loading sessions…
 workspace-left-panel-ssh-manager-sessions-empty = No running sessions
 workspace-left-panel-ssh-manager-sessions-not-persistent = Set "Session persistence" to Persistent to use this
+workspace-left-panel-ssh-manager-sessions-needs-key = Running sessions need key-based authentication
 workspace-left-panel-ssh-manager-menu-clone = Clone
 workspace-left-panel-ssh-manager-menu-delete = Delete
 workspace-left-panel-ssh-manager-pane-hint = Editing fields and "Connect" will arrive in the next iteration. For now this pane shows the saved configuration; tweak it via the SQLite store or the upcoming editor.

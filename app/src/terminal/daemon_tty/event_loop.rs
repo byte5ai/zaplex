@@ -13,6 +13,13 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::terminal_manager::OpenSessionParams;
 
+/// Cap on input buffered while the transport is down. A reconnect window is
+/// normally seconds, but a laptop can sleep for hours — without a bound, typed
+/// input / pastes would grow this `Vec` unboundedly. 256 KiB is far more than any
+/// realistic burst of keystrokes; past it we drop the oldest input (a terminal
+/// tolerates lost keystrokes far better than unbounded memory).
+const MAX_PENDING_INPUT_BYTES: usize = 256 * 1024;
+
 /// Drives a terminal backed by a *daemon-hosted* PTY session.
 ///
 /// Unlike [`crate::terminal::remote_tty`]'s event loop, which speaks the
@@ -320,7 +327,44 @@ impl EventLoop {
     fn on_event_loop_message(&mut self, message: EventLoopMessage, ctx: &mut ModelContext<Self>) {
         match self.pty_session_id.clone() {
             Some(pty_session_id) => self.dispatch_message(&pty_session_id, message, ctx),
-            None => self.pending_input.push(message),
+            None => self.buffer_pending(message),
+        }
+    }
+
+    /// Buffer an input/resize while the session isn't addressable (pre-open or
+    /// transport down). Coalesces resizes (only the latest matters) and bounds the
+    /// buffered input bytes, dropping the oldest input past the cap so a long
+    /// outage can't grow `pending_input` without limit.
+    fn buffer_pending(&mut self, message: EventLoopMessage) {
+        if matches!(message, EventLoopMessage::Resize(_)) {
+            // Intermediate window sizes are irrelevant — keep only the latest.
+            self.pending_input
+                .retain(|m| !matches!(m, EventLoopMessage::Resize(_)));
+        }
+        self.pending_input.push(message);
+
+        let mut total: usize = self
+            .pending_input
+            .iter()
+            .map(|m| match m {
+                EventLoopMessage::Input(b) => b.len(),
+                _ => 0,
+            })
+            .sum();
+        if total > MAX_PENDING_INPUT_BYTES {
+            log::warn!(
+                "daemon_tty: buffered input exceeded {MAX_PENDING_INPUT_BYTES} bytes during an \
+                 outage — dropping oldest input"
+            );
+            let mut i = 0;
+            while total > MAX_PENDING_INPUT_BYTES && i < self.pending_input.len() {
+                if let EventLoopMessage::Input(b) = &self.pending_input[i] {
+                    total -= b.len();
+                    self.pending_input.remove(i);
+                } else {
+                    i += 1;
+                }
+            }
         }
     }
 
@@ -339,7 +383,7 @@ impl EventLoop {
             log::debug!(
                 "daemon_tty: buffering {message:?} for {pty_session_id} (transport down, will flush on reattach)"
             );
-            self.pending_input.push(message);
+            self.buffer_pending(message);
             return;
         };
         let result = match message {
@@ -663,6 +707,57 @@ mod tests {
                     }
                     other => panic!("expected Input, got {other:?}"),
                 }
+            });
+        });
+    }
+
+    /// During a long outage the buffered input must stay bounded: consecutive
+    /// resizes coalesce to the latest, and input past the byte cap drops oldest-
+    /// first — so a sleeping laptop can't grow `pending_input` without limit.
+    #[test]
+    fn buffered_input_is_capped_and_resizes_coalesce() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(19u64);
+            // Adopted loop: pty id set, no live client → everything buffers.
+            let (_manager, event_loop, _model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
+
+            event_loop.update(&mut app, |me, ctx| {
+                me.on_event_loop_message(
+                    EventLoopMessage::Resize(SizeInfo::new_without_font_metrics(20, 60)),
+                    ctx,
+                );
+                me.on_event_loop_message(
+                    EventLoopMessage::Resize(SizeInfo::new_without_font_metrics(30, 90)),
+                    ctx,
+                );
+                // 5 x 100 KiB = 500 KiB of input, over the 256 KiB cap.
+                for _ in 0..5 {
+                    me.on_event_loop_message(
+                        EventLoopMessage::Input(Cow::Owned(vec![b'x'; 100 * 1024])),
+                        ctx,
+                    );
+                }
+            });
+
+            event_loop.read(&app, |me, _| {
+                let resizes = me
+                    .pending_input
+                    .iter()
+                    .filter(|m| matches!(m, EventLoopMessage::Resize(_)))
+                    .count();
+                assert_eq!(resizes, 1, "consecutive resizes coalesce to the latest");
+                let input_bytes: usize = me
+                    .pending_input
+                    .iter()
+                    .map(|m| match m {
+                        EventLoopMessage::Input(b) => b.len(),
+                        _ => 0,
+                    })
+                    .sum();
+                assert!(
+                    input_bytes <= MAX_PENDING_INPUT_BYTES,
+                    "buffered input must be capped (was {input_bytes})"
+                );
             });
         });
     }

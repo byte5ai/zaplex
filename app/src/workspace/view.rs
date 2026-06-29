@@ -856,6 +856,12 @@ pub struct Workspace {
     window_id: WindowId,
     pub(crate) tabs: Vec<TabData>,
     active_tab_index: usize,
+    /// Tracks which tab (by pane-group id) currently hosts each adopted daemon
+    /// `pty_session_id`, so adopting the same running session again focuses the
+    /// existing tab instead of opening a second view onto it (which would split
+    /// input/output across two tabs). Stale entries (tab since closed) are pruned
+    /// opportunistically on the next adopt.
+    adopted_daemon_sessions: std::collections::HashMap<String, EntityId>,
     pub(crate) hovered_tab_index: Option<TabBarHoverIndex>,
     tab_bar_hover_state: MouseStateHandle,
     tab_fixed_width: Option<f32>,
@@ -2850,6 +2856,7 @@ impl Workspace {
         let mut ws = Self {
             tabs: Vec::new(),
             active_tab_index: 0,
+            adopted_daemon_sessions: std::collections::HashMap::new(),
             hovered_tab_index: None,
             tab_bar_hover_state: Default::default(),
             traffic_light_mouse_states: Default::default(),
@@ -5626,11 +5633,25 @@ impl Workspace {
     ) {
         use crate::remote_server::headless_connect;
 
+        // Prune entries whose tab has since closed, then, if this session is
+        // already open in a tab, focus that tab instead of opening a second view
+        // onto it (a second adopt would split input/output across two tabs).
+        let live_pg_ids: Vec<EntityId> = self.tabs.iter().map(|t| t.pane_group.id()).collect();
+        self.adopted_daemon_sessions
+            .retain(|_, pg_id| live_pg_ids.contains(pg_id));
+        if let Some(pg_id) = self.adopted_daemon_sessions.get(&pty_session_id).copied() {
+            if let Some(index) = self.tabs.iter().position(|t| t.pane_group.id() == pg_id) {
+                log::info!("daemon adopt: session {pty_session_id} already open — focusing its tab");
+                self.activate_tab(index, ctx);
+                return;
+            }
+        }
+
         let session_id = headless_connect::alloc_daemon_session_id();
         let request = crate::terminal::daemon_tty::DaemonSessionRequest {
             connection_session_id: session_id,
             open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
-            adopt_pty_session_id: Some(pty_session_id),
+            adopt_pty_session_id: Some(pty_session_id.clone()),
         };
 
         self.add_tab_with_pane_layout(
@@ -5643,6 +5664,13 @@ impl Workspace {
             None, /* custom_tab_title */
             ctx,
         );
+
+        // The freshly added tab is the active one — remember which tab hosts this
+        // adopted session so a later duplicate adopt focuses it.
+        if let Some(pane_group) = self.get_pane_group_view(self.active_tab_index) {
+            self.adopted_daemon_sessions
+                .insert(pty_session_id, pane_group.id());
+        }
 
         self.spawn_daemon_session_connect(server, session_id, ctx);
     }
