@@ -130,7 +130,13 @@ pub async fn ensure_control_master(server: &SshServerInfo, socket_path: &Path) -
         "-o".into(),
         "ControlMaster=auto".into(),
         "-o".into(),
-        "ControlPersist=yes".into(),
+        // Idle timeout, NOT `yes`: `yes` keeps the backgrounded master alive
+        // forever (it even survives app exit, since `-f` detaches it), and daemon
+        // sessions no longer stop it on tab close (it's a shared per-host master).
+        // A timeout lets it self-retire after the last client goes idle, while
+        // still being reused for reconnects / new tabs within the window. The
+        // remote daemon session is independent of the master and survives either way.
+        "ControlPersist=600".into(),
         "-o".into(),
         format!("ControlPath={}", socket_path.display()),
         "-o".into(),
