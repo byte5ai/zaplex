@@ -7,11 +7,12 @@ Type=Application
 Name=Zaplex
 GenericName=TerminalEmulator
 
-# `zaplex` resolves on PATH after install: deb/rpm packages symlink it to the
-# bundled binary, and the arch package ships a /usr/bin/zaplex wrapper script.
-# When packaging an AppImage, bundle_appimage rewrites this line with sed to
-# point straight at the binary inside the AppImage.
-Exec=zaplex %U
+# Exec must match the command the Linux packages actually install on PATH. The
+# deb/rpm/arch packages currently name the OSS package `zap` (PACKAGE_NAME in
+# script/linux/bundle_{deb,rpm}), so the installed command is `zap`. (When the
+# Linux package slug is renamed to `zaplex`, update this to `zaplex` in lockstep.)
+# bundle_appimage rewrites this line with sed to point at the in-AppImage binary.
+Exec=zap %U
 StartupWMClass=dev.zaplex.Zaplex
 
 Keywords=shell;prompt;command;commandline;cmd;
