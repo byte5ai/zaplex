@@ -683,22 +683,31 @@ impl SshManagerPanel {
                 );
                 return;
             }
-            // Resolve OneKey → effective auth: the daemon listing runs headless
-            // (BatchMode), which only works with key auth. Without this, a
-            // OneKey/Password host would reach `list_daemon_sessions` and surface a
-            // confusing ssh batch-mode error instead of a clear reason.
-            let resolves_to_key = warp_ssh_manager::with_conn(|c| {
-                Ok(SshRepository::resolve_server_auth(c, &server)?.auth_type)
-            })
-            .map(|auth| auth == AuthType::Key)
-            .unwrap_or(false);
-            if !resolves_to_key {
-                self.sessions_error.insert(
-                    id,
-                    crate::t!("workspace-left-panel-ssh-manager-sessions-needs-key"),
-                );
-                return;
-            }
+            // Resolve OneKey → effective auth. The daemon listing runs headless
+            // (BatchMode), which only works with key auth, AND it must use the
+            // resolved username/key_path so it targets the SAME per-host
+            // ControlMaster the connect path uses (`control_socket_path` keys on
+            // user@host:port, and `open_ssh_terminal` connects with the resolved
+            // server). Using the unresolved record would key a different socket
+            // and/or fail auth for OneKey-key hosts.
+            let resolved = warp_ssh_manager::with_conn(|c| {
+                let auth = SshRepository::resolve_server_auth(c, &server)?;
+                let mut resolved = server.clone();
+                resolved.username = auth.username;
+                resolved.key_path = auth.key_path;
+                resolved.auth_type = auth.auth_type;
+                Ok(resolved)
+            });
+            let server = match resolved {
+                Ok(s) if s.auth_type == AuthType::Key => s,
+                _ => {
+                    self.sessions_error.insert(
+                        id,
+                        crate::t!("workspace-left-panel-ssh-manager-sessions-needs-key"),
+                    );
+                    return;
+                }
+            };
             self.sessions_loading.insert(id.clone());
             let auth_context = std::sync::Arc::new(server_api_auth_context(
                 AuthStateProvider::as_ref(ctx).get().clone(),
@@ -737,9 +746,22 @@ impl SshManagerPanel {
         pty_session_id: String,
         ctx: &mut ViewContext<Self>,
     ) {
-        let server = warp_ssh_manager::with_conn(|c| Ok(SshRepository::get_server(c, &node_id)?))
-            .ok()
-            .flatten();
+        // Resolve OneKey → effective auth so the adopt connects with the same
+        // username/key_path the listing + connect paths use — otherwise an
+        // OneKey-key host would target a different ControlMaster / fail auth.
+        let server = warp_ssh_manager::with_conn(|c| {
+            let Some(server) = SshRepository::get_server(c, &node_id)? else {
+                return Ok(None);
+            };
+            let auth = SshRepository::resolve_server_auth(c, &server)?;
+            let mut resolved = server;
+            resolved.username = auth.username;
+            resolved.key_path = auth.key_path;
+            resolved.auth_type = auth.auth_type;
+            Ok(Some(resolved))
+        })
+        .ok()
+        .flatten();
         if let Some(server) = server {
             ctx.emit(SshManagerPanelEvent::AdoptDaemonSession {
                 server,

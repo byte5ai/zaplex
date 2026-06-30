@@ -20,6 +20,13 @@ use super::terminal_manager::OpenSessionParams;
 /// tolerates lost keystrokes far better than unbounded memory).
 const MAX_PENDING_INPUT_BYTES: usize = 256 * 1024;
 
+/// Safety valve for output buffered before `OpenSession` resolves (the daemon
+/// auto-attaches and starts the shell/bootstrap before the response reaches us).
+/// The open window is normally sub-second, so this is far more than any bootstrap
+/// burst; past it we stop buffering (the early bootstrap prefix is preserved)
+/// rather than grow without bound if an open hangs on a chatty session.
+const MAX_PENDING_OUTPUT_BYTES: usize = 1024 * 1024;
+
 /// Drives a terminal backed by a *daemon-hosted* PTY session.
 ///
 /// Unlike [`crate::terminal::remote_tty`]'s event loop, which speaks the
@@ -47,6 +54,11 @@ pub(super) struct EventLoop {
     /// Input/resize messages received before the session id is known. Flushed,
     /// in order, once `OpenSession` resolves.
     pending_input: Vec<EventLoopMessage>,
+    /// Output `(pty_session_id, seq, bytes)` pushed for our connection before the
+    /// `OpenSession` response arrives (the daemon auto-attaches and starts the
+    /// shell immediately). Rendered, in order, in `on_session_opened`, so the
+    /// initial shell/bootstrap output isn't lost on a fresh tab.
+    pending_output: Vec<(String, u64, Vec<u8>)>,
     /// The `OpenSession` request, held until the transport is `Connected`. Taken
     /// (once) by `try_open`. `None` after the session has been opened.
     pending_open: Option<(OpenSessionParams, SizeInfo)>,
@@ -86,13 +98,27 @@ impl EventLoop {
         let manager = RemoteServerManager::handle(ctx);
         ctx.subscribe_to_model(&manager, |me, event, ctx| match event {
             RemoteServerManagerEvent::SessionOutput {
+                session_id,
                 pty_session_id,
                 seq,
                 bytes,
                 ..
-            } if me.is_our_session(pty_session_id) => {
-                me.process_pty_bytes(bytes);
-                me.last_seq = *seq + bytes.len() as u64;
+            } => {
+                if me.is_our_session(pty_session_id) {
+                    me.process_pty_bytes(bytes);
+                    me.last_seq = *seq + bytes.len() as u64;
+                } else if me.pty_session_id.is_none() && *session_id == me.connection_session_id {
+                    // Output for our connection before `OpenSession` resolved — the
+                    // daemon auto-attaches and starts the shell/bootstrap before the
+                    // response reaches us. Buffer it (drained in `on_session_opened`)
+                    // so the initial output isn't lost; stop past the cap so a hung
+                    // open can't grow this without bound.
+                    let buffered: usize = me.pending_output.iter().map(|(_, _, b)| b.len()).sum();
+                    if buffered < MAX_PENDING_OUTPUT_BYTES {
+                        me.pending_output
+                            .push((pty_session_id.clone(), *seq, bytes.clone()));
+                    }
+                }
             }
             RemoteServerManagerEvent::SessionExited {
                 pty_session_id,
@@ -157,6 +183,7 @@ impl EventLoop {
             connection_session_id,
             pty_session_id: None,
             pending_input: Vec::new(),
+            pending_output: Vec::new(),
             pending_open: None,
             startup_command: None,
             last_seq: 0,
@@ -290,6 +317,16 @@ impl EventLoop {
     fn on_session_opened(&mut self, pty_session_id: String, ctx: &mut ModelContext<Self>) {
         log::info!("daemon_tty: session opened, pty_session_id={pty_session_id}");
         self.pty_session_id = Some(pty_session_id.clone());
+        // Render output the daemon produced before this response arrived (it
+        // auto-attaches and starts the shell immediately), so the initial
+        // shell/bootstrap output isn't missing from a fresh tab. In seq order.
+        let pending = std::mem::take(&mut self.pending_output);
+        for (pty, seq, bytes) in pending {
+            if pty == pty_session_id {
+                self.process_pty_bytes(&bytes);
+                self.last_seq = seq + bytes.len() as u64;
+            }
+        }
         // Run the host's startup command once, after the session is open — the
         // daemon-path analog of the local-PTY SSH startup-command injector. Sent
         // as input + newline (bash/zsh execute byte), the same way the daemon
@@ -757,6 +794,68 @@ mod tests {
                 assert!(
                     input_bytes <= MAX_PENDING_INPUT_BYTES,
                     "buffered input must be capped (was {input_bytes})"
+                );
+            });
+        });
+    }
+
+    /// Output the daemon pushes before `OpenSession` resolves (it auto-attaches
+    /// and starts the shell immediately) must not be lost: it is buffered while
+    /// the pty id is unknown, then rendered when `on_session_opened` records the id.
+    #[test]
+    fn output_before_open_is_buffered_then_rendered() {
+        App::test((), |mut app| async move {
+            let manager = app.add_singleton_model(RemoteServerManager::new);
+            let conn = SessionId::from(23u64);
+            let (listener, wakeups_rx) = test_listener();
+            let model = Arc::new(FairMutex::new(TerminalModel::mock(None, Some(listener.clone()))));
+            let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+            let size = SizeInfo::new_without_font_metrics(24, 80);
+            let model_for_loop = model.clone();
+            // Fresh open (adopt = None): with no live client the open never
+            // resolves, so pty_session_id stays None and output must buffer.
+            let event_loop = app.add_model(|ctx| {
+                EventLoop::start(
+                    model_for_loop,
+                    event_loop_rx,
+                    listener,
+                    size,
+                    conn,
+                    OpenSessionParams::default(),
+                    None,
+                    ctx,
+                )
+            });
+
+            // Daemon pushes output for our connection before OpenSession resolves.
+            manager.update(&mut app, |_m, ctx| {
+                ctx.emit(output_event(conn, "pty-late", 0, b"BOOT"));
+            });
+            event_loop.read(&app, |me, _| {
+                assert!(me.pty_session_id.is_none(), "not opened yet");
+                assert_eq!(
+                    me.pending_output.len(),
+                    1,
+                    "pre-open output must be buffered, not dropped"
+                );
+            });
+
+            // Opening renders the buffered output (proven by the repaint wakeup),
+            // advances last_seq, and clears the buffer.
+            drain(&wakeups_rx);
+            event_loop.update(&mut app, |me, ctx| {
+                me.on_session_opened("pty-late".to_string(), ctx)
+            });
+            assert!(
+                !wakeups_rx.is_empty(),
+                "buffered pre-open output must be rendered on open"
+            );
+            event_loop.read(&app, |me, _| {
+                assert!(me.pending_output.is_empty(), "buffer drained on open");
+                assert_eq!(
+                    me.last_seq,
+                    b"BOOT".len() as u64,
+                    "last_seq advances past the replayed pre-open output"
                 );
             });
         });

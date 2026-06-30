@@ -30,6 +30,7 @@ fn server() -> SshServerInfo {
         notes: None,
         last_connected_at: None,
         session_resilience: crate::types::SessionResilience::default(),
+        ring_ceiling_mb: 0,
     }
 }
 

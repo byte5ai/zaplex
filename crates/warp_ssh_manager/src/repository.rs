@@ -588,6 +588,10 @@ pub(crate) fn setup_in_memory() -> SqliteConnection {
         include_str!(
             "../../persistence/migrations/2026-06-09-160000_add_ssh_onekey_key_type/up.sql"
         ),
+        include_str!(
+            "../../persistence/migrations/2026-06-27-000000_add_session_resilience/up.sql"
+        ),
+        include_str!("../../persistence/migrations/2026-06-29-000000_add_ring_ceiling/up.sql"),
     ] {
         conn.batch_execute(up).unwrap();
     }
