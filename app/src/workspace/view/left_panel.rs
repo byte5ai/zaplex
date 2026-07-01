@@ -343,7 +343,7 @@ impl LeftPanelView {
             }
         });
 
-        let active_view = views.first().copied().unwrap_or(ToolPanelView::ZaplexDrive);
+        let active_view = views.first().copied().unwrap_or(ToolPanelView::SshManager);
         let toolbelt_buttons = views
             .iter()
             .map(|view| Self::create_toolbelt_button_config(view, ctx))

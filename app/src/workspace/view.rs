@@ -15993,7 +15993,7 @@ impl Workspace {
                         .left_panel_views
                         .first()
                         .copied()
-                        .unwrap_or(ToolPanelView::ZaplexDrive)
+                        .unwrap_or(ToolPanelView::SshManager)
                     {
                         ToolPanelView::ProjectExplorer => {
                             crate::t!("workspace-left-panel-project-explorer")
@@ -16062,7 +16062,7 @@ impl Workspace {
                 .left_panel_views
                 .first()
                 .copied()
-                .unwrap_or(ToolPanelView::ZaplexDrive)
+                .unwrap_or(ToolPanelView::SshManager)
             {
                 ToolPanelView::ProjectExplorer => {
                     crate::t!("workspace-left-panel-project-explorer")
@@ -18818,13 +18818,16 @@ impl Workspace {
     /// Computes the list of available left panel views based on current AI settings and feature flags.
     fn compute_left_panel_views(ctx: &AppContext) -> Vec<ToolPanelView> {
         let mut views = vec![];
-        if FeatureFlag::AgentViewConversationListView.is_enabled()
-            && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-            && *AISettings::as_ref(ctx).show_conversation_history
-        {
-            views.push(ToolPanelView::ConversationListView);
+
+        // Remote-dev core first: SSH hosts, then remote files — this is the product's
+        // primary surface, so it leads the toolbelt.
+        // openWarp-only: the SSH manager, no feature flag, always shown by default.
+        views.push(ToolPanelView::SshManager);
+        if FeatureFlag::ServerFileBrowser.is_enabled() && FeatureFlag::SshRemoteServer.is_enabled() {
+            views.push(ToolPanelView::ServerFileBrowser);
         }
 
+        // Local workspace tools.
         if cfg!(feature = "local_fs") && *CodeSettings::as_ref(ctx).show_project_explorer.value() {
             views.push(ToolPanelView::ProjectExplorer);
         }
@@ -18836,18 +18839,23 @@ impl Workspace {
                 entry_focus: GlobalSearchEntryFocus::Results,
             });
         }
-        if WarpDriveSettings::is_warp_drive_enabled(ctx) {
-            views.push(ToolPanelView::ZaplexDrive);
+
+        // Agent conversation history (local, BYOP).
+        if FeatureFlag::AgentViewConversationListView.is_enabled()
+            && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
+            && *AISettings::as_ref(ctx).show_conversation_history
+        {
+            views.push(ToolPanelView::ConversationListView);
         }
-        // openWarp-only: the SSH manager, no feature flag, always shown by default.
-        views.push(ToolPanelView::SshManager);
-        if FeatureFlag::ServerFileBrowser.is_enabled() && FeatureFlag::SshRemoteServer.is_enabled() {
-            views.push(ToolPanelView::ServerFileBrowser);
-        }
+
         // openWarp-only: the Skill manager, no feature flag, shown by default in local_fs builds.
         if cfg!(feature = "local_fs") {
             views.push(ToolPanelView::SkillManager);
         }
+
+        // Zaplex Drive (inherited Warp Drive) is preserved as a sidebar-panel template
+        // (enum variant, render arms and modules kept) but is no longer surfaced in the
+        // shipped toolbelt. See docs/superpowers/specs/2026-07-01-self-contained-cleanup-plan.md
         views
     }
 
