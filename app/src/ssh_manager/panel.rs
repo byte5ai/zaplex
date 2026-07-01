@@ -1194,15 +1194,17 @@ impl SshManagerPanel {
         let theme = appearance.theme();
         let muted = theme.sub_text_color(theme.background());
         let main = theme.main_text_color(theme.background());
+        let accent = theme.accent().into_solid();
         let icon_color = muted;
 
-        // Header: "Add a host" + a Cancel button on the right.
+        // Header: "Add a host" + a Cancel button on the right. Accent-colored so the
+        // add-mode block reads as an active, distinct state.
         let heading = Text::new_inline(
             crate::t!("workspace-left-panel-ssh-manager-add-heading"),
             appearance.ui_font_family(),
             appearance.ui_font_subheading(),
         )
-        .with_color(muted.into())
+        .with_color(accent.into())
         .finish();
         let cancel_label = Text::new_inline(
             crate::t!("workspace-left-panel-ssh-manager-add-cancel"),
@@ -1298,7 +1300,16 @@ impl SshManagerPanel {
                     .finish(),
             );
         }
-        col.with_main_axis_size(MainAxisSize::Min).finish()
+        // Set the whole "Add a host" block apart from the saved tree with an accent
+        // left-bar + subtle background, so it's unmistakable that you're in add mode.
+        Container::new(col.with_main_axis_size(MainAxisSize::Min).finish())
+            .with_background(internal_colors::fg_overlay_1(theme))
+            .with_border(Border::left(2.0).with_border_color(accent))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+            .with_padding_top(ITEM_PADDING_VERTICAL)
+            .with_padding_bottom(ITEM_PADDING_VERTICAL)
+            .with_margin_bottom(ITEM_PADDING_VERTICAL)
+            .finish()
     }
 
     /// "Candidates" section — the list of importable hosts parsed from `~/.ssh/config`.
@@ -1835,7 +1846,9 @@ impl SshManagerPanel {
     fn render_tree(&self, appearance: &warp_core::ui::appearance::Appearance) -> Box<dyn Element> {
         let mut col = Flex::column();
 
-        if self.nodes.is_empty() {
+        // While the "Add a host" block is shown, suppress the "no servers yet"
+        // empty-state — showing both at once reads as a contradiction.
+        if self.nodes.is_empty() && !self.adding_mode {
             let theme = appearance.theme();
             let muted = theme.sub_text_color(theme.background());
             col.add_child(

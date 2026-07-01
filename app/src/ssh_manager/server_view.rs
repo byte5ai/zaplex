@@ -98,6 +98,29 @@ enum AuthSpecificField {
     OneKeyCredential,
 }
 
+/// Immutable snapshot of every value the Save button submits, used for
+/// dirty-tracking (see [`SshServerView::baseline_snapshot`]).
+#[derive(Clone, PartialEq, Eq)]
+struct ServerFormSnapshot {
+    name: String,
+    host: String,
+    port: String,
+    user: String,
+    password: String,
+    key_path: String,
+    onekey_label: String,
+    onekey_user: String,
+    onekey_key_path: String,
+    root_password: String,
+    startup_command: String,
+    notes: String,
+    auth_type: AuthType,
+    session_resilience: SessionResilience,
+    ring_ceiling_mb: u32,
+    group_id: Option<String>,
+    onekey_credential_id: Option<String>,
+}
+
 pub struct SshServerView {
     node_id: String,
     /// Node metadata (mainly uses name as header title).
@@ -171,6 +194,11 @@ pub struct SshServerView {
     latency_ms: Option<u64>,
     is_testing: bool,
     scroll_state: ClippedScrollStateHandle,
+    /// Snapshot of all form values as of the last DB load / successful save.
+    /// The Save button is enabled only while the current form differs from this
+    /// baseline; after a save `reload` re-captures it, so the button disables
+    /// again — the visible "it worked" feedback the user was missing.
+    baseline_snapshot: Option<ServerFormSnapshot>,
 }
 
 impl SshServerView {
@@ -275,6 +303,7 @@ impl SshServerView {
             latency_ms: None,
             is_testing: false,
             scroll_state: ClippedScrollStateHandle::default(),
+            baseline_snapshot: None,
         };
         me.reload(ctx);
 
@@ -300,8 +329,10 @@ impl SshServerView {
                 EditorEvent::Edited(_) | EditorEvent::Enter => {
                     if me.status.is_some() {
                         me.status = None;
-                        ctx.notify();
                     }
+                    // Re-render so the Save button re-evaluates its dirty state on
+                    // every edit (not only when a status banner is cleared).
+                    ctx.notify();
                 }
                 EditorEvent::Blurred => {
                     // When losing focus, clear own selection too, to prevent
@@ -491,6 +522,9 @@ impl SshServerView {
         self.rebuild_group_dropdown(ctx);
         self.rebuild_onekey_credential_dropdown(ctx);
         self.sync_onekey_manager_row_states();
+        // Re-baseline: the form now reflects the persisted state, so it is "clean"
+        // (Save stays disabled until the next edit).
+        self.baseline_snapshot = Some(self.current_form_snapshot(ctx));
         ctx.notify();
     }
 
@@ -645,6 +679,39 @@ impl SshServerView {
 
     fn current_text(&self, editor: &ViewHandle<EditorView>, app: &AppContext) -> String {
         editor.as_ref(app).buffer_text(app)
+    }
+
+    /// Capture the current form values into a snapshot for dirty-tracking.
+    fn current_form_snapshot(&self, app: &AppContext) -> ServerFormSnapshot {
+        ServerFormSnapshot {
+            name: self.current_text(&self.name_editor, app),
+            host: self.current_text(&self.host_editor, app),
+            port: self.current_text(&self.port_editor, app),
+            user: self.current_text(&self.user_editor, app),
+            password: self.current_text(&self.password_editor, app),
+            key_path: self.current_text(&self.key_path_editor, app),
+            onekey_label: self.current_text(&self.onekey_label_editor, app),
+            onekey_user: self.current_text(&self.onekey_user_editor, app),
+            onekey_key_path: self.current_text(&self.onekey_key_path_editor, app),
+            root_password: self.current_text(&self.root_password_editor, app),
+            startup_command: self.current_text(&self.startup_command_editor, app),
+            notes: self.current_text(&self.notes_editor, app),
+            auth_type: self.auth_type,
+            session_resilience: self.session_resilience,
+            ring_ceiling_mb: self.ring_ceiling_mb,
+            group_id: self.current_group_id.clone(),
+            onekey_credential_id: self.selected_onekey_credential_id.clone(),
+        }
+    }
+
+    /// Whether the form differs from the last loaded/saved baseline. Without a
+    /// baseline (e.g. the DB load failed) we treat the form as dirty so Save
+    /// stays usable.
+    fn is_dirty(&self, app: &AppContext) -> bool {
+        match &self.baseline_snapshot {
+            Some(baseline) => self.current_form_snapshot(app) != *baseline,
+            None => true,
+        }
     }
 
     /// Get currently selected group ID.
@@ -1597,8 +1664,8 @@ impl SshServerView {
         }
     }
 
-    fn render_save_button(&self, appearance: &Appearance) -> Box<dyn Element> {
-        appearance
+    fn render_save_button(&self, appearance: &Appearance, enabled: bool) -> Box<dyn Element> {
+        let mut builder = appearance
             .ui_builder()
             .button(ButtonVariant::Accent, self.save_btn_state.clone())
             .with_style(UiComponentStyles {
@@ -1614,7 +1681,19 @@ impl SshServerView {
                 font_size: Some(13.0),
                 ..Default::default()
             })
-            .with_centered_text_label(crate::t!("workspace-left-panel-ssh-manager-save"))
+            // Muted, non-interactive look when there are no unsaved changes, so the
+            // button visibly communicates "nothing to save" rather than looking
+            // clickable but doing nothing.
+            .with_disabled_styles(UiComponentStyles {
+                background: Some(internal_colors::neutral_4(appearance.theme()).into()),
+                font_color: Some(internal_colors::neutral_5(appearance.theme())),
+                ..Default::default()
+            })
+            .with_centered_text_label(crate::t!("workspace-left-panel-ssh-manager-save"));
+        if !enabled {
+            builder = builder.disabled();
+        }
+        builder
             .build()
             .on_click(move |ctx, _, _| ctx.dispatch_typed_action(SshServerAction::Save))
             .finish()
@@ -2330,7 +2409,7 @@ impl View for SshServerView {
             .with_spacing(8.0)
             .with_child(self.render_test_button(appearance))
             .with_child(self.render_connect_button(appearance))
-            .with_child(self.render_save_button(appearance))
+            .with_child(self.render_save_button(appearance, self.is_dirty(app)))
             .with_main_axis_size(MainAxisSize::Min)
             .finish();
         let header = Flex::row()
