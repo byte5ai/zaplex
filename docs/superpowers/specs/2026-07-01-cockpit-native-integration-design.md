@@ -59,38 +59,44 @@ Every claudeplex feature, and where it lives natively. **Nothing is dropped.**
 | Account **drill-in** detail | cockpit pane detail/filter mode | Increment C2 |
 | **Codex** (net-new; claudeplex is Claude-only) | first-class in the spine already → **more than claudeplex** | done |
 
-## 3. Native surfaces
+## 3. Native surfaces — three glance tiers (main-pane-vs-sidebar principle)
 
-Three complementary surfaces, each on an existing zaplex mechanism — not one monolith.
+Principle (user, approved 2026-07-01): the **main-area pane** is for the *overview /
+deep dive* — big, roomy, nothing cramped; the **sidebar** is for what you want in view /
+one click away *while working* — because nothing in the main area gets switched or
+overlaid (your terminals/agents stay put). Applied, the cockpit is three tiers, each on
+an existing zaplex mechanism — not one monolith.
 
-### 3.1 The Cockpit pane (the dashboard) — pane-mode, like FM
-The `OverviewMain` equivalent is a **pane in the main area** (the FM/SFTP pane
-mechanism, `PaneContent`), openable as tab/split, promotable, multi-instance. Contents
-(over the data spine): aggregate header (accounts · cost 5h·today·wk · attention count)
-+ a responsive **account-card grid** (`minmax(320px,1fr)`): accent stripe, key + label +
-**plan badge** + status, email, **reset timers** (5h/wk), **heat bars** (5h/wk, later
-per-model), **cost + tokens** (5h·today·wk). Card → drill-in (detail mode of the same
-pane). This is the roomy dashboard both references use.
+### 3.1 Toolbelt icon — the ambient indicator (always visible, even collapsed)
+The Cockpit toolbelt icon carries an **attention badge**: colour = highest account heat,
+count = "needs-you" sessions. You read the fleet's state without opening anything.
 
-### 3.2 The live inventory IS zaplex's sessions (the key adaptation)
-claudeplex keeps a **parallel** agent registry. zaplex must **not**. The cockpit's
-"sessions" are unified from what zaplex already knows:
-- **Live panes** — terminal panes currently running a CLI agent (local or remote), with
-  their real state (running/waiting-for-input/idle) from the terminal/agent model.
-- **Daemon sessions** — persistent remote sessions (attached or detached) from the
-  remote-session manager, across hosts.
-- **Historic** — sessions discovered from CLI transcripts (`~/.claude`/`~/.codex`),
-  for accounts with no live pane.
-One session model, correlated to its account (by the config-dir/env it launched under)
-and host. "Open" = **focus the existing pane** (or adopt a daemon session, or open its
-transcript via ConversationListView) — never spawn a duplicate.
+### 3.2 Cockpit sidebar (toolbelt tab) — quick-access while working
+A docked toolbelt tab (like SSH/Files), one click / hotkey, **no main-area switch**:
+- compact **account list** — mini heat bar / %, plan badge, live dot, "needs-you" marker;
+- **live-session quick-list** (active/waiting) → click **focuses the existing pane**
+  (never a duplicate);
+- **quick-launch** — "New Agent" (on freest / on account) opens a pane in the main area.
+The operational daily-driver. This tier + the badge ARE the "glanceable" half — there is
+no separate tab-bar widget.
 
-### 3.3 Ambient attention (glanceable, no pane needed)
-The mission is *reduce mental load at a glance*. So a **lightweight attention indicator**
-lives in always-visible chrome (tab-bar/status area): the max account heat + a
-"needs-you" count (waiting sessions). Click → open the Cockpit pane. This is the
-"glanceable" value without forcing the dashboard open — the ambient half of the FM-style
-"you choose where it lives" philosophy.
+### 3.3 Cockpit pane (main area) — the overview / deep dive, pane-mode like FM
+Opened when you want the big picture (`PaneContent`, tab/split/promotable, multi-instance):
+the full responsive **account-card grid** (`minmax(320px,1fr)`) — 5h/today/week cost+tokens
+matrix, all **heat bars** (5h/wk, later per-model), **reset timers**, session breakdown,
+aggregate header — plus account **drill-in** and (later) history/trends. The roomy
+dashboard both references use.
+
+### 3.4 The live inventory IS zaplex's sessions (the key adaptation)
+Both the sidebar's session list and the pane's session sections draw from ONE unified
+inventory — never a parallel registry:
+- **Live panes** — terminal panes running a CLI agent (local or remote), with real state
+  (running / waiting-for-input / idle) from the terminal/agent model.
+- **Daemon sessions** — persistent remote sessions (attached/detached) across hosts.
+- **Historic** — sessions discovered from CLI transcripts, for accounts with no live pane.
+Correlated to account (by the config-dir/env launched under) + host. "Open" = **focus the
+existing pane** / adopt a daemon session / open its transcript (ConversationListView) —
+never a duplicate. This is the anti-foreign-body core.
 
 ## 4. Actions, expressed natively
 - **Launch agent** → the existing CLI-agent launch, extended with **account routing**:
@@ -105,12 +111,16 @@ lives in always-visible chrome (tab-bar/status area): the max account heat + a
 ## 5. Revised increment plan (native-first)
 
 - **C1 — Data spine.** ✅ done (`zaplex_cockpit` + `CockpitModel` + watch + settings).
-- **C2 — Cockpit pane (dashboard).** Account-card grid over the spine (plan/heat/cost/
-  reset), aggregate header, drill-in detail; pure formatting helpers unit-tested. + the
-  `--json`/debug snapshot dump. *(This is "Increment 2 UI", now as a native pane.)*
+- **C2 — Sidebar + pane (spine-backed, read-only). Sidebar first (approved).** Both
+  surfaces share the data + card/formatting components (formatting helpers headless-
+  tested). Order: (a) the Cockpit **sidebar** toolbelt tab — account glance
+  (plan/heat/cost/reset) + the toolbelt icon with the heat part of the attention badge;
+  (b) the Cockpit **pane** — the full card grid + drill-in over the same components; +
+  the `--json`/debug snapshot dump.
 - **C3 — Unified live inventory.** Correlate live panes + daemon sessions + transcript
-  history into one account-scoped session list with status; "open/adopt/focus" wiring;
-  ambient attention indicator. Adds per-model heat to the spine.
+  history into one account-scoped session list with status; powers the sidebar's
+  **session quick-list + "needs-you" marker**, the pane's session sections, and the
+  badge's count; adds per-model heat. "open/adopt/focus" wiring.
 - **C4 — Orchestration.** New-Agent launch with **account routing** + **launch-on-freest**;
   repo/worktree picker; remote-host target via the daemon.
 - **C5 — Multi-host aggregation + history.** Aggregate per-host snapshots over the
