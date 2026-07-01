@@ -93,6 +93,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     AltScreenReporting::register(ctx);
     UndoCloseSettings::register(ctx);
     SshSettings::register(ctx);
+    crate::cockpit::CockpitSettings::register(ctx);
     VimBannerSettings::register(ctx);
     SharedSessionSettings::register(ctx);
     WarpDriveSettings::register(ctx);

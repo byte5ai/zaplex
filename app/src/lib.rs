@@ -16,6 +16,7 @@ mod banner;
 mod changelog_model;
 mod chip_configurator;
 mod cloud_object;
+mod cockpit;
 mod code;
 mod code_review;
 mod coding_entrypoints;
@@ -1628,6 +1629,9 @@ fn initialize_app(
     // FileMCPWatcher must be registered before FileBasedMCPManager, which subscribes to it.
     ctx.add_singleton_model(FileMCPWatcher::new);
     ctx.add_singleton_model(FileBasedMCPManager::new);
+
+    // Cockpit data spine: registered after HomeDirectoryWatcher (which it subscribes to).
+    ctx.add_singleton_model(cockpit::CockpitModel::new);
 
     // TemplatableMCPServerManager must be registered after UpdateManager and MCPServerManager so it can migrate legacy MCPs on start up
     // It should also be registered after FileBasedMCPManager so it can receive file-based server updates.
