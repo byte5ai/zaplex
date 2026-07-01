@@ -1,0 +1,19 @@
+[package]
+name = "zaplex_cockpit"
+version = "0.1.0"
+edition = "2021"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "zaplex cockpit data spine: Claude/Codex account discovery + usage/cost/heat aggregation (read-only, never reads secrets)"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+log.workspace = true
+walkdir.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
