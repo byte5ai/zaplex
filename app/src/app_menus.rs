@@ -44,7 +44,8 @@ pub fn menu_bar(ctx: &mut AppContext) -> MenuBar {
         make_new_tab_menu(ctx),
         make_new_blocks_menu(ctx),
         make_new_ai_menu(ctx),
-        make_new_drive_menu(ctx),
+        // Zaplex Drive (inherited Warp Drive) is out of scope; its menu is de-listed
+        // but `make_new_drive_menu` is preserved as a template.
         make_new_window_menu(),
         make_new_help_menu(),
     ])
@@ -316,8 +317,6 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
 
 fn make_new_view_menu(ctx: &AppContext) -> Menu {
     let mut items = vec![
-        updateable_custom_item_without_checkmark(CustomAction::ToggleWarpDrive, ctx),
-        MenuItem::Separator,
         updateable_custom_item_without_checkmark(CustomAction::CommandPalette, ctx),
         updateable_custom_item_without_checkmark(CustomAction::NavigationPalette, ctx),
         updateable_custom_item_without_checkmark(CustomAction::LaunchConfigPalette, ctx),
@@ -522,6 +521,11 @@ fn make_new_blocks_menu(ctx: &AppContext) -> Menu {
     Menu::new(&crate::t!("app-menu-blocks"), items)
 }
 
+// Preserved as a template: Zaplex Drive (inherited Warp Drive) is out of scope and
+// its menu is de-listed (not built into the menu bar), but the builder is kept so a
+// future sidebar/menu can reuse it. See
+// docs/superpowers/specs/2026-07-01-self-contained-cleanup-plan.md
+#[allow(dead_code)]
 fn make_new_drive_menu(ctx: &AppContext) -> Menu {
     let mut items = vec![
         updateable_custom_item_without_checkmark(CustomAction::NewPersonalWorkflow, ctx),

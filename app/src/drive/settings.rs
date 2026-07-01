@@ -24,9 +24,13 @@ define_settings_group!(WarpDriveSettings, settings: [
         private: true,
     },
     // Controls whether Zaplex Drive appears in the tools panel, command palette, and command search.
+    // Zaplex Drive (inherited Warp Drive) is out of scope, so it is disabled by default: this is the
+    // master switch that also gates the Drive keybindings (flags::ENABLE_ZAPLEX_DRIVE) and the
+    // command-palette / command-search entries. The code is preserved as a template — see
+    // docs/superpowers/specs/2026-07-01-self-contained-cleanup-plan.md
     enable_warp_drive: EnableWarpDrive {
         type: bool,
-        default: true,
+        default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
