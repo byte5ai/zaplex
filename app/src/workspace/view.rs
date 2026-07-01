@@ -3538,6 +3538,7 @@ impl Workspace {
                 LeftPanelDisplayedTab::SshManager => ToolPanelView::SshManager,
                 LeftPanelDisplayedTab::ServerFileBrowser => ToolPanelView::ServerFileBrowser,
                 LeftPanelDisplayedTab::SkillManager => ToolPanelView::SkillManager,
+                LeftPanelDisplayedTab::Cockpit => ToolPanelView::Cockpit,
             };
             lp.restore_active_view_from_snapshot(active_view, ctx);
             lp.set_active_pane_group(pane_group.clone(), &self.working_directories_model, ctx);
@@ -16014,6 +16015,7 @@ impl Workspace {
                         ToolPanelView::SkillManager => {
                             crate::t!("workspace-left-panel-skill-manager")
                         }
+                        ToolPanelView::Cockpit => crate::t!("workspace-left-panel-cockpit"),
                     }
                 } else {
                     crate::t!("workspace-tools-panel-tooltip")
@@ -16083,6 +16085,7 @@ impl Workspace {
                 ToolPanelView::SkillManager => {
                     crate::t!("workspace-left-panel-skill-manager")
                 }
+                ToolPanelView::Cockpit => crate::t!("workspace-left-panel-cockpit"),
             }
         } else {
             crate::t!("workspace-tools-panel-tooltip")
@@ -18819,8 +18822,13 @@ impl Workspace {
     fn compute_left_panel_views(ctx: &AppContext) -> Vec<ToolPanelView> {
         let mut views = vec![];
 
-        // Remote-dev core first: SSH hosts, then remote files — this is the product's
-        // primary surface, so it leads the toolbelt.
+        // Cockpit (account/usage/attention overview) leads the toolbelt — the
+        // glanceable daily-driver. Gated by the cockpit.enabled setting.
+        if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+            views.push(ToolPanelView::Cockpit);
+        }
+
+        // Remote-dev core: SSH hosts, then remote files.
         // openWarp-only: the SSH manager, no feature flag, always shown by default.
         views.push(ToolPanelView::SshManager);
         if FeatureFlag::ServerFileBrowser.is_enabled() && FeatureFlag::SshRemoteServer.is_enabled() {

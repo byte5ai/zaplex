@@ -31,6 +31,7 @@ use crate::pane_group::{PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesMo
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
 use crate::server::telemetry::{FileTreeSource, WarpDriveSource};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
+use crate::cockpit::CockpitPanel;
 use crate::skill_manager::{SkillManagerPanel, SkillManagerPanelEvent};
 use crate::ssh_manager::SshManagerPanel;
 use crate::terminal::model::session::Session;
@@ -80,6 +81,7 @@ struct MouseStateHandles {
     ssh_manager_button: MouseStateHandle,
     server_file_browser_button: MouseStateHandle,
     skill_manager_button: MouseStateHandle,
+    cockpit_button: MouseStateHandle,
 }
 
 #[derive(Clone, Debug)]
@@ -91,6 +93,7 @@ pub enum LeftPanelAction {
     SshManager,
     ServerFileBrowser,
     SkillManager,
+    Cockpit,
 }
 
 pub enum LeftPanelEvent {
@@ -156,6 +159,7 @@ pub enum ToolPanelView {
     SshManager,
     ServerFileBrowser,
     SkillManager,
+    Cockpit,
 }
 
 /// Encapsulates the active view state to enforce that all mutations go through
@@ -225,6 +229,7 @@ pub struct LeftPanelView {
     ssh_manager_view: ViewHandle<SshManagerPanel>,
     server_file_browser_view: ViewHandle<ServerFileBrowserView>,
     skill_manager_view: ViewHandle<SkillManagerPanel>,
+    cockpit_view: ViewHandle<CockpitPanel>,
     active_view: active_view_state::ActiveViewState,
     toolbelt_buttons: Vec<ToolbeltButtonConfig>,
     active_pane_group: Option<WeakViewHandle<PaneGroup>>,
@@ -272,6 +277,7 @@ impl LeftPanelView {
         let ssh_manager_view = ctx.add_typed_action_view(SshManagerPanel::new);
         let server_file_browser_view = ctx.add_typed_action_view(ServerFileBrowserView::new);
         let skill_manager_view = ctx.add_typed_action_view(SkillManagerPanel::new);
+        let cockpit_view = ctx.add_typed_action_view(CockpitPanel::new);
         ctx.subscribe_to_view(&ssh_manager_view, |_me, _, event, ctx| {
             use crate::ssh_manager::SshManagerPanelEvent;
             match event {
@@ -421,6 +427,7 @@ impl LeftPanelView {
             ssh_manager_view,
             server_file_browser_view,
             skill_manager_view,
+            cockpit_view,
             active_view: active_view_state::new(active_view),
             toolbelt_buttons,
             active_pane_group: None,
@@ -463,6 +470,7 @@ impl LeftPanelView {
                 (ToolPanelView::SshManager, ToolPanelView::SshManager) => true,
                 (ToolPanelView::ServerFileBrowser, ToolPanelView::ServerFileBrowser) => true,
                 (ToolPanelView::SkillManager, ToolPanelView::SkillManager) => true,
+                (ToolPanelView::Cockpit, ToolPanelView::Cockpit) => true,
                 _ => std::mem::discriminant(v) == std::mem::discriminant(&current_view),
             }
         });
@@ -589,6 +597,18 @@ impl LeftPanelView {
                     action: LeftPanelAction::SkillManager,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
+                    tooltip_keybinding_names,
+                }
+            }
+            ToolPanelView::Cockpit => {
+                let tooltip_keybinding_names = Vec::new();
+                ToolbeltButtonConfig {
+                    icon: Icon::Grid,
+                    active_icon: None,
+                    tooltip_text: crate::t!("workspace-left-panel-cockpit"),
+                    action: LeftPanelAction::Cockpit,
+                    render_with_active_state: false,
+                    tooltip_keybinding: None,
                     tooltip_keybinding_names,
                 }
             }
@@ -870,6 +890,9 @@ impl LeftPanelView {
             ToolPanelView::SkillManager => {
                 ctx.focus(&self.skill_manager_view);
             }
+            ToolPanelView::Cockpit => {
+                ctx.focus(&self.cockpit_view);
+            }
         }
     }
 
@@ -1045,6 +1068,7 @@ impl LeftPanelView {
                 LeftPanelAction::SkillManager => {
                     self.active_view.get() == ToolPanelView::SkillManager
                 }
+                LeftPanelAction::Cockpit => self.active_view.get() == ToolPanelView::Cockpit,
             };
         }
     }
@@ -1195,6 +1219,9 @@ impl LeftPanelView {
             LeftPanelAction::SkillManager => {
                 active_view_state::set(self, ToolPanelView::SkillManager, ctx);
             }
+            LeftPanelAction::Cockpit => {
+                active_view_state::set(self, ToolPanelView::Cockpit, ctx);
+            }
         }
     }
 
@@ -1297,6 +1324,7 @@ impl View for LeftPanelView {
                 ToolPanelView::SshManager => ctx.focus(&self.ssh_manager_view),
                 ToolPanelView::ServerFileBrowser => ctx.focus(&self.server_file_browser_view),
                 ToolPanelView::SkillManager => ctx.focus(&self.skill_manager_view),
+                ToolPanelView::Cockpit => ctx.focus(&self.cockpit_view),
             }
         }
     }
@@ -1314,6 +1342,7 @@ impl View for LeftPanelView {
             self.mouse_state_handles.ssh_manager_button.clone(),
             self.mouse_state_handles.server_file_browser_button.clone(),
             self.mouse_state_handles.skill_manager_button.clone(),
+            self.mouse_state_handles.cockpit_button.clone(),
         ];
 
         // If there is only one button in the toolbelt row,
@@ -1391,6 +1420,14 @@ impl View for LeftPanelView {
             ToolPanelView::SkillManager => Shrinkable::new(
                 1.0,
                 Container::new(ChildView::new(&self.skill_manager_view).finish())
+                    .with_padding_left(2.)
+                    .with_padding_right(2.)
+                    .finish(),
+            )
+            .finish(),
+            ToolPanelView::Cockpit => Shrinkable::new(
+                1.0,
+                Container::new(ChildView::new(&self.cockpit_view).finish())
                     .with_padding_left(2.)
                     .with_padding_right(2.)
                     .finish(),

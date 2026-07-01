@@ -13,10 +13,14 @@
 
 pub mod claude;
 pub mod codex;
+pub mod format;
 pub mod pricing;
 pub mod types;
 pub mod windows;
 
+pub use format::{
+    format_cost, format_reset, format_tokens, heat_fill, heat_pct_label, HeatLevel,
+};
 pub use pricing::{ModelPrice, PricingTable};
 pub use types::{Account, AccountUsage, CockpitSnapshot, Provider, UsageEntry, WindowTotals};
 pub use windows::{
