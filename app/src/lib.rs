@@ -60,7 +60,6 @@ mod plugin;
 mod prefix;
 #[cfg(target_os = "macos")]
 mod preview_config_migration;
-mod pricing;
 mod profiling;
 mod projects;
 mod prompt;
@@ -1251,7 +1250,6 @@ fn initialize_app(
     ctx.add_singleton_model(|_| SettingsPaneManager::new());
     ctx.add_singleton_model(|_| AIFactManager::new());
     ctx.add_singleton_model(|_| ExecutionProfileEditorManager::default());
-    ctx.add_singleton_model(|_| pricing::PricingInfoModel::new());
     ctx.add_singleton_model(|_| {
         ManagedSecretManager::new(
             Arc::new(local_managed_secrets::DisabledManagedSecretsClient),
