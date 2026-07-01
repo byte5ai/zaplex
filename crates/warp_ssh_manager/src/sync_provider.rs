@@ -61,7 +61,10 @@ pub struct SyncServer {
 }
 
 fn default_session_resilience() -> String {
-    SessionResilience::default().as_db_str().to_string()
+    // A sync payload predating this field represents a host from before persistence
+    // existed — keep it `off`. (Explicit, not the enum default, which is now
+    // `persist_only` for *new* hosts; we must not silently upgrade synced hosts.)
+    SessionResilience::Off.as_db_str().to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

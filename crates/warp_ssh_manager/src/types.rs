@@ -60,16 +60,18 @@ impl AuthType {
 
 /// Per-host opt-in for the native persistent remote-session layer.
 ///
-/// `Off` (the default) keeps today's behavior: SSH is a local PTY running the
-/// `ssh` binary. The other tiers make the session daemon-hosted — the remote
-/// daemon owns the PTY and a replay buffer, so the session survives transport
-/// drops and can be reattached.
+/// `PersistOnly` is the **default for new hosts** — persistence is a core zaplex
+/// feature (it's what makes a session survive transport drops), so new hosts opt
+/// in by default. It only actually engages for headless-capable (key-auth) hosts;
+/// others transparently fall back to the classic local-PTY `ssh` path. `Off`
+/// keeps that classic behavior. Existing saved hosts keep their stored value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default, Serialize, Deserialize)]
 pub enum SessionResilience {
     /// No persistence; classic local-PTY-runs-ssh.
-    #[default]
     Off,
     /// Daemon-hosted session with server-side persistence + replay/reattach.
+    /// Default for new hosts.
+    #[default]
     PersistOnly,
     /// Persistence plus the mosh-grade UDP transport (Phase B3).
     PersistPlusMosh,

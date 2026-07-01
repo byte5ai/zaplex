@@ -459,7 +459,11 @@ fn server_from_row(r: SshServerRow) -> Result<SshServerInfo, SshRepositoryError>
         credential_id: r.credential_id,
         // Lenient on purpose: an unknown value (e.g. written by a newer client)
         // degrades to `Off` rather than making the whole server unloadable.
-        session_resilience: SessionResilience::parse(&r.session_resilience).unwrap_or_default(),
+        // Explicit `Off` (not `unwrap_or_default`, whose default is now `PersistOnly`
+        // for *new* hosts) so a corrupt stored value never silently upgrades a
+        // saved host to persistent.
+        session_resilience: SessionResilience::parse(&r.session_resilience)
+            .unwrap_or(SessionResilience::Off),
         ring_ceiling_mb: r.ring_ceiling_mb.max(0) as u32,
     })
 }

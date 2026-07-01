@@ -2407,6 +2407,14 @@ impl View for SshServerView {
             }
         }
 
+        // Session persistence — a core zaplex feature (survives transport drops),
+        // so it sits prominently right under the auth section, not buried at the
+        // bottom. The scrollback-ceiling picker only matters when it's enabled.
+        col.add_child(self.render_resilience_toggle(appearance));
+        if self.session_resilience.is_enabled() {
+            col.add_child(self.render_ring_ceiling(appearance));
+        }
+
         // Startup command
         col.add_child(self.render_text_field(
             &crate::t!("workspace-left-panel-ssh-manager-startup-command"),
@@ -2425,12 +2433,7 @@ impl View for SshServerView {
             &self.notes_editor,
             appearance,
         ));
-        // Session persistence (native remote-session layer)
-        col.add_child(self.render_resilience_toggle(appearance));
-        // The scrollback-ceiling picker only matters for daemon-hosted sessions.
-        if self.session_resilience.is_enabled() {
-            col.add_child(self.render_ring_ceiling(appearance));
-        }
+        // (Session persistence moved up, directly under the auth section.)
 
         let theme = appearance.theme();
         let inner = ConstrainedBox::new(
