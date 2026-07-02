@@ -2801,6 +2801,7 @@ workspace-left-panel-ssh-manager-menu-edit = Edit
 workspace-left-panel-ssh-manager-menu-connect = Connect
 workspace-left-panel-ssh-manager-menu-sessions = Running sessions
 workspace-left-panel-ssh-manager-menu-sftp = File Manager
+workspace-left-panel-ssh-manager-connecting = connecting…
 workspace-left-panel-ssh-manager-sessions-loading = Loading sessions…
 workspace-left-panel-ssh-manager-sessions-empty = No running sessions
 workspace-left-panel-ssh-manager-sessions-not-persistent = Set "Session persistence" to Persistent to use this

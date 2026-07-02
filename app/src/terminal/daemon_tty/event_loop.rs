@@ -69,6 +69,12 @@ pub(super) struct EventLoop {
     /// Byte offset just past the last `SessionOutput` byte we've rendered. Sent
     /// as `last_seq` on re-attach so the daemon replays only what we missed.
     last_seq: u64,
+    /// Human-readable host label for in-tab status lines ("⚡ … on <host>").
+    host_label: String,
+    /// Whether the one-time "⚡ Zaplexify active" welcome has been shown, so an
+    /// adopt's first attach welcomes while later re-attaches announce the
+    /// reconnect instead.
+    welcomed: bool,
 }
 
 impl EventLoop {
@@ -83,9 +89,11 @@ impl EventLoop {
         open_params: OpenSessionParams,
         adopt_pty_session_id: Option<String>,
         install_progress_rx: Option<Receiver<String>>,
+        host_label: String,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let mut event_loop = Self::new(model, channel_event_listener, connection_session_id);
+        event_loop.host_label = host_label;
         match adopt_pty_session_id {
             // Adopt an existing daemon session: attach + replay on connect.
             Some(id) => event_loop.pty_session_id = Some(id),
@@ -215,6 +223,8 @@ impl EventLoop {
             pending_open: None,
             startup_command: None,
             last_seq: 0,
+            host_label: String::new(),
+            welcomed: false,
         }
     }
 
@@ -248,6 +258,21 @@ impl EventLoop {
                     me.process_pty_bytes(&attached.replay);
                 }
                 me.last_seq = attached.base_seq + attached.replay.len() as u64;
+                // Stage the payoff moment: an adopt's first attach welcomes the
+                // user into their running session; a reconnect after a drop
+                // states plainly that nothing was lost.
+                if me.welcomed {
+                    me.write_zaplexify(&format!(
+                        "Reconnected to {} — session restored, nothing lost.",
+                        me.host_label
+                    ));
+                } else {
+                    me.write_zaplexify(&format!(
+                        "Re-attached to your running session on {} — right where you left off.",
+                        me.host_label
+                    ));
+                    me.welcomed = true;
+                }
                 // Transport is back and we're re-attached — flush input buffered
                 // during the outage so keystrokes/resizes aren't lost (§9).
                 me.flush_pending_input(ctx);
@@ -345,6 +370,13 @@ impl EventLoop {
     fn on_session_opened(&mut self, pty_session_id: String, ctx: &mut ModelContext<Self>) {
         log::info!("daemon_tty: session opened, pty_session_id={pty_session_id}");
         self.pty_session_id = Some(pty_session_id.clone());
+        // Stage the moment: the user should SEE they're in a persistent session
+        // (the whole point of zaplex), not have to infer it. One line, once.
+        self.write_zaplexify(&format!(
+            "Zaplexify active — persistent session on {}. Disconnects won't lose your work.",
+            self.host_label
+        ));
+        self.welcomed = true;
         // Render output the daemon produced before this response arrived (it
         // auto-attaches and starts the shell immediately), so the initial
         // shell/bootstrap output isn't missing from a fresh tab. In seq order.
@@ -502,6 +534,13 @@ impl EventLoop {
     /// progress and the red error notices.
     fn write_warning(&mut self, text: &str) {
         let line = format!("\r\n\x1b[1;33m[zaplex] {text}\x1b[0m\r\n");
+        self.process_pty_bytes(line.as_bytes());
+    }
+
+    /// The Zaplexify signature line — bold cyan with the ⚡ mark. Used for the
+    /// persistent-session welcome and the reconnect/re-attach payoff moments.
+    fn write_zaplexify(&mut self, text: &str) {
+        let line = format!("\r\n\x1b[1;36m⚡ {text}\x1b[0m\r\n");
         self.process_pty_bytes(line.as_bytes());
     }
 

@@ -4843,6 +4843,7 @@ impl PaneGroup {
                     request.open_params,
                     request.adopt_pty_session_id,
                     request.install_progress_rx,
+                    request.host_label,
                     ctx,
                 );
             let terminal_view = terminal_manager.as_ref(ctx).view();

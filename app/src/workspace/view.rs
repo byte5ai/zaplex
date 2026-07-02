@@ -5710,6 +5710,7 @@ impl Workspace {
                     },
                     adopt_pty_session_id: None,
                     install_progress_rx,
+                    host_label: server_owned.host.clone(),
                 };
 
                 // Create the daemon-backed tab: its event loop subscribes for
@@ -5909,6 +5910,7 @@ impl Workspace {
             open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
             adopt_pty_session_id: Some(pty_session_id.clone()),
             install_progress_rx: None,
+            host_label: server.host.clone(),
         };
 
         self.add_tab_with_pane_layout(

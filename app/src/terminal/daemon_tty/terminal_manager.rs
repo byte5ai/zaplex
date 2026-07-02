@@ -60,6 +60,9 @@ pub struct DaemonSessionRequest {
     /// remote-server binary is being set up. `None` for the common case where
     /// the daemon is already installed.
     pub install_progress_rx: Option<Receiver<String>>,
+    /// Human-readable host label (the SSH host name), for in-tab status lines
+    /// ("⚡ persistent session on <host>", reconnect notices).
+    pub host_label: String,
 }
 
 /// A [`crate::terminal::TerminalManager`] whose PTY lives in the remote daemon
@@ -100,6 +103,7 @@ impl TerminalManager {
         open_params: OpenSessionParams,
         adopt_pty_session_id: Option<String>,
         install_progress_rx: Option<Receiver<String>>,
+        host_label: String,
         ctx: &mut AppContext,
     ) -> ModelHandle<Box<dyn crate::terminal::TerminalManager>> {
         // Create all the channels we need for communication.
@@ -151,6 +155,7 @@ impl TerminalManager {
             open_params,
             adopt_pty_session_id,
             install_progress_rx,
+            host_label,
             ctx,
         );
 
@@ -219,6 +224,7 @@ impl TerminalManager {
         open_params: OpenSessionParams,
         adopt_pty_session_id: Option<String>,
         install_progress_rx: Option<Receiver<String>>,
+        host_label: String,
         ctx: &mut AppContext,
     ) -> ModelHandle<EventLoop> {
         ctx.add_model(|ctx| {
@@ -231,6 +237,7 @@ impl TerminalManager {
                 open_params,
                 adopt_pty_session_id,
                 install_progress_rx,
+                host_label,
                 ctx,
             )
         })

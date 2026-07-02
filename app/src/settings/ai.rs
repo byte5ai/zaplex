@@ -1148,13 +1148,22 @@ fn default_true_bool() -> bool {
 }
 
 impl PerAgentSettings {
-    /// Return the default value for the given agent. titlebar is enabled by default for Claude/Codex/Gemini/Antigravity.
-    pub fn default_for(agent: CLIAgent) -> Self {
-        let titlebar = matches!(
-            agent,
-            CLIAgent::Claude | CLIAgent::Codex | CLIAgent::Gemini | CLIAgent::Antigravity
-        );
-        Self { toolbar: true, tabmenu: true, titlebar }
+    /// Return the default value for the given agent.
+    ///
+    /// zaplex: the title-bar quick-launch buttons are OFF by default for all
+    /// agents. They are app-level controls with no explicit target — clicking
+    /// one opens a new LOCAL tab in the default directory, which is
+    /// deterministically wrong in a multi-session remote-dev workflow (agent
+    /// placement — host + working dir — governs e.g. CLAUDE.md discovery and
+    /// must be an explicit choice). They return as the cockpit C4 launcher
+    /// ("Launch <agent> on <host> in <dir>"); until then the buttons stay
+    /// de-listed but user-enableable in Settings → AI.
+    pub fn default_for(_agent: CLIAgent) -> Self {
+        Self {
+            toolbar: true,
+            tabmenu: true,
+            titlebar: false,
+        }
     }
 }
 

@@ -234,6 +234,14 @@ pub struct SshManagerPanel {
     sessions_expanded: std::collections::HashSet<String>,
     /// Server node_ids with an in-flight session fetch.
     sessions_loading: std::collections::HashSet<String>,
+    /// Server node_ids with an in-flight connect (daemon preflight/install or
+    /// classic open). Gives instant feedback on the row and guards against
+    /// double-triggering while the preflight runs. Cleared by a bounded timer
+    /// (the preflight itself is bounded), so a stray entry can't stick.
+    connecting: std::collections::HashSet<String>,
+    /// Server node_ids whose host has session resilience (Zaplexify persistent
+    /// sessions) enabled — rendered with the ⚡ mark. Refreshed with the tree.
+    resilient_hosts: std::collections::HashSet<String>,
     /// Last fetch error per server node_id (shown inline under the host).
     sessions_error: HashMap<String, String>,
     /// Hover/click state per session row (key = "<node_id>:<pty_session_id>").
@@ -270,6 +278,8 @@ impl SshManagerPanel {
             host_sessions: HashMap::new(),
             sessions_expanded: std::collections::HashSet::new(),
             sessions_loading: std::collections::HashSet::new(),
+            connecting: std::collections::HashSet::new(),
+            resilient_hosts: std::collections::HashSet::new(),
             sessions_error: HashMap::new(),
             session_row_states: HashMap::new(),
         };
@@ -311,6 +321,25 @@ impl SshManagerPanel {
                         self.rename_state = None;
                     }
                 }
+                // Refresh which hosts have Zaplexify persistence enabled (⚡ mark).
+                let server_ids: Vec<String> = self
+                    .nodes
+                    .iter()
+                    .filter(|n| matches!(n.kind, NodeKind::Server))
+                    .map(|n| n.id.clone())
+                    .collect();
+                self.resilient_hosts = warp_ssh_manager::with_conn(|c| {
+                    let mut resilient = std::collections::HashSet::new();
+                    for id in &server_ids {
+                        if let Some(server) = SshRepository::get_server(c, id)? {
+                            if server.session_resilience.is_enabled() {
+                                resilient.insert(id.clone());
+                            }
+                        }
+                    }
+                    Ok(resilient)
+                })
+                .unwrap_or_default();
             }
             Err(e) => {
                 log::error!("ssh_manager: failed to load tree: {e:?}");
@@ -630,15 +659,35 @@ impl SshManagerPanel {
         }
     }
 
-    fn dispatch_connect_for(&self, id: &str, ctx: &mut ViewContext<Self>) {
+    fn dispatch_connect_for(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
         let kind = self.nodes.iter().find(|n| n.id == id).map(|n| n.kind);
         if !matches!(kind, Some(NodeKind::Server)) {
+            return;
+        }
+        // Instant acknowledgment + double-trigger guard: the daemon preflight
+        // takes a few seconds before any tab appears; without row feedback the
+        // click feels dead and users click again.
+        if self.connecting.contains(id) {
             return;
         }
         let server = warp_ssh_manager::with_conn(|c| Ok(SshRepository::get_server(c, id)?))
             .ok()
             .flatten();
         if let Some(server) = server {
+            self.connecting.insert(id.to_string());
+            ctx.notify();
+            // Bounded self-clear: the preflight resolves (tab or fallback) well
+            // within this window; a stray entry can't wedge the row.
+            let id_owned = id.to_string();
+            ctx.spawn(
+                async move {
+                    async_io::Timer::after(std::time::Duration::from_secs(10)).await;
+                },
+                move |me, (), ctx| {
+                    me.connecting.remove(&id_owned);
+                    ctx.notify();
+                },
+            );
             ctx.emit(SshManagerPanelEvent::OpenSshTerminal {
                 node_id: id.to_string(),
                 server,
@@ -1989,7 +2038,7 @@ impl SshManagerPanel {
         };
 
         // Use MainAxisSize::Max so the tree node row fills the panel width, eliminating the gap on the right.
-        let row = Flex::row()
+        let mut row_flex = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(ITEM_ICON_TEXT_SPACING)
             .with_child(
@@ -1999,9 +2048,34 @@ impl SshManagerPanel {
             )
             .with_child(chevron_el)
             .with_child(icon_el)
-            .with_child(label_or_editor)
-            .with_main_axis_size(MainAxisSize::Max)
-            .finish();
+            .with_child(label_or_editor);
+        // ⚡ mark: this host opens as a Zaplexify persistent session (survives
+        // disconnects). The mark is the at-a-glance signal in the host list.
+        if self.resilient_hosts.contains(&node.id) {
+            row_flex = row_flex.with_child(
+                Text::new_inline(
+                    "⚡".to_string(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_subheading(),
+                )
+                .with_color(theme.accent().into_solid())
+                .finish(),
+            );
+        }
+        // Instant connect feedback: the daemon preflight runs a few seconds
+        // before any tab appears; show it on the row instead of feeling dead.
+        if self.connecting.contains(&node.id) {
+            row_flex = row_flex.with_child(
+                Text::new_inline(
+                    crate::t!("workspace-left-panel-ssh-manager-connecting"),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_subheading(),
+                )
+                .with_color(theme.sub_text_color(theme.background()).into_solid())
+                .finish(),
+            );
+        }
+        let row = row_flex.with_main_axis_size(MainAxisSize::Max).finish();
 
         let state = self.row_states.get(&node.id).cloned().unwrap_or_default();
         let id_for_click = node.id.clone();
