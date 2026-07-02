@@ -534,6 +534,23 @@ async fn download_remote_server_tarball(download_url: &str, tarball_path: &Path)
     ))
 }
 
+/// Rung-1 reachability probe: can the *host* quickly reach the release tarball? A short
+/// HEAD over the ControlMaster decides host-download (rung 2) vs. client relay (rung 3)
+/// without paying a full download timeout on a locked-down host.
+async fn probe_host_internet(socket_path: &Path) -> bool {
+    let Ok(platform) = detect_remote_platform(socket_path).await else {
+        return false;
+    };
+    let url = remote_server::setup::download_tarball_url(&platform);
+    let cmd = format!("curl -fsI --max-time 3 {url} >/dev/null 2>&1");
+    match remote_server::ssh::run_ssh_command(socket_path, &cmd, std::time::Duration::from_secs(6))
+        .await
+    {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    }
+}
+
 async fn scp_install_fallback(socket_path: &Path) -> Result<()> {
     let platform = detect_remote_platform(socket_path).await?;
     let download_url = remote_server::setup::download_tarball_url(&platform);
@@ -704,10 +721,34 @@ impl RemoteTransport for SshTransport {
                 }
             }
 
-            // PRIMARY: client-push install. Detect the host platform, fetch the matching
-            // binary ON THE CLIENT, and scp it over the existing ControlMaster. The remote
-            // host never needs public-internet access — remote-dev hosts are frequently
-            // locked-down / air-gapped, so we deliberately do NOT run a host-side download.
+            // Install ladder (docs/superpowers/specs/2026-07-02-daemon-install-ladder-design.md):
+            //   rung 1 reachability probe → rung 2 host-side download → rung 3 client relay.
+            //
+            // Rung 1: a fast probe so a locked-down/air-gapped host doesn't pay a full
+            // download timeout before we relay from the client.
+            if probe_host_internet(&socket_path).await {
+                // Rung 2: the host fetches the version-matched tarball itself (fastest —
+                // its own pipe, no client bandwidth). On failure, fall to the relay.
+                match run_install_script(&socket_path, None, remote_server::setup::INSTALL_TIMEOUT)
+                    .await
+                {
+                    Ok(()) => {
+                        return verify_installed_binary(&socket_path)
+                            .await
+                            .map_err(|error| format!("{error:#}"));
+                    }
+                    Err(error) => {
+                        log::warn!("host-side download failed ({error}); relaying from client");
+                    }
+                }
+            } else {
+                log::info!("remote host cannot reach the release; relaying binary from client");
+            }
+
+            // Rung 3: client relay — the client supplies the host-matching binary and scp's
+            // it over the existing ControlMaster (host needs no internet). Today this is
+            // rung 3b (client download); rung 3a (bundled/embedded binary) is wired in
+            // separately for the fully-offline case.
             scp_install_fallback(&socket_path)
                 .await
                 .map_err(|error| format!("{error:#}"))
