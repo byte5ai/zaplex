@@ -4210,7 +4210,9 @@ impl TerminalView {
                     // Stage 2: handled by the attached-remote terminal byte-source
                     // (later increment), not in this view-level telemetry match.
                     | RemoteServerManagerEvent::SessionOutput { .. }
-                    | RemoteServerManagerEvent::SessionExited { .. } => {}
+                    | RemoteServerManagerEvent::SessionExited { .. }
+                    // Advisory notices are rendered by the daemon tab + workspace.
+                    | RemoteServerManagerEvent::SessionNotice { .. } => {}
                 }
             });
         }

@@ -74,9 +74,10 @@ message ServerMessage {
     SessionOpened session_opened = 23;
     SessionAttached session_attached = 24;
     SessionList session_list = 25;
-    // The following two are pushes (empty request_id):
+    // The following three are pushes (empty request_id):
     SessionOutput session_output = 26;
     SessionExited session_exited = 27;
+    SessionNotice session_notice = 28;
   }
 }
 
@@ -684,4 +685,16 @@ message SessionExited {
   string session_id = 1;
   // Process exit code; absent when killed by a signal (Unix).
   optional int32 exit_code = 2;
+}
+
+// Daemon → client (push, empty request_id): an advisory about the session's
+// runtime environment. v1 kind: "multiplexer-detected" — the session landed
+// inside a terminal multiplexer (a hand-rolled auto-attach the spawn-env
+// opt-outs couldn't suppress) even though zaplex owns persistence natively;
+// `detail` names the multiplexer ("tmux"/"screen"). Additive: unknown kinds
+// must be ignored by the client.
+message SessionNotice {
+  string session_id = 1;
+  string kind = 2;
+  string detail = 3;
 }

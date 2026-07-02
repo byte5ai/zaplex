@@ -159,6 +159,22 @@ impl EventLoop {
             {
                 me.on_connect_failed(&format!("{phase:?}"), error);
             }
+            // Advisory from the daemon: this session landed inside a terminal
+            // multiplexer (hand-rolled auto-attach). zaplex owns persistence
+            // natively, so surface the nesting in the tab; the workspace shows
+            // the actionable warning toast.
+            RemoteServerManagerEvent::SessionNotice {
+                pty_session_id,
+                kind,
+                detail,
+                ..
+            } if me.is_our_session(pty_session_id) && kind == "multiplexer-detected" => {
+                me.write_warning(&format!(
+                    "this session is running inside {detail} (auto-attached by the host's \
+                     login profile). zaplex already keeps this session alive natively — \
+                     two persistence layers are nested."
+                ));
+            }
             _ => {}
         });
 
@@ -479,6 +495,13 @@ impl EventLoop {
     /// cyan instead of the red error styling of [`Self::write_notice`].
     fn write_progress(&mut self, text: &str) {
         let line = format!("\r\n\x1b[2;36m[zaplex] {text}\x1b[0m\r\n");
+        self.process_pty_bytes(line.as_bytes());
+    }
+
+    /// Advisory (non-fatal) warning line — yellow, between the dim-cyan
+    /// progress and the red error notices.
+    fn write_warning(&mut self, text: &str) {
+        let line = format!("\r\n\x1b[1;33m[zaplex] {text}\x1b[0m\r\n");
         self.process_pty_bytes(line.as_bytes());
     }
 

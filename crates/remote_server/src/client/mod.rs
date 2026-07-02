@@ -93,6 +93,14 @@ pub enum ClientEvent {
         session_id: String,
         exit_code: Option<i32>,
     },
+    /// Advisory about a daemon-hosted session's environment (push), e.g. kind
+    /// "multiplexer-detected" with the multiplexer name in `detail`. Unknown
+    /// kinds must be ignored by consumers (additive protocol surface).
+    SessionNotice {
+        session_id: String,
+        kind: String,
+        detail: String,
+    },
     /// A server message could not be decoded and had no parseable request_id.
     MessageDecodingError,
 }
@@ -801,6 +809,11 @@ impl RemoteServerClient {
             server_message::Message::SessionExited(push) => Some(ClientEvent::SessionExited {
                 session_id: push.session_id,
                 exit_code: push.exit_code,
+            }),
+            server_message::Message::SessionNotice(push) => Some(ClientEvent::SessionNotice {
+                session_id: push.session_id,
+                kind: push.kind,
+                detail: push.detail,
             }),
             other => {
                 log::warn!("Unhandled push message variant: {other:?}");

@@ -29,8 +29,8 @@ use zaplex_remote_session::types::supported_features;
 #[cfg(unix)]
 use super::proto::{
     AttachSession, CloseSession, DetachSession, OpenSession, ResizeSession, SessionAttached,
-    SessionExited, SessionInfo, SessionInput, SessionList, SessionOpened, SessionOutput,
-    SessionSize,
+    SessionExited, SessionInfo, SessionInput, SessionList, SessionNotice, SessionOpened,
+    SessionOutput, SessionSize,
 };
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -1994,6 +1994,7 @@ impl ServerModel {
 
         let session_id = uuid::Uuid::new_v4().to_string();
         let (input_tx, input_rx) = async_channel::unbounded::<Vec<u8>>();
+        let shell_pid = child.id();
         self.sessions.insert(
             session_id.clone(),
             super::session_host::Session {
@@ -2015,11 +2016,19 @@ impl ServerModel {
         exec.spawn(super::session_host::run_session_reader(
             session_id.clone(),
             async_leader.clone(),
-            spawner,
+            ctx.spawner(),
         ))
         .detach();
         exec.spawn(super::session_host::run_session_writer(async_leader, input_rx))
             .detach();
+        // Advisory probe: did the user's profile auto-attach tmux/screen into
+        // this session despite the spawn-env opt-outs? See run_multiplexer_probe.
+        exec.spawn(super::session_host::run_multiplexer_probe(
+            session_id.clone(),
+            shell_pid,
+            spawner,
+        ))
+        .detach();
 
         // Bootstrap the daemon-spawned shell with the Zaplexify shell integration
         // (blocks, prompt marks, completions) by writing the init script as the
@@ -2344,6 +2353,25 @@ impl ServerModel {
                 session_id: session_id.to_string(),
                 seq,
                 bytes,
+            }),
+        );
+    }
+
+    /// Probe-task callback: the session landed inside a terminal multiplexer
+    /// (hand-rolled auto-attach). Push an advisory `SessionNotice` to the
+    /// attached connection — the client renders a tab notice + warning toast.
+    pub(super) fn on_session_multiplexer_detected(&mut self, session_id: &str, mux: &str) {
+        let Some(conn) = self.sessions.get(session_id).map(|s| s.attached) else {
+            return;
+        };
+        log::info!("Daemon: session {session_id} is nested inside {mux} (auto-attach)");
+        self.send_server_message(
+            Some(conn),
+            None,
+            server_message::Message::SessionNotice(SessionNotice {
+                session_id: session_id.to_string(),
+                kind: "multiplexer-detected".to_string(),
+                detail: mux.to_string(),
             }),
         );
     }

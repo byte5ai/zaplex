@@ -862,6 +862,14 @@ pub struct Workspace {
     /// input/output across two tabs). Stale entries (tab since closed) are pruned
     /// opportunistically on the next adopt.
     adopted_daemon_sessions: std::collections::HashMap<String, EntityId>,
+    /// Host label per connected daemon session (connection `SessionId`), for
+    /// host-scoped advisories (e.g. the multiplexer-nesting warning toast).
+    #[cfg(unix)]
+    daemon_session_hosts: std::collections::HashMap<SessionId, String>,
+    /// Hosts already warned about multiplexer nesting this app run — one
+    /// warning per host, not one per session/tab.
+    #[cfg(unix)]
+    multiplexer_warned_hosts: std::collections::HashSet<String>,
     pub(crate) hovered_tab_index: Option<TabBarHoverIndex>,
     tab_bar_hover_state: MouseStateHandle,
     tab_fixed_width: Option<f32>,
@@ -2632,6 +2640,28 @@ impl Workspace {
             );
         }
 
+        // Daemon-session advisories (multiplexer nesting etc.) — independent of
+        // the SshRemoteServer flag: the native persistent-session path doesn't
+        // gate on it. The daemon tab shows an inline notice; this adds the
+        // actionable warning toast, once per host per app run.
+        #[cfg(unix)]
+        ctx.subscribe_to_model(
+            &crate::remote_server::manager::RemoteServerManager::handle(ctx),
+            |me, _handle, event, ctx| {
+                if let RemoteServerManagerEvent::SessionNotice {
+                    session_id,
+                    kind,
+                    detail,
+                    ..
+                } = event
+                {
+                    if kind == "multiplexer-detected" {
+                        me.on_daemon_session_multiplexer_notice(*session_id, detail.clone(), ctx);
+                    }
+                }
+            },
+        );
+
         ctx.subscribe_to_model(&WindowSettings::handle(ctx), |me, _handle, event, ctx| {
             me.handle_window_settings_changed_event(event, ctx);
         });
@@ -2857,6 +2887,10 @@ impl Workspace {
             tabs: Vec::new(),
             active_tab_index: 0,
             adopted_daemon_sessions: std::collections::HashMap::new(),
+            #[cfg(unix)]
+            daemon_session_hosts: std::collections::HashMap::new(),
+            #[cfg(unix)]
+            multiplexer_warned_hosts: std::collections::HashSet::new(),
             hovered_tab_index: None,
             tab_bar_hover_state: Default::default(),
             traffic_light_mouse_states: Default::default(),
@@ -5779,11 +5813,44 @@ impl Workspace {
         use crate::remote_server::manager::RemoteServerManager;
         use crate::remote_server::ssh_transport::SshTransport;
 
+        self.daemon_session_hosts
+            .insert(session_id, server.host.clone());
         let transport =
             SshTransport::new(socket_path, auth_context.clone()).with_self_heal(server);
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.mark_session_persistent(session_id);
             mgr.connect_session(session_id, transport, auth_context, ctx);
+        });
+    }
+
+    /// Daemon advisory (`SessionNotice`, kind "multiplexer-detected"): the session
+    /// landed inside tmux/screen via the host's auto-attach, nesting a second
+    /// persistence layer inside zaplex's own. Warn once per host per app run —
+    /// the tab itself gets an inline notice from the daemon event loop.
+    #[cfg(unix)]
+    fn on_daemon_session_multiplexer_notice(
+        &mut self,
+        session_id: SessionId,
+        multiplexer: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let host = self
+            .daemon_session_hosts
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_else(|| "the remote host".to_string());
+        if !self.multiplexer_warned_hosts.insert(host.clone()) {
+            return;
+        }
+        let warning = format!(
+            "{host} auto-attaches {multiplexer} on login, so this persistent session is \
+             running inside {multiplexer} — two nested persistence layers. zaplex already \
+             keeps your session alive across disconnects. To keep sessions clean, guard \
+             your auto-attach snippet with: [ -n \"$ZAPLEX_SESSION\" ] && return  — or keep \
+             {multiplexer} if you use it deliberately."
+        );
+        self.toast_stack.update(ctx, |stack, ctx| {
+            stack.add_persistent_toast(DismissibleToast::error(warning), ctx);
         });
     }
 
@@ -5885,6 +5952,8 @@ impl Workspace {
         ));
         let socket_path = headless_connect::control_socket_path(&server);
         let host = server.host.clone();
+        self.daemon_session_hosts
+            .insert(session_id, server.host.clone());
         // Kept for the transport so reconnect can re-heal a dead ControlMaster.
         let server_for_transport = server.clone();
 

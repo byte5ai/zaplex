@@ -150,7 +150,9 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             // Stage 2: session output/exit are consumed by the attached-remote
             // terminal byte-source (later increment), not by this controller.
             | RemoteServerManagerEvent::SessionOutput { .. }
-            | RemoteServerManagerEvent::SessionExited { .. } => {}
+            | RemoteServerManagerEvent::SessionExited { .. }
+            // Advisory notices are rendered by the daemon tab + workspace.
+            | RemoteServerManagerEvent::SessionNotice { .. } => {}
         });
 
         Self {

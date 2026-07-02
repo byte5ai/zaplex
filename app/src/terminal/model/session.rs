@@ -182,7 +182,9 @@ impl Sessions {
                 // Stage 2: the attached-remote terminal byte-source subscribes
                 // to these in a later increment; no-op here for now.
                 | RemoteServerManagerEvent::SessionOutput { .. }
-                | RemoteServerManagerEvent::SessionExited { .. } => {}
+                | RemoteServerManagerEvent::SessionExited { .. }
+                // Advisory notices are rendered by the daemon tab + workspace.
+                | RemoteServerManagerEvent::SessionNotice { .. } => {}
                 RemoteServerManagerEvent::SessionReconnected {
                     session_id: sid,
                     client,

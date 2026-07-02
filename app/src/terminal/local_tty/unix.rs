@@ -570,11 +570,22 @@ pub(crate) fn spawn_session_pty(
     // `. /usr/bin/byobu-launch` in ~/.profile). Without suppressing it, the
     // daemon's login shell joins the user's *existing* byobu session group,
     // cross-contaminating I/O (the bootstrap script leaking into the user's
-    // live session, the daemon tab mirroring it). `BYOBU_DISABLE=1` is byobu's
-    // documented opt-out and makes the daemon shell stand alone. The client may
-    // still override via `env`.
+    // live session, the daemon tab mirroring it). `BYOBU_DISABLE=1` and
+    // `LC_BYOBU=0` are byobu-launch's two documented opt-outs (verified against
+    // /usr/bin/byobu-launch: it checks both). The client may still override via
+    // `env`.
     if !env.contains_key("BYOBU_DISABLE") {
         command.env("BYOBU_DISABLE", "1");
+    }
+    if !env.contains_key("LC_BYOBU") {
+        command.env("LC_BYOBU", "0");
+    }
+    // Documented convention for hand-rolled auto-attach snippets (no universal
+    // off-switch exists for `[ -z "$TMUX" ] && tmux attach` in ~/.bashrc):
+    // users guard them with `[ -n "$ZAPLEX_SESSION" ] && return`. Also lets
+    // scripts/tools detect they run inside a zaplex-managed persistent session.
+    if !env.contains_key("ZAPLEX_SESSION") {
+        command.env("ZAPLEX_SESSION", "1");
     }
     let size = SizeInfo::new_without_font_metrics(rows, cols);
     let info = spawn_command_in_pty(command, &size, true)?;

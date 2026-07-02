@@ -392,6 +392,17 @@ pub enum RemoteServerManagerEvent {
         pty_session_id: String,
         exit_code: Option<i32>,
     },
+    /// Advisory about a daemon-hosted session's environment, e.g. kind
+    /// "multiplexer-detected" (the session landed inside tmux/screen via a
+    /// hand-rolled auto-attach) with the multiplexer name in `detail`.
+    /// Consumers must ignore unknown kinds.
+    SessionNotice {
+        session_id: SessionId,
+        host_id: HostId,
+        pty_session_id: String,
+        kind: String,
+        detail: String,
+    },
 }
 
 impl RemoteServerManagerEvent {
@@ -412,7 +423,8 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::ClientRequestFailed { session_id, .. }
             | RemoteServerManagerEvent::ServerMessageDecodingError { session_id }
             | RemoteServerManagerEvent::SessionOutput { session_id, .. }
-            | RemoteServerManagerEvent::SessionExited { session_id, .. } => {
+            | RemoteServerManagerEvent::SessionExited { session_id, .. }
+            | RemoteServerManagerEvent::SessionNotice { session_id, .. } => {
                 Some(*session_id)
             }
             RemoteServerManagerEvent::HostConnected { .. }
@@ -1362,6 +1374,19 @@ impl RemoteServerManager {
                     host_id,
                     pty_session_id,
                     exit_code,
+                });
+            }
+            ClientEvent::SessionNotice {
+                session_id: pty_session_id,
+                kind,
+                detail,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::SessionNotice {
+                    session_id,
+                    host_id,
+                    pty_session_id,
+                    kind,
+                    detail,
                 });
             }
             ClientEvent::MessageDecodingError => {
