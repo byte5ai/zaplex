@@ -186,8 +186,13 @@ pub async fn ensure_control_master(server: &SshServerInfo, socket_path: &Path) -
     ))
 }
 
-/// Brings up the headless ControlMaster for `server` at `socket_path` and ensures
-/// the remote-server binary is installed (auto-install if missing). Shared by the
+/// Sentinel error returned by [`prepare_daemon_transport`] when the remote-server
+/// binary is not present on the host. The caller uses this to fall back to a classic
+/// SSH session (with a warning) instead of hanging on an install-on-connect.
+pub const DAEMON_BINARY_MISSING: &str = "daemon-binary-missing";
+
+/// Brings up the headless ControlMaster for `server` at `socket_path` and verifies
+/// the remote-server binary is present (no install-on-connect). Shared by the
 /// daemon-terminal connect (`Workspace::spawn_daemon_session_connect`) and the
 /// adopt-sidebar's connect-to-list. On success the caller builds a fresh
 /// [`SshTransport`] over `socket_path` and calls `connect_session`.
@@ -205,13 +210,13 @@ pub async fn prepare_daemon_transport(
     log::info!("daemon connect [{host}]: checking remote-server binary");
     match transport.check_binary().await {
         Ok(true) => log::info!("daemon connect [{host}]: binary present"),
+        // Binary missing: fail FAST instead of an unbounded install-on-connect
+        // (GitHub download for a non-release tag + a 194 MB scp), which made the
+        // connect appear to hang at "Starting…". The caller falls back to a classic
+        // SSH session (with a warning). Installing the daemon is a separate,
+        // explicit action — never a silent multi-minute stall on every connect.
         Ok(false) => {
-            log::info!("daemon connect [{host}]: binary missing — installing");
-            transport
-                .install_binary()
-                .await
-                .map_err(|e| format!("remote-server install failed: {e}"))?;
-            log::info!("daemon connect [{host}]: install complete");
+            return Err(DAEMON_BINARY_MISSING.to_string());
         }
         Err(e) => return Err(format!("remote-server binary check failed: {e}")),
     }

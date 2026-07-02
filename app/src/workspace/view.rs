@@ -5322,7 +5322,7 @@ impl Workspace {
                 self.open_ssh_server(node_id.clone(), ctx);
             }
             LeftPanelEvent::OpenSshTerminal { node_id, server } => {
-                self.open_ssh_terminal(node_id.clone(), server.clone(), ctx);
+                self.open_ssh_terminal(node_id.clone(), server.clone(), false, ctx);
             }
             LeftPanelEvent::OpenSftpPane { node_id, server: _ } => {
                 self.open_sftp_pane(node_id.clone(), ctx);
@@ -5437,6 +5437,10 @@ impl Workspace {
         &mut self,
         node_id: String,
         server: warp_ssh_manager::SshServerInfo,
+        // When true, skip the daemon (persistent) path and open a plain local-PTY
+        // `ssh` session directly. Used by the daemon-connect fallback so it never
+        // re-attempts the daemon path.
+        force_classic: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshRepository, SshSecretStore};
@@ -5471,8 +5475,8 @@ impl Workspace {
         // instead of a local PTY running `ssh`. Falls through to the normal path
         // if the host isn't resilient or the auth isn't headless-capable.
         #[cfg(unix)]
-        {
-            if self.try_open_daemon_ssh_terminal(&server_for_connection, ctx) {
+        if !force_classic {
+            if self.try_open_daemon_ssh_terminal(&node_id, &server_for_connection, ctx) {
                 return;
             }
         }
@@ -5566,16 +5570,27 @@ impl Workspace {
     }
 
     /// Native persistent remote-session path (Stage 2, Option B). Returns `true`
-    /// if the host was opened as a daemon-hosted session (caller should stop), or
+    /// if the host will be opened via the daemon path (caller should stop), or
     /// `false` to fall through to the ordinary local-PTY SSH path. v1 only takes
     /// the daemon path for resilient hosts with headless-capable (key) auth.
+    ///
+    /// Preflights the ControlMaster + daemon-binary presence OFF the main thread
+    /// *before* creating any tab: only if the daemon is actually reachable do we
+    /// open a daemon-hosted tab; otherwise we fall back to a classic SSH session
+    /// with a prominent warning. This keeps persistence the default while degrading
+    /// gracefully — never a dead "Starting…" tab and never an install-on-connect
+    /// stall on a host without the daemon.
     #[cfg(unix)]
     fn try_open_daemon_ssh_terminal(
         &mut self,
+        node_id: &str,
         server: &warp_ssh_manager::SshServerInfo,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        use crate::remote_server::headless_connect;
+        use crate::remote_server::auth_context::server_api_auth_context;
+        use crate::remote_server::headless_connect::{self, DAEMON_BINARY_MISSING};
+        use crate::remote_server::manager::RemoteServerManager;
+        use crate::remote_server::ssh_transport::SshTransport;
 
         if !server.session_resilience.is_enabled() {
             return false;
@@ -5604,20 +5619,76 @@ impl Workspace {
             adopt_pty_session_id: None,
         };
 
-        // Create the daemon-backed tab first: its event loop subscribes for
-        // `SessionConnected` on `session_id` before we kick off the connect.
-        self.add_tab_with_pane_layout(
-            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
-                hide_homepage: true,
-                daemon_request: Some(request),
-                ..Default::default()
-            })),
-            Arc::new(HashMap::new()),
-            None, /* custom_tab_title */
-            ctx,
-        );
+        let auth_context = std::sync::Arc::new(server_api_auth_context(
+            AuthStateProvider::as_ref(ctx).get().clone(),
+        ));
+        let socket_path = headless_connect::control_socket_path(server);
+        let host = server.host.clone();
+        let node_id_owned = node_id.to_string();
+        let server_owned = server.clone();
+        let server_for_transport = server.clone();
+        let auth_for_callback = auth_context.clone();
+        let socket_for_callback = socket_path.clone();
 
-        self.spawn_daemon_session_connect(server.clone(), session_id, ctx);
+        // Preflight off the main thread: bring up the ControlMaster + a *fast*
+        // binary-presence check (no install-on-connect). Only once it succeeds do
+        // we create the daemon tab and connect; on any failure fall back to classic.
+        ctx.spawn(
+            headless_connect::prepare_daemon_transport(server.clone(), socket_path, auth_context),
+            move |workspace, result, ctx| match result {
+                Ok(()) => {
+                    log::info!(
+                        "daemon connect [{host}]: ready — opening daemon session {session_id:?}"
+                    );
+                    // Create the daemon-backed tab: its event loop subscribes for
+                    // `SessionConnected` before we connect just below.
+                    workspace.add_tab_with_pane_layout(
+                        PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                            hide_homepage: true,
+                            daemon_request: Some(request),
+                            ..Default::default()
+                        })),
+                        Arc::new(HashMap::new()),
+                        None, /* custom_tab_title */
+                        ctx,
+                    );
+                    let transport =
+                        SshTransport::new(socket_for_callback, auth_for_callback.clone())
+                            .with_self_heal(server_for_transport);
+                    RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+                        // Persistent: a transport drop must trigger reconnect — the
+                        // daemon keeps the session alive.
+                        mgr.mark_session_persistent(session_id);
+                        mgr.connect_session(session_id, transport, auth_for_callback, ctx);
+                    });
+                }
+                Err(e) => {
+                    // Daemon unavailable → fall back to a classic SSH session, with a
+                    // prominent warning so the user KNOWS they have no persistent
+                    // session (a disconnect loses open work). Never silent, never hang.
+                    let warning = if e == DAEMON_BINARY_MISSING {
+                        format!(
+                            "Persistent session unavailable on {host}: the zaplex daemon isn't \
+                             installed there. Opened a standard SSH session instead — a disconnect \
+                             will lose open work. Install the daemon on the host to enable persistence."
+                        )
+                    } else {
+                        format!(
+                            "Couldn't start a persistent session on {host} ({e}). Opened a standard \
+                             SSH session instead — a disconnect will lose open work."
+                        )
+                    };
+                    log::warn!(
+                        "daemon connect [{host}] unavailable; falling back to classic SSH: {e}"
+                    );
+                    workspace.update_toast_stack.update(ctx, |stack, ctx| {
+                        stack.add_persistent_toast(DismissibleToast::error(warning), ctx);
+                    });
+                    // Force the classic local-PTY ssh path (no second daemon attempt).
+                    workspace.open_ssh_terminal(node_id_owned, server_owned, true, ctx);
+                }
+            },
+        );
         true
     }
 
@@ -19041,7 +19112,7 @@ impl TypedActionView for Workspace {
                 ctx.notify();
             }
             OpenSshTerminal { node_id, server } => {
-                self.open_ssh_terminal(node_id.clone(), server.clone(), ctx);
+                self.open_ssh_terminal(node_id.clone(), server.clone(), false, ctx);
             }
             AddTabWithShell { shell, source } => {
                 self.add_tab_with_shell(shell.clone(), *source, ctx)
