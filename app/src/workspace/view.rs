@@ -5681,7 +5681,11 @@ impl Workspace {
                     log::warn!(
                         "daemon connect [{host}] unavailable; falling back to classic SSH: {e}"
                     );
-                    workspace.update_toast_stack.update(ctx, |stack, ctx| {
+                    // Must go on `toast_stack` (rendered unconditionally via
+                    // global_toast_positioning). `update_toast_stack` is only rendered
+                    // behind FeatureFlag::AvatarInTabBar, which the fork hard-disables —
+                    // a toast added there is invisible.
+                    workspace.toast_stack.update(ctx, |stack, ctx| {
                         stack.add_persistent_toast(DismissibleToast::error(warning), ctx);
                     });
                     // Force the classic local-PTY ssh path (no second daemon attempt).
