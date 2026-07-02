@@ -238,6 +238,12 @@ impl RootDirectory {
     }
 }
 
+/// How long the skeleton loading state may show before flipping to an explicit
+/// empty/unavailable state. Generous enough for a remote repo-metadata push or
+/// the initial local repo scan; bounded so the panel never looks hung.
+#[cfg(feature = "local_fs")]
+const LOADING_STATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+
 pub struct FileTreeView {
     /// Per-root state, keyed by root path
     root_directories: HashMap<StandardizedPath, RootDirectory>,
@@ -269,6 +275,13 @@ pub struct FileTreeView {
     /// Handle to track the currently focused file
     active_file_model: Option<ModelHandle<ActiveFileModel>>,
     has_terminal_session: bool,
+    /// When the current "data may still arrive" window started. The skeleton
+    /// loading state is only rendered inside this bounded window; past the
+    /// deadline the view renders an explicit empty/unavailable state instead of
+    /// an endless skeleton (issue #20). Restarted on enablement changes (a new
+    /// session context is a fresh chance for data to arrive).
+    #[cfg(feature = "local_fs")]
+    loading_since: Option<std::time::Instant>,
     /// Paths the user explicitly collapsed (per root).
     ///
     /// This is used to prevent automatic expansion behavior (e.g. when switching tabs,
@@ -695,9 +708,37 @@ impl FileTreeView {
             #[cfg(feature = "local_fs")]
             registered_lazy_loaded_paths: HashSet::new(),
             pending_focus_target: None,
+            #[cfg(feature = "local_fs")]
+            loading_since: Some(std::time::Instant::now()),
         };
 
+        // Re-render once the loading deadline passes so a view nothing else
+        // repaints still flips from skeleton to the explicit empty state.
+        #[cfg(feature = "local_fs")]
+        Self::schedule_loading_deadline_tick(ctx);
+
         picker
+    }
+
+    /// Notifies this view shortly after [`LOADING_STATE_TIMEOUT`] so the render
+    /// re-evaluates `loading_deadline_passed` even without other events.
+    #[cfg(feature = "local_fs")]
+    fn schedule_loading_deadline_tick(ctx: &mut ViewContext<Self>) {
+        ctx.spawn(
+            async {
+                async_io::Timer::after(LOADING_STATE_TIMEOUT + std::time::Duration::from_millis(250))
+                    .await;
+            },
+            |_, (), ctx| ctx.notify(),
+        );
+    }
+
+    /// Whether the bounded loading window has elapsed without data arriving.
+    #[cfg(feature = "local_fs")]
+    fn loading_deadline_passed(&self) -> bool {
+        self.loading_since
+            .map(|since| since.elapsed() > LOADING_STATE_TIMEOUT)
+            .unwrap_or(false)
     }
 
     /// Sets [`ActiveFileModel`] for the [`FileTreeView`] to track
@@ -867,6 +908,9 @@ impl FileTreeView {
             return;
         }
         self.enablement = enablement;
+        // New session context → fresh bounded window for data to arrive.
+        self.loading_since = Some(std::time::Instant::now());
+        Self::schedule_loading_deadline_tick(ctx);
         ctx.notify();
     }
 
@@ -2896,11 +2940,21 @@ impl View for FileTreeView {
             );
         }
 
+        // Every "data may still arrive" state renders the skeleton only inside a
+        // bounded window; past the deadline it flips to an explicit state — an
+        // endless skeleton reads as a hang (issue #20).
         if matches!(
             self.enablement,
             CodingPanelEnablementState::PendingRemoteSession
         ) {
-            return self.render_loading_state(app);
+            return if self.loading_deadline_passed() {
+                self.render_error_state(
+                    crate::t!("project-explorer-unavailable-remote-description"),
+                    app,
+                )
+            } else {
+                self.render_loading_state(app)
+            };
         }
 
         if self.displayed_directories.is_empty() {
@@ -2911,7 +2965,7 @@ impl View for FileTreeView {
                 // may push repo metadata momentarily. For other SSH modes
                 // (tmux, subshell) no data will arrive, so show the disabled
                 // error instead.
-                return if has_remote_server {
+                return if has_remote_server && !self.loading_deadline_passed() {
                     self.render_loading_state(app)
                 } else {
                     self.render_error_state(
@@ -2931,7 +2985,11 @@ impl View for FileTreeView {
                 );
             }
 
-            return self.render_loading_state(app);
+            return if self.loading_deadline_passed() {
+                self.render_error_state(crate::t!("project-explorer-empty-description"), app)
+            } else {
+                self.render_loading_state(app)
+            };
         }
 
         self.render_file_tree(app)

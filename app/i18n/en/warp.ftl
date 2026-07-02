@@ -2741,6 +2741,7 @@ command-palette-conversations-a11y-navigate = Press enter to navigate to convers
 command-palette-conversations-a11y-fork = Press enter to fork the current conversation into a new conversation.
 command-palette-conversations-a11y-new = Press enter to create a new conversation.
 workspace-left-panel-project-explorer = Project explorer
+project-explorer-empty-description = No project found in this session. Open a session in a project directory to browse its files.
 project-explorer-unavailable-title = Project explorer unavailable
 project-explorer-unavailable-disabled-description = The Project Explorer requires access to your local workspace. Open a new session or navigate to an active session to view.
 project-explorer-unavailable-remote-description = The Project Explorer requires access to your local workspace, which isn’t supported in remote sessions.
