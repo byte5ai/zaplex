@@ -173,6 +173,9 @@ async fn run_install_script(
     }
 }
 
+// Retained from the retired host-side download path (client-push is now primary; the
+// host never downloads). Kept for reference / a possible future host-download option.
+#[allow(dead_code)]
 fn should_skip_scp_fallback(error: &InstallError) -> bool {
     matches!(error, InstallError::ScriptFailed { exit_code: 2, .. })
 }
@@ -685,39 +688,29 @@ impl RemoteTransport for SshTransport {
             );
 
             // Zaplex fork: DEBUG source build (no release tag) uses dev mode,
-            // cross-compiling local `warp` and uploading instead of downloading stale GitHub release.
-            // On failure (cross-compile prerequisites missing, etc.), print warning and fall back
-            // to download-install, preserving dev experience. Release builds skip this entire block.
+            // cross-compiling local `warp` and uploading instead of a stale GitHub release.
+            // On failure (cross-compile prerequisites missing, etc.), fall through to the
+            // client-push install. Release builds skip this entire block.
             if remote_server::setup::is_dev_source_build() {
                 log::info!("dev remote-server: DEBUG source build detected, switching to local cross-compile install");
                 match dev_install_local_binary(&socket_path).await {
                     Ok(()) => return Ok(()),
                     Err(error) => {
                         log::warn!(
-                            "dev remote-server: local cross-compile install unavailable, falling back to download-install: {error:#}"
+                            "dev remote-server: local cross-compile install unavailable, falling back to client-push install: {error:#}"
                         );
-                        // Fall through, continue to regular download-install flow below.
+                        // Fall through to the client-push install below.
                     }
                 }
             }
 
-            match run_install_script(&socket_path, None, remote_server::setup::INSTALL_TIMEOUT)
+            // PRIMARY: client-push install. Detect the host platform, fetch the matching
+            // binary ON THE CLIENT, and scp it over the existing ControlMaster. The remote
+            // host never needs public-internet access — remote-dev hosts are frequently
+            // locked-down / air-gapped, so we deliberately do NOT run a host-side download.
+            scp_install_fallback(&socket_path)
                 .await
-            {
-                Ok(()) => verify_installed_binary(&socket_path)
-                    .await
-                    .map_err(|error| format!("{error:#}")),
-                Err(error) if should_skip_scp_fallback(&error) => Err(error.to_string()),
-                Err(error) => {
-                    log::warn!("remote-server install failed, trying SCP fallback: {error}");
-                    match scp_install_fallback(&socket_path).await {
-                        Ok(()) => Ok(()),
-                        Err(fallback_error) => {
-                            Err(format!("{error}; SCP fallback failed: {fallback_error:#}"))
-                        }
-                    }
-                }
-            }
+                .map_err(|error| format!("{error:#}"))
         })
     }
 

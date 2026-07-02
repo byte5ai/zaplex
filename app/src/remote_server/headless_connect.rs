@@ -210,13 +210,19 @@ pub async fn prepare_daemon_transport(
     log::info!("daemon connect [{host}]: checking remote-server binary");
     match transport.check_binary().await {
         Ok(true) => log::info!("daemon connect [{host}]: binary present"),
-        // Binary missing: fail FAST instead of an unbounded install-on-connect
-        // (GitHub download for a non-release tag + a 194 MB scp), which made the
-        // connect appear to hang at "Starting…". The caller falls back to a classic
-        // SSH session (with a warning). Installing the daemon is a separate,
-        // explicit action — never a silent multi-minute stall on every connect.
+        // Binary missing → auto-install on first connect (like Warp), via the
+        // client-push path (`install_binary`): the client fetches the host-matching
+        // binary and scp's it over the existing ControlMaster — the host never needs
+        // internet. This is bounded (download + scp timeouts). On genuine failure
+        // (e.g. no binary source available yet) the caller falls back to a classic
+        // SSH session with a warning — never a silent unbounded hang.
         Ok(false) => {
-            return Err(DAEMON_BINARY_MISSING.to_string());
+            log::info!("daemon connect [{host}]: binary missing — installing (first connect)");
+            transport
+                .install_binary()
+                .await
+                .map_err(|e| format!("remote-server install failed: {e}"))?;
+            log::info!("daemon connect [{host}]: install complete");
         }
         Err(e) => return Err(format!("remote-server binary check failed: {e}")),
     }
