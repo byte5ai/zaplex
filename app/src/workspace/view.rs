@@ -5588,9 +5588,10 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         use crate::remote_server::auth_context::server_api_auth_context;
-        use crate::remote_server::headless_connect::{self, DAEMON_BINARY_MISSING};
-        use crate::remote_server::manager::RemoteServerManager;
-        use crate::remote_server::ssh_transport::SshTransport;
+        use crate::remote_server::headless_connect::{
+            self, DaemonPreflight, DAEMON_BINARY_MISSING,
+        };
+        use crate::remote_server::ssh_transport::{InstallProgress, SshTransport};
 
         if !server.session_resilience.is_enabled() {
             return false;
@@ -5605,20 +5606,6 @@ impl Workspace {
         }
 
         let session_id = headless_connect::alloc_daemon_session_id();
-        let request = crate::terminal::daemon_tty::DaemonSessionRequest {
-            connection_session_id: session_id,
-            open_params: crate::terminal::daemon_tty::OpenSessionParams {
-                // Per-host scrollback ceiling (MiB → bytes); 0 → daemon default.
-                ring_ceiling_bytes: (server.ring_ceiling_mb > 0)
-                    .then(|| server.ring_ceiling_mb as u64 * 1024 * 1024),
-                // Honor the host's saved startup command on the daemon path too,
-                // matching the local-PTY SSH path (run once after the session opens).
-                startup_command: server.startup_command.clone(),
-                ..Default::default()
-            },
-            adopt_pty_session_id: None,
-        };
-
         let auth_context = std::sync::Arc::new(server_api_auth_context(
             AuthStateProvider::as_ref(ctx).get().clone(),
         ));
@@ -5626,74 +5613,200 @@ impl Workspace {
         let host = server.host.clone();
         let node_id_owned = node_id.to_string();
         let server_owned = server.clone();
-        let server_for_transport = server.clone();
-        let auth_for_callback = auth_context.clone();
-        let socket_for_callback = socket_path.clone();
 
-        // Preflight off the main thread: bring up the ControlMaster + a *fast*
-        // binary-presence check (no install-on-connect). Only once it succeeds do
-        // we create the daemon tab and connect; on any failure fall back to classic.
+        // Fast, bounded preflight off the main thread (ControlMaster + binary check
+        // + install-source classification) — no tab yet, so a host that can't do
+        // persistence degrades to classic SSH without ever showing a dead daemon
+        // tab. A first-connect install runs *after* the tab exists, streaming its
+        // progress into it (Warp-style auto-install).
         ctx.spawn(
-            headless_connect::prepare_daemon_transport(server.clone(), socket_path, auth_context),
-            move |workspace, result, ctx| match result {
-                Ok(()) => {
-                    log::info!(
-                        "daemon connect [{host}]: ready — opening daemon session {session_id:?}"
-                    );
-                    // Create the daemon-backed tab: its event loop subscribes for
-                    // `SessionConnected` before we connect just below.
-                    workspace.add_tab_with_pane_layout(
-                        PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
-                            hide_homepage: true,
-                            daemon_request: Some(request),
-                            ..Default::default()
-                        })),
-                        Arc::new(HashMap::new()),
-                        None, /* custom_tab_title */
-                        ctx,
-                    );
-                    let transport =
-                        SshTransport::new(socket_for_callback, auth_for_callback.clone())
-                            .with_self_heal(server_for_transport);
-                    RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-                        // Persistent: a transport drop must trigger reconnect — the
-                        // daemon keeps the session alive.
-                        mgr.mark_session_persistent(session_id);
-                        mgr.connect_session(session_id, transport, auth_for_callback, ctx);
-                    });
-                }
-                Err(e) => {
-                    // Daemon unavailable → fall back to a classic SSH session, with a
-                    // prominent warning so the user KNOWS they have no persistent
-                    // session (a disconnect loses open work). Never silent, never hang.
-                    let warning = if e == DAEMON_BINARY_MISSING {
-                        format!(
-                            "Persistent session unavailable on {host}: the zaplex daemon isn't \
-                             installed there. Opened a standard SSH session instead — a disconnect \
-                             will lose open work. Install the daemon on the host to enable persistence."
-                        )
-                    } else {
-                        format!(
-                            "Couldn't start a persistent session on {host} ({e}). Opened a standard \
-                             SSH session instead — a disconnect will lose open work."
-                        )
-                    };
-                    log::warn!(
-                        "daemon connect [{host}] unavailable; falling back to classic SSH: {e}"
-                    );
-                    // Must go on `toast_stack` (rendered unconditionally via
-                    // global_toast_positioning). `update_toast_stack` is only rendered
-                    // behind FeatureFlag::AvatarInTabBar, which the fork hard-disables —
-                    // a toast added there is invisible.
-                    workspace.toast_stack.update(ctx, |stack, ctx| {
-                        stack.add_persistent_toast(DismissibleToast::error(warning), ctx);
-                    });
-                    // Force the classic local-PTY ssh path (no second daemon attempt).
-                    workspace.open_ssh_terminal(node_id_owned, server_owned, true, ctx);
+            headless_connect::preflight_daemon_transport(
+                server.clone(),
+                socket_path.clone(),
+                auth_context.clone(),
+            ),
+            move |workspace, result, ctx| {
+                let preflight = match result {
+                    Ok(preflight) => preflight,
+                    Err(e) => {
+                        // Daemon unavailable → classic SSH with a prominent warning so
+                        // the user KNOWS they have no persistent session (a disconnect
+                        // loses open work). Never silent, never a hang.
+                        let warning = if e == DAEMON_BINARY_MISSING {
+                            format!(
+                                "Persistent session unavailable on {host}: the zaplex daemon \
+                                 isn't installed there and no install source is available. \
+                                 Opened a standard SSH session instead — a disconnect will \
+                                 lose open work."
+                            )
+                        } else {
+                            format!(
+                                "Couldn't start a persistent session on {host} ({e}). Opened a \
+                                 standard SSH session instead — a disconnect will lose open work."
+                            )
+                        };
+                        log::warn!(
+                            "daemon connect [{host}] unavailable; falling back to classic SSH: {e}"
+                        );
+                        workspace.fall_back_to_classic_ssh(node_id_owned, server_owned, warning, ctx);
+                        return;
+                    }
+                };
+
+                // First-connect install → wire a progress channel into the tab so the
+                // install ladder's phases render there.
+                let (progress_tx, install_progress_rx) = match preflight {
+                    DaemonPreflight::Ready => (None, None),
+                    DaemonPreflight::NeedsInstall => {
+                        let (tx, rx) = async_channel::unbounded();
+                        (Some(tx), Some(rx))
+                    }
+                };
+
+                let request = crate::terminal::daemon_tty::DaemonSessionRequest {
+                    connection_session_id: session_id,
+                    open_params: crate::terminal::daemon_tty::OpenSessionParams {
+                        // Per-host scrollback ceiling (MiB → bytes); 0 → daemon default.
+                        ring_ceiling_bytes: (server_owned.ring_ceiling_mb > 0)
+                            .then(|| server_owned.ring_ceiling_mb as u64 * 1024 * 1024),
+                        // Honor the host's saved startup command on the daemon path too,
+                        // matching the local-PTY SSH path (run once after the session opens).
+                        startup_command: server_owned.startup_command.clone(),
+                        ..Default::default()
+                    },
+                    adopt_pty_session_id: None,
+                    install_progress_rx,
+                };
+
+                // Create the daemon-backed tab: its event loop subscribes for
+                // `SessionConnected` (and renders install progress) before we
+                // connect below.
+                workspace.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                        hide_homepage: true,
+                        daemon_request: Some(request),
+                        ..Default::default()
+                    })),
+                    Arc::new(HashMap::new()),
+                    None, /* custom_tab_title */
+                    ctx,
+                );
+
+                match progress_tx {
+                    // Daemon already installed → connect right away.
+                    None => {
+                        log::info!(
+                            "daemon connect [{host}]: ready — opening daemon session {session_id:?}"
+                        );
+                        workspace.connect_daemon_session(
+                            server_owned,
+                            session_id,
+                            socket_path,
+                            auth_context,
+                            ctx,
+                        );
+                    }
+                    // First connect → auto-install with progress in the tab, then
+                    // connect; on failure degrade to classic SSH + warning.
+                    Some(progress_tx) => {
+                        log::info!(
+                            "daemon connect [{host}]: first connect — installing the session daemon"
+                        );
+                        let transport =
+                            SshTransport::new(socket_path.clone(), auth_context.clone());
+                        let install = transport.install_binary_with_progress(
+                            InstallProgress::new(progress_tx.clone()),
+                        );
+                        ctx.spawn(install, move |workspace, result, ctx| match result {
+                            Ok(()) => {
+                                log::info!(
+                                    "daemon connect [{host}]: install complete — connecting"
+                                );
+                                let _ = progress_tx.try_send(
+                                    "Setup complete — starting your persistent session…".into(),
+                                );
+                                workspace.connect_daemon_session(
+                                    server_owned,
+                                    session_id,
+                                    socket_path,
+                                    auth_context,
+                                    ctx,
+                                );
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "daemon connect [{host}]: install failed; falling back to \
+                                     classic SSH: {e}"
+                                );
+                                // Leave the failure visible in the daemon tab, then open a
+                                // working classic session alongside it.
+                                let _ = progress_tx.try_send(format!(
+                                    "Setup failed: {e} — opened a standard SSH session in a new tab."
+                                ));
+                                let warning = format!(
+                                    "Couldn't install the Zaplex session daemon on {host} ({e}). \
+                                     Opened a standard SSH session instead — a disconnect will \
+                                     lose open work."
+                                );
+                                workspace.fall_back_to_classic_ssh(
+                                    node_id_owned,
+                                    server_owned,
+                                    warning,
+                                    ctx,
+                                );
+                            }
+                        });
+                    }
                 }
             },
         );
         true
+    }
+
+    /// Connects a daemon-hosted session on an established ControlMaster: builds the
+    /// self-healing transport, marks the session persistent (transport drops trigger
+    /// reconnect — the daemon keeps the session alive), and connects. The daemon tab
+    /// created beforehand picks it up via `SessionConnected`.
+    #[cfg(unix)]
+    fn connect_daemon_session(
+        &mut self,
+        server: warp_ssh_manager::SshServerInfo,
+        session_id: SessionId,
+        socket_path: std::path::PathBuf,
+        auth_context: std::sync::Arc<remote_server::auth::RemoteServerAuthContext>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::remote_server::manager::RemoteServerManager;
+        use crate::remote_server::ssh_transport::SshTransport;
+
+        let transport =
+            SshTransport::new(socket_path, auth_context.clone()).with_self_heal(server);
+        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+            mgr.mark_session_persistent(session_id);
+            mgr.connect_session(session_id, transport, auth_context, ctx);
+        });
+    }
+
+    /// Daemon path unavailable/failed → open a classic local-PTY SSH session (no
+    /// second daemon attempt) with a persistent warning toast: the user must know
+    /// they have NO persistent session — a disconnect loses open work.
+    ///
+    /// The toast must go on `toast_stack` (rendered unconditionally via
+    /// global_toast_positioning). `update_toast_stack` is only rendered behind
+    /// `FeatureFlag::AvatarInTabBar`, which the fork hard-disables — a toast added
+    /// there is invisible.
+    #[cfg(unix)]
+    fn fall_back_to_classic_ssh(
+        &mut self,
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+        warning: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.toast_stack.update(ctx, |stack, ctx| {
+            stack.add_persistent_toast(DismissibleToast::error(warning), ctx);
+        });
+        self.open_ssh_terminal(node_id, server, true, ctx);
     }
 
     /// Adopts an already-running daemon session in a new tab: attaches to
@@ -5728,6 +5841,7 @@ impl Workspace {
             connection_session_id: session_id,
             open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
             adopt_pty_session_id: Some(pty_session_id.clone()),
+            install_progress_rx: None,
         };
 
         self.add_tab_with_pane_layout(

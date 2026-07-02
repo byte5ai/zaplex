@@ -191,16 +191,26 @@ pub async fn ensure_control_master(server: &SshServerInfo, socket_path: &Path) -
 /// SSH session (with a warning) instead of hanging on an install-on-connect.
 pub const DAEMON_BINARY_MISSING: &str = "daemon-binary-missing";
 
-/// Brings up the headless ControlMaster for `server` at `socket_path` and verifies
-/// the remote-server binary is present (no install-on-connect). Shared by the
-/// daemon-terminal connect (`Workspace::spawn_daemon_session_connect`) and the
-/// adopt-sidebar's connect-to-list. On success the caller builds a fresh
-/// [`SshTransport`] over `socket_path` and calls `connect_session`.
-pub async fn prepare_daemon_transport(
+/// Outcome of [`preflight_daemon_transport`]: the daemon is either ready to
+/// connect, or absent but installable (an install source exists).
+pub enum DaemonPreflight {
+    /// The remote-server binary is present — connect right away.
+    Ready,
+    /// Binary missing, but an install source exists (dev cross-compile, bundled
+    /// tarball, or reachable release asset) — run the auto-install, showing
+    /// progress in the daemon tab, then connect.
+    NeedsInstall,
+}
+
+/// Fast, bounded preflight for a daemon connect: brings up the headless
+/// ControlMaster and classifies the host (binary present / installable /
+/// unavailable). No install work happens here, so the caller can create the
+/// daemon tab *first* and stream install progress into it.
+pub async fn preflight_daemon_transport(
     server: SshServerInfo,
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<DaemonPreflight, String> {
     let host = server.host.clone();
     log::info!("daemon connect [{host}]: establishing ControlMaster");
     ensure_control_master(&server, &socket_path)
@@ -209,37 +219,55 @@ pub async fn prepare_daemon_transport(
     let transport = SshTransport::new(socket_path, auth_context);
     log::info!("daemon connect [{host}]: checking remote-server binary");
     match transport.check_binary().await {
-        Ok(true) => log::info!("daemon connect [{host}]: binary present"),
-        // Binary missing → auto-install on first connect (like Warp), via the
-        // client-push path (`install_binary`): the client fetches the host-matching
-        // binary and scp's it over the existing ControlMaster — the host never needs
-        // internet. This is bounded (download + scp timeouts). On genuine failure
-        // (e.g. no binary source available yet) the caller falls back to a classic
-        // SSH session with a warning — never a silent unbounded hang.
+        Ok(true) => {
+            log::info!("daemon connect [{host}]: binary present");
+            Ok(DaemonPreflight::Ready)
+        }
+        // Binary missing → auto-install on first connect (like Warp), IF it can
+        // actually be sourced (dev cross-compile, bundled tarball, or a reachable
+        // version-matched release asset). Otherwise fail fast with the
+        // DAEMON_BINARY_MISSING sentinel so the caller opens a classic SSH session
+        // with a warning — never a multi-minute stall on a doomed download.
         Ok(false) => {
-            // Only auto-install if the binary can actually be sourced (dev cross-compile,
-            // an embedded binary, or a reachable release asset). Otherwise fail fast with
-            // the DAEMON_BINARY_MISSING sentinel so the caller opens a classic SSH session
-            // with a warning — never a multi-minute stall on a doomed download. (Once the
-            // embed / a real release process lands, `install_source_available` returns true
-            // and this becomes the Warp-style auto-install-on-first-connect.)
-            if !transport.install_source_available().await {
+            if transport.install_source_available().await {
+                log::info!("daemon connect [{host}]: binary missing — install source available");
+                Ok(DaemonPreflight::NeedsInstall)
+            } else {
                 log::info!(
                     "daemon connect [{host}]: remote-server binary missing and no install \
                      source available — falling back to classic SSH"
                 );
-                return Err(DAEMON_BINARY_MISSING.to_string());
+                Err(DAEMON_BINARY_MISSING.to_string())
             }
+        }
+        Err(e) => Err(format!("remote-server binary check failed: {e}")),
+    }
+}
+
+/// Brings up the headless ControlMaster for `server` at `socket_path` and ensures
+/// the remote-server binary is present, auto-installing (without progress UI) if
+/// needed. Used by the adopt-sidebar's connect-to-list and other headless flows;
+/// the interactive first-connect path uses [`preflight_daemon_transport`] +
+/// `install_binary_with_progress` instead so the tab can show progress.
+pub async fn prepare_daemon_transport(
+    server: SshServerInfo,
+    socket_path: PathBuf,
+    auth_context: Arc<RemoteServerAuthContext>,
+) -> std::result::Result<(), String> {
+    let host = server.host.clone();
+    match preflight_daemon_transport(server, socket_path.clone(), auth_context.clone()).await? {
+        DaemonPreflight::Ready => Ok(()),
+        DaemonPreflight::NeedsInstall => {
             log::info!("daemon connect [{host}]: binary missing — installing (first connect)");
+            let transport = SshTransport::new(socket_path, auth_context);
             transport
                 .install_binary()
                 .await
                 .map_err(|e| format!("remote-server install failed: {e}"))?;
             log::info!("daemon connect [{host}]: install complete");
+            Ok(())
         }
-        Err(e) => return Err(format!("remote-server binary check failed: {e}")),
     }
-    Ok(())
 }
 
 /// Connects to `server`'s daemon (a transient connection) and returns the

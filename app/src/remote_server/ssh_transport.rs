@@ -109,10 +109,13 @@ impl SshTransport {
         if remote_server::setup::is_dev_source_build() {
             return true;
         }
-        // (embedded-binary check lands here with ladder rung 3a)
         let Ok(platform) = detect_remote_platform(&self.socket_path).await else {
             return false;
         };
+        // Rung 3a: a tarball bundled in the app matches — always installable, offline.
+        if crate::remote_server::embedded::embedded_server_tarball(&platform).is_some() {
+            return true;
+        }
         let url = remote_server::setup::download_tarball_url(&platform);
         // Client-side HEAD, following redirects (-L: GitHub 301s asset URLs) and bounded
         // (--max-time). `-f` makes a 404 (unpublished tag) a fast non-success.
@@ -128,6 +131,41 @@ impl SshTransport {
             .status()
             .await;
         matches!(status, Ok(status) if status.success())
+    }
+
+    /// Installs the remote-server binary, reporting human-readable phase messages
+    /// through `progress` (the daemon tab renders them during a first-connect
+    /// auto-install). Same behavior as the `RemoteTransport::install_binary` trait
+    /// method — that one simply runs this with `InstallProgress::silent()`.
+    pub fn install_binary_with_progress(
+        &self,
+        progress: InstallProgress,
+    ) -> Pin<Box<dyn Future<Output = core::result::Result<(), String>> + Send>> {
+        let socket_path = self.socket_path.clone();
+        Box::pin(async move {
+            log::info!(
+                "Installing remote server binary to {}",
+                remote_server::setup::remote_server_binary()
+            );
+
+            // Zaplex fork: DEBUG source build (no release tag) uses dev mode,
+            // cross-compiling local `warp` and uploading instead of a stale GitHub release.
+            // On failure (cross-compile prerequisites missing, etc.), fall through to the
+            // install ladder. Release builds skip this entire block.
+            if remote_server::setup::is_dev_source_build() {
+                log::info!("dev remote-server: DEBUG source build detected, switching to local cross-compile install");
+                match dev_install_local_binary(&socket_path).await {
+                    Ok(()) => return Ok(()),
+                    Err(error) => {
+                        log::warn!(
+                            "dev remote-server: local cross-compile install unavailable, falling back to the install ladder: {error:#}"
+                        );
+                    }
+                }
+            }
+
+            install_ladder(&socket_path, progress).await
+        })
     }
 }
 
@@ -569,14 +607,35 @@ async fn download_remote_server_tarball(download_url: &str, tarball_path: &Path)
     ))
 }
 
+/// Progress reporting for the install ladder. Wraps an optional unbounded
+/// channel to the daemon tab; a phase send never blocks the install and a
+/// dropped receiver (tab closed) is silently ignored.
+#[derive(Clone)]
+pub struct InstallProgress(Option<async_channel::Sender<String>>);
+
+impl InstallProgress {
+    pub fn new(tx: async_channel::Sender<String>) -> Self {
+        Self(Some(tx))
+    }
+
+    pub fn silent() -> Self {
+        Self(None)
+    }
+
+    fn phase(&self, message: impl Into<String>) {
+        let message = message.into();
+        log::info!("remote-server install: {message}");
+        if let Some(tx) = &self.0 {
+            let _ = tx.try_send(message);
+        }
+    }
+}
+
 /// Rung-1 reachability probe: can the *host* quickly reach the release tarball? A short
 /// HEAD over the ControlMaster decides host-download (rung 2) vs. client relay (rung 3)
 /// without paying a full download timeout on a locked-down host.
-async fn probe_host_internet(socket_path: &Path) -> bool {
-    let Ok(platform) = detect_remote_platform(socket_path).await else {
-        return false;
-    };
-    let url = remote_server::setup::download_tarball_url(&platform);
+async fn probe_host_internet(socket_path: &Path, platform: &RemotePlatform) -> bool {
+    let url = remote_server::setup::download_tarball_url(platform);
     let cmd = format!("curl -fsI --max-time 3 {url} >/dev/null 2>&1");
     match remote_server::ssh::run_ssh_command(socket_path, &cmd, std::time::Duration::from_secs(6))
         .await
@@ -586,9 +645,10 @@ async fn probe_host_internet(socket_path: &Path) -> bool {
     }
 }
 
-async fn scp_install_fallback(socket_path: &Path) -> Result<()> {
-    let platform = detect_remote_platform(socket_path).await?;
-    let download_url = remote_server::setup::download_tarball_url(&platform);
+/// Rung-3 relay: upload a tarball the *client* supplies (bundled or downloaded)
+/// over the ControlMaster and run the staged install script — the host needs no
+/// internet access.
+async fn relay_tarball_install(socket_path: &Path, local_tarball: &Path) -> Result<()> {
     let remote_server_dir = remote_server::setup::remote_server_dir();
     let mkdir_cmd = format!("mkdir -p {remote_server_dir}");
     let mkdir_output = remote_server::ssh::run_ssh_command(
@@ -606,14 +666,10 @@ async fn scp_install_fallback(socket_path: &Path) -> Result<()> {
         ));
     }
 
-    let tempdir = tempfile::tempdir()?;
-    let tarball_path = tempdir.path().join("zap.tar.gz");
-    download_remote_server_tarball(&download_url, &tarball_path).await?;
-
     let remote_tarball_path = format!("{remote_server_dir}/zap-upload.tar.gz");
     remote_server::ssh::scp_upload(
         socket_path,
-        &tarball_path,
+        local_tarball,
         &remote_tarball_path,
         remote_server::setup::SCP_INSTALL_TIMEOUT,
     )
@@ -628,6 +684,65 @@ async fn scp_install_fallback(socket_path: &Path) -> Result<()> {
     .map_err(|error| anyhow!("staged install failed: {error}"))?;
 
     verify_installed_binary(socket_path).await
+}
+
+/// The install ladder (docs/superpowers/specs/2026-07-02-daemon-install-ladder-design.md):
+/// rung 1 reachability probe → rung 2 host-side download → rung 3a bundled-tarball
+/// relay → rung 3b client-download relay. Every rung installs the tarball matching
+/// the client's exact version, and every step is bounded by a timeout.
+async fn install_ladder(
+    socket_path: &Path,
+    progress: InstallProgress,
+) -> core::result::Result<(), String> {
+    progress.phase("Detecting host platform…");
+    let platform = detect_remote_platform(socket_path)
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+
+    // Rung 1: a fast probe so a locked-down/air-gapped host doesn't pay a full
+    // download timeout before we relay from the client.
+    progress.phase("Checking whether the host can reach the release…");
+    if probe_host_internet(socket_path, &platform).await {
+        // Rung 2: the host fetches the version-matched tarball itself (fastest —
+        // its own pipe, no client bandwidth). On failure, fall to the relay.
+        progress.phase("Host is downloading the Zaplex session daemon…");
+        match run_install_script(socket_path, None, remote_server::setup::INSTALL_TIMEOUT).await {
+            Ok(()) => {
+                progress.phase("Verifying installation…");
+                return verify_installed_binary(socket_path)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+            }
+            Err(error) => {
+                log::warn!("host-side download failed ({error}); relaying from client");
+            }
+        }
+    } else {
+        log::info!("remote host cannot reach the release; relaying binary from client");
+    }
+
+    // Rung 3a: a tarball bundled in the app bundle — instant, fully offline, and
+    // version-matched by construction (CI stages it with the same GIT_RELEASE_TAG).
+    if let Some(tarball) = crate::remote_server::embedded::embedded_server_tarball(&platform) {
+        progress.phase("Uploading the bundled Zaplex session daemon to the host…");
+        return relay_tarball_install(socket_path, &tarball)
+            .await
+            .map_err(|error| format!("{error:#}"));
+    }
+
+    // Rung 3b: client download — covers the open-ended platform matrix when no
+    // bundled tarball matches. Still no host internet needed.
+    progress.phase("Downloading the Zaplex session daemon on this machine…");
+    let tempdir = tempfile::tempdir().map_err(|error| format!("{error:#}"))?;
+    let tarball_path = tempdir.path().join("zap.tar.gz");
+    let download_url = remote_server::setup::download_tarball_url(&platform);
+    download_remote_server_tarball(&download_url, &tarball_path)
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+    progress.phase("Uploading the Zaplex session daemon to the host…");
+    relay_tarball_install(socket_path, &tarball_path)
+        .await
+        .map_err(|error| format!("{error:#}"))
 }
 
 impl RemoteTransport for SshTransport {
@@ -732,62 +847,7 @@ impl RemoteTransport for SshTransport {
     }
 
     fn install_binary(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
-        let socket_path = self.socket_path.clone();
-        Box::pin(async move {
-            log::info!(
-                "Installing remote server binary to {}",
-                remote_server::setup::remote_server_binary()
-            );
-
-            // Zaplex fork: DEBUG source build (no release tag) uses dev mode,
-            // cross-compiling local `warp` and uploading instead of a stale GitHub release.
-            // On failure (cross-compile prerequisites missing, etc.), fall through to the
-            // client-push install. Release builds skip this entire block.
-            if remote_server::setup::is_dev_source_build() {
-                log::info!("dev remote-server: DEBUG source build detected, switching to local cross-compile install");
-                match dev_install_local_binary(&socket_path).await {
-                    Ok(()) => return Ok(()),
-                    Err(error) => {
-                        log::warn!(
-                            "dev remote-server: local cross-compile install unavailable, falling back to client-push install: {error:#}"
-                        );
-                        // Fall through to the client-push install below.
-                    }
-                }
-            }
-
-            // Install ladder (docs/superpowers/specs/2026-07-02-daemon-install-ladder-design.md):
-            //   rung 1 reachability probe → rung 2 host-side download → rung 3 client relay.
-            //
-            // Rung 1: a fast probe so a locked-down/air-gapped host doesn't pay a full
-            // download timeout before we relay from the client.
-            if probe_host_internet(&socket_path).await {
-                // Rung 2: the host fetches the version-matched tarball itself (fastest —
-                // its own pipe, no client bandwidth). On failure, fall to the relay.
-                match run_install_script(&socket_path, None, remote_server::setup::INSTALL_TIMEOUT)
-                    .await
-                {
-                    Ok(()) => {
-                        return verify_installed_binary(&socket_path)
-                            .await
-                            .map_err(|error| format!("{error:#}"));
-                    }
-                    Err(error) => {
-                        log::warn!("host-side download failed ({error}); relaying from client");
-                    }
-                }
-            } else {
-                log::info!("remote host cannot reach the release; relaying binary from client");
-            }
-
-            // Rung 3: client relay — the client supplies the host-matching binary and scp's
-            // it over the existing ControlMaster (host needs no internet). Today this is
-            // rung 3b (client download); rung 3a (bundled/embedded binary) is wired in
-            // separately for the fully-offline case.
-            scp_install_fallback(&socket_path)
-                .await
-                .map_err(|error| format!("{error:#}"))
-        })
+        self.install_binary_with_progress(InstallProgress::silent())
     }
 
     fn connect(

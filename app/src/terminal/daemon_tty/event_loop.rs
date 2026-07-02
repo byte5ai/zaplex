@@ -82,6 +82,7 @@ impl EventLoop {
         connection_session_id: SessionId,
         open_params: OpenSessionParams,
         adopt_pty_session_id: Option<String>,
+        install_progress_rx: Option<Receiver<String>>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let mut event_loop = Self::new(model, channel_event_listener, connection_session_id);
@@ -90,6 +91,17 @@ impl EventLoop {
             Some(id) => event_loop.pty_session_id = Some(id),
             // Open a fresh session once the transport is connected.
             None => event_loop.pending_open = Some((open_params, size_info)),
+        }
+
+        // First-connect auto-install: render the install ladder's phase messages
+        // in this tab while the remote-server binary is being set up. The channel
+        // closes when the install finishes (sender dropped), ending the stream.
+        if let Some(progress_rx) = install_progress_rx {
+            ctx.spawn_stream_local(
+                progress_rx,
+                |me, message, _ctx| me.write_progress(&message),
+                |_, _| (),
+            );
         }
 
         // Output path: live PTY bytes arrive as manager pushes. Filter to our
@@ -460,6 +472,13 @@ impl EventLoop {
     /// in the tab rather than a blank/hung view. Rendered in bold red.
     fn write_notice(&mut self, text: &str) {
         let line = format!("\r\n\x1b[1;31m[zaplex] {text}\x1b[0m\r\n");
+        self.process_pty_bytes(line.as_bytes());
+    }
+
+    /// Neutral (non-error) status line, used for install/setup progress. Dim
+    /// cyan instead of the red error styling of [`Self::write_notice`].
+    fn write_progress(&mut self, text: &str) {
+        let line = format!("\r\n\x1b[2;36m[zaplex] {text}\x1b[0m\r\n");
         self.process_pty_bytes(line.as_bytes());
     }
 

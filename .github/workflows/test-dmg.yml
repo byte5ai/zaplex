@@ -14,8 +14,12 @@
 #
 # `dmg_tag` wird als GIT_RELEASE_TAG eingebrannt und bestimmt den remote-server-
 # Pfad, den der Client auf dem Ziel-Host prüft: ~/.zaplex/remote-server/zaplex-<tag>.
-# Fixer Default, damit das Daemon-Binary auf dem Ziel-Host deterministisch
-# vorab platziert werden kann.
+#
+# Der Linux-remote-server (musl x86_64) wird als Tarball MIT ins DMG gebündelt
+# (Contents/Resources/bundled/remote-server/) — der erste Connect auf einen
+# Linux-x86_64-Host installiert den Daemon automatisch offline (Install-Leiter
+# Rung 3a, siehe app/src/remote_server/embedded.rs). Manuelles Vorab-Platzieren
+# via build-remote-server.yml ist damit nur noch für andere Plattformen nötig.
 
 name: Test DMG
 
@@ -43,12 +47,95 @@ env:
   CHANNEL: oss
 
 jobs:
+  # Linux remote-server tarball, bundled INTO the DMG (install ladder rung 3a):
+  # first connect to a Linux x86_64 host auto-installs the persistent-session
+  # daemon fully offline, version-matched to the client by construction (same
+  # GIT_RELEASE_TAG). Mirrors build-remote-server.yml (static musl via zigbuild);
+  # packed in the release-asset layout the install script expects (binary named
+  # `zaplex` inside `zap-linux-x86_64.tar.gz`, see setup.rs tarball_basename()).
+  build_remote_server:
+    name: Build bundled remote-server (Linux musl x86_64)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Free up disk space
+        shell: bash
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift || true
+          df -h /
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          install_release_deps: true
+
+      - name: Install zig + cargo-zigbuild for static musl build
+        run: |
+          set -euo pipefail
+          rustup target add x86_64-unknown-linux-musl
+          ZIG_VERSION="0.13.0"
+          ZIG_DIR="$HOME/.local/zig-${ZIG_VERSION}"
+          if [ ! -x "${ZIG_DIR}/zig" ]; then
+            mkdir -p "${ZIG_DIR}"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+              | tar -xJ -C "${ZIG_DIR}" --strip-components=1
+          fi
+          echo "${ZIG_DIR}" >> "$GITHUB_PATH"
+          cargo install --locked cargo-zigbuild --version ^0.19
+        shell: bash
+
+      - name: Build remote-server CLI (static musl via zigbuild)
+        id: bundle_cli
+        run: |
+          script/bundle --channel "$CHANNEL" --arch x86_64 --artifact cli --packages none \
+            --target x86_64-unknown-linux-musl
+        shell: bash
+        env:
+          GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          USE_ZIGBUILD: "true"
+          PKG_CONFIG_ALLOW_CROSS: 1
+
+      - name: Pack tarball in the release-asset layout
+        # The staged-install script extracts the tarball and looks for the binary
+        # under the client channel's `binary_name()` (= `zaplex` for oss), see
+        # crates/remote_server/src/install_remote_server.sh.
+        run: |
+          set -euo pipefail
+          staging=$(mktemp -d)
+          cp "${{ steps.bundle_cli.outputs.executable_path }}" "$staging/zaplex"
+          tar -czf zap-linux-x86_64.tar.gz -C "$staging" zaplex
+          ls -lh zap-linux-x86_64.tar.gz
+        shell: bash
+
+      - name: Upload remote-server tarball
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zap-remote-server-linux-x86_64
+          path: zap-linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
   build_dmg:
     name: Build Test DMG (macOS ${{ inputs.arch }})
     runs-on: ${{ inputs.arch == 'x86_64' && 'macos-26-intel' || 'macos-26' }}
     timeout-minutes: 360
+    needs: build_remote_server
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Stage the Linux remote-server tarball where prepare_bundled_resources
+      # picks it up (resources/bundled/ → Zaplex.app/Contents/Resources/bundled/),
+      # matching the runtime resolver app/src/remote_server/embedded.rs.
+      - name: Fetch bundled remote-server tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: zap-remote-server-linux-x86_64
+          path: resources/bundled/remote-server/
 
       - uses: ./.github/actions/prepare_environment
         with:

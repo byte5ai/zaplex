@@ -55,6 +55,11 @@ pub struct DaemonSessionRequest {
     /// daemon session (attach + replay instead of open) — the multi-session
     /// "adopt a running session" path (Stage 4).
     pub adopt_pty_session_id: Option<String>,
+    /// First-connect auto-install: phase messages from the install ladder
+    /// (`InstallProgress`), rendered as notice lines in this tab while the
+    /// remote-server binary is being set up. `None` for the common case where
+    /// the daemon is already installed.
+    pub install_progress_rx: Option<Receiver<String>>,
 }
 
 /// A [`crate::terminal::TerminalManager`] whose PTY lives in the remote daemon
@@ -94,6 +99,7 @@ impl TerminalManager {
         connection_session_id: SessionId,
         open_params: OpenSessionParams,
         adopt_pty_session_id: Option<String>,
+        install_progress_rx: Option<Receiver<String>>,
         ctx: &mut AppContext,
     ) -> ModelHandle<Box<dyn crate::terminal::TerminalManager>> {
         // Create all the channels we need for communication.
@@ -144,6 +150,7 @@ impl TerminalManager {
             connection_session_id,
             open_params,
             adopt_pty_session_id,
+            install_progress_rx,
             ctx,
         );
 
@@ -211,6 +218,7 @@ impl TerminalManager {
         connection_session_id: SessionId,
         open_params: OpenSessionParams,
         adopt_pty_session_id: Option<String>,
+        install_progress_rx: Option<Receiver<String>>,
         ctx: &mut AppContext,
     ) -> ModelHandle<EventLoop> {
         ctx.add_model(|ctx| {
@@ -222,6 +230,7 @@ impl TerminalManager {
                 connection_session_id,
                 open_params,
                 adopt_pty_session_id,
+                install_progress_rx,
                 ctx,
             )
         })

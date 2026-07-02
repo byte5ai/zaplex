@@ -4,6 +4,8 @@ pub use remote_server::*;
 
 #[cfg(not(target_family = "wasm"))]
 pub mod auth_context;
+#[cfg(not(target_family = "wasm"))]
+pub mod embedded;
 #[cfg(unix)]
 pub mod headless_connect;
 #[cfg(not(target_family = "wasm"))]

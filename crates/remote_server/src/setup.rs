@@ -379,14 +379,21 @@ fn version_suffix() -> String {
     }
 }
 
-/// Returns the Zaplex CLI tarball URL for the specified remote platform.
-pub fn download_tarball_url(platform: &RemotePlatform) -> String {
+/// Returns the release-asset tarball filename for a remote platform, e.g.
+/// `zap-linux-x86_64.tar.gz`. Single source of truth for the tarball naming —
+/// shared by the download URL, the bundled-in-the-app copies (install ladder
+/// rung 3a), and the CI packaging step that stages them.
+pub fn tarball_basename(platform: &RemotePlatform) -> String {
     format!(
-        "{}/zap-{}-{}.tar.gz",
-        download_url(),
+        "zap-{}-{}.tar.gz",
         platform.os.as_str(),
         platform.arch.as_str(),
     )
+}
+
+/// Returns the Zaplex CLI tarball URL for the specified remote platform.
+pub fn download_tarball_url(platform: &RemotePlatform) -> String {
+    format!("{}/{}", download_url(), tarball_basename(platform))
 }
 
 /// Zaplex fork: In development mode (DEBUG source builds without release tags),
