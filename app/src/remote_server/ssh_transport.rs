@@ -94,6 +94,41 @@ impl SshTransport {
         let quoted_identity_key = shell_words::quote(&identity_key);
         format!("{binary} remote-server-proxy --identity-key {quoted_identity_key}")
     }
+
+    /// Fast, bounded check for whether the remote-server binary can be sourced at all,
+    /// used to decide *auto-install vs. fast classic-SSH fallback* on first daemon
+    /// connect. Sources, in order of cost:
+    ///   1. a dev cross-compile (`is_dev_source_build`) — always available locally;
+    ///   2. (future) a binary embedded in the app bundle (ladder rung 3a);
+    ///   3. a reachable, version-matched release asset — a client-side HEAD.
+    ///
+    /// Returns `false` in seconds when none exist (e.g. before zaplex publishes
+    /// remote-server release tarballs), so the caller degrades to a classic SSH session
+    /// with a warning instead of hanging on a doomed multi-stage install.
+    pub async fn install_source_available(&self) -> bool {
+        if remote_server::setup::is_dev_source_build() {
+            return true;
+        }
+        // (embedded-binary check lands here with ladder rung 3a)
+        let Ok(platform) = detect_remote_platform(&self.socket_path).await else {
+            return false;
+        };
+        let url = remote_server::setup::download_tarball_url(&platform);
+        // Client-side HEAD, following redirects (-L: GitHub 301s asset URLs) and bounded
+        // (--max-time). `-f` makes a 404 (unpublished tag) a fast non-success.
+        let status = command::r#async::Command::new("curl")
+            .arg("-fsIL")
+            .arg("--max-time")
+            .arg("3")
+            .arg(&url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .status()
+            .await;
+        matches!(status, Ok(status) if status.success())
+    }
 }
 
 #[derive(Debug)]

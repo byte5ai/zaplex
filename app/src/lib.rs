@@ -2279,6 +2279,23 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
     #[cfg(all(debug_assertions, not(windows)))]
     flags.insert(FeatureFlag::ServerFileBrowser);
 
+    // zaplex: keep the remote-server SSH enhancement (remote file open/edit/save + the
+    // server file browser) *source-honest*. It only works when the host binary can
+    // actually be provided, and today the sole install source is a dev cross-compile
+    // (`is_dev_source_build`): zaplex does not yet publish remote-server release tarballs
+    // and does not yet bundle them (embed / ladder rung 3a). When the flag is on WITHOUT a
+    // source, every *classic* SSH session is routed through a stash-and-install
+    // (model_events.rs) that withholds the interactive shell behind failing download
+    // timeouts — the "Starting shell …" hang the user hit. So when no source exists, drop
+    // the flags: classic SSH becomes an instant plain shell, while the persistent *daemon*
+    // path (which does NOT gate on these flags) still provides resilience and its own
+    // auto-install. Re-widen the condition (e.g. an `embedded_server_available()` term)
+    // once the embed or a real remote-server release process lands.
+    if !::remote_server::setup::is_dev_source_build() {
+        flags.remove(&FeatureFlag::SshRemoteServer);
+        flags.remove(&FeatureFlag::ServerFileBrowser);
+    }
+
     // Issue #72: HTTP proxy settings page. Does not use channel check, all channels including zaplex
     // enabled by default, as basic capability for enterprise VPN / corporate proxy scenarios.
     flags.insert(FeatureFlag::HttpProxySettings);

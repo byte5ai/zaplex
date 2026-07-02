@@ -217,6 +217,19 @@ pub async fn prepare_daemon_transport(
         // (e.g. no binary source available yet) the caller falls back to a classic
         // SSH session with a warning — never a silent unbounded hang.
         Ok(false) => {
+            // Only auto-install if the binary can actually be sourced (dev cross-compile,
+            // an embedded binary, or a reachable release asset). Otherwise fail fast with
+            // the DAEMON_BINARY_MISSING sentinel so the caller opens a classic SSH session
+            // with a warning — never a multi-minute stall on a doomed download. (Once the
+            // embed / a real release process lands, `install_source_available` returns true
+            // and this becomes the Warp-style auto-install-on-first-connect.)
+            if !transport.install_source_available().await {
+                log::info!(
+                    "daemon connect [{host}]: remote-server binary missing and no install \
+                     source available — falling back to classic SSH"
+                );
+                return Err(DAEMON_BINARY_MISSING.to_string());
+            }
             log::info!("daemon connect [{host}]: binary missing — installing (first connect)");
             transport
                 .install_binary()
