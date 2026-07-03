@@ -3917,6 +3917,47 @@ impl Workspace {
         });
     }
 
+    /// "Ask my agent about this context" (Oz-repurpose design §4): open a
+    /// terminal tab running the user's own CLI coding agent and prefill
+    /// `prompt` in the input box — the user reviews and presses Enter (no
+    /// timing race: the text waits in zaplex's input, not the PTY).
+    ///
+    /// Agent resolution (§3): explicit `agent` if installed; else the single
+    /// installed agent; else the first installed one (picker = follow-up per
+    /// design §3); none installed → an actionable toast instead of a silent
+    /// fallback to the retired in-app agent mode.
+    fn ask_agent(&mut self, prompt: String, agent: Option<CLIAgent>, ctx: &mut ViewContext<Self>) {
+        let install_model = CLIAgentInstallModel::as_ref(ctx);
+        let installed: Vec<CLIAgent> = enum_iterator::all::<CLIAgent>()
+            .filter(|a| !matches!(a, CLIAgent::Unknown))
+            .filter(|a| install_model.is_cli_agent_installed(*a))
+            .collect();
+        let resolved = agent
+            .filter(|a| installed.contains(a))
+            .or_else(|| installed.first().copied());
+        let Some(agent) = resolved else {
+            self.toast_stack.update(ctx, |stack, ctx| {
+                stack.add_persistent_toast(
+                    DismissibleToast::error(crate::t!("ask-agent-none-installed").to_string()),
+                    ctx,
+                );
+            });
+            return;
+        };
+
+        self.add_tab_with_specific_agent(agent, ctx);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
+                terminal_view.update(ctx, |terminal_view, ctx| {
+                    terminal_view.input().update(ctx, |input, ctx| {
+                        input.replace_buffer_content(&prompt, ctx);
+                        input.focus_input_box(ctx);
+                    });
+                });
+            }
+        });
+    }
+
     /// Creates a new default terminal tab, then runs the startup command of the specified CLI agent.
     fn add_tab_with_specific_agent(&mut self, agent: CLIAgent, ctx: &mut ViewContext<Self>) {
         self.add_terminal_tab(false, ctx);
@@ -19539,51 +19580,16 @@ impl TypedActionView for Workspace {
                 let path = crate::settings::user_preferences_toml_file_path();
                 self.add_tab_for_code_file(path, None, ctx);
             }
+            AskAgent { prompt, agent } => {
+                self.ask_agent(prompt.clone(), *agent, ctx);
+            }
             FixSettingsWithOz { error_description } => {
-                use crate::ai::skills::SkillManager;
-                let modify_settings_skill = SkillManager::as_ref(ctx)
-                    .active_bundled_skill("modify-settings", ctx)
-                    .cloned();
-                let query = format!(
+                // Repurposed (Oz-repurpose P1): the fix goes to the USER's own
+                // CLI coding agent, not the retired in-app agent mode.
+                let prompt = format!(
                     "My settings.toml file has an error: {error_description}. Please fix it."
                 );
-                self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-                    pane_group.add_terminal_pane_in_agent_mode(None, None, ctx);
-                    if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
-                        terminal_view.update(ctx, |terminal_view, terminal_view_ctx| {
-                            // The modify-settings skill should always be available for
-                            // production builds.
-                            if let Some(skill) = modify_settings_skill {
-                                terminal_view.ai_controller().update(
-                                    terminal_view_ctx,
-                                    |controller, ctx| {
-                                        controller.send_slash_command_request(
-                                            SlashCommandRequest::InvokeSkill {
-                                                skill,
-                                                user_query: Some(query),
-                                            },
-                                            ctx,
-                                        );
-                                    },
-                                );
-                            } else if let Some(conversation_id) =
-                                terminal_view.active_conversation_id(terminal_view_ctx)
-                            {
-                                terminal_view.ai_controller().update(
-                                    terminal_view_ctx,
-                                    |controller, ctx| {
-                                        controller.send_user_query_in_conversation(
-                                            query,
-                                            conversation_id,
-                                            None,
-                                            ctx,
-                                        );
-                                    },
-                                );
-                            }
-                        });
-                    }
-                });
+                self.ask_agent(prompt, None, ctx);
             }
             OpenWorktreeInRepo { repo_path } => {
                 self.open_worktree_in_repo(repo_path.clone(), ctx);

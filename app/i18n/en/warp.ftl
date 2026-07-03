@@ -1201,6 +1201,8 @@ settings-color-picker-add-directory-color = Add directory color
 # ---- settings_file_footer.rs ----
 settings-footer-open-file = Open settings file
 settings-footer-alert-open-file = Open file
+ask-agent-none-installed = No coding agent found. Install one (Claude Code, Codex, Gemini, …) and it will appear here.
+settings-footer-alert-fix-with-agent = Fix with { $agent }
 settings-footer-alert-fix-with-oz = Fix with AI
 
 # --- ANCHOR-SUB-CODE (agent-settings-code) ---

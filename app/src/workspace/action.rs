@@ -623,6 +623,14 @@ pub enum WorkspaceAction {
     /// Opens the settings.toml file in a code editor pane.
     OpenSettingsFile,
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
+    /// Send a fully-formed prompt to the user's own CLI coding agent (opens a
+    /// terminal tab running the agent, prompt prefilled in the input box for
+    /// review — the "ask my agent about this context" primitive; Oz-repurpose
+    /// design §4). `agent: None` resolves via the installed-set rule.
+    AskAgent {
+        prompt: String,
+        agent: Option<crate::terminal::cli_agent::CLIAgent>,
+    },
     FixSettingsWithOz {
         error_description: String,
     },
@@ -857,6 +865,7 @@ impl WorkspaceAction {
             | TabConfigSidecarEditConfig { .. }
             | TabConfigSidecarRemoveConfig { .. }
             | OpenSettingsFile
+            | AskAgent { .. }
             | FixSettingsWithOz { .. } => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,

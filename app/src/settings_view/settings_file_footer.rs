@@ -14,6 +14,7 @@ use crate::WorkspaceAction;
 use pathfinder_color::ColorU;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::Fill;
+use warpui::SingletonEntity as _;
 use warpui::elements::{
     Border, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Element, Empty, Expanded, Flex, Highlight, Hoverable,
@@ -162,6 +163,7 @@ pub fn render_settings_error_alert(
     error: &SettingsFileError,
     ai_enabled: bool,
     mouse_states: &SettingsFooterMouseStates,
+    app: &warpui::AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     // Warning banner colors: yellow background, contrast-safe text on top of
@@ -249,12 +251,28 @@ pub fn render_settings_error_alert(
 
     if ai_enabled {
         let error_description = error.to_string();
+        // Dynamic label (Oz-repurpose §3): name the agent that will actually
+        // handle the fix when it is unambiguous ("Fix with Claude"), otherwise
+        // the generic "Fix with AI".
+        let install_model = crate::terminal::cli_agent::CLIAgentInstallModel::as_ref(app);
+        let installed: Vec<crate::terminal::cli_agent::CLIAgent> =
+            enum_iterator::all::<crate::terminal::cli_agent::CLIAgent>()
+                .filter(|a| !matches!(a, crate::terminal::cli_agent::CLIAgent::Unknown))
+                .filter(|a| install_model.is_cli_agent_installed(*a))
+                .collect();
+        let label = match installed.first() {
+            Some(agent) => crate::t!(
+                "settings-footer-alert-fix-with-agent",
+                agent = agent.display_name()
+            ),
+            None => crate::t!("settings-footer-alert-fix-with-oz"),
+        };
         let fix_with_oz_button = render_alert_action_button(
             ui_font_family,
             text_color,
             mouse_states.alert_fix_with_oz_button.clone(),
-            crate::t!("settings-footer-alert-fix-with-oz"),
-            Some(Icon::Oz),
+            label,
+            Some(Icon::AiAssistant),
             /*bordered=*/ false,
             WorkspaceAction::FixSettingsWithOz { error_description },
         );
@@ -292,6 +310,7 @@ pub fn render_footer(
     error: Option<&SettingsFileError>,
     ai_enabled: bool,
     mouse_states: &SettingsFooterMouseStates,
+    app: &warpui::AppContext,
 ) -> Box<dyn Element> {
     let inner: Box<dyn Element> = match kind {
         SettingsFooterKind::Hidden => return Empty::new().finish(),
@@ -300,7 +319,7 @@ pub fn render_footer(
             mouse_states.open_settings_file_button.clone(),
         ),
         SettingsFooterKind::ErrorAlert => match error {
-            Some(error) => render_settings_error_alert(appearance, error, ai_enabled, mouse_states),
+            Some(error) => render_settings_error_alert(appearance, error, ai_enabled, mouse_states, app),
             // Defensive fallback: if the error disappears between `choose` and
             // `render_footer`, fall back to the plain button rather than
             // rendering an empty alert shell.
