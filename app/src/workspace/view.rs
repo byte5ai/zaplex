@@ -862,6 +862,12 @@ pub struct Workspace {
     /// input/output across two tabs). Stale entries (tab since closed) are pruned
     /// opportunistically on the next adopt.
     adopted_daemon_sessions: std::collections::HashMap<String, EntityId>,
+    /// SSH host node per tab (pane-group id → `ssh_servers.node_id`), recorded
+    /// when a tab is opened for a host (daemon or classic). Lets pane-scoped
+    /// actions resolve their host context — e.g. "Open file manager here" on a
+    /// remote tab opens that HOST's file manager, not the local one. Stale
+    /// entries (closed tabs) are pruned opportunistically on lookup.
+    ssh_tab_nodes: std::collections::HashMap<EntityId, String>,
     /// Host label per connected daemon session (connection `SessionId`), for
     /// host-scoped advisories (e.g. the multiplexer-nesting warning toast).
     #[cfg(unix)]
@@ -2887,6 +2893,7 @@ impl Workspace {
             tabs: Vec::new(),
             active_tab_index: 0,
             adopted_daemon_sessions: std::collections::HashMap::new(),
+            ssh_tab_nodes: std::collections::HashMap::new(),
             #[cfg(unix)]
             daemon_session_hosts: std::collections::HashMap::new(),
             #[cfg(unix)]
@@ -5573,6 +5580,11 @@ impl Workspace {
             ctx,
         );
 
+        // Remember which host this tab belongs to (pane-scoped context for e.g.
+        // "Open file manager here" opening the HOST's file manager).
+        let pane_group_id = self.active_tab_pane_group().id();
+        self.ssh_tab_nodes.insert(pane_group_id, node_id.clone());
+
         // Grab the focused terminal view of the new tab.
         let pane_group = self.active_tab_pane_group();
         let focused_pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
@@ -5769,6 +5781,14 @@ impl Workspace {
                     None, /* custom_tab_title */
                     ctx,
                 );
+                // Remember which host this tab belongs to (pane-scoped context
+                // for e.g. "Open file manager here").
+                if let Some(pane_group) = workspace.get_pane_group_view(workspace.active_tab_index)
+                {
+                    workspace
+                        .ssh_tab_nodes
+                        .insert(pane_group.id(), node_id_owned.clone());
+                }
 
                 match progress_tx {
                     // Daemon already installed → connect right away.
@@ -5968,10 +5988,16 @@ impl Workspace {
         );
 
         // The freshly added tab is the active one — remember which tab hosts this
-        // adopted session so a later duplicate adopt focuses it.
-        if let Some(pane_group) = self.get_pane_group_view(self.active_tab_index) {
+        // adopted session so a later duplicate adopt focuses it, and which host
+        // it belongs to (pane-scoped context).
+        if let Some(pane_group_id) = self
+            .get_pane_group_view(self.active_tab_index)
+            .map(|pane_group| pane_group.id())
+        {
             self.adopted_daemon_sessions
-                .insert(pty_session_id, pane_group.id());
+                .insert(pty_session_id, pane_group_id);
+            self.ssh_tab_nodes
+                .insert(pane_group_id, server.node_id.clone());
         }
 
         self.spawn_daemon_session_connect(server, session_id, ctx);
@@ -19347,7 +19373,18 @@ impl TypedActionView for Workspace {
                 self.open_ssh_terminal(node_id.clone(), server.clone(), false, ctx);
             }
             OpenLocalFileManager { start_path } => {
-                self.open_local_file_manager(start_path.clone(), ctx);
+                // Pane-scoped context: on a tab that belongs to an SSH host,
+                // "open file manager here" means that HOST's file manager; on a
+                // local tab it means the local one rooted at the session cwd.
+                let live_pg_ids: Vec<EntityId> =
+                    self.tabs.iter().map(|t| t.pane_group.id()).collect();
+                self.ssh_tab_nodes
+                    .retain(|pg_id, _| live_pg_ids.contains(pg_id));
+                let active_pg_id = self.active_tab_pane_group().id();
+                match self.ssh_tab_nodes.get(&active_pg_id).cloned() {
+                    Some(node_id) => self.open_sftp_pane(node_id, ctx),
+                    None => self.open_local_file_manager(start_path.clone(), ctx),
+                }
             }
             AddTabWithShell { shell, source } => {
                 self.add_tab_with_shell(shell.clone(), *source, ctx)
