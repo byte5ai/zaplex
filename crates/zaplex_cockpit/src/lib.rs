@@ -58,16 +58,19 @@ pub fn build_snapshot(
     for account in claude::discover_accounts(home, claude_config_dir_env) {
         let entries = claude::usage_for_account(&account, since);
         let live = sessions::live_sessions(&account.config_dir, now);
-        let usage = build_account_usage(
-            account, entries, now, budget_5h, budget_week, pricing,
-        );
+        // Explicit user budgets win; otherwise estimate from the plan tier so
+        // Enterprise/Team accounts aren't shown falsely maxed.
+        let (plan_5h, plan_week) = windows::plan_budgets(account.plan_tier.as_deref());
+        let b5h = if budget_5h > 0 { budget_5h } else { plan_5h };
+        let bwk = if budget_week > 0 { budget_week } else { plan_week };
+        let usage = build_account_usage(account, entries, now, b5h, bwk, pricing);
         accounts.push(windows::with_sessions(usage, live));
     }
     for account in codex::discover_accounts(codex_home) {
         let entries = codex::usage_for_account(&account, since);
-        accounts.push(build_account_usage(
-            account, entries, now, budget_5h, budget_week, pricing,
-        ));
+        let b5h = if budget_5h > 0 { budget_5h } else { DEFAULT_BUDGET_5H };
+        let bwk = if budget_week > 0 { budget_week } else { DEFAULT_BUDGET_WEEK };
+        accounts.push(build_account_usage(account, entries, now, b5h, bwk, pricing));
     }
 
     CockpitSnapshot {

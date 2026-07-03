@@ -18,7 +18,7 @@ use std::time::Duration;
 use chrono::Utc;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use watcher::HomeDirectoryWatcher;
-use zaplex_cockpit::{build_snapshot, CockpitSnapshot, PricingTable, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK};
+use zaplex_cockpit::{build_snapshot, CockpitSnapshot, PricingTable};
 
 use crate::cockpit::settings::CockpitSettings;
 
@@ -76,18 +76,10 @@ impl CockpitModel {
             return None;
         }
         let home = dirs::home_dir()?;
-        let budget_override = *CockpitSettings::as_ref(ctx).budget_5h as u64;
-        let budget_5h = if budget_override > 0 {
-            budget_override
-        } else {
-            DEFAULT_BUDGET_5H
-        };
-        let week_override = *CockpitSettings::as_ref(ctx).budget_week as u64;
-        let budget_week = if week_override > 0 {
-            week_override
-        } else {
-            DEFAULT_BUDGET_WEEK
-        };
+        // 0 = automatic: the spine estimates per-account budgets from the plan
+        // tier (Enterprise/Team/Pro/Max) instead of one flat default.
+        let budget_5h = *CockpitSettings::as_ref(ctx).budget_5h as u64;
+        let budget_week = *CockpitSettings::as_ref(ctx).budget_week as u64;
         Some(RefreshInputs {
             codex_home: home.join(".codex"),
             claude_config_dir_env: std::env::var("CLAUDE_CONFIG_DIR").ok(),

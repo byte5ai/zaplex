@@ -132,6 +132,24 @@ pub fn build_account_usage(
     }
 }
 
+/// Plan-tier-based budget estimate (port of claudeplex-desktop's `planBudget`):
+/// used when the user set no explicit budget, so a heavily-used Enterprise/Team
+/// account isn't shown falsely maxed against the flat Max-5x default. Sensible
+/// defaults, not exact plan limits.
+pub fn plan_budgets(plan_tier: Option<&str>) -> (u64, u64) {
+    let plan = plan_tier.unwrap_or("").to_ascii_lowercase();
+    if plan.contains("enterprise") {
+        (140_000_000, 2_000_000_000)
+    } else if plan.contains("team") || plan.contains("20") {
+        (70_000_000, 1_000_000_000)
+    } else if plan.contains("pro") {
+        (7_000_000, 100_000_000)
+    } else {
+        // Max 5x / unknown → the flat defaults.
+        (DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK)
+    }
+}
+
 /// Attaches live sessions to a built usage view and derives the account status.
 pub fn with_sessions(
     mut usage: AccountUsage,
