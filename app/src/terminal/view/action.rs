@@ -212,6 +212,9 @@ pub enum TerminalAction {
     ClearSelectionsWhenShellMode,
     Close,
     ToggleMaximizePane,
+    /// Open the local file manager pane rooted at this session's cwd (FM
+    /// pane-mode P1). Pane-scoped affordance: the context is visible.
+    OpenFileManagerHere,
     SplitRight(Option<AvailableShell>),
     SplitLeft(Option<AvailableShell>),
     SplitDown(Option<AvailableShell>),
@@ -499,6 +502,7 @@ impl fmt::Debug for TerminalAction {
             SplitDown(_) => f.write_str("SplitDown"),
             SplitUp(_) => f.write_str("SplitUp"),
             ToggleMaximizePane => f.write_str("ToggleMaximizeActivePane"),
+            OpenFileManagerHere => f.write_str("OpenFileManagerHere"),
             PromptContextMenu {
                 position_offset_from_prompt,
             } => write!(

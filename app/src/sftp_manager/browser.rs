@@ -334,6 +334,30 @@ impl SftpBrowserView {
         me
     }
 
+    /// Create a file-manager view over the **local** filesystem (FM pane-mode P1:
+    /// the same browser UI, backed by the local-FS backend instead of SFTP —
+    /// no connection involved). `start_path` is typically the invoking terminal
+    /// session's cwd, falling back to `$HOME`.
+    pub fn new_local(start_path: std::path::PathBuf, ctx: &mut ViewContext<Self>) -> Self {
+        // Construct via `new` with an empty node id, then replace the (never
+        // started for an empty id) connection with the local backend. The
+        // guard in `connect_to_server` skips empty node ids.
+        let mut me = Self::new(String::new(), ctx);
+        me.pane_configuration = ctx.add_model(|_ctx| {
+            PaneConfiguration::new(crate::t!("sftp-local-file-manager-title"))
+        });
+        let backend = Arc::new(crate::sftp_manager::sftp_backend::InMemorySftpBackend::new(
+            std::path::PathBuf::from("/"),
+        )) as Arc<dyn SftpBackend>;
+        me.connection = ConnectionState::Connected;
+        me.sftp = Some(backend);
+        me.current_path = start_path.clone();
+        me.path_history = vec![start_path];
+        me.history_index = 0;
+        me.refresh_dir(ctx);
+        me
+    }
+
     /// Inject a test backend, simulating the Connected state (test only)
     #[cfg(test)]
     pub(crate) fn set_backend_for_test(
@@ -455,6 +479,11 @@ impl SftpBrowserView {
     /// Connect to the SSH server and establish an SFTP channel
     fn connect_to_server(&mut self, ctx: &mut ViewContext<Self>) {
         let node_id = self.node_id.clone();
+        // Local mode (`new_local`) has no server node; the caller installs the
+        // local backend instead of connecting.
+        if node_id.is_empty() {
+            return;
+        }
         let result = warp_ssh_manager::with_conn(|c| {
             let server = SshRepository::get_server(c, &node_id)?;
             Ok(server)

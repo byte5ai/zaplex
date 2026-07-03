@@ -441,6 +441,17 @@ impl BackingView for TerminalView {
         }
         // Zaplex: Remove "Share session" entry from pane header (cloud-side shared session)
 
+        // File manager (FM pane-mode P1): open the local FM rooted at this
+        // session's cwd. Pane-scoped — the target context is the pane itself.
+        if !items.is_empty() {
+            items.push(MenuItem::Separator);
+        }
+        items.push(
+            MenuItemFields::new(crate::t!("menu-pane-open-file-manager"))
+                .with_on_select_action(TerminalAction::OpenFileManagerHere)
+                .into_item(),
+        );
+
         // Split-pane related items.
         if self.split_pane_state(ctx).is_in_split_pane() {
             if !items.is_empty() {

@@ -5415,6 +5415,28 @@ impl Workspace {
         });
     }
 
+    /// Opens the local file-manager pane (FM pane-mode P1) rooted at
+    /// `start_path` — same browser surface as the per-host SFTP pane, backed by
+    /// the local filesystem. Opened next to the invoking pane (smart split).
+    pub fn open_local_file_manager(
+        &mut self,
+        start_path: std::path::PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::pane_group::pane::sftp_pane::SftpPane;
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            let pane = SftpPane::new_local(start_path, ctx);
+            let smart_split_direction =
+                pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
+            pane_group.add_pane_with_direction(
+                smart_split_direction,
+                pane,
+                true, /* focus_new_pane */
+                ctx,
+            );
+        });
+    }
+
     /// Opens an SFTP file browser pane for the given SSH node in the central area.
     pub fn open_sftp_pane(&mut self, node_id: String, ctx: &mut ViewContext<Self>) {
         use crate::pane_group::pane::sftp_pane::SftpPane;
@@ -19323,6 +19345,9 @@ impl TypedActionView for Workspace {
             }
             OpenSshTerminal { node_id, server } => {
                 self.open_ssh_terminal(node_id.clone(), server.clone(), false, ctx);
+            }
+            OpenLocalFileManager { start_path } => {
+                self.open_local_file_manager(start_path.clone(), ctx);
             }
             AddTabWithShell { shell, source } => {
                 self.add_tab_with_shell(shell.clone(), *source, ctx)

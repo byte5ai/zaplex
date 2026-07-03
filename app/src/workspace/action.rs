@@ -147,6 +147,10 @@ pub enum WorkspaceAction {
         node_id: String,
         server: warp_ssh_manager::SshServerInfo,
     },
+    /// Open the local file-manager pane (FM pane-mode P1) rooted at `start_path`.
+    OpenLocalFileManager {
+        start_path: std::path::PathBuf,
+    },
     /// Open/close the SSH Manager view on the left panel (openWarp-specific).
     ToggleSshManager,
     /// Open/close the Skill Manager view on the left panel (openWarp-specific).
@@ -673,6 +677,7 @@ impl WorkspaceAction {
             | AddDefaultTab
             | AddTerminalTab { .. }
             | OpenSshTerminal { .. }
+            | OpenLocalFileManager { .. }
             | ToggleSshManager
             | ToggleSkillManager
             | AddTabWithShell { .. }
