@@ -3,8 +3,8 @@
 <pre>
 ███████╗ █████╗ ██████╗ ██╗     ███████╗██╗  ██╗
 ╚══███╔╝██╔══██╗██╔══██╗██║     ██╔════╝╚██╗██╔╝
-  ███╔╝ ███████║██████╔╝██║     █████╗   ╚███╔╝
- ███╔╝  ██╔══██║██╔═══╝ ██║     ██╔══╝   ██╔██╗
+  ███╔╝ ███████║██████╔╝██║     █████╗   ╚███╔╝ 
+ ███╔╝  ██╔══██║██╔═══╝ ██║     ██╔══╝   ██╔██╗ 
 ███████╗██║  ██║██║     ███████╗███████╗██╔╝ ██╗
 ╚══════╝╚═╝  ╚═╝╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝
 </pre>
@@ -54,7 +54,7 @@ zaplex is a fork of [Zap](https://github.com/zerx-lab/zap) — the open-source, 
 - **Persistent remote sessions** — agents survive lid-close, network roaming, and app restarts; re-attach replays history seamlessly. No tmux, no byobu, no mosh setup on the host.
 - **Agent cockpit** — every subscription account with rolling 5h/week utilization heat, cost, and reset timers; sessions **waiting on you** bubble up as `✋ N waiting`.
 - **Native agent awareness** — blocks know when an agent needs input, finished, or got blocked: banner, footer, notification center.
-- **Multi-account, multi-provider** — all your Claude Max and ChatGPT/Codex subscription logins discovered and monitored side by side.
+- **Multi-account, multi-provider** — all your Claude and ChatGPT/Codex subscription logins discovered and monitored side by side.
 - **Adopt any session** — daemon sessions started elsewhere appear in the sidebar; Enter attaches one as a block, history included.
 - **File manager pane mode** — flip any terminal pane into a host-aware file manager; dual-pane cross-host copy is on the roadmap.
 - **A full terminal first** — blocks, command palette, SSH host manager, themes: everything the Warp core does, without its cloud.
