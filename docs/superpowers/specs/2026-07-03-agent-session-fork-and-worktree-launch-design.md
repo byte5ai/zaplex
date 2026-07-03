@@ -1,6 +1,6 @@
 # Agent Session Fork & Worktree Launch — "try the other approach" as a first-class verb
 
-> **Status:** Design (read-only plan, no code yet) — 2026-07-03
+> **Status:** F1+W1+FW implemented (local fork, fork-into-worktree, cockpit session-row surfaces) — 2026-07-03. Fork capability verified against both CLIs: `claude --resume <id> --fork-session`, `codex fork <id>` (F2 mechanics ready in `CLIAgent::fork_command`; a Codex surface waits on Codex session discovery). Open: W2 remote worktree via daemon `startup_command`, block-header surface. Runtime acceptance pending the next user test build.
 >
 > **Quelle der Entscheidung:** User 2026-07-03 — adapt the two session-UX ideas from the Gitlawb/zero analysis (`zero exec --fork <session-id>`, `zero exec --worktree`); gap analysis `2026-07-03-claudeplex-gap-analysis.md` lines 49-50 already lists fork-resume as a small open gap ("Branch a copy … an Transcript-/Session-UI andocken").
 >

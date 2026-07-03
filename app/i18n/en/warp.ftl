@@ -2762,6 +2762,8 @@ cockpit-pane-col-today = Today
 cockpit-pane-col-5h = 5h block
 cockpit-pane-col-week = Week
 cockpit-pane-provenance-legend = ~ = estimated from transcripts · unmarked = live subscription usage
+cockpit-session-fork = ⑂ fork
+cockpit-session-fork-worktree = ⑂ +worktree
 workspace-left-panel-cockpit-empty = No Claude or Codex accounts found.
 skill-manager-search-placeholder = Search skills
 skill-manager-filter-all = All
