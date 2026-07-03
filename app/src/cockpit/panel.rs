@@ -13,8 +13,8 @@ use warpui::elements::{
 };
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 use zaplex_cockpit::{
-    format_cost, format_reset, format_tokens, heat_fill, heat_pct_label, AccountUsage, HeatLevel,
-    SessionState,
+    format_cost, format_reset, format_tokens, heat_fill, heat_pct_label_with_provenance,
+    AccountUsage, HeatLevel, SessionState, UsageProvenance,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
@@ -66,8 +66,16 @@ impl CockpitPanel {
         Text::new_inline(s, family, size).with_color(color).finish()
     }
 
-    /// A labelled heat bar: `5h [▓▓▓░░] 62%`, coloured by band.
-    fn heat_bar(&self, label: &str, fraction: f64, appearance: &Appearance) -> Box<dyn Element> {
+    /// A labelled heat bar: `5h [▓▓▓░░] 62%`, coloured by band. Estimate-driven
+    /// bars carry a subtle `~` on the percentage (C3b provenance); real numbers
+    /// get no extra chrome.
+    fn heat_bar(
+        &self,
+        label: &str,
+        fraction: f64,
+        provenance: UsageProvenance,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_body();
@@ -100,7 +108,7 @@ impl CockpitPanel {
             .with_child(Self::text(label.to_string(), family, size, muted))
             .with_child(track)
             .with_child(Self::text(
-                heat_pct_label(fraction),
+                heat_pct_label_with_provenance(fraction, provenance),
                 family,
                 size,
                 heat_coloru(level),
@@ -188,7 +196,7 @@ impl CockpitPanel {
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(CARD_SPACING)
             .with_child(header.finish())
-            .with_child(self.heat_bar("5h", acct.heat, appearance))
+            .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance))
             .with_child(Self::text(cost_line, family, body, muted));
         if let Some(session_line) = session_line {
             let color = if waiting > 0 {

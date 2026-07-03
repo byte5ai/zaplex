@@ -59,6 +59,18 @@ pub fn heat_pct_label(fraction: f64) -> String {
     format!("{}%", (fraction * 100.0).round() as i64)
 }
 
+/// Percent label with provenance (C3b): real numbers get no extra chrome,
+/// estimates carry a subtle `~` prefix — 0.62 -> "62%" (real) / "~62%" (estimate).
+pub fn heat_pct_label_with_provenance(
+    fraction: f64,
+    provenance: crate::types::UsageProvenance,
+) -> String {
+    match provenance {
+        crate::types::UsageProvenance::Real => heat_pct_label(fraction),
+        crate::types::UsageProvenance::Estimate => format!("~{}", heat_pct_label(fraction)),
+    }
+}
+
 /// USD cost with 2 decimals: 4.2 -> "$4.20".
 pub fn format_cost(usd: f64) -> String {
     format!("${usd:.2}")

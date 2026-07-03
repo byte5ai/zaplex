@@ -12,14 +12,17 @@
 //! The (blocking) disk scan runs on the background executor; results are applied back
 //! on the model's thread via the spawner round-trip.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use async_compat::CompatExt as _;
 use chrono::Utc;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use watcher::HomeDirectoryWatcher;
-use zaplex_cockpit::{build_snapshot, CockpitSnapshot, PricingTable};
+use zaplex_cockpit::{apply_oauth_usage, build_snapshot, CockpitSnapshot, PricingTable, Provider};
 
+use crate::cockpit::oauth::{self, CachedOauth};
 use crate::cockpit::settings::CockpitSettings;
 
 /// How often to re-scan transcripts even when no top-level home change fired.
@@ -36,6 +39,10 @@ pub enum CockpitEvent {
 pub struct CockpitModel {
     snapshot: CockpitSnapshot,
     pricing: PricingTable,
+    /// Per-account real-usage cache (C3b), keyed by the account's config dir.
+    /// Lives here so the 15-min TTL survives across refresh cycles; the token
+    /// itself is never stored — only the parsed, secret-free usage numbers.
+    oauth_cache: HashMap<PathBuf, CachedOauth>,
 }
 
 /// Inputs captured on the model thread, moved into the off-thread build.
@@ -46,6 +53,11 @@ struct RefreshInputs {
     budget_5h: u64,
     budget_week: u64,
     pricing: PricingTable,
+    /// `cockpit.oauth_usage` — when off, no usage requests happen at all.
+    oauth_enabled: bool,
+    /// Cache state moved into the build; the (possibly refreshed) cache comes
+    /// back with the snapshot via `apply`.
+    oauth_cache: HashMap<PathBuf, CachedOauth>,
 }
 
 impl CockpitModel {
@@ -61,6 +73,7 @@ impl CockpitModel {
                 generated_at: Utc::now(),
             },
             pricing: PricingTable::default(),
+            oauth_cache: HashMap::new(),
         };
         model.spawn_refresh(ctx);
         model.start_reconcile_timer(ctx);
@@ -90,6 +103,8 @@ impl CockpitModel {
             budget_5h,
             budget_week,
             pricing: self.pricing.clone(),
+            oauth_enabled: *CockpitSettings::as_ref(ctx).oauth_usage,
+            oauth_cache: self.oauth_cache.clone(),
         })
     }
 
@@ -101,7 +116,7 @@ impl CockpitModel {
         let spawner = ctx.spawner();
         ctx.background_executor()
             .spawn(async move {
-                let snapshot = build_snapshot(
+                let mut snapshot = build_snapshot(
                     &inputs.home,
                     &inputs.codex_home,
                     inputs.claude_config_dir_env.as_deref(),
@@ -110,14 +125,42 @@ impl CockpitModel {
                     inputs.budget_week,
                     &inputs.pricing,
                 );
+                // C3b: overlay real per-account utilization where available.
+                // Piggybacks on this refresh (no extra timer); the 15-min TTL
+                // inside `refresh_cache` keeps actual requests rare. `.compat()`
+                // provides the tokio reactor reqwest needs on this executor.
+                let oauth_cache = if inputs.oauth_enabled {
+                    let claude_dirs: Vec<PathBuf> = snapshot
+                        .accounts
+                        .iter()
+                        .filter(|a| a.account.provider == Provider::Claude)
+                        .map(|a| a.account.config_dir.clone())
+                        .collect();
+                    let cache = oauth::refresh_cache(
+                        claude_dirs,
+                        inputs.home.join(".claude"),
+                        inputs.oauth_cache,
+                    )
+                    .compat()
+                    .await;
+                    apply_oauth_usage(&mut snapshot, &oauth::usable_usage(&cache));
+                    cache
+                } else {
+                    inputs.oauth_cache
+                };
                 let _ = spawner
-                    .spawn(move |me, ctx| me.apply(snapshot, ctx))
+                    .spawn(move |me, ctx| me.apply(snapshot, oauth_cache, ctx))
                     .await;
             })
             .detach();
     }
 
-    fn apply(&mut self, snapshot: CockpitSnapshot, ctx: &mut ModelContext<Self>) {
+    fn apply(
+        &mut self,
+        snapshot: CockpitSnapshot,
+        oauth_cache: HashMap<PathBuf, CachedOauth>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         // Transition detection (claudeplex's most-loved signal): a session that
         // was working (Active/Monitor) and is now Waiting needs the user NOW.
         // Sessions first seen already-waiting don't fire (no old state).
@@ -154,6 +197,7 @@ impl CockpitModel {
         }
 
         self.snapshot = snapshot;
+        self.oauth_cache = oauth_cache;
         ctx.emit(CockpitEvent::Updated);
         if !became_waiting.is_empty() {
             ctx.emit(CockpitEvent::SessionsBecameWaiting(became_waiting));

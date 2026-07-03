@@ -35,6 +35,23 @@ fn heat_fill_clamps_but_label_does_not() {
 }
 
 #[test]
+fn provenance_marks_estimates_only() {
+    use crate::types::UsageProvenance;
+    assert_eq!(
+        heat_pct_label_with_provenance(0.62, UsageProvenance::Real),
+        "62%"
+    );
+    assert_eq!(
+        heat_pct_label_with_provenance(0.62, UsageProvenance::Estimate),
+        "~62%"
+    );
+    assert_eq!(
+        heat_pct_label_with_provenance(1.3, UsageProvenance::Estimate),
+        "~130%"
+    );
+}
+
+#[test]
 fn cost_format() {
     assert_eq!(format_cost(4.2), "$4.20");
     assert_eq!(format_cost(0.0), "$0.00");

@@ -5,6 +5,7 @@
 //! subscribe to `CockpitEvent::Updated` land in Increment 2 (`app/src/cockpit/…`).
 
 pub mod model;
+pub mod oauth;
 pub mod pane;
 pub mod panel;
 pub mod settings;

@@ -14,18 +14,21 @@
 pub mod claude;
 pub mod codex;
 pub mod format;
+pub mod oauth;
 pub mod pricing;
 pub mod sessions;
 pub mod types;
 pub mod windows;
 
 pub use format::{
-    format_cost, format_reset, format_tokens, heat_fill, heat_pct_label, HeatLevel,
+    format_cost, format_reset, format_tokens, heat_fill, heat_pct_label,
+    heat_pct_label_with_provenance, HeatLevel,
 };
+pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
 pub use pricing::{ModelPrice, PricingTable};
 pub use types::{
     Account, AccountStatus, AccountUsage, CockpitSnapshot, Provider, SessionSnapshot, SessionState,
-    UsageEntry, WindowTotals,
+    UsageEntry, UsageProvenance, WindowTotals,
 };
 pub use windows::{
     build_account_usage, window_5h, window_week, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK,
