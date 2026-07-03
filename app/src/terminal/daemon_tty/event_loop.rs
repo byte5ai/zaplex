@@ -631,6 +631,8 @@ mod tests {
                 conn,
                 OpenSessionParams::default(),
                 Some(OUR_PTY.to_string()),
+                None,
+                "test-host".to_string(),
                 ctx,
             )
         });
@@ -717,6 +719,8 @@ mod tests {
                     conn,
                     OpenSessionParams::default(),
                     None,
+                    None,
+                    "test-host".to_string(),
                     ctx,
                 )
             });
@@ -807,6 +811,8 @@ mod tests {
                     conn,
                     OpenSessionParams::default(),
                     None,
+                    None,
+                    "test-host".to_string(),
                     ctx,
                 )
             });
@@ -904,6 +910,8 @@ mod tests {
                     conn,
                     OpenSessionParams::default(),
                     None,
+                    None,
+                    "test-host".to_string(),
                     ctx,
                 )
             });
