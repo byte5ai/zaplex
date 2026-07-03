@@ -535,3 +535,48 @@ fn test_cli_agent_search_dirs_include_home_managed_bins() {
     assert!(dirs.contains(&home.join(".bun/bin")));
     assert!(dirs.contains(&home.join(".local/bin")));
 }
+
+#[test]
+fn fork_command_per_provider() {
+    // Verified against the CLIs on 2026-07-03 (fork/worktree design §2).
+    assert_eq!(
+        CLIAgent::Claude.fork_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
+        Some("claude --resume 0198c8f3-aaaa-bbbb-cccc-1234567890ab --fork-session".to_string())
+    );
+    assert_eq!(
+        CLIAgent::Codex.fork_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
+        Some("codex fork 0198c8f3-aaaa-bbbb-cccc-1234567890ab".to_string())
+    );
+    // No known fork mechanism → None, surfaces stay disabled (no fake fork).
+    assert_eq!(CLIAgent::Gemini.fork_command("x"), None);
+    assert_eq!(CLIAgent::Unknown.fork_command("x"), None);
+}
+
+#[test]
+fn fork_command_quotes_hostile_session_ids() {
+    let cmd = CLIAgent::Claude
+        .fork_command("evil; rm -rf /")
+        .expect("claude forks");
+    assert_eq!(cmd, "claude --resume 'evil; rm -rf /' --fork-session");
+}
+
+#[test]
+fn fork_command_pinned_prepends_inline_env_for_non_default_accounts() {
+    let dir = PathBuf::from("/home/u/claude-work dir");
+    assert_eq!(
+        CLIAgent::Claude.fork_command_pinned("abc", Some(&dir)),
+        Some(
+            "CLAUDE_CONFIG_DIR='/home/u/claude-work dir' claude --resume abc --fork-session"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        CLIAgent::Codex.fork_command_pinned("abc", Some(Path::new("/home/u/.codex-alt"))),
+        Some("CODEX_HOME=/home/u/.codex-alt codex fork abc".to_string())
+    );
+    // Default account (None) → bare fork command, no env prefix.
+    assert_eq!(
+        CLIAgent::Claude.fork_command_pinned("abc", None),
+        Some("claude --resume abc --fork-session".to_string())
+    );
+}

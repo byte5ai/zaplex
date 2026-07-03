@@ -794,7 +794,7 @@ fn test_worktree_custom_commands_with_template() {
 #[test]
 fn test_build_worktree_toml_autogenerate_round_trips() {
     let toml_str =
-        build_worktree_config_toml("Worktree: my-project", "/Users/me/repo", "main", None);
+        build_worktree_config_toml("Worktree: my-project", "/Users/me/repo", "main", None, None);
     let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
 
     assert_eq!(config.name, "Worktree: my-project");
@@ -837,6 +837,7 @@ fn test_build_worktree_toml_manual_round_trips() {
         "/Users/me/repo",
         "main",
         Some("my-feature"),
+        None,
     );
     let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
 
@@ -902,5 +903,27 @@ directory = "~/a"
         assert_eq!(is_focused, Some(true));
     } else {
         panic!("Expected fallback PaneTemplate");
+    }
+}
+
+#[test]
+fn test_build_worktree_toml_appends_followup_command() {
+    let toml_str = build_worktree_config_toml(
+        "Fork into worktree: repo",
+        "/Users/me/repo",
+        "main",
+        None,
+        Some("claude --resume abc --fork-session"),
+    );
+    let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
+
+    let (_, template) = render_tab_config(&config, &HashMap::new(), Some("obsidian-hawk"));
+    if let PaneTemplateType::PaneTemplate { commands, .. } = template {
+        assert_eq!(commands.len(), 3);
+        assert!(commands[0].exec.starts_with("git worktree add -b obsidian-hawk"));
+        assert!(commands[1].exec.starts_with("cd "));
+        assert_eq!(commands[2].exec, "claude --resume abc --fork-session");
+    } else {
+        panic!("Expected PaneTemplate");
     }
 }

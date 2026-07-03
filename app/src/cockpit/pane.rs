@@ -6,26 +6,32 @@
 //! multi-instance), opened from the sidebar's expand action. See
 //! docs/superpowers/specs/2026-07-01-cockpit-native-integration-design.md §3.3.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Fill as ElementFill, Flex, MainAxisAlignment, MainAxisSize,
-    ParentElement, Radius, Rect, ScrollbarWidth, Shrinkable, Text,
+    CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Rect, ScrollbarWidth, Shrinkable, Text,
 };
+use warpui::platform::Cursor;
 use warpui::{
     AppContext, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View, ViewContext,
 };
 use zaplex_cockpit::{
     format_cost, format_reset, format_tokens, heat_fill, heat_pct_label, AccountUsage, HeatLevel,
-    SessionState, WindowTotals,
+    Provider, SessionState, WindowTotals,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
+use crate::terminal::cli_agent::CLIAgent;
+use crate::WorkspaceAction;
 
 const PANE_PADDING: f32 = 16.0;
 const CARD_PADDING: f32 = 12.0;
@@ -52,23 +58,133 @@ pub struct CockpitPaneView {
     scroll_state: ClippedScrollStateHandle,
     pane_configuration: ModelHandle<PaneConfiguration>,
     focus_handle: Option<PaneFocusHandle>,
+    /// Hover state of each session row's "⑂ fork" action (key = session_id).
+    /// Synced against the snapshot on every cockpit update so handles persist
+    /// across renders (hover needs a stable handle).
+    session_fork_states: HashMap<String, MouseStateHandle>,
+    /// Hover state of each session row's "⑂ fork in worktree" action.
+    session_forkwt_states: HashMap<String, MouseStateHandle>,
+    /// Whether a session's cwd sits inside a git repo (key = session_id) —
+    /// precomputed on cockpit updates so render never touches the filesystem.
+    /// Non-repo cwds simply don't get the worktree action (design §3: toggle
+    /// disabled, never a broken session).
+    session_in_repo: HashMap<String, bool>,
 }
 
 impl CockpitPaneView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         ctx.subscribe_to_model(&Appearance::handle(ctx), |_, _, _, ctx| ctx.notify());
-        ctx.subscribe_to_model(&CockpitModel::handle(ctx), |_, _, event, ctx| {
+        ctx.subscribe_to_model(&CockpitModel::handle(ctx), |me, _, event, ctx| {
             if matches!(event, CockpitEvent::Updated) {
+                me.sync_session_action_states(ctx);
                 ctx.notify();
             }
         });
         let pane_configuration =
             ctx.add_model(|_ctx| PaneConfiguration::new(crate::t!("cockpit-pane-title")));
-        Self {
+        let mut me = Self {
             scroll_state: ClippedScrollStateHandle::default(),
             pane_configuration,
             focus_handle: None,
+            session_fork_states: HashMap::new(),
+            session_forkwt_states: HashMap::new(),
+            session_in_repo: HashMap::new(),
+        };
+        me.sync_session_action_states(ctx);
+        me
+    }
+
+    /// Keep one stable `MouseStateHandle` per live session for each row action
+    /// (hover needs a stable handle across renders) and precompute the
+    /// is-inside-a-git-repo bit per session; drop state of sessions that
+    /// disappeared.
+    fn sync_session_action_states(&mut self, ctx: &mut ViewContext<Self>) {
+        let sessions: Vec<(String, String)> = CockpitModel::as_ref(ctx)
+            .snapshot()
+            .accounts
+            .iter()
+            .flat_map(|a| a.sessions.iter())
+            .map(|s| (s.session_id.clone(), s.cwd.clone()))
+            .collect();
+        let live: std::collections::HashSet<&String> =
+            sessions.iter().map(|(id, _)| id).collect();
+        self.session_fork_states.retain(|id, _| live.contains(id));
+        self.session_forkwt_states.retain(|id, _| live.contains(id));
+        self.session_in_repo.retain(|id, _| live.contains(id));
+        for (id, cwd) in sessions {
+            // `.git` may be a dir (repo root) or a file (linked worktree) —
+            // `exists()` covers both, so forking from inside a worktree chains.
+            let in_repo = Path::new(&cwd)
+                .ancestors()
+                .any(|p| p.join(".git").exists());
+            self.session_in_repo.insert(id.clone(), in_repo);
+            self.session_fork_states.entry(id.clone()).or_default();
+            self.session_forkwt_states.entry(id).or_default();
         }
+    }
+
+    /// One session-row fork action ("⑂ fork" / "⑂ +worktree"): muted, accent
+    /// on hover, dispatches [`WorkspaceAction::ForkAgentSession`]. `None` when
+    /// the provider has no fork mechanism, or — for the worktree variant —
+    /// when the session's cwd is not inside a git repo: disabled-by-absence,
+    /// never a broken session (fork/worktree design §2/§3).
+    fn session_fork_action(
+        &self,
+        acct: &AccountUsage,
+        session: &zaplex_cockpit::SessionSnapshot,
+        into_worktree: bool,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let agent = match acct.account.provider {
+            Provider::Claude => CLIAgent::Claude,
+            Provider::Codex => CLIAgent::Codex,
+        };
+        // Capability gate — agents without a fork mechanism get no surface.
+        agent.fork_command(&session.session_id)?;
+        if into_worktree
+            && !self
+                .session_in_repo
+                .get(&session.session_id)
+                .copied()
+                .unwrap_or(false)
+        {
+            return None;
+        }
+        let states = if into_worktree {
+            &self.session_forkwt_states
+        } else {
+            &self.session_fork_states
+        };
+        let state = states.get(&session.session_id).cloned()?;
+
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let accent = theme.accent().into_solid();
+        let label = if into_worktree {
+            crate::t!("cockpit-session-fork-worktree")
+        } else {
+            crate::t!("cockpit-session-fork")
+        };
+
+        let action = WorkspaceAction::ForkAgentSession {
+            agent,
+            session_id: session.session_id.clone(),
+            cwd: PathBuf::from(&session.cwd),
+            // Non-default accounts pin the fork to the same subscription.
+            config_dir: (!acct.account.is_default).then(|| acct.account.config_dir.clone()),
+            into_worktree,
+        };
+        Some(
+            Hoverable::new(state, move |mouse| {
+                let color = if mouse.is_hovered() { accent } else { muted };
+                Self::text(label.to_string(), family, body, color)
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+            .finish(),
+        )
     }
 
     pub fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {
@@ -265,17 +381,23 @@ impl CockpitPaneView {
             } else {
                 format!("{} — {dir}", session.name)
             };
-            col = col.with_child(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(6.0)
-                    .with_child(Self::text(glyph.to_string(), family, body, color))
-                    .with_child(
-                        Shrinkable::new(1.0, Self::text(label, family, body, main)).finish(),
-                    )
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .finish(),
-            );
+            let mut row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(6.0)
+                .with_child(Self::text(glyph.to_string(), family, body, color))
+                .with_child(
+                    Shrinkable::new(1.0, Self::text(label, family, body, main)).finish(),
+                );
+            // Fork verbs (fork/worktree design §2): branch a copy of the
+            // conversation — plain, or into an isolated sibling worktree.
+            for into_worktree in [false, true] {
+                if let Some(action) =
+                    self.session_fork_action(acct, session, into_worktree, appearance)
+                {
+                    row = row.with_child(action);
+                }
+            }
+            col = col.with_child(row.with_main_axis_size(MainAxisSize::Max).finish());
         }
         if acct.sessions.len() > 4 {
             col = col.with_child(Self::text(

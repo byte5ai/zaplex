@@ -631,6 +631,21 @@ pub enum WorkspaceAction {
         prompt: String,
         agent: Option<crate::terminal::cli_agent::CLIAgent>,
     },
+    /// Fork an agent conversation into a NEW session (fork/worktree design §2):
+    /// opens a terminal tab in the source session's cwd — or, with
+    /// `into_worktree`, in a fresh sibling git worktree of its repo — and runs
+    /// the provider's fork command. The original session stays untouched.
+    ForkAgentSession {
+        agent: CLIAgent,
+        session_id: String,
+        /// The source session's working directory.
+        cwd: PathBuf,
+        /// Non-default account config dir for subscription pinning
+        /// (`None` = the provider's default login).
+        config_dir: Option<PathBuf>,
+        /// Isolate the fork's file effects in a fresh sibling worktree.
+        into_worktree: bool,
+    },
     FixSettingsWithOz {
         error_description: String,
     },
@@ -866,6 +881,7 @@ impl WorkspaceAction {
             | TabConfigSidecarRemoveConfig { .. }
             | OpenSettingsFile
             | AskAgent { .. }
+            | ForkAgentSession { .. }
             | FixSettingsWithOz { .. } => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,

@@ -181,6 +181,50 @@ impl CLIAgent {
         command == self.command_prefix() || self.command_prefix_aliases().contains(&command)
     }
 
+    /// The shell command that forks an existing conversation into a **new**
+    /// session — same history, divergent future; the original session stays
+    /// untouched (fork/worktree design §2).
+    ///
+    /// Verified against the current CLIs (2026-07-03):
+    /// `claude --resume <id> --fork-session` and `codex fork <id>`.
+    /// `None` = this agent has no known fork mechanism; surfaces stay
+    /// visibly disabled rather than guessing (no fake fork).
+    pub fn fork_command(&self, session_id: &str) -> Option<String> {
+        // Ids come from the providers' own registries (UUIDs), but they end
+        // up on a shell command line — quote defensively.
+        let id = shell_words::quote(session_id).into_owned();
+        match self {
+            CLIAgent::Claude => Some(format!("claude --resume {id} --fork-session")),
+            CLIAgent::Codex => Some(format!("codex fork {id}")),
+            _ => None,
+        }
+    }
+
+    /// [`Self::fork_command`] with account pinning: a non-default account's
+    /// config dir is prepended as an inline env assignment
+    /// (`CLAUDE_CONFIG_DIR=… claude …` / `CODEX_HOME=… codex …`), so the fork
+    /// runs on the same subscription as the source session. Inline env is used
+    /// (not per-launch env injection) so the same string works verbatim in
+    /// local tabs, worktree tab-configs, and daemon `startup_command`s — and
+    /// the pinning stays visible in the block.
+    pub fn fork_command_pinned(
+        &self,
+        session_id: &str,
+        config_dir: Option<&Path>,
+    ) -> Option<String> {
+        let fork = self.fork_command(session_id)?;
+        let Some(dir) = config_dir else {
+            return Some(fork);
+        };
+        let var = match self {
+            CLIAgent::Claude => "CLAUDE_CONFIG_DIR",
+            CLIAgent::Codex => "CODEX_HOME",
+            _ => return Some(fork),
+        };
+        let dir = shell_words::quote(&dir.to_string_lossy()).into_owned();
+        Some(format!("{var}={dir} {fork}"))
+    }
+
     /// Serialized version of the CLIAgent name (e.g. "Claude", "Gemini"). Used for the
     /// session-sharing protocol's opaque `cli_agent` string field.
     pub fn to_serialized_name(&self) -> String {
