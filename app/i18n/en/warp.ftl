@@ -2755,6 +2755,7 @@ workspace-left-panel-ssh-manager = SSH Manager
 workspace-left-panel-server-file-browser = Server files
 workspace-left-panel-skill-manager = Skill Manager
 workspace-left-panel-cockpit = Cockpit
+cockpit-sessions-waiting-toast = Waiting on you: { $sessions }
 cockpit-open-dashboard-tooltip = Open cockpit dashboard
 cockpit-pane-title = Cockpit
 cockpit-pane-col-today = Today

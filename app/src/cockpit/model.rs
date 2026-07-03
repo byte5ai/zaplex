@@ -27,6 +27,9 @@ const RECONCILE_INTERVAL: Duration = Duration::from_secs(45);
 
 /// Emitted whenever the snapshot changes.
 pub enum CockpitEvent {
+    /// One or more sessions transitioned from working to WAITING — they need
+    /// the user. Carries "account-label — session/cwd" display strings.
+    SessionsBecameWaiting(Vec<String>),
     Updated,
 }
 
@@ -115,8 +118,46 @@ impl CockpitModel {
     }
 
     fn apply(&mut self, snapshot: CockpitSnapshot, ctx: &mut ModelContext<Self>) {
+        // Transition detection (claudeplex's most-loved signal): a session that
+        // was working (Active/Monitor) and is now Waiting needs the user NOW.
+        // Sessions first seen already-waiting don't fire (no old state).
+        use std::collections::HashMap;
+        use zaplex_cockpit::SessionState;
+        let old_states: HashMap<&str, SessionState> = self
+            .snapshot
+            .accounts
+            .iter()
+            .flat_map(|a| a.sessions.iter())
+            .map(|s| (s.session_id.as_str(), s.state))
+            .collect();
+        let mut became_waiting = Vec::new();
+        for account in &snapshot.accounts {
+            for session in &account.sessions {
+                if session.state != SessionState::Waiting {
+                    continue;
+                }
+                match old_states.get(session.session_id.as_str()) {
+                    Some(SessionState::Active) | Some(SessionState::Monitor) => {
+                        let place = if session.name.is_empty() {
+                            std::path::Path::new(&session.cwd)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| session.cwd.clone())
+                        } else {
+                            session.name.clone()
+                        };
+                        became_waiting.push(format!("{} — {place}", account.account.label));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         self.snapshot = snapshot;
         ctx.emit(CockpitEvent::Updated);
+        if !became_waiting.is_empty() {
+            ctx.emit(CockpitEvent::SessionsBecameWaiting(became_waiting));
+        }
     }
 
     /// Periodic reconcile: re-scan on a fixed interval for the model's lifetime.

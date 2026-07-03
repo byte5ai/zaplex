@@ -2646,6 +2646,28 @@ impl Workspace {
             );
         }
 
+        // Cockpit: a session flipping from working to WAITING is the signal the
+        // user must never miss — surface it as a toast wherever they are.
+        ctx.subscribe_to_model(
+            &crate::cockpit::CockpitModel::handle(ctx),
+            |me, _handle, event, ctx| {
+                if let crate::cockpit::model::CockpitEvent::SessionsBecameWaiting(sessions) = event
+                {
+                    let body = sessions.join("\n");
+                    me.toast_stack.update(ctx, |stack, ctx| {
+                        // Not an error — an attention signal. Plain toast text.
+                        stack.add_persistent_toast(
+                            DismissibleToast::new(crate::t!(
+                                "cockpit-sessions-waiting-toast",
+                                sessions = body
+                            )),
+                            ctx,
+                        );
+                    });
+                }
+            },
+        );
+
         // Daemon-session advisories (multiplexer nesting etc.) — independent of
         // the SshRemoteServer flag: the native persistent-session path doesn't
         // gate on it. The daemon tab shows an inline notice; this adds the

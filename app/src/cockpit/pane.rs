@@ -58,8 +58,9 @@ impl CockpitPaneView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         ctx.subscribe_to_model(&Appearance::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&CockpitModel::handle(ctx), |_, _, event, ctx| {
-            let CockpitEvent::Updated = event;
-            ctx.notify();
+            if matches!(event, CockpitEvent::Updated) {
+                ctx.notify();
+            }
         });
         let pane_configuration =
             ctx.add_model(|_ctx| PaneConfiguration::new(crate::t!("cockpit-pane-title")));

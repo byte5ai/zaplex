@@ -52,8 +52,9 @@ impl CockpitPanel {
         // Re-render on theme change and whenever the snapshot updates.
         ctx.subscribe_to_model(&Appearance::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&CockpitModel::handle(ctx), |_, _, event, ctx| {
-            let CockpitEvent::Updated = event;
-            ctx.notify();
+            if matches!(event, CockpitEvent::Updated) {
+                ctx.notify();
+            }
         });
         Self {
             scroll_state: ClippedScrollStateHandle::default(),
