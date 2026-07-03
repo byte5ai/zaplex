@@ -101,6 +101,44 @@ impl WindowTotals {
     }
 }
 
+/// Live-session state, waiting-first semantics (see `sessions.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionState {
+    /// Registry-reported busy: the agent is working right now.
+    Active,
+    /// The assistant's last turn ended — the session is waiting for YOU.
+    Waiting,
+    /// Mid tool-run or a live background job: working, hands off.
+    Monitor,
+}
+
+/// One live Claude Code session (registry-backed, transcript-joined).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionSnapshot {
+    pub session_id: String,
+    pub cwd: String,
+    /// The session's registry name (native `--name`), often empty.
+    pub name: String,
+    pub state: SessionState,
+    /// Model of the latest assistant turn (may be empty).
+    pub model: String,
+    /// Context-window fill of the latest assistant turn.
+    pub ctx_tokens: u64,
+    pub last_activity: DateTime<Utc>,
+    pub pid: u32,
+}
+
+/// Coarse account activity derived from its live sessions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AccountStatus {
+    /// At least one session is actively working.
+    Working,
+    /// Sessions exist, none busy.
+    Live,
+    /// No live sessions.
+    Offline,
+}
+
 /// Per-account usage across the cockpit's windows, plus derived reset times + heat.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AccountUsage {
@@ -120,6 +158,11 @@ pub struct AccountUsage {
     /// `week.work / budget_week` — the slower weekly budget's heat; same
     /// semantics as `heat` (may exceed 1.0).
     pub heat_week: f64,
+    /// Live sessions (Claude Code registry), waiting-first. Empty for
+    /// providers without a session registry (Codex, for now).
+    pub sessions: Vec<SessionSnapshot>,
+    /// Coarse activity status derived from `sessions`.
+    pub status: AccountStatus,
 }
 
 /// A full cockpit snapshot: every discovered account with its usage.

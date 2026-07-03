@@ -19,7 +19,7 @@ use warpui::{
 };
 use zaplex_cockpit::{
     format_cost, format_reset, format_tokens, heat_fill, heat_pct_label, AccountUsage, HeatLevel,
-    WindowTotals,
+    SessionState, WindowTotals,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
@@ -247,6 +247,43 @@ impl CockpitPaneView {
             .with_child(self.heat_bar("5h", acct.heat, appearance))
             .with_child(self.heat_bar("wk", acct.heat_week, appearance))
             .with_child(matrix);
+        // Live sessions (C3a), waiting-first (the spine pre-sorts): the
+        // dashboard's job is surfacing what needs YOU.
+        for session in acct.sessions.iter().take(4) {
+            let (glyph, color) = match session.state {
+                SessionState::Waiting => ("✋", heat_coloru(HeatLevel::Critical)),
+                SessionState::Active => ("●", heat_coloru(HeatLevel::Ok)),
+                SessionState::Monitor => ("◌", muted),
+            };
+            let dir = std::path::Path::new(&session.cwd)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| session.cwd.clone());
+            let label = if session.name.is_empty() {
+                dir
+            } else {
+                format!("{} — {dir}", session.name)
+            };
+            col = col.with_child(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(6.0)
+                    .with_child(Self::text(glyph.to_string(), family, body, color))
+                    .with_child(
+                        Shrinkable::new(1.0, Self::text(label, family, body, main)).finish(),
+                    )
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .finish(),
+            );
+        }
+        if acct.sessions.len() > 4 {
+            col = col.with_child(Self::text(
+                format!("… {} more", acct.sessions.len() - 4),
+                family,
+                body,
+                muted,
+            ));
+        }
         if let Some(reset_line) = reset_line {
             col = col.with_child(Self::text(reset_line, family, body, muted));
         }
@@ -275,20 +312,37 @@ impl CockpitPaneView {
         let cost_today: f64 = accounts.iter().map(|a| a.today.cost_usd).sum();
         let cost_5h: f64 = accounts.iter().map(|a| a.block5h.cost_usd).sum();
         let cost_wk: f64 = accounts.iter().map(|a| a.week.cost_usd).sum();
+        let waiting: usize = accounts
+            .iter()
+            .flat_map(|a| &a.sessions)
+            .filter(|s| s.state == SessionState::Waiting)
+            .count();
 
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_child(Self::text(
-                format!(
-                    "{} account{}",
-                    accounts.len(),
-                    if accounts.len() == 1 { "" } else { "s" }
-                ),
+                if waiting > 0 {
+                    format!(
+                        "{} account{} · ✋ {waiting} waiting on you",
+                        accounts.len(),
+                        if accounts.len() == 1 { "" } else { "s" }
+                    )
+                } else {
+                    format!(
+                        "{} account{}",
+                        accounts.len(),
+                        if accounts.len() == 1 { "" } else { "s" }
+                    )
+                },
                 family,
                 heading,
-                main,
+                if waiting > 0 {
+                    heat_coloru(HeatLevel::Critical)
+                } else {
+                    main
+                },
             ))
             .with_child(Self::text(
                 format!(

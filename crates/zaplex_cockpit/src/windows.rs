@@ -127,7 +127,29 @@ pub fn build_account_usage(
         reset_week,
         heat,
         heat_week,
+        sessions: Vec::new(),
+        status: crate::types::AccountStatus::Offline,
     }
+}
+
+/// Attaches live sessions to a built usage view and derives the account status.
+pub fn with_sessions(
+    mut usage: AccountUsage,
+    sessions: Vec<crate::types::SessionSnapshot>,
+) -> AccountUsage {
+    use crate::types::{AccountStatus, SessionState};
+    usage.status = if sessions
+        .iter()
+        .any(|s| s.state == SessionState::Active)
+    {
+        AccountStatus::Working
+    } else if !sessions.is_empty() {
+        AccountStatus::Live
+    } else {
+        AccountStatus::Offline
+    };
+    usage.sessions = sessions;
+    usage
 }
 
 #[cfg(test)]

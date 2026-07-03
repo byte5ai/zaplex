@@ -14,6 +14,7 @@ use warpui::elements::{
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 use zaplex_cockpit::{
     format_cost, format_reset, format_tokens, heat_fill, heat_pct_label, AccountUsage, HeatLevel,
+    SessionState,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
@@ -145,6 +146,33 @@ impl CockpitPanel {
             format_tokens(acct.today.total)
         );
 
+        // Live-session status (C3a): waiting sessions are THE signal — they
+        // need the user. Rendered in the heat palette when non-zero.
+        let waiting = acct
+            .sessions
+            .iter()
+            .filter(|s| s.state == SessionState::Waiting)
+            .count();
+        let active = acct
+            .sessions
+            .iter()
+            .filter(|s| s.state == SessionState::Active)
+            .count();
+        let session_line = (!acct.sessions.is_empty()).then(|| {
+            let mut parts = Vec::new();
+            if active > 0 {
+                parts.push(format!("● {active} active"));
+            }
+            if waiting > 0 {
+                parts.push(format!("✋ {waiting} waiting"));
+            }
+            let monitor = acct.sessions.len() - active - waiting;
+            if monitor > 0 {
+                parts.push(format!("◌ {monitor} running"));
+            }
+            parts.join(" · ")
+        });
+
         let reset_5h = format_reset(acct.reset5h, now);
         let reset_wk = format_reset(acct.reset_week, now);
         let reset_line = match (reset_5h.is_empty(), reset_wk.is_empty()) {
@@ -161,6 +189,14 @@ impl CockpitPanel {
             .with_child(header.finish())
             .with_child(self.heat_bar("5h", acct.heat, appearance))
             .with_child(Self::text(cost_line, family, body, muted));
+        if let Some(session_line) = session_line {
+            let color = if waiting > 0 {
+                heat_coloru(HeatLevel::Critical)
+            } else {
+                muted
+            };
+            col = col.with_child(Self::text(session_line, family, body, color));
+        }
         if let Some(reset_line) = reset_line {
             col = col.with_child(Self::text(reset_line, family, body, muted));
         }

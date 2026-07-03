@@ -15,6 +15,7 @@ pub mod claude;
 pub mod codex;
 pub mod format;
 pub mod pricing;
+pub mod sessions;
 pub mod types;
 pub mod windows;
 
@@ -22,7 +23,10 @@ pub use format::{
     format_cost, format_reset, format_tokens, heat_fill, heat_pct_label, HeatLevel,
 };
 pub use pricing::{ModelPrice, PricingTable};
-pub use types::{Account, AccountUsage, CockpitSnapshot, Provider, UsageEntry, WindowTotals};
+pub use types::{
+    Account, AccountStatus, AccountUsage, CockpitSnapshot, Provider, SessionSnapshot, SessionState,
+    UsageEntry, WindowTotals,
+};
 pub use windows::{
     build_account_usage, window_5h, window_week, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK,
 };
@@ -53,9 +57,11 @@ pub fn build_snapshot(
 
     for account in claude::discover_accounts(home, claude_config_dir_env) {
         let entries = claude::usage_for_account(&account, since);
-        accounts.push(build_account_usage(
+        let live = sessions::live_sessions(&account.config_dir, now);
+        let usage = build_account_usage(
             account, entries, now, budget_5h, budget_week, pricing,
-        ));
+        );
+        accounts.push(windows::with_sessions(usage, live));
     }
     for account in codex::discover_accounts(codex_home) {
         let entries = codex::usage_for_account(&account, since);
