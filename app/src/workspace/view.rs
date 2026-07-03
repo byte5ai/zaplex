@@ -19373,18 +19373,26 @@ impl TypedActionView for Workspace {
                 self.open_ssh_terminal(node_id.clone(), server.clone(), false, ctx);
             }
             OpenLocalFileManager { start_path } => {
-                // Pane-scoped context: on a tab that belongs to an SSH host,
-                // "open file manager here" means that HOST's file manager; on a
-                // local tab it means the local one rooted at the session cwd.
+                // FM pane-mode: swap the invoking (focused) pane in place for a
+                // file manager. Pane-scoped context: on a tab that belongs to an
+                // SSH host it browses that HOST; on a local tab it browses the
+                // local filesystem rooted at the session cwd. Closing the FM
+                // reverts to the terminal (temporary replacement).
                 let live_pg_ids: Vec<EntityId> =
                     self.tabs.iter().map(|t| t.pane_group.id()).collect();
                 self.ssh_tab_nodes
                     .retain(|pg_id, _| live_pg_ids.contains(pg_id));
-                let active_pg_id = self.active_tab_pane_group().id();
-                match self.ssh_tab_nodes.get(&active_pg_id).cloned() {
-                    Some(node_id) => self.open_sftp_pane(node_id, ctx),
-                    None => self.open_local_file_manager(start_path.clone(), ctx),
-                }
+                let active_pg = self.active_tab_pane_group();
+                let target = match self.ssh_tab_nodes.get(&active_pg.id()).cloned() {
+                    Some(node_id) => crate::pane_group::FileManagerTarget::Remote { node_id },
+                    None => crate::pane_group::FileManagerTarget::Local {
+                        start_path: start_path.clone(),
+                    },
+                };
+                active_pg.update(ctx, |pane_group, ctx| {
+                    let pane_id = pane_group.focused_pane_id(ctx);
+                    pane_group.open_file_manager_in_place(pane_id, target, ctx);
+                });
             }
             AddTabWithShell { shell, source } => {
                 self.add_tab_with_shell(shell.clone(), *source, ctx)

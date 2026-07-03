@@ -705,6 +705,14 @@ pub struct DraggedBorder {
 }
 
 /// Options that can be set when adding a new local terminal pane.
+/// Target filesystem for the in-place file manager (FM pane-mode P1).
+pub enum FileManagerTarget {
+    /// The machine zaplex runs on, rooted at `start_path` (the session cwd).
+    Local { start_path: std::path::PathBuf },
+    /// An SSH host (browsed over its SFTP connection), by `ssh_servers.node_id`.
+    Remote { node_id: String },
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct NewTerminalOptions {
     /// The particular shell to spawn (if not the default).
@@ -3841,6 +3849,20 @@ impl PaneGroup {
             return;
         }
 
+        // A temporary replacement (e.g. the in-place file manager over a
+        // terminal) closes by REVERTING to the original pane — the pane slot
+        // and the hidden original survive. Mirrors `close_pane_and_focus`.
+        if self.panes.is_temporary_replacement(pane_id) {
+            if let Some(original_id) = self.close_temporary_replacement_pane(pane_id, ctx) {
+                ctx.emit(Event::FocusPane {
+                    pane_to_focus: original_id,
+                });
+            }
+            ctx.notify();
+            ctx.emit(Event::AppStateChanged);
+            return;
+        }
+
         // If this pane is a child agent, re-hide it instead of closing it.
         if self.is_child_agent_pane(pane_id) {
             if !self.panes.is_pane_hidden(&pane_id) {
@@ -4012,6 +4034,29 @@ impl PaneGroup {
         ctx.notify();
         ctx.emit(Event::AppStateChanged);
         success
+    }
+
+    /// FM pane-mode (P1): swap the given pane **in place** for a file manager —
+    /// same slot in the layout, neighbors and sizes untouched. The original
+    /// pane (typically a running terminal) is hidden, NOT torn down; closing
+    /// the file manager reverts to it (temporary replacement).
+    pub fn open_file_manager_in_place(
+        &mut self,
+        pane_id: PaneId,
+        target: FileManagerTarget,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::pane_group::pane::sftp_pane::SftpPane;
+        match target {
+            FileManagerTarget::Local { start_path } => {
+                let pane = SftpPane::new_local(start_path, ctx);
+                self.replace_pane(pane_id, pane, /* is_temporary */ true, ctx);
+            }
+            FileManagerTarget::Remote { node_id } => {
+                let pane = SftpPane::new(node_id, ctx);
+                self.replace_pane(pane_id, pane, /* is_temporary */ true, ctx);
+            }
+        }
     }
 
     fn close_temporary_replacement_pane(
