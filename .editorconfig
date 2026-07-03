@@ -1,0 +1,8 @@
+# Root EditorConfig for zaplex.
+root = true
+
+# The ASCII wordmark relies on trailing spaces to keep all <pre> lines at a
+# uniform 48 characters — the centered <div> centers each line individually,
+# so trimming shifts the shorter lines sideways. Do not trim.
+[README.md]
+trim_trailing_whitespace = false
