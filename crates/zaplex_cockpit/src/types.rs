@@ -139,6 +139,20 @@ pub enum AccountStatus {
     Offline,
 }
 
+/// Where an account's heat/reset numbers come from.
+///
+/// The cockpit prefers the provider's **real** rate-limit position (OAuth usage
+/// endpoint, C3b) and falls back to the local transcript-based **estimate**
+/// whenever the real number is unavailable — honest degradation, visibly marked.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UsageProvenance {
+    /// Real utilization reported by the provider for this account.
+    Real,
+    /// Derived locally from transcript token counts vs. a budget guess.
+    #[default]
+    Estimate,
+}
+
 /// Per-account usage across the cockpit's windows, plus derived reset times + heat.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AccountUsage {
@@ -163,6 +177,11 @@ pub struct AccountUsage {
     pub sessions: Vec<SessionSnapshot>,
     /// Coarse activity status derived from `sessions`.
     pub status: AccountStatus,
+    /// Whether `heat`/`heat_week`/resets are the provider's real numbers or the
+    /// local estimate (see [`UsageProvenance`]). Token/cost totals are always
+    /// transcript-derived — they measure spend, not rate-limit position.
+    #[serde(default)]
+    pub provenance: UsageProvenance,
 }
 
 /// A full cockpit snapshot: every discovered account with its usage.

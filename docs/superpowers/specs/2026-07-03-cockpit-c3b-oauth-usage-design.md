@@ -1,6 +1,6 @@
 # Cockpit C3b — Real OAuth Usage ("the desktop jewel")
 
-> **Status:** Design (read-only plan, no code yet) — 2026-07-03
+> **Status:** Implemented (milestones 1–3) — 2026-07-03. Runtime acceptance (real credentials, network-kill fallback) pending the next user test build.
 >
 > **Quelle der Entscheidung:** User 2026-07-03 (adopt the OAuth-usage capability identified in the zero analysis); gap analysis `2026-07-03-claudeplex-gap-analysis.md` line 17 marks this ❌ and calls it the "Desktop-Juwel — höchster Genauigkeitsgewinn"; scheduled there as increment C3b.
 >

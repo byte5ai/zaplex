@@ -18,8 +18,8 @@ use warpui::{
     AppContext, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View, ViewContext,
 };
 use zaplex_cockpit::{
-    format_cost, format_reset, format_tokens, heat_fill, heat_pct_label, AccountUsage, HeatLevel,
-    SessionState, WindowTotals,
+    format_cost, format_reset, format_tokens, heat_fill, heat_pct_label_with_provenance,
+    AccountUsage, HeatLevel, SessionState, UsageProvenance, WindowTotals,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
@@ -84,8 +84,16 @@ impl CockpitPaneView {
         Text::new_inline(s, family, size).with_color(color).finish()
     }
 
-    /// A labelled heat bar (roomier than the sidebar variant).
-    fn heat_bar(&self, label: &str, fraction: f64, appearance: &Appearance) -> Box<dyn Element> {
+    /// A labelled heat bar (roomier than the sidebar variant). Estimate-driven
+    /// bars carry a subtle `~` on the percentage (C3b provenance); real numbers
+    /// get no extra chrome.
+    fn heat_bar(
+        &self,
+        label: &str,
+        fraction: f64,
+        provenance: UsageProvenance,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_body();
@@ -125,7 +133,7 @@ impl CockpitPaneView {
             .finish())
             .with_child(track)
             .with_child(Self::text(
-                heat_pct_label(fraction),
+                heat_pct_label_with_provenance(fraction, provenance),
                 family,
                 size,
                 heat_coloru(level),
@@ -245,8 +253,8 @@ impl CockpitPaneView {
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(CARD_SPACING)
             .with_child(header.finish())
-            .with_child(self.heat_bar("5h", acct.heat, appearance))
-            .with_child(self.heat_bar("wk", acct.heat_week, appearance))
+            .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance))
+            .with_child(self.heat_bar("wk", acct.heat_week, acct.provenance, appearance))
             .with_child(matrix);
         // Live sessions (C3a), waiting-first (the spine pre-sorts): the
         // dashboard's job is surfacing what needs YOU.
@@ -392,6 +400,20 @@ impl View for CockpitPaneView {
                 );
             for acct in &snapshot.accounts {
                 col = col.with_child(self.render_card(acct, appearance));
+            }
+            // C3b: explain the ~ marker whenever any bar shows an estimate
+            // (real numbers stay unmarked — no chrome for the good case).
+            if snapshot
+                .accounts
+                .iter()
+                .any(|a| a.provenance == UsageProvenance::Estimate)
+            {
+                col = col.with_child(Self::text(
+                    crate::t!("cockpit-pane-provenance-legend"),
+                    family,
+                    body,
+                    muted,
+                ));
             }
             ClippedScrollable::vertical(
                 self.scroll_state.clone(),
