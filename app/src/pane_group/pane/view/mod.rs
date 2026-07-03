@@ -32,7 +32,7 @@ pub use header_content::{
 };
 
 pub fn init(_app: &mut AppContext) {
-    // Zap Phase 2a: pane:share_pane_contents keybinding removed (sharing UI gone).
+    // Zaplex Phase 2a: pane:share_pane_contents keybinding removed (sharing UI gone).
 }
 
 pub enum PaneViewEvent {

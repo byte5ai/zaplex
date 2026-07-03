@@ -115,7 +115,7 @@ fn plugin_paths() -> Vec<PathBuf> {
         .collect()
 }
 
-/// Returns `true` if the directory at the given path is directory containing JS source for a Zap plugin.
+/// Returns `true` if the directory at the given path is directory containing JS source for a Zaplex plugin.
 fn is_plugin_dir(path: &Path) -> bool {
     if !path.is_dir() {
         return false;

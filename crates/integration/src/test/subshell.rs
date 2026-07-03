@@ -16,7 +16,7 @@ use warp::{
         },
         terminal::wait_until_bootstrapped_single_pane_for_tab,
     },
-    terminal::warpify::settings::AddedSubshellCommands,
+    terminal::zaplexify::settings::AddedSubshellCommands,
 };
 use warpui::integration::{AssertionOutcome, TestStep};
 use warpui::windowing::state::ApplicationStage;
@@ -88,7 +88,7 @@ generate_can_bootstrap_remote_subshell_for_shell!(test_can_bootstrap_remote_bash
 // generate_can_bootstrap_remote_subshell_for_shell!(test_can_bootstrap_remote_fish_subshell, "fish");
 
 // Test the flow of creating a new window and running a command that should create a subshell and
-//  automaticall bootstrapping AKA "warpifying" that subshell.
+//  automaticall bootstrapping AKA "zaplexifying" that subshell.
 pub fn test_can_auto_bootstrap() -> Builder {
     const SUBSHELL_COMMAND: &str = "zsh";
 

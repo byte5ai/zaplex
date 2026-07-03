@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     app_state::{LeafContents, WorkflowPaneSnapshot},
-    drive::{items::WarpDriveItemId, ZapDriveObjectSettings},
+    drive::{items::WarpDriveItemId, ZaplexDriveObjectSettings},
     server::ids::SyncId,
     workflows::{
         manager::{WorkflowManager, WorkflowOpenSource},
@@ -39,7 +39,7 @@ impl WorkflowPane {
 
     pub fn restore(
         workflow_id: Option<SyncId>,
-        settings: ZapDriveObjectSettings,
+        settings: ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<PaneGroup>,
     ) -> anyhow::Result<Self> {
         let window_id = ctx.window_id();
@@ -132,7 +132,7 @@ impl PaneContent for WorkflowPane {
         let workflow_id = self.get_view(app).as_ref(app).workflow_id();
         LeafContents::Workflow(WorkflowPaneSnapshot::WorkflowObject {
             workflow_id: Some(workflow_id),
-            settings: ZapDriveObjectSettings::default(),
+            settings: ZaplexDriveObjectSettings::default(),
         })
     }
 

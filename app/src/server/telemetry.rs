@@ -1,4 +1,4 @@
-// Zap: The telemetry sending layer and context provider have been removed.
+// Zaplex: The telemetry sending layer and context provider have been removed.
 // Only `TelemetryEvent` enum and its auxiliary types remain here, serving as type stubs
 // for many UI and model call sites.
 
@@ -60,7 +60,7 @@ use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::cli_agent_sessions::CLIAgentInputEntrypoint;
 use crate::terminal::cli_agent_sessions::CLIAgentRichInputCloseReason;
 use crate::terminal::input::TelemetryInputSuggestionsMode;
-use crate::terminal::model::ansi::WarpificationUnavailableReason;
+use crate::terminal::model::ansi::ZaplexificationUnavailableReason;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::model::terminal_model::BlockSelectionCardinality;
@@ -148,7 +148,7 @@ pub struct BlockLatencyInfo {
     pub execution_ms: u64,
 }
 
-// Compatibility metadata for local Zap Drive object event shells.
+// Compatibility metadata for local Zaplex Drive object event shells.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TelemetryObjectType {
     Workflow,
@@ -191,13 +191,13 @@ impl From<Space> for TelemetrySpace {
     }
 }
 
-/// Common metadata retained for local Zap Drive event call sites that act on a specific object.
+/// Common metadata retained for local Zaplex Drive event call sites that act on a specific object.
 /// Events that only apply to a single object type may use specific metadata like [`WorkflowTelemetryMetadata`],
 /// [`NotebookTelemetryMetadata`], or [`EnvVarTelemetryMetadata`] instead.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ObjectTelemetryMetadata {
     pub object_type: TelemetryObjectType,
-    /// Legacy server UID slot. Zap keeps it optional while object-event call sites are being
+    /// Legacy server UID slot. Zaplex keeps it optional while object-event call sites are being
     /// localized.
     pub object_uid: Option<ServerId>,
     /// The space through which the user has access to the object.
@@ -357,7 +357,7 @@ impl From<rmcp::RmcpError> for MCPServerTelemetryError {
     }
 }
 
-// Zap Phase 2a: `OpenedSharingDialogEvent` + `SharingDialogSource` and
+// Zaplex Phase 2a: `OpenedSharingDialogEvent` + `SharingDialogSource` and
 // the corresponding `OpenedSharingDialog` `TelemetryEvent` variant removed
 // along with the sharing dialog UI.
 
@@ -402,7 +402,7 @@ pub enum PaletteSource {
     PrefixChange,
     Keybinding,
     CtrlTab { shift_pressed_initially: bool },
-    ZapDrive,
+    ZaplexDrive,
     QuitModal,
     LogOutModal,
     IntegrationTest,
@@ -465,7 +465,7 @@ pub enum PluginChipTelemetryKind {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationAgentVariant {
-    /// Zap's built-in agent (Oz).
+    /// Zaplex's built-in agent (Oz).
     Oz,
     /// A CLI agent (e.g., Claude Code, Gemini CLI, etc.).
     CLIAgent(CLIAgentType),
@@ -527,7 +527,7 @@ pub enum CommandCorrectionEvent {
 pub enum CommandSearchResultType {
     History,
     Workflow,
-    ZapAI,
+    ZaplexAI,
     TranslateUsingWarpAI,
     Notebook,
     EnvVarCollection,
@@ -544,7 +544,7 @@ impl From<&CommandSearchItemAction> for CommandSearchResultType {
             AcceptWorkflow(_) => Self::Workflow,
             AcceptNotebook(_) => Self::Notebook,
             AcceptEnvVarCollection(_) => Self::EnvVarCollection,
-            ZapAI => Self::ZapAI,
+            ZaplexAI => Self::ZaplexAI,
             TranslateUsingWarpAI => Self::TranslateUsingWarpAI,
             AcceptAIQuery(_) | RunAIQuery(_) => Self::AIQuery,
         }
@@ -667,7 +667,7 @@ pub enum KnowledgePaneEntrypoint {
     Settings,
 
     #[serde(rename = "warp_drive")]
-    ZapDrive,
+    ZaplexDrive,
 
     #[serde(rename = "ai_blocklist")]
     AIBlocklist,
@@ -686,7 +686,7 @@ pub enum MCPServerCollectionPaneEntrypoint {
     Settings,
 
     #[serde(rename = "warp_drive")]
-    ZapDrive,
+    ZaplexDrive,
 
     #[serde(rename = "slash_command")]
     SlashCommand,
@@ -1251,7 +1251,7 @@ pub enum TelemetryEvent {
     DatabaseReadError(String),
     DatabaseWriteError(String),
     AppStartup(AppStartupInfo),
-    /// The native app was opened while logged out. Since Zap requires login,
+    /// The native app was opened while logged out. Since Zaplex requires login,
     /// this usually means a new user.
     LoggedOutStartup,
     /// We attempted to bootstrap an SSH session via the SSH wrapper.  The
@@ -1481,11 +1481,11 @@ pub enum TelemetryEvent {
     InitialWorkingDirectoryConfigurationChanged {
         advanced_mode_enabled: bool,
     },
-    /// Opened legacy Zap AI.
+    /// Opened legacy Zaplex AI.
     OpenedWarpAI {
         source: OpenedWarpAISource,
     },
-    /// Issued legacy Zap AI request.
+    /// Issued legacy Zaplex AI request.
     WarpAIRequestIssued {
         result: WarpAIRequestResult,
     },
@@ -1554,7 +1554,7 @@ pub enum TelemetryEvent {
     ToggleSshTmuxWrapper {
         enabled: bool,
     },
-    ToggleSshWarpification {
+    ToggleSshZaplexification {
         enabled: bool,
     },
     /// User changed the SSH extension install mode.
@@ -1568,26 +1568,26 @@ pub enum TelemetryEvent {
     },
     /// An ssh interactive session was detected.
     SshInteractiveSessionDetected(SshInteractiveSessionDetected),
-    SshTmuxWarpifyBannerDisplayed,
-    /// A SSH Warpify Block was accepted
-    SshTmuxWarpifyBlockAccepted,
-    /// A SSH Warpify Block was dismissed
-    SshTmuxWarpifyBlockDismissed,
-    WarpifyFooterShown {
+    SshTmuxZaplexifyBannerDisplayed,
+    /// A SSH Zaplexify Block was accepted
+    SshTmuxZaplexifyBlockAccepted,
+    /// A SSH Zaplexify Block was dismissed
+    SshTmuxZaplexifyBlockDismissed,
+    ZaplexifyFooterShown {
         is_ssh: bool,
     },
     AgentToolbarDismissed,
-    WarpifyFooterAcceptedWarpify {
+    ZaplexifyFooterAcceptedZaplexify {
         is_ssh: bool,
     },
-    /// How long until the warpify process succeeded
-    SshTmuxWarpificationSuccess {
+    /// How long until the zaplexify process succeeded
+    SshTmuxZaplexificationSuccess {
         tmux_installation: Option<TmuxInstallationState>,
         duration_ms: u64,
     },
     /// An SSH Error block was displayed to the user.
-    SshTmuxWarpificationErrorBlock {
-        error: WarpificationUnavailableReason,
+    SshTmuxZaplexificationErrorBlock {
+        error: ZaplexificationUnavailableReason,
         tmux_installation: Option<TmuxInstallationState>,
     },
     /// A SSH Install Tmux Block was displayed.
@@ -1617,7 +1617,7 @@ pub enum TelemetryEvent {
         source: WarpDriveSource,
         is_code_mode_v2: bool,
     },
-    // Toggled the legacy Zap AI side panel.
+    // Toggled the legacy Zaplex AI side panel.
     ToggleWarpAI {
         opened: bool,
     },
@@ -1664,7 +1664,7 @@ pub enum TelemetryEvent {
     LogOut,
     SettingsImportInitiated,
     CopyObjectToClipboard(TelemetryObjectType),
-    OpenAndWarpifyDockerSubshell {
+    OpenAndZaplexifyDockerSubshell {
         /// Some variant if we support this shell type, and None otherwise.
         shell_type: Option<ShellType>,
     },
@@ -1816,7 +1816,7 @@ pub enum TelemetryEvent {
     /// language auto-detection false-positive.
     AgentModePotentialAutoDetectionFalsePositive(AgentModeAutoDetectionFalsePositivePayload),
 
-    /// This is a telemetry event used to help track performance of Agent Predict in Zap,
+    /// This is a telemetry event used to help track performance of Agent Predict in Zaplex,
     /// by keeping track of the context given and the predictions generated.
     AgentModePrediction {
         was_suggestion_accepted: bool,
@@ -1826,7 +1826,7 @@ pub enum TelemetryEvent {
         does_actual_command_match_history_prediction: bool,
         history_prediction_likelihood: f64,
         total_history_count: usize,
-        // Zap leaves these optional; no telemetry sender consumes them.
+        // Zaplex leaves these optional; no telemetry sender consumes them.
         actual_next_command_run: Option<String>,
         history_based_autosuggestion_state: Option<HistoryBasedAutosuggestionState>,
         generate_ai_input_suggestions_request: Option<GenerateAIInputSuggestionsRequest>,
@@ -1840,7 +1840,7 @@ pub enum TelemetryEvent {
         block_id: Option<String>,
         view: PromptSuggestionViewType,
         /// Legacy request token from the `/passive-suggestion` request that generated this
-        /// suggestion. Zap keeps it optional for local diagnostics only.
+        /// suggestion. Zaplex keeps it optional for local diagnostics only.
         server_request_token: Option<String>,
     },
 
@@ -1853,7 +1853,7 @@ pub enum TelemetryEvent {
         code_exchange_id: Option<AIAgentExchangeId>,
         block_id: Option<String>,
         request_duration_ms: u64,
-        /// Legacy request token from the `/passive-suggestion` request. Zap keeps it optional
+        /// Legacy request token from the `/passive-suggestion` request. Zaplex keeps it optional
         /// for local diagnostics only.
         server_request_token: Option<String>,
     },
@@ -1876,7 +1876,7 @@ pub enum TelemetryEvent {
         id: String,
         block_id: String,
         static_prompt_suggestion_name: String,
-        // Zap leaves these optional; no telemetry sender consumes them.
+        // Zaplex leaves these optional; no telemetry sender consumes them.
         query: Option<String>,
         block_command: Option<String>,
         request_duration_ms: u64,
@@ -2368,7 +2368,7 @@ pub enum TelemetryEvent {
         block_id: BlockId,
         user_took_over: bool,
     },
-    /// Detected that Zap is running in an isolated sandbox.
+    /// Detected that Zaplex is running in an isolated sandbox.
     DetectedIsolationPlatform {
         platform: warp_isolation_platform::IsolationPlatformType,
     },
@@ -2983,8 +2983,8 @@ impl TelemetryEvent {
                 Some(json!({ "remember": remember }))
             }
             TelemetryEvent::AgentToolbarDismissed => None,
-            TelemetryEvent::WarpifyFooterShown { is_ssh }
-            | TelemetryEvent::WarpifyFooterAcceptedWarpify { is_ssh } => {
+            TelemetryEvent::ZaplexifyFooterShown { is_ssh }
+            | TelemetryEvent::ZaplexifyFooterAcceptedZaplexify { is_ssh } => {
                 Some(json!({ "is_ssh": is_ssh }))
             }
             TelemetryEvent::ToggleSameLinePrompt { enabled } => Some(json!({ "enabled": enabled })),
@@ -3039,7 +3039,7 @@ impl TelemetryEvent {
             TelemetryEvent::CopyObjectToClipboard(object_type) => {
                 Some(json!({ "object_type": object_type }))
             }
-            TelemetryEvent::OpenAndWarpifyDockerSubshell { shell_type } => {
+            TelemetryEvent::OpenAndZaplexifyDockerSubshell { shell_type } => {
                 Some(json!({ "shell_type": shell_type }))
             }
             TelemetryEvent::ToggleBlockFilterQuery { enabled, source } => {
@@ -3064,7 +3064,7 @@ impl TelemetryEvent {
                 Some(json!({"enabled": enabled}))
             }
             TelemetryEvent::ToggleSshTmuxWrapper { enabled } => Some(json!({"enabled": enabled})),
-            TelemetryEvent::ToggleSshWarpification { enabled } => Some(json!({"enabled": enabled})),
+            TelemetryEvent::ToggleSshZaplexification { enabled } => Some(json!({"enabled": enabled})),
             TelemetryEvent::SetSshExtensionInstallMode { mode } => Some(json!({"mode": mode})),
             TelemetryEvent::SshRemoteServerChoiceDoNotAskAgainToggled { checked } => {
                 Some(json!({"checked": checked}))
@@ -3072,14 +3072,14 @@ impl TelemetryEvent {
             TelemetryEvent::SshInteractiveSessionDetected(ssh_interactive_session_detected) => {
                 Some(json!({"ssh_interactive_session": ssh_interactive_session_detected}))
             }
-            TelemetryEvent::SshTmuxWarpificationSuccess {
+            TelemetryEvent::SshTmuxZaplexificationSuccess {
                 duration_ms,
                 tmux_installation,
             } => Some(json!({
                 "duration_ms": duration_ms,
                 "tmux_installation": *tmux_installation,
             })),
-            TelemetryEvent::SshTmuxWarpificationErrorBlock {
+            TelemetryEvent::SshTmuxZaplexificationErrorBlock {
                 error,
                 tmux_installation,
             } => Some(json!({
@@ -3658,7 +3658,7 @@ impl TelemetryEvent {
             | TelemetryEvent::SetNewWindowsAtCustomSize
             | TelemetryEvent::DisableInputSync
             | TelemetryEvent::ShowSubshellBanner
-            | TelemetryEvent::SshTmuxWarpifyBannerDisplayed
+            | TelemetryEvent::SshTmuxZaplexifyBannerDisplayed
             | TelemetryEvent::AddDenylistedSubshellCommand
             | TelemetryEvent::RemoveDenylistedSubshellCommand
             | TelemetryEvent::AddAddedSubshellCommand
@@ -3666,8 +3666,8 @@ impl TelemetryEvent {
             | TelemetryEvent::ReceivedSubshellRcFileDcs
             | TelemetryEvent::AddDenylistedSshTmuxWrapperHost
             | TelemetryEvent::RemoveDenylistedSshTmuxWrapperHost
-            | TelemetryEvent::SshTmuxWarpifyBlockAccepted
-            | TelemetryEvent::SshTmuxWarpifyBlockDismissed
+            | TelemetryEvent::SshTmuxZaplexifyBlockAccepted
+            | TelemetryEvent::SshTmuxZaplexifyBlockDismissed
             | TelemetryEvent::SshInstallTmuxBlockDisplayed
             | TelemetryEvent::SshInstallTmuxBlockAccepted
             | TelemetryEvent::SshInstallTmuxBlockDismissed
@@ -4293,14 +4293,14 @@ impl TelemetryEvent {
             | TelemetryEvent::RemoveDenylistedSshTmuxWrapperHost
             | TelemetryEvent::ToggleSshTmuxWrapper { .. }
             | TelemetryEvent::SshInteractiveSessionDetected(_)
-            | TelemetryEvent::SshTmuxWarpifyBannerDisplayed
-            | TelemetryEvent::SshTmuxWarpifyBlockAccepted
-            | TelemetryEvent::SshTmuxWarpifyBlockDismissed
-            | TelemetryEvent::WarpifyFooterShown { .. }
+            | TelemetryEvent::SshTmuxZaplexifyBannerDisplayed
+            | TelemetryEvent::SshTmuxZaplexifyBlockAccepted
+            | TelemetryEvent::SshTmuxZaplexifyBlockDismissed
+            | TelemetryEvent::ZaplexifyFooterShown { .. }
             | TelemetryEvent::AgentToolbarDismissed
-            | TelemetryEvent::WarpifyFooterAcceptedWarpify { .. }
-            | TelemetryEvent::SshTmuxWarpificationSuccess { .. }
-            | TelemetryEvent::SshTmuxWarpificationErrorBlock { .. }
+            | TelemetryEvent::ZaplexifyFooterAcceptedZaplexify { .. }
+            | TelemetryEvent::SshTmuxZaplexificationSuccess { .. }
+            | TelemetryEvent::SshTmuxZaplexificationErrorBlock { .. }
             | TelemetryEvent::SshInstallTmuxBlockDisplayed
             | TelemetryEvent::SshInstallTmuxBlockAccepted
             | TelemetryEvent::SshInstallTmuxBlockDismissed
@@ -4337,7 +4337,7 @@ impl TelemetryEvent {
             | TelemetryEvent::UnsupportedShell { .. }
             | TelemetryEvent::LogOut
             | TelemetryEvent::CopyObjectToClipboard(_)
-            | TelemetryEvent::OpenAndWarpifyDockerSubshell { .. }
+            | TelemetryEvent::OpenAndZaplexifyDockerSubshell { .. }
             | TelemetryEvent::UpdateBlockFilterQuery
             | TelemetryEvent::UpdateBlockFilterQueryContextLines { .. }
             | TelemetryEvent::ToggleBlockFilterQuery { .. }
@@ -4403,7 +4403,7 @@ impl TelemetryEvent {
             | TelemetryEvent::MCPServerSpawned { .. }
             | TelemetryEvent::MCPToolCallAccepted { .. }
             | TelemetryEvent::ExecutedWarpDrivePrompt { .. }
-            | TelemetryEvent::ToggleSshWarpification { .. }
+            | TelemetryEvent::ToggleSshZaplexification { .. }
             | TelemetryEvent::SetSshExtensionInstallMode { .. }
             | TelemetryEvent::SshRemoteServerChoiceDoNotAskAgainToggled { .. }
             | TelemetryEvent::SettingsImportInitiated

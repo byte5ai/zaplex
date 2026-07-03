@@ -18,7 +18,7 @@ pub enum Channel {
     /// The internal-only HEAD build.
     Local,
 
-    /// The open-source build of Zap.
+    /// The open-source build of Zaplex.
     Oss,
 
     /// The integration test build.
@@ -42,7 +42,7 @@ impl Channel {
             Channel::Preview => "oz-preview",
             Channel::Local => "oz-local",
             Channel::Integration => "oz-integration",
-            Channel::Oss => "zap-oss",
+            Channel::Oss => "zaplex",
         }
     }
 }
@@ -55,7 +55,7 @@ impl fmt::Display for Channel {
             Channel::Dev => "dev",
             Channel::Integration => "integration",
             Channel::Local => "local",
-            Channel::Oss => "zap-oss",
+            Channel::Oss => "zaplex",
         })
     }
 }

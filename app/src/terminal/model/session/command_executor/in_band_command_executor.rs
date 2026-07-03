@@ -383,7 +383,7 @@ impl CommandExecutor for InBandCommandExecutor {
     ///
     /// The given `command` is executed in the active session using the
     /// `warp_run_generator_command`/`Zap-Run-GeneratorCommand` shell script API that is declared as
-    /// part of Zap's bootstrap script.
+    /// part of Zaplex's bootstrap script.
     ///
     /// Internally, `command` is added to a queue of commands to be executed serially (this is to
     /// avoid output from multiple commands corrupting one another since the pty is a single

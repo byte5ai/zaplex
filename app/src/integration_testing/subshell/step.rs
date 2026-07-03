@@ -78,7 +78,7 @@ pub fn enter_local_subshell_command(shell: &str) -> TestStep {
 }
 
 pub fn assert_subshell_banner_is_showing() -> TestStep {
-    TestStep::new("Assert the Warpify banner is visible")
+    TestStep::new("Assert the Zaplexify banner is visible")
         .add_assertion(move |app, window_id| {
             let terminal_view = single_terminal_view(app, window_id);
             terminal_view.read(app, |view, _ctx| {
@@ -88,7 +88,7 @@ pub fn assert_subshell_banner_is_showing() -> TestStep {
                         .block_list_mut()
                         .active_block()
                         .block_banner(),
-                    Some(WithinBlockBanner::WarpifyBanner(..))
+                    Some(WithinBlockBanner::ZaplexifyBanner(..))
                 ))
             })
         })
@@ -118,10 +118,10 @@ pub fn assert_subshell_is_bootstrapped(tab_index: usize, pane_index: usize) -> T
                 };
 
                 match rich_content_type {
-                    Some(RichContentType::WarpifySuccessBlock) => {}
+                    Some(RichContentType::ZaplexifySuccessBlock) => {}
                     _ => {
                         return AssertionOutcome::failure(
-                            "Warpify success block wasn't added to the blocklist".to_owned(),
+                            "Zaplexify success block wasn't added to the blocklist".to_owned(),
                         );
                     }
                 }

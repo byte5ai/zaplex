@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use itertools::Itertools;
-use markdown_parser::html_parser::WARP_EMBED_ATTRIBUTE_NAME;
+use markdown_parser::html_parser::ZAPLEX_EMBED_ATTRIBUTE_NAME;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use serde_yaml::Mapping;
@@ -310,7 +310,7 @@ impl EmbeddedItem for EmbeddedWorkflow {
 
         // If the workflow is no longer accessible or is trashed, set the content to
         // an empty string. But we should still keep the HTML element formatting and
-        // attributes so we could re-parse the ID and metadata when pasted into Zap.
+        // attributes so we could re-parse the ID and metadata when pasted into Zaplex.
         let workflow_content = workflow
             .and_then(|workflow| {
                 if !workflow.is_trashed(object_store_model) {
@@ -326,7 +326,7 @@ impl EmbeddedItem for EmbeddedWorkflow {
             html: EmbeddedItemHTMLRepresentation {
                 element_name: "pre",
                 content: workflow_content,
-                attributes: HashMap::from([(WARP_EMBED_ATTRIBUTE_NAME, self.hashed_id())]),
+                attributes: HashMap::from([(ZAPLEX_EMBED_ATTRIBUTE_NAME, self.hashed_id())]),
             },
         }
     }

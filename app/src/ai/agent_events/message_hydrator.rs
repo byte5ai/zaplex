@@ -1,7 +1,7 @@
 use crate::ai::agent::ReceivedMessageInput;
 use crate::ai::agent_events::AgentRunEvent;
 
-/// Zap local builds no longer fetch message bodies from cloud mailbox or send delivery receipts.
+/// Zaplex local builds no longer fetch message bodies from cloud mailbox or send delivery receipts.
 /// This type preserves side-effect-free compatible semantics for the local harness bridging call surface.
 #[derive(Clone)]
 pub(crate) struct MessageHydrator;

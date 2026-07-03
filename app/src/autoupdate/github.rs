@@ -1,4 +1,4 @@
-// openWarp(Channel::Oss) autoupdate uses GitHub Releases API, not Zap's official
+// openWarp(Channel::Oss) autoupdate uses GitHub Releases API, not Zaplex's official
 // channel_versions / GCS. This module only handles "fetch latest release metadata" + "select asset by filename";
 // actual download, save, and directory opening are handled by windows.rs / mac.rs.
 

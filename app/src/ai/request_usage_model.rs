@@ -1,7 +1,7 @@
-//! Zap (Phase 3c subtask A1): Localized as a permanent "unlimited" stub.
+//! Zaplex (Phase 3c subtask A1): Localized as a permanent "unlimited" stub.
 //!
 //! Historical responsibility: warp.dev server-side RPC-driven "monthly AI request quota" model.
-//! Zap uses BYOP (Bring Your Own Provider), where users pay directly to LLM providers
+//! Zaplex uses BYOP (Bring Your Own Provider), where users pay directly to LLM providers
 //! and should never be constrained by cloud concepts like "remaining request count / upgrade CTA / buy extra credits".
 //!
 //! Write constraints:
@@ -32,7 +32,7 @@ pub enum BonusGrantType {
 
 /// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
 ///
-/// Zap: In the local scenario, this will never be reached (because `ambient_only_credits_remaining` is always `None`),
+/// Zaplex: In the local scenario, this will never be reached (because `ambient_only_credits_remaining` is always `None`),
 /// but the constant definition is retained for compatibility with external imports.
 pub const AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD: i32 = 20;
 
@@ -71,7 +71,7 @@ pub enum RequestLimitRefreshDuration {
 }
 
 /// Historical: Server-issued snapshot of "monthly request quota".
-/// Zap: Retained only as a type shell (`AISettings::update_quota_info` / `ai_assistant/requests.rs`
+/// Zaplex: Retained only as a type shell (`AISettings::update_quota_info` / `ai_assistant/requests.rs`
 /// and other out-of-domain files still construct this structure). `AIRequestUsageModel` no longer holds / caches / updates it.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct RequestLimitInfo {
@@ -96,7 +96,7 @@ fn default_voice_requests_limit() -> usize {
 }
 
 impl Default for RequestLimitInfo {
-    /// Zap: No cloud-side quota; default value is treated as "unlimited".
+    /// Zaplex: No cloud-side quota; default value is treated as "unlimited".
     fn default() -> Self {
         Self {
             limit: usize::MAX,
@@ -125,21 +125,21 @@ impl RequestLimitInfo {
 }
 
 /// Historical: Aggregate structure returned by server's `getRequestLimitInfo`.
-/// Zap: Retained only as a type shell (`ai_assistant/requests.rs` still constructs this type).
+/// Zaplex: Retained only as a type shell (`ai_assistant/requests.rs` still constructs this type).
 /// `AIRequestUsageModel` no longer consumes it.
 pub struct RequestUsageInfo {
     pub request_limit_info: RequestLimitInfo,
     pub bonus_grants: Vec<BonusGrant>,
 }
 
-/// Zap: Model no longer holds any state.
+/// Zaplex: Model no longer holds any state.
 pub struct AIRequestUsageModel;
 
 impl Entity for AIRequestUsageModel {
     type Event = AIRequestUsageModelEvent;
 }
 
-/// Zap: Enum definition is retained to be compatible with subscription callback `match` patterns;
+/// Zaplex: Enum definition is retained to be compatible with subscription callback `match` patterns;
 /// after localization, `AIRequestUsageModel` no longer emits any variants → all subscription callbacks become silent no-ops.
 pub enum AIRequestUsageModelEvent {
     RequestUsageUpdated,
@@ -164,42 +164,42 @@ impl AIRequestUsageModel {
         None
     }
 
-    /// Zap: No cloud backend, no-op.
+    /// Zaplex: No cloud backend, no-op.
     pub fn refresh_request_usage_async(&mut self, _ctx: &mut ModelContext<Self>) {}
 
-    /// Zap (localized): Always returns true; BYOP local runs are not constrained by cloud limits.
+    /// Zaplex (localized): Always returns true; BYOP local runs are not constrained by cloud limits.
     pub fn has_requests_remaining(&self) -> bool {
         true
     }
 
-    /// Zap (localized): Always returns true.
+    /// Zaplex (localized): Always returns true.
     /// AI availability depends only on whether the user has configured an API key (managed independently by `ApiKeyManager`),
     /// not on cloud-side metering components like `request_limit_info`.
     pub fn has_any_ai_remaining(&self, _ctx: &AppContext) -> bool {
         true
     }
 
-    /// Zap (localized): No cloud-side metering; always returns 0.
+    /// Zaplex (localized): No cloud-side metering; always returns 0.
     pub fn requests_used(&self) -> usize {
         0
     }
 
-    /// Zap (localized): No cloud-side metering; always returns 0.0.
+    /// Zaplex (localized): No cloud-side metering; always returns 0.0.
     pub fn request_percentage_used(&self) -> f32 {
         0.0
     }
 
-    /// Zap (localized): No cloud-side limit; always returns `usize::MAX`.
+    /// Zaplex (localized): No cloud-side limit; always returns `usize::MAX`.
     pub fn request_limit(&self) -> usize {
         usize::MAX
     }
 
-    /// Zap (localized): Far-future placeholder time.
+    /// Zaplex (localized): Far-future placeholder time.
     pub fn next_refresh_time(&self) -> DateTime<Utc> {
         Utc::now() + chrono::Duration::days(365)
     }
 
-    /// Zap (localized): Always unlimited.
+    /// Zaplex (localized): Always unlimited.
     pub fn is_unlimited(&self) -> bool {
         true
     }
@@ -208,27 +208,27 @@ impl AIRequestUsageModel {
         "monthly".to_string()
     }
 
-    /// Zap (localized): Local users have no bonus grants.
+    /// Zaplex (localized): Local users have no bonus grants.
     pub fn bonus_grants(&self) -> &[BonusGrant] {
         &[]
     }
 
-    /// Zap (localized): Local users have no concept of ambient-only credits.
+    /// Zaplex (localized): Local users have no concept of ambient-only credits.
     pub fn ambient_only_credits_remaining(&self) -> Option<i32> {
         None
     }
 
-    /// Zap (localized): Local users have no concept of workspace bonus credits.
+    /// Zaplex (localized): Local users have no concept of workspace bonus credits.
     pub fn total_workspace_bonus_credits_remaining(&self, _uid: WorkspaceUid) -> i32 {
         0
     }
 
-    /// Zap (localized): Local users have no concept of workspace bonus credits.
+    /// Zaplex (localized): Local users have no concept of workspace bonus credits.
     pub fn total_current_workspace_bonus_credits_remaining(&self, _ctx: &AppContext) -> i32 {
         0
     }
 
-    /// Zap (localized): Purchasing extra credits does not apply.
+    /// Zaplex (localized): Purchasing extra credits does not apply.
     pub fn compute_buy_addon_credits_banner_display_state(
         &self,
         _ctx: &AppContext,
@@ -236,13 +236,13 @@ impl AIRequestUsageModel {
         BuyCreditsBannerDisplayState::Hidden
     }
 
-    /// Zap (localized): No-op.
+    /// Zaplex (localized): No-op.
     pub fn dismiss_buy_credits_banner(&mut self, _ctx: &mut ModelContext<Self>) {}
 
-    /// Zap (localized): No-op.
+    /// Zaplex (localized): No-op.
     pub fn enable_buy_credits_banner(&mut self, _ctx: &mut ModelContext<Self>) {}
 
-    /// Zap (localized): Voice input is not constrained by cloud-side quota; always returns true.
+    /// Zaplex (localized): Voice input is not constrained by cloud-side quota; always returns true.
     pub fn can_request_voice(&self) -> bool {
         true
     }

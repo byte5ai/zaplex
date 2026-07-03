@@ -1,7 +1,7 @@
 use super::{workflow::Workflow, WorkflowObjectModel};
 use crate::{
     cloud_object::{model::persistence::ObjectStoreModel, GenericStoredObject, Owner},
-    drive::ZapDriveObjectSettings,
+    drive::ZaplexDriveObjectSettings,
     pane_group::{PaneContent, WorkflowPane},
     safe_warn,
     server::ids::{ClientId, SyncId},
@@ -39,7 +39,7 @@ pub enum WorkflowOpenSource {
 
 impl WorkflowManager {
     pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
-        // Zap: no cloud backend = no client_id→server_id conversion events. Original UpdateManager
+        // Zaplex: no cloud backend = no client_id→server_id conversion events. Original UpdateManager
         // subscriptions + handle_update_manager_event are dead code; delete in Phase 2c-1.
         WorkflowManager {
             panes_by_hashed_id: HashMap::new(),
@@ -59,7 +59,7 @@ impl WorkflowManager {
     pub fn create_pane(
         &mut self,
         source: &WorkflowOpenSource,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         mode: WorkflowViewMode,
         window_id: WindowId,
         ctx: &mut ModelContext<Self>,
@@ -116,7 +116,7 @@ impl WorkflowManager {
                             *initial_folder_id,
                             ClientId::default(),
                         ),
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         mode,
                         ctx,
                     );

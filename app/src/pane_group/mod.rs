@@ -104,7 +104,7 @@ use crate::banner::{Banner, BannerEvent, BannerState, BannerTextContent, Dismiss
 use crate::channel::{Channel, ChannelState};
 use crate::code::view::CodeView;
 use crate::drive::items::WarpDriveItemId;
-use crate::drive::{ObjectTypeAndId, ZapDriveObjectArgs};
+use crate::drive::{ObjectTypeAndId, ZaplexDriveObjectArgs};
 use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::{self, PaneMode, PaneTemplateType};
 use crate::persistence::ModelEvent;
@@ -122,7 +122,7 @@ use crate::terminal::local_tty;
 use crate::terminal::model::session::Session;
 use crate::terminal::session_settings::NewSessionSource;
 use crate::terminal::session_settings::SessionSettings;
-// Zap: removed ShareSessionModal import (cloud shared session modal)
+// Zaplex: removed ShareSessionModal import (cloud shared session modal)
 use crate::terminal::shared_session::IsSharedSessionCreator;
 use crate::terminal::view::ssh_file_upload::FileUploadId;
 use crate::terminal::view::{
@@ -157,7 +157,7 @@ pub use pane::ai_fact_pane::AIFactPane;
 pub use pane::code_diff_pane::CodeDiffPane;
 pub use pane::code_pane::CodePane;
 pub use pane::env_var_collection_pane::EnvVarCollectionPane;
-// Zap Wave 7-3: `EnvironmentManagementPane` physically removed with ambient-agent UI subsystem.
+// Zaplex Wave 7-3: `EnvironmentManagementPane` physically removed with ambient-agent UI subsystem.
 pub use pane::execution_profile_editor_pane::ExecutionProfileEditorPane;
 pub use pane::file_pane::FilePane;
 pub use pane::image_pane::ImagePane;
@@ -204,7 +204,7 @@ fn get_minimum_pane_size(app: &AppContext) -> f32 {
 /// 2. Otherwise look up by command name in the already-discovered
 ///    [`AvailableShells`]. Its shell discovery supplements the process `PATH`
 ///    with well-known install locations (e.g. `/opt/homebrew/bin` on macOS,
-///    MSYS2/WSL on Windows) that a raw `PATH` lookup would miss when Zap is
+///    MSYS2/WSL on Windows) that a raw `PATH` lookup would miss when Zaplex is
 ///    launched outside an interactive shell.
 /// 3. As a final fallback, perform a plain `PATH` lookup via
 ///    [`AvailableShell::try_from`] in case the user put something exotic in
@@ -221,7 +221,7 @@ fn resolve_tab_config_shell(name: &str, ctx: &AppContext) -> Option<AvailableShe
 
     AvailableShell::try_from(name).ok()
 }
-const WARP_SHELL_COMPATIBILITY_DOCS: &str =
+const ZAPLEX_SHELL_COMPATIBILITY_DOCS: &str =
     "";
 // Default minimum width for a newly created Agent Mode pane so that it is legible. Called "default"
 // because this value may be too large for small windows. In that case, we fall back to 50% of the
@@ -479,15 +479,15 @@ pub enum Event {
     OpenPromptEditor,
     OpenAgentToolbarEditor,
     OpenCLIAgentToolbarEditor,
-    /// tell the workspace to open a file within Zap.
+    /// tell the workspace to open a file within Zaplex.
     OpenFileInWarp {
         /// The file path to open.
         path: PathBuf,
         /// The session that the path was opened from.
         session: Arc<Session>,
     },
-    ZapDriveLink {
-        open_warp_drive_args: ZapDriveObjectArgs,
+    ZaplexDriveLink {
+        open_warp_drive_args: ZaplexDriveObjectArgs,
     },
     #[cfg(feature = "local_fs")]
     OpenCodeInWarp {
@@ -562,7 +562,7 @@ pub enum Event {
     },
     /// Clears the hovered tab index so it no longer appears as highlighted drop target
     ClearHoveredTabIndex,
-    ZapDriveObjectInPane(ObjectUid),
+    ZaplexDriveObjectInPane(ObjectUid),
     OpenSuggestedAgentModeWorkflowModal {
         workflow_and_id: SuggestedAgentModeWorkflowAndId,
     },
@@ -620,7 +620,7 @@ pub enum Event {
         initial_content: Option<String>,
     },
     OpenAddRulePane,
-    // Zap Wave 7-3: `OpenEnvironmentManagementPane` event physically removed with ambient-agent UI subsystem.
+    // Zaplex Wave 7-3: `OpenEnvironmentManagementPane` event physically removed with ambient-agent UI subsystem.
     OpenFilesPalette {
         source: PaletteSource,
     },
@@ -634,7 +634,7 @@ pub enum Event {
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
     },
-    /// Zap: emitted when Ctrl/Cmd+clicking a file path in remote SSH session output in the terminal,
+    /// Zaplex: emitted when Ctrl/Cmd+clicking a file path in remote SSH session output in the terminal,
     /// workspace then uses buffer-sync protocol to open the remote file in the editor.
     #[cfg(all(feature = "local_tty", feature = "local_fs"))]
     OpenRemoteFileFromTerminal {
@@ -705,6 +705,14 @@ pub struct DraggedBorder {
 }
 
 /// Options that can be set when adding a new local terminal pane.
+/// Target filesystem for the in-place file manager (FM pane-mode P1).
+pub enum FileManagerTarget {
+    /// The machine zaplex runs on, rooted at `start_path` (the session cwd).
+    Local { start_path: std::path::PathBuf },
+    /// An SSH host (browsed over its SFTP connection), by `ssh_servers.node_id`.
+    Remote { node_id: String },
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct NewTerminalOptions {
     /// The particular shell to spawn (if not the default).
@@ -719,6 +727,10 @@ pub struct NewTerminalOptions {
     pub is_shared_session_creator: IsSharedSessionCreator,
     /// The AI conversation to restore when the terminal is created.
     pub conversation_restoration: Option<ConversationRestorationInNewPaneType>,
+    /// If set, back this terminal with a daemon-hosted (native persistent)
+    /// session instead of a local PTY. Set only by the resilient-SSH path
+    /// (`open_ssh_terminal`); `None` for ordinary terminals.
+    pub daemon_request: Option<crate::terminal::daemon_tty::DaemonSessionRequest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -799,18 +811,18 @@ pub struct PaneGroup {
     /// Mapping from pane IDs to their contents.
     pane_contents: HashMap<PaneId, Box<dyn AnyPaneContent>>,
 
-    // Zap: removed terminal_with_open_share_block_modal / share_block_modal fields (cloud share block)
+    // Zaplex: removed terminal_with_open_share_block_modal / share_block_modal fields (cloud share block)
     dragged_border: Option<DraggedBorder>,
     user_default_shell_changed_banner: ViewHandle<Banner<PaneGroupAction>>,
 
-    // Zap: removed terminal_with_open_share_session_modal / share_session_modal fields (cloud shared session)
+    // Zaplex: removed terminal_with_open_share_session_modal / share_session_modal fields (cloud shared session)
     /// Model that tracks the currently active file.
     active_file_model: ModelHandle<ActiveFileModel>,
     /// If there is an open summarization cancel dialog, the terminal pane ID where summarization is active.
     terminal_with_open_summarization_dialog: Option<TerminalPaneId>,
 
     /// Pane with an open environment setup mode selector modal (rendered at tab level).
-    // Zap Wave 7-3: `pane_with_open_environment_setup_mode_selector` /
+    // Zaplex Wave 7-3: `pane_with_open_environment_setup_mode_selector` /
     // `pane_with_open_agent_assisted_environment_modal` physically removed with ambient-agent UI subsystem.
 
     /// If the left panel is open for this pane group
@@ -1242,6 +1254,7 @@ impl PaneGroup {
                         model_event_sender.clone(),
                         chosen_shell,
                         None,
+                        None, // daemon_request: ordinary terminal
                         ctx,
                     ),
                 };
@@ -1534,6 +1547,7 @@ impl PaneGroup {
                     model_event_sender.clone(),
                     chosen_shell,
                     terminal_snapshot.input_config,
+                    None, // daemon_request: restored snapshot is a local session
                     ctx,
                 );
 
@@ -1822,6 +1836,14 @@ impl PaneGroup {
                     "Image pane should not have been persisted, as it is not restorable"
                 ))
             }
+            LeafContents::Cockpit => {
+                // Cockpit dashboard panes are intentionally not persisted (see
+                // `LeafContents::is_persisted`); users reopen from the cockpit
+                // sidebar.
+                Err(anyhow::anyhow!(
+                    "Cockpit pane should not have been persisted, as it is not restorable"
+                ))
+            }
             LeafContents::GetStarted => {
                 if !FeatureFlag::GetStartedTab.is_enabled() {
                     Err(anyhow::anyhow!("GetStarted pane not supported"))
@@ -1851,7 +1873,7 @@ impl PaneGroup {
                     };
                     Ok((PaneData::new(pane_id), focus))
                 }
-            } // Zap Wave 7-3: `EnvironmentManagement` LeafContents arm physically removed with ambient-agent UI subsystem.
+            } // Zaplex Wave 7-3: `EnvironmentManagement` LeafContents arm physically removed with ambient-agent UI subsystem.
         };
 
         if let (Ok((pane_data, _)), Some(title)) = (&result, custom_vertical_tabs_title.as_deref())
@@ -2290,7 +2312,7 @@ impl PaneGroup {
     }
 
     /// Send prompt change bindkey events to all terminal sessions in this pane group. This
-    /// is used for intra-session prompt switching between Zap prompt and PS1.
+    /// is used for intra-session prompt switching between Zaplex prompt and PS1.
     #[cfg_attr(not(feature = "local_tty"), allow(unused_variables))]
     pub fn send_prompt_change_bindkey_to_all_sessions(
         &self,
@@ -2357,17 +2379,17 @@ impl PaneGroup {
         _terminal_pane_id: TerminalPaneId,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Zap: share_session_modal removed, no-op
+        // Zaplex: share_session_modal removed, no-op
         ctx.notify();
     }
 
     /// Closes the share session modal if it is open. Does nothing otherwise. Does not change
     /// which element is focused.
     fn close_share_session_modal(&mut self, _ctx: &mut ViewContext<Self>) {
-        // Zap: share_session_modal removed, no-op
+        // Zaplex: share_session_modal removed, no-op
     }
 
-    // Zap: removed handle_share_session_modal_event (cloud shared session modal)
+    // Zaplex: removed handle_share_session_modal_event (cloud shared session modal)
 
     fn new_internal(
         tips_completed: ModelHandle<TipsCompleted>,
@@ -2418,7 +2440,7 @@ impl PaneGroup {
             me.handle_focus_state_event(event, ctx);
         });
 
-        // Zap: removed share_block_modal registration (cloud share block)
+        // Zaplex: removed share_block_modal registration (cloud share block)
 
         ctx.subscribe_to_model(&PaneSettings::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
@@ -2428,11 +2450,11 @@ impl PaneGroup {
             Banner::<PaneGroupAction>::new_permanently_dismissible(
                 BannerTextContent::formatted_text(vec![
                     FormattedTextFragment::plain_text(
-                        "Zap doesn't currently support your default shell, falling back to zsh.  ",
+                        "Zaplex doesn't currently support your default shell, falling back to zsh.  ",
                     ),
                     FormattedTextFragment::hyperlink(
                         crate::t!("common-learn-more"),
-                        WARP_SHELL_COMPATIBILITY_DOCS,
+                        ZAPLEX_SHELL_COMPATIBILITY_DOCS,
                     ),
                 ]),
             )
@@ -2462,7 +2484,7 @@ impl PaneGroup {
             },
         );
 
-        // Zap: removed share_session_modal registration (cloud shared session modal)
+        // Zaplex: removed share_session_modal registration (cloud shared session modal)
 
         ctx.subscribe_to_model(&UndoCloseStack::handle(ctx), |me, _, event, ctx| {
             let UndoCloseStackEvent::DiscardPane(pane_id) = event;
@@ -2483,7 +2505,7 @@ impl PaneGroup {
             user_default_shell_changed_banner,
             active_file_model,
             terminal_with_open_summarization_dialog: None,
-            // Zap Wave 7-3: pane-level modal tracking fields from ambient-agent UI subsystem physically removed with UI.
+            // Zaplex Wave 7-3: pane-level modal tracking fields from ambient-agent UI subsystem physically removed with UI.
             right_panel_open: false,
             left_panel_open: false,
             is_right_panel_maximized: false,
@@ -2876,6 +2898,7 @@ impl PaneGroup {
             model_event_sender.clone(),
             options.shell,
             None,
+            options.daemon_request,
             ctx,
         );
         let uuid = Uuid::new_v4();
@@ -3234,7 +3257,7 @@ impl PaneGroup {
 
         let _ = ambient_agent_task_id;
 
-        // Insert the conversation ended tombstone (includes Open in Zap button on WASM).
+        // Insert the conversation ended tombstone (includes Open in Zaplex button on WASM).
         if terminal_manager.is_some() {
             terminal_view.update(ctx, |view, ctx| {
                 view.insert_conversation_ended_tombstone(ctx);
@@ -3268,7 +3291,7 @@ impl PaneGroup {
         }
     }
 
-    // Zap: removed handle_share_block_modal_event (cloud share block)
+    // Zaplex: removed handle_share_block_modal_event (cloud share block)
 
     /// Used to add a new pane but not splitting panes.
     pub fn add_terminal_pane(
@@ -3826,6 +3849,20 @@ impl PaneGroup {
             return;
         }
 
+        // A temporary replacement (e.g. the in-place file manager over a
+        // terminal) closes by REVERTING to the original pane — the pane slot
+        // and the hidden original survive. Mirrors `close_pane_and_focus`.
+        if self.panes.is_temporary_replacement(pane_id) {
+            if let Some(original_id) = self.close_temporary_replacement_pane(pane_id, ctx) {
+                ctx.emit(Event::FocusPane {
+                    pane_to_focus: original_id,
+                });
+            }
+            ctx.notify();
+            ctx.emit(Event::AppStateChanged);
+            return;
+        }
+
         // If this pane is a child agent, re-hide it instead of closing it.
         if self.is_child_agent_pane(pane_id) {
             if !self.panes.is_pane_hidden(&pane_id) {
@@ -3876,8 +3913,8 @@ impl PaneGroup {
                 self.hide_closed_pane(pane_id, ctx);
             }
 
-            // Zap: removed share_block_modal cleanup (cloud share block)
-            // Zap Wave 7-3: pane-level modal tracking in the ambient-agent UI
+            // Zaplex: removed share_block_modal cleanup (cloud share block)
+            // Zaplex Wave 7-3: pane-level modal tracking in the ambient-agent UI
             // subsystem; the field cleanup was physically removed with the UI.
 
             self.focus_next_terminal_pane_and_activate_session(
@@ -3900,8 +3937,8 @@ impl PaneGroup {
 
             self.clean_up_pane(pane_id, ctx);
 
-            // Zap: removed share_block_modal cleanup (cloud share block)
-            // Zap Wave 7-3: pane-level modal tracking in the ambient-agent UI
+            // Zaplex: removed share_block_modal cleanup (cloud share block)
+            // Zaplex Wave 7-3: pane-level modal tracking in the ambient-agent UI
             // subsystem; the field cleanup was physically removed with the UI.
 
             self.focus_next_terminal_pane_and_activate_session(
@@ -3997,6 +4034,29 @@ impl PaneGroup {
         ctx.notify();
         ctx.emit(Event::AppStateChanged);
         success
+    }
+
+    /// FM pane-mode (P1): swap the given pane **in place** for a file manager —
+    /// same slot in the layout, neighbors and sizes untouched. The original
+    /// pane (typically a running terminal) is hidden, NOT torn down; closing
+    /// the file manager reverts to it (temporary replacement).
+    pub fn open_file_manager_in_place(
+        &mut self,
+        pane_id: PaneId,
+        target: FileManagerTarget,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::pane_group::pane::sftp_pane::SftpPane;
+        match target {
+            FileManagerTarget::Local { start_path } => {
+                let pane = SftpPane::new_local(start_path, ctx);
+                self.replace_pane(pane_id, pane, /* is_temporary */ true, ctx);
+            }
+            FileManagerTarget::Remote { node_id } => {
+                let pane = SftpPane::new(node_id, ctx);
+                self.replace_pane(pane_id, pane, /* is_temporary */ true, ctx);
+            }
+        }
     }
 
     fn close_temporary_replacement_pane(
@@ -4814,11 +4874,35 @@ impl PaneGroup {
         model_event_sender: Option<SyncSender<ModelEvent>>,
         chosen_shell: Option<AvailableShell>,
         initial_input_config: Option<InputConfig>,
+        daemon_request: Option<crate::terminal::daemon_tty::DaemonSessionRequest>,
         ctx: &mut ViewContext<Self>,
     ) -> (
         ViewHandle<TerminalView>,
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
+        // Daemon-hosted (native persistent) session: bytes come from the remote
+        // daemon over the protocol, not a local PTY. Additive — `local_tty`
+        // remains the default for every ordinary terminal (`daemon_request` is
+        // `None`).
+        if let Some(request) = daemon_request {
+            let terminal_manager: ModelHandle<Box<dyn TerminalManager>> =
+                crate::terminal::daemon_tty::TerminalManager::create_model(
+                    resources,
+                    initial_size,
+                    model_event_sender,
+                    ctx.window_id(),
+                    initial_input_config,
+                    request.connection_session_id,
+                    request.open_params,
+                    request.adopt_pty_session_id,
+                    request.install_progress_rx,
+                    request.host_label,
+                    ctx,
+                );
+            let terminal_view = terminal_manager.as_ref(ctx).view();
+            return (terminal_view, terminal_manager);
+        }
+
         cfg_if::cfg_if! {
             if #[cfg(feature = "remote_tty")] {
                 let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = crate::terminal::remote_tty::TerminalManager::create_model(
@@ -4908,7 +4992,7 @@ impl PaneGroup {
         });
 
         let terminal_view = terminal_manager.as_ref(ctx).view();
-        // Insert the conversation ended tombstone (includes Open in Zap button on WASM)
+        // Insert the conversation ended tombstone (includes Open in Zaplex button on WASM)
         terminal_view.update(ctx, |view, ctx| {
             view.insert_conversation_ended_tombstone(ctx);
         });
@@ -5079,6 +5163,7 @@ impl PaneGroup {
             self.model_event_sender.clone(),
             None, // chosen_shell
             None, // initial_input_config
+            None, // daemon_request: conversation restoration is a local session
             ctx,
         );
 
@@ -5204,6 +5289,7 @@ impl PaneGroup {
             self.model_event_sender.clone(),
             chosen_shell,
             None,
+            None, // daemon_request: ordinary local terminal pane
             ctx,
         );
 
@@ -6079,7 +6165,7 @@ impl PaneGroup {
         );
 
         self.close_share_session_modal(ctx);
-        // Zap: removed terminal_with_open_share_block_modal reset (field no longer exists)
+        // Zaplex: removed terminal_with_open_share_block_modal reset (field no longer exists)
         ctx.notify();
     }
 
@@ -6222,7 +6308,7 @@ impl View for PaneGroup {
 
         let mut stack = Stack::new().with_child(column.finish());
 
-        // Zap: removed share_block_modal / share_session_modal / role-change modal render branches (fields no longer exist)
+        // Zaplex: removed share_block_modal / share_session_modal / role-change modal render branches (fields no longer exist)
 
         // Render the summarization cancel dialog at tab level when open.
         if let Some(terminal_pane_id) = self.terminal_with_open_summarization_dialog {
@@ -6235,7 +6321,7 @@ impl View for PaneGroup {
             }
         }
 
-        // Zap Wave 7-3: the tab-level overlay rendering of the environment setup
+        // Zaplex Wave 7-3: the tab-level overlay rendering of the environment setup
         // mode selector / agent-assisted environment modal was physically
         // removed along with the ambient-agent UI subsystem.
 

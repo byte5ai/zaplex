@@ -78,7 +78,7 @@ use crate::cloud_object::{
 };
 use crate::code::editor_management::CodeSource;
 use crate::drive::folders::{FolderId, FolderObject, FolderObjectModel};
-use crate::drive::ZapDriveObjectSettings;
+use crate::drive::ZaplexDriveObjectSettings;
 use crate::env_vars::{EnvVarCollectionObject, EnvVarCollectionObjectModel};
 use crate::features::FeatureFlag;
 use crate::notebooks::{NotebookId, NotebookObject};
@@ -133,10 +133,10 @@ const COMMANDS_COUNT_LIMIT: i64 = 10000;
 
 use crate::persistence::cloud_objects::{upsert_stored_object, StoredObjectId};
 
-const WARP_SQLITE_FILE_NAME: &str = "warp.sqlite";
+const ZAPLEX_SQLITE_FILE_NAME: &str = "warp.sqlite";
 const ZAP_APP_GROUP_SQLITE_MIGRATION_MARKER: &str = ".zap-app-group-sqlite-migrated";
 #[cfg(target_os = "macos")]
-const WARP_APP_GROUP_ID: &str = "2BBY89MBSN.dev.warp";
+const ZAPLEX_APP_GROUP_ID: &str = "2BBY89MBSN.dev.warp";
 
 /// Callback used when deleting a local stored object. Parameter is the ID of the object to be deleted.
 /// The passed-in conn has already started a transaction.
@@ -395,7 +395,7 @@ unsafe fn init_logging() {
             // According to the docs, this error means that the database file was moved (or deleted),
             // so SQLite can't safely modify it and the rollback journal:
             //     https://www.sqlite.org/rescode.html#readonly_dbmoved
-            // This is mostly outside of Zap's control (e.g. the user or some system program is
+            // This is mostly outside of Zaplex's control (e.g. the user or some system program is
             // moving around files in the user data directory), so downgrade to a warning.
             (_, sqlite3::SQLITE_READONLY_DBMOVED) => log::Level::Warn,
             _ => log::Level::Error,
@@ -459,7 +459,7 @@ pub(super) fn init_db() -> Result<SqliteConnection> {
     if warp_core::channel::ChannelState::channel() == warp_core::channel::Channel::Oss {
         if let Some(legacy_dir) = zap_legacy_app_group_sqlite_dir() {
             if let Err(err) = migrate_zap_app_group_sqlite_if_needed(&db_path, &legacy_dir)
-                .context("Failed to migrate Zap SQLite database out of legacy App Group")
+                .context("Failed to migrate Zaplex SQLite database out of legacy App Group")
             {
                 report_error!(err);
                 log::warn!("Skipping legacy App Group SQLite migration and continuing startup");
@@ -468,7 +468,7 @@ pub(super) fn init_db() -> Result<SqliteConnection> {
     }
 
     // Migrate old SQLite files into the secure application container.
-    let old_db_path = warp_core::paths::state_dir().join(WARP_SQLITE_FILE_NAME);
+    let old_db_path = warp_core::paths::state_dir().join(ZAPLEX_SQLITE_FILE_NAME);
     if old_db_path != db_path && old_db_path.exists() && !db_path.exists() {
         match std::fs::rename(&old_db_path, &db_path) {
             Ok(_) => {
@@ -516,7 +516,7 @@ fn zap_legacy_app_group_sqlite_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home_dir| {
         home_dir
             .join("Library/Group Containers")
-            .join(WARP_APP_GROUP_ID)
+            .join(ZAPLEX_APP_GROUP_ID)
             .join("Library/Application Support")
             .join(warp_core::channel::ChannelState::app_id().to_string())
     })
@@ -533,7 +533,7 @@ fn migrate_zap_app_group_sqlite_if_needed(target_db: &Path, legacy_dir: &Path) -
         return Ok(());
     }
 
-    let legacy_db = legacy_dir.join(WARP_SQLITE_FILE_NAME);
+    let legacy_db = legacy_dir.join(ZAPLEX_SQLITE_FILE_NAME);
     if !legacy_db.exists() {
         write_zap_app_group_sqlite_migration_marker(&marker)?;
         return Ok(());
@@ -556,8 +556,8 @@ fn migrate_zap_app_group_sqlite_if_needed(target_db: &Path, legacy_dir: &Path) -
     write_zap_app_group_sqlite_migration_marker(&marker)?;
 
     safe_info!(
-        safe: ("Migrated Zap SQLite database out of legacy App Group"),
-        full: ("Migrated Zap SQLite database from `{}` to `{}`", legacy_db.display(), target_db.display())
+        safe: ("Migrated Zaplex SQLite database out of legacy App Group"),
+        full: ("Migrated Zaplex SQLite database from `{}` to `{}`", legacy_db.display(), target_db.display())
     );
 
     Ok(())
@@ -652,7 +652,7 @@ fn setup_database(database_path: &Path) -> Result<SqliteConnection> {
 pub fn database_file_path() -> PathBuf {
     warp_core::paths::secure_state_dir()
         .unwrap_or_else(warp_core::paths::state_dir)
-        .join(WARP_SQLITE_FILE_NAME)
+        .join(ZAPLEX_SQLITE_FILE_NAME)
 }
 
 pub(super) fn remove(sender: SyncSender<ModelEvent>) {
@@ -1266,8 +1266,8 @@ fn save_pane_state(
         LeafContents::GetStarted => GET_STARTED_PANE_KIND,
         LeafContents::Welcome { .. } => WELCOME_PANE_KIND,
         LeafContents::AIDocument(_) => AI_DOCUMENT_PANE_KIND,
-        // Zap Wave 7-3: `EnvironmentManagement` arm physically removed along with variant.
-        LeafContents::SshServer { .. } => {
+        // Zaplex Wave 7-3: `EnvironmentManagement` arm physically removed along with variant.
+        LeafContents::SshServer { .. } | LeafContents::Cockpit => {
             // These pane types are filtered out before this function is
             // called; see `LeafContents::is_persisted` and the skip in
             // `save_app_state`. Reaching this arm would mean a `pane_nodes`
@@ -1435,7 +1435,7 @@ fn save_pane_state(
                 .values(workflow)
                 .execute(conn)?;
         }
-        // Zap Wave 7-3: `EnvironmentManagement` LeafContents arm physically removed along with variant.
+        // Zaplex Wave 7-3: `EnvironmentManagement` LeafContents arm physically removed along with variant.
         LeafContents::Settings(settings_pane_snapshot) => {
             let current_page = match settings_pane_snapshot {
                 SettingsPaneSnapshot::Local { current_page, .. } => current_page,
@@ -1527,6 +1527,9 @@ fn save_pane_state(
             // Unreachable: filtered by `is_persisted` in `save_app_state`.
         }
         LeafContents::Image { .. } => {
+            // Unreachable: filtered by `is_persisted` in `save_app_state`.
+        }
+        LeafContents::Cockpit => {
             // Unreachable: filtered by `is_persisted` in `save_app_state`.
         }
     }
@@ -2496,7 +2499,7 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                         Some(path) => NotebookPaneSnapshot::LocalFileNotebook { path: Some(path) },
                         None => NotebookPaneSnapshot::NotebookObject {
                             notebook_id,
-                            settings: ZapDriveObjectSettings::default(),
+                            settings: ZaplexDriveObjectSettings::default(),
                         },
                     })
                 }
@@ -2514,7 +2517,7 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
 
                     LeafContents::Workflow(WorkflowPaneSnapshot::WorkflowObject {
                         workflow_id,
-                        settings: ZapDriveObjectSettings::default(),
+                        settings: ZaplexDriveObjectSettings::default(),
                     })
                 }
                 CODE_PANE_KIND => {

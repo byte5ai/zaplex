@@ -44,7 +44,8 @@ pub fn menu_bar(ctx: &mut AppContext) -> MenuBar {
         make_new_tab_menu(ctx),
         make_new_blocks_menu(ctx),
         make_new_ai_menu(ctx),
-        make_new_drive_menu(ctx),
+        // Zaplex Drive (inherited Warp Drive) is out of scope; its menu is de-listed
+        // but `make_new_drive_menu` is preserved as a template.
         make_new_window_menu(),
         make_new_help_menu(),
     ])
@@ -316,8 +317,6 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
 
 fn make_new_view_menu(ctx: &AppContext) -> Menu {
     let mut items = vec![
-        updateable_custom_item_without_checkmark(CustomAction::ToggleWarpDrive, ctx),
-        MenuItem::Separator,
         updateable_custom_item_without_checkmark(CustomAction::CommandPalette, ctx),
         updateable_custom_item_without_checkmark(CustomAction::NavigationPalette, ctx),
         updateable_custom_item_without_checkmark(CustomAction::LaunchConfigPalette, ctx),
@@ -522,6 +521,11 @@ fn make_new_blocks_menu(ctx: &AppContext) -> Menu {
     Menu::new(&crate::t!("app-menu-blocks"), items)
 }
 
+// Preserved as a template: Zaplex Drive (inherited Warp Drive) is out of scope and
+// its menu is de-listed (not built into the menu bar), but the builder is kept so a
+// future sidebar/menu can reuse it. See
+// docs/superpowers/specs/2026-07-01-self-contained-cleanup-plan.md
+#[allow(dead_code)]
 fn make_new_drive_menu(ctx: &AppContext) -> Menu {
     let mut items = vec![
         updateable_custom_item_without_checkmark(CustomAction::NewPersonalWorkflow, ctx),
@@ -540,7 +544,7 @@ fn make_new_drive_menu(ctx: &AppContext) -> Menu {
         updateable_custom_item_without_checkmark(CustomAction::OpenMCPServerCollection, ctx),
     ]);
 
-    // Zap Phase 2a: removed `Share pane contents` menu item (cloud
+    // Zaplex Phase 2a: removed `Share pane contents` menu item (cloud
     // sharing UI gone) — keeping the entry would render a clickable menu
     // item that does nothing.
 
@@ -588,7 +592,7 @@ fn block_menu_debug_items() -> Vec<MenuItem> {
     )));
 
     items.push(MenuItem::Custom(CustomMenuItem::new(
-        &crate::t!("app-menu-show-warpified-ssh-blocks"),
+        &crate::t!("app-menu-show-zaplexified-ssh-blocks"),
         move |ctx| {
             let handle = BlockVisibilitySettings::handle(ctx);
             handle.update(ctx, |block_visibility_settings, ctx| {
@@ -605,9 +609,9 @@ fn block_menu_debug_items() -> Vec<MenuItem> {
             let name = if BlockVisibilitySettings::handle(ctx).read(ctx, |settings, _ctx| {
                 *settings.should_show_ssh_block.value()
             }) {
-                crate::t!("app-menu-hide-warpified-ssh-blocks")
+                crate::t!("app-menu-hide-zaplexified-ssh-blocks")
             } else {
-                crate::t!("app-menu-show-warpified-ssh-blocks")
+                crate::t!("app-menu-show-zaplexified-ssh-blocks")
             };
 
             MenuItemPropertyChanges {
@@ -799,8 +803,8 @@ fn debug_menu_items() -> Vec<MenuItem> {
             None,
         )));
 
-        // Zap Wave 3-1:"Create anonymous user" debug menu item 随
-        // `workspace:debug_create_anonymous_user` global action + AuthClient 一同物理删。
+        // Zaplex Wave 3-1: "Create anonymous user" debug menu item
+        // deleted together with `workspace:debug_create_anonymous_user` global action + AuthClient.
     }
 
     if FeatureFlag::RuntimeFeatureFlags.is_enabled() {
@@ -1024,7 +1028,7 @@ fn open_new_agent_tab_or_window(ctx: &mut AppContext) {
     }
 }
 
-/// Dispatch event to open a new Zap window
+/// Dispatch event to open a new Zaplex window
 fn open_new_window(ctx: &mut AppContext) {
     ctx.dispatch_global_action("root_view:open_new", &());
     ctx.dispatch_global_action("workspace:save_app", &());

@@ -15,7 +15,7 @@ pub enum ApiKeyManagerEvent {
 /// User-provided API keys for AI providers.
 ///
 /// These are used for "Bring Your Own API Key" functionality, allowing
-/// users to use their own API keys instead of Zap's.
+/// users to use their own API keys instead of Zaplex's.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ApiKeys {
     pub google: Option<String>,

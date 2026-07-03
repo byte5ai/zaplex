@@ -140,7 +140,7 @@ impl SettingsWidget for AboutPageWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
 
-        // Always use pure icon logo; brand name presented as standalone "Zap" text, no longer
+        // Always use pure icon logo; brand name presented as standalone "Zaplex" text, no longer
         // dependent on svg containing "warp" text.
         let image_path = "bundled/svg/warp-logo-light.svg";
 
@@ -189,7 +189,7 @@ impl SettingsWidget for AboutPageWidget {
             )
             .with_child(
                 ui_builder
-                    .span("Zap")
+                    .span("Zaplex")
                     .build()
                     .with_margin_top(12.)
                     .finish(),

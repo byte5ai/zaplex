@@ -10,7 +10,7 @@
 //!   2. Not depend on `HashMap` iteration order
 //!   3. Not depend on external state (timestamps, randomness, PID, etc.)
 //!
-//! This test suite is Zap's "anti-regression safeguard"—any future changes to the prompt
+//! This test suite is Zaplex's "anti-regression safeguard"—any future changes to the prompt
 //! construction path that break byte-level stability will cause assertions here to fail.
 
 use crate::ai::agent::{MCPContext, MCPServer};

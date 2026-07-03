@@ -349,7 +349,7 @@ impl View for AgentMessageBar {
             return Empty::new().finish();
         };
 
-        // Zap (Phase 3c A1): removed the ambient credits banner UI.
+        // Zaplex (Phase 3c A1): removed the ambient credits banner UI.
         // After localization, `ambient_only_credits_remaining` is always None, so the original branch only ever took the None path.
         let right_element: Option<Box<dyn warpui::Element>> = None;
 

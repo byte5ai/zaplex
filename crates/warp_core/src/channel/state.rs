@@ -37,7 +37,7 @@ pub struct ChannelState {
 impl ChannelState {
     pub fn init() -> Self {
         let channel = Channel::Oss;
-        let app_id = AppId::new("dev", "zap", "Zap");
+        let app_id = AppId::new("dev", "zaplex", "Zaplex");
         Self {
             channel,
             additional_features: Default::default(),
@@ -89,11 +89,11 @@ impl ChannelState {
     /// Returns a profile name for isolating user data. This should be used to
     /// sandbox how user data is stored.
     ///
-    /// This is a debugging tool for isolating development instances of Zap, and is not
+    /// This is a debugging tool for isolating development instances of Zaplex, and is not
     /// supported in release builds.
     pub fn data_profile() -> Option<String> {
         if cfg!(debug_assertions) {
-            std::env::var("WARP_DATA_PROFILE").ok()
+            std::env::var("ZAPLEX_DATA_PROFILE").ok()
         } else {
             None
         }
@@ -102,7 +102,7 @@ impl ChannelState {
     /// Returns a value that should be used for namespacing persisted data.
     ///
     /// In release builds, this is identical to the app ID; in debug builds,
-    /// it optionally includes a suffix derived from the `WARP_DATA_PROFILE`
+    /// it optionally includes a suffix derived from the `ZAPLEX_DATA_PROFILE`
     /// environment variable.
     pub fn data_domain() -> String {
         match Self::data_profile() {
@@ -245,12 +245,12 @@ impl ChannelState {
             // Dummy value--integration tests shouldn't support URL schemes.
             Channel::Integration => "warpintegration",
             Channel::Local => "warplocal",
-            Channel::Oss => "zap",
+            Channel::Oss => "zaplex",
         }
     }
 }
 
-/// Zap Wave 5-5: `derive_http_origin_from_ws_url` was physically removed together with `rtc_http_url()`.
+/// Zaplex Wave 5-5: `derive_http_origin_from_ws_url` was physically removed together with `rtc_http_url()`.
 
 #[cfg(all(test, not(feature = "test-util")))]
 #[path = "state_tests.rs"]

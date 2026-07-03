@@ -98,8 +98,8 @@ impl TabBehavior {
     }
 }
 
-/// This enum is used to enforce options in the dropdown for selecting a separator with the Zap prompt.
-/// Note that these separators are added at the END of the Zap prompt (used in the case of same line prompt).
+/// This enum is used to enforce options in the dropdown for selecting a separator with the Zaplex prompt.
+/// Note that these separators are added at the END of the Zaplex prompt (used in the case of same line prompt).
 #[derive(
     Clone,
     Copy,

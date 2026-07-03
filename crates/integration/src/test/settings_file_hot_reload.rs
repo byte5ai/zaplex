@@ -2,7 +2,7 @@
 //!
 //! Verifies that changes to `settings.toml` on disk are picked up by the
 //! filesystem watcher and pushed into the in-memory setting models, on every
-//! platform where Zap watches `config_local_dir()`.
+//! platform where Zaplex watches `config_local_dir()`.
 
 use settings::Setting as _;
 use std::time::Duration;
@@ -33,7 +33,7 @@ pub fn test_settings_file_hot_reload_applies_new_values() -> Builder {
     new_builder()
         .with_setup(move |utils| {
             // Use a short watcher delay so each reload fires quickly.
-            utils.set_env("WARP_CONFIG_WATCHER_DELAY_MS", Some("10".to_string()));
+            utils.set_env("ZAPLEX_CONFIG_WATCHER_DELAY_MS", Some("10".to_string()));
 
             // Write an initial valid settings file so the watcher is already
             // tracking it and the app reads a known value at startup.

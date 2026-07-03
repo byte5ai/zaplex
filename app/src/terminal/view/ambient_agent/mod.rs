@@ -1,5 +1,5 @@
 mod block;
-// Zap Wave 7-2: `first_time_setup` to be deleted physically with ambient agent UI.
+// Zaplex Wave 7-2: `first_time_setup` to be deleted physically with ambient agent UI.
 mod footer;
 mod harness_selector;
 mod host_selector;

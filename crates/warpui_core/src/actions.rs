@@ -1,6 +1,6 @@
 /// A StandardAction is one that corresponds to an action that
 /// must be dispatched and handled natively by NSApp (e.g. terminate:)
-/// Use CustomActions for handling Zap specific actions.
+/// Use CustomActions for handling Zaplex specific actions.
 ///
 /// Set a 'repr' here as we store these values as tags in menu items.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive, Hash)]

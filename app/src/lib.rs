@@ -1,6 +1,6 @@
 // Suppress warnings about rustdoc style.
 #![allow(clippy::doc_lazy_continuation)]
-// Orphaned code remaining from upstream Zap pruning; temporarily retained with unified dead_code suppression.
+// Orphaned code remaining from upstream Zaplex pruning; temporarily retained with unified dead_code suppression.
 #![allow(dead_code)]
 
 mod ai;
@@ -16,6 +16,7 @@ mod banner;
 mod changelog_model;
 mod chip_configurator;
 mod cloud_object;
+mod cockpit;
 mod code;
 mod code_review;
 mod coding_entrypoints;
@@ -60,7 +61,6 @@ mod plugin;
 mod prefix;
 #[cfg(target_os = "macos")]
 mod preview_config_migration;
-mod pricing;
 mod profiling;
 mod projects;
 mod prompt;
@@ -150,7 +150,7 @@ use code::editor_management::CodeManager;
 use code::opened_files::OpenedFilesModel;
 use code_review::GlobalCodeReviewModel;
 use quit_warning::UnsavedStateSummary;
-// Zap (localization, Phase 4): `ServerVoiceTranscriber` previously used for default VoiceTranscriber injection; now using `VoiceTranscriber::disabled()`, same-name import retained for now.
+// Zaplex (localization, Phase 4): `ServerVoiceTranscriber` previously used for default VoiceTranscriber injection; now using `VoiceTranscriber::disabled()`, same-name import retained for now.
 
 #[cfg(feature = "local_fs")]
 use settings::import::model::ImportedConfigModel;
@@ -310,18 +310,18 @@ pub struct Assets;
 
 pub static ASSETS: Assets = Assets;
 
-/// Launch mode for how to start up Zap.
+/// Launch mode for how to start up Zaplex.
 #[allow(clippy::large_enum_variant)]
 pub enum LaunchMode {
     /// Run the regular GUI application.
     App {
         args: warp_cli::AppArgs,
-        /// API key for server authentication, if provided via `--api-key` or `WARP_API_KEY`.
+        /// API key for server authentication, if provided via `--api-key` or `ZAPLEX_API_KEY`.
         /// Only used on dogfood channels.
         api_key: Option<String>,
     },
 
-    /// Run the Zap command-line SDK.
+    /// Run the Zaplex command-line SDK.
     CommandLine {
         command: warp_cli::CliCommand,
         global_options: GlobalOptions,
@@ -410,7 +410,7 @@ impl LaunchMode {
         }
     }
 
-    /// Returns `true` if Zap should run headlessly, without a visible UI.
+    /// Returns `true` if Zaplex should run headlessly, without a visible UI.
     fn is_headless(&self) -> bool {
         match self {
             LaunchMode::CommandLine { command, .. } => match command {
@@ -660,7 +660,7 @@ pub fn run() -> Result<()> {
     // instead of launching the GUI app.
     let is_cli_binary = cfg!(feature = "standalone")
         || warp_cli::binary_name().is_some_and(|name| name.starts_with("oz"))
-        || std::env::var_os("WARP_CLI_MODE").is_some();
+        || std::env::var_os("ZAPLEX_CLI_MODE").is_some();
     if is_cli_binary {
         warp_cli::Args::clap_command().print_help()?;
         return Ok(());
@@ -675,7 +675,7 @@ pub fn run() -> Result<()> {
 
 /// Runs an integration test using the provided test driver.
 pub fn run_integration_test(driver: TestDriver) -> Result<()> {
-    let is_integration_test = std::env::var("WARP_INTEGRATION").is_ok();
+    let is_integration_test = std::env::var("ZAPLEX_INTEGRATION").is_ok();
     let launch = LaunchMode::Test {
         driver: Box::new(Some(driver)),
         is_integration_test,
@@ -789,15 +789,15 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             launch_mode.args().as_ref(),
         ) {
             // If we were able to contact an existing application instance, quit -
-            // we only want to run a single instance of Zap at a time.
+            // we only want to run a single instance of Zaplex at a time.
             Ok(_) => std::process::exit(0),
-            // If Zap isn't already running, we're good to go.
+            // If Zaplex isn't already running, we're good to go.
             Err(app_services::linux::StartupArgsForwardingError::NoExistingInstance) => {}
             // If we just finished an auto-update, we should continue running.
             Err(app_services::linux::StartupArgsForwardingError::IgnoredAfterAutoUpdate) => {}
             // If we were unable to perform the forwarding for an unknown reason,
             // it's better to run a second instance than potentially end up in a
-            // state where Zap refuses to run even a first instance.
+            // state where Zaplex refuses to run even a first instance.
             Err(err) => {
                 let err = anyhow::Error::from(err).context("Failed to forward startup args");
                 log::error!("{err:#}");
@@ -812,15 +812,15 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             launch_mode.args().as_ref(),
         ) {
             // If we were able to contact an existing application instance, quit -
-            // we only want to run a single instance of Zap at a time.
+            // we only want to run a single instance of Zaplex at a time.
             Ok(_) => std::process::exit(0),
-            // If Zap isn't already running, we're good to go.
+            // If Zaplex isn't already running, we're good to go.
             Err(app_services::windows::StartupArgsForwardingError::NoExistingInstance) => {}
             // If we just finished an auto-update, we should continue running.
             Err(app_services::windows::StartupArgsForwardingError::IgnoredAfterAutoUpdate) => {}
             // If we were unable to perform the forwarding for an unknown reason,
             // it's better to run a second instance than potentially end up in a
-            // state where Zap refuses to run even a first instance.
+            // state where Zaplex refuses to run even a first instance.
             Err(err) => {
                 let err = anyhow::Error::from(err).context("Failed to forward startup args");
                 log::error!("{err:#}");
@@ -829,7 +829,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         }
     }
 
-    // Sets up a Job Object that we associate with the Zap process to handle
+    // Sets up a Job Object that we associate with the Zaplex process to handle
     // shared fate with its child processes. This should be called before we
     // start spawning any child processes.
     #[cfg(windows)]
@@ -902,7 +902,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
         let force_x11 = ForceX11::read_from_preferences(prefs_for_public_settings)
             .unwrap_or(ForceX11::default_value());
-        // Force use of wayland if the user has passed the `WARP_ENABLE_WAYLAND` env var.
+        // Force use of wayland if the user has passed the `ZAPLEX_ENABLE_WAYLAND` env var.
         let allow_wayland = linux::is_wayland_env_var_set() || !force_x11;
         app_builder.force_x11(!allow_wayland);
     }
@@ -1062,10 +1062,10 @@ fn initialize_app(
 
     let update_http_client = Arc::new(http_client::Client::new());
 
-    // Zap: retain AuthStateProvider singleton only for legacy call sites to read local placeholder user state.
+    // Zaplex: retain AuthStateProvider singleton only for legacy call sites to read local placeholder user state.
     ctx.add_singleton_model(|_ctx| AuthStateProvider::new(auth_state.clone()));
 
-    // Zap Wave 3-1: AuthManager has been localized to stub, no longer injecting server_api / auth_client.
+    // Zaplex Wave 3-1: AuthManager has been localized to stub, no longer injecting server_api / auth_client.
     ctx.add_singleton_model(AuthManager::new);
 
     ctx.add_singleton_model(|_ctx| GPUState::new());
@@ -1251,7 +1251,6 @@ fn initialize_app(
     ctx.add_singleton_model(|_| SettingsPaneManager::new());
     ctx.add_singleton_model(|_| AIFactManager::new());
     ctx.add_singleton_model(|_| ExecutionProfileEditorManager::default());
-    ctx.add_singleton_model(|_| pricing::PricingInfoModel::new());
     ctx.add_singleton_model(|_| {
         ManagedSecretManager::new(
             Arc::new(local_managed_secrets::DisabledManagedSecretsClient),
@@ -1282,7 +1281,7 @@ fn initialize_app(
     ctx.add_singleton_model(|_ctx| SyncedInputState::new());
 
     ctx.add_singleton_model(remote_server::manager::RemoteServerManager::new);
-    // Zap Wave 6-1: `remote_server::wire_auth_token_rotation(ctx)` call removed together with
+    // Zaplex Wave 6-1: `remote_server::wire_auth_token_rotation(ctx)` call removed together with
     // server API token rotation event + `wire_auth_token_rotation` function body.
 
     log::info!(
@@ -1298,7 +1297,7 @@ fn initialize_app(
         apply_scroll_multiplier(event, ctx);
     });
 
-    // Rewrite recognized Zap web URLs (sessions, Drive, settings, home) into local
+    // Rewrite recognized Zaplex web URLs (sessions, Drive, settings, home) into local
     // intent URLs when possible so they open directly in the desktop app.
     ctx.set_before_open_url(|url_str, _ctx| {
         if let Ok(url) = Url::parse(url_str) {
@@ -1321,7 +1320,7 @@ fn initialize_app(
     let user_is_logged_in = auth_state.is_logged_in();
 
     if user_is_logged_in {
-        // Zap local auth facade has already loaded identity snapshot at `AuthState::initialize`.
+        // Zaplex local auth facade has already loaded identity snapshot at `AuthState::initialize`.
         // Startup phase no longer triggers an additional cloud token refresh / auth refresh.
 
         // Set the first frame callback to record the app's startup time.
@@ -1331,7 +1330,7 @@ fn initialize_app(
         ctx.on_first_frame_drawn(move |ctx| {
             let timing_data = IntervalTimer::handle(ctx).update(ctx, |timer, _| {
                 timer.mark_interval_end("FIRST_FRAME_DRAWN");
-                // Local tuning exit: when WARP_STARTUP_TRACE=1, dump complete startup sequence table to stderr.
+                // Local tuning exit: when ZAPLEX_STARTUP_TRACE=1, dump complete startup sequence table to stderr.
                 // Does not affect telemetry logic, for developer use only.
                 timer.print_trace_to_stderr_if_enabled();
                 timer.compute_stats()
@@ -1371,7 +1370,7 @@ fn initialize_app(
         // This is sent immediately in case they quit the app on the signup screen.
         send_telemetry_sync_from_app_ctx!(TelemetryEvent::LoggedOutStartup, ctx);
         // Unauthenticated users also need to see startup sequence (BYOP scenarios are majority), after first frame
-        // dump WARP_STARTUP_TRACE table once. No telemetry, does not affect logic.
+        // dump ZAPLEX_STARTUP_TRACE table once. No telemetry, does not affect logic.
         ctx.on_first_frame_drawn(move |ctx| {
             IntervalTimer::handle(ctx).update(ctx, |timer, _| {
                 timer.mark_interval_end("FIRST_FRAME_DRAWN");
@@ -1478,11 +1477,11 @@ fn initialize_app(
     ai::blocklist::block::status_bar::init(ctx);
     drive::index::init(ctx);
     ai_assistant::panel::init(ctx);
-    // Zap Wave 7-2: `settings_view::update_environment_form::init` removed together with cloud ambient agent
+    // Zaplex Wave 7-2: `settings_view::update_environment_form::init` removed together with cloud ambient agent
     // main subsystem.
     env_vars::env_var_collection_block::init(ctx);
     terminal::ssh::install_tmux::init(ctx);
-    terminal::ssh::warpify::init(ctx);
+    terminal::ssh::zaplexify::init(ctx);
     terminal::ssh::error::init(ctx);
     context_chips::display_menu::init(ctx);
     context_chips::node_version_popup::init(ctx);
@@ -1537,7 +1536,7 @@ fn initialize_app(
     #[cfg(feature = "voice_input")]
     ctx.add_singleton_model(voice_input::VoiceInput::new);
     ctx.add_singleton_model(|_| {
-        // Zap (localization, Phase 4): originally default injected `ServerVoiceTranscriber` using cloud Wispr STT.
+        // Zaplex (localization, Phase 4): originally default injected `ServerVoiceTranscriber` using cloud Wispr STT.
         // In localization scenario, cloud speech transcription is unavailable; changed to `disabled()` to make upper-level `transcriber()` return None,
         // voice input UI becomes collection-only without transcription (connect local STT later).
         VoiceTranscriber::disabled()
@@ -1562,7 +1561,7 @@ fn initialize_app(
         )
     });
 
-    // Zap (Wave 4): after SyncQueue is completely deleted, no more `unsynced_actions` /
+    // Zaplex (Wave 4): after SyncQueue is completely deleted, no more `unsynced_actions` /
     // `objects_with_pending_changes` tracking; local writes are "complete".
     let _ = (&object_store_model, &object_actions);
     // Retain `ObjectTypeAndId` import for other modules in the same crate to access via `crate::` path.
@@ -1610,11 +1609,11 @@ fn initialize_app(
 
     ctx.add_singleton_model(|_| AudibleBell::new());
 
-    // Zap: UpdateManager only handles local cloud object memory/SQLite synchronization, no longer injects cloud client.
+    // Zaplex: UpdateManager only handles local cloud object memory/SQLite synchronization, no longer injects cloud client.
     ctx.add_singleton_model(|ctx| UpdateManager::new(persistence_writer.sender(), ctx));
 
     let toml_file_path = settings::user_preferences_toml_file_path();
-    // Zap (localization, Phase 5): `PreferencesSyncer` has been physically deleted. Original syncer handled local
+    // Zaplex (localization, Phase 5): `PreferencesSyncer` has been physically deleted. Original syncer handled local
     // settings.toml and cloud preferences bidirectional sync, in localization scenario only retain local toml loading.
     let _ = toml_file_path;
     let _ = startup_toml_parse_error_for_syncer;
@@ -1630,6 +1629,9 @@ fn initialize_app(
     // FileMCPWatcher must be registered before FileBasedMCPManager, which subscribes to it.
     ctx.add_singleton_model(FileMCPWatcher::new);
     ctx.add_singleton_model(FileBasedMCPManager::new);
+
+    // Cockpit data spine: registered after HomeDirectoryWatcher (which it subscribes to).
+    ctx.add_singleton_model(cockpit::CockpitModel::new);
 
     // TemplatableMCPServerManager must be registered after UpdateManager and MCPServerManager so it can migrate legacy MCPs on start up
     // It should also be registered after FileBasedMCPManager so it can receive file-based server updates.
@@ -1669,7 +1671,7 @@ fn initialize_app(
     ctx.add_singleton_model(NotebookKeybindings::new);
     ctx.add_singleton_model(TerminalKeybindings::new);
     ctx.add_singleton_model(|_| ActiveSession::default());
-    // Zap (localization, Phase 2d-4a-1): original `Listener` singleton handled cloud cloud_objects RTC WebSocket,
+    // Zaplex (localization, Phase 2d-4a-1): original `Listener` singleton handled cloud cloud_objects RTC WebSocket,
     // after 2b-1, `start_listener` is already no-op, this entire file and singleton injection are physically deleted.
 
     #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
@@ -1817,7 +1819,7 @@ fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppCallbacks {
             });
 
             // We want to tear down the terminal server before relaunching for
-            // autoupdate, to ensure we're not running any extra Zap processes
+            // autoupdate, to ensure we're not running any extra Zaplex processes
             // when we bring up the new process.  Additionally, this must occur
             // after terminating the persistence writer, so we don't keep track
             // of the fact that the shell sessions terminated.
@@ -2277,7 +2279,24 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
     #[cfg(all(debug_assertions, not(windows)))]
     flags.insert(FeatureFlag::ServerFileBrowser);
 
-    // Issue #72: HTTP proxy settings page. Does not use channel check, all channels including zap-oss
+    // zaplex: keep the remote-server SSH enhancement (remote file open/edit/save + the
+    // server file browser) *source-honest*. It only works when the host binary can
+    // actually be provided: a dev cross-compile (`is_dev_source_build`) or a tarball
+    // bundled in the app (install ladder rung 3a, staged by CI). When the flag is on
+    // WITHOUT a source, every *classic* SSH session is routed through a
+    // stash-and-install (model_events.rs) that withholds the interactive shell behind
+    // failing download timeouts — the "Starting shell …" hang. So when no source
+    // exists, drop the flags: classic SSH becomes an instant plain shell, while the
+    // persistent *daemon* path (which does NOT gate on these flags) still provides
+    // resilience and its own auto-install.
+    if !::remote_server::setup::is_dev_source_build()
+        && !crate::remote_server::embedded::any_embedded_server_available()
+    {
+        flags.remove(&FeatureFlag::SshRemoteServer);
+        flags.remove(&FeatureFlag::ServerFileBrowser);
+    }
+
+    // Issue #72: HTTP proxy settings page. Does not use channel check, all channels including zaplex
     // enabled by default, as basic capability for enterprise VPN / corporate proxy scenarios.
     flags.insert(FeatureFlag::HttpProxySettings);
 
@@ -2338,7 +2357,7 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ShellSelector,
         #[cfg(feature = "block_toolbelt_save_as_workflow")]
         FeatureFlag::BlockToolbeltSaveAsWorkflow,
-        // Zap Wave 7-2: `CloudEnvironments` FeatureFlag removed together with cloud ambient agent main subsystem
+        // Zaplex Wave 7-2: `CloudEnvironments` FeatureFlag removed together with cloud ambient agent main subsystem
         // — `warp environment` subcommand + `--environment` parameter sunset together.
         #[cfg(all(feature = "simulate_github_unauthed", debug_assertions))]
         FeatureFlag::SimulateGithubUnauthed,
@@ -2508,7 +2527,7 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ServerFileBrowser,
         #[cfg(feature = "allow_ignoring_input_suggestions")]
         FeatureFlag::AllowIgnoringInputSuggestions,
-        // Zap (localization): cloud entry point for ambient agent / agent management view has been physically shut down.
+        // Zaplex (localization): cloud entry point for ambient agent / agent management view has been physically shut down.
         // BYOP agent local execution does not depend on these entry points.
         #[cfg(feature = "code_launch_modal")]
         FeatureFlag::CodeLaunchModal,
@@ -2601,7 +2620,7 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         #[cfg(feature = "bundled_skills")]
         FeatureFlag::BundledSkills,
         #[cfg(feature = "open_warp_launch_modal")]
-        FeatureFlag::ZapLaunchModal,
+        FeatureFlag::ZaplexLaunchModal,
         #[cfg(feature = "new_tab_styling")]
         FeatureFlag::NewTabStyling,
         #[cfg(feature = "skill_arguments")]
@@ -2623,7 +2642,7 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         #[cfg(feature = "directory_tab_colors")]
         FeatureFlag::DirectoryTabColors,
         #[cfg(feature = "open_warp_new_settings_modes")]
-        FeatureFlag::ZapNewSettingsModes,
+        FeatureFlag::ZaplexNewSettingsModes,
         #[cfg(feature = "hoa_code_review")]
         FeatureFlag::HoaCodeReview,
         #[cfg(feature = "vertical_tabs")]
@@ -2642,8 +2661,8 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CLIAgentRichInput,
         #[cfg(feature = "transfer_control_tool")]
         FeatureFlag::TransferControlTool,
-        #[cfg(feature = "warpify_footer")]
-        FeatureFlag::WarpifyFooter,
+        #[cfg(feature = "zaplexify_footer")]
+        FeatureFlag::ZaplexifyFooter,
         #[cfg(feature = "solo_user_byok")]
         FeatureFlag::SoloUserByok,
         #[cfg(feature = "hoa_onboarding_flow")]

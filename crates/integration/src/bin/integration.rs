@@ -8,7 +8,7 @@ use warp_cli::WorkerCommand;
 use warp_core::channel::{Channel, ChannelConfig, ChannelState};
 use warp_core::AppId;
 
-/// The Zap integration test runner.
+/// The Zaplex integration test runner.
 #[derive(Debug, Default, Parser, Clone)]
 #[command(name = "warp-integration-test")]
 #[clap(args_conflicts_with_subcommands = true)]
@@ -313,7 +313,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_history_command_is_linked_to_local_workflow);
     register_test!(test_up_arrow_history_enters_shift_tab_for_workflow);
 
-    // Zap (localization, Phase 5): websocket integration tests removed with Listener physical deletion.
+    // Zaplex (localization, Phase 5): websocket integration tests removed with Listener physical deletion.
 
     register_test!(test_secret_is_obfuscated_on_copy);
     register_test!(test_secret_tooltip_shows_on_click);

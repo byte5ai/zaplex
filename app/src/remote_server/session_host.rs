@@ -44,6 +44,13 @@ pub(super) struct Session {
     pub(super) attached: ConnectionId,
     /// Ordered keyboard/mouse input → the writer task → the PTY.
     pub(super) input_tx: async_channel::Sender<Vec<u8>>,
+    /// Working directory the session was opened in (for `ListSessions`).
+    pub(super) cwd: Option<String>,
+    /// Login shell the session runs (for `ListSessions` titles).
+    pub(super) shell: String,
+    /// Unix epoch millis of the last attach (open counts as the first attach);
+    /// `0` means never. Drives `ListSessions` and the detached-idle GC.
+    pub(super) last_attached_ms: u64,
 }
 
 /// Per-session reader task: pumps PTY output into the model (which appends it to
@@ -76,6 +83,66 @@ pub(super) async fn run_session_reader(
     }
     let id = session_id.clone();
     let _ = spawner.spawn(move |me, _ctx| me.on_session_reader_eof(&id)).await;
+}
+
+/// One-shot multiplexer probe: shortly after a session opens, check whether the
+/// user's login profile auto-attached a terminal multiplexer despite the
+/// spawn-env opt-outs (`BYOBU_DISABLE`/`LC_BYOBU` cover byobu, but hand-rolled
+/// `[ -z "$TMUX" ] && tmux attach` snippets have no universal off-switch). The
+/// daemon owns persistence natively, so nesting a second persistence layer is
+/// worth an advisory (`SessionNotice`, kind "multiplexer-detected") — the client
+/// renders a tab notice + warning toast.
+///
+/// Two probes (post-profile settle, then a late retry for slow profiles); stops
+/// after the first hit. Deliberate *later* `tmux` use never fires — only
+/// auto-attach-timed nesting is flagged, which is exactly the target.
+pub(super) async fn run_multiplexer_probe(
+    session_id: String,
+    child_pid: u32,
+    spawner: ModelSpawner<ServerModel>,
+) {
+    for delay_secs in [4u64, 8] {
+        async_io::Timer::after(std::time::Duration::from_secs(delay_secs)).await;
+        if let Some(mux) = multiplexer_on_session_tty(child_pid) {
+            let id = session_id.clone();
+            let _ = spawner
+                .spawn(move |me, _ctx| me.on_session_multiplexer_detected(&id, &mux))
+                .await;
+            return;
+        }
+    }
+}
+
+/// Returns the multiplexer name if one is running on the session shell's TTY.
+/// Portable (Linux/macOS): resolve the child's TTY via `ps -o tty=`, then list
+/// the commands on that TTY — a `tmux`/`screen` client there means the session
+/// landed inside a multiplexer.
+fn multiplexer_on_session_tty(child_pid: u32) -> Option<String> {
+    let tty_out = std::process::Command::new("ps")
+        .args(["-o", "tty=", "-p", &child_pid.to_string()])
+        .output()
+        .ok()?;
+    let tty = String::from_utf8_lossy(&tty_out.stdout).trim().to_string();
+    if tty.is_empty() || tty == "?" || tty == "??" {
+        return None;
+    }
+    let comm_out = std::process::Command::new("ps")
+        .args(["-o", "comm=", "-t", &tty])
+        .output()
+        .ok()?;
+    let comms = String::from_utf8_lossy(&comm_out.stdout);
+    for line in comms.lines() {
+        let comm = line.trim();
+        // Linux reports the tmux client as "tmux: client"; screen's client is
+        // "screen" (the detached server, "SCREEN", lives on another TTY).
+        if comm.contains("tmux") {
+            return Some("tmux".to_string());
+        }
+        if comm.eq_ignore_ascii_case("screen") {
+            return Some("screen".to_string());
+        }
+    }
+    None
 }
 
 /// Per-session writer task: drains the ordered input channel and writes each

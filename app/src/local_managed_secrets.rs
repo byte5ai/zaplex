@@ -1,7 +1,7 @@
-//! Zap local managed-secrets client.
+//! Zaplex local managed-secrets client.
 //!
-//! Upstream Zap originally maintained team/user-managed secrets here by calling cloud endpoints via server_api.
-//! Zap retains the `warp_managed_secrets` crate for local feature reuse, but all cloud-managed secret
+//! Upstream Zaplex originally maintained team/user-managed secrets here by calling cloud endpoints via server_api.
+//! Zaplex retains the `warp_managed_secrets` crate for local feature reuse, but all cloud-managed secret
 //! operations are unreachable: queries return empty set, write operations and OIDC token issuance return disabled error.
 
 use std::collections::HashMap;
@@ -33,11 +33,11 @@ impl ManagedSecretsClient for DisabledManagedSecretsClient {
         _encrypted_value: String,
         _description: Option<String>,
     ) -> Result<ManagedSecret> {
-        Err(anyhow!("Cloud managed secrets disabled in Zap"))
+        Err(anyhow!("Cloud managed secrets disabled in Zaplex"))
     }
 
     async fn delete_managed_secret(&self, _owner: SecretOwner, _name: String) -> Result<()> {
-        Err(anyhow!("Cloud managed secrets disabled in Zap"))
+        Err(anyhow!("Cloud managed secrets disabled in Zaplex"))
     }
 
     async fn update_managed_secret(
@@ -47,7 +47,7 @@ impl ManagedSecretsClient for DisabledManagedSecretsClient {
         _encrypted_value: Option<String>,
         _description: Option<String>,
     ) -> Result<ManagedSecret> {
-        Err(anyhow!("Cloud managed secrets disabled in Zap"))
+        Err(anyhow!("Cloud managed secrets disabled in Zaplex"))
     }
 
     async fn list_secrets(&self) -> Result<Vec<ManagedSecret>> {
@@ -65,6 +65,6 @@ impl ManagedSecretsClient for DisabledManagedSecretsClient {
         &self,
         _options: warp_managed_secrets::client::IdentityTokenOptions,
     ) -> Result<TaskIdentityToken> {
-        Err(anyhow!("Task identity token issuance disabled in Zap"))
+        Err(anyhow!("Task identity token issuance disabled in Zaplex"))
     }
 }

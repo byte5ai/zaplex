@@ -205,11 +205,11 @@ async fn handles_multiple_data_lines() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Real endpoint smoke test (enabled by default; set WARP_SKIP_WEB_INTEGRATION=1 when CI network is restricted)
+// Real endpoint smoke test (enabled by default; set ZAPLEX_SKIP_WEB_INTEGRATION=1 when CI network is restricted)
 // ---------------------------------------------------------------------------
 
 fn skip_real() -> bool {
-    std::env::var("WARP_SKIP_WEB_INTEGRATION").is_ok()
+    std::env::var("ZAPLEX_SKIP_WEB_INTEGRATION").is_ok()
 }
 
 #[tokio::test]

@@ -417,7 +417,7 @@ impl AIContextMenu {
                     categories.push(AIContextMenuCategory::CurrentFolderFiles);
                 }
             }
-            // Zap: Previously would push Code category based on the outline_codebase_symbols_for_at_context_menu setting.
+            // Zaplex: Previously would push Code category based on the outline_codebase_symbols_for_at_context_menu setting.
             // Now that outline is retired, the Code category no longer appears.
             return categories;
         }
@@ -452,7 +452,7 @@ impl AIContextMenu {
                 categories.push(AIContextMenuCategory::Commands);
             }
             categories.push(AIContextMenuCategory::Blocks);
-            // Zap: Code category retired in sync with outline sunset; no longer pushed.
+            // Zaplex: Code category retired in sync with outline sunset; no longer pushed.
             if show_warp_drive && FeatureFlag::DriveObjectsAsContext.is_enabled() {
                 categories.push(AIContextMenuCategory::Workflows);
                 categories.push(AIContextMenuCategory::Notebooks);
@@ -474,7 +474,7 @@ impl AIContextMenu {
             categories
         } else if !is_shared_session_viewer {
             // Terminal mode: show Files category only.
-            // Zap: Previously would also push Code category based on outline_codebase_symbols_for_at_context_menu setting;
+            // Zaplex: Previously would also push Code category based on outline_codebase_symbols_for_at_context_menu setting;
             // now that outline is retired, the Code category no longer appears.
 
             if is_active_dir_in_git_repo {
@@ -595,7 +595,7 @@ impl AIContextMenu {
         // Get initial categories for proper initialization
         let initial_categories = Self::get_categories_for_mode(true, false, false, false, ctx); // Default to AI mode, not a viewer, not ambient agent, not CLI agent input
 
-        // Zap: Previously, this would create a CodeSymbolCache (subscribing to RepoOutlines) to support
+        // Zaplex: Previously, this would create a CodeSymbolCache (subscribing to RepoOutlines) to support
         // code symbol search. This feature has been retired along with outline sunset,
         // and these subscription/creation code blocks have been removed accordingly.
 
@@ -867,7 +867,7 @@ impl AIContextMenu {
                     );
                 });
             }
-            // Zap: Code category retired along with outline sunset. This category will not appear in categories,
+            // Zaplex: Code category retired along with outline sunset. This category will not appear in categories,
             // but the enum variant is retained to avoid widespread match errors; this branch will never be hit.
             #[cfg(not(target_family = "wasm"))]
             NavigationState::Category(AIContextMenuCategory::Workflows) => {
@@ -1043,7 +1043,7 @@ impl AIContextMenu {
                         mixer.add_sync_source(block_data_source, [QueryFilter::Blocks]);
                     });
                 }
-                // Zap: Code category retired along with outline sunset; will not appear but kept as a no-op branch
+                // Zaplex: Code category retired along with outline sunset; will not appear but kept as a no-op branch
                 // to avoid match errors.
                 AIContextMenuCategory::Code => {}
                 AIContextMenuCategory::Workflows => {
@@ -1335,7 +1335,7 @@ impl AIContextMenu {
         .finish()
     }
 
-    // Zap: Previously, `render_code_symbols_indexing` was responsible for rendering
+    // Zaplex: Previously, `render_code_symbols_indexing` was responsible for rendering
     // “Code symbols indexing...” prompt when indexing code symbols. After outline retirement,
     // this render path is no longer called and the function is removed accordingly.
 
@@ -1544,7 +1544,7 @@ impl AIContextMenu {
         fallback: Box<dyn Element>,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        // Zap: Previously, this would check if code symbols were being indexed under the Code category,
+        // Zaplex: Previously, this would check if code symbols were being indexed under the Code category,
         // and if so, would display `render_code_symbols_indexing`. After outline retirement, this category no longer appears; completely removed.
         let _ = category;
 

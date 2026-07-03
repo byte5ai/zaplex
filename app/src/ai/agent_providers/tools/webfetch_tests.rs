@@ -400,11 +400,11 @@ async fn ssrf_safe_client_builds_with_redirect_policy() {
 
 // ---------------------------------------------------------------------------
 // Real endpoint smoke tests are skipped by default to avoid CI/offline dev relying on external network.
-// Set WARP_RUN_WEB_INTEGRATION=1 when manual verification is needed.
+// Set ZAPLEX_RUN_WEB_INTEGRATION=1 when manual verification is needed.
 // ---------------------------------------------------------------------------
 
 fn skip_real() -> bool {
-    std::env::var("WARP_RUN_WEB_INTEGRATION").is_err()
+    std::env::var("ZAPLEX_RUN_WEB_INTEGRATION").is_err()
 }
 
 #[tokio::test]

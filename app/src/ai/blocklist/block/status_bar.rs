@@ -51,7 +51,7 @@ use crate::{
         model::block::LONG_RUNNING_COMMAND_DURATION_MS,
         model_events::{ModelEvent, ModelEventDispatcher},
         view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent},
-        warpify::render::LEFT_STRIPE_WIDTH,
+        zaplexify::render::LEFT_STRIPE_WIDTH,
         TerminalModel, CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
         TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING,
     },

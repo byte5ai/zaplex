@@ -6,9 +6,9 @@
 //! without a LayoutContext. Use the exported BLOCK_BANNER_HEIGHT const when the banner height
 //! needs to be taken into account.
 
-mod warpify;
+mod zaplexify;
 
-pub use warpify::*;
+pub use zaplexify::*;
 use warpui::{
     elements::{
         ConstrainedBox, Container, CornerRadius, Hoverable, MouseState, MouseStateHandle,
@@ -28,22 +28,22 @@ pub const BLOCK_BANNER_HEIGHT: f32 = CONSTRAINED_BANNER_HEIGHT + BANNER_TOP_MARG
 pub const BLOCK_BANNER_DESCRIPTION_MAX_HEIGHT: f32 = 24.;
 
 pub enum WithinBlockBanner {
-    WarpifyBanner(WarpifyBannerState),
+    ZaplexifyBanner(ZaplexifyBannerState),
 }
 
 impl WithinBlockBanner {
     pub fn banner_height(&self) -> f32 {
-        match self.warpify_mode() {
-            Some(WarpificationMode::Ssh { .. }) => {
+        match self.zaplexify_mode() {
+            Some(ZaplexificationMode::Ssh { .. }) => {
                 BLOCK_BANNER_HEIGHT + BLOCK_BANNER_DESCRIPTION_MAX_HEIGHT
             }
-            Some(WarpificationMode::Subshell { .. }) | None => BLOCK_BANNER_HEIGHT,
+            Some(ZaplexificationMode::Subshell { .. }) | None => BLOCK_BANNER_HEIGHT,
         }
     }
 
-    pub fn warpify_mode(&self) -> Option<&WarpificationMode> {
+    pub fn zaplexify_mode(&self) -> Option<&ZaplexificationMode> {
         match self {
-            WithinBlockBanner::WarpifyBanner(state) => Some(&state.mode),
+            WithinBlockBanner::ZaplexifyBanner(state) => Some(&state.mode),
         }
     }
 }

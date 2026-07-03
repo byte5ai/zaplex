@@ -25,6 +25,6 @@ pub use sync_provider::{
 };
 pub use types::ConnectionStatus;
 pub use types::{
-    AuthType, NodeKind, OneKeyCredentialKind, ResolvedSshAuth, SshNode, SshOneKeyCredential,
-    SshServerInfo,
+    AuthType, NodeKind, OneKeyCredentialKind, ResolvedSshAuth, SessionResilience, SshNode,
+    SshOneKeyCredential, SshServerInfo,
 };

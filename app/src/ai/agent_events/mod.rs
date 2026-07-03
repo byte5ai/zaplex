@@ -17,7 +17,7 @@ pub(crate) use driver::{
 };
 pub(crate) use message_hydrator::MessageHydrator;
 
-/// Local agent event stream entry point. Zap retains interface to support local driver injection, default implementation disables cloud RTC.
+/// Local agent event stream entry point. Zaplex retains interface to support local driver injection, default implementation disables cloud RTC.
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 pub(crate) trait AgentEventStreamClient: 'static + Send + Sync {
@@ -39,7 +39,7 @@ impl AgentEventStreamClient for DisabledAgentEventStreamClient {
         _since_sequence: i64,
     ) -> Result<http_client::EventSourceStream> {
         Err(anyhow!(
-            "Agent event stream disabled in Zap - RTC endpoint is removed"
+            "Agent event stream disabled in Zaplex - RTC endpoint is removed"
         ))
     }
 }

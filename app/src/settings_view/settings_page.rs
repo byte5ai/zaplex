@@ -16,7 +16,7 @@ use super::{
     mcp_servers_page::MCPServersSettingsPageView,
     network_page::NetworkPageView,
     warp_drive_page::WarpDriveSettingsPageView,
-    warpify_page::WarpifyPageView,
+    zaplexify_page::ZaplexifyPageView,
     SettingsSection,
 };
 use crate::{
@@ -100,15 +100,15 @@ pub enum SettingsPageViewHandle {
     Keybindings(ViewHandle<KeybindingsView>),
     About(ViewHandle<AboutPageView>),
     Code(ViewHandle<CodeSettingsPageView>),
-    // Zap Wave 3-1: `OzCloudAPIKeys` variant removed together with `platform_page`.
-    // Cloud API key management UI fully represents Zap Inc cloud account; unrelated to BYOP.
-    // Zap Wave 6-8: `SharedBlocks` / `Referrals` variant removed together with `ShowBlocksView` /
+    // Zaplex Wave 3-1: `OzCloudAPIKeys` variant removed together with `platform_page`.
+    // Cloud API key management UI fully represents Zaplex Inc cloud account; unrelated to BYOP.
+    // Zaplex Wave 6-8: `SharedBlocks` / `Referrals` variant removed together with `ShowBlocksView` /
     // `ReferralsPageView` and the corresponding ServerApi client trait.
-    // Zap Wave 7-3: `CloudEnvironments` variant removed together with ambient-agent UI subsystem.
-    Warpify(ViewHandle<WarpifyPageView>),
+    // Zaplex Wave 7-3: `CloudEnvironments` variant removed together with ambient-agent UI subsystem.
+    Zaplexify(ViewHandle<ZaplexifyPageView>),
     AI(ViewHandle<AISettingsPageView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
-    ZapDrive(ViewHandle<WarpDriveSettingsPageView>),
+    ZaplexDrive(ViewHandle<WarpDriveSettingsPageView>),
     /// Global HTTP proxy settings page.
     Network(ViewHandle<NetworkPageView>),
     /// Cloud sync settings page.
@@ -124,13 +124,13 @@ impl SettingsPageViewHandle {
             Keybindings(view_handle) => ChildView::new(view_handle).finish(),
             About(view_handle) => ChildView::new(view_handle).finish(),
             Code(view_handle) => ChildView::new(view_handle).finish(),
-            // Zap Wave 3-1: `OzCloudAPIKeys` arm removed together with `platform_page`.
-            // Zap Wave 6-8: `SharedBlocks` / `Referrals` arm removed together with variant.
-            // Zap Wave 7-3: `CloudEnvironments` arm removed together with ambient-agent UI.
-            Warpify(view_handle) => ChildView::new(view_handle).finish(),
+            // Zaplex Wave 3-1: `OzCloudAPIKeys` arm removed together with `platform_page`.
+            // Zaplex Wave 6-8: `SharedBlocks` / `Referrals` arm removed together with variant.
+            // Zaplex Wave 7-3: `CloudEnvironments` arm removed together with ambient-agent UI.
+            Zaplexify(view_handle) => ChildView::new(view_handle).finish(),
             AI(view_handle) => ChildView::new(view_handle).finish(),
             MCPServers(view_handle) => ChildView::new(view_handle).finish(),
-            ZapDrive(view_handle) => ChildView::new(view_handle).finish(),
+            ZaplexDrive(view_handle) => ChildView::new(view_handle).finish(),
             Network(view_handle) => ChildView::new(view_handle).finish(),
             CloudSync(view_handle) => ChildView::new(view_handle).finish(),
         }
@@ -193,7 +193,7 @@ impl SettingsPage {
 pub enum SettingsPageEvent {
     FocusModal,
     Pane(PaneEventWrapper),
-    // Zap Wave 7-3: `EnvironmentSetupModeSelectorToggled` /
+    // Zaplex Wave 7-3: `EnvironmentSetupModeSelectorToggled` /
     // `AgentAssistedEnvironmentModalToggled` removed together with ambient-agent UI subsystem.
 }
 

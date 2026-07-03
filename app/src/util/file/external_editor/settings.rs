@@ -20,7 +20,7 @@ use settings::{
 )]
 pub enum EditorChoice {
     SystemDefault,
-    Zap,
+    Zaplex,
     EnvEditor,
     #[schemars(description = "A specific external code editor.")]
     ExternalEditor(super::Editor),
@@ -45,7 +45,7 @@ impl<'de> Deserialize<'de> for EditorChoice {
         #[derive(Deserialize)]
         enum EditorChoiceInner {
             SystemDefault,
-            Zap,
+            Zaplex,
             EnvEditor,
             ExternalEditor(super::Editor),
         }
@@ -53,7 +53,7 @@ impl<'de> Deserialize<'de> for EditorChoice {
         match EditorChoiceCompat::deserialize(deserializer)? {
             EditorChoiceCompat::New(inner) => match inner {
                 EditorChoiceInner::SystemDefault => Ok(EditorChoice::SystemDefault),
-                EditorChoiceInner::Zap => Ok(EditorChoice::Zap),
+                EditorChoiceInner::Zaplex => Ok(EditorChoice::Zaplex),
                 EditorChoiceInner::EnvEditor => Ok(EditorChoice::EnvEditor),
                 EditorChoiceInner::ExternalEditor(editor) => {
                     Ok(EditorChoice::ExternalEditor(editor))
@@ -80,7 +80,7 @@ define_settings_group!(EditorSettings, settings: [
     },
     open_code_panels_file_editor: OpenCodePanelsFileEditor {
         type: EditorChoice,
-        default: EditorChoice::Zap,
+        default: EditorChoice::Zaplex,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
         private: false,

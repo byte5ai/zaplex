@@ -191,7 +191,7 @@ pub struct SerializedBlock {
 
     pub shell_host: Option<ShellHost>,
 
-    /// JSON-serialized representation of the Zap prompt snapshot (Context Chips). Note that this
+    /// JSON-serialized representation of the Zaplex prompt snapshot (Context Chips). Note that this
     /// is different from PS1 and RPROMPT1
     pub prompt_snapshot: Option<String>,
 

@@ -41,7 +41,7 @@ fn installed_when_extension_present() {
     let json = serde_json::json!({
         "name": "warp",
         "version": "1.0.0",
-        "description": "Zap terminal integration for Gemini CLI"
+        "description": "Zaplex terminal integration for Gemini CLI"
     });
     fs::write(
         ext_dir.join("gemini-extension.json"),

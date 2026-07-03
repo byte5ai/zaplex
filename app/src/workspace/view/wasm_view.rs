@@ -16,7 +16,7 @@ use crate::ui_components::icons;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme, PrimaryTheme};
 use crate::wasm_nux_dialog::{WasmNUXDialog, WasmNUXDialogEvent};
 use crate::workspace::action::WorkspaceAction;
-use crate::workspace::view::{NotebookSource, ZapDriveObjectSettings, Workspace};
+use crate::workspace::view::{NotebookSource, ZaplexDriveObjectSettings, Workspace};
 use crate::BlocklistAIHistoryModel;
 
 const TRANSCRIPT_PANEL_WIDTH: f32 = 280.0;
@@ -43,7 +43,7 @@ impl Workspace {
                     if let Some(url) = parse_current_url() {
                         ctx.dispatch_typed_action(WorkspaceAction::OpenLinkOnDesktop(url));
                     } else {
-                        log::warn!("Could not get URL for Open in Zap button");
+                        log::warn!("Could not get URL for Open in Zaplex button");
                     }
                 },
             )
@@ -83,7 +83,7 @@ impl Workspace {
             ConversationDetailsPanelEvent::OpenPlanNotebook { notebook_uid } => {
                 me.open_notebook(
                     &NotebookSource::Existing((*notebook_uid).into()),
-                    &ZapDriveObjectSettings::default(),
+                    &ZaplexDriveObjectSettings::default(),
                     ctx,
                     true,
                 );

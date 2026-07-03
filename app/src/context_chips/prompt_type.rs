@@ -162,7 +162,7 @@ impl PromptType {
             .collect()
     }
 
-    /// Whether same line prompt is enabled for the Zap Prompt.
+    /// Whether same line prompt is enabled for the Zaplex Prompt.
     pub fn same_line_prompt_enabled(&self, ctx: &AppContext) -> bool {
         match self {
             Self::Dynamic { prompt } => prompt.as_ref(ctx).same_line_prompt_enabled(),
@@ -170,7 +170,7 @@ impl PromptType {
         }
     }
 
-    /// The separator for the Zap prompt.
+    /// The separator for the Zaplex prompt.
     pub fn separator(&self, ctx: &AppContext) -> WarpPromptSeparator {
         match self {
             Self::Dynamic { prompt } => prompt.as_ref(ctx).separator(),

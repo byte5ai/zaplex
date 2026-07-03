@@ -15,7 +15,7 @@ cfg_if::cfg_if! {
         };
         use crate::terminal::model::session::Sessions;
         use crate::terminal::model_events::ModelEventDispatcher;
-        use crate::terminal::view::WARP_PROMPT_HEIGHT_LINES;
+        use crate::terminal::view::ZAPLEX_PROMPT_HEIGHT_LINES;
         use crate::terminal::{SizeInfo, TerminalModel};
 
         use crate::context_chips::prompt_type::PromptType;
@@ -68,7 +68,7 @@ impl TerminalView {
             block_padding,
             size: size_info,
             max_block_scroll_limit,
-            warp_prompt_height_lines: WARP_PROMPT_HEIGHT_LINES,
+            warp_prompt_height_lines: ZAPLEX_PROMPT_HEIGHT_LINES,
         };
 
         let terminal_view_resources = TerminalViewResources {

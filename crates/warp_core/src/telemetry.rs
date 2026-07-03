@@ -1,4 +1,4 @@
-// Zap: telemetry sending has been physically removed. These macros remain as
+// Zaplex: telemetry sending has been physically removed. These macros remain as
 // compatibility shims for call sites that still describe local UI/business events. They
 // type-check the event expression in an unreachable branch without evaluating it, so
 // telemetry-only payload construction has no runtime cost while callers keep their existing

@@ -4,12 +4,12 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 // Global execution mode, for logic that runs outside the UI framework.
 static GLOBAL_EXECUTION_MODE: OnceLock<ExecutionMode> = OnceLock::new();
 
-/// Execution mode that Zap is running under.
+/// Execution mode that Zaplex is running under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExecutionMode {
-    /// Zap is running as a normal desktop app.
+    /// Zaplex is running as a normal desktop app.
     App,
-    /// Zap is running as a CLI.
+    /// Zaplex is running as a CLI.
     Sdk,
 }
 
@@ -24,9 +24,9 @@ impl ExecutionMode {
     }
 }
 
-/// Model tracking the mode that Zap is running in.
+/// Model tracking the mode that Zaplex is running in.
 ///
-/// This gates functionality that's disabled when Zap is running in SDK mode.
+/// This gates functionality that's disabled when Zaplex is running in SDK mode.
 #[derive(Clone, Debug)]
 pub struct AppExecutionMode {
     mode: ExecutionMode,
@@ -82,7 +82,7 @@ impl AppExecutionMode {
 
     /// Whether telemetry should be sent synchronously at shutdown.
     ///
-    /// Zap has no telemetry sender, so shutdown must never wait on telemetry work. The method
+    /// Zaplex has no telemetry sender, so shutdown must never wait on telemetry work. The method
     /// remains as a compatibility surface for callers that still branch on the old capability.
     pub fn send_telemetry_at_shutdown(&self) -> bool {
         false
@@ -100,7 +100,7 @@ impl AppExecutionMode {
         self.mode.client_id()
     }
 
-    /// If true, Zap is running in a sandbox like a Docker container or VM, rather than directly
+    /// If true, Zaplex is running in a sandbox like a Docker container or VM, rather than directly
     /// on a user machine.
     pub fn is_sandboxed(&self) -> bool {
         self.is_sandboxed

@@ -121,7 +121,7 @@ pub enum AutoupdateStage {
     },
     /// A relaunch was initiated to use the new version, but failed.
     UnableToLaunchNewVersion { new_version: VersionInfo },
-    /// A new version was installed, but Zap hasn't restarted yet.
+    /// A new version was installed, but Zaplex hasn't restarted yet.
     ///
     /// This state is only used on macOS, where the update isn't fully applied until right before
     /// restarting.
@@ -384,7 +384,7 @@ impl AutoupdateState {
         // `trim_start_matches('v')` to remove the `v` (e.g., `2026.05.10.preview`). Directly doing
         // string equality comparison would always be false, causing "already up to date" to be
         // misidentified as "new version found". Here we perform idempotent prefix normalization:
-        // - Official Zap: tag always has `v`, both sides still equal after trim, behavior unchanged.
+        // - Official Zaplex: tag always has `v`, both sides still equal after trim, behavior unchanged.
         // - openWarp: only equal after trim, correctly identifies same version.
         if version.version.trim_start_matches('v') == current_version.trim_start_matches('v') {
             log::info!("Already up to date with {}", version.version);
@@ -846,7 +846,7 @@ pub fn accessibility_content(
         // Found autoupdate
         (RequestType::ManualCheck, Ok(UpdateReady::Yes { .. })) => Some(AccessibilityContent::new(
             "Update available.",
-            "Use the command palette to install and relaunch Zap",
+            "Use the command palette to install and relaunch Zaplex",
             WarpA11yRole::HelpRole,
         )),
         // Any non-successful autoupdate check
@@ -884,7 +884,7 @@ async fn fetch_version(
     update_id: &str,
     http_client: Arc<http_client::Client>,
 ) -> Result<VersionInfo> {
-    // openWarp uses GitHub Releases (zerx-lab/warp), completely bypassing Zap official
+    // openWarp uses GitHub Releases (zerx-lab/warp), completely bypassing Zaplex official
     // channel_versions / GCS. Return early to avoid fetch_channel_versions failing downstream.
     if matches!(channel, Channel::Oss) {
         let release = github::fetch_latest_release(http_client.as_ref()).await?;
@@ -978,7 +978,7 @@ pub fn apply_update(
     }
 }
 
-/// Relaunch Zap to apply an update.
+/// Relaunch Zaplex to apply an update.
 ///
 /// This will:
 /// 1. Perform any last update steps.

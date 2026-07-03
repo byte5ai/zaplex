@@ -20,7 +20,7 @@ use crate::{
         update_manager::UpdateManager,
         Owner, StoredObjectMetadata, StoredObjectPermissions,
     },
-    drive::ZapDriveObjectSettings,
+    drive::ZaplexDriveObjectSettings,
     editor::{DisplayPoint, EditorAction, SelectAction},
     network::NetworkStatus,
     notebooks::{
@@ -124,7 +124,7 @@ fn open_notebook(
     notebook: NotebookObject,
 ) -> BoxFuture<'static, ()> {
     let load_future = handle.update(app, |view, ctx| {
-        view.load(notebook, &ZapDriveObjectSettings::default(), ctx)
+        view.load(notebook, &ZaplexDriveObjectSettings::default(), ctx)
     });
     app.update(|ctx| ctx.await_spawned_future(load_future.future_id()))
 }
@@ -442,7 +442,7 @@ fn test_not_eager_baton_grab_different_editor() {
 }
 
 /// Test to make sure we do not eagerly enter edit mode when another editor took the baton
-/// while Zap was closed.
+/// while Zaplex was closed.
 #[test]
 fn test_baton_grab_editor_changed_offline() {
     App::test((), |mut app| async move {
@@ -553,7 +553,7 @@ fn test_close_unmodified() {
         initialize_app(&mut app);
         initial_load(&mut app, vec![]).await;
 
-        // Zap(Wave 4): SyncQueue completely removed; original stop_dequeueing + queue length assertions no longer apply.
+        // Zaplex(Wave 4): SyncQueue completely removed; original stop_dequeueing + queue length assertions no longer apply.
 
         let cloud_notebook = mock_stored_notebook("Test", "Some text");
         let notebook_id = cloud_notebook.id;
@@ -575,7 +575,7 @@ fn test_close_unmodified() {
                 .expect("Notebook should exist");
             assert!(!object.metadata().has_pending_content_changes());
 
-            // Zap(Wave 4): SyncQueue completely removed; original `sync_queue.is_empty()` assertion no longer applies.
+            // Zaplex(Wave 4): SyncQueue completely removed; original `sync_queue.is_empty()` assertion no longer applies.
         })
     });
 }

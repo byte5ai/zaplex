@@ -433,7 +433,7 @@ impl super::TerminalView {
 // where we can spawn a local tty.
 #[cfg(feature = "local_fs")]
 impl super::TerminalView {
-    /// Zap: Determine if a given session is a remote-server (SSH) session.
+    /// Zaplex: Determine if a given session is a remote-server (SSH) session.
     ///
     /// When `local_tty` is not enabled / on wasm / `SshRemoteServer` feature flag is disabled,
     /// always return `false`, keeping local behavior unchanged.
@@ -463,7 +463,7 @@ impl super::TerminalView {
         false
     }
 
-    /// Zap: Obtain directory listing validation context for a remote session's cwd.
+    /// Zaplex: Obtain directory listing validation context for a remote session's cwd.
     ///
     /// Cache hit returns `Remote(Some(..))` directly; cache miss asynchronously initiates
     /// daemon `ListDirectory` RPC to fetch the directory listing, returning `Remote(None)`
@@ -579,7 +579,7 @@ impl super::TerminalView {
     ) {
         use crate::util::file::LinkValidationContext;
 
-        // Zap: Determine if the hovered block's session is a remote-server session.
+        // Zaplex: Determine if the hovered block's session is a remote-server session.
         // Remote session files are not on local disk; use `LinkValidationContext::Remote`
         // with daemon-fetched real directory listing for precise validation.
         let block_session_id = match position {
@@ -596,7 +596,7 @@ impl super::TerminalView {
         // For AltScreen we scan for relative path with the current working directory.
         // For BlockList we scan for relative path with the pwd of the hovered block.
         //
-        // Zap: Remote session block `pwd()` is the remote cwd reported by shell-integration;
+        // Zaplex: Remote session block `pwd()` is the remote cwd reported by shell-integration;
         // concatenated, it yields the correct remote absolute path, so remote blocks also
         // participate in scanning (no longer skipped).
         let pwd_to_scan_for = match position {
@@ -616,7 +616,7 @@ impl super::TerminalView {
                 .and_then(|block| block.pwd().map(String::from)),
         };
 
-        // Zap: Remote sessions use cached cwd directory listing for precise validation;
+        // Zaplex: Remote sessions use cached cwd directory listing for precise validation;
         // local sessions keep `Local`.
         let validation_ctx = match (&pwd_to_scan_for, block_session_id) {
             #[cfg(all(feature = "local_tty", not(target_family = "wasm")))]

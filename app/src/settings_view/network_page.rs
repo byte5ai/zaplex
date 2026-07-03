@@ -583,7 +583,7 @@ impl SettingsWidget for NetworkPageWidget {
     type View = NetworkPageView;
 
     fn search_terms(&self) -> &str {
-        "network proxy http https 代理 网络 vpn 公司 corporate system custom off no_proxy 测试连接"
+        "network proxy http https corporate system custom off no_proxy test connection"
     }
 
     fn render(

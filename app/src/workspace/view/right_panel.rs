@@ -65,8 +65,8 @@ use warpui::{
 pub enum ReviewDestination {
     /// No terminal is available to receive comments.
     None,
-    /// A Zap agent terminal is available (input box visible, not executing).
-    Zap,
+    /// A Zaplex agent terminal is available (input box visible, not executing).
+    Zaplex,
     /// A CLI agent (e.g. Claude Code, Gemini) is running in a terminal.
     Cli(CLIAgent),
 }
@@ -97,7 +97,7 @@ impl ReviewTerminalUnavailableReason {
             Self::NoSelectedRepo => "no repo is selected for code review",
             Self::SessionPathUnavailable => "session cwd is unavailable or not local",
             Self::SessionOutsideSelectedRepo => "session cwd is not inside selected repo",
-            Self::AIDisabled => "AI is disabled for Zap review destinations",
+            Self::AIDisabled => "AI is disabled for Zaplex review destinations",
             Self::TerminalExecuting => "terminal is currently executing a command",
             Self::InputBoxNotVisible => "terminal input box is not visible",
         }
@@ -1462,7 +1462,7 @@ impl RightPanelView {
     /// (CLI agents are long-running commands that accept review input).
     ///
     /// When `ai_enabled` is `false`, only terminals with an active CLI agent are
-    /// considered available (non-CLI Zap terminals require AI to be on).
+    /// considered available (non-CLI Zaplex terminals require AI to be on).
     fn is_terminal_available_for_review(
         tv: &ViewHandle<TerminalView>,
         repo_path: &Path,
@@ -1565,7 +1565,7 @@ impl RightPanelView {
                 tv.read(ctx, |t, ctx| {
                     t.active_cli_agent(ctx)
                         .map(ReviewDestination::Cli)
-                        .unwrap_or(ReviewDestination::Zap)
+                        .unwrap_or(ReviewDestination::Zaplex)
                 })
             })
             .unwrap_or(ReviewDestination::None);

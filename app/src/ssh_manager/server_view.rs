@@ -33,8 +33,8 @@ use warpui::{
 
 use warp_ssh_manager::{
     AuthType, ConnectionStatus, KeychainSecretStore, NodeKind, OneKeyCredentialKind, SecretKind,
-    SshNode, SshOneKeyCredential, SshRepository, SshSecretStore, SshSecretStoreError,
-    SshServerInfo,
+    SessionResilience, SshNode, SshOneKeyCredential, SshRepository, SshSecretStore,
+    SshSecretStoreError, SshServerInfo,
 };
 use zeroize::Zeroizing;
 
@@ -45,6 +45,10 @@ const SAVE_BUTTON_WIDTH: f32 = 96.0;
 const SAVE_BUTTON_HEIGHT: f32 = 28.0;
 const AUTH_TOGGLE_PADDING_H: f32 = 14.0;
 const AUTH_TOGGLE_PADDING_V: f32 = 6.0;
+/// Per-host daemon scrollback-ceiling presets shown as pills: (MiB, label).
+/// 0 = the daemon's built-in default ceiling.
+const RING_CEILING_PRESETS: [(u32, &str); 4] =
+    [(0, "Default"), (64, "64 MB"), (256, "256 MB"), (1024, "1 GB")];
 const ONEKEY_MANAGER_WIDTH: f32 = 680.0;
 const ONEKEY_MANAGER_HEIGHT: f32 = 500.0;
 const ONEKEY_MANAGER_LIST_WIDTH: f32 = 220.0;
@@ -57,6 +61,11 @@ pub enum SshServerAction {
     SetAuthPassword,
     SetAuthKey,
     SetAuthOneKey,
+    /// Toggle session persistence (native remote-session layer). `true` selects
+    /// the persistent tier, `false` selects standard (non-persistent) SSH.
+    SetSessionResilience(bool),
+    /// Pick the per-host daemon scrollback ceiling, in MiB (0 = daemon default).
+    SetRingCeiling(u32),
     /// Open system file picker to select private key file and write path to key_path editor.
     PickKeyFile,
     /// Select group (None means root level, Some(index) means self.folders[index]).
@@ -89,6 +98,29 @@ enum AuthSpecificField {
     OneKeyCredential,
 }
 
+/// Immutable snapshot of every value the Save button submits, used for
+/// dirty-tracking (see [`SshServerView::baseline_snapshot`]).
+#[derive(Clone, PartialEq, Eq)]
+struct ServerFormSnapshot {
+    name: String,
+    host: String,
+    port: String,
+    user: String,
+    password: String,
+    key_path: String,
+    onekey_label: String,
+    onekey_user: String,
+    onekey_key_path: String,
+    root_password: String,
+    startup_command: String,
+    notes: String,
+    auth_type: AuthType,
+    session_resilience: SessionResilience,
+    ring_ceiling_mb: u32,
+    group_id: Option<String>,
+    onekey_credential_id: Option<String>,
+}
+
 pub struct SshServerView {
     node_id: String,
     /// Node metadata (mainly uses name as header title).
@@ -114,12 +146,23 @@ pub struct SshServerView {
     /// Currently selected authentication method. Save button submits this value to DB.
     auth_type: AuthType,
 
+    /// Currently selected session-persistence tier (native remote-session layer).
+    /// Save/Connect submit this value.
+    session_resilience: SessionResilience,
+    /// Per-host daemon scrollback ceiling in MiB (0 = daemon default). Only
+    /// meaningful when `session_resilience` is enabled.
+    ring_ceiling_mb: u32,
+
     save_btn_state: MouseStateHandle,
     connect_btn_state: MouseStateHandle,
     test_btn_state: MouseStateHandle,
     auth_password_btn_state: MouseStateHandle,
     auth_key_btn_state: MouseStateHandle,
     auth_onekey_btn_state: MouseStateHandle,
+    resilience_off_btn_state: MouseStateHandle,
+    resilience_on_btn_state: MouseStateHandle,
+    /// Hover/click state per ring-ceiling preset pill (see RING_CEILING_PRESETS).
+    ring_ceiling_btn_states: Vec<MouseStateHandle>,
     key_path_picker_btn_state: MouseStateHandle,
     onekey_manager_btn_state: MouseStateHandle,
     onekey_manager_close_btn_state: MouseStateHandle,
@@ -151,6 +194,11 @@ pub struct SshServerView {
     latency_ms: Option<u64>,
     is_testing: bool,
     scroll_state: ClippedScrollStateHandle,
+    /// Snapshot of all form values as of the last DB load / successful save.
+    /// The Save button is enabled only while the current form differs from this
+    /// baseline; after a save `reload` re-captures it, so the button disables
+    /// again — the visible "it worked" feedback the user was missing.
+    baseline_snapshot: Option<ServerFormSnapshot>,
 }
 
 impl SshServerView {
@@ -216,12 +264,20 @@ impl SshServerView {
             startup_command_editor,
             notes_editor,
             auth_type: AuthType::Password,
+            session_resilience: SessionResilience::default(),
+            ring_ceiling_mb: 0,
             save_btn_state: MouseStateHandle::default(),
             connect_btn_state: MouseStateHandle::default(),
             test_btn_state: MouseStateHandle::default(),
             auth_password_btn_state: MouseStateHandle::default(),
             auth_key_btn_state: MouseStateHandle::default(),
             auth_onekey_btn_state: MouseStateHandle::default(),
+            resilience_off_btn_state: MouseStateHandle::default(),
+            resilience_on_btn_state: MouseStateHandle::default(),
+            ring_ceiling_btn_states: RING_CEILING_PRESETS
+                .iter()
+                .map(|_| MouseStateHandle::default())
+                .collect(),
             key_path_picker_btn_state: MouseStateHandle::default(),
             onekey_manager_btn_state: MouseStateHandle::default(),
             onekey_manager_close_btn_state: MouseStateHandle::default(),
@@ -247,6 +303,7 @@ impl SshServerView {
             latency_ms: None,
             is_testing: false,
             scroll_state: ClippedScrollStateHandle::default(),
+            baseline_snapshot: None,
         };
         me.reload(ctx);
 
@@ -272,17 +329,21 @@ impl SshServerView {
                 EditorEvent::Edited(_) | EditorEvent::Enter => {
                     if me.status.is_some() {
                         me.status = None;
-                        ctx.notify();
                     }
+                    // Re-render so the Save button re-evaluates its dirty state on
+                    // every edit (not only when a status banner is cleared).
+                    ctx.notify();
                 }
                 EditorEvent::Blurred => {
                     // When losing focus, clear own selection too, to prevent
                     // "old editor still highlighted/selected after clicking another editor".
                     source.update(ctx, |e, ctx| e.clear_selections(ctx));
-                    if me.status.is_some() {
-                        me.status = None;
-                        ctx.notify();
-                    }
+                    // Do NOT clear `status` on blur: clicking the Save button
+                    // blurs the focused field, which would immediately wipe the
+                    // "Saved." confirmation that on_save just set (the user saw
+                    // no feedback at all). The status is cleared when the user
+                    // actually edits a field (the Edited/Enter arm) — i.e. once
+                    // the saved state has become stale.
                 }
                 EditorEvent::Focused | EditorEvent::ClearParentSelections => {
                     me.clear_other_editors_selections(&source, ctx);
@@ -374,6 +435,8 @@ impl SshServerView {
 
         if let Some(srv) = self.server.clone() {
             self.auth_type = srv.auth_type;
+            self.session_resilience = srv.session_resilience;
+            self.ring_ceiling_mb = srv.ring_ceiling_mb;
             self.selected_onekey_credential_id = srv.credential_id.clone();
             let host = srv.host.clone();
             let port_str = srv.port.to_string();
@@ -459,6 +522,9 @@ impl SshServerView {
         self.rebuild_group_dropdown(ctx);
         self.rebuild_onekey_credential_dropdown(ctx);
         self.sync_onekey_manager_row_states();
+        // Re-baseline: the form now reflects the persisted state, so it is "clean"
+        // (Save stays disabled until the next edit).
+        self.baseline_snapshot = Some(self.current_form_snapshot(ctx));
         ctx.notify();
     }
 
@@ -615,6 +681,39 @@ impl SshServerView {
         editor.as_ref(app).buffer_text(app)
     }
 
+    /// Capture the current form values into a snapshot for dirty-tracking.
+    fn current_form_snapshot(&self, app: &AppContext) -> ServerFormSnapshot {
+        ServerFormSnapshot {
+            name: self.current_text(&self.name_editor, app),
+            host: self.current_text(&self.host_editor, app),
+            port: self.current_text(&self.port_editor, app),
+            user: self.current_text(&self.user_editor, app),
+            password: self.current_text(&self.password_editor, app),
+            key_path: self.current_text(&self.key_path_editor, app),
+            onekey_label: self.current_text(&self.onekey_label_editor, app),
+            onekey_user: self.current_text(&self.onekey_user_editor, app),
+            onekey_key_path: self.current_text(&self.onekey_key_path_editor, app),
+            root_password: self.current_text(&self.root_password_editor, app),
+            startup_command: self.current_text(&self.startup_command_editor, app),
+            notes: self.current_text(&self.notes_editor, app),
+            auth_type: self.auth_type,
+            session_resilience: self.session_resilience,
+            ring_ceiling_mb: self.ring_ceiling_mb,
+            group_id: self.current_group_id.clone(),
+            onekey_credential_id: self.selected_onekey_credential_id.clone(),
+        }
+    }
+
+    /// Whether the form differs from the last loaded/saved baseline. Without a
+    /// baseline (e.g. the DB load failed) we treat the form as dirty so Save
+    /// stays usable.
+    fn is_dirty(&self, app: &AppContext) -> bool {
+        match &self.baseline_snapshot {
+            Some(baseline) => self.current_form_snapshot(app) != *baseline,
+            None => true,
+        }
+    }
+
     /// Get currently selected group ID.
     pub fn current_group_id(&self) -> &Option<String> {
         &self.current_group_id
@@ -693,6 +792,8 @@ impl SshServerView {
                 Some(notes_text.trim().to_string())
             },
             last_connected_at: self.server.as_ref().and_then(|s| s.last_connected_at),
+            session_resilience: self.session_resilience,
+            ring_ceiling_mb: self.ring_ceiling_mb,
         };
 
         // 2. Write to DB (rename + update_server + possible move_node)
@@ -814,6 +915,11 @@ impl SshServerView {
                 Some(notes_text.trim().to_string())
             },
             last_connected_at: self.server.as_ref().and_then(|s| s.last_connected_at),
+            // Use the live editor state (like host/auth/startup above), not the
+            // last-saved server — so toggling Persistent / scrollback and hitting
+            // Connect without Save first takes effect immediately.
+            session_resilience: self.session_resilience,
+            ring_ceiling_mb: self.ring_ceiling_mb,
         };
         ctx.dispatch_typed_action(&crate::workspace::WorkspaceAction::OpenSshTerminal {
             node_id: self.node_id.clone(),
@@ -855,6 +961,9 @@ impl SshServerView {
             startup_command: None,
             notes: None,
             last_connected_at: None,
+            // Ephemeral object for the connection test only; never persisted.
+            session_resilience: SessionResilience::default(),
+            ring_ceiling_mb: self.ring_ceiling_mb,
         };
 
         let (server, password) = match resolve_test_server_and_password(
@@ -962,6 +1071,33 @@ impl SshServerView {
             // Clear password buffer when switching auth type — password and passphrase have different semantics.
             self.password_editor
                 .update(ctx, |e, ctx| e.set_buffer_text("", ctx));
+            self.status = None;
+            ctx.notify();
+        }
+    }
+
+    fn on_set_session_resilience(&mut self, on: bool, ctx: &mut ViewContext<Self>) {
+        let next = if on {
+            // Preserve a higher tier (e.g. PersistPlusMosh) if already selected;
+            // the UI only distinguishes off vs. on for now (B3 mosh not built).
+            if self.session_resilience.is_enabled() {
+                self.session_resilience
+            } else {
+                SessionResilience::PersistOnly
+            }
+        } else {
+            SessionResilience::Off
+        };
+        if self.session_resilience != next {
+            self.session_resilience = next;
+            self.status = None;
+            ctx.notify();
+        }
+    }
+
+    fn on_set_ring_ceiling(&mut self, mb: u32, ctx: &mut ViewContext<Self>) {
+        if self.ring_ceiling_mb != mb {
+            self.ring_ceiling_mb = mb;
             self.status = None;
             ctx.notify();
         }
@@ -1367,6 +1503,159 @@ impl SshServerView {
         .finish()
     }
 
+    /// Session-persistence toggle (native remote-session layer). Two pills,
+    /// styled like the auth toggle: Standard (non-persistent) vs. Persistent.
+    fn render_resilience_toggle(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+
+        let make_pill = |label: String,
+                         active: bool,
+                         state: MouseStateHandle,
+                         action: SshServerAction|
+         -> Box<dyn Element> {
+            let main_color = if active {
+                theme.main_text_color(theme.accent())
+            } else {
+                theme.sub_text_color(theme.background())
+            };
+            let bg = if active {
+                theme.accent()
+            } else {
+                theme.surface_2()
+            };
+            let label_el = Text::new_inline(
+                label,
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(main_color.into())
+            .finish();
+
+            Hoverable::new(state, move |_| {
+                Container::new(label_el)
+                    .with_padding_left(AUTH_TOGGLE_PADDING_H)
+                    .with_padding_right(AUTH_TOGGLE_PADDING_H)
+                    .with_padding_top(AUTH_TOGGLE_PADDING_V)
+                    .with_padding_bottom(AUTH_TOGGLE_PADDING_V)
+                    .with_background(bg)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                    .finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action))
+            .finish()
+        };
+
+        let enabled = self.session_resilience.is_enabled();
+        let mut row = Wrap::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(8.0)
+            .with_run_spacing(8.0)
+            .with_main_axis_size(MainAxisSize::Min);
+        row.add_child(make_pill(
+            crate::t!("workspace-left-panel-ssh-manager-resilience-off"),
+            !enabled,
+            self.resilience_off_btn_state.clone(),
+            SshServerAction::SetSessionResilience(false),
+        ));
+        row.add_child(make_pill(
+            crate::t!("workspace-left-panel-ssh-manager-resilience-on"),
+            enabled,
+            self.resilience_on_btn_state.clone(),
+            SshServerAction::SetSessionResilience(true),
+        ));
+
+        Container::new(
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(self.render_label(
+                    &crate::t!("workspace-left-panel-ssh-manager-detail-resilience"),
+                    appearance,
+                ))
+                .with_child(row.finish())
+                .finish(),
+        )
+        .with_margin_bottom(FIELD_BLOCK_MARGIN_BOTTOM)
+        .finish()
+    }
+
+    /// Per-host daemon scrollback-ceiling picker (preset pills). Only rendered
+    /// when session persistence is enabled — the ceiling sizes the daemon-side
+    /// replay/scrollback buffer (OutputRing).
+    fn render_ring_ceiling(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+
+        let make_pill = |label: String,
+                         active: bool,
+                         state: MouseStateHandle,
+                         action: SshServerAction|
+         -> Box<dyn Element> {
+            let main_color = if active {
+                theme.main_text_color(theme.accent())
+            } else {
+                theme.sub_text_color(theme.background())
+            };
+            let bg = if active {
+                theme.accent()
+            } else {
+                theme.surface_2()
+            };
+            let label_el = Text::new_inline(
+                label,
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(main_color.into())
+            .finish();
+
+            Hoverable::new(state, move |_| {
+                Container::new(label_el)
+                    .with_padding_left(AUTH_TOGGLE_PADDING_H)
+                    .with_padding_right(AUTH_TOGGLE_PADDING_H)
+                    .with_padding_top(AUTH_TOGGLE_PADDING_V)
+                    .with_padding_bottom(AUTH_TOGGLE_PADDING_V)
+                    .with_background(bg)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                    .finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action))
+            .finish()
+        };
+
+        let mut row = Wrap::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(8.0)
+            .with_run_spacing(8.0)
+            .with_main_axis_size(MainAxisSize::Min);
+        for (i, (mb, label)) in RING_CEILING_PRESETS.iter().enumerate() {
+            let state = self
+                .ring_ceiling_btn_states
+                .get(i)
+                .cloned()
+                .unwrap_or_default();
+            row.add_child(make_pill(
+                (*label).to_string(),
+                self.ring_ceiling_mb == *mb,
+                state,
+                SshServerAction::SetRingCeiling(*mb),
+            ));
+        }
+
+        Container::new(
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(self.render_label(
+                    &crate::t!("workspace-left-panel-ssh-manager-detail-ring-ceiling"),
+                    appearance,
+                ))
+                .with_child(row.finish())
+                .finish(),
+        )
+        .with_margin_bottom(FIELD_BLOCK_MARGIN_BOTTOM)
+        .finish()
+    }
+
     fn auth_toggle_button_state(&self, auth_type: AuthType) -> MouseStateHandle {
         match auth_type {
             AuthType::Password => self.auth_password_btn_state.clone(),
@@ -1375,8 +1664,8 @@ impl SshServerView {
         }
     }
 
-    fn render_save_button(&self, appearance: &Appearance) -> Box<dyn Element> {
-        appearance
+    fn render_save_button(&self, appearance: &Appearance, enabled: bool) -> Box<dyn Element> {
+        let mut builder = appearance
             .ui_builder()
             .button(ButtonVariant::Accent, self.save_btn_state.clone())
             .with_style(UiComponentStyles {
@@ -1392,7 +1681,19 @@ impl SshServerView {
                 font_size: Some(13.0),
                 ..Default::default()
             })
-            .with_centered_text_label(crate::t!("workspace-left-panel-ssh-manager-save"))
+            // Muted, non-interactive look when there are no unsaved changes, so the
+            // button visibly communicates "nothing to save" rather than looking
+            // clickable but doing nothing.
+            .with_disabled_styles(UiComponentStyles {
+                background: Some(internal_colors::neutral_4(appearance.theme()).into()),
+                font_color: Some(internal_colors::neutral_5(appearance.theme())),
+                ..Default::default()
+            })
+            .with_centered_text_label(crate::t!("workspace-left-panel-ssh-manager-save"));
+        if !enabled {
+            builder = builder.disabled();
+        }
+        builder
             .build()
             .on_click(move |ctx, _, _| ctx.dispatch_typed_action(SshServerAction::Save))
             .finish()
@@ -1613,23 +1914,26 @@ impl SshServerView {
             .finish()
         };
 
-        let row = Flex::row()
+        // Wrap::row (like the auth/resilience/ring pill groups) so the type pills
+        // wrap on a narrow form instead of overflowing.
+        let mut row = Wrap::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(8.0)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_child(make_pill(
-                crate::t!("workspace-left-panel-ssh-manager-onekey-type-password"),
-                self.managed_onekey_kind == OneKeyCredentialKind::Password,
-                self.onekey_manager_password_btn_state.clone(),
-                SshServerAction::SetManagedOneKeyPassword,
-            ))
-            .with_child(make_pill(
-                crate::t!("workspace-left-panel-ssh-manager-onekey-type-key"),
-                self.managed_onekey_kind == OneKeyCredentialKind::Key,
-                self.onekey_manager_key_btn_state.clone(),
-                SshServerAction::SetManagedOneKeyKey,
-            ))
-            .finish();
+            .with_run_spacing(8.0)
+            .with_main_axis_size(MainAxisSize::Min);
+        row.add_child(make_pill(
+            crate::t!("workspace-left-panel-ssh-manager-onekey-type-password"),
+            self.managed_onekey_kind == OneKeyCredentialKind::Password,
+            self.onekey_manager_password_btn_state.clone(),
+            SshServerAction::SetManagedOneKeyPassword,
+        ));
+        row.add_child(make_pill(
+            crate::t!("workspace-left-panel-ssh-manager-onekey-type-key"),
+            self.managed_onekey_kind == OneKeyCredentialKind::Key,
+            self.onekey_manager_key_btn_state.clone(),
+            SshServerAction::SetManagedOneKeyKey,
+        ));
+        let row = row.finish();
 
         Container::new(
             Flex::column()
@@ -1966,6 +2270,8 @@ impl TypedActionView for SshServerView {
             SshServerAction::SetAuthPassword => self.on_set_auth(AuthType::Password, ctx),
             SshServerAction::SetAuthKey => self.on_set_auth(AuthType::Key, ctx),
             SshServerAction::SetAuthOneKey => self.on_set_auth(AuthType::OneKey, ctx),
+            SshServerAction::SetSessionResilience(on) => self.on_set_session_resilience(*on, ctx),
+            SshServerAction::SetRingCeiling(mb) => self.on_set_ring_ceiling(*mb, ctx),
             SshServerAction::PickKeyFile => self.on_pick_key_file(ctx),
             SshServerAction::PickOneKeyKeyFile => self.on_pick_onekey_key_file(ctx),
             SshServerAction::OpenOneKeyManager => {
@@ -2103,7 +2409,7 @@ impl View for SshServerView {
             .with_spacing(8.0)
             .with_child(self.render_test_button(appearance))
             .with_child(self.render_connect_button(appearance))
-            .with_child(self.render_save_button(appearance))
+            .with_child(self.render_save_button(appearance, self.is_dirty(app)))
             .with_main_axis_size(MainAxisSize::Min)
             .finish();
         let header = Flex::row()
@@ -2180,6 +2486,14 @@ impl View for SshServerView {
             }
         }
 
+        // Session persistence — a core zaplex feature (survives transport drops),
+        // so it sits prominently right under the auth section, not buried at the
+        // bottom. The scrollback-ceiling picker only matters when it's enabled.
+        col.add_child(self.render_resilience_toggle(appearance));
+        if self.session_resilience.is_enabled() {
+            col.add_child(self.render_ring_ceiling(appearance));
+        }
+
         // Startup command
         col.add_child(self.render_text_field(
             &crate::t!("workspace-left-panel-ssh-manager-startup-command"),
@@ -2198,6 +2512,7 @@ impl View for SshServerView {
             &self.notes_editor,
             appearance,
         ));
+        // (Session persistence moved up, directly under the auth section.)
 
         let theme = appearance.theme();
         let inner = ConstrainedBox::new(
@@ -2337,7 +2652,7 @@ fn resolve_test_password(
         Ok(None) => None,
         Err(SshSecretStoreError::NoBackend) => None,
         Err(SshSecretStoreError::Keyring(msg)) => {
-            log::warn!("keychain 读取失败,fallback 失败: {msg}");
+            log::warn!("keychain: read failed, fallback failed: {msg}");
             None
         }
     }

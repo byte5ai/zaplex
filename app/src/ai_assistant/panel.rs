@@ -31,7 +31,7 @@ use crate::input_suggestions::{Event as InputSuggestionsEvent, InputSuggestions}
 
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{TelemetryEvent, WarpAIActionType};
-use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_WARP_AI_WIDTH};
+use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_ZAPLEX_AI_WIDTH};
 use crate::ui_components::blended_colors;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -70,7 +70,7 @@ const EDITOR_MARGIN: f32 = 16.;
 const LOGO_SIZE: f32 = 20.;
 
 
-const ZERO_STATE_HELP_TEXT: &str = "Shift + ctrl + space a block or text selection to ask Zap AI.";
+const ZERO_STATE_HELP_TEXT: &str = "Shift + ctrl + space a block or text selection to ask Zaplex AI.";
 const SCRIPT_ZERO_STATE_PROMPT: &str = "Write a script to connect to an AWS EC2 instance.";
 const GIT_ZERO_STATE_PROMPT: &str = "How do I undo the most recent commits in git?";
 const FILES_ZERO_STATE_PROMPT: &str = "How do I find all files containing specific text?";
@@ -228,7 +228,7 @@ impl AIAssistantPanelView {
             Some(handle) => handle,
             None => {
                 log::error!("Couldn't retrieve warp ai resizable state handle.");
-                resizable_state_handle(DEFAULT_WARP_AI_WIDTH)
+                resizable_state_handle(DEFAULT_ZAPLEX_AI_WIDTH)
             }
         };
 
@@ -651,14 +651,14 @@ impl AIAssistantPanelView {
         let time_now = Local::now();
 
         result.push_str(&format!(
-            "## Zap AI Transcript ({})\n\n",
+            "## Zaplex AI Transcript ({})\n\n",
             time_now.format("%x %l:%M %p")
         ));
 
         for part in transcript {
             result.push_str(&format!("Prompt: {}\n\n", part.raw_user_prompt().trim()));
             result.push_str(&format!(
-                "Zap AI: {}\n\n",
+                "Zaplex AI: {}\n\n",
                 part.raw_assistant_answer().trim()
             ));
         }

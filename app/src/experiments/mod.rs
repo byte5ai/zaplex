@@ -1,4 +1,4 @@
-﻿//! A framework for running A/B tests within Zap.
+﻿//! A framework for running A/B tests within Zaplex.
 //!
 //! Before starting, please read the usage guide on Notion. The guide explains
 //! some important constraints that are required for proper use of the framework

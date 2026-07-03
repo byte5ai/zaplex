@@ -30,10 +30,10 @@ pub struct ModelSpecScoresLayout {
 /// but with different row semantics:
 /// - Context — context window, bar uses log2 normalization to map to 4K..2M
 /// - Output  — max tokens per output, bar uses log2 normalization to map to 1K..128K
-/// - Cost    — forces `BilledToApi` branch (BYOP users use their own key, not Zap billing)
+/// - Cost    — forces `BilledToApi` branch (BYOP users use their own key, not Zaplex billing)
 ///
 /// When `context_window` / `max_output_tokens` is 0 (unfilled), pass None, displaying
-/// a default "?" placeholder, consistent with Zap's default panel when data is missing.
+/// a default "?" placeholder, consistent with Zaplex's default panel when data is missing.
 pub fn render_byop_spec_scores(
     context_window: Option<u32>,
     max_output_tokens: Option<u32>,

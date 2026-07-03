@@ -12,7 +12,7 @@ pub(super) fn register_uri_handler() {
         return;
     };
 
-    // The Windows Registry entry for Zap (assuming the channel is WarpLocal):
+    // The Windows Registry entry for Zaplex (assuming the channel is WarpLocal):
     // warplocal
     //   (Default) = "WarpLocal"
     //   URL Protocol = ""
@@ -36,7 +36,7 @@ pub(super) fn register_uri_handler() {
             };
 
             // TODO(CORE-2861): Add the `DefaultIcon` Default value here with the file path to
-            // Zap's icon once we figure out distribution on Windows.
+            // Zaplex's icon once we figure out distribution on Windows.
 
             let command_key = match parent_key.create("shell\\open\\command") {
                 Ok(command_key) => command_key,

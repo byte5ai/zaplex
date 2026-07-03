@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use crate::secrets::SecretKind;
 use crate::types::{
-    AuthType, NodeKind, OneKeyCredentialKind, ResolvedSshAuth, SshNode, SshOneKeyCredential,
-    SshServerInfo,
+    AuthType, NodeKind, OneKeyCredentialKind, ResolvedSshAuth, SessionResilience, SshNode,
+    SshOneKeyCredential, SshServerInfo,
 };
 use persistence::model::{
     NewSshNode, NewSshOneKeyCredential, NewSshServer, NewSyncMeta, SshNodeRow,
@@ -102,6 +102,8 @@ impl SshRepository {
                     startup_command: info.startup_command.as_deref(),
                     notes: info.notes.as_deref(),
                     credential_id: info.credential_id.as_deref(),
+                    session_resilience: info.session_resilience.as_db_str(),
+                    ring_ceiling_mb: info.ring_ceiling_mb as i32,
                 })
                 .execute(conn)?;
             Ok(())
@@ -142,6 +144,8 @@ impl SshRepository {
                 ssh_servers::startup_command.eq(info.startup_command.as_deref()),
                 ssh_servers::notes.eq(info.notes.as_deref()),
                 ssh_servers::credential_id.eq(info.credential_id.as_deref()),
+                ssh_servers::session_resilience.eq(info.session_resilience.as_db_str()),
+                ssh_servers::ring_ceiling_mb.eq(info.ring_ceiling_mb as i32),
             ))
             .execute(conn)?;
         if n == 0 {
@@ -453,6 +457,14 @@ fn server_from_row(r: SshServerRow) -> Result<SshServerInfo, SshRepositoryError>
         notes: r.notes,
         last_connected_at: r.last_connected_at,
         credential_id: r.credential_id,
+        // Lenient on purpose: an unknown value (e.g. written by a newer client)
+        // degrades to `Off` rather than making the whole server unloadable.
+        // Explicit `Off` (not `unwrap_or_default`, whose default is now `PersistOnly`
+        // for *new* hosts) so a corrupt stored value never silently upgrades a
+        // saved host to persistent.
+        session_resilience: SessionResilience::parse(&r.session_resilience)
+            .unwrap_or(SessionResilience::Off),
+        ring_ceiling_mb: r.ring_ceiling_mb.max(0) as u32,
     })
 }
 
@@ -580,6 +592,10 @@ pub(crate) fn setup_in_memory() -> SqliteConnection {
         include_str!(
             "../../persistence/migrations/2026-06-09-160000_add_ssh_onekey_key_type/up.sql"
         ),
+        include_str!(
+            "../../persistence/migrations/2026-06-27-000000_add_session_resilience/up.sql"
+        ),
+        include_str!("../../persistence/migrations/2026-06-29-000000_add_ring_ceiling/up.sql"),
     ] {
         conn.batch_execute(up).unwrap();
     }
@@ -602,6 +618,8 @@ mod tests {
             startup_command: None,
             notes: None,
             last_connected_at: None,
+            session_resilience: SessionResilience::default(),
+            ring_ceiling_mb: 0,
         }
     }
 

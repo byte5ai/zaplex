@@ -44,7 +44,7 @@ impl Display for ApplicationStage {
 pub struct State {
     /// The current stage of the app.
     pub stage: ApplicationStage,
-    /// The [`WindowId`] of the currently active (frontmost) window. If Zap goes out of focus,
+    /// The [`WindowId`] of the currently active (frontmost) window. If Zaplex goes out of focus,
     /// this will go back to None.
     pub active_window: Option<WindowId>,
     /// A stack of [`WindowId`]s which had been active before.

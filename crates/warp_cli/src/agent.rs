@@ -120,7 +120,7 @@ impl HiddenComputerUseArgs {
 /// The execution harness for an agent run.
 #[derive(Debug, Copy, Clone, ValueEnum, Eq, PartialEq, Default)]
 pub enum Harness {
-    /// Use Zap's built-in MAA infrastructure (default).
+    /// Use Zaplex's built-in MAA infrastructure (default).
     #[default]
     #[value(name = "oz")]
     Oz,
@@ -237,7 +237,7 @@ pub struct RunAgentArgs {
     /// Working directory for the agent
     #[arg(short = 'C', long = "cwd")]
     pub cwd: Option<PathBuf>,
-    /// Display agent progress in the Zap interface.
+    /// Display agent progress in the Zaplex interface.
     #[arg(long = "gui", hide = true)]
     pub gui: bool,
     #[command(flatten)]
@@ -254,7 +254,7 @@ pub struct RunAgentArgs {
     /// LEGACY: MCP servers to start before executing the agent, identified by UUID.
     #[arg(long = "mcp-server", value_name = "UUID", hide = true)]
     pub mcp_servers: Vec<uuid::Uuid>,
-    // Zap Wave 7-2: `--environment` parameter physically removed with cloud ambient agent subsystem.
+    // Zaplex Wave 7-2: `--environment` parameter physically removed with cloud ambient agent subsystem.
     /// Keep the agent's session open after the conversation completes.
     ///
     /// This is useful when you want to keep the session alive for follow-up interactions.
@@ -285,7 +285,7 @@ pub struct RunAgentArgs {
 
     /// Execution harness for the agent run.
     ///
-    /// "oz" (default) uses Zap's built-in agent infrastructure.
+    /// "oz" (default) uses Zaplex's built-in agent infrastructure.
     /// "claude" delegates to the `claude` CLI.
     #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz, hide = true)]
     pub harness: Harness,

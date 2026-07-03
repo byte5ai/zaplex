@@ -19,6 +19,8 @@ use crate::proto::{
     ResolveConflictResponse, ResolvePath, ResolvePathResponse, RunCommandRequest,
     RunCommandResponse, SaveBuffer, SaveBufferResponse, ServerMessage, SessionBootstrapped,
     TextEdit, WriteFile, WriteFileChunk, WriteFileChunkResponse,
+    AttachSession, DetachSession, ListSessions, OpenSession, ResizeSession, SessionAttached,
+    SessionInput, SessionList, SessionOpened, SessionSize,
 };
 
 use crate::protocol::{self, ProtocolError, RequestId};
@@ -79,6 +81,26 @@ pub enum ClientEvent {
         expected_client_version: u64,
         edits: Vec<TextEdit>,
     },
+    /// Live PTY output for a daemon-hosted session (push). `seq` is the byte
+    /// offset of the first byte in this chunk (monotonic), for replay alignment.
+    SessionOutput {
+        session_id: String,
+        seq: u64,
+        bytes: Vec<u8>,
+    },
+    /// A daemon-hosted session's shell exited (push).
+    SessionExited {
+        session_id: String,
+        exit_code: Option<i32>,
+    },
+    /// Advisory about a daemon-hosted session's environment (push), e.g. kind
+    /// "multiplexer-detected" with the multiplexer name in `detail`. Unknown
+    /// kinds must be ignored by consumers (additive protocol surface).
+    SessionNotice {
+        session_id: String,
+        kind: String,
+        detail: String,
+    },
     /// A server message could not be decoded and had no parseable request_id.
     MessageDecodingError,
 }
@@ -94,7 +116,7 @@ pub enum ClientEvent {
 /// This type does **not** own the child subprocess whose stdio backs it.
 /// For transports that spawn a subprocess (e.g. SSH), the caller is
 /// responsible for holding the `Child` for the lifetime of the session
-/// so that `kill_on_drop` fires when teardown occurs. In Zap this is
+/// so that `kill_on_drop` fires when teardown occurs. In Zaplex this is
 /// the `RemoteServerManager`, which stores the child in
 /// `RemoteSessionState` alongside the `Arc<RemoteServerClient>`. That
 /// way the child's lifetime is gated by the manager's session map
@@ -127,7 +149,7 @@ impl RemoteServerClient {
     /// The caller retains ownership of the `Child` itself. Typically the
     /// caller spawns the `Command` with `kill_on_drop(true)` and stashes
     /// the returned `Child` somewhere whose lifetime matches the
-    /// session's (in Zap, on the `RemoteServerManager`'s
+    /// session's (in Zaplex, on the `RemoteServerManager`'s
     /// `RemoteSessionState`). Dropping the `Child` there triggers
     /// SIGKILL on the subprocess, regardless of how many
     /// `Arc<RemoteServerClient>` clones are still alive.
@@ -375,7 +397,7 @@ impl RemoteServerClient {
         }
     }
 
-    /// Zap: List direct children of a directory on the remote host.
+    /// Zaplex: List direct children of a directory on the remote host.
     ///
     /// Used by terminal file link detection to precisely verify remote path form
     /// (local sessions use `fs::metadata` for this; remote files are not on the
@@ -542,7 +564,7 @@ impl RemoteServerClient {
 
     /// Sends a buffer edit notification to the remote host.
     ///
-    /// Zap: Unlike other fire-and-forget notifications, buffer edit delivery failures must
+    /// Zaplex: Unlike other fire-and-forget notifications, buffer edit delivery failures must
     /// be reported. If we silently drop when `outbound_tx` is closed (connection dead), the
     /// local buffer continues to advance while the daemon doesn't receive the edit, causing
     /// invisible desynchronization. Return `Err` on failure to let the caller handle it.
@@ -622,6 +644,146 @@ impl RemoteServerClient {
         }
     }
 
+    // ── Native session host (Stage 2 client side) ────────────────────────
+
+    /// Opens a new daemon-hosted PTY session and awaits its assigned id.
+    pub async fn open_session(
+        &self,
+        cwd: Option<String>,
+        shell: Option<String>,
+        env: std::collections::HashMap<String, String>,
+        rows: u32,
+        cols: u32,
+        ring_ceiling_bytes: Option<u64>,
+    ) -> Result<SessionOpened, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::OpenSession(OpenSession {
+                cwd,
+                shell,
+                env,
+                size: Some(SessionSize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                }),
+                ring_ceiling_bytes,
+            })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::SessionOpened(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for OpenSession: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Attaches to an existing daemon-hosted session and awaits the attach
+    /// response (which carries the replay from `last_seq`; 0 = full available
+    /// replay).
+    pub async fn attach_session(
+        &self,
+        session_id: String,
+        last_seq: u64,
+    ) -> Result<SessionAttached, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::AttachSession(AttachSession {
+                session_id,
+                last_seq,
+            })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::SessionAttached(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for AttachSession: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Lists the daemon's live sessions (Stage 4: multi-session UI / adopt).
+    pub async fn list_sessions(&self) -> Result<SessionList, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::ListSessions(ListSessions {})),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::SessionList(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for ListSessions: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Sends keyboard/mouse input bytes to a session's PTY (notification).
+    pub fn send_session_input(
+        &self,
+        session_id: String,
+        bytes: Vec<u8>,
+    ) -> Result<(), ClientError> {
+        let msg = ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::SessionInput(SessionInput {
+                session_id,
+                bytes,
+            })),
+        };
+        self.outbound_tx.try_send(msg).map_err(|e| {
+            log::error!("Failed to enqueue session input: {e}");
+            ClientError::Disconnected
+        })
+    }
+
+    /// Resizes a session's PTY (notification).
+    pub fn send_resize_session(
+        &self,
+        session_id: String,
+        rows: u32,
+        cols: u32,
+    ) -> Result<(), ClientError> {
+        let msg = ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::ResizeSession(ResizeSession {
+                session_id,
+                size: Some(SessionSize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                }),
+            })),
+        };
+        self.outbound_tx.try_send(msg).map_err(|e| {
+            log::error!("Failed to enqueue session resize: {e}");
+            ClientError::Disconnected
+        })
+    }
+
+    /// Detaches from a session without terminating it; the daemon keeps it
+    /// alive for a later re-attach (notification).
+    pub fn send_detach_session(&self, session_id: String) -> Result<(), ClientError> {
+        let msg = ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::DetachSession(DetachSession {
+                session_id,
+            })),
+        };
+        self.outbound_tx.try_send(msg).map_err(|e| {
+            log::error!("Failed to enqueue session detach: {e}");
+            ClientError::Disconnected
+        })
+    }
+
     /// Converts a server push message (empty request_id) into a domain event.
     fn push_message_to_event(msg: ServerMessage) -> Option<ClientEvent> {
         match msg.message? {
@@ -638,6 +800,20 @@ impl RemoteServerClient {
                 new_server_version: push.new_server_version,
                 expected_client_version: push.expected_client_version,
                 edits: push.edits,
+            }),
+            server_message::Message::SessionOutput(push) => Some(ClientEvent::SessionOutput {
+                session_id: push.session_id,
+                seq: push.seq,
+                bytes: push.bytes,
+            }),
+            server_message::Message::SessionExited(push) => Some(ClientEvent::SessionExited {
+                session_id: push.session_id,
+                exit_code: push.exit_code,
+            }),
+            server_message::Message::SessionNotice(push) => Some(ClientEvent::SessionNotice {
+                session_id: push.session_id,
+                kind: push.kind,
+                detail: push.detail,
             }),
             other => {
                 log::warn!("Unhandled push message variant: {other:?}");

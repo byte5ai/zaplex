@@ -627,7 +627,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::MakeWarpDefaultTerminal,
             )),
-            context.to_owned() & !id!(flags::WARP_IS_DEFAULT_TERMINAL),
+            context.to_owned() & !id!(flags::ZAPLEX_IS_DEFAULT_TERMINAL),
         )]);
     }
 }
@@ -710,7 +710,7 @@ pub enum FeaturesPageAction {
     ToggleShowAutosuggestionIgnoreButton,
     ToggleAtContextMenuInTerminalMode,
     ToggleSlashCommandsInTerminalMode,
-    // Zap: `ToggleOutlineCodebaseSymbolsForAtContextMenu` deleted when outline / RAG went offline.
+    // Zaplex: `ToggleOutlineCodebaseSymbolsForAtContextMenu` deleted when outline / RAG went offline.
     ToggleAutoOpenCodeReviewPane,
     ToggleShowTerminalInputMessageLine,
     ToggleAgentInAppNotifications,
@@ -1188,7 +1188,7 @@ impl FeaturesPageAction {
                         .value(),
                 ),
             },
-            // Zap: ToggleOutlineCodebaseSymbolsForAtContextMenu went offline,
+            // Zaplex: ToggleOutlineCodebaseSymbolsForAtContextMenu went offline,
             // telemetry branch deleted together.
             Self::MakeWarpDefaultTerminal => TelemetryEvent::FeaturesPageAction {
                 action: "MakeWarpDefaultTerminal".to_string(),
@@ -1923,7 +1923,7 @@ impl TypedActionView for FeaturesPageView {
                         .toggle_and_save_value(ctx));
                 });
             }
-            // Zap: `ToggleOutlineCodebaseSymbolsForAtContextMenu` action deleted when outline went offline.
+            // Zaplex: `ToggleOutlineCodebaseSymbolsForAtContextMenu` action deleted when outline went offline.
             ToggleAutoOpenCodeReviewPane => {
                 GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
@@ -1986,7 +1986,7 @@ impl FeaturesPageView {
 
         ctx.subscribe_to_model(&SelectionSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
 
-        // TODO(CORE-3029): Remove when we launch the new SSH Warpification.
+        // TODO(CORE-3029): Remove when we launch the new SSH Zaplexification.
         ctx.subscribe_to_model(&SshSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&AltScreenReporting::handle(ctx), |_, _, _, ctx| {
             ctx.notify()
@@ -2506,7 +2506,7 @@ impl FeaturesPageView {
 
         #[cfg(feature = "local_fs")]
         {
-            if !FeatureFlag::ZapNewSettingsModes.is_enabled() {
+            if !FeatureFlag::ZaplexNewSettingsModes.is_enabled() {
                 let external_editor_settings =
                     crate::util::file::external_editor::EditorSettings::as_ref(ctx);
                 if external_editor_settings
@@ -2541,7 +2541,7 @@ impl FeaturesPageView {
         }
 
         if FeatureFlag::AutoOpenCodeReviewPane.is_enabled()
-            && !FeatureFlag::ZapNewSettingsModes.is_enabled()
+            && !FeatureFlag::ZaplexNewSettingsModes.is_enabled()
         {
             general_widgets.push(Box::new(AutoOpenCodeReviewPaneWidget::default()));
         }
@@ -4382,7 +4382,7 @@ impl SettingsWidget for ConversationPersistenceWidget {
     type View = FeaturesPageView;
 
     fn search_terms(&self) -> &str {
-        "persist conversations agent history database save 历史 对话 保存"
+        "persist conversations agent history database save"
     }
 
     fn render(

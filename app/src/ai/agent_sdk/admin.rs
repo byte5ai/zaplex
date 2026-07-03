@@ -1,4 +1,4 @@
-//! General-purpose administrative commands in the Zap CLI.
+//! General-purpose administrative commands in the Zaplex CLI.
 
 use anyhow::{Context, Result};
 use serde::Serialize;

@@ -5,14 +5,14 @@ use channel_versions::{ChannelChangelogs, ChannelVersion, ChannelVersions, Versi
 
 use crate::channel::ChannelState;
 
-// Load channel versions only from local state. Zap no longer requests release-channel metadata from Zap or GCP.
+// Load channel versions only from local state. Zaplex no longer requests release-channel metadata from Zaplex or GCP.
 pub async fn fetch_channel_versions(
     nonce: &str,
     client: &http_client::Client,
     include_changelogs: bool,
     is_daily: bool,
 ) -> Result<ChannelVersions> {
-    if let Ok(path) = env::var("WARP_CHANNEL_VERSIONS_PATH") {
+    if let Ok(path) = env::var("ZAPLEX_CHANNEL_VERSIONS_PATH") {
         // Load channel versions from local filesystem. Used for testing both
         // autoupdate and changelog behavior.
         let path = shellexpand::tilde(&path);

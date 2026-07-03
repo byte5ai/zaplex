@@ -5,6 +5,6 @@ pub mod install_tmux;
 pub mod root_access;
 pub mod ssh_detection;
 pub mod util;
-pub mod warpify;
+pub mod zaplexify;
 
-pub const SSH_WARPIFY_TIMEOUT_DURATION: Duration = Duration::from_secs(8);
+pub const SSH_ZAPLEXIFY_TIMEOUT_DURATION: Duration = Duration::from_secs(8);

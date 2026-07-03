@@ -18,7 +18,7 @@ use super::{
     safe_mode_settings::get_secret_obfuscation_mode,
     session_settings::SessionSettings,
     settings::TerminalSettings,
-    view::{create_size_info_for_blocklist, WARP_PROMPT_HEIGHT_LINES},
+    view::{create_size_info_for_blocklist, ZAPLEX_PROMPT_HEIGHT_LINES},
     ShellLaunchState, SizeInfo, TerminalModel, TerminalView,
 };
 use crate::pane_group::pane::DetachType;
@@ -72,7 +72,7 @@ pub(super) fn compute_block_size(initial_size: Vector2F, ctx: &mut AppContext) -
         block_padding: terminal_spacing.block_padding,
         size: size_info,
         max_block_scroll_limit: maximum_grid_size,
-        warp_prompt_height_lines: WARP_PROMPT_HEIGHT_LINES,
+        warp_prompt_height_lines: ZAPLEX_PROMPT_HEIGHT_LINES,
     }
 }
 

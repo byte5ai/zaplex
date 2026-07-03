@@ -67,6 +67,7 @@ pub fn create_server_via_db(name: &str, parent_id: Option<&str>) -> String {
             startup_command: None,
             notes: None,
             last_connected_at: None,
+            session_resilience: warp_ssh_manager::SessionResilience::default(),
         };
         let node = SshRepository::create_server(c, parent.as_deref(), &name, &info)
             .unwrap_or_else(|e| panic!("create server failed: {e:?}"));

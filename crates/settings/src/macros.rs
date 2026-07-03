@@ -1,5 +1,5 @@
 //! This module defines a set of macros to standardize and simplify the process
-//! of defining new settings within Zap.
+//! of defining new settings within Zaplex.
 //!
 //! Settings are defined as enums or structs that implement [`Setting`], and are
 //! organized into groups in singleton models which contain one or more settings

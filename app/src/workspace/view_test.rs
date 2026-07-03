@@ -18,7 +18,6 @@ use crate::network::NetworkStatus;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::notebook::NotebookView;
 use crate::pane_group::{Direction, PaneGroupAction, PaneId};
-use crate::pricing::PricingInfoModel;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::terminal::shared_session::protocol::SessionSourceType;
 use crate::terminal::shared_session::protocol::{ParticipantId, ParticipantList};
@@ -65,7 +64,7 @@ use crate::workflows::local_workflows::LocalWorkflows;
 use crate::ObjectActions;
 use crate::{experiments, workspace, GlobalResourceHandlesProvider};
 
-// Zap(localization, Phase 5): `PreferencesSyncer` has been physically deleted.
+// Zaplex(localization, Phase 5): `PreferencesSyncer` has been physically deleted.
 
 use crate::terminal::shared_session::protocol::SessionId;
 use ai::project_context::model::ProjectContextModel;
@@ -110,7 +109,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(NotebookKeybindings::new);
     app.add_singleton_model(TerminalKeybindings::new);
     app.add_singleton_model(NotebookManager::mock);
-    // Zap(localization, Phase 5): `PreferencesSyncer` has been physically deleted, test singleton no longer needed.
+    // Zaplex(localization, Phase 5): `PreferencesSyncer` has been physically deleted, test singleton no longer needed.
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(AgentConversationsModel::new);
@@ -130,7 +129,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|ctx| {
         AIExecutionProfilesModel::new(&crate::LaunchMode::new_for_unit_test(), ctx)
     });
-    // Zap: RepoOutlines has been deleted, no longer registered.
+    // Zaplex: RepoOutlines has been deleted, no longer registered.
     #[cfg(feature = "voice_input")]
     app.add_singleton_model(voice_input::VoiceInput::new);
     app.add_singleton_model(BlocklistAIPermissions::new);
@@ -170,7 +169,6 @@ fn initialize_app(app: &mut App) {
     );
 
     app.add_singleton_model(|_| ProjectContextModel::default());
-    app.add_singleton_model(|_| PricingInfoModel::new());
     app.add_singleton_model(AIDocumentModel::new);
     app.add_singleton_model(|_| History::new(vec![]));
 
@@ -302,7 +300,7 @@ fn test_worktree_sidecar_search_editor_enter_executes_selection() {
 /// RAII guard that removes tab config TOML files whose name starts with
 /// `prefix` from `~/.warp/tab_configs/` on drop. Because `Drop` runs even
 /// when a test panics, this prevents stale worktree configs from leaking
-/// into Zap dev.
+/// into Zaplex dev.
 #[cfg(feature = "local_fs")]
 struct TabConfigCleanupGuard {
     prefix: &'static str,
@@ -1147,7 +1145,7 @@ fn test_notebook_pane_tracking() {
                     owner: Owner::mock_current_user(),
                     initial_folder_id: None,
                 },
-                &ZapDriveObjectSettings::default(),
+                &ZaplexDriveObjectSettings::default(),
                 ctx,
                 true,
             );
@@ -1187,7 +1185,7 @@ fn test_notebook_pane_tracking() {
             // Re-opening the notebook should not create a new view.
             workspace.open_notebook(
                 &NotebookSource::Existing(notebook_id),
-                &ZapDriveObjectSettings::default(),
+                &ZaplexDriveObjectSettings::default(),
                 ctx,
                 true,
             );
@@ -1304,7 +1302,7 @@ fn test_open_or_toggle_warp_drive() {
 
         let workspace = mock_workspace(&mut app);
         workspace.update(&mut app, |workspace, ctx| {
-            // First, unconditionally open Zap Drive as a system action. WD should be open and welcome tips should not have opening zap drive.
+            // First, unconditionally open Zaplex Drive as a system action. WD should be open and welcome tips should not have opening zap drive.
             workspace.open_or_toggle_warp_drive(
                 false, /* toggle */
                 false, /* explicit_user_action */
@@ -1312,15 +1310,15 @@ fn test_open_or_toggle_warp_drive() {
             );
             assert!(
                 workspace.current_workspace_state.is_warp_drive_open,
-                "Zap Drive should be open"
+                "Zaplex Drive should be open"
             );
             assert!(
                 !workspace
                     .tips_completed
                     .as_ref(ctx)
                     .features_used
-                    .contains(&Tip::Action(TipAction::ZapDrive)),
-                "Zap drive welcome tip should not be completed"
+                    .contains(&Tip::Action(TipAction::ZaplexDrive)),
+                "Zaplex drive welcome tip should not be completed"
             );
 
             // Next, toggle zap drive as a user action. WD should be closed and tip should not be filled out.
@@ -1331,15 +1329,15 @@ fn test_open_or_toggle_warp_drive() {
             );
             assert!(
                 !workspace.current_workspace_state.is_warp_drive_open,
-                "Zap Drive should be closed"
+                "Zaplex Drive should be closed"
             );
             assert!(
                 !workspace
                     .tips_completed
                     .as_ref(ctx)
                     .features_used
-                    .contains(&Tip::Action(TipAction::ZapDrive)),
-                "Zap drive welcome tip should not be completed"
+                    .contains(&Tip::Action(TipAction::ZaplexDrive)),
+                "Zaplex drive welcome tip should not be completed"
             );
 
             // Finally, toggle zap drive again as a user action. WD should be open and tip filled out.
@@ -1350,15 +1348,15 @@ fn test_open_or_toggle_warp_drive() {
             );
             assert!(
                 workspace.current_workspace_state.is_warp_drive_open,
-                "Zap Drive should be open"
+                "Zaplex Drive should be open"
             );
             assert!(
                 workspace
                     .tips_completed
                     .as_ref(ctx)
                     .features_used
-                    .contains(&Tip::Action(TipAction::ZapDrive)),
-                "Zap drive welcome tip should not be completed"
+                    .contains(&Tip::Action(TipAction::ZaplexDrive)),
+                "Zaplex drive welcome tip should not be completed"
             );
         });
     });
@@ -1447,7 +1445,7 @@ fn test_switch_focus_panels() {
         workspace.update(&mut app, |view, ctx| {
             assert!(
                 view.left_panel_view.is_self_or_child_focused(ctx),
-                "Expected Zap Drive panel to be focused"
+                "Expected Zaplex Drive panel to be focused"
             );
         });
 
@@ -2333,16 +2331,16 @@ fn test_unified_new_session_menu_includes_reopen_closed_session() {
 
 #[cfg(feature = "local_fs")]
 #[test]
-#[ignore = "依赖已下线的 PersistedWorkspace"]
+#[ignore = "depends on the decommissioned PersistedWorkspace"]
 fn test_worktree_sidecar_search_editor_proxies_navigation_and_escape() {
-    unimplemented!("PersistedWorkspace 已下线,worktree sidecar 仓库列表测试暂停");
+    unimplemented!("PersistedWorkspace has been decommissioned, worktree sidecar repository list testing is paused");
 }
 
 #[cfg(feature = "local_fs")]
 #[test]
-#[ignore = "依赖已下线的 PersistedWorkspace"]
+#[ignore = "depends on the decommissioned PersistedWorkspace"]
 fn test_worktree_sidecar_hides_linked_worktrees_from_repo_list() {
-    unimplemented!("PersistedWorkspace 已下线,worktree sidecar 仓库列表测试暂停");
+    unimplemented!("PersistedWorkspace has been decommissioned, worktree sidecar repository list testing is paused");
 }
 
 #[test]

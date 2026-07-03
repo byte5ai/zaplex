@@ -277,7 +277,7 @@ impl UserWorkspaces {
 
     /// Returns `true` if the current team's enterprise status allows AI features that have an
     /// enterprise gate. Non-enterprise teams always pass; enterprise teams pass only if they
-    /// are on the Zap Plan or the build is dogfood (both our internal Zap team and dogfood
+    /// are on the Zaplex Plan or the build is dogfood (both our internal Zaplex team and dogfood
     /// team are billed as enterprise).
     pub fn ai_allowed_for_current_team(&self) -> bool {
         !self
@@ -439,26 +439,26 @@ impl UserWorkspaces {
         })
     }
 
-    // Zap: Team spaces are the cloud collaboration entry point; the local version does not expose any Team space.
+    // Zaplex: Team spaces are the cloud collaboration entry point; the local version does not expose any Team space.
     pub fn team_spaces(&self) -> Vec<Space> {
         vec![]
     }
 
-    // Zap: Drive only retains the local Personal space. Team / Shared are cloud collaboration surfaces;
+    // Zaplex: Drive only retains the local Personal space. Team / Shared are cloud collaboration surfaces;
     // even if old cache still has workspace metadata, we cannot re-enter Drive or Workflow UI.
     pub fn all_user_spaces(&self, ctx: &AppContext) -> Vec<Space> {
         let _ = ctx;
         vec![Space::Personal]
     }
 
-    // Zap (localized branch): personal space owner is permanently bound to the local placeholder user.
+    // Zaplex (localized branch): personal space owner is permanently bound to the local placeholder user.
     // Must remain stable, or after restart old object owner fields won't match, and old data becomes "invisible" in Personal Space list.
     fn effective_personal_user_uid() -> UserUid {
         UserUid::new(TEST_USER_UID)
     }
 
     // Returns the [`Owner`] for the user's personal drive.
-    // Zap: Create actions for Workflow / EnvVar / Folder / Notebook / Import etc. under Drive Personal space
+    // Zaplex: Create actions for Workflow / EnvVar / Folder / Notebook / Import etc. under Drive Personal space
     // are uniformly attributed to the local placeholder user (persisted only to local sqlite).
     pub fn personal_drive(&self, ctx: &AppContext) -> Option<Owner> {
         let _ = ctx;
@@ -487,7 +487,7 @@ impl UserWorkspaces {
                     return Space::Personal;
                 }
 
-                // Zap: Compare using effective_personal_user_uid to ensure that even without auth,
+                // Zaplex: Compare using effective_personal_user_uid to ensure that even without auth,
                 // local Owner (user_uid="zap") goes to Personal rather than Shared.
                 if user_uid == Self::effective_personal_user_uid() {
                     Space::Personal
@@ -588,7 +588,7 @@ impl UserWorkspaces {
         entrypoint: StoredObjectEventEntrypoint,
         _ctx: &mut ModelContext<Self>,
     ) {
-        // Zap (localized): remove member path has no remote team write target locally → no-op.
+        // Zaplex (localized): remove member path has no remote team write target locally → no-op.
         let _ = (user_uid, team_uid, entrypoint);
     }
 
@@ -598,7 +598,7 @@ impl UserWorkspaces {
         domains: Vec<String>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Zap (localized): domain restriction path has no remote team/invite write target locally → emit Success event to keep UI responsive.
+        // Zaplex (localized): domain restriction path has no remote team/invite write target locally → emit Success event to keep UI responsive.
         let _ = (team_uid, domains);
         ctx.emit(UserWorkspacesEvent::AddDomainRestrictionsSuccess);
         ctx.notify();
@@ -667,7 +667,7 @@ impl UserWorkspaces {
     }
 
     pub fn refresh_ai_overages(&mut self, _ctx: &mut ModelContext<Self>) {
-        // Zap (localized, Phase 5): no cloud AI overages query locally, no-op.
+        // Zaplex (localized, Phase 5): no cloud AI overages query locally, no-op.
         // Call site (`blocklist/controller.rs::maybe_refresh_ai_overages`) does not initiate meaningful UI updates.
     }
 
@@ -700,7 +700,7 @@ impl UserWorkspaces {
     }
 
     pub fn is_ai_allowed_in_remote_sessions(&self) -> bool {
-        // Zap has no managed organizational policies; remote SSH sessions always allow local Agent capabilities.
+        // Zaplex has no managed organizational policies; remote SSH sessions always allow local Agent capabilities.
         true
     }
 
@@ -880,7 +880,7 @@ impl Entity for UserWorkspaces {
 /// Mark UserWorkspaces as global application state.
 impl SingletonEntity for UserWorkspaces {}
 
-// Zap (localized, Phase 5): `user_workspaces_tests.rs` entirely targets team RPC paths (`MockTeamClient` / `mockall::Sequence`);
+// Zaplex (localized, Phase 5): `user_workspaces_tests.rs` entirely targets team RPC paths (`MockTeamClient` / `mockall::Sequence`);
 // after localization these paths are unreachable, so the entire file was physically deleted.
 
 #[cfg(test)]

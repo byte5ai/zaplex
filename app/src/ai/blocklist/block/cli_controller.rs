@@ -180,7 +180,7 @@ impl CLISubagentController {
                     .and_then(|result| snapshot_block_id_for_action_result(&result.result))
                     .cloned();
 
-                // Zap BYOP fallback: after the agent self-starts LRC, the upstream server path
+                // Zaplex BYOP fallback: after the agent self-starts LRC, the upstream server path
                 // emits `BlocklistAIHistoryEvent::CreatedSubtask` which triggers
                 // `handle_history_model_event` to upgrade the block to monitored state. BYOP has no
                 // this server event source, so without compensation, active_block stays frozen at
@@ -305,7 +305,7 @@ impl CLISubagentController {
                     ctx.emit(CLISubagentEvent::UpdatedLastSnapshot);
                 }
 
-                // Zap BYOP: silent_create_for_byop doesn't emit CreatedSubtask, so we manually
+                // Zaplex BYOP: silent_create_for_byop doesn't emit CreatedSubtask, so we manually
                 // trigger SpawnedSubagent here to let terminal_view create the CLISubagentView overlay.
                 // active_subagents_by_block.task_id is synced to ensure the BlockCompleted hook
                 // cleans up correctly when LRC ends.

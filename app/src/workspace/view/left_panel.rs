@@ -31,6 +31,7 @@ use crate::pane_group::{PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesMo
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
 use crate::server::telemetry::{FileTreeSource, WarpDriveSource};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
+use crate::cockpit::CockpitPanel;
 use crate::skill_manager::{SkillManagerPanel, SkillManagerPanelEvent};
 use crate::ssh_manager::SshManagerPanel;
 use crate::terminal::model::session::Session;
@@ -51,9 +52,9 @@ use crate::workspace::view::server_file_browser::{
 use crate::workspace::view::{
     LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
     LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME, LEFT_PANEL_SKILL_MANAGER_BINDING_NAME,
-    LEFT_PANEL_SSH_MANAGER_BINDING_NAME, LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
+    LEFT_PANEL_SSH_MANAGER_BINDING_NAME, LEFT_PANEL_ZAPLEX_DRIVE_BINDING_NAME,
     OPEN_GLOBAL_SEARCH_BINDING_NAME, TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME,
-    TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
+    TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_ZAPLEX_DRIVE_BINDING_NAME,
 };
 use crate::{
     appearance::Appearance,
@@ -80,23 +81,25 @@ struct MouseStateHandles {
     ssh_manager_button: MouseStateHandle,
     server_file_browser_button: MouseStateHandle,
     skill_manager_button: MouseStateHandle,
+    cockpit_button: MouseStateHandle,
 }
 
 #[derive(Clone, Debug)]
 pub enum LeftPanelAction {
     ProjectExplorer,
     GlobalSearch { entry_focus: GlobalSearchEntryFocus },
-    ZapDrive,
+    ZaplexDrive,
     ConversationListView,
     SshManager,
     ServerFileBrowser,
     SkillManager,
+    Cockpit,
 }
 
 pub enum LeftPanelEvent {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     FileTree(pane_group::Event),
-    ZapDrive(DrivePanelEvent),
+    ZaplexDrive(DrivePanelEvent),
     ServerFileBrowser(ServerFileBrowserEvent),
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     OpenFileWithTarget {
@@ -139,17 +142,27 @@ pub enum LeftPanelEvent {
         node_id: String,
         server: warp_ssh_manager::SshServerInfo,
     },
+    /// User clicked "open dashboard" in the cockpit sidebar → main window opens
+    /// the roomy cockpit pane in the central area.
+    OpenCockpitPane,
+    /// User clicked a listed running daemon session in the SSH manager → main
+    /// window adopts it (attach + replay) in a new tab.
+    AdoptDaemonSession {
+        server: warp_ssh_manager::SshServerInfo,
+        pty_session_id: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolPanelView {
     ProjectExplorer,
     GlobalSearch { entry_focus: GlobalSearchEntryFocus },
-    ZapDrive,
+    ZaplexDrive,
     ConversationListView,
     SshManager,
     ServerFileBrowser,
     SkillManager,
+    Cockpit,
 }
 
 /// Encapsulates the active view state to enforce that all mutations go through
@@ -219,6 +232,7 @@ pub struct LeftPanelView {
     ssh_manager_view: ViewHandle<SshManagerPanel>,
     server_file_browser_view: ViewHandle<ServerFileBrowserView>,
     skill_manager_view: ViewHandle<SkillManagerPanel>,
+    cockpit_view: ViewHandle<CockpitPanel>,
     active_view: active_view_state::ActiveViewState,
     toolbelt_buttons: Vec<ToolbeltButtonConfig>,
     active_pane_group: Option<WeakViewHandle<PaneGroup>>,
@@ -266,6 +280,12 @@ impl LeftPanelView {
         let ssh_manager_view = ctx.add_typed_action_view(SshManagerPanel::new);
         let server_file_browser_view = ctx.add_typed_action_view(ServerFileBrowserView::new);
         let skill_manager_view = ctx.add_typed_action_view(SkillManagerPanel::new);
+        let cockpit_view = ctx.add_typed_action_view(CockpitPanel::new);
+        ctx.subscribe_to_view(&cockpit_view, |_, _, event, ctx| match event {
+            crate::cockpit::panel::CockpitPanelEvent::OpenDashboardPane => {
+                ctx.emit(LeftPanelEvent::OpenCockpitPane);
+            }
+        });
         ctx.subscribe_to_view(&ssh_manager_view, |_me, _, event, ctx| {
             use crate::ssh_manager::SshManagerPanelEvent;
             match event {
@@ -284,6 +304,15 @@ impl LeftPanelView {
                     ctx.emit(LeftPanelEvent::OpenSftpPane {
                         node_id: node_id.clone(),
                         server: server.clone(),
+                    });
+                }
+                SshManagerPanelEvent::AdoptDaemonSession {
+                    server,
+                    pty_session_id,
+                } => {
+                    ctx.emit(LeftPanelEvent::AdoptDaemonSession {
+                        server: server.clone(),
+                        pty_session_id: pty_session_id.clone(),
                     });
                 }
                 SshManagerPanelEvent::PersistenceError(msg) => {
@@ -305,7 +334,7 @@ impl LeftPanelView {
         });
 
         ctx.subscribe_to_view(&warp_drive_view, |_me, _, event, ctx| {
-            ctx.emit(LeftPanelEvent::ZapDrive(event.clone()));
+            ctx.emit(LeftPanelEvent::ZaplexDrive(event.clone()));
         });
         ctx.subscribe_to_view(&server_file_browser_view, |_me, _, event, ctx| {
             ctx.emit(LeftPanelEvent::ServerFileBrowser(event.clone()));
@@ -328,7 +357,7 @@ impl LeftPanelView {
             }
         });
 
-        let active_view = views.first().copied().unwrap_or(ToolPanelView::ZapDrive);
+        let active_view = views.first().copied().unwrap_or(ToolPanelView::SshManager);
         let toolbelt_buttons = views
             .iter()
             .map(|view| Self::create_toolbelt_button_config(view, ctx))
@@ -406,6 +435,7 @@ impl LeftPanelView {
             ssh_manager_view,
             server_file_browser_view,
             skill_manager_view,
+            cockpit_view,
             active_view: active_view_state::new(active_view),
             toolbelt_buttons,
             active_pane_group: None,
@@ -448,6 +478,7 @@ impl LeftPanelView {
                 (ToolPanelView::SshManager, ToolPanelView::SshManager) => true,
                 (ToolPanelView::ServerFileBrowser, ToolPanelView::ServerFileBrowser) => true,
                 (ToolPanelView::SkillManager, ToolPanelView::SkillManager) => true,
+                (ToolPanelView::Cockpit, ToolPanelView::Cockpit) => true,
                 _ => std::mem::discriminant(v) == std::mem::discriminant(&current_view),
             }
         });
@@ -509,17 +540,17 @@ impl LeftPanelView {
                     tooltip_keybinding_names,
                 }
             }
-            ToolPanelView::ZapDrive => {
+            ToolPanelView::ZaplexDrive => {
                 let tooltip_keybinding_names = vec![
-                    LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
-                    TOGGLE_WARP_DRIVE_BINDING_NAME,
+                    LEFT_PANEL_ZAPLEX_DRIVE_BINDING_NAME,
+                    TOGGLE_ZAPLEX_DRIVE_BINDING_NAME,
                 ];
 
                 ToolbeltButtonConfig {
-                    icon: Icon::ZapDrive,
+                    icon: Icon::ZaplexDrive,
                     active_icon: None,
                     tooltip_text: crate::t!("workspace-left-panel-warp-drive"),
-                    action: LeftPanelAction::ZapDrive,
+                    action: LeftPanelAction::ZaplexDrive,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
                     tooltip_keybinding_names,
@@ -574,6 +605,18 @@ impl LeftPanelView {
                     action: LeftPanelAction::SkillManager,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
+                    tooltip_keybinding_names,
+                }
+            }
+            ToolPanelView::Cockpit => {
+                let tooltip_keybinding_names = Vec::new();
+                ToolbeltButtonConfig {
+                    icon: Icon::Grid,
+                    active_icon: None,
+                    tooltip_text: crate::t!("workspace-left-panel-cockpit"),
+                    action: LeftPanelAction::Cockpit,
+                    render_with_active_state: false,
+                    tooltip_keybinding: None,
                     tooltip_keybinding_names,
                 }
             }
@@ -687,7 +730,7 @@ impl LeftPanelView {
     }
 
     pub fn is_warp_drive_active(&self) -> bool {
-        self.active_view.get() == ToolPanelView::ZapDrive
+        self.active_view.get() == ToolPanelView::ZaplexDrive
     }
 
     pub fn is_file_tree_active(&self) -> bool {
@@ -832,7 +875,7 @@ impl LeftPanelView {
                     ctx,
                 );
             }
-            ToolPanelView::ZapDrive => {
+            ToolPanelView::ZaplexDrive => {
                 ctx.focus(&self.warp_drive_view);
                 self.warp_drive_view.update(ctx, |view, ctx| {
                     view.reset_focused_index_in_warp_drive(true, ctx);
@@ -854,6 +897,9 @@ impl LeftPanelView {
             }
             ToolPanelView::SkillManager => {
                 ctx.focus(&self.skill_manager_view);
+            }
+            ToolPanelView::Cockpit => {
+                ctx.focus(&self.cockpit_view);
             }
         }
     }
@@ -1019,7 +1065,7 @@ impl LeftPanelView {
                 LeftPanelAction::GlobalSearch { .. } => {
                     matches!(self.active_view.get(), ToolPanelView::GlobalSearch { .. })
                 }
-                LeftPanelAction::ZapDrive => self.active_view.get() == ToolPanelView::ZapDrive,
+                LeftPanelAction::ZaplexDrive => self.active_view.get() == ToolPanelView::ZaplexDrive,
                 LeftPanelAction::ConversationListView => {
                     self.active_view.get() == ToolPanelView::ConversationListView
                 }
@@ -1030,6 +1076,7 @@ impl LeftPanelView {
                 LeftPanelAction::SkillManager => {
                     self.active_view.get() == ToolPanelView::SkillManager
                 }
+                LeftPanelAction::Cockpit => self.active_view.get() == ToolPanelView::Cockpit,
             };
         }
     }
@@ -1147,8 +1194,8 @@ impl LeftPanelView {
                     send_telemetry_from_ctx!(TelemetryEvent::GlobalSearchOpened, ctx);
                 }
             }
-            LeftPanelAction::ZapDrive => {
-                active_view_state::set(self, ToolPanelView::ZapDrive, ctx);
+            LeftPanelAction::ZaplexDrive => {
+                active_view_state::set(self, ToolPanelView::ZaplexDrive, ctx);
                 if force_open {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::WarpDriveOpened {
@@ -1179,6 +1226,9 @@ impl LeftPanelView {
             }
             LeftPanelAction::SkillManager => {
                 active_view_state::set(self, ToolPanelView::SkillManager, ctx);
+            }
+            LeftPanelAction::Cockpit => {
+                active_view_state::set(self, ToolPanelView::Cockpit, ctx);
             }
         }
     }
@@ -1277,11 +1327,12 @@ impl View for LeftPanelView {
                         ctx.focus(&view);
                     }
                 }
-                ToolPanelView::ZapDrive => ctx.focus(&self.warp_drive_view),
+                ToolPanelView::ZaplexDrive => ctx.focus(&self.warp_drive_view),
                 ToolPanelView::ConversationListView => ctx.focus(&self.conversation_list_view),
                 ToolPanelView::SshManager => ctx.focus(&self.ssh_manager_view),
                 ToolPanelView::ServerFileBrowser => ctx.focus(&self.server_file_browser_view),
                 ToolPanelView::SkillManager => ctx.focus(&self.skill_manager_view),
+                ToolPanelView::Cockpit => ctx.focus(&self.cockpit_view),
             }
         }
     }
@@ -1299,6 +1350,7 @@ impl View for LeftPanelView {
             self.mouse_state_handles.ssh_manager_button.clone(),
             self.mouse_state_handles.server_file_browser_button.clone(),
             self.mouse_state_handles.skill_manager_button.clone(),
+            self.mouse_state_handles.cockpit_button.clone(),
         ];
 
         // If there is only one button in the toolbelt row,
@@ -1346,7 +1398,7 @@ impl View for LeftPanelView {
                     Shrinkable::new(1.0, Container::new(Empty::new().finish()).finish()).finish()
                 }
             }
-            ToolPanelView::ZapDrive => Shrinkable::new(
+            ToolPanelView::ZaplexDrive => Shrinkable::new(
                 1.0,
                 Container::new(ChildView::new(&self.warp_drive_view).finish())
                     .with_padding_left(2.)
@@ -1376,6 +1428,14 @@ impl View for LeftPanelView {
             ToolPanelView::SkillManager => Shrinkable::new(
                 1.0,
                 Container::new(ChildView::new(&self.skill_manager_view).finish())
+                    .with_padding_left(2.)
+                    .with_padding_right(2.)
+                    .finish(),
+            )
+            .finish(),
+            ToolPanelView::Cockpit => Shrinkable::new(
+                1.0,
+                Container::new(ChildView::new(&self.cockpit_view).finish())
                     .with_padding_left(2.)
                     .with_padding_right(2.)
                     .finish(),

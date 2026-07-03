@@ -262,14 +262,14 @@ pub fn parse_uname_output(output: &str) -> Result<RemotePlatform> {
 /// - dev:         `~/.warp-dev/remote-server`
 /// - local:       `~/.warp-local/remote-server`
 /// - integration: `~/.warp-dev/remote-server`
-/// - warp-oss:    `~/.zap/remote-server`
+/// - warp-oss:    `~/.zaplex/remote-server`
 pub fn remote_server_dir() -> String {
     let warp_dir = match ChannelState::channel() {
         Channel::Stable => ".warp",
         Channel::Preview => ".warp-preview",
         Channel::Dev | Channel::Integration => ".warp-dev",
         Channel::Local => ".warp-local",
-        Channel::Oss => ".zap",
+        Channel::Oss => ".zaplex",
     };
     format!("~/{warp_dir}/remote-server")
 }
@@ -312,7 +312,7 @@ pub fn binary_name() -> &'static str {
 /// Returns the full path to the remote binary corresponding to the current channel and client version.
 ///
 /// Local builds preserve an unversioned suffix path so that `script/deploy_remote_server` can
-/// overwrite the same development slot. Zap release builds with `GIT_RELEASE_TAG` use a versioned
+/// overwrite the same development slot. Zaplex release builds with `GIT_RELEASE_TAG` use a versioned
 /// suffix, allowing new versions to naturally trigger reinstalls. Source-built local builds without
 /// a release tag still use an unversioned path.
 pub fn remote_server_binary() -> String {
@@ -360,7 +360,7 @@ pub fn install_script(staging_tarball_path: Option<&str>) -> String {
         .replace("{staging_tarball_path}", staging_tarball_path.unwrap_or(""))
 }
 
-/// Constructs the base URL for downloading Zap CLI release assets.
+/// Constructs the base URL for downloading Zaplex CLI release assets.
 fn download_url() -> String {
     let release_path = match ChannelState::app_version() {
         Some(tag) => format!("download/{tag}"),
@@ -379,17 +379,24 @@ fn version_suffix() -> String {
     }
 }
 
-/// Returns the Zap CLI tarball URL for the specified remote platform.
-pub fn download_tarball_url(platform: &RemotePlatform) -> String {
+/// Returns the release-asset tarball filename for a remote platform, e.g.
+/// `zap-linux-x86_64.tar.gz`. Single source of truth for the tarball naming —
+/// shared by the download URL, the bundled-in-the-app copies (install ladder
+/// rung 3a), and the CI packaging step that stages them.
+pub fn tarball_basename(platform: &RemotePlatform) -> String {
     format!(
-        "{}/zap-{}-{}.tar.gz",
-        download_url(),
+        "zap-{}-{}.tar.gz",
         platform.os.as_str(),
         platform.arch.as_str(),
     )
 }
 
-/// Zap fork: In development mode (DEBUG source builds without release tags),
+/// Returns the Zaplex CLI tarball URL for the specified remote platform.
+pub fn download_tarball_url(platform: &RemotePlatform) -> String {
+    format!("{}/{}", download_url(), tarball_basename(platform))
+}
+
+/// Zaplex fork: In development mode (DEBUG source builds without release tags),
 /// the SSH transport no longer downloads stale releases from GitHub. Instead, it cross-compiles
 /// the current `warp` binary locally and uploads it. The constants below describe the cross-compilation
 /// artifacts, coordinated with `script/deploy_remote_server` (same profile / features / target)
@@ -412,10 +419,10 @@ pub const DEV_REMOTE_FEATURES: &str = "release_bundle,crash_reporting,standalone
 /// the standard used in `remote_server_binary()` / `download_url()` for "no release tag".
 /// Release builds always return `false`, with unchanged behavior.
 ///
-/// Explicit override: set `WARP_REMOTE_SERVER_FROM_LOCAL=1` to force the local cross-compilation path
+/// Explicit override: set `ZAPLEX_REMOTE_SERVER_FROM_LOCAL=1` to force the local cross-compilation path
 /// (`0` or unset means disabled). Used for temporary local remote-server debugging in release builds.
 pub fn is_dev_source_build() -> bool {
-    if let Some(raw) = std::env::var_os("WARP_REMOTE_SERVER_FROM_LOCAL") {
+    if let Some(raw) = std::env::var_os("ZAPLEX_REMOTE_SERVER_FROM_LOCAL") {
         let lossy = raw.to_string_lossy();
         let trimmed = lossy.trim();
         let disabled =

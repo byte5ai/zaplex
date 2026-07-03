@@ -81,7 +81,7 @@ impl IntentionSlide {
 
         let title = appearance
             .ui_builder()
-            .paragraph(localized("onboarding-intention-title", "Welcome to Zap"))
+            .paragraph(localized("onboarding-intention-title", "Welcome to Zaplex"))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -256,7 +256,7 @@ impl IntentionSlide {
 
         let checklist = {
             let items = [
-                localized("onboarding-ai-feature-warp-agents", "Zap agents"),
+                localized("onboarding-ai-feature-warp-agents", "Zaplex agents"),
                 localized(
                     "onboarding-ai-feature-oz-cloud-agents-platform",
                     "Oz local agents platform",
@@ -431,7 +431,7 @@ impl IntentionSlide {
             },
         );
 
-        let new_settings_modes = FeatureFlag::ZapNewSettingsModes.is_enabled();
+        let new_settings_modes = FeatureFlag::ZaplexNewSettingsModes.is_enabled();
         let next_text = if !new_settings_modes && selected_index == 1 {
             localized("common-get-warping", "Get Zapping")
         } else {
@@ -481,7 +481,7 @@ impl IntentionSlide {
     fn render_visual(&self, appearance: &Appearance, selected_index: usize) -> Box<dyn Element> {
         let theme = appearance.theme();
 
-        if FeatureFlag::ZapNewSettingsModes.is_enabled() {
+        if FeatureFlag::ZaplexNewSettingsModes.is_enabled() {
             let path = if selected_index == 1 {
                 Self::VISUAL_IMAGE_PATHS[1]
             } else {
@@ -554,7 +554,7 @@ impl IntentionSlide {
 
     fn next(&mut self, ctx: &mut ViewContext<Self>) {
         self.onboarding_state.update(ctx, |model, ctx| {
-            if FeatureFlag::ZapNewSettingsModes.is_enabled() {
+            if FeatureFlag::ZaplexNewSettingsModes.is_enabled() {
                 // Always advance to Customize slide; both intentions continue the flow.
                 model.next(ctx);
             } else {

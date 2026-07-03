@@ -590,7 +590,7 @@ impl MCPServersListPageView {
                 ctx.emit(MCPServersListPageViewEvent::Edit(*item_id));
             }
             ServerCardEvent::Share(item_id) => {
-                log::debug!("Zap: MCP sharing is disabled for {item_id:?}");
+                log::debug!("Zaplex: MCP sharing is disabled for {item_id:?}");
             }
             ServerCardEvent::ViewLogs(item_id) => match item_id {
                 ServerCardItemId::TemplatableMCP(_) => {
@@ -1478,8 +1478,8 @@ impl MCPServersListPageView {
             }
         }
 
-        // If the path is the Zap data directory (e.g. ~/.warp or ~/.warp_dev), set the text to
-        // "global". The Zap provider stores its data directory as the root path rather than the
+        // If the path is the Zaplex data directory (e.g. ~/.warp or ~/.warp_dev), set the text to
+        // "global". The Zaplex provider stores its data directory as the root path rather than the
         // home directory, unlike other providers that store the home directory directly.
         if root_path == &crate::warp_managed_paths_watcher::warp_data_dir() {
             return Some(crate::t!("settings-mcp-list-chip-global"));

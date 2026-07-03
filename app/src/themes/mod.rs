@@ -11,7 +11,7 @@ use warp_core::ui::theme::WarpTheme;
 
 pub fn onboarding_theme_picker_themes() -> [WarpTheme; 4] {
     [
-        default_themes::phenomenon(),
+        default_themes::zaplex_dark(),
         default_themes::dark_theme(),
         default_themes::light_theme(),
         default_themes::adeberry(),

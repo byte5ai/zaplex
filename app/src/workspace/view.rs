@@ -109,7 +109,7 @@ use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabCloseButtonPosition;
 use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
 use crate::workspace::view::zap_launch_modal::{
-    ZapLaunchModal, ZapLaunchModalEvent,
+    ZaplexLaunchModal, ZaplexLaunchModalEvent,
 };
 use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
 use crate::BlocklistAIHistoryModel;
@@ -145,12 +145,12 @@ use crate::pane_group::{
 use crate::quit_warning::UnsavedStateSummary;
 use crate::search::command_palette::view::NavigationMode;
 use crate::search::slash_command_menu::static_commands::commands;
-// Zap Wave 3-1: the `AuthClient` trait was physically removed along with server_api/auth.rs.
+// Zaplex Wave 3-1: the `AuthClient` trait was physically removed along with server_api/auth.rs.
 use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, CtrlTabBehavior,
     DefaultSessionMode, InputModeSettings,
 };
-// Zap Wave 7-3: the `environments_page::EnvironmentsPage` import was physically removed
+// Zaplex Wave 7-3: the `environments_page::EnvironmentsPage` import was physically removed
 // along with the ambient-agent UI subsystem.
 use crate::settings_view::pane_manager::SettingsPaneManager;
 use crate::settings_view::{SettingsSection, SettingsView, SettingsViewEvent};
@@ -161,7 +161,7 @@ use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::ligature_settings::should_use_ligature_rendering;
-use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::zaplexify::settings::ZaplexifySettings;
 use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
 
 #[cfg(target_family = "wasm")]
@@ -177,7 +177,7 @@ use repo_metadata::RemoteRepositoryIdentifier;
 #[cfg(target_family = "wasm")]
 use url::Url;
 
-// Zap: removed SharedObjectsCreationDeniedModal (the cloud Drive quota-rejection dialog)
+// Zaplex: removed SharedObjectsCreationDeniedModal (the cloud Drive quota-rejection dialog)
 
 #[cfg(target_family = "wasm")]
 use crate::wasm_nux_dialog::WasmNUXDialog;
@@ -207,7 +207,7 @@ use crate::drive::import::modal::{ImportModal, ImportModalEvent};
 use crate::drive::workflows::arguments::ArgumentsState;
 use crate::drive::workflows::modal::{WorkflowModal, WorkflowModalEvent};
 use crate::drive::{
-    DriveObjectType, DrivePanel, DrivePanelEvent, ObjectTypeAndId, ZapDriveObjectSettings,
+    DriveObjectType, DrivePanel, DrivePanelEvent, ObjectTypeAndId, ZaplexDriveObjectSettings,
 };
 use crate::experiments::{BlockOnboarding, Experiment};
 use crate::menu::{
@@ -511,8 +511,8 @@ const TAB_BAR_ICON_PADDING: f32 = 4.;
 
 const TAB_BAR_PILL_WIDTH: f32 = 100.;
 const PILL_FONT_SIZE: f32 = 12.;
-// We use the word "Zap" in the Update Ready button to make it obvious that the terminal is Zap.
-// This can lead to free advertising when users screen-share Zap when an update is available.
+// We use the word "Zaplex" in the Update Ready button to make it obvious that the terminal is Zaplex.
+// This can lead to free advertising when users screen-share Zaplex when an update is available.
 const TAB_BAR_OVERFLOW_MENU_WIDTH: f32 = 300.;
 
 #[cfg(not(target_family = "wasm"))]
@@ -562,7 +562,7 @@ pub(crate) const TOGGLE_NOTIFICATION_MAILBOX_BINDING_NAME: &str =
 
 // these won't have to be public after we deprecate the code mode v1 project explorer which is defined in terminal
 pub(crate) const TOGGLE_PROJECT_EXPLORER_BINDING_NAME: &str = "workspace:toggle_project_explorer";
-pub(crate) const TOGGLE_WARP_DRIVE_BINDING_NAME: &str = "workspace:toggle_warp_drive";
+pub(crate) const TOGGLE_ZAPLEX_DRIVE_BINDING_NAME: &str = "workspace:toggle_warp_drive";
 pub(crate) const TOGGLE_RIGHT_PANEL_BINDING_NAME: &str = "workspace:toggle_right_panel";
 pub(crate) const TOGGLE_VERTICAL_TABS_PANEL_BINDING_NAME: &str =
     "workspace:toggle_vertical_tabs_panel";
@@ -578,7 +578,7 @@ pub(crate) const TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME: &str = "workspace:toggle_
 pub(crate) const LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME: &str =
     "workspace:left_panel_project_explorer";
 pub(crate) const LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME: &str = "workspace:left_panel_global_search";
-pub(crate) const LEFT_PANEL_WARP_DRIVE_BINDING_NAME: &str = "workspace:left_panel_warp_drive";
+pub(crate) const LEFT_PANEL_ZAPLEX_DRIVE_BINDING_NAME: &str = "workspace:left_panel_warp_drive";
 pub(crate) const LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME: &str =
     "workspace:left_panel_agent_conversations";
 pub(crate) const LEFT_PANEL_SSH_MANAGER_BINDING_NAME: &str = "workspace:left_panel_ssh_manager";
@@ -612,7 +612,7 @@ const MAX_WINDOW_TITLE_LENGTH: usize = 80;
 pub const DEFAULT_USER_DISPLAY_NAME: &str = "User";
 
 lazy_static! {
-    static ref OPENING_WARP_DRIVE_ON_START_UP: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    static ref OPENING_ZAPLEX_DRIVE_ON_START_UP: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     static ref PANEL_CORNER_RADIUS: CornerRadius = CornerRadius::with_all(Radius::Pixels(8.));
     static ref PANEL_HEADER_CORNER_RADIUS: CornerRadius =
         CornerRadius::with_top(Radius::Pixels(8.));
@@ -716,7 +716,7 @@ impl ShowTabBar {
 #[cfg(target_family = "wasm")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SimplifiedWasmTabBarContent {
-    /// Viewing a Zap Drive object (notebook, workflow, env vars, AI facts, MCP servers)
+    /// Viewing a Zaplex Drive object (notebook, workflow, env vars, AI facts, MCP servers)
     WarpDriveObject,
     /// Participating in a shared session (viewer or writer). Contains the optional ambient agent task ID.
     SharedSession { task_id: Option<AmbientAgentTaskId> },
@@ -856,6 +856,26 @@ pub struct Workspace {
     window_id: WindowId,
     pub(crate) tabs: Vec<TabData>,
     active_tab_index: usize,
+    /// Tracks which tab (by pane-group id) currently hosts each adopted daemon
+    /// `pty_session_id`, so adopting the same running session again focuses the
+    /// existing tab instead of opening a second view onto it (which would split
+    /// input/output across two tabs). Stale entries (tab since closed) are pruned
+    /// opportunistically on the next adopt.
+    adopted_daemon_sessions: std::collections::HashMap<String, EntityId>,
+    /// SSH host node per tab (pane-group id → `ssh_servers.node_id`), recorded
+    /// when a tab is opened for a host (daemon or classic). Lets pane-scoped
+    /// actions resolve their host context — e.g. "Open file manager here" on a
+    /// remote tab opens that HOST's file manager, not the local one. Stale
+    /// entries (closed tabs) are pruned opportunistically on lookup.
+    ssh_tab_nodes: std::collections::HashMap<EntityId, String>,
+    /// Host label per connected daemon session (connection `SessionId`), for
+    /// host-scoped advisories (e.g. the multiplexer-nesting warning toast).
+    #[cfg(unix)]
+    daemon_session_hosts: std::collections::HashMap<SessionId, String>,
+    /// Hosts already warned about multiplexer nesting this app run — one
+    /// warning per host, not one per session/tab.
+    #[cfg(unix)]
+    multiplexer_warned_hosts: std::collections::HashSet<String>,
     pub(crate) hovered_tab_index: Option<TabBarHoverIndex>,
     tab_bar_hover_state: MouseStateHandle,
     tab_fixed_width: Option<f32>,
@@ -928,7 +948,7 @@ pub struct Workspace {
     theme_deletion_modal: ViewHandle<ThemeDeletionModal>,
     suggested_agent_mode_workflow_modal: ViewHandle<SuggestedAgentModeWorkflowModal>,
     suggested_rule_modal: ViewHandle<SuggestedRuleModal>,
-    zap_launch_modal: ViewHandle<ZapLaunchModal>,
+    zap_launch_modal: ViewHandle<ZaplexLaunchModal>,
     codex_modal: ViewHandle<CodexModal>,
     toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
     agent_toast_stack: ViewHandle<AgentToastStack>,
@@ -1341,7 +1361,7 @@ impl Workspace {
                 if let Some(id) = id_to_force_expand {
                     self.open_notebook(
                         &NotebookSource::Existing(id),
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         ctx,
                         true,
                     );
@@ -1358,7 +1378,7 @@ impl Workspace {
                 if let Some(id) = id_to_force_expand {
                     self.open_workflow_with_existing(
                         id,
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         ctx,
                     );
                     ObjectStoreModel::handle(ctx).update(ctx, |object_store_model, ctx| {
@@ -2518,7 +2538,7 @@ impl Workspace {
 
         let suggested_rule_modal = Self::build_suggested_rule_modal(ctx);
 
-        let zap_launch_view = ctx.add_typed_action_view(ZapLaunchModal::new);
+        let zap_launch_view = ctx.add_typed_action_view(ZaplexLaunchModal::new);
         ctx.subscribe_to_view(&zap_launch_view, |me, _, event, ctx| {
             me.handle_zap_launch_modal_event(event, ctx);
         });
@@ -2626,11 +2646,55 @@ impl Workspace {
             );
         }
 
+        // Cockpit: a session flipping from working to WAITING is the signal the
+        // user must never miss — surface it as a toast wherever they are.
+        ctx.subscribe_to_model(
+            &crate::cockpit::CockpitModel::handle(ctx),
+            |me, _handle, event, ctx| {
+                if let crate::cockpit::model::CockpitEvent::SessionsBecameWaiting(sessions) = event
+                {
+                    let body = sessions.join("\n");
+                    me.toast_stack.update(ctx, |stack, ctx| {
+                        // Not an error — an attention signal. Plain toast text.
+                        stack.add_persistent_toast(
+                            DismissibleToast::new(
+                                crate::t!("cockpit-sessions-waiting-toast", sessions = body),
+                                crate::view_components::ToastFlavor::Default,
+                            ),
+                            ctx,
+                        );
+                    });
+                }
+            },
+        );
+
+        // Daemon-session advisories (multiplexer nesting etc.) — independent of
+        // the SshRemoteServer flag: the native persistent-session path doesn't
+        // gate on it. The daemon tab shows an inline notice; this adds the
+        // actionable warning toast, once per host per app run.
+        #[cfg(unix)]
+        ctx.subscribe_to_model(
+            &crate::remote_server::manager::RemoteServerManager::handle(ctx),
+            |me, _handle, event, ctx| {
+                if let RemoteServerManagerEvent::SessionNotice {
+                    session_id,
+                    kind,
+                    detail,
+                    ..
+                } = event
+                {
+                    if kind == "multiplexer-detected" {
+                        me.on_daemon_session_multiplexer_notice(*session_id, detail.clone(), ctx);
+                    }
+                }
+            },
+        );
+
         ctx.subscribe_to_model(&WindowSettings::handle(ctx), |me, _handle, event, ctx| {
             me.handle_window_settings_changed_event(event, ctx);
         });
 
-        // Show the Zap AI warm welcome iff the user hasn't dismissed it nor interacted with Zap AI before.
+        // Show the Zaplex AI warm welcome iff the user hasn't dismissed it nor interacted with Zaplex AI before.
         // Also, avoid showing it in integration tests to prevent interaction with other tests.
         let mut should_show_ai_assistant_warm_welcome: bool = !FeatureFlag::AgentMode.is_enabled()
             && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
@@ -2643,7 +2707,7 @@ impl Workspace {
                 .map(|dismissed: bool| !dismissed)
                 .unwrap_or(true);
 
-        // Don't automatically show the Zap AI welcome during onboarding if the block onboarding flow is being used.
+        // Don't automatically show the Zaplex AI welcome during onboarding if the block onboarding flow is being used.
         // This way, we can delay the reveal until the end of the onboarding flow so as not to overwhelm the user.
         if matches!(
             BlockOnboarding::get_group(ctx),
@@ -2795,7 +2859,7 @@ impl Workspace {
         });
 
         let native_modal = Self::build_native_modal_view(ctx);
-        // Zap: removed the SharedObjectsCreationDeniedModal registration (the cloud Drive quota-rejection dialog)
+        // Zaplex: removed the SharedObjectsCreationDeniedModal registration (the cloud Drive quota-rejection dialog)
 
         ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| match event {
             AISettingsChangedEvent::IsAnyAIEnabled { .. }
@@ -2850,6 +2914,12 @@ impl Workspace {
         let mut ws = Self {
             tabs: Vec::new(),
             active_tab_index: 0,
+            adopted_daemon_sessions: std::collections::HashMap::new(),
+            ssh_tab_nodes: std::collections::HashMap::new(),
+            #[cfg(unix)]
+            daemon_session_hosts: std::collections::HashMap::new(),
+            #[cfg(unix)]
+            multiplexer_warned_hosts: std::collections::HashSet::new(),
             hovered_tab_index: None,
             tab_bar_hover_state: Default::default(),
             traffic_light_mouse_states: Default::default(),
@@ -3526,11 +3596,12 @@ impl Workspace {
                 LeftPanelDisplayedTab::GlobalSearch => ToolPanelView::GlobalSearch {
                     entry_focus: GlobalSearchEntryFocus::Results,
                 },
-                LeftPanelDisplayedTab::ZapDrive => ToolPanelView::ZapDrive,
+                LeftPanelDisplayedTab::ZaplexDrive => ToolPanelView::ZaplexDrive,
                 LeftPanelDisplayedTab::ConversationListView => ToolPanelView::ConversationListView,
                 LeftPanelDisplayedTab::SshManager => ToolPanelView::SshManager,
                 LeftPanelDisplayedTab::ServerFileBrowser => ToolPanelView::ServerFileBrowser,
                 LeftPanelDisplayedTab::SkillManager => ToolPanelView::SkillManager,
+                LeftPanelDisplayedTab::Cockpit => ToolPanelView::Cockpit,
             };
             lp.restore_active_view_from_snapshot(active_view, ctx);
             lp.set_active_pane_group(pane_group.clone(), &self.working_directories_model, ctx);
@@ -3596,26 +3667,26 @@ impl Workspace {
             placeholder_pane = Some(home_pane.as_pane().id());
             self.add_tab_from_existing_pane(home_pane, 0, ctx);
 
-            // If we can't start a terminal session to run the onboarding flow, show the Zap Home
-            // placeholder along with Zap Drive.
+            // If we can't start a terminal session to run the onboarding flow, show the Zaplex Home
+            // placeholder along with Zaplex Drive.
             true
         };
         let initial_tab = self.active_tab_pane_group().clone();
 
         if open_warp_drive {
-            // We open Zap Drive automatically in two cases:
-            // * The user is new to Zap, and went through the overall onboarding flow
+            // We open Zaplex Drive automatically in two cases:
+            // * The user is new to Zaplex, and went through the overall onboarding flow
             // * The user is on the web, so we can't open a terminal session.
             let initial_load_complete =
                 crate::cloud_object::model::persistence::ObjectStoreModel::as_ref(ctx)
                     .initial_load_complete();
             ctx.spawn(initial_load_complete, move |me, _, ctx| {
-                // New Zap users can have non-welcome objects if they were directly invited OR if
+                // New Zaplex users can have non-welcome objects if they were directly invited OR if
                 // linked objects were copied over from an anonymous user.
                 if ObjectStoreModel::as_ref(ctx).has_non_welcome_objects() {
                     me.open_or_toggle_warp_drive(false, false, ctx);
 
-                    // After opening Zap Drive, if we rendered the Zap Home placeholder panel, replace it with one of
+                    // After opening Zaplex Drive, if we rendered the Zaplex Home placeholder panel, replace it with one of
                     // the user's own objects.
                     if show_warp_home {
                         let object_store_model = ObjectStoreModel::as_ref(ctx);
@@ -3715,7 +3786,7 @@ impl Workspace {
     fn show_local_conversation_not_found_toast(&mut self, ctx: &mut ViewContext<Self>) {
         self.toast_stack.update(ctx, |view, ctx| {
             let new_toast = DismissibleToast::error(
-                "Conversation is not available in local Zap history.".to_string(),
+                "Conversation is not available in local Zaplex history.".to_string(),
             );
             view.add_ephemeral_toast(new_toast, ctx);
         });
@@ -3775,7 +3846,7 @@ impl Workspace {
             }
         }
 
-        // Check if focused pane is a Zap Drive object
+        // Check if focused pane is a Zaplex Drive object
         let focused_pane_id = pane_group.focused_pane_id(ctx);
         if focused_pane_id.is_warp_drive_object_pane() {
             return Some(SimplifiedWasmTabBarContent::WarpDriveObject);
@@ -3868,6 +3939,47 @@ impl Workspace {
         });
     }
 
+    /// "Ask my agent about this context" (Oz-repurpose design §4): open a
+    /// terminal tab running the user's own CLI coding agent and prefill
+    /// `prompt` in the input box — the user reviews and presses Enter (no
+    /// timing race: the text waits in zaplex's input, not the PTY).
+    ///
+    /// Agent resolution (§3): explicit `agent` if installed; else the single
+    /// installed agent; else the first installed one (picker = follow-up per
+    /// design §3); none installed → an actionable toast instead of a silent
+    /// fallback to the retired in-app agent mode.
+    fn ask_agent(&mut self, prompt: String, agent: Option<CLIAgent>, ctx: &mut ViewContext<Self>) {
+        let install_model = CLIAgentInstallModel::as_ref(ctx);
+        let installed: Vec<CLIAgent> = enum_iterator::all::<CLIAgent>()
+            .filter(|a| !matches!(a, CLIAgent::Unknown))
+            .filter(|a| install_model.is_cli_agent_installed(*a))
+            .collect();
+        let resolved = agent
+            .filter(|a| installed.contains(a))
+            .or_else(|| installed.first().copied());
+        let Some(agent) = resolved else {
+            self.toast_stack.update(ctx, |stack, ctx| {
+                stack.add_persistent_toast(
+                    DismissibleToast::error(crate::t!("ask-agent-none-installed").to_string()),
+                    ctx,
+                );
+            });
+            return;
+        };
+
+        self.add_tab_with_specific_agent(agent, ctx);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
+                terminal_view.update(ctx, |terminal_view, ctx| {
+                    terminal_view.input().update(ctx, |input, ctx| {
+                        input.replace_buffer_content(&prompt, ctx);
+                        input.focus_input_box(ctx);
+                    });
+                });
+            }
+        });
+    }
+
     /// Creates a new default terminal tab, then runs the startup command of the specified CLI agent.
     fn add_tab_with_specific_agent(&mut self, agent: CLIAgent, ctx: &mut ViewContext<Self>) {
         self.add_terminal_tab(false, ctx);
@@ -3897,9 +4009,9 @@ impl Workspace {
         });
 
         // The panel is already open and no models are open, so just refocus the panel.
-        // If there is a modal open, it would sit above the Zap AI panel and we would end up
-        // focusing the Zap AI panel _behind_ the floating modal. Instead, we opt for the normal
-        // toggle behavior which will close the current modal view and then toggle Zap AI.
+        // If there is a modal open, it would sit above the Zaplex AI panel and we would end up
+        // focusing the Zaplex AI panel _behind_ the floating modal. Instead, we opt for the normal
+        // toggle behavior which will close the current modal view and then toggle Zaplex AI.
         if self.current_workspace_state.is_ai_assistant_panel_open
             && !self.ai_assistant_panel.is_self_or_child_focused(ctx)
             && !self.current_workspace_state.is_any_modal_open(ctx)
@@ -3912,7 +4024,7 @@ impl Workspace {
         self.current_workspace_state.is_ai_assistant_panel_open =
             !self.current_workspace_state.is_ai_assistant_panel_open;
 
-        // Close any other modals that could be floating on top of the Zap AI panel.
+        // Close any other modals that could be floating on top of the Zaplex AI panel.
         self.current_workspace_state.close_all_modals();
 
         if self.current_workspace_state.is_ai_assistant_panel_open {
@@ -3949,8 +4061,8 @@ impl Workspace {
             .has_warp_drive_initialized_sections(app)
     }
 
-    /// Check if Zap Drive view is focused within.
-    /// Routes to the appropriate Zap Drive panel.
+    /// Check if Zaplex Drive view is focused within.
+    /// Routes to the appropriate Zaplex Drive panel.
     fn is_warp_drive_view_focused(&self, ctx: &mut ViewContext<Self>) -> bool {
         let app = ctx;
         self.left_panel_view.is_self_or_child_focused(app)
@@ -4152,7 +4264,7 @@ impl Workspace {
     }
 
     /// This function shifts focus to the panel on the left.
-    /// The current focusable panels are: Zap Drive, theme chooser, AI, and resource center (keyboard shortcuts page only)
+    /// The current focusable panels are: Zaplex Drive, theme chooser, AI, and resource center (keyboard shortcuts page only)
     fn focus_left_panel(&mut self, ctx: &mut ViewContext<Self>) {
         // Starts from terminal
         if self.active_tab_pane_group().is_self_or_child_focused(ctx) {
@@ -4172,7 +4284,7 @@ impl Workspace {
         {
             self.focus_active_tab(ctx);
         }
-        // Starts from a left panel: Zap Drive
+        // Starts from a left panel: Zaplex Drive
         else if self.is_warp_drive_view_focused(ctx) {
             if self.current_workspace_state.is_right_panel_open() {
                 self.set_selected_object(None, ctx);
@@ -4217,7 +4329,7 @@ impl Workspace {
                 ctx.focus(&self.theme_chooser_view);
             }
         }
-        // Starts from a left panel: Zap Drive, theme chooser
+        // Starts from a left panel: Zaplex Drive, theme chooser
         else if self.is_warp_drive_view_focused(ctx)
             || self.theme_chooser_view.is_self_or_child_focused(ctx)
         {
@@ -5229,7 +5341,7 @@ impl Workspace {
                 let pane_group = self.active_tab_pane_group().clone();
                 self.handle_file_tree_event(pane_group, pane_group_event, ctx);
             }
-            LeftPanelEvent::ZapDrive(drive_event) => {
+            LeftPanelEvent::ZaplexDrive(drive_event) => {
                 self.handle_warp_drive_event(drive_event, ctx);
             }
             LeftPanelEvent::ServerFileBrowser(event) => match event {
@@ -5314,12 +5426,45 @@ impl Workspace {
                 self.open_ssh_server(node_id.clone(), ctx);
             }
             LeftPanelEvent::OpenSshTerminal { node_id, server } => {
-                self.open_ssh_terminal(node_id.clone(), server.clone(), ctx);
+                self.open_ssh_terminal(node_id.clone(), server.clone(), false, ctx);
             }
             LeftPanelEvent::OpenSftpPane { node_id, server: _ } => {
                 self.open_sftp_pane(node_id.clone(), ctx);
             }
+            LeftPanelEvent::OpenCockpitPane => {
+                self.open_cockpit_pane(ctx);
+            }
+            LeftPanelEvent::AdoptDaemonSession {
+                server,
+                pty_session_id,
+            } => {
+                #[cfg(unix)]
+                self.adopt_daemon_session(server.clone(), pty_session_id.clone(), ctx);
+                #[cfg(not(unix))]
+                {
+                    let _ = (server, pty_session_id);
+                    log::warn!("AdoptDaemonSession ignored: daemon sessions are unix-only");
+                }
+            }
         }
+    }
+
+    /// Opens the roomy cockpit dashboard pane in the central area (C2b). Like
+    /// the SSH panes, always opens a new pane (multi-instance is fine — it's a
+    /// read-only lens over the data spine).
+    pub fn open_cockpit_pane(&mut self, ctx: &mut ViewContext<Self>) {
+        use crate::pane_group::pane::cockpit_pane::CockpitPane;
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            let pane = CockpitPane::new(ctx);
+            let smart_split_direction =
+                pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
+            pane_group.add_pane_with_direction(
+                smart_split_direction,
+                pane,
+                true, /* focus_new_pane */
+                ctx,
+            );
+        });
     }
 
     /// Opens an edit pane for the given SSH node in the central area. MVP implementation:
@@ -5329,6 +5474,28 @@ impl Workspace {
         use crate::pane_group::pane::ssh_server_pane::SshServerPane;
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             let pane = SshServerPane::new(node_id, ctx);
+            let smart_split_direction =
+                pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
+            pane_group.add_pane_with_direction(
+                smart_split_direction,
+                pane,
+                true, /* focus_new_pane */
+                ctx,
+            );
+        });
+    }
+
+    /// Opens the local file-manager pane (FM pane-mode P1) rooted at
+    /// `start_path` — same browser surface as the per-host SFTP pane, backed by
+    /// the local filesystem. Opened next to the invoking pane (smart split).
+    pub fn open_local_file_manager(
+        &mut self,
+        start_path: std::path::PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::pane_group::pane::sftp_pane::SftpPane;
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            let pane = SftpPane::new_local(start_path, ctx);
             let smart_split_direction =
                 pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
             pane_group.add_pane_with_direction(
@@ -5417,6 +5584,10 @@ impl Workspace {
         &mut self,
         node_id: String,
         server: warp_ssh_manager::SshServerInfo,
+        // When true, skip the daemon (persistent) path and open a plain local-PTY
+        // `ssh` session directly. Used by the daemon-connect fallback so it never
+        // re-attempts the daemon path.
+        force_classic: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshRepository, SshSecretStore};
@@ -5445,6 +5616,18 @@ impl Workspace {
                     (server.clone(), node_id.clone(), fallback_kind)
                 }
             };
+
+        // Native persistent remote-session layer (Option B): a host with
+        // `session_resilience` enabled opens directly as a daemon-hosted session
+        // instead of a local PTY running `ssh`. Falls through to the normal path
+        // if the host isn't resilient or the auth isn't headless-capable.
+        #[cfg(unix)]
+        if !force_classic {
+            if self.try_open_daemon_ssh_terminal(&node_id, &server_for_connection, ctx) {
+                return;
+            }
+        }
+
         let cmd = warp_ssh_manager::build_ssh_command_line(&server_for_connection);
         let window_id = ctx.window_id();
 
@@ -5459,6 +5642,11 @@ impl Workspace {
             DefaultSessionModeBehavior::Ignore,
             ctx,
         );
+
+        // Remember which host this tab belongs to (pane-scoped context for e.g.
+        // "Open file manager here" opening the HOST's file manager).
+        let pane_group_id = self.active_tab_pane_group().id();
+        self.ssh_tab_nodes.insert(pane_group_id, node_id.clone());
 
         // Grab the focused terminal view of the new tab.
         let pane_group = self.active_tab_pane_group();
@@ -5531,6 +5719,411 @@ impl Workspace {
         terminal_view.update(ctx, |view, ctx| {
             view.execute_command_or_set_pending(&cmd, ctx);
         });
+    }
+
+    /// Native persistent remote-session path (Stage 2, Option B). Returns `true`
+    /// if the host will be opened via the daemon path (caller should stop), or
+    /// `false` to fall through to the ordinary local-PTY SSH path. v1 only takes
+    /// the daemon path for resilient hosts with headless-capable (key) auth.
+    ///
+    /// Preflights the ControlMaster + daemon-binary presence OFF the main thread
+    /// *before* creating any tab: only if the daemon is actually reachable do we
+    /// open a daemon-hosted tab; otherwise we fall back to a classic SSH session
+    /// with a prominent warning. This keeps persistence the default while degrading
+    /// gracefully — never a dead "Starting…" tab and never an install-on-connect
+    /// stall on a host without the daemon.
+    #[cfg(unix)]
+    fn try_open_daemon_ssh_terminal(
+        &mut self,
+        node_id: &str,
+        server: &warp_ssh_manager::SshServerInfo,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        use crate::remote_server::auth_context::server_api_auth_context;
+        use crate::remote_server::headless_connect::{
+            self, DaemonPreflight, DAEMON_BINARY_MISSING,
+        };
+        use crate::remote_server::ssh_transport::{InstallProgress, SshTransport};
+
+        if !server.session_resilience.is_enabled() {
+            return false;
+        }
+        if !headless_connect::is_headless_capable(server) {
+            log::info!(
+                "Host {} has session_resilience enabled but its auth is not \
+                 headless-capable (v1: key auth only); using the normal SSH path",
+                server.host
+            );
+            return false;
+        }
+
+        let session_id = headless_connect::alloc_daemon_session_id();
+        let auth_context = std::sync::Arc::new(server_api_auth_context(
+            AuthStateProvider::as_ref(ctx).get().clone(),
+        ));
+        let socket_path = headless_connect::control_socket_path(server);
+        let host = server.host.clone();
+        let node_id_owned = node_id.to_string();
+        let server_owned = server.clone();
+
+        // Fast, bounded preflight off the main thread (ControlMaster + binary check
+        // + install-source classification) — no tab yet, so a host that can't do
+        // persistence degrades to classic SSH without ever showing a dead daemon
+        // tab. A first-connect install runs *after* the tab exists, streaming its
+        // progress into it (Warp-style auto-install).
+        ctx.spawn(
+            headless_connect::preflight_daemon_transport(
+                server.clone(),
+                socket_path.clone(),
+                auth_context.clone(),
+            ),
+            move |workspace, result, ctx| {
+                let preflight = match result {
+                    Ok(preflight) => preflight,
+                    Err(e) => {
+                        // Daemon unavailable → classic SSH with a prominent warning so
+                        // the user KNOWS they have no persistent session (a disconnect
+                        // loses open work). Never silent, never a hang.
+                        let warning = if e == DAEMON_BINARY_MISSING {
+                            format!(
+                                "Persistent session unavailable on {host}: the zaplex daemon \
+                                 isn't installed there and no install source is available. \
+                                 Opened a standard SSH session instead — a disconnect will \
+                                 lose open work."
+                            )
+                        } else {
+                            format!(
+                                "Couldn't start a persistent session on {host} ({e}). Opened a \
+                                 standard SSH session instead — a disconnect will lose open work."
+                            )
+                        };
+                        log::warn!(
+                            "daemon connect [{host}] unavailable; falling back to classic SSH: {e}"
+                        );
+                        workspace.fall_back_to_classic_ssh(node_id_owned, server_owned, warning, ctx);
+                        return;
+                    }
+                };
+
+                // First-connect install → wire a progress channel into the tab so the
+                // install ladder's phases render there.
+                let (progress_tx, install_progress_rx) = match preflight {
+                    DaemonPreflight::Ready => (None, None),
+                    DaemonPreflight::NeedsInstall => {
+                        let (tx, rx) = async_channel::unbounded();
+                        (Some(tx), Some(rx))
+                    }
+                };
+
+                let request = crate::terminal::daemon_tty::DaemonSessionRequest {
+                    connection_session_id: session_id,
+                    open_params: crate::terminal::daemon_tty::OpenSessionParams {
+                        // Per-host scrollback ceiling (MiB → bytes); 0 → daemon default.
+                        ring_ceiling_bytes: (server_owned.ring_ceiling_mb > 0)
+                            .then(|| server_owned.ring_ceiling_mb as u64 * 1024 * 1024),
+                        // Honor the host's saved startup command on the daemon path too,
+                        // matching the local-PTY SSH path (run once after the session opens).
+                        startup_command: server_owned.startup_command.clone(),
+                        ..Default::default()
+                    },
+                    adopt_pty_session_id: None,
+                    install_progress_rx,
+                    host_label: server_owned.host.clone(),
+                };
+
+                // Create the daemon-backed tab: its event loop subscribes for
+                // `SessionConnected` (and renders install progress) before we
+                // connect below.
+                workspace.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                        hide_homepage: true,
+                        daemon_request: Some(request),
+                        ..Default::default()
+                    })),
+                    Arc::new(HashMap::new()),
+                    None, /* custom_tab_title */
+                    ctx,
+                );
+                // Remember which host this tab belongs to (pane-scoped context
+                // for e.g. "Open file manager here").
+                if let Some(pane_group) = workspace.get_pane_group_view(workspace.active_tab_index)
+                {
+                    workspace
+                        .ssh_tab_nodes
+                        .insert(pane_group.id(), node_id_owned.clone());
+                }
+
+                match progress_tx {
+                    // Daemon already installed → connect right away.
+                    None => {
+                        log::info!(
+                            "daemon connect [{host}]: ready — opening daemon session {session_id:?}"
+                        );
+                        workspace.connect_daemon_session(
+                            server_owned,
+                            session_id,
+                            socket_path,
+                            auth_context,
+                            ctx,
+                        );
+                    }
+                    // First connect → auto-install with progress in the tab, then
+                    // connect; on failure degrade to classic SSH + warning.
+                    Some(progress_tx) => {
+                        log::info!(
+                            "daemon connect [{host}]: first connect — installing the session daemon"
+                        );
+                        let transport =
+                            SshTransport::new(socket_path.clone(), auth_context.clone());
+                        let install = transport.install_binary_with_progress(
+                            InstallProgress::new(progress_tx.clone()),
+                        );
+                        ctx.spawn(install, move |workspace, result, ctx| match result {
+                            Ok(()) => {
+                                log::info!(
+                                    "daemon connect [{host}]: install complete — connecting"
+                                );
+                                let _ = progress_tx.try_send(
+                                    "Setup complete — starting your persistent session…".into(),
+                                );
+                                workspace.connect_daemon_session(
+                                    server_owned,
+                                    session_id,
+                                    socket_path,
+                                    auth_context,
+                                    ctx,
+                                );
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "daemon connect [{host}]: install failed; falling back to \
+                                     classic SSH: {e}"
+                                );
+                                // Leave the failure visible in the daemon tab, then open a
+                                // working classic session alongside it.
+                                let _ = progress_tx.try_send(format!(
+                                    "Setup failed: {e} — opened a standard SSH session in a new tab."
+                                ));
+                                let warning = format!(
+                                    "Couldn't install the Zaplex session daemon on {host} ({e}). \
+                                     Opened a standard SSH session instead — a disconnect will \
+                                     lose open work."
+                                );
+                                workspace.fall_back_to_classic_ssh(
+                                    node_id_owned,
+                                    server_owned,
+                                    warning,
+                                    ctx,
+                                );
+                            }
+                        });
+                    }
+                }
+            },
+        );
+        true
+    }
+
+    /// Connects a daemon-hosted session on an established ControlMaster: builds the
+    /// self-healing transport, marks the session persistent (transport drops trigger
+    /// reconnect — the daemon keeps the session alive), and connects. The daemon tab
+    /// created beforehand picks it up via `SessionConnected`.
+    #[cfg(unix)]
+    fn connect_daemon_session(
+        &mut self,
+        server: warp_ssh_manager::SshServerInfo,
+        session_id: SessionId,
+        socket_path: std::path::PathBuf,
+        auth_context: std::sync::Arc<remote_server::auth::RemoteServerAuthContext>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::remote_server::manager::RemoteServerManager;
+        use crate::remote_server::ssh_transport::SshTransport;
+
+        self.daemon_session_hosts
+            .insert(session_id, server.host.clone());
+        let transport =
+            SshTransport::new(socket_path, auth_context.clone()).with_self_heal(server);
+        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+            mgr.mark_session_persistent(session_id);
+            mgr.connect_session(session_id, transport, auth_context, ctx);
+        });
+    }
+
+    /// Daemon advisory (`SessionNotice`, kind "multiplexer-detected"): the session
+    /// landed inside tmux/screen via the host's auto-attach, nesting a second
+    /// persistence layer inside zaplex's own. Warn once per host per app run —
+    /// the tab itself gets an inline notice from the daemon event loop.
+    #[cfg(unix)]
+    fn on_daemon_session_multiplexer_notice(
+        &mut self,
+        session_id: SessionId,
+        multiplexer: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let host = self
+            .daemon_session_hosts
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_else(|| "the remote host".to_string());
+        if !self.multiplexer_warned_hosts.insert(host.clone()) {
+            return;
+        }
+        let warning = format!(
+            "{host} auto-attaches {multiplexer} on login, so this persistent session is \
+             running inside {multiplexer} — two nested persistence layers. zaplex already \
+             keeps your session alive across disconnects. To keep sessions clean, guard \
+             your auto-attach snippet with: [ -n \"$ZAPLEX_SESSION\" ] && return  — or keep \
+             {multiplexer} if you use it deliberately."
+        );
+        self.toast_stack.update(ctx, |stack, ctx| {
+            stack.add_persistent_toast(DismissibleToast::error(warning), ctx);
+        });
+    }
+
+    /// Daemon path unavailable/failed → open a classic local-PTY SSH session (no
+    /// second daemon attempt) with a persistent warning toast: the user must know
+    /// they have NO persistent session — a disconnect loses open work.
+    ///
+    /// The toast must go on `toast_stack` (rendered unconditionally via
+    /// global_toast_positioning). `update_toast_stack` is only rendered behind
+    /// `FeatureFlag::AvatarInTabBar`, which the fork hard-disables — a toast added
+    /// there is invisible.
+    #[cfg(unix)]
+    fn fall_back_to_classic_ssh(
+        &mut self,
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+        warning: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.toast_stack.update(ctx, |stack, ctx| {
+            stack.add_persistent_toast(DismissibleToast::error(warning), ctx);
+        });
+        self.open_ssh_terminal(node_id, server, true, ctx);
+    }
+
+    /// Adopts an already-running daemon session in a new tab: attaches to
+    /// `pty_session_id` (replay + live) instead of opening a fresh one. This is
+    /// the entry point the multi-session sidebar calls when the user picks a
+    /// listed session (the listing comes from `RemoteServerClient::list_sessions`).
+    #[cfg(unix)]
+    pub fn adopt_daemon_session(
+        &mut self,
+        server: warp_ssh_manager::SshServerInfo,
+        pty_session_id: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::remote_server::headless_connect;
+
+        // Prune entries whose tab has since closed, then, if this session is
+        // already open in a tab, focus that tab instead of opening a second view
+        // onto it (a second adopt would split input/output across two tabs).
+        let live_pg_ids: Vec<EntityId> = self.tabs.iter().map(|t| t.pane_group.id()).collect();
+        self.adopted_daemon_sessions
+            .retain(|_, pg_id| live_pg_ids.contains(pg_id));
+        if let Some(pg_id) = self.adopted_daemon_sessions.get(&pty_session_id).copied() {
+            if let Some(index) = self.tabs.iter().position(|t| t.pane_group.id() == pg_id) {
+                log::info!("daemon adopt: session {pty_session_id} already open — focusing its tab");
+                self.activate_tab(index, ctx);
+                return;
+            }
+        }
+
+        let session_id = headless_connect::alloc_daemon_session_id();
+        let request = crate::terminal::daemon_tty::DaemonSessionRequest {
+            connection_session_id: session_id,
+            open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
+            adopt_pty_session_id: Some(pty_session_id.clone()),
+            install_progress_rx: None,
+            host_label: server.host.clone(),
+        };
+
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                hide_homepage: true,
+                daemon_request: Some(request),
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None, /* custom_tab_title */
+            ctx,
+        );
+
+        // The freshly added tab is the active one — remember which tab hosts this
+        // adopted session so a later duplicate adopt focuses it, and which host
+        // it belongs to (pane-scoped context).
+        if let Some(pane_group_id) = self
+            .get_pane_group_view(self.active_tab_index)
+            .map(|pane_group| pane_group.id())
+        {
+            self.adopted_daemon_sessions
+                .insert(pty_session_id, pane_group_id);
+            self.ssh_tab_nodes
+                .insert(pane_group_id, server.node_id.clone());
+        }
+
+        self.spawn_daemon_session_connect(server, session_id, ctx);
+    }
+
+    /// Establishes the headless SSH ControlMaster for a daemon session, then
+    /// connects the remote-server session on `session_id`. The daemon terminal
+    /// (already created) issues `OpenSession` once `SessionConnected` fires.
+    #[cfg(unix)]
+    fn spawn_daemon_session_connect(
+        &mut self,
+        server: warp_ssh_manager::SshServerInfo,
+        session_id: SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::remote_server::auth_context::server_api_auth_context;
+        use crate::remote_server::headless_connect;
+        use crate::remote_server::manager::{RemoteServerInitPhase, RemoteServerManager};
+        use crate::remote_server::ssh_transport::SshTransport;
+
+        let auth_context = std::sync::Arc::new(server_api_auth_context(
+            AuthStateProvider::as_ref(ctx).get().clone(),
+        ));
+        let socket_path = headless_connect::control_socket_path(&server);
+        let host = server.host.clone();
+        self.daemon_session_hosts
+            .insert(session_id, server.host.clone());
+        // Kept for the transport so reconnect can re-heal a dead ControlMaster.
+        let server_for_transport = server.clone();
+
+        // Off the main thread: bring up the ControlMaster + ensure the
+        // remote-server binary is installed, then connect the session.
+        ctx.spawn(
+            headless_connect::prepare_daemon_transport(
+                server,
+                socket_path.clone(),
+                auth_context.clone(),
+            ),
+            move |_workspace, result, ctx| match result {
+                Ok(()) => {
+                    log::info!(
+                        "daemon connect [{host}]: transport ready — connecting session {session_id:?}"
+                    );
+                    let transport = SshTransport::new(socket_path, auth_context.clone())
+                        .with_self_heal(server_for_transport);
+                    RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+                        // Persistent: a transport drop (ssh slave exit) must trigger
+                        // reconnect — the daemon keeps the session alive (§9).
+                        mgr.mark_session_persistent(session_id);
+                        mgr.connect_session(session_id, transport, auth_context, ctx);
+                    });
+                }
+                Err(e) => {
+                    log::error!("daemon connect [{host}] failed: {e}");
+                    // The daemon tab is already open and its event loop is waiting
+                    // for manager events. Surface the failure so it shows the error
+                    // instead of hanging on a blank view.
+                    RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+                        mgr.fail_session(session_id, RemoteServerInitPhase::Connect, e, ctx);
+                    });
+                }
+            },
+        );
     }
 
     fn handle_right_panel_event(&mut self, event: RightPanelEvent, ctx: &mut ViewContext<Self>) {
@@ -5786,14 +6379,14 @@ impl Workspace {
                 .unwrap_or_else(|| "<unknown>".to_string());
 
             format!(
-                "Zap 日志导出\n\
-                 生成时间: {now}\n\
-                 版本: {version}\n\
+                "Zaplex Log Export\n\
+                 Generated at: {now}\n\
+                 Version: {version}\n\
                  channel: {channel}\n\
-                 执行模式: {execution_mode:?}\n\
+                 Execution mode: {execution_mode:?}\n\
                  OS: {os}\n\
                  ARCH: {arch}\n\
-                 日志目录: {log_dir_str}\n",
+                 Log directory: {log_dir_str}\n",
                 os = std::env::consts::OS,
                 arch = std::env::consts::ARCH,
             )
@@ -6416,7 +7009,7 @@ impl Workspace {
     }
 
     /// The tab bar overflow menu is the context menu that appears when
-    /// a user clicks "Update Zap" in the top right of the tab bar.
+    /// a user clicks "Update Zaplex" in the top right of the tab bar.
     pub fn toggle_tab_bar_overflow_menu(&mut self, ctx: &mut ViewContext<Self>) {
         if self.show_tab_bar_overflow_menu {
             self.close_tab_bar_overflow_menu(ctx);
@@ -6540,7 +7133,7 @@ impl Workspace {
     /// If the user is new and therefore has not seen the in app onboarding,
     /// triggers the welcome block to be shown after bootstrapping is completed.
     fn check_and_trigger_onboarding(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        // Zap: removed the first-launch agentic-suggestions welcome-block tutorial. Still marks the user as
+        // Zaplex: removed the first-launch agentic-suggestions welcome-block tutorial. Still marks the user as
         // onboarded, to avoid downstream code (e.g. the telemetry banner) treating an existing user as new.
         if !self.auth_state.is_onboarded().unwrap_or_default() {
             AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
@@ -6595,7 +7188,7 @@ impl Workspace {
         ctx.notify();
     }
 
-    /// Opens the Zap Drive object identified by `uid` in a new pane
+    /// Opens the Zaplex Drive object identified by `uid` in a new pane
     /// if it has a pane representation.
     fn open_warp_drive_object_in_new_pane(&mut self, uid: &ObjectUid, ctx: &mut ViewContext<Self>) {
         let Some(object) = ObjectStoreModel::as_ref(ctx).get_by_uid(uid) else {
@@ -6607,7 +7200,7 @@ impl Workspace {
             ObjectType::Notebook => {
                 self.open_notebook(
                     &NotebookSource::Existing(sync_id),
-                    &ZapDriveObjectSettings::default(),
+                    &ZaplexDriveObjectSettings::default(),
                     ctx,
                     true,
                 );
@@ -6615,7 +7208,7 @@ impl Workspace {
             ObjectType::Workflow => {
                 self.open_workflow_in_pane(
                     &WorkflowOpenSource::Existing(sync_id),
-                    &ZapDriveObjectSettings::default(),
+                    &ZaplexDriveObjectSettings::default(),
                     WorkflowViewMode::View,
                     ctx,
                 );
@@ -6644,7 +7237,7 @@ impl Workspace {
     pub fn open_notebook(
         &mut self,
         source: &NotebookSource,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<Self>,
         default_to_new_pane: bool,
     ) {
@@ -6666,7 +7259,7 @@ impl Workspace {
                 );
             }
             // TODO(zap-cloud-removal Phase 5): this invitee_email/source notebook
-            // invitation path no longer has a UI entry point, but `ZapDriveObjectSettings.invitee_email`
+            // invitation path no longer has a UI entry point, but `ZaplexDriveObjectSettings.invitee_email`
             // is still passed in by the URL handler / drag-drop path. When the invitee concept is
             // retired in Phase 5, remove the field from the settings struct as well.
             let _ = settings;
@@ -6688,7 +7281,7 @@ impl Workspace {
             });
         }
 
-        // Get notebook ID to set Zap drive index selected state
+        // Get notebook ID to set Zaplex drive index selected state
         if let NotebookSource::Existing(notebook_id) = source {
             let focused_folder_id = settings.focused_folder_id.map(SyncId::ServerId);
             if !notebook_already_open && !default_to_new_pane {
@@ -6717,11 +7310,11 @@ impl Workspace {
         }
     }
 
-    /// Open a Zap Drive workflow in response to an intent URL.
+    /// Open a Zaplex Drive workflow in response to an intent URL.
     pub fn open_workflow_from_intent(
         &mut self,
         workflow_id: SyncId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<Self>,
     ) {
         // If running workflows is supported, do so. Otherwise, or if the workflow isn't in memory,
@@ -6764,7 +7357,7 @@ impl Workspace {
     pub fn open_workflow_in_pane(
         &mut self,
         source: &WorkflowOpenSource,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         mode: WorkflowViewMode,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -7388,7 +7981,7 @@ impl Workspace {
         });
     }
 
-    // Zap Wave 7-3: `open_environment_management_pane` was physically removed along with the
+    // Zaplex Wave 7-3: `open_environment_management_pane` was physically removed along with the
     // ambient-agent UI subsystem.
 
     pub(super) fn active_session_view(
@@ -7418,7 +8011,7 @@ impl Workspace {
         ctx.notify();
     }
 
-    /// Find an active session and pre-fill the input editor the Zap executable with the
+    /// Find an active session and pre-fill the input editor the Zaplex executable with the
     /// [`warp_cli::Command::DumpDebugInfo`] subcommand.
     fn dump_debug_info(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(exec) = std::env::current_exe()
@@ -7457,7 +8050,7 @@ impl Workspace {
         }
     }
 
-    /// Install the Zap CLI by creating a symlink in /usr/local/bin
+    /// Install the Zaplex CLI by creating a symlink in /usr/local/bin
     #[cfg(target_os = "macos")]
     fn install_cli(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(async { cli_install::install_cli() }, |view, result, ctx| {
@@ -7487,7 +8080,7 @@ impl Workspace {
         });
     }
 
-    /// Uninstall the Zap CLI by removing the symlink from /usr/local/bin
+    /// Uninstall the Zaplex CLI by removing the symlink from /usr/local/bin
     #[cfg(target_os = "macos")]
     fn uninstall_cli(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(
@@ -7585,21 +8178,21 @@ impl Workspace {
         self.current_workspace_state.is_warp_drive_open =
             if toggle { !was_warp_drive_open } else { true };
 
-        // Set selected object to None upon toggle close of Zap Drive
+        // Set selected object to None upon toggle close of Zaplex Drive
         if !self.current_workspace_state.is_warp_drive_open {
             self.set_selected_object(None, ctx);
             self.focus_active_tab(ctx);
         }
 
-        // Reset focused index when opening/toggling Zap Drive open
+        // Reset focused index when opening/toggling Zaplex Drive open
         if self.current_workspace_state.is_warp_drive_open {
             self.reset_focused_index_in_warp_drive(true, ctx);
         }
 
         ctx.notify();
 
-        // Telemetry and welcome tip logic is only for when the user explicitly opens Zap Drive
-        // AND zap drive wasn't open before. There are other scenarios where we open Zap Drive like:
+        // Telemetry and welcome tip logic is only for when the user explicitly opens Zaplex Drive
+        // AND zap drive wasn't open before. There are other scenarios where we open Zaplex Drive like:
         // new user onboarding, user joins a team, etc so we want to avoid counting those.
         if explicit_user_action
             && !was_warp_drive_open
@@ -7614,7 +8207,7 @@ impl Workspace {
             );
             self.tips_completed.update(ctx, |tips_completed, ctx| {
                 mark_feature_used_and_write_to_user_defaults(
-                    Tip::Action(TipAction::ZapDrive),
+                    Tip::Action(TipAction::ZaplexDrive),
                     tips_completed,
                     ctx,
                 );
@@ -9228,7 +9821,7 @@ impl Workspace {
                     // Proc same behavior as DrivePanelEvent::RunWorkflow
                     self.run_cloud_workflow_in_active_input(
                         workflow.clone(),
-                        WorkflowSelectionSource::ZapDrive,
+                        WorkflowSelectionSource::ZaplexDrive,
                         TerminalSessionFallbackBehavior::default(),
                         ctx,
                     );
@@ -10573,7 +11166,7 @@ impl Workspace {
     pub fn add_tab_for_cloud_notebook(
         &mut self,
         notebook_id: SyncId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<Self>,
     ) {
         // TODO: We should validate that this notebook exists and fallback if it doesn't
@@ -10591,7 +11184,7 @@ impl Workspace {
     fn add_tab_for_cloud_workflow(
         &mut self,
         workflow_id: SyncId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<Self>,
     ) {
         let panes_layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
@@ -11969,7 +12562,7 @@ impl Workspace {
                 _ => self.open_navigation_palette(ctx),
             },
             PaletteMode::LaunchConfig => self.open_launch_config_palette(ctx),
-            PaletteMode::ZapDrive => self.open_warp_drive_palette(ctx),
+            PaletteMode::ZaplexDrive => self.open_warp_drive_palette(ctx),
             PaletteMode::Files => self.open_files_palette(ctx),
             PaletteMode::Conversations => self.open_conversations_palette(ctx),
         }
@@ -12062,7 +12655,7 @@ impl Workspace {
             }
             CommandPaletteEvent::OpenNotebook { id } => self.open_notebook(
                 &NotebookSource::Existing(*id),
-                &ZapDriveObjectSettings::default(),
+                &ZaplexDriveObjectSettings::default(),
                 ctx,
                 true,
             ),
@@ -12104,11 +12697,11 @@ impl Workspace {
     }
 
     /// This function is used when we set a selected object, which is an object open in an active pane.
-    /// We do not want to focus Zap Drive, instead we want to focus the editor of the open object.
+    /// We do not want to focus Zaplex Drive, instead we want to focus the editor of the open object.
     fn view_in_warp_drive(&mut self, item_id: WarpDriveItemId, ctx: &mut ViewContext<Self>) {
         self.open_left_panel(ctx);
         self.left_panel_view.update(ctx, |left_panel, ctx| {
-            left_panel.handle_action(&LeftPanelAction::ZapDrive, ctx);
+            left_panel.handle_action(&LeftPanelAction::ZaplexDrive, ctx);
         });
 
         if let WarpDriveItemId::Object(object_id) = item_id {
@@ -12123,7 +12716,7 @@ impl Workspace {
         });
     }
 
-    /// This function is used when we want to view an item in Zap Drive AND focus Zap Drive.
+    /// This function is used when we want to view an item in Zaplex Drive AND focus Zaplex Drive.
     pub fn view_in_and_focus_warp_drive(
         &mut self,
         item_id: WarpDriveItemId,
@@ -12169,7 +12762,7 @@ impl Workspace {
     }
 
     fn handle_changelog_event(&mut self, _event: &ChangelogEvent, _ctx: &mut ViewContext<Self>) {
-        // Zap is a localized fork; it does not rely on the private changelog service and does not pop up a toast/resource-center after updating.
+        // Zaplex is a localized fork; it does not rely on the private changelog service and does not pop up a toast/resource-center after updating.
     }
 
     fn manual_check_for_update(&self, ctx: &mut ViewContext<Self>) {
@@ -12224,10 +12817,10 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            // Zap decentralized fork: the `CheckForUpdate` / `ZapDrive` event arms were physically
+            // Zaplex decentralized fork: the `CheckForUpdate` / `ZaplexDrive` event arms were physically
             // removed along with the same-named variants in `SettingsViewEvent`. Manual update checks
             // can still be triggered by `WorkspaceAction::CheckForUpdate` (the `workspace:check_for_updates` binding);
-            // Zap Drive can still be triggered by `WorkspaceAction::ZapDrive`.
+            // Zaplex Drive can still be triggered by `WorkspaceAction::ZaplexDrive`.
             SettingsViewEvent::Pane(_) | SettingsViewEvent::StartResize => {}
             SettingsViewEvent::ShowToast { message, flavor } => {
                 self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -12468,7 +13061,7 @@ impl Workspace {
             pane_group::Event::OpenCloudWorkflowForEdit(workflow_id) => self
                 .open_workflow_with_existing(
                     *workflow_id,
-                    &ZapDriveObjectSettings::default(),
+                    &ZaplexDriveObjectSettings::default(),
                     ctx,
                 ),
             pane_group::Event::OpenWorkflowModalWithTemporary(workflow) => {
@@ -12530,7 +13123,7 @@ impl Workspace {
             } => {
                 self.move_to_drive_space(*object_type_and_id, *space, ctx);
             }
-            pane_group::Event::ZapDriveLink {
+            pane_group::Event::ZaplexDriveLink {
                 open_warp_drive_args,
             } => {
                 let object_found = ObjectStoreModel::as_ref(ctx)
@@ -12578,7 +13171,7 @@ impl Workspace {
                         ctx,
                     ),
                     _ => {
-                        log::warn!("Attempted to open an unsupported Zap Drive link")
+                        log::warn!("Attempted to open an unsupported Zaplex Drive link")
                     }
                 }
             }
@@ -13107,7 +13700,7 @@ impl Workspace {
                 ctx.notify();
             }
             pane_group::Event::ClearHoveredTabIndex => self.hovered_tab_index = None,
-            pane_group::Event::ZapDriveObjectInPane(uid) => {
+            pane_group::Event::ZaplexDriveObjectInPane(uid) => {
                 self.open_warp_drive_object_in_new_pane(uid, ctx);
             }
             pane_group::Event::OpenSuggestedAgentModeWorkflowModal { workflow_and_id } => {
@@ -13310,7 +13903,7 @@ impl Workspace {
                     self.left_panel_view
                         .read(ctx, |left_panel, _| match target_view {
                             LeftPanelTargetView::FileTree => left_panel.is_file_tree_active(),
-                            LeftPanelTargetView::ZapDrive => left_panel.is_warp_drive_active(),
+                            LeftPanelTargetView::ZaplexDrive => left_panel.is_warp_drive_active(),
                         });
 
                 if self.active_tab_pane_group().as_ref(ctx).left_panel_open && is_target_active {
@@ -13325,7 +13918,7 @@ impl Workspace {
                     self.left_panel_view.update(ctx, |left_panel, ctx| {
                         let action = match target_view {
                             LeftPanelTargetView::FileTree => LeftPanelAction::ProjectExplorer,
-                            LeftPanelTargetView::ZapDrive => LeftPanelAction::ZapDrive,
+                            LeftPanelTargetView::ZaplexDrive => LeftPanelAction::ZaplexDrive,
                         };
                         left_panel.handle_action_with_force_open(&action, *force_open, ctx);
                     });
@@ -13349,7 +13942,7 @@ impl Workspace {
                     ctx,
                 );
             }
-            // Zap: Ctrl/Cmd+clicking a remote SSH file path in the terminal opens it via the buffer-sync protocol.
+            // Zaplex: Ctrl/Cmd+clicking a remote SSH file path in the terminal opens it via the buffer-sync protocol.
             #[cfg(all(feature = "local_tty", feature = "local_fs"))]
             pane_group::Event::OpenRemoteFileFromTerminal {
                 remote_path,
@@ -13368,7 +13961,7 @@ impl Workspace {
             pane_group::Event::OpenAgentProfileEditor { profile_id } => {
                 self.open_execution_profile_editor_pane(None, *profile_id, ctx);
             }
-            // Zap Wave 7-3: the `pane_group::Event::OpenEnvironmentManagementPane` handler was physically
+            // Zaplex Wave 7-3: the `pane_group::Event::OpenEnvironmentManagementPane` handler was physically
             // removed along with the ambient-agent UI subsystem.
             pane_group::Event::LeftPanelToggled { is_open } => {
                 // Only handle visibility changes from the active pane group.
@@ -13634,7 +14227,7 @@ impl Workspace {
     }
 
     /// Insert the given command that should open a subshell. And set a flag that we should
-    /// automatically bootstrap AKA "warpify" that subshell if we support it. No-op if there is
+    /// automatically bootstrap AKA "zaplexify" that subshell if we support it. No-op if there is
     /// no active terminal session.
     pub fn insert_subshell_command_and_bootstrap_if_supported(
         &mut self,
@@ -13730,7 +14323,7 @@ impl Workspace {
 
             // Check whether this remote session has an active remote server
             // connection (or is in the process of connecting). This is only
-            // true for Auto SSH Warpification (mode 1) sessions where
+            // true for Auto SSH Zaplexification (mode 1) sessions where
             // `connect_session` was called at `InitShell` time.
             let has_remote_server = is_remote
                 && FeatureFlag::SshRemoteServer.is_enabled()
@@ -13838,7 +14431,7 @@ impl Workspace {
             DrivePanelEvent::RunWorkflow(workflow) => {
                 self.run_cloud_workflow_in_active_input(
                     workflow.as_ref().clone(),
-                    WorkflowSelectionSource::ZapDrive,
+                    WorkflowSelectionSource::ZaplexDrive,
                     TerminalSessionFallbackBehavior::default(),
                     ctx,
                 );
@@ -13866,27 +14459,27 @@ impl Workspace {
             DrivePanelEvent::OpenWorkflowModalWithWorkflowObject(workflow_id) => {
                 self.open_workflow_with_existing(
                     *workflow_id,
-                    &ZapDriveObjectSettings::default(),
+                    &ZaplexDriveObjectSettings::default(),
                     ctx,
                 );
             }
             DrivePanelEvent::OpenSearch => {
                 self.open_palette_action(
-                    PaletteMode::ZapDrive,
-                    PaletteSource::ZapDrive,
+                    PaletteMode::ZaplexDrive,
+                    PaletteSource::ZaplexDrive,
                     None,
                     ctx,
                 );
             }
             DrivePanelEvent::OpenNotebook(source) => {
-                self.open_notebook(source, &ZapDriveObjectSettings::default(), ctx, true)
+                self.open_notebook(source, &ZaplexDriveObjectSettings::default(), ctx, true)
             }
             DrivePanelEvent::OpenEnvVarCollection(source) => {
                 self.open_env_var_collection(source, false, ctx)
             }
             DrivePanelEvent::OpenWorkflowInPane(source, mode) => self.open_workflow_in_pane(
                 source,
-                &ZapDriveObjectSettings::default(),
+                &ZaplexDriveObjectSettings::default(),
                 *mode,
                 ctx,
             ),
@@ -13894,7 +14487,7 @@ impl Workspace {
                 self.open_ai_fact_collection_pane(None, None, ctx);
                 send_telemetry_from_ctx!(
                     TelemetryEvent::KnowledgePaneOpened {
-                        entrypoint: KnowledgePaneEntrypoint::ZapDrive,
+                        entrypoint: KnowledgePaneEntrypoint::ZaplexDrive,
                     },
                     ctx
                 );
@@ -13904,7 +14497,7 @@ impl Workspace {
 
                 send_telemetry_from_ctx!(
                     TelemetryEvent::MCPServerCollectionPaneOpened {
-                        entrypoint: MCPServerCollectionPaneEntrypoint::ZapDrive,
+                        entrypoint: MCPServerCollectionPaneEntrypoint::ZaplexDrive,
                     },
                     ctx
                 );
@@ -13913,7 +14506,7 @@ impl Workspace {
                 ctx.focus(&self.left_panel_view);
             }
             DrivePanelEvent::OpenSharedObjectsCreationDeniedModal(_, _) => {
-                // Zap: the cloud Drive quota-rejection dialog has been removed, so the event is simply ignored
+                // Zaplex: the cloud Drive quota-rejection dialog has been removed, so the event is simply ignored
             }
             DrivePanelEvent::AttachPlanAsContext(id) => {
                 self.attach_plan_as_context(*id, ctx);
@@ -14307,7 +14900,7 @@ impl Workspace {
                     AcceptNotebook(sync_id) => {
                         self.open_notebook(
                             &NotebookSource::Existing(*sync_id),
-                            &ZapDriveObjectSettings::default(),
+                            &ZaplexDriveObjectSettings::default(),
                             ctx,
                             true,
                         );
@@ -14319,7 +14912,7 @@ impl Workspace {
                             ctx,
                         );
                     }
-                    ZapAI => {
+                    ZaplexAI => {
                         if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                             return;
                         }
@@ -15011,7 +15604,7 @@ impl Workspace {
     }
 
     fn set_selected_object(&mut self, id: Option<WarpDriveItemId>, ctx: &mut ViewContext<Self>) {
-        // Set Zap drive index selected state
+        // Set Zaplex drive index selected state
         self.update_warp_drive_view(ctx, |drive_panel, ctx| {
             drive_panel.set_selected_object(id, ctx);
         });
@@ -15126,7 +15719,7 @@ impl Workspace {
                 let command = code.trim().to_string();
                 let args_state =
                     ArgumentsState::for_command_workflow(&Default::default(), command.clone());
-                let workflow = Workflow::new("Command from Zap AI", command)
+                let workflow = Workflow::new("Command from Zaplex AI", command)
                     .with_arguments(args_state.arguments);
                 self.run_workflow_in_active_input(
                     &WorkflowType::AIGenerated {
@@ -15153,11 +15746,11 @@ impl Workspace {
 
     fn handle_zap_launch_modal_event(
         &mut self,
-        event: &ZapLaunchModalEvent,
+        event: &ZaplexLaunchModalEvent,
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            ZapLaunchModalEvent::Close => {
+            ZaplexLaunchModalEvent::Close => {
                 OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
                     model.mark_zap_launch_modal_dismissed(ctx);
                 });
@@ -15485,7 +16078,7 @@ impl Workspace {
         ctx.notify();
     }
 
-    // Zap: removed open_shared_objects_creation_denied_modal (the cloud Drive quota-rejection dialog)
+    // Zaplex: removed open_shared_objects_creation_denied_modal (the cloud Drive quota-rejection dialog)
 
     /// Opens the workflow modal in the provided space and folder with no existing content (i.e. a new workflow modal).
     fn open_workflow_modal(
@@ -15503,7 +16096,7 @@ impl Workspace {
         let owner = match space {
             Space::Team { team_uid } => {
                 if !UserWorkspaces::has_capacity_for_shared_workflows(team_uid, ctx, 1) {
-                    // Zap: the cloud quota-rejection dialog has been removed, so just return
+                    // Zaplex: the cloud quota-rejection dialog has been removed, so just return
                     return;
                 }
 
@@ -15534,7 +16127,7 @@ impl Workspace {
     fn open_workflow_with_existing(
         &mut self,
         workflow_id: SyncId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<Self>,
     ) {
         let source = WorkflowOpenSource::Existing(workflow_id);
@@ -15554,7 +16147,7 @@ impl Workspace {
         };
         self.open_workflow_in_pane(
             &source,
-            &ZapDriveObjectSettings::default(),
+            &ZaplexDriveObjectSettings::default(),
             WorkflowViewMode::Create,
             ctx,
         );
@@ -15575,7 +16168,7 @@ impl Workspace {
         };
         self.open_workflow_in_pane(
             &source,
-            &ZapDriveObjectSettings::default(),
+            &ZaplexDriveObjectSettings::default(),
             WorkflowViewMode::Create,
             ctx,
         );
@@ -15641,7 +16234,7 @@ impl Workspace {
         let body = appearance
             .ui_builder()
             .wrappable_text(
-                "Ask Zap AI to explain errors, suggest commands or write scripts.".to_owned(),
+                "Ask Zaplex AI to explain errors, suggest commands or write scripts.".to_owned(),
                 true,
             )
             .with_style(UiComponentStyles {
@@ -15793,7 +16386,7 @@ impl Workspace {
                         .left_panel_views
                         .first()
                         .copied()
-                        .unwrap_or(ToolPanelView::ZapDrive)
+                        .unwrap_or(ToolPanelView::SshManager)
                     {
                         ToolPanelView::ProjectExplorer => {
                             crate::t!("workspace-left-panel-project-explorer")
@@ -15801,7 +16394,7 @@ impl Workspace {
                         ToolPanelView::GlobalSearch { .. } => {
                             crate::t!("workspace-left-panel-global-search")
                         }
-                        ToolPanelView::ZapDrive => crate::t!("workspace-left-panel-warp-drive"),
+                        ToolPanelView::ZaplexDrive => crate::t!("workspace-left-panel-warp-drive"),
                         ToolPanelView::ConversationListView => {
                             crate::t!("workspace-left-panel-agent-conversations")
                         }
@@ -15814,6 +16407,7 @@ impl Workspace {
                         ToolPanelView::SkillManager => {
                             crate::t!("workspace-left-panel-skill-manager")
                         }
+                        ToolPanelView::Cockpit => crate::t!("workspace-left-panel-cockpit"),
                     }
                 } else {
                     crate::t!("workspace-tools-panel-tooltip")
@@ -15862,7 +16456,7 @@ impl Workspace {
                 .left_panel_views
                 .first()
                 .copied()
-                .unwrap_or(ToolPanelView::ZapDrive)
+                .unwrap_or(ToolPanelView::SshManager)
             {
                 ToolPanelView::ProjectExplorer => {
                     crate::t!("workspace-left-panel-project-explorer")
@@ -15870,7 +16464,7 @@ impl Workspace {
                 ToolPanelView::GlobalSearch { .. } => {
                     crate::t!("workspace-left-panel-global-search")
                 }
-                ToolPanelView::ZapDrive => crate::t!("workspace-left-panel-warp-drive"),
+                ToolPanelView::ZaplexDrive => crate::t!("workspace-left-panel-warp-drive"),
                 ToolPanelView::ConversationListView => {
                     crate::t!("workspace-left-panel-agent-conversations")
                 }
@@ -15883,6 +16477,7 @@ impl Workspace {
                 ToolPanelView::SkillManager => {
                     crate::t!("workspace-left-panel-skill-manager")
                 }
+                ToolPanelView::Cockpit => crate::t!("workspace-left-panel-cockpit"),
             }
         } else {
             crate::t!("workspace-tools-panel-tooltip")
@@ -16188,7 +16783,7 @@ impl Workspace {
             .is_user_web_anonymous_user()
             .unwrap_or_default();
 
-        // Simplified mode for viewing Zap Drive objects, shared sessions, or conversation transcripts on WASM
+        // Simplified mode for viewing Zaplex Drive objects, shared sessions, or conversation transcripts on WASM
         #[cfg(target_family = "wasm")]
         if let Some(content_type) = self.get_simplified_wasm_tab_bar_content(ctx) {
             // Use MainAxisAlignment::SpaceBetween and expand to fill width
@@ -16197,10 +16792,10 @@ impl Workspace {
                 .with_main_axis_size(MainAxisSize::Max);
             let bg_color = blended_colors::neutral_1(appearance.theme());
 
-            // Left: Zap logo - clickable to link to warp.dev
+            // Left: Zaplex logo - clickable to link to warp.dev
             let warp_logo = Hoverable::new(self.mouse_states.warp_logo.clone(), |_state| {
                 ConstrainedBox::new(
-                    warp_core::ui::Icon::Zap
+                    warp_core::ui::Icon::Zaplex
                         .to_warpui_icon(appearance.theme().foreground())
                         .finish(),
                 )
@@ -16215,7 +16810,7 @@ impl Workspace {
             .finish();
             tab_bar.add_child(warp_logo);
 
-            // Right: Info button + run history button (for agent sessions) + "Open in Zap" button
+            // Right: Info button + run history button (for agent sessions) + "Open in Zaplex" button
             let mut right_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_main_axis_size(MainAxisSize::Min);
@@ -16239,7 +16834,7 @@ impl Workspace {
                 );
             }
 
-            // Hide "Open in Zap" button on mobile devices
+            // Hide "Open in Zaplex" button on mobile devices
             if !warpui::platform::wasm::is_mobile_device() {
                 right_row.add_child(ChildView::new(&self.open_in_warp_button).finish());
             }
@@ -16715,7 +17310,7 @@ impl Workspace {
                     .finish(),
             );
         } else {
-            // Decentralized fork: no longer renders the Zap Essentials (lightbulb) button, keeping only the settings gear.
+            // Decentralized fork: no longer renders the Zaplex Essentials (lightbulb) button, keeping only the settings gear.
             target.add_child(
                 Container::new(self.render_settings_button(appearance))
                     .with_margin_left(TAB_BAR_PADDING_LEFT)
@@ -17450,12 +18045,12 @@ impl Workspace {
             AISettings::as_ref(app)
                 .is_any_ai_enabled(app)
                 .then(|| WorkspaceBannerButtonDetails {
-                    text: "Fix with Oz".to_owned(),
+                    text: "Fix with AI".to_owned(),
                     action: WorkspaceAction::FixSettingsWithOz {
                         error_description: error.to_string(),
                     },
                     variant: BannerButtonVariant::Naked,
-                    icon: Some(Icon::Oz),
+                    icon: Some(Icon::AiAssistant),
                     more_info_button_action: None,
                 });
         Some(WorkspaceBannerFields {
@@ -18184,7 +18779,7 @@ impl Workspace {
         let general_settings = GeneralSettings::as_ref(app);
         let theme_settings = ThemeSettings::as_ref(app);
         let ssh_settings = SshSettings::as_ref(app);
-        let warpify_settings = WarpifySettings::as_ref(app);
+        let zaplexify_settings = ZaplexifySettings::as_ref(app);
         let terminal_settings = TerminalSettings::as_ref(app);
         let pane_settings = PaneSettings::as_ref(app);
         let keys_settings = KeysSettings::as_ref(app);
@@ -18225,7 +18820,7 @@ impl Workspace {
             .value()
             .same_line_prompt_enabled()
         {
-            context.set.insert(flags::WARP_SAME_LINE_PROMPT_FLAG);
+            context.set.insert(flags::ZAPLEX_SAME_LINE_PROMPT_FLAG);
         }
 
         if *ssh_settings.enable_legacy_ssh_wrapper.value() {
@@ -18237,7 +18832,7 @@ impl Workspace {
             context.set.insert(flags::SSH_AUTO_DISCOVERY_CONTEXT_FLAG);
         }
 
-        if *warpify_settings.use_ssh_tmux_wrapper.value() {
+        if *zaplexify_settings.use_ssh_tmux_wrapper.value() {
             context.set.insert(flags::SSH_TMUX_WRAPPER_CONTEXT_FLAG);
         }
 
@@ -18532,7 +19127,7 @@ impl Workspace {
     fn process_updated_sync_state(&self, ctx: &mut ViewContext<Self>) {
         // If there is an active terminal, return a sync event that all
         // other synced terminals should apply to match it.
-        // If there is no active terminal (like when all Zap windows are
+        // If there is no active terminal (like when all Zaplex windows are
         // minimized), return an event to start syncing.
         let sync_event = self
             .active_tab_pane_group()
@@ -18618,13 +19213,21 @@ impl Workspace {
     /// Computes the list of available left panel views based on current AI settings and feature flags.
     fn compute_left_panel_views(ctx: &AppContext) -> Vec<ToolPanelView> {
         let mut views = vec![];
-        if FeatureFlag::AgentViewConversationListView.is_enabled()
-            && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-            && *AISettings::as_ref(ctx).show_conversation_history
-        {
-            views.push(ToolPanelView::ConversationListView);
+
+        // Cockpit (account/usage/attention overview) leads the toolbelt — the
+        // glanceable daily-driver. Gated by the cockpit.enabled setting.
+        if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+            views.push(ToolPanelView::Cockpit);
         }
 
+        // Remote-dev core: SSH hosts, then remote files.
+        // openWarp-only: the SSH manager, no feature flag, always shown by default.
+        views.push(ToolPanelView::SshManager);
+        if FeatureFlag::ServerFileBrowser.is_enabled() && FeatureFlag::SshRemoteServer.is_enabled() {
+            views.push(ToolPanelView::ServerFileBrowser);
+        }
+
+        // Local workspace tools.
         if cfg!(feature = "local_fs") && *CodeSettings::as_ref(ctx).show_project_explorer.value() {
             views.push(ToolPanelView::ProjectExplorer);
         }
@@ -18636,18 +19239,23 @@ impl Workspace {
                 entry_focus: GlobalSearchEntryFocus::Results,
             });
         }
-        if WarpDriveSettings::is_warp_drive_enabled(ctx) {
-            views.push(ToolPanelView::ZapDrive);
+
+        // Agent conversation history (local, BYOP).
+        if FeatureFlag::AgentViewConversationListView.is_enabled()
+            && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
+            && *AISettings::as_ref(ctx).show_conversation_history
+        {
+            views.push(ToolPanelView::ConversationListView);
         }
-        // openWarp-only: the SSH manager, no feature flag, always shown by default.
-        views.push(ToolPanelView::SshManager);
-        if FeatureFlag::ServerFileBrowser.is_enabled() && FeatureFlag::SshRemoteServer.is_enabled() {
-            views.push(ToolPanelView::ServerFileBrowser);
-        }
+
         // openWarp-only: the Skill manager, no feature flag, shown by default in local_fs builds.
         if cfg!(feature = "local_fs") {
             views.push(ToolPanelView::SkillManager);
         }
+
+        // Zaplex Drive (inherited Warp Drive) is preserved as a sidebar-panel template
+        // (enum variant, render arms and modules kept) but is no longer surfaced in the
+        // shipped toolbelt. See docs/superpowers/specs/2026-07-01-self-contained-cleanup-plan.md
         views
     }
 
@@ -18661,7 +19269,7 @@ impl Workspace {
         });
     }
 
-    /// Opens a given URL in the desktop Zap app if installed, or redirects to download page.
+    /// Opens a given URL in the desktop Zaplex app if installed, or redirects to download page.
     #[cfg(target_family = "wasm")]
     fn open_link_on_desktop(&mut self, url: &Url, ctx: &mut ViewContext<Self>) {
         use crate::settings::app_installation_detection::{
@@ -18684,7 +19292,7 @@ impl Workspace {
             // Many users' browser settings will block Local Network Access so this will end up redirecting to download page,
             // even if they have the app installed.
             let toast_message = format!(
-                "Have Zap installed but redirecting to download page?\nEnable Local Network Access for the Zap web launcher in your browser."
+                "Have Zaplex installed but redirecting to download page?\nEnable Local Network Access for the Zaplex web launcher in your browser."
             );
             self.toast_stack.update(ctx, |toast_stack, ctx| {
                 toast_stack.add_persistent_toast(DismissibleToast::default(toast_message), ctx)
@@ -18825,7 +19433,29 @@ impl TypedActionView for Workspace {
                 ctx.notify();
             }
             OpenSshTerminal { node_id, server } => {
-                self.open_ssh_terminal(node_id.clone(), server.clone(), ctx);
+                self.open_ssh_terminal(node_id.clone(), server.clone(), false, ctx);
+            }
+            OpenLocalFileManager { start_path } => {
+                // FM pane-mode: swap the invoking (focused) pane in place for a
+                // file manager. Pane-scoped context: on a tab that belongs to an
+                // SSH host it browses that HOST; on a local tab it browses the
+                // local filesystem rooted at the session cwd. Closing the FM
+                // reverts to the terminal (temporary replacement).
+                let live_pg_ids: Vec<EntityId> =
+                    self.tabs.iter().map(|t| t.pane_group.id()).collect();
+                self.ssh_tab_nodes
+                    .retain(|pg_id, _| live_pg_ids.contains(pg_id));
+                let active_pg = self.active_tab_pane_group();
+                let target = match self.ssh_tab_nodes.get(&active_pg.id()).cloned() {
+                    Some(node_id) => crate::pane_group::FileManagerTarget::Remote { node_id },
+                    None => crate::pane_group::FileManagerTarget::Local {
+                        start_path: start_path.clone(),
+                    },
+                };
+                active_pg.update(ctx, |pane_group, ctx| {
+                    let pane_id = pane_group.focused_pane_id(ctx);
+                    pane_group.open_file_manager_in_place(pane_id, target, ctx);
+                });
             }
             AddTabWithShell { shell, source } => {
                 self.add_tab_with_shell(shell.clone(), *source, ctx)
@@ -18972,51 +19602,16 @@ impl TypedActionView for Workspace {
                 let path = crate::settings::user_preferences_toml_file_path();
                 self.add_tab_for_code_file(path, None, ctx);
             }
+            AskAgent { prompt, agent } => {
+                self.ask_agent(prompt.clone(), *agent, ctx);
+            }
             FixSettingsWithOz { error_description } => {
-                use crate::ai::skills::SkillManager;
-                let modify_settings_skill = SkillManager::as_ref(ctx)
-                    .active_bundled_skill("modify-settings", ctx)
-                    .cloned();
-                let query = format!(
+                // Repurposed (Oz-repurpose P1): the fix goes to the USER's own
+                // CLI coding agent, not the retired in-app agent mode.
+                let prompt = format!(
                     "My settings.toml file has an error: {error_description}. Please fix it."
                 );
-                self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-                    pane_group.add_terminal_pane_in_agent_mode(None, None, ctx);
-                    if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
-                        terminal_view.update(ctx, |terminal_view, terminal_view_ctx| {
-                            // The modify-settings skill should always be available for
-                            // production builds.
-                            if let Some(skill) = modify_settings_skill {
-                                terminal_view.ai_controller().update(
-                                    terminal_view_ctx,
-                                    |controller, ctx| {
-                                        controller.send_slash_command_request(
-                                            SlashCommandRequest::InvokeSkill {
-                                                skill,
-                                                user_query: Some(query),
-                                            },
-                                            ctx,
-                                        );
-                                    },
-                                );
-                            } else if let Some(conversation_id) =
-                                terminal_view.active_conversation_id(terminal_view_ctx)
-                            {
-                                terminal_view.ai_controller().update(
-                                    terminal_view_ctx,
-                                    |controller, ctx| {
-                                        controller.send_user_query_in_conversation(
-                                            query,
-                                            conversation_id,
-                                            None,
-                                            ctx,
-                                        );
-                                    },
-                                );
-                            }
-                        });
-                    }
-                });
+                self.ask_agent(prompt, None, ctx);
             }
             OpenWorktreeInRepo { repo_path } => {
                 self.open_worktree_in_repo(repo_path.clone(), ctx);
@@ -19116,7 +19711,7 @@ impl TypedActionView for Workspace {
                             owner: personal_drive,
                             initial_folder_id: None,
                         },
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         ctx,
                         true,
                     );
@@ -19146,7 +19741,7 @@ impl TypedActionView for Workspace {
                     };
                     self.open_workflow_in_pane(
                         &source,
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         WorkflowViewMode::Create,
                         ctx,
                     );
@@ -19172,9 +19767,9 @@ impl TypedActionView for Workspace {
                 self.finish_tab_rename(ctx);
                 self.current_workspace_state.is_tab_being_dragged = true;
             }
-            ZapDrive => {
+            ZaplexDrive => {
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
-                    self.open_left_panel_view(&LeftPanelAction::ZapDrive, ctx);
+                    self.open_left_panel_view(&LeftPanelAction::ZaplexDrive, ctx);
                 }
             }
             ToggleLeftPanel => {
@@ -19212,7 +19807,7 @@ impl TypedActionView for Workspace {
                             ctx
                         );
                     } else if warp_drive_active {
-                        // Tools panel opened with Zap Drive as the active view
+                        // Tools panel opened with Zaplex Drive as the active view
                         send_telemetry_from_ctx!(
                             TelemetryEvent::WarpDriveOpened {
                                 source: WarpDriveSource::LeftPanelToolbelt,
@@ -19650,7 +20245,7 @@ impl TypedActionView for Workspace {
                 });
                 self.open_workflow_with_existing(
                     *workflow_id,
-                    &ZapDriveObjectSettings::default(),
+                    &ZaplexDriveObjectSettings::default(),
                     ctx,
                 );
             }
@@ -19794,7 +20389,7 @@ impl TypedActionView for Workspace {
                     ctx
                 );
             }
-            // Zap Wave 7-3: the `OpenEnvironmentManagementPane` WorkspaceAction handler was physically
+            // Zaplex Wave 7-3: the `OpenEnvironmentManagementPane` WorkspaceAction handler was physically
             // removed along with the ambient-agent UI subsystem.
             ToggleAIDocumentPane {
                 document_id,
@@ -19932,7 +20527,7 @@ impl TypedActionView for Workspace {
             }
             OpenNotebook { id } => self.open_notebook(
                 &NotebookSource::Existing(*id),
-                &ZapDriveObjectSettings::default(),
+                &ZaplexDriveObjectSettings::default(),
                 ctx,
                 true,
             ),
@@ -20082,7 +20677,7 @@ impl TypedActionView for Workspace {
                     };
                     self.open_workflow_in_pane(
                         &source,
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         WorkflowViewMode::Create,
                         ctx,
                     );
@@ -20113,7 +20708,7 @@ impl TypedActionView for Workspace {
             }
             #[cfg(debug_assertions)]
             OpenZapLaunchModal => {
-                // Force open the Zap launch modal for debugging
+                // Force open the Zaplex launch modal for debugging
                 OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
                     model.force_open_zap_launch_modal(ctx);
                 });
@@ -20121,7 +20716,7 @@ impl TypedActionView for Workspace {
             }
             #[cfg(debug_assertions)]
             ResetZapLaunchModalState => {
-                // Reset the Zap launch modal dismissed state for debugging
+                // Reset the Zaplex launch modal dismissed state for debugging
                 let old_value = *GeneralSettings::as_ref(ctx)
                     .did_check_to_trigger_zap_launch_modal
                     .value();
@@ -20130,17 +20725,17 @@ impl TypedActionView for Workspace {
                         .did_check_to_trigger_zap_launch_modal
                         .set_value(false, ctx)
                     {
-                        log::warn!("Failed to reset Zap launch modal dismissed setting: {e}");
+                        log::warn!("Failed to reset Zaplex launch modal dismissed setting: {e}");
                     }
                 });
                 let new_value = *GeneralSettings::as_ref(ctx)
                     .did_check_to_trigger_zap_launch_modal
                     .value();
                 log::info!(
-                    "Zap launch modal state: old={}, new={}, feature_flag_enabled={}",
+                    "Zaplex launch modal state: old={}, new={}, feature_flag_enabled={}",
                     old_value,
                     new_value,
-                    FeatureFlag::ZapLaunchModal.is_enabled()
+                    FeatureFlag::ZaplexLaunchModal.is_enabled()
                 );
             }
             #[cfg(debug_assertions)]
@@ -20247,8 +20842,8 @@ impl TypedActionView for Workspace {
             ToggleWarpDrive => {
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
                     let is_showing =
-                        self.left_panel_view.as_ref(ctx).active_view() == ToolPanelView::ZapDrive;
-                    self.toggle_left_panel_view(&LeftPanelAction::ZapDrive, is_showing, ctx);
+                        self.left_panel_view.as_ref(ctx).active_view() == ToolPanelView::ZaplexDrive;
+                    self.toggle_left_panel_view(&LeftPanelAction::ZaplexDrive, is_showing, ctx);
                 }
             }
             ToggleSshManager => {
@@ -20533,7 +21128,7 @@ impl View for Workspace {
         };
 
         if WarpDriveSettings::is_warp_drive_enabled(app) {
-            context.set.insert(flags::ENABLE_WARP_DRIVE);
+            context.set.insert(flags::ENABLE_ZAPLEX_DRIVE);
         }
 
         if AISettings::as_ref(app).is_any_ai_enabled(app)
@@ -20574,7 +21169,7 @@ impl View for Workspace {
 
         let default_terminal = DefaultTerminal::as_ref(app);
         if default_terminal.is_warp_default() {
-            context.set.insert(flags::WARP_IS_DEFAULT_TERMINAL);
+            context.set.insert(flags::ZAPLEX_IS_DEFAULT_TERMINAL);
         }
 
         if FeatureFlag::DebugMode.is_enabled() {
@@ -20647,7 +21242,7 @@ impl View for Workspace {
 
         let tab_bar_mode = self.tab_bar_mode(app);
 
-        // For WASM simplified tab bar views (Zap Drive objects, shared sessions, conversation transcripts),
+        // For WASM simplified tab bar views (Zaplex Drive objects, shared sessions, conversation transcripts),
         // we render the tab bar outside of panels so that the details panel only affects content below the tab bar.
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {

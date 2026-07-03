@@ -256,7 +256,7 @@ fn render_linked_code_block_internal(
             let open_button = render_button(
                 appearance,
                 Icon::LinkExternal,
-                "Open in Zap",
+                "Open in Zaplex",
                 mouse_handles.open_button,
                 code_clone.clone(),
                 on_open,

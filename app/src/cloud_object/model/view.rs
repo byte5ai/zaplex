@@ -165,7 +165,7 @@ impl ObjectStoreViewModel {
             .map(|object| object.space(app))
     }
 
-    /// Get the current user's access level on a Zap Drive object.
+    /// Get the current user's access level on a Zaplex Drive object.
     ///
     /// This is based on the client's current view of the object permissions, which may be stale. The
     /// server is the source of truth for all permission data, and it may reject a request that the
@@ -215,7 +215,7 @@ impl ObjectStoreViewModel {
         }
     }
 
-    /// Get the current user's editability state for a Zap Drive object.
+    /// Get the current user's editability state for a Zaplex Drive object.
     pub fn object_editability(
         &self,
         object_uid: &ObjectUid,

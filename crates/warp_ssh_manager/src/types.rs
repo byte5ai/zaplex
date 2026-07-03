@@ -58,6 +58,49 @@ impl AuthType {
     }
 }
 
+/// Per-host opt-in for the native persistent remote-session layer.
+///
+/// `PersistOnly` is the **default for new hosts** — persistence is a core zaplex
+/// feature (it's what makes a session survive transport drops), so new hosts opt
+/// in by default. It only actually engages for headless-capable (key-auth) hosts;
+/// others transparently fall back to the classic local-PTY `ssh` path. `Off`
+/// keeps that classic behavior. Existing saved hosts keep their stored value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default, Serialize, Deserialize)]
+pub enum SessionResilience {
+    /// No persistence; classic local-PTY-runs-ssh.
+    Off,
+    /// Daemon-hosted session with server-side persistence + replay/reattach.
+    /// Default for new hosts.
+    #[default]
+    PersistOnly,
+    /// Persistence plus the mosh-grade UDP transport (Phase B3).
+    PersistPlusMosh,
+}
+
+impl SessionResilience {
+    pub fn as_db_str(&self) -> &'static str {
+        match self {
+            SessionResilience::Off => "off",
+            SessionResilience::PersistOnly => "persist_only",
+            SessionResilience::PersistPlusMosh => "persist_plus_mosh",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "off" => Some(SessionResilience::Off),
+            "persist_only" => Some(SessionResilience::PersistOnly),
+            "persist_plus_mosh" => Some(SessionResilience::PersistPlusMosh),
+            _ => None,
+        }
+    }
+
+    /// Whether this host should run as a daemon-hosted session at all.
+    pub fn is_enabled(&self) -> bool {
+        !matches!(self, SessionResilience::Off)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum OneKeyCredentialKind {
     Password,
@@ -110,6 +153,12 @@ pub struct SshServerInfo {
     pub startup_command: Option<String>,
     pub notes: Option<String>,
     pub last_connected_at: Option<NaiveDateTime>,
+    /// Per-host opt-in for the native persistent remote-session layer.
+    pub session_resilience: SessionResilience,
+    /// Per-host scrollback/replay buffer ceiling for a daemon session, in MiB.
+    /// `0` means "use the daemon default". Only meaningful when
+    /// `session_resilience` is enabled (it sizes the daemon-side OutputRing).
+    pub ring_ceiling_mb: u32,
 }
 
 impl SshServerInfo {
@@ -125,6 +174,8 @@ impl SshServerInfo {
             startup_command: None,
             notes: None,
             last_connected_at: None,
+            session_resilience: SessionResilience::default(),
+            ring_ceiling_mb: 0,
         }
     }
 
@@ -141,6 +192,8 @@ impl SshServerInfo {
             startup_command: source.startup_command.clone(),
             notes: source.notes.clone(),
             last_connected_at: None,
+            session_resilience: source.session_resilience,
+            ring_ceiling_mb: source.ring_ceiling_mb,
         }
     }
 }

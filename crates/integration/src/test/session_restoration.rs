@@ -83,7 +83,7 @@ pub fn test_session_restoration() -> Builder {
 /// always be added. Mock data for this case:
 /// | command            | output       | shell | user       | host          |
 /// | ------------------ | ------------ | ----- | ---------- | ------------- |
-/// | echo $TERM_PROGRAM | WarpTerminal | zsh   | local:user | local:host    |
+/// | echo $TERM_PROGRAM | ZaplexTerminal | zsh   | local:user | local:host    |
 /// | pwd                | /            | bash  | local:user | local:host    |
 /// | uname              | Linux        | zsh   | andy       | ubuntu-test   |
 /// | mkdir secrets      | secrets      | NULL  | NULL       | NULL          |

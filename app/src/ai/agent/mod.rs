@@ -682,9 +682,9 @@ impl Display for RenderableAIError {
         match self {
             Self::QuotaLimit => write!(f, "Quota limit reached."),
             Self::ServerOverloaded => {
-                write!(f, "Zap is currently overloaded. Please try again later.")
+                write!(f, "Zaplex is currently overloaded. Please try again later.")
             }
-            Self::InternalWarpError => write!(f, "Internal Zap error."),
+            Self::InternalWarpError => write!(f, "Internal Zaplex error."),
             Self::ContextWindowExceeded(message) => {
                 write!(f, "Context window exceeded: {message}")
             }
@@ -2390,7 +2390,7 @@ pub enum AIAgentInput {
 
     SummarizeConversation {
         prompt: Option<String>,
-        /// Zap BYOP: this field marks whether this summarization was triggered automatically by token overflow.
+        /// Zaplex BYOP: this field marks whether this summarization was triggered automatically by token overflow.
         /// The `chat_stream::SummarizeConversation` branch uses it to decide the follow-up wording
         /// (the overflow path appends a "previous request exceeded ..." explanation).
         /// The local agent conversation path does not read this field. All existing call sites keep `overflow: false`.

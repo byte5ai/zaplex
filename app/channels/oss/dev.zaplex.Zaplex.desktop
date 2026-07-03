@@ -1,0 +1,28 @@
+[Desktop Entry]
+# The version of the desktop entry spec this conforms to.
+Version=1.0
+
+Type=Application
+
+Name=Zaplex
+GenericName=TerminalEmulator
+
+# Exec must match the command the Linux packages actually install on PATH. The
+# deb/rpm/arch packages currently name the OSS package `zap` (PACKAGE_NAME in
+# script/linux/bundle_{deb,rpm}), so the installed command is `zap`. (When the
+# Linux package slug is renamed to `zaplex`, update this to `zaplex` in lockstep.)
+# bundle_appimage rewrites this line with sed to point at the in-AppImage binary.
+Exec=zap %U
+StartupWMClass=dev.zaplex.Zaplex
+
+Keywords=shell;prompt;command;commandline;cmd;
+
+Icon=dev.zaplex.Zaplex
+
+Categories=System;TerminalEmulator;
+
+# Don't run this application within a terminal.
+Terminal=false
+
+# Register ourselves as the handler for zaplex:// URLs.
+MimeType=x-scheme-handler/zaplex;

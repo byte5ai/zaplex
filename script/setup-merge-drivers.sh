@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 注册 openWarp 自定义合并驱动 + 启用 rerere。
-# 第一次 clone 后跑一次,后续合并上游(merge / cherry-pick / rebase)就会:
-# 1. .gitattributes 中标了 merge=zap-ours 的路径自动保留本地版本
-# 2. rerere 记录每次冲突解析,下次相同冲突自动复用
+# Register openWarp custom merge driver + enable rerere.
+# Run once after first clone, subsequent merges with upstream (merge / cherry-pick / rebase) will:
+# 1. Paths marked with merge=zap-ours in .gitattributes automatically keep local version
+# 2. rerere records each conflict resolution, next identical conflict auto-reuses solution
 set -euo pipefail
 
 git config merge.zap-ours.name "Always keep openWarp version (custom driver)"

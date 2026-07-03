@@ -1,7 +1,7 @@
 use crate::channel::ChannelState;
 
-// Upstream Warp's documentation site/Slack/privacy policy are no longer applicable to the Zap fork.
-// These constants are retained as placeholder empty strings, to be filled once Zap's own channels are established.
+// Upstream Warp's documentation site/Slack/privacy policy are no longer applicable to the Zaplex fork.
+// These constants are retained as placeholder empty strings, to be filled once Zaplex's own channels are established.
 // `ctx.open_url("")` is a harmless no-op at the UI call site.
 pub const USER_DOCS_URL: &str = "";
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]

@@ -30,7 +30,7 @@ pub enum ShellPathType {
     PlatformNative(PathBuf),
 }
 
-/// Zap: Snapshot of real items in a remote directory (cwd).
+/// Zaplex: Snapshot of real items in a remote directory (cwd).
 ///
 /// Populated with results returned by the daemon's `ListDirectory` RPC. The terminal link detector
 /// uses this for precise validation in remote sessions: it extracts the actual filename from candidate
@@ -49,7 +49,7 @@ impl RemoteDirListing {
     }
 }
 
-/// Zap: Validation source for terminal file links.
+/// Zaplex: Validation source for terminal file links.
 ///
 /// Local sessions use the local filesystem `fs::metadata` to check if a path exists;
 /// remote SSH (remote-server) session files are not on the local disk, so local validation
@@ -132,7 +132,7 @@ fn is_path_valid(
         return false;
     }
 
-    // Zap: Remote SSH session files are not on the local disk, so `fs::metadata` will necessarily fail.
+    // Zaplex: Remote SSH session files are not on the local disk, so `fs::metadata` will necessarily fail.
     // Use the real directory list cached from daemon `ListDirectory` for precise validation:
     // a candidate parsed path is valid ⇔ its parent directory exactly equals the cached cwd
     // and its filename is a known child item in that directory.
@@ -165,7 +165,7 @@ fn is_path_valid(
     metadata.is_file() || (metadata.is_dir() && clean_path_result.line_and_column_num.is_none())
 }
 
-/// Zap: Determines whether a parsed remote path points to a directory.
+/// Zaplex: Determines whether a parsed remote path points to a directory.
 ///
 /// Only called when clicking a link in a remote session and needing to decide
 /// "open file vs `cd` into directory"; the basis is the cached remote cwd directory list.

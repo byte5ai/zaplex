@@ -146,7 +146,7 @@ pub struct RuleView {
 
 impl RuleView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        // Zap(localization, Phase 2d-1): Original UpdateManager subscription was for receiving cloud create/update ack
+        // Zaplex(localization, Phase 2d-1): Original UpdateManager subscription was for receiving cloud create/update ack
         // events and network-status-driven panel redraws. After localization, ObjectStoreEvent covers local write UI refresh needs
         // (2c-2/2c-3 emitted in update_object/create_object), so UpdateManager and NetworkStatus subscriptions are dead code; removed together.
         let object_store_model = ObjectStoreModel::handle(ctx);
@@ -603,7 +603,7 @@ impl RuleView {
             .finish()
     }
 
-    // Zap(localization, Phase 2d-1): Original `render_sync_status_icon` depended on `SyncQueue::is_dequeueing()`
+    // Zaplex(localization, Phase 2d-1): Original `render_sync_status_icon` depended on `SyncQueue::is_dequeueing()`
     // and `is_syncing` predicates. After localization, "syncing" state never occurs; entire feature removed.
 
     fn render_project_based_row(
@@ -731,7 +731,7 @@ impl RuleView {
                 .finish()
         });
 
-        // Zap(localization, Phase 2d-1): Original `is_edit_allowed` depended on two dimensions: network online + server_id.
+        // Zaplex(localization, Phase 2d-1): Original `is_edit_allowed` depended on two dimensions: network online + server_id.
         // After localization, rules are always editable; click action is unconditionally attached.
         hoverable
             .with_cursor(Cursor::PointingHand)

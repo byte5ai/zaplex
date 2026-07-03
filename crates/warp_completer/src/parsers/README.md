@@ -190,10 +190,10 @@ LiteRootNode {
 }
 ```
 
-For more involved inputs (say commands separated by `|` and/or having `;`) the lite parser will effectively create the necessary `LitePipeline`s to express it, let's explore what happens if we lite parse the input `warp config-set --extension-path="/path/to/dir" ; echo $WARP_VAR"` (*two pipelines here due to the ; character*), like so:
+For more involved inputs (say commands separated by `|` and/or having `;`) the lite parser will effectively create the necessary `LitePipeline`s to express it, let's explore what happens if we lite parse the input `warp config-set --extension-path="/path/to/dir" ; echo $ZAPLEX_VAR"` (*two pipelines here due to the ; character*), like so:
 
 ```rust
-let input = "warp config-set --extension-path=\"/path/to/dir\" ; echo $WARP_VAR";
+let input = "warp config-set --extension-path=\"/path/to/dir\" ; echo $ZAPLEX_VAR";
 let start_offset = 0;
 
 let (tokens, _) = lex(input, start_offset);
@@ -258,7 +258,7 @@ LiteRootNode {
                                         start: 55,
                                         end: 64,
                                     },
-                                    item: "$WARP_VAR",
+                                    item: "$ZAPLEX_VAR",
                                 },
                             ],
                             post_whitespace: None,

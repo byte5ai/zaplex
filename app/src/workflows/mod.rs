@@ -50,14 +50,14 @@ pub enum WorkflowSource {
         location: NotebookLocation,
     },
 
-    /// A hardcoded workflow type that allows Zap to surface features as Workflows (e.g.
+    /// A hardcoded workflow type that allows Zaplex to surface features as Workflows (e.g.
     /// a command to see our network log)
     App,
 }
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Hash, PartialOrd)]
 pub enum WorkflowSelectionSource {
-    ZapDrive,
+    ZaplexDrive,
     CommandPalette,
     UniversalSearch,
     Voltron,
@@ -146,7 +146,7 @@ pub enum WorkflowType {
     Local(Workflow),
     /// Saved workflows from the local object store.
     Cloud(Box<WorkflowObject>),
-    /// Ephemeral/transient workflows created from Zap AI output
+    /// Ephemeral/transient workflows created from Zaplex AI output
     AIGenerated {
         workflow: Workflow,
         origin: AIWorkflowOrigin,

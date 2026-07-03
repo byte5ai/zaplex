@@ -9,7 +9,7 @@ use super::{shell::ShellType, ModelEvent, ModelEventDispatcher};
 /// The duration after a precmd/end prompt hook (depending on the shell type) to wait before
 /// assuming the shell's line editor is active again. If we receive a preexec hook in that time,
 /// we assume there are multiple queued typeahead commands and wait to request input.
-/// This prevents Zap sending an escape sequence to an arbitrary running program.
+/// This prevents Zaplex sending an escape sequence to an arbitrary running program.
 ///
 /// To avoid flickering, this must be less than `BACKGROUND_OUTPUT_RENDER_DELAY_MS`,
 /// which is the delay before a background block is rendered.
@@ -29,8 +29,8 @@ pub struct LineEditorStatus {
     ///
     /// When receiving an end prompt marker in zsh, this is used as a proxy to determine if the
     /// session is bootstrapped -- the prompt markers are emitted by zsh regardless of whether or
-    /// not its a Warpified session, so to in order properly signal downstream that the line editor
-    /// (for Warpified sessions) is active, we must check if there was a corresponding precmd
+    /// not its a Zaplexified session, so to in order properly signal downstream that the line editor
+    /// (for Zaplexified sessions) is active, we must check if there was a corresponding precmd
     /// emitted prior to the end prompt marker.
     ///
     /// Precmd is always emitted before prompt markers.

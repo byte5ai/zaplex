@@ -169,7 +169,7 @@ fn folder_from_object_store_model(model: &ObjectStoreModel, id: SyncId) -> &Fold
 /// Mock receiving an RTC update. These tests update objects by mocking RTC messages so that they
 /// don't need to mock the server API for updates. The unit tests for [`UpdateManager`] ensure that
 /// updates from both RTC and client actions emit the same events.
-// Zap (localization, Phase 2d-4a-1): the RTC entry point `received_message_from_server` was
+// Zaplex (localization, Phase 2d-4a-1): the RTC entry point `received_message_from_server` was
 // physically deleted along with `Listener`. The following 4 folder sorting-timestamp tests
 // (test_update_folder_timestamp_from_*) that depended on the `receive_rtc_update` / `move_object`
 // helpers were deleted along with those helpers; on the local-write path, metadata updates are

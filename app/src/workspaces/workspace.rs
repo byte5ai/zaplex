@@ -3,8 +3,7 @@ use crate::ai::execution_profiles::{
 };
 use crate::ai::llms::LLMModelHost;
 use crate::{
-    auth::UserUid, pricing::StripeSubscriptionPlan, server::ids::ServerId,
-    settings::AgentModeCommandExecutionPredicate,
+    auth::UserUid, server::ids::ServerId, settings::AgentModeCommandExecutionPredicate,
 };
 use chrono::Utc;
 use regex::Regex;
@@ -394,33 +393,6 @@ pub enum ServiceAgreementType {
     Other(String),
 }
 
-impl TryFrom<&BillingMetadata> for StripeSubscriptionPlan {
-    type Error = ();
-
-    fn try_from(billing_metadata: &BillingMetadata) -> Result<Self, Self::Error> {
-        match billing_metadata.customer_type {
-            CustomerType::Turbo => Ok(StripeSubscriptionPlan::Turbo),
-            CustomerType::SelfServe => Ok(StripeSubscriptionPlan::Team),
-            CustomerType::Prosumer => Ok(StripeSubscriptionPlan::Pro),
-            CustomerType::Business => match billing_metadata
-                .service_agreements
-                .first()
-                .map(|sa| sa.type_.clone())
-            {
-                Some(ServiceAgreementType::SelfServe) => Ok(StripeSubscriptionPlan::BuildBusiness),
-                _ => Ok(StripeSubscriptionPlan::Business),
-            },
-            CustomerType::Lightspeed => Ok(StripeSubscriptionPlan::Lightspeed),
-            CustomerType::Build => Ok(StripeSubscriptionPlan::Build),
-            CustomerType::BuildMax => Ok(StripeSubscriptionPlan::BuildMax),
-            CustomerType::Free
-            | CustomerType::Legacy
-            | CustomerType::Enterprise
-            | CustomerType::Unknown => Err(()),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct BonusGrantsPurchased {
     pub total_credits_purchased: i32,
@@ -552,9 +524,9 @@ impl BillingMetadata {
             || self.delinquency_status == DelinquencyStatus::Unpaid
     }
 
-    // Whether the enterprise customer is our Stable Zap Enterprise team (internal team of Warpers).
+    // Whether the enterprise customer is our Stable Zaplex Enterprise team (internal team of Warpers).
     pub fn is_warp_plan(&self) -> bool {
-        self.tier.name == "Zap Plan"
+        self.tier.name == "Zaplex Plan"
     }
 
     pub fn has_active_subscription(&self) -> bool {

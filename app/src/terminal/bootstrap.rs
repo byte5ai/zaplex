@@ -13,7 +13,7 @@ use crate::{
 #[cfg(feature = "local_fs")]
 use super::{
     model::session::{BootstrapSessionType, SessionInfo},
-    warpify::settings::{PIPENV_SUBSHELL_COMMAND_REGEX, POETRY_SUBSHELL_COMMAND_REGEX},
+    zaplexify::settings::{PIPENV_SUBSHELL_COMMAND_REGEX, POETRY_SUBSHELL_COMMAND_REGEX},
 };
 
 lazy_static! {
@@ -27,7 +27,7 @@ lazy_static! {
 /// errors
 const BYTE_ORDER_MARK: &str = "\u{FEFF}";
 
-/// Returns `true` if Zap should use an RC-file based bootstrap (e.g. dump the bootstrap script to
+/// Returns `true` if Zaplex should use an RC-file based bootstrap (e.g. dump the bootstrap script to
 /// a temp file and `source` it) for a newly spawned session with the given `shell_type`, and
 /// associated `session_type` and `subshell_initialization_info`.
 ///
@@ -81,7 +81,7 @@ pub fn should_use_rc_file_bootstrap_method(
                     && shell_type == ShellType::Zsh)
                 || is_msys2
         }
-        BootstrapSessionType::WarpifiedRemote => false,
+        BootstrapSessionType::ZaplexifiedRemote => false,
     }
 }
 
@@ -215,7 +215,7 @@ pub fn init_subshell_command(
         Some(shell_type) => {
             let subshell_script =
                 init_subshell_script_for_shell(shell_type, &crate::ASSETS, vars, ctx);
-            format!(r#" [ -z $WARP_BOOTSTRAPPED ] && eval '{subshell_script}'"#)
+            format!(r#" [ -z $ZAPLEX_BOOTSTRAPPED ] && eval '{subshell_script}'"#)
         }
         None => init_subshell_script_for_unknown_shell(&crate::ASSETS),
     }
@@ -237,7 +237,7 @@ fn init_subshell_script_for_shell(
 
     // Prepend environment variable settings to the script
     let env_setup_script = format!(
-        "export WARP_HONOR_PS1={}; {}",
+        "export ZAPLEX_HONOR_PS1={}; {}",
         honor_ps1_env_var_value,
         env_vars
             .iter()

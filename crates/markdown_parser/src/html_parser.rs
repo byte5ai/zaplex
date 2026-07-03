@@ -28,7 +28,7 @@ const PHRASING_ELEMENT_TAGS: &[&str] = &[
     "span", "i", "code", "strong", "em", "br", "a", "s", "u", "ins",
 ];
 
-pub const WARP_EMBED_ATTRIBUTE_NAME: &str = "data-warp-embedded-item";
+pub const ZAPLEX_EMBED_ATTRIBUTE_NAME: &str = "data-warp-embedded-item";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ListArg {
@@ -267,7 +267,7 @@ pub fn parse_html(html: &str) -> Result<FormattedText> {
                 result.push_back(match node_name.as_str() {
                     // If it's a code block, process its children node as plain text.
                     "pre" => {
-                        if let Some(val) = get_attribute(&attrs.borrow(), WARP_EMBED_ATTRIBUTE_NAME)
+                        if let Some(val) = get_attribute(&attrs.borrow(), ZAPLEX_EMBED_ATTRIBUTE_NAME)
                         {
                             FormattedTextLine::Embedded(Mapping::from_iter([(
                                 Value::String("id".to_string()),

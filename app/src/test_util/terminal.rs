@@ -28,7 +28,6 @@ use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::auth::AuthManager;
 use crate::auth::AuthStateProvider;
 use crate::changelog_model::ChangelogModel;
-use crate::pricing::PricingInfoModel;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::undo_close::UndoCloseStack;
@@ -93,7 +92,7 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(RepoMetadataModel::new);
     app.add_singleton_model(FileSearchModel::new);
     app.add_singleton_model(|_| GitStatusUpdateModel::new());
-    // Zap: RepoOutlines removed, no longer registered.
+    // Zaplex: RepoOutlines removed, no longer registered.
     app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
     app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
     app.add_singleton_model(SkillManager::new);
@@ -112,7 +111,6 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(OneTimeModalModel::new);
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(|_| IgnoredSuggestionsModel::new(vec![]));
-    app.add_singleton_model(|_| PricingInfoModel::new());
     app.add_singleton_model(AIDocumentModel::new);
     app.add_singleton_model(ByoLlmAuthBannerSessionState::new);
     app.add_singleton_model(|_| GitHubAuthNotifier::new());

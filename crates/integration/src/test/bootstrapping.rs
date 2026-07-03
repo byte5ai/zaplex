@@ -104,7 +104,7 @@ pub fn test_paste_and_type_characters_before_bootstrap() -> Builder {
                 .add_named_assertion("Validate block contents", assert_active_block_command_for_single_terminal_in_tab("Enter some user input: ", 0))
         )
         .with_step(
-            TestStep::new("Zap input should not start focused, since .rc file is reading user input")
+            TestStep::new("Zaplex input should not start focused, since .rc file is reading user input")
                 .add_assertion(input_editor_is_not_focused(0))
         )
         .with_step(
@@ -200,7 +200,7 @@ pub fn test_paste_and_type_characters_before_bootstrap() -> Builder {
         )
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(
-            new_step_with_default_assertions("Zap input should be focused and keep buffered text")
+            new_step_with_default_assertions("Zaplex input should be focused and keep buffered text")
                 .add_assertion(input_editor_is_focused(0))
                 .add_assertion(input_contains_string(0, "this is the pasted textthese are some typed characters".to_owned()))
         )

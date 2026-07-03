@@ -19,6 +19,10 @@ use remote_server::setup::{
 };
 use remote_server::ssh::ssh_args;
 use remote_server::transport::{Connection, RemoteTransport};
+// ControlMaster self-healing is unix-only (the `headless_connect` module is
+// `#[cfg(unix)]`), so the related field/import are gated to match.
+#[cfg(unix)]
+use warp_ssh_manager::SshServerInfo;
 
 /// SSH transport: connects via a ControlMaster socket.
 ///
@@ -30,6 +34,12 @@ use remote_server::transport::{Connection, RemoteTransport};
 pub struct SshTransport {
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
+    /// When set (daemon sessions), `connect` first re-establishes the per-host
+    /// shared ControlMaster if its socket went stale/dead — so a persistent
+    /// session can reconnect after a network drop killed the master. `None` for
+    /// non-daemon callers, whose ControlMaster lifecycle is managed elsewhere.
+    #[cfg(unix)]
+    self_heal_server: Option<SshServerInfo>,
 }
 
 impl fmt::Debug for SshTransport {
@@ -45,7 +55,19 @@ impl SshTransport {
         Self {
             socket_path,
             auth_context,
+            #[cfg(unix)]
+            self_heal_server: None,
         }
+    }
+
+    /// Opt into ControlMaster self-healing on `connect` (daemon sessions). The
+    /// `server` provides the SSH parameters needed to respawn a dead master.
+    /// The same transport instance is reused for reconnect attempts, so this is
+    /// what lets a persistent session re-attach after the master died.
+    #[cfg(unix)]
+    pub fn with_self_heal(mut self, server: SshServerInfo) -> Self {
+        self.self_heal_server = Some(server);
+        self
     }
 
     pub fn socket_path(&self) -> &PathBuf {
@@ -71,6 +93,79 @@ impl SshTransport {
         let identity_key = self.auth_context.remote_server_identity_key();
         let quoted_identity_key = shell_words::quote(&identity_key);
         format!("{binary} remote-server-proxy --identity-key {quoted_identity_key}")
+    }
+
+    /// Fast, bounded check for whether the remote-server binary can be sourced at all,
+    /// used to decide *auto-install vs. fast classic-SSH fallback* on first daemon
+    /// connect. Sources, in order of cost:
+    ///   1. a dev cross-compile (`is_dev_source_build`) — always available locally;
+    ///   2. (future) a binary embedded in the app bundle (ladder rung 3a);
+    ///   3. a reachable, version-matched release asset — a client-side HEAD.
+    ///
+    /// Returns `false` in seconds when none exist (e.g. before zaplex publishes
+    /// remote-server release tarballs), so the caller degrades to a classic SSH session
+    /// with a warning instead of hanging on a doomed multi-stage install.
+    pub async fn install_source_available(&self) -> bool {
+        if remote_server::setup::is_dev_source_build() {
+            return true;
+        }
+        let Ok(platform) = detect_remote_platform(&self.socket_path).await else {
+            return false;
+        };
+        // Rung 3a: a tarball bundled in the app matches — always installable, offline.
+        if crate::remote_server::embedded::embedded_server_tarball(&platform).is_some() {
+            return true;
+        }
+        let url = remote_server::setup::download_tarball_url(&platform);
+        // Client-side HEAD, following redirects (-L: GitHub 301s asset URLs) and bounded
+        // (--max-time). `-f` makes a 404 (unpublished tag) a fast non-success.
+        let status = command::r#async::Command::new("curl")
+            .arg("-fsIL")
+            .arg("--max-time")
+            .arg("3")
+            .arg(&url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .status()
+            .await;
+        matches!(status, Ok(status) if status.success())
+    }
+
+    /// Installs the remote-server binary, reporting human-readable phase messages
+    /// through `progress` (the daemon tab renders them during a first-connect
+    /// auto-install). Same behavior as the `RemoteTransport::install_binary` trait
+    /// method — that one simply runs this with `InstallProgress::silent()`.
+    pub fn install_binary_with_progress(
+        &self,
+        progress: InstallProgress,
+    ) -> Pin<Box<dyn Future<Output = core::result::Result<(), String>> + Send>> {
+        let socket_path = self.socket_path.clone();
+        Box::pin(async move {
+            log::info!(
+                "Installing remote server binary to {}",
+                remote_server::setup::remote_server_binary()
+            );
+
+            // Zaplex fork: DEBUG source build (no release tag) uses dev mode,
+            // cross-compiling local `warp` and uploading instead of a stale GitHub release.
+            // On failure (cross-compile prerequisites missing, etc.), fall through to the
+            // install ladder. Release builds skip this entire block.
+            if remote_server::setup::is_dev_source_build() {
+                log::info!("dev remote-server: DEBUG source build detected, switching to local cross-compile install");
+                match dev_install_local_binary(&socket_path).await {
+                    Ok(()) => return Ok(()),
+                    Err(error) => {
+                        log::warn!(
+                            "dev remote-server: local cross-compile install unavailable, falling back to the install ladder: {error:#}"
+                        );
+                    }
+                }
+            }
+
+            install_ladder(&socket_path, progress).await
+        })
     }
 }
 
@@ -151,12 +246,15 @@ async fn run_install_script(
     }
 }
 
+// Retained from the retired host-side download path (client-push is now primary; the
+// host never downloads). Kept for reference / a possible future host-download option.
+#[allow(dead_code)]
 fn should_skip_scp_fallback(error: &InstallError) -> bool {
     matches!(error, InstallError::ScriptFailed { exit_code: 2, .. })
 }
 
 // ===========================================================================
-// Zap fork: dev-mode remote-server installation path
+// Zaplex fork: dev-mode remote-server installation path
 //
 // Upstream/release builds have the remote install script download pre-built
 // remote-server binaries from GitHub releases. However, during local source
@@ -317,12 +415,12 @@ async fn cross_compile_remote_server(backend: &DevBuildBackend) -> Result<PathBu
         remote_server::setup::DEV_REMOTE_PROFILE,
     );
     // First-time compilation of the entire warp typically takes several minutes.
-    // stdout/stderr are directly inherited to the terminal running Zap, so developers
+    // stdout/stderr are directly inherited to the terminal running Zaplex, so developers
     // can see cargo's real-time progress (otherwise completely silent, easy to think
     // it's stuck).
     log::info!(
         "dev remote-server: cross-compiling now, first time typically takes several minutes — \
-         cargo progress will be printed to the terminal running Zap"
+         cargo progress will be printed to the terminal running Zaplex"
     );
 
     let status = async {
@@ -371,16 +469,16 @@ async fn cross_compile_remote_server(backend: &DevBuildBackend) -> Result<PathBu
     .await
     .map_err(|_| {
         anyhow!(
-            "dev remote-server 交叉编译超时(>{:?})",
+            "dev remote-server cross-compilation timeout (>{:?})",
             remote_server::setup::DEV_CROSS_COMPILE_TIMEOUT
         )
     })?
-    .map_err(|e| anyhow!("无法启动 cargo 构建: {e}"))?;
+    .map_err(|e| anyhow!("Failed to start cargo build: {e}"))?;
 
     if !status.success() {
         let code = status.code().unwrap_or(-1);
         return Err(anyhow!(
-            "cargo cross-compilation failed (exit {code}); see cargo output in the terminal running Zap"
+            "cargo cross-compilation failed (exit {code}); see cargo output in the terminal running Zaplex"
         ));
     }
 
@@ -411,7 +509,7 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
     // Prerequisite check: missing any item returns error, caller falls back to download-install.
     if !musl_target_installed().await {
         return Err(anyhow!(
-            "未安装 rust target {};可执行 `rustup target add {}`",
+            "Rust target {} not installed; run `rustup target add {}`",
             remote_server::setup::DEV_MUSL_TARGET,
             remote_server::setup::DEV_MUSL_TARGET,
         ));
@@ -421,9 +519,9 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
     // If neither available, error.
     let backend = select_dev_build_backend().ok_or_else(|| {
         anyhow!(
-            "未找到可用的 musl 交叉编译后端。建议安装 cargo-zigbuild + zig\
-             (`cargo install cargo-zigbuild`,并用包管理器安装 `zig`),\
-             或安装完整的 musl C/C++ 交叉工具链({})",
+            "No available musl cross-compilation backend found. Recommended: install cargo-zigbuild + zig\
+             (`cargo install cargo-zigbuild`, and install `zig` via package manager),\
+             or install a complete musl C/C++ cross-toolchain ({})",
             DEV_MUSL_LINKER_CANDIDATES.join(" / ")
         )
     })?;
@@ -509,9 +607,48 @@ async fn download_remote_server_tarball(download_url: &str, tarball_path: &Path)
     ))
 }
 
-async fn scp_install_fallback(socket_path: &Path) -> Result<()> {
-    let platform = detect_remote_platform(socket_path).await?;
-    let download_url = remote_server::setup::download_tarball_url(&platform);
+/// Progress reporting for the install ladder. Wraps an optional unbounded
+/// channel to the daemon tab; a phase send never blocks the install and a
+/// dropped receiver (tab closed) is silently ignored.
+#[derive(Clone)]
+pub struct InstallProgress(Option<async_channel::Sender<String>>);
+
+impl InstallProgress {
+    pub fn new(tx: async_channel::Sender<String>) -> Self {
+        Self(Some(tx))
+    }
+
+    pub fn silent() -> Self {
+        Self(None)
+    }
+
+    fn phase(&self, message: impl Into<String>) {
+        let message = message.into();
+        log::info!("remote-server install: {message}");
+        if let Some(tx) = &self.0 {
+            let _ = tx.try_send(message);
+        }
+    }
+}
+
+/// Rung-1 reachability probe: can the *host* quickly reach the release tarball? A short
+/// HEAD over the ControlMaster decides host-download (rung 2) vs. client relay (rung 3)
+/// without paying a full download timeout on a locked-down host.
+async fn probe_host_internet(socket_path: &Path, platform: &RemotePlatform) -> bool {
+    let url = remote_server::setup::download_tarball_url(platform);
+    let cmd = format!("curl -fsI --max-time 3 {url} >/dev/null 2>&1");
+    match remote_server::ssh::run_ssh_command(socket_path, &cmd, std::time::Duration::from_secs(6))
+        .await
+    {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    }
+}
+
+/// Rung-3 relay: upload a tarball the *client* supplies (bundled or downloaded)
+/// over the ControlMaster and run the staged install script — the host needs no
+/// internet access.
+async fn relay_tarball_install(socket_path: &Path, local_tarball: &Path) -> Result<()> {
     let remote_server_dir = remote_server::setup::remote_server_dir();
     let mkdir_cmd = format!("mkdir -p {remote_server_dir}");
     let mkdir_output = remote_server::ssh::run_ssh_command(
@@ -529,14 +666,10 @@ async fn scp_install_fallback(socket_path: &Path) -> Result<()> {
         ));
     }
 
-    let tempdir = tempfile::tempdir()?;
-    let tarball_path = tempdir.path().join("zap.tar.gz");
-    download_remote_server_tarball(&download_url, &tarball_path).await?;
-
     let remote_tarball_path = format!("{remote_server_dir}/zap-upload.tar.gz");
     remote_server::ssh::scp_upload(
         socket_path,
-        &tarball_path,
+        local_tarball,
         &remote_tarball_path,
         remote_server::setup::SCP_INSTALL_TIMEOUT,
     )
@@ -551,6 +684,65 @@ async fn scp_install_fallback(socket_path: &Path) -> Result<()> {
     .map_err(|error| anyhow!("staged install failed: {error}"))?;
 
     verify_installed_binary(socket_path).await
+}
+
+/// The install ladder (docs/superpowers/specs/2026-07-02-daemon-install-ladder-design.md):
+/// rung 1 reachability probe → rung 2 host-side download → rung 3a bundled-tarball
+/// relay → rung 3b client-download relay. Every rung installs the tarball matching
+/// the client's exact version, and every step is bounded by a timeout.
+async fn install_ladder(
+    socket_path: &Path,
+    progress: InstallProgress,
+) -> core::result::Result<(), String> {
+    progress.phase("Detecting host platform…");
+    let platform = detect_remote_platform(socket_path)
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+
+    // Rung 1: a fast probe so a locked-down/air-gapped host doesn't pay a full
+    // download timeout before we relay from the client.
+    progress.phase("Checking whether the host can reach the release…");
+    if probe_host_internet(socket_path, &platform).await {
+        // Rung 2: the host fetches the version-matched tarball itself (fastest —
+        // its own pipe, no client bandwidth). On failure, fall to the relay.
+        progress.phase("Host is downloading the Zaplex session daemon…");
+        match run_install_script(socket_path, None, remote_server::setup::INSTALL_TIMEOUT).await {
+            Ok(()) => {
+                progress.phase("Verifying installation…");
+                return verify_installed_binary(socket_path)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+            }
+            Err(error) => {
+                log::warn!("host-side download failed ({error}); relaying from client");
+            }
+        }
+    } else {
+        log::info!("remote host cannot reach the release; relaying binary from client");
+    }
+
+    // Rung 3a: a tarball bundled in the app bundle — instant, fully offline, and
+    // version-matched by construction (CI stages it with the same GIT_RELEASE_TAG).
+    if let Some(tarball) = crate::remote_server::embedded::embedded_server_tarball(&platform) {
+        progress.phase("Uploading the bundled Zaplex session daemon to the host…");
+        return relay_tarball_install(socket_path, &tarball)
+            .await
+            .map_err(|error| format!("{error:#}"));
+    }
+
+    // Rung 3b: client download — covers the open-ended platform matrix when no
+    // bundled tarball matches. Still no host internet needed.
+    progress.phase("Downloading the Zaplex session daemon on this machine…");
+    let tempdir = tempfile::tempdir().map_err(|error| format!("{error:#}"))?;
+    let tarball_path = tempdir.path().join("zap.tar.gz");
+    let download_url = remote_server::setup::download_tarball_url(&platform);
+    download_remote_server_tarball(&download_url, &tarball_path)
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+    progress.phase("Uploading the Zaplex session daemon to the host…");
+    relay_tarball_install(socket_path, &tarball_path)
+        .await
+        .map_err(|error| format!("{error:#}"))
 }
 
 impl RemoteTransport for SshTransport {
@@ -655,48 +847,7 @@ impl RemoteTransport for SshTransport {
     }
 
     fn install_binary(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
-        let socket_path = self.socket_path.clone();
-        Box::pin(async move {
-            log::info!(
-                "Installing remote server binary to {}",
-                remote_server::setup::remote_server_binary()
-            );
-
-            // Zap fork: DEBUG source build (no release tag) uses dev mode,
-            // cross-compiling local `warp` and uploading instead of downloading stale GitHub release.
-            // On failure (cross-compile prerequisites missing, etc.), print warning and fall back
-            // to download-install, preserving dev experience. Release builds skip this entire block.
-            if remote_server::setup::is_dev_source_build() {
-                log::info!("dev remote-server: DEBUG source build detected, switching to local cross-compile install");
-                match dev_install_local_binary(&socket_path).await {
-                    Ok(()) => return Ok(()),
-                    Err(error) => {
-                        log::warn!(
-                            "dev remote-server: local cross-compile install unavailable, falling back to download-install: {error:#}"
-                        );
-                        // Fall through, continue to regular download-install flow below.
-                    }
-                }
-            }
-
-            match run_install_script(&socket_path, None, remote_server::setup::INSTALL_TIMEOUT)
-                .await
-            {
-                Ok(()) => verify_installed_binary(&socket_path)
-                    .await
-                    .map_err(|error| format!("{error:#}")),
-                Err(error) if should_skip_scp_fallback(&error) => Err(error.to_string()),
-                Err(error) => {
-                    log::warn!("remote-server install failed, trying SCP fallback: {error}");
-                    match scp_install_fallback(&socket_path).await {
-                        Ok(()) => Ok(()),
-                        Err(fallback_error) => {
-                            Err(format!("{error}; SCP fallback failed: {fallback_error:#}"))
-                        }
-                    }
-                }
-            }
-        })
+        self.install_binary_with_progress(InstallProgress::silent())
     }
 
     fn connect(
@@ -705,7 +856,18 @@ impl RemoteTransport for SshTransport {
     ) -> Pin<Box<dyn Future<Output = Result<Connection>> + Send>> {
         let socket_path = self.socket_path.clone();
         let remote_proxy_command = self.remote_proxy_command();
+        #[cfg(unix)]
+        let self_heal_server = self.self_heal_server.clone();
         Box::pin(async move {
+            // For daemon sessions, re-establish the shared ControlMaster if its
+            // socket went stale/dead (e.g. the master died on a network drop).
+            // Without this, reconnect attempts reuse a dead master and all fail
+            // even though the remote daemon session is still alive and attachable.
+            #[cfg(unix)]
+            if let Some(server) = self_heal_server.as_ref() {
+                crate::remote_server::headless_connect::ensure_control_master(server, &socket_path)
+                    .await?;
+            }
             let mut args = ssh_args(&socket_path);
             args.push(remote_proxy_command);
 

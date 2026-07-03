@@ -5,6 +5,10 @@ pub use remote_server::*;
 #[cfg(not(target_family = "wasm"))]
 pub mod auth_context;
 #[cfg(not(target_family = "wasm"))]
+pub mod embedded;
+#[cfg(unix)]
+pub mod headless_connect;
+#[cfg(not(target_family = "wasm"))]
 pub mod server_buffer_tracker;
 #[cfg(not(target_family = "wasm"))]
 pub mod server_model;
@@ -85,7 +89,7 @@ pub(super) fn run_daemon_app(
     Ok(())
 }
 
-// Zap Wave 6-1: `wire_auth_token_rotation` function physically removed — originally subscribed to server API
+// Zaplex Wave 6-1: `wire_auth_token_rotation` function physically removed — originally subscribed to server API
 // token rotation events and forwarded to `RemoteServerManager::rotate_auth_token`. After auth subsystem removal in Wave 3-1,
 // this event has 0 emit points. Wave 6-1 synchronously removes event + this subscription function + call site in `lib.rs`.
 // `RemoteServerManager::rotate_auth_token` function body kept for now.

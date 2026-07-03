@@ -160,7 +160,7 @@ impl Shell {
     /// If the particular version of this shell supports input reporting, return the byte sequence
     /// to trigger input reporting.
     ///
-    /// These sequences are bound to Zap shell functions during session bootstrap that print the
+    /// These sequences are bound to Zaplex shell functions during session bootstrap that print the
     /// shell's input buffer, wrapped within the 'InputBuffer' DCS hook when triggered. PowerShell
     /// cannot use a binding that contains the letter "i"  because it does virtual key code
     /// translation based on the current layout, and not all layouts have the letter "i".
@@ -581,7 +581,7 @@ impl ShellType {
         }
     }
 
-    /// If true, Zap will bootstrap the shell if it's the login shell on the remote host.
+    /// If true, Zaplex will bootstrap the shell if it's the login shell on the remote host.
     pub fn is_fully_supported_remotely(&self) -> bool {
         match self {
             ShellType::Zsh | ShellType::Bash => true,
@@ -654,7 +654,7 @@ impl ShellType {
                                 // Those suffixes are contained in `PATHEXT`.
                                 for ext in PATHEXT {
                                     // If the command ends with one of those suffixes, tell
-                                    // Zap about this command as-is and also sans-suffix, e.g.
+                                    // Zaplex about this command as-is and also sans-suffix, e.g.
                                     // "git" and "git.exe".
                                     if line.to_lowercase().ends_with(&ext.to_lowercase()) {
                                         let trimmed = &line[..line.len() - ext.len()];
@@ -693,7 +693,7 @@ impl ShellType {
                                     // Those suffixes are contained in `PATHEXT`.
                                     for ext in PATHEXT {
                                         // If the command ends with one of those suffixes, tell
-                                        // Zap about this command as-is and also sans-suffix, e.g.
+                                        // Zaplex about this command as-is and also sans-suffix, e.g.
                                         // "git" and "git.exe".
                                         if line.to_lowercase().ends_with(&ext.to_lowercase()) {
                                             let trimmed = &line[..line.len() - ext.len()];
@@ -821,7 +821,7 @@ impl ShellLaunchData {
                 let windows_encoding = TypedPath::unix(path_str).with_windows_encoding();
                 PathBuf::try_from(windows_encoding).ok()
             }
-            // The container is Unix; Zap runs on the host, so paths are
+            // The container is Unix; Zaplex runs on the host, so paths are
             // already in the host's native encoding. Pass through unchanged.
             ShellLaunchData::DockerSandbox { .. } => Some(PathBuf::from(path_str)),
         }

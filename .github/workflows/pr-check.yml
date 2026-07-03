@@ -51,10 +51,10 @@ jobs:
         run: rustup target add x86_64-unknown-linux-gnu
         shell: bash
 
-      - name: cargo check (default = zap-oss bin)
+      - name: cargo check (default = zaplex bin)
         # `cargo check --workspace` would pull in wasm/preview channel-gated
         # targets; check only the default oss bin + its dependency graph, matching
         # the release_linux compile target. (Cargo.lock is gitignored, so no
         # --locked here.)
-        run: cargo check --bin zap-oss
+        run: cargo check --bin zaplex
         shell: bash

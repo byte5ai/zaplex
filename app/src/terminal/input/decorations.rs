@@ -1,4 +1,4 @@
-//! Zap input editor logic for decorating input text, such as
+//! Zaplex input editor logic for decorating input text, such as
 //! applying syntax highlighting and error underlining.
 
 use std::{collections::HashMap, ops::Range};

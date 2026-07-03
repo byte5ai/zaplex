@@ -627,7 +627,7 @@ fn render_grid_without_ligatures<'a>(
 
             // Skip the cursor cell when CLI agent rich input is open
             // AND the agent draws its own cursor (SHOW_CURSOR is off).
-            // When Zap draws the cursor (SHOW_CURSOR on), we keep the cell
+            // When Zaplex draws the cursor (SHOW_CURSOR on), we keep the cell
             // and only suppress the draw_cursor call.
             if hide_cursor_cell
                 && visible_cursor_shape.is_none()
@@ -1150,7 +1150,7 @@ fn render_grid_with_ligatures<'a>(
 
             // Skip the cursor cell when CLI agent rich input is open
             // AND the agent draws its own cursor (SHOW_CURSOR is off).
-            // When Zap draws the cursor (SHOW_CURSOR on), we keep the cell
+            // When Zaplex draws the cursor (SHOW_CURSOR on), we keep the cell
             // and only suppress the draw_cursor call.
             if hide_cursor_cell
                 && visible_cursor_shape.is_none()

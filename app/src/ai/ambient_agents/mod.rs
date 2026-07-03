@@ -18,9 +18,9 @@ pub use task::{
 pub const OUT_OF_CREDITS_TASK_FAILURE_MESSAGE: &str =
     "Agent usage limit reached. Please try again later.";
 pub const SERVER_OVERLOADED_TASK_FAILURE_MESSAGE: &str =
-    "Zap is temporarily overloaded. Please try again shortly.";
+    "Zaplex is temporarily overloaded. Please try again shortly.";
 
-/// JSON payload for starting an agent run. In Zap this is only used by local UI/CLI
+/// JSON payload for starting an agent run. In Zaplex this is only used by local UI/CLI
 /// plumbing; no remote run endpoint is contacted.
 #[derive(Debug, Clone, Serialize)]
 pub struct SpawnAgentRequest {
@@ -73,7 +73,7 @@ impl FromStr for AmbientAgentTaskId {
 }
 
 impl AmbientAgentTaskId {
-    /// Zap (localization, Phase 3b-4): Generate a UUID v4 locally as task_id to avoid the local
+    /// Zaplex (localization, Phase 3b-4): Generate a UUID v4 locally as task_id to avoid the local
     /// harness depending on a remote pre-create-task endpoint when spawning child tasks.
     pub fn new_local() -> Self {
         let uuid = Uuid::new_v4();

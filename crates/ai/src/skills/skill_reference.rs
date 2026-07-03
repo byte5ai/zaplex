@@ -6,7 +6,7 @@ use std::{fmt, path::PathBuf};
 pub enum SkillReference {
     /// A skill identified by the path to its SKILL.md file.
     Path(PathBuf),
-    /// A bundled skill distributed with Zap.
+    /// A bundled skill distributed with Zaplex.
     BundledSkillId(String),
 }
 

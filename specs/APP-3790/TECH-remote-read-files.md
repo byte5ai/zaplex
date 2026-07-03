@@ -2,7 +2,7 @@
 
 ## Problem
 
-The `ReadFiles` agent tool is disabled for remote SSH sessions. `get_supported_tools` skips `ToolType::ReadFiles` when `SessionType::WarpifiedRemote`, because the underlying `read_local_file_context` reads files via `async_fs`, `FileModel::read_text_file`, and local image processing — all local-only APIs.
+The `ReadFiles` agent tool is disabled for remote SSH sessions. `get_supported_tools` skips `ToolType::ReadFiles` when `SessionType::ZaplexifiedRemote`, because the underlying `read_local_file_context` reads files via `async_fs`, `FileModel::read_text_file`, and local image processing — all local-only APIs.
 
 The remote server already runs on the host machine with full filesystem access and has access to the same dependencies (`warp_files`, `warp_util`, `mime_guess`). Rather than building a degraded client-side approximation, we push the file-reading logic to the server so the ReadFiles tool has full feature parity with local: line-range extraction, binary/image support, metadata, and size limits.
 
@@ -36,7 +36,7 @@ The remote server already runs on the host machine with full filesystem access a
 
 **Current `ReadFile` proto** (`remote_server.proto`): `ReadFile { path }` → `ReadFileSuccess { content, exists }`. The server handler just calls `tokio::fs::read_to_string` — no metadata, no line ranges, no size limits, no binary support.
 
-**Tool gating**: `get_supported_tools` excludes `ReadFiles` for `WarpifiedRemote` sessions. `get_supported_cli_agent_tools` also excludes it.
+**Tool gating**: `get_supported_tools` excludes `ReadFiles` for `ZaplexifiedRemote` sessions. `get_supported_cli_agent_tools` also excludes it.
 
 ## Proposed Changes
 
@@ -135,8 +135,8 @@ Follows the same pattern as `write_file` / `delete_file` — sends request, awai
 In the `execute` method, after resolving cwd/shell, check `active_session.session_type(ctx)`:
 
 - **Local / None**: call `read_local_file_context` as today (unchanged).
-- **WarpifiedRemote with host_id**: resolve `RemoteServerClient` via `RemoteServerManager::client_for_host`, call `client.read_file_context(...)`, convert `ReadFileContextResponse` → `ReadFileContextResult` (mapping proto `FileContextProto` → `FileContext`, `FailedFileRead` → `missing_files`).
-- **WarpifiedRemote without host_id**: fall through to the local `read_local_file_context` path.
+- **ZaplexifiedRemote with host_id**: resolve `RemoteServerClient` via `RemoteServerManager::client_for_host`, call `client.read_file_context(...)`, convert `ReadFileContextResponse` → `ReadFileContextResult` (mapping proto `FileContextProto` → `FileContext`, `FailedFileRead` → `missing_files`).
+- **ZaplexifiedRemote without host_id**: fall through to the local `read_local_file_context` path.
 
 The remote client lookup uses a unified code path with no `cfg` gating — `RemoteServerManager` and `RemoteServerClient` compile on all targets including WASM. On WASM, `client_for_host` returns `None` (since `connect_session` is a no-op), so the local path is used automatically.
 
@@ -146,7 +146,7 @@ The `read_remote_file` adapter currently uses the old `ReadFile`/`ReadFileSucces
 
 ### 7. Enable `ReadFiles` in `get_supported_tools` for remote sessions
 
-In `get_supported_tools` (impl.rs:179), add `api::ToolType::ReadFiles` alongside `ApplyFileDiffs` for the `WarpifiedRemote { host_id: Some(_) }` arm.
+In `get_supported_tools` (impl.rs:179), add `api::ToolType::ReadFiles` alongside `ApplyFileDiffs` for the `ZaplexifiedRemote { host_id: Some(_) }` arm.
 
 Also in `get_supported_cli_agent_tools` (impl.rs:234), enable `ReadFiles` for remote sessions with a connected host.
 
@@ -161,7 +161,7 @@ sequenceDiagram
     participant Shared as read_single_file_context
 
     LLM->>Executor: ReadFiles action (file locations)
-    Note over Executor: session_type is WarpifiedRemote with host_id
+    Note over Executor: session_type is ZaplexifiedRemote with host_id
 
     Executor->>Client: read_file_context(files, max_bytes)
     Client->>Server: ReadFileContextRequest { files, max_file_bytes, max_batch_bytes }

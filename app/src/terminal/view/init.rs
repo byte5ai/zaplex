@@ -83,12 +83,12 @@ fn init_overlapping_keybindings(app: &mut AppContext) {
     app.register_fixed_bindings([
         FixedBinding::new(
             escape_key,
-            TerminalAction::NotifySshErrorBlock(SshErrorBlockAction::ContinueWithoutWarpification),
+            TerminalAction::NotifySshErrorBlock(SshErrorBlockAction::ContinueWithoutZaplexification),
             id!(SSH_ERROR_BLOCK_VISIBLE_KEY) & block_action_context(),
         ),
         FixedBinding::new(
             cmd_or_ctrl_enter,
-            TerminalAction::NotifySshErrorBlock(SshErrorBlockAction::ContinueWithoutWarpification),
+            TerminalAction::NotifySshErrorBlock(SshErrorBlockAction::ContinueWithoutZaplexification),
             id!(SSH_ERROR_BLOCK_VISIBLE_KEY) & block_action_context(),
         ),
     ]);
@@ -101,8 +101,8 @@ pub fn init(app: &mut AppContext) {
     app.register_binding_validator::<TerminalView>(is_binding_pty_compliant);
 
     init_overlapping_keybindings(app);
-    // Register input mode bindings before warpify bindings so ctrl-i warpifies
-    // instead of opening inline agent when a warpify banner is visible.
+    // Register input mode bindings before zaplexify bindings so ctrl-i zaplexifies
+    // instead of opening inline agent when a zaplexify banner is visible.
     register_input_mode_bindings(app);
 
     app.register_fixed_bindings([
@@ -342,8 +342,8 @@ pub fn init(app: &mut AppContext) {
                 | (id!("Terminal") & !id!("IMEOpen") & id!(flags::CLI_AGENT_RICH_INPUT_OPEN)),
         ),
         EditableBinding::new(
-            "terminal:warpify_subshell",
-            crate::t!("keybinding-desc-terminal-warpify-subshell"),
+            "terminal:zaplexify_subshell",
+            crate::t!("keybinding-desc-terminal-zaplexify-subshell"),
             TerminalAction::TriggerSubshellBootstrap,
         )
         .with_key_binding("ctrl-i")
@@ -351,16 +351,16 @@ pub fn init(app: &mut AppContext) {
             id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand") & id!("SubshellBanner"),
         ),
         EditableBinding::new(
-            "terminal:warpify_ssh_session",
-            crate::t!("keybinding-desc-terminal-warpify-ssh-session"),
-            TerminalAction::WarpifySSHSession,
+            "terminal:zaplexify_ssh_session",
+            crate::t!("keybinding-desc-terminal-zaplexify-ssh-session"),
+            TerminalAction::ZaplexifySSHSession,
         )
         .with_key_binding("ctrl-i")
         .with_context_predicate(
             id!("Terminal")
                 & !id!("IMEOpen")
                 & id!("LongRunningCommand")
-                & id!("SshWarpificationBanner"),
+                & id!("SshZaplexificationBanner"),
         ),
         EditableBinding::new(
             ACCEPT_PROMPT_SUGGESTION_KEYBINDING,
@@ -583,7 +583,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(
             id!("Terminal") & id!("TerminalView_NonEmptyBlockList") & !id!("AltScreen"),
         ),
-        // Zap: removed terminal:open_share_block_modal keybinding (cloud-based share block)
+        // Zaplex: removed terminal:open_share_block_modal keybinding (cloud-based share block)
         EditableBinding::new(
             "terminal:bookmark_selected_block",
             crate::t!("keybinding-desc-terminal-bookmark-selected-block"),
@@ -963,7 +963,7 @@ pub fn init(app: &mut AppContext) {
     )
     .with_context_predicate(id!("Terminal") & id!(flags::HAS_SETTINGS_TO_IMPORT_FLAG))]);
 
-    // Zap: removed terminal:share_current_session / terminal:stop_sharing_current_session keybindings (cloud-based shared session)
+    // Zaplex: removed terminal:share_current_session / terminal:stop_sharing_current_session keybindings (cloud-based shared session)
 
     app.register_editable_bindings([EditableBinding::new(
         TOGGLE_BLOCK_FILTER_KEYBINDING,
@@ -1055,7 +1055,7 @@ fn register_input_mode_bindings(app: &mut AppContext) {
 
     // A context predicate that matches when the input mode bindings are
     // available for use. Disabled when a CLI agent session is active — the
-    // Zap agent should not be tagged into a CLI agent's command, and the
+    // Zaplex agent should not be tagged into a CLI agent's command, and the
     // `!` prefix is the only way to toggle shell mode in the rich input.
     let base_context = id!(flags::IS_ANY_AI_ENABLED)
         & (id!("Input") | id!("Terminal"))

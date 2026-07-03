@@ -208,14 +208,14 @@ impl UpdateManager {
         object_type_and_id: &ObjectTypeAndId,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Zap(Wave 4): resync originally meant “re-enqueue to SyncQueue to push local changes to the server”.
+        // Zaplex(Wave 4): resync originally meant “re-enqueue to SyncQueue to push local changes to the server”.
         // After localization, it is now a one-way SQLite write; callers only need lightweight validation.
         let _ = (object_type_and_id, ctx);
     }
 
     /// Out-of-band (from the regular poll) refresh of updated objects.
     pub fn refresh_updated_objects(&mut self, ctx: &mut ModelContext<Self>) {
-        // Zap localization: no cloud object polling source yet.
+        // Zaplex localization: no cloud object polling source yet.
         // This method is preserved for backward compatibility with old call sites; does not trigger network I/O.
         let _ = ctx;
     }
@@ -246,7 +246,7 @@ impl UpdateManager {
         }
     }
 
-    /// Zap localization: no longer fetches individual cloud objects; signature preserved for backward compatibility.
+    /// Zaplex localization: no longer fetches individual cloud objects; signature preserved for backward compatibility.
     ///
     /// Returns A `Receiver<()>` that completes when the fetch operation is done.
     /// This receiver can be used to wait for the fetch operation to complete before proceeding.
@@ -259,7 +259,7 @@ impl UpdateManager {
         let _ = fetch_single_object_option;
         let _ = ctx;
         let (fetch_cloud_object_tx, fetch_cloud_object_rx) = oneshot::channel::<()>();
-        log::debug!("Zap skipping single cloud object fetch: {server_id:?}");
+        log::debug!("Zaplex skipping single cloud object fetch: {server_id:?}");
         let _ = fetch_cloud_object_tx.send(());
         fetch_cloud_object_rx
     }
@@ -424,7 +424,7 @@ impl UpdateManager {
         _current_metadata_last_updated_ts: Option<ServerTimestamp>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Zap: cloud-side move RPC has been removed; this is now collapsed to local direct write and clear
+        // Zaplex: cloud-side move RPC has been removed; this is now collapsed to local direct write and clear
         // the has_pending_metadata_change flag.
         let _ = (object_type, owner, destination_folder);
         ObjectStoreModel::handle(ctx).update(ctx, |object_store_model, ctx| {
@@ -450,7 +450,7 @@ impl UpdateManager {
 
     /// Attempts to move the object identified by `object_id`
     /// to the root of the drive identified by `destination_owner`.
-    /// Zap(Wave 6-7): The remote leg originally called `transfer_*_owner` stub series, always returning `Ok(true)`,
+    /// Zaplex(Wave 6-7): The remote leg originally called `transfer_*_owner` stub series, always returning `Ok(true)`,
     /// then after a round-trip cleared has_pending_permissions_change and emitted a Success toast.
     /// This is now collapsed to local direct write. `move_object_to_drive_failed` / `revert_workflow_on_failed_move` are retired.
     #[allow(clippy::too_many_arguments)]
@@ -1023,7 +1023,7 @@ impl UpdateManager {
 
     /// Create a new local stored object using the given model.
     ///
-    /// Zap(localization): Same as `update_object` — the original implementation enqueued to `SyncQueue` and waited
+    /// Zaplex(localization): Same as `update_object` — the original implementation enqueued to `SyncQueue` and waited
     /// for server creation ack. After localization, only in-memory object creation + SQLite write is retained.
     /// The object persists under its client_id identity and is never promoted to server_id.
     /// Parameters `entrypoint` / `initiated_by` are kept for interface stability.
@@ -1050,7 +1050,7 @@ impl UpdateManager {
             + 'static,
         M: StoredObjectModel<IdType = K, StoredObjectType = GenericStoredObject<K, M>> + 'static,
     {
-        // Zap: the cloud-enqueue leg has been removed; these two parameters are retained only for
+        // Zaplex: the cloud-enqueue leg has been removed; these two parameters are retained only for
         // `create_object_queue_item` construction and interface stability to avoid breaking 30+ call sites.
         let _ = entrypoint;
         let _ = initiated_by;
@@ -1083,7 +1083,7 @@ impl UpdateManager {
 
     /// Update a local stored object using a new model.
     ///
-    /// Zap(localization): No cloud = no server ack. Original implementation: update in-memory → mark `InFlight` →
+    /// Zaplex(localization): No cloud = no server ack. Original implementation: update in-memory → mark `InFlight` →
     /// write SQLite → enqueue to `SyncQueue` (wait for server response before decrementing `InFlight`).
     /// After localization, the two cloud-side legs are removed; only retained: update in-memory + write SQLite.
     /// The object's sync_status remains at initial `NoLocalChanges` (local write = "complete" semantics).
@@ -1107,7 +1107,7 @@ impl UpdateManager {
             + 'static,
         M: StoredObjectModel<IdType = K, StoredObjectType = GenericStoredObject<K, M>> + 'static,
     {
-        let _ = revision_ts; // Zap: no server-side revision coordination; ignored.
+        let _ = revision_ts; // Zaplex: no server-side revision coordination; ignored.
 
         // Update in-memory model.
         ObjectStoreModel::handle(ctx).update(ctx, |object_store_model, ctx| {
@@ -1148,7 +1148,7 @@ impl UpdateManager {
         // Update sqlite.
         self.save_to_db([ModelEvent::InsertObjectAction { object_action }]);
 
-        // Zap(Wave 4): The original implementation enqueued to SyncQueue at the end to report RecordObjectAction.
+        // Zaplex(Wave 4): The original implementation enqueued to SyncQueue at the end to report RecordObjectAction.
         // After SyncQueue removal, a local SQLite record is “complete”.
         let _ = (id_and_type, action_type, data, action_timestamp);
     }
@@ -1209,7 +1209,7 @@ impl UpdateManager {
         });
     }
 
-    /// Zap: Cloud-side notebook edit lease has been removed. This is now collapsed to local edit permission grant;
+    /// Zaplex: Cloud-side notebook edit lease has been removed. This is now collapsed to local edit permission grant;
     /// method signature is kept for `notebooks/notebook.rs` call sites.
     pub fn grab_notebook_edit_access(
         &mut self,
@@ -1225,7 +1225,7 @@ impl UpdateManager {
         self.set_notebook_current_editor(&notebook_id, Some(TEST_USER_UID.to_string()), ctx);
     }
 
-    /// Zap: Cloud-side notebook edit lease has been removed; this is now collapsed to local direct clearing of edit permission.
+    /// Zaplex: Cloud-side notebook edit lease has been removed; this is now collapsed to local direct clearing of edit permission.
     pub fn give_up_notebook_edit_access(
         &mut self,
         notebook_id: SyncId,
@@ -1284,7 +1284,7 @@ impl UpdateManager {
     }
 
     pub fn trash_object(&mut self, id: ObjectTypeAndId, ctx: &mut ModelContext<Self>) {
-        // Zap(decentralized branch): Local objects (without server_id) follow pure local trash —
+        // Zaplex(decentralized branch): Local objects (without server_id) follow pure local trash —
         // mark trashed_ts + write SQLite. **Do NOT emit ObjectOperationComplete**,
         // because multiple consumers (notebooks/env_vars/cloud_object/view) .expect server_id;
         // Drive UI has already received notification via ObjectStoreEvent::ObjectTrashed
@@ -1292,7 +1292,7 @@ impl UpdateManager {
         let Some(server_id) = id.server_id() else {
             let hashed_id = id.uid();
             self.mark_object_trashed_and_return_timestamps(&hashed_id, ctx);
-            // Zap: Local objects never have a server ack to clear has_pending_metadata_change.
+            // Zaplex: Local objects never have a server ack to clear has_pending_metadata_change.
             // Must be manually cleared before writing to SQLite; otherwise, the
             // `if !has_pending_metadata_change` branch in upsert_stored_object will skip writing the trashed_ts field,
             // causing trashed_ts to be NULL when loaded from SQLite after restart, and the object reappears in PERSONAL.
@@ -1355,11 +1355,11 @@ impl UpdateManager {
     }
 
     pub fn untrash_object(&mut self, id: ObjectTypeAndId, ctx: &mut ModelContext<Self>) {
-        // Zap: Local object untrash — clear trashed_ts + emit ObjectUntrashed + write SQLite.
+        // Zaplex: Local object untrash — clear trashed_ts + emit ObjectUntrashed + write SQLite.
         // Do NOT emit ObjectOperationComplete (same rationale as trash_object comment).
         let Some(server_id) = id.server_id() else {
             let hashed_id = id.uid();
-            // Zap: Local object untrash — clear trashed_ts and also clear
+            // Zaplex: Local object untrash — clear trashed_ts and also clear
             // has_pending_metadata_change (local branch has no server ack);
             // otherwise upsert_stored_object skips writing trashed_ts and SQLite retains the old value.
             ObjectStoreModel::handle(ctx).update(ctx, |object_store_model, ctx| {
@@ -1398,7 +1398,7 @@ impl UpdateManager {
             return;
         }
 
-        // Zap: Cloud-side untrash RPC has been removed; this is collapsed to local direct write and clearing the pending_untrash flag.
+        // Zaplex: Cloud-side untrash RPC has been removed; this is collapsed to local direct write and clearing the pending_untrash flag.
         ObjectStoreModel::handle(ctx).update(ctx, |object_store_model, ctx| {
             if let Some(object) = object_store_model.get_mut_by_uid(&hashed_id) {
                 object.metadata_mut().trashed_ts = None;
@@ -1466,7 +1466,7 @@ impl UpdateManager {
             return;
         }
 
-        // Zap: Cloud-side delete RPC has been removed; this is collapsed to local direct deletion.
+        // Zaplex: Cloud-side delete RPC has been removed; this is collapsed to local direct deletion.
         let num_deleted_objects =
             self.on_object_delete_success(vec![SyncId::ServerId(server_id)], ctx);
         ctx.emit(UpdateManagerEvent::ObjectOperationComplete {
@@ -1482,7 +1482,7 @@ impl UpdateManager {
     }
 
     pub fn empty_trash(&mut self, space: Space, ctx: &mut ModelContext<Self>) {
-        // Zap: Empty Trash follows a pure local path. The original implementation called the upstream
+        // Zaplex: Empty Trash follows a pure local path. The original implementation called the upstream
         // cloud empty_trash interface; without auth/server, it would fail with `Failed to get access token`
         // after 3 retries, leaving Trash UI unresponsive. Local branch: directly iterate ObjectStoreModel
         // to find objects matching owner + is_trashed, collect SyncIds, then reuse `on_object_delete_success`
@@ -1618,6 +1618,6 @@ impl Entity for UpdateManager {
 impl SingletonEntity for UpdateManager {}
 
 // Phase 2c-2: Delete `update_manager_test.rs` (7500+ lines of cloud-side sync behavior tests):
-// After Zap localization of `update_object`, all cloud-side assertions become invalid; this file
+// After Zaplex localization of `update_object`, all cloud-side assertions become invalid; this file
 // originally belonged to Phase 2d-4a's full-file deletion scope. Deleting early avoids accumulating 12 `#[ignore]` markers.
 // Remaining consumers in `server/cloud_objects/` (listener / update_manager itself) go offline in 2d-4a.

@@ -61,8 +61,8 @@ pub fn uses_vertical_tabs(ctx: &AppContext) -> bool {
     FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs
 }
 
-const WARP_2_TAB_COLOR_OPACITY: Opacity = 25;
-const WARP_2_HOVERED_TAB_COLOR_OPACITY: Opacity = 50;
+const ZAPLEX_2_TAB_COLOR_OPACITY: Opacity = 25;
+const ZAPLEX_2_HOVERED_TAB_COLOR_OPACITY: Opacity = 50;
 const TAB_CLOSE_BUTTON_OPACITY: Opacity = 60;
 const TAB_CLOSE_BUTTON_WIDTH: f32 = 20.0;
 const MAX_TOOLTIP_LENGTH: usize = 80;
@@ -1184,9 +1184,9 @@ impl<'a> TabComponent<'a> {
             (bg, border)
         } else {
             let tab_opacity = if is_active || is_hovered {
-                WARP_2_HOVERED_TAB_COLOR_OPACITY
+                ZAPLEX_2_HOVERED_TAB_COLOR_OPACITY
             } else {
-                WARP_2_TAB_COLOR_OPACITY
+                ZAPLEX_2_TAB_COLOR_OPACITY
             };
 
             let bg = if let Some(custom_background) = self.styles.background {

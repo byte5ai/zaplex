@@ -2,7 +2,7 @@ use super::*;
 use clap::Parser;
 
 use crate::agent::{AgentCommand, Harness};
-// Zap Wave 7-2: `environment` CLI physically deleted with cloud ambient agent main body.
+// Zaplex Wave 7-2: `environment` CLI physically deleted with cloud ambient agent main body.
 
 #[test]
 fn agent_run_accepts_model() {
@@ -260,7 +260,7 @@ fn run_command_is_removed() {
     assert!(result.is_err());
 }
 
-// Zap Wave 7-2: environment_image_list_parses / environment_create_accepts_description /
+// Zaplex Wave 7-2: environment_image_list_parses / environment_create_accepts_description /
 // environment_create_description_max_length / environment_update_accepts_description /
 // environment_update_accepts_remove_description physically deleted with cloud ambient agent subsystem.
 

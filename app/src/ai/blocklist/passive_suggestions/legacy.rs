@@ -256,7 +256,7 @@ impl PassiveSuggestionsModel {
         };
 
         // BYOP path: replace the ServerApi call with a BYOP one-shot completion.
-        // Zap has stripped out the Zap Inc cloud; with no BYOP config this is a silent no-op.
+        // Zaplex has stripped out the Zaplex Inc cloud; with no BYOP config this is a silent no-op.
         let Some(rendered) = build_prompt_suggestions_byop_request(
             &block_completed,
             execution_context,
@@ -390,7 +390,7 @@ impl PassiveSuggestionsModel {
             .active_session
             .as_ref(ctx)
             .session_type(ctx)
-            .map(|session_type| matches!(session_type, SessionType::WarpifiedRemote { .. }))
+            .map(|session_type| matches!(session_type, SessionType::ZaplexifiedRemote { .. }))
             .unwrap_or(true);
         if !can_read_file || should_skip_for_remote {
             let reason = if !can_read_file {

@@ -37,7 +37,7 @@ The recording API is exposed through `TestStep` helpers:
 This means annotated recording is opt-in at the test level. A test author does not need to change how clicks, drags, or keystrokes are authored once recording has started.
 
 ### Environment-Based Debugging API
-The existing environment variable `WARP_INTEGRATION_TEST_VIDEO` remains available as a convenience override for automatic recording during test runs. This is useful for debugging, but the primary product-facing API remains the explicit step-based recording controls.
+The existing environment variable `ZAPLEX_INTEGRATION_TEST_VIDEO` remains available as a convenience override for automatic recording during test runs. This is useful for debugging, but the primary product-facing API remains the explicit step-based recording controls.
 
 ## High-Level Architecture
 

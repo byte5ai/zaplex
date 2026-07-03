@@ -716,7 +716,7 @@ pub struct Block {
     pub host: Option<String>,
     pub is_background: bool,
     pub rprompt: Option<String>,
-    /// JSON-serialized representation of the Zap prompt snapshot (Context Chips). Note that this
+    /// JSON-serialized representation of the Zaplex prompt snapshot (Context Chips). Note that this
     /// is different from PS1 and RPROMPT1
     pub prompt_snapshot: Option<String>,
     pub block_id: String,
@@ -1476,6 +1476,8 @@ pub struct SshServerRow {
     pub notes: Option<String>,
     pub last_connected_at: Option<NaiveDateTime>,
     pub credential_id: Option<String>,
+    pub session_resilience: String,
+    pub ring_ceiling_mb: i32,
 }
 
 #[derive(Insertable, AsChangeset, Clone, Debug)]
@@ -1490,6 +1492,8 @@ pub struct NewSshServer<'a> {
     pub startup_command: Option<&'a str>,
     pub notes: Option<&'a str>,
     pub credential_id: Option<&'a str>,
+    pub session_resilience: &'a str,
+    pub ring_ceiling_mb: i32,
 }
 
 // --- Sync Meta ---------------------------------------------------------

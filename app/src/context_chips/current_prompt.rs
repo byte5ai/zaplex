@@ -171,7 +171,7 @@ pub struct CurrentPrompt {
     renderable_chips: HashSet<ContextChipKind>,
 
     same_line_prompt_enabled: bool,
-    /// The separator to use as a trailing character at the end of Zap prompt, if any.
+    /// The separator to use as a trailing character at the end of Zaplex prompt, if any.
     separator: WarpPromptSeparator,
 
     latest_context: Option<PromptContext>,
@@ -330,12 +330,12 @@ impl CurrentPrompt {
             .collect()
     }
 
-    /// Whether same line prompt is enabled for the Zap prompt.
+    /// Whether same line prompt is enabled for the Zaplex prompt.
     pub fn same_line_prompt_enabled(&self) -> bool {
         self.same_line_prompt_enabled
     }
 
-    /// The separator for the current Zap prompt.
+    /// The separator for the current Zaplex prompt.
     pub fn separator(&self) -> WarpPromptSeparator {
         self.separator
     }

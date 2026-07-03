@@ -1640,7 +1640,7 @@ impl CodeDiffView {
 
         // Renders the 'open config' button only when every MCP config file in this diff
         // belongs to the same provider. Mixed-provider diffs (e.g. editing both a Claude
-        // config and a Zap config at once) show no badge to avoid misleading attribution.
+        // config and a Zaplex config at once) show no badge to avoid misleading attribution.
         let mcp_configs: Vec<_> = file_paths
             .iter()
             .filter_map(|path| {

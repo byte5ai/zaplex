@@ -76,9 +76,9 @@ Follows the existing `OpenAutoReloadModal` pattern (`view.rs:18411`, `workspace/
 
 ## 5. Remote Session Detection
 
-`CLIAgentSession` has an `is_remote: bool` field set at session creation from `TerminalView::active_session_is_local()`. This uses `SessionType::WarpifiedRemote` and `IsLegacySSHSession` — the same logic as the SSH host chip (`context_chips/builtins.rs:76`).
+`CLIAgentSession` has an `is_remote: bool` field set at session creation from `TerminalView::active_session_is_local()`. This uses `SessionType::ZaplexifiedRemote` and `IsLegacySSHSession` — the same logic as the SSH host chip (`context_chips/builtins.rs:76`).
 
-This avoids relying on `terminal_model.is_ssh_block()` (which only tracks the pre-warpification login phase) or `is_warpified_ssh()` (which misses legacy SSH). The `is_remote` flag is threaded through `set_session` and `register_listener` at all call sites in `terminal/view.rs`.
+This avoids relying on `terminal_model.is_ssh_block()` (which only tracks the pre-zaplexification login phase) or `is_zaplexified_ssh()` (which misses legacy SSH). The `is_remote` flag is threaded through `set_session` and `register_listener` at all call sites in `terminal/view.rs`.
 
 ## 6. Two-Mode Chip
 

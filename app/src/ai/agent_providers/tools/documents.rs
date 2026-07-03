@@ -1,4 +1,4 @@
-//! Zap Drive local document system: read / edit / create toolkit.
+//! Zaplex Drive local document system: read / edit / create toolkit.
 //!
 //! Unlike `read_files` / `apply_file_diffs`: these operations target **documents managed by AIDocumentModel**
 //! (local documents internal to Drive, referenced by `document_id`), not files in the filesystem.
@@ -124,7 +124,7 @@ fn read_result_to_json(result: &api::message::tool_call_result::Result) -> Optio
 
 pub static READ_DOCUMENTS: OpenAiTool = OpenAiTool {
     name: "read_documents",
-    description: "Read local Zap Drive documents (referenced by document_id, not filesystem files).\
+    description: "Read local Zaplex Drive documents (referenced by document_id, not filesystem files).\
                   Returns JSON: { documents: [{document_id, content, line_range?}] }.\
                   Use when the user mentions a specific document_id or document in Drive.",
     parameters: read_parameters,
@@ -213,7 +213,7 @@ fn edit_result_to_json(result: &api::message::tool_call_result::Result) -> Optio
 
 pub static EDIT_DOCUMENTS: OpenAiTool = OpenAiTool {
     name: "edit_documents",
-    description: "Perform string search-and-replace on existing documents in Zap Drive.\
+    description: "Perform string search-and-replace on existing documents in Zaplex Drive.\
                   Similar to apply_file_diffs::edit, but targets Drive documents (referenced by document_id).\
                   search must match document's current content **exactly** (including whitespace and newlines), or the operation fails.",
     parameters: edit_parameters,
@@ -299,7 +299,7 @@ fn create_result_to_json(result: &api::message::tool_call_result::Result) -> Opt
 
 pub static CREATE_DOCUMENTS: OpenAiTool = OpenAiTool {
     name: "create_documents",
-    description: "Create one or more new documents in Zap Drive (each with title + complete content).\
+    description: "Create one or more new documents in Zaplex Drive (each with title + complete content).\
                   Ideal for consolidating analysis results, notes, todos, etc. into reusable Drive documents.",
     parameters: create_parameters,
     from_args: create_from_args,

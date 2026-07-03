@@ -393,11 +393,11 @@ impl AskpassSession {
         }
 
         // Write askpass helper script: read the first line from the file pointed to by
-        // %WARP_SSH_ASKPASS_FILE% and echo it to stdout. `set /p` reads the first line
+        // %ZAPLEX_SSH_ASKPASS_FILE% and echo it to stdout. `set /p` reads the first line
         // (stripping newline), `echo !PW!` outputs it. Use `setlocal enabledelayedexpansion`
         // + `!PW!` for delayed expansion to avoid password containing cmd special characters
         // (&, |, <, >, ^) being truncated by immediate expansion of %PW%.
-        let body = "@echo off\r\nsetlocal enabledelayedexpansion\r\nset /p PW=<\"%WARP_SSH_ASKPASS_FILE%\"\r\necho !PW!\r\nendlocal\r\n";
+        let body = "@echo off\r\nsetlocal enabledelayedexpansion\r\nset /p PW=<\"%ZAPLEX_SSH_ASKPASS_FILE%\"\r\necho !PW!\r\nendlocal\r\n";
         {
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
@@ -417,7 +417,7 @@ impl AskpassSession {
     fn apply_env(&self, cmd: &mut command::r#async::Command) {
         cmd.env("SSH_ASKPASS", &self.script_path)
             .env("SSH_ASKPASS_REQUIRE", "force")
-            .env("WARP_SSH_ASKPASS_FILE", &self.password_path)
+            .env("ZAPLEX_SSH_ASKPASS_FILE", &self.password_path)
             .env_remove("DISPLAY");
     }
 }

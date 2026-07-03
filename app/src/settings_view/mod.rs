@@ -46,7 +46,7 @@ use warp_core::{
     settings::ToggleableSetting as _, ui::theme::color::internal_colors,
 };
 use warp_editor::editor::NavigationKey;
-use warpify_page::{WarpifyPageAction, WarpifyPageView};
+use zaplexify_page::{ZaplexifyPageAction, ZaplexifyPageView};
 use warpui::Element;
 use warpui::{
     elements::{
@@ -79,17 +79,17 @@ pub mod mcp_servers_page;
 mod nav;
 mod network_page;
 pub mod pane_manager;
-// Zap Wave 3-1: `platform` / `platform_page` removed together with `OzCloudAPIKeys` settings entry +
-// Zap Inc cloud API key management UI.
-// Zap Wave 6-8: `referrals_page` / `show_blocks_view` removed with `ReferralsClient` /
+// Zaplex Wave 3-1: `platform` / `platform_page` removed together with `OzCloudAPIKeys` settings entry +
+// Zaplex Inc cloud API key management UI.
+// Zaplex Wave 6-8: `referrals_page` / `show_blocks_view` removed with `ReferralsClient` /
 // `BlockClient` trait — both pages are stub Err / empty list, no local value.
 mod settings_file_footer;
 pub(crate) mod settings_page;
-// Zap Wave 7-3: `telemetry` removed together with the only variant `EnvironmentsPageOpened` (ambient-agent UI).
-// Zap Wave 7-2: `update_environment_form` removed with cloud ambient agent core —
+// Zaplex Wave 7-3: `telemetry` removed together with the only variant `EnvironmentsPageOpened` (ambient-agent UI).
+// Zaplex Wave 7-2: `update_environment_form` removed with cloud ambient agent core —
 // `terminal::view::ambient_agent::first_time_setup` and `cloud_environments` sunset together.
 mod warp_drive_page;
-mod warpify_page;
+mod zaplexify_page;
 
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use ai_page::cli_agent_settings_widget_id;
@@ -142,7 +142,7 @@ pub(super) fn editor_text_colors(appearance: &Appearance) -> TextColors {
 pub enum SettingsViewEvent {
     Pane(PaneEvent),
     StartResize,
-    // Zap decentralized branch: `CheckForUpdate` / `ZapDrive` variants removed with Account
+    // Zaplex decentralized branch: `CheckForUpdate` / `ZaplexDrive` variants removed with Account
     // main settings page sole emitter (`MainSettingsPageView`).
     ShowToast {
         message: String,
@@ -164,15 +164,15 @@ pub enum SettingsSection {
     Appearance,
     Features,
     Keybindings,
-    ZapDrive,
-    Warpify,
+    ZaplexDrive,
+    Zaplexify,
     /// Internal backing-page identifier for AISettingsPageView. Multiple subpages
     /// (WarpAgent, AgentProfiles, Knowledge, ThirdPartyCLIAgents) share this single
     /// backing page, so this variant is needed as the key in `settings_pages`.
     /// External callers should navigate to a specific subpage (e.g. `WarpAgent`) instead.
     AI,
     // ── Agents umbrella subpages ──
-    // Decentralized branch: Settings default page changed to Zap Agent (local AI settings).
+    // Decentralized branch: Settings default page changed to Zaplex Agent (local AI settings).
     #[default]
     WarpAgent,
     AgentProfiles,
@@ -191,8 +191,8 @@ pub enum SettingsSection {
     EditorAndCodeReview,
     /// Cloud sync settings page.
     CloudSync,
-    // Zap Wave 3-1: `OzCloudAPIKeys` enum variant removed with Zap Inc API key management UI.
-    // Zap Wave 7-3: `CloudEnvironments` removed with ambient-agent UI subsystem.
+    // Zaplex Wave 3-1: `OzCloudAPIKeys` enum variant removed with Zaplex Inc API key management UI.
+    // Zaplex Wave 7-3: `CloudEnvironments` removed with ambient-agent UI subsystem.
 }
 
 use crate::util::bindings::custom_tag_to_keystroke;
@@ -206,8 +206,8 @@ impl Display for SettingsSection {
             SettingsSection::Appearance => crate::t!("settings-section-appearance"),
             SettingsSection::Features => crate::t!("settings-section-features"),
             SettingsSection::Keybindings => crate::t!("settings-section-keybindings"),
-            SettingsSection::ZapDrive => crate::t!("settings-section-warp-drive"),
-            SettingsSection::Warpify => crate::t!("settings-section-warpify"),
+            SettingsSection::ZaplexDrive => crate::t!("settings-section-warp-drive"),
+            SettingsSection::Zaplexify => crate::t!("settings-section-zaplexify"),
             SettingsSection::AI => crate::t!("settings-section-ai"),
             SettingsSection::WarpAgent => crate::t!("settings-section-warp-agent"),
             SettingsSection::AgentProfiles => crate::t!("settings-section-agent-profiles"),
@@ -224,8 +224,8 @@ impl Display for SettingsSection {
             SettingsSection::CloudSync => crate::t!("settings-section-cloud-sync"),
             // Proxy settings page. i18n key `settings-section-network` is complete in en / zh-CN / ja.
             SettingsSection::Network => crate::t!("settings-section-network"),
-            // Zap Wave 3-1: `OzCloudAPIKeys` Display arm removed with variant.
-            // Zap Wave 7-3: `CloudEnvironments` Display arm removed with variant.
+            // Zaplex Wave 3-1: `OzCloudAPIKeys` Display arm removed with variant.
+            // Zaplex Wave 7-3: `CloudEnvironments` Display arm removed with variant.
         };
         write!(f, "{s}")
     }
@@ -260,8 +260,8 @@ impl SettingsSection {
             s if s.is_ai_subpage() => Self::AI,
             // EditorAndCodeReview is the only label still pointing at the Code page.
             Self::EditorAndCodeReview => Self::Code,
-            // Zap Wave 3-1: `OzCloudAPIKeys` removed with UI.
-            // Zap Wave 7-3: `CloudEnvironments` umbrella removed with ambient-agent UI.
+            // Zaplex Wave 3-1: `OzCloudAPIKeys` removed with UI.
+            // Zaplex Wave 7-3: `CloudEnvironments` umbrella removed with ambient-agent UI.
             other => *other,
         }
     }
@@ -291,20 +291,20 @@ impl FromStr for SettingsSection {
             "Code" => Ok(Self::Code),
             "Features" => Ok(Self::Features),
             "Keyboard shortcuts" => Ok(Self::Keybindings),
-            "Warpify" => Ok(Self::Warpify),
-            "ZapDrive" | "Zap Drive" => Ok(Self::ZapDrive),
+            "Zaplexify" => Ok(Self::Zaplexify),
+            "ZaplexDrive" | "Zaplex Drive" => Ok(Self::ZaplexDrive),
             // This page was called "Oz" at one point, keep for backward compatibility.
-            "Oz" | "Zap Agent" => Ok(Self::WarpAgent),
+            "Oz" | "Zaplex Agent" => Ok(Self::WarpAgent),
             "Profiles" | "AgentProfiles" => Ok(Self::AgentProfiles),
             "MCP servers" | "AgentMCPServers" => Ok(Self::AgentMCPServers),
             "Providers" | "AgentProviders" => Ok(Self::AgentProviders),
             "Knowledge" => Ok(Self::Knowledge),
             "Third party CLI agents" | "ThirdPartyCLIAgents" => Ok(Self::ThirdPartyCLIAgents),
             "Editor and Code Review" | "EditorAndCodeReview" => Ok(Self::EditorAndCodeReview),
-            "Network" | "网络" => Ok(Self::Network),
-            "CloudSync" | "Cloud Sync" | "云同步" => Ok(Self::CloudSync),
-            // Zap Wave 3-1: `OzCloudAPIKeys` removed with UI.
-            // Zap Wave 7-3: `CloudEnvironments` FromStr arm removed with variant.
+            "Network" => Ok(Self::Network),
+            "CloudSync" | "Cloud Sync" => Ok(Self::CloudSync),
+            // Zaplex Wave 3-1: `OzCloudAPIKeys` removed with UI.
+            // Zaplex Wave 7-3: `CloudEnvironments` FromStr arm removed with variant.
             _ => Err(()),
         }
     }
@@ -344,7 +344,7 @@ pub mod flags {
     pub const EXTRA_META_KEYS_LEFT_CONTEXT_FLAG: &str = "Extra_Meta_Keys_Left";
     pub const SCROLL_REPORTING_CONTEXT_FLAG: &str = "Scroll_Reporting";
     pub const FOCUS_REPORTING_CONTEXT_FLAG: &str = "Focus_Reporting";
-    #[deprecated = "Use `SSH_TMUX_WRAPPER_CONTEXT_FLAG` for new ssh warpification logic"]
+    #[deprecated = "Use `SSH_TMUX_WRAPPER_CONTEXT_FLAG` for new ssh zaplexification logic"]
     pub const LEGACY_SSH_WRAPPER_CONTEXT_FLAG: &str = "SSH_Wrapper";
     pub const SSH_TMUX_WRAPPER_CONTEXT_FLAG: &str = "SSH_Tmux_Wrapper";
     pub const SSH_AUTO_DISCOVERY_CONTEXT_FLAG: &str = "SSH_Auto_Discovery";
@@ -401,7 +401,7 @@ pub mod flags {
     pub const IN_BAND_COMMAND_BLOCKS_FLAG: &str = "In_Band_Command_Blocks_Visible";
     pub const RECORDING_MODE_FLAG: &str = "Recording_Mode_Enabled";
     pub const IN_BAND_GENERATORS_FLAG: &str = "In_Band_Generators_Enabled";
-    pub const WARP_SAME_LINE_PROMPT_FLAG: &str = "Warp_Same_Line_Prompt_Enabled";
+    pub const ZAPLEX_SAME_LINE_PROMPT_FLAG: &str = "Warp_Same_Line_Prompt_Enabled";
     pub const DEBUG_NETWORK_ONLINE_FLAG: &str = "Network_Status_Online";
     pub const AI_INPUT_AUTODETECTION_FLAG: &str = "AI_Input_Autodetection";
     pub const NLD_IN_TERMINAL_FLAG: &str = "NLD_In_Terminal";
@@ -417,11 +417,11 @@ pub mod flags {
     pub const IS_BLOCK_AI_SUMMARIES_ENABLED: &str = "IsBlockAISummariesEnabled";
     pub const LIGATURE_RENDERING_CONTEXT_FLAG: &str = "Ligature_Rendering_Enabled";
     pub const HAS_SETTINGS_TO_IMPORT_FLAG: &str = "HasSettingsToImport";
-    /// The user's setting enabled UDI, but we may show a classic input (e.g. ssh/subshell warpification)
+    /// The user's setting enabled UDI, but we may show a classic input (e.g. ssh/subshell zaplexification)
     pub const UNIVERSAL_DEVELOPER_INPUT_ENABLED: &str = "UniversalDeveloperInputEnabled";
     pub const AGENT_MODE_INPUT: &str = "InputAgentMode";
     pub const TERMINAL_MODE_INPUT: &str = "InputTerminalMode";
-    pub const WARP_IS_DEFAULT_TERMINAL: &str = "WarpIsDefaultTerminal";
+    pub const ZAPLEX_IS_DEFAULT_TERMINAL: &str = "WarpIsDefaultTerminal";
     pub const PASSIVE_CODE_DIFF_KEYBINDINGS_ENABLED: &str = "PassiveCodeDiffKeybindingsEnabled";
     /// When set, ctrl-enter should accept a prompt suggestion rather than insert a newline.
     /// This flag is set by the terminal Input when there's a pending passive code diff.
@@ -444,7 +444,7 @@ pub mod flags {
     pub const CLI_AGENT_RICH_INPUT_OPEN: &str = "CLIAgentRichInputOpen";
     pub const CLI_AGENT_FOOTER_ENABLED: &str = "CLIAgentFooterEnabled";
     pub const CLI_AGENT_RICH_INPUT_CHIP_ENABLED: &str = "CLIAgentRichInputChipEnabled";
-    pub const ENABLE_WARP_DRIVE: &str = "EnableWarpDrive";
+    pub const ENABLE_ZAPLEX_DRIVE: &str = "EnableWarpDrive";
     // Tools panel settings
     pub const SHOW_CONVERSATION_HISTORY: &str = "ShowConversationHistory";
     pub const SHOW_PROJECT_EXPLORER: &str = "ShowProjectExplorer";
@@ -458,7 +458,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 ) {
     appearance_page::init_actions_from_parent_view(app, context, builder);
     features_page::init_actions_from_parent_view(app, context, builder);
-    warpify_page::init_actions_from_parent_view(app, context, builder);
+    zaplexify_page::init_actions_from_parent_view(app, context, builder);
     ai_page::init_actions_from_parent_view(app, context, builder);
     code_page::init_actions_from_parent_view(app, context, builder);
 
@@ -769,9 +769,9 @@ pub enum SettingsAction {
     FeaturesPageToggle(FeaturesPageAction),
     AI(AISettingsPageAction),
     Code(CodeSettingsPageAction),
-    ZapDrive(warp_drive_page::WarpDriveSettingsPageAction),
+    ZaplexDrive(warp_drive_page::WarpDriveSettingsPageAction),
     CloudSync(cloud_sync_page::CloudSyncPageAction),
-    WarpifyPageToggle(WarpifyPageAction),
+    ZaplexifyPageToggle(ZaplexifyPageAction),
     Tab,
     Split(Direction),
     ToggleMaximizePane,
@@ -914,15 +914,15 @@ macro_rules! update_page {
             SettingsPageViewHandle::Appearance(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Features(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Keybindings(handle) => $ctx.update_view(handle, $update),
-            SettingsPageViewHandle::Warpify(handle) => $ctx.update_view(handle, $update),
-            // Zap Wave 3-1: `OzCloudAPIKeys` arm removed with variant.
-            // Zap Wave 6-8: `SharedBlocks` / `Referrals` arm removed with variant.
-            // Zap Wave 7-3: `CloudEnvironments` arm removed with ambient-agent UI.
+            SettingsPageViewHandle::Zaplexify(handle) => $ctx.update_view(handle, $update),
+            // Zaplex Wave 3-1: `OzCloudAPIKeys` arm removed with variant.
+            // Zaplex Wave 6-8: `SharedBlocks` / `Referrals` arm removed with variant.
+            // Zaplex Wave 7-3: `CloudEnvironments` arm removed with ambient-agent UI.
             SettingsPageViewHandle::AI(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::About(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Code(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::MCPServers(handle) => $ctx.update_view(handle, $update),
-            SettingsPageViewHandle::ZapDrive(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::ZaplexDrive(handle) => $ctx.update_view(handle, $update),
             // Issue #72: Global HTTP proxy settings page.
             SettingsPageViewHandle::Network(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::CloudSync(handle) => $ctx.update_view(handle, $update),
@@ -984,7 +984,7 @@ impl SettingsView {
             me.handle_features_page_event(event, ctx);
         });
 
-        // Zap Wave 6-8: Shared blocks settings page removed with `ShowBlocksView` / `BlockClient`,
+        // Zaplex Wave 6-8: Shared blocks settings page removed with `ShowBlocksView` / `BlockClient`,
         // handle / event subscriptions removed together.
 
         // About page
@@ -998,7 +998,7 @@ impl SettingsView {
         });
 
         // Environments page
-        // Zap Wave 7-3: `environments_page_handle` removed with ambient-agent UI subsystem.
+        // Zaplex Wave 7-3: `environments_page_handle` removed with ambient-agent UI subsystem.
 
         // Keybindings page
         let keybindings_handle = ctx.add_typed_action_view(KeybindingsView::new);
@@ -1010,19 +1010,19 @@ impl SettingsView {
             me.handle_code_page_event(event, ctx);
         });
 
-        let warpify_page_handle = ctx.add_typed_action_view(WarpifyPageView::new);
-        ctx.subscribe_to_view(&warpify_page_handle, |me, _, event, ctx| {
-            me.handle_warpify_page_event(event, ctx);
+        let zaplexify_page_handle = ctx.add_typed_action_view(ZaplexifyPageView::new);
+        ctx.subscribe_to_view(&zaplexify_page_handle, |me, _, event, ctx| {
+            me.handle_zaplexify_page_event(event, ctx);
         });
 
-        // Zap Wave 6-8: Referrals settings page removed with `ReferralsPageView` / `ReferralsClient`,
+        // Zaplex Wave 6-8: Referrals settings page removed with `ReferralsPageView` / `ReferralsClient`,
         // handle / event subscriptions removed together.
 
-        // Zap Drive page
+        // Zaplex Drive page
         let warp_drive_page_handle =
             ctx.add_typed_action_view(warp_drive_page::WarpDriveSettingsPageView::new);
 
-        // Zap Wave 3-1: `platform_page_handle` removed together with `platform_page`.
+        // Zaplex Wave 3-1: `platform_page_handle` removed together with `platform_page`.
 
         // MCP Servers page
         let mcp_servers_page_handle = ctx.add_typed_action_view(MCPServersSettingsPageView::new);
@@ -1071,8 +1071,8 @@ impl SettingsView {
             SettingsPage::new(appearance_page_handle),
             SettingsPage::new(features_page_handle),
             SettingsPage::new(keybindings_handle),
-            // Zap Wave 3-1: `platform_page_handle` removed with UI.
-            SettingsPage::new(warpify_page_handle),
+            // Zaplex Wave 3-1: `platform_page_handle` removed with UI.
+            SettingsPage::new(zaplexify_page_handle),
             SettingsPage::new(warp_drive_page_handle),
         ];
 
@@ -1099,7 +1099,7 @@ impl SettingsView {
             SettingsNavItem::Page(SettingsSection::Appearance),
             SettingsNavItem::Page(SettingsSection::Features),
             SettingsNavItem::Page(SettingsSection::Keybindings),
-            SettingsNavItem::Page(SettingsSection::Warpify),
+            SettingsNavItem::Page(SettingsSection::Zaplexify),
             SettingsNavItem::Page(SettingsSection::CloudSync),
             SettingsNavItem::Page(SettingsSection::About),
         ];
@@ -1476,7 +1476,7 @@ impl SettingsView {
         }
     }
 
-    // Zap Wave 7-3: `handle_environments_page_event` removed with ambient-agent UI subsystem.
+    // Zaplex Wave 7-3: `handle_environments_page_event` removed with ambient-agent UI subsystem.
 
     fn handle_features_page_event(
         &mut self,
@@ -1491,7 +1491,7 @@ impl SettingsView {
         }
     }
 
-    fn handle_warpify_page_event(
+    fn handle_zaplexify_page_event(
         &mut self,
         event: &SettingsPageEvent,
         ctx: &mut ViewContext<Self>,
@@ -1505,7 +1505,7 @@ impl SettingsView {
         }
     }
 
-    // Zap Wave 3-1: `handle_platform_page_event` removed with `platform_page::PlatformPageViewEvent`.
+    // Zaplex Wave 3-1: `handle_platform_page_event` removed with `platform_page::PlatformPageViewEvent`.
 
     fn handle_mcp_servers_page_event(
         &mut self,
@@ -1626,7 +1626,7 @@ impl SettingsView {
             self.clear_search_query(ctx);
         }
         self.current_settings_page = section;
-        // Zap Wave 7-3: `SettingsTelemetryEvent::EnvironmentsPageOpened` removed with ambient-agent UI subsystem.
+        // Zaplex Wave 7-3: `SettingsTelemetryEvent::EnvironmentsPageOpened` removed with ambient-agent UI subsystem.
         let _ = previous_section;
 
         // When navigating to a subpage, update the backing page's active subpage mode
@@ -1689,13 +1689,13 @@ impl SettingsView {
             SettingsPageViewHandle::Features(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Appearance(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::About(v) => v.as_ref(app).should_render(app),
-            // Zap Wave 3-1: `OzCloudAPIKeys` arm removed with variant.
-            // Zap Wave 6-8: `SharedBlocks` / `Referrals` arm removed with variant.
-            SettingsPageViewHandle::Warpify(v) => v.as_ref(app).should_render(app),
+            // Zaplex Wave 3-1: `OzCloudAPIKeys` arm removed with variant.
+            // Zaplex Wave 6-8: `SharedBlocks` / `Referrals` arm removed with variant.
+            SettingsPageViewHandle::Zaplexify(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::AI(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::MCPServers(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Code(v) => v.as_ref(app).should_render(app),
-            SettingsPageViewHandle::ZapDrive(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::ZaplexDrive(v) => v.as_ref(app).should_render(app),
             // Issue #72: Global HTTP proxy settings page.
             SettingsPageViewHandle::Network(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::CloudSync(v) => v.as_ref(app).should_render(app),
@@ -1885,7 +1885,7 @@ impl SettingsView {
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         match page_handle {
-            // Zap Wave 3-1: `OzCloudAPIKeys` modal arm removed with UI.
+            // Zaplex Wave 3-1: `OzCloudAPIKeys` modal arm removed with UI.
             SettingsPageViewHandle::MCPServers(view) => {
                 view.read(app, |view, _| view.get_modal_content(app))
             }
@@ -2105,6 +2105,7 @@ impl View for SettingsView {
             self.settings_file_error.as_ref(),
             AISettings::as_ref(app).is_any_ai_enabled(app),
             &self.footer_mouse_states,
+            app,
         );
 
         let scrollable = Container::new(
@@ -2188,7 +2189,7 @@ impl View for SettingsView {
             );
         }
 
-        // Zap Wave 7-3:environment setup mode selector / agent-assisted environment
+        // Zaplex Wave 7-3:environment setup mode selector / agent-assisted environment
         // Modal overlay rendering removed with ambient-agent UI subsystem.
 
         SavePosition::new(stack.finish(), POSITION_ID).finish()
@@ -2256,9 +2257,9 @@ impl TypedActionView for SettingsView {
                     }
                 }
             }
-            SettingsAction::ZapDrive(warp_drive_action) => {
-                if let Some(warp_drive_page) = self.settings_page(SettingsSection::ZapDrive) {
-                    if let SettingsPageViewHandle::ZapDrive(view) = &warp_drive_page.view_handle {
+            SettingsAction::ZaplexDrive(warp_drive_action) => {
+                if let Some(warp_drive_page) = self.settings_page(SettingsSection::ZaplexDrive) {
+                    if let SettingsPageViewHandle::ZaplexDrive(view) = &warp_drive_page.view_handle {
                         view.update(ctx, |view, ctx| {
                             view.handle_action(warp_drive_action, ctx);
                         })
@@ -2274,11 +2275,11 @@ impl TypedActionView for SettingsView {
                     }
                 }
             }
-            SettingsAction::WarpifyPageToggle(warpify_action) => {
-                if let Some(warpify_page) = self.settings_page(SettingsSection::Warpify) {
-                    if let SettingsPageViewHandle::Warpify(view) = &warpify_page.view_handle {
+            SettingsAction::ZaplexifyPageToggle(zaplexify_action) => {
+                if let Some(zaplexify_page) = self.settings_page(SettingsSection::Zaplexify) {
+                    if let SettingsPageViewHandle::Zaplexify(view) = &zaplexify_page.view_handle {
                         view.update(ctx, |view, ctx| {
-                            view.handle_action(warpify_action, ctx);
+                            view.handle_action(zaplexify_action, ctx);
                         })
                     }
                 }

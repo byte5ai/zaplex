@@ -52,7 +52,7 @@ impl SuggestNewConversationExecutor {
 
         let message_id = message_id.clone();
         let receiver = self.suggest_new_conversation_result_rx.clone().1;
-        // Zap: No "Start new conversation?" confirmation popup view component;
+        // Zaplex: No "Start new conversation?" confirmation popup view component;
         // send fast-fail Reject to prevent BYOP loop hanging forever on receiver.
         // Model sees Rejected and continues main flow unaffected.
         // Synchronously send Reject once to channel; receiver.recv() gets it immediately.

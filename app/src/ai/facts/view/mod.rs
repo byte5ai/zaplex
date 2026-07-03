@@ -1,4 +1,4 @@
-// Zap (Localization, Phase 2d-1): This file originally handled "offline banner / sync state predicates";
+// Zaplex (Localization, Phase 2d-1): This file originally handled "offline banner / sync state predicates";
 // after the cloud backend (SyncQueue / NetworkStatus online gating) was completely shut down,
 // all this code lost meaning and was removed entirely with imports cleaned up. The Pane container view
 // itself is retained to manage switching between Rules / RuleEditor pages.
@@ -278,7 +278,7 @@ impl BackingView for AIFactView {
     }
 }
 
-// Zap (Localization, Phase 2d-1): Original `is_online` / `is_delete_allowed` / `is_edit_allowed` /
+// Zaplex (Localization, Phase 2d-1): Original `is_online` / `is_delete_allowed` / `is_edit_allowed` /
 // `is_syncing` predicates depended on cloud SyncQueue and network online status. After localization,
 // rules are always editable, always deletable, never in "syncing" state; predicates are removed entirely,
 // call sites also cleaned up accordingly.

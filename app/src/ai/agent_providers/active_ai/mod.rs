@@ -12,7 +12,7 @@
 //! 3. UI callback directly consumes returned response, completely equivalent to original `ServerApi` path
 //!
 //! No BYOP configuration (`active_ai_model` decode fails) → `dispatch::*` returns `None`,
-//! caller silently no-ops (Zap has removed cloud, no longer fallback to ServerApi).
+//! caller silently no-ops (Zaplex has removed cloud, no longer fallback to ServerApi).
 
 use minijinja::{context, Environment};
 use serde::Serialize;

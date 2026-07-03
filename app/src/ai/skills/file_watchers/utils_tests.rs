@@ -351,7 +351,7 @@ fn extract_skill_parent_directory_returns_home_dir_for_warp_home_skill() {
         return;
     };
     let Some(warp_home_skills_dir) = warp_core::paths::warp_home_skills_dir() else {
-        eprintln!("Skipping test: Zap home skills directory not available");
+        eprintln!("Skipping test: Zaplex home skills directory not available");
         return;
     };
 

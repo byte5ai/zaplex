@@ -98,8 +98,8 @@ impl Command {
         {
             use async_process::windows::CommandExt;
             // We need to set the `CREATE_BREAKAWAY_FROM_JOB` flag to avoid assigning
-            // the process to the same Job Object as the Zap process, otherwise the
-            // process will be killed when the Zap process is killed.
+            // the process to the same Job Object as the Zaplex process, otherwise the
+            // process will be killed when the Zaplex process is killed.
             let flags = windows::Win32::System::Threading::CREATE_NO_WINDOW.0
                 | windows::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB.0;
             inner.creation_flags(flags);

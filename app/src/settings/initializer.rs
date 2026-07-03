@@ -8,9 +8,8 @@ use crate::{
     auth::AuthState,
     report_if_error,
     settings::input::InputBoxType,
-    settings::{InputSettings, PrivacySettings, ThemeSettings},
+    settings::{InputSettings, PrivacySettings},
     terminal::session_settings::SessionSettings,
-    themes::theme::ThemeKind,
 };
 
 pub struct SettingsInitializer;
@@ -45,15 +44,6 @@ impl SettingsInitializer {
                 settings.disable_default_regex_trigger(ctx);
             });
 
-            if FeatureFlag::DefaultAdeberryTheme.is_enabled() {
-                log::debug!("Setting default theme to Adeberry for new user");
-                ThemeSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    if *settings.theme_kind.value() == ThemeKind::Phenomenon {
-                        report_if_error!(settings.theme_kind.set_value(ThemeKind::Adeberry, ctx));
-                    }
-                });
-            }
-
             if cfg!(windows) {
                 log::debug!("Setting default font size to 16px (12pt) for a new Windows user");
                 FontSettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -67,7 +57,7 @@ impl SettingsInitializer {
                 if !settings.input_box_type.is_value_explicitly_set()
                     && *settings.input_box_type.value() == InputBoxType::Classic
                 {
-                    log::debug!("Setting default input type to Zap prompt for new user");
+                    log::debug!("Setting default input type to Zaplex prompt for new user");
                     report_if_error!(settings
                         .input_box_type
                         .set_value(InputBoxType::Universal, ctx));

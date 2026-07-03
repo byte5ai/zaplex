@@ -1,4 +1,4 @@
-//! File type detection utilities for determining if files can be opened in Zap.
+//! File type detection utilities for determining if files can be opened in Zaplex.
 
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::{settings::EditorChoice, Editor, EditorSettings};
@@ -26,7 +26,7 @@ pub enum EditorLayout {
     NewTab,
 }
 
-/// The type of file that can be opened in Zap. The in-product treatment for "opening" a file
+/// The type of file that can be opened in Zaplex. The in-product treatment for "opening" a file
 /// depends on its type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenableFileType {
@@ -41,11 +41,11 @@ pub enum OpenableFileType {
 /// The target application or viewer to use when opening a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileTarget {
-    /// Open in Zap's Markdown viewer.
+    /// Open in Zaplex's Markdown viewer.
     MarkdownViewer(EditorLayout),
-    /// Open in Zap's Code Editor.
+    /// Open in Zaplex's Code Editor.
     CodeEditor(EditorLayout),
-    /// Open in Zap's in-app image viewer.
+    /// Open in Zaplex's in-app image viewer.
     ImageViewer(EditorLayout),
     /// Open in an external editor (e.g. VS Code, Emacs).
     #[cfg(feature = "local_fs")]
@@ -84,7 +84,7 @@ pub fn is_supported_image_file(path: impl AsRef<Path>) -> bool {
 }
 
 /// Returns true if `path` looks like a shell script the user intends to run when
-/// "Open with Zap" is invoked from Finder/another app via a `file://` URL.
+/// "Open with Zaplex" is invoked from Finder/another app via a `file://` URL.
 ///
 /// Policy: extension in {sh, bash, zsh, fish, ksh} with the user-execute bit set on Unix,
 /// or extension in {ps1, bat, cmd} on Windows (no x-bit concept). On Unix, files with no
@@ -109,7 +109,7 @@ pub fn is_runnable_shell_script(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
     // Match the documented routing policy: only the owner's execute bit counts.
-    // A file `chmod 070` belongs to a group, not to the user invoking Zap.
+    // A file `chmod 070` belongs to a group, not to the user invoking Zaplex.
     let has_user_x_bit = std::fs::metadata(path)
         .map(|m| m.permissions().mode() & 0o100 != 0)
         .unwrap_or(false);
@@ -139,7 +139,7 @@ pub fn is_runnable_shell_script(_path: &Path) -> bool {
     false
 }
 
-/// Determines if a file can be opened in Zap and returns its type.
+/// Determines if a file can be opened in Zaplex and returns its type.
 /// Returns `None` if the file is binary and should not be opened.
 pub fn is_file_openable_in_warp(path: &Path) -> Option<OpenableFileType> {
     if is_binary_file(path) {
@@ -157,9 +157,9 @@ pub fn is_file_openable_in_warp(path: &Path) -> Option<OpenableFileType> {
     }
 }
 
-/// Only use this for UI elements that must explicitly open a file in Zap (i.e. "Open in New Tab").
+/// Only use this for UI elements that must explicitly open a file in Zaplex (i.e. "Open in New Tab").
 /// Prefer `resolve_file_target` for all other cases to respect users' preferences.
-/// This would also force any binary file to be opened in Zap's Code Editor, so you should likely check
+/// This would also force any binary file to be opened in Zaplex's Code Editor, so you should likely check
 /// `is_file_openable_in_warp` before rendering any such UI Elements.
 #[cfg(feature = "local_fs")]
 pub fn resolve_file_target_to_open_in_warp(
@@ -211,8 +211,8 @@ pub fn resolve_file_target_with_editor_choice(
         return FileTarget::MarkdownViewer(layout);
     }
 
-    // 2. Zap Code Editor (Explicit user preference)
-    if is_openable_in_warp && matches!(editor_choice, EditorChoice::Zap) {
+    // 2. Zaplex Code Editor (Explicit user preference)
+    if is_openable_in_warp && matches!(editor_choice, EditorChoice::Zaplex) {
         return FileTarget::CodeEditor(layout);
     }
 
@@ -235,7 +235,7 @@ pub fn resolve_file_target_with_editor_choice(
     match editor_choice {
         EditorChoice::ExternalEditor(editor) => FileTarget::ExternalEditor(editor),
         EditorChoice::SystemDefault => FileTarget::SystemDefault,
-        EditorChoice::Zap | EditorChoice::EnvEditor => unreachable!("Already matched above"),
+        EditorChoice::Zaplex | EditorChoice::EnvEditor => unreachable!("Already matched above"),
     }
 }
 
@@ -261,7 +261,7 @@ mod tests {
 
         assert_eq!(
             OpenCodePanelsFileEditor::default_value(),
-            EditorChoice::Zap
+            EditorChoice::Zaplex
         );
     }
 
@@ -284,7 +284,7 @@ mod tests {
     fn test_resolve_file_target_warp_uses_default_layout() {
         let target = resolve_file_target_with_editor_choice(
             Path::new("data.txt"),
-            EditorChoice::Zap,
+            EditorChoice::Zaplex,
             true, /* prefer_markdown_viewer */
             EditorLayout::NewTab,
             None,
@@ -298,7 +298,7 @@ mod tests {
     fn test_resolve_file_target_binary_is_system_generic() {
         let target = resolve_file_target_with_editor_choice(
             Path::new("video.mp4"),
-            EditorChoice::Zap,
+            EditorChoice::Zaplex,
             true, /* prefer_markdown_viewer */
             EditorLayout::SplitPane,
             None,
@@ -312,7 +312,7 @@ mod tests {
     fn test_resolve_file_target_image_uses_image_viewer() {
         let target = resolve_file_target_with_editor_choice(
             Path::new("photo.png"),
-            EditorChoice::Zap,
+            EditorChoice::Zaplex,
             true, /* prefer_markdown_viewer */
             EditorLayout::NewTab,
             None,

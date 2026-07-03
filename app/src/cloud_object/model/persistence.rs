@@ -100,7 +100,7 @@ enum FolderOpenState {
     Reversed,
 }
 
-/// Persistence model for [StoredObject] information. In Zap, it corresponds to the local object store in SQLite.
+/// Persistence model for [StoredObject] information. In Zaplex, it corresponds to the local object store in SQLite.
 /// Logic beyond basic update/query should be placed in [ObjectStoreViewModel] and covered in model_test.rs.
 pub struct ObjectStoreModel {
     objects_by_id: HashMap<ObjectUid, Box<dyn StoredObject>>,
@@ -121,7 +121,7 @@ impl ObjectStoreModel {
             .map(|object| (object.uid().to_owned(), object))
             .collect::<HashMap<ObjectUid, Box<dyn StoredObject>>>();
         let initial_load_complete = Condition::new();
-        // Zap has no initial cloud object fetch; it becomes readable once SQLite restore completes.
+        // Zaplex has no initial cloud object fetch; it becomes readable once SQLite restore completes.
         initial_load_complete.set();
 
         Self {
@@ -132,7 +132,7 @@ impl ObjectStoreModel {
         }
     }
 
-    /// Wait for local object store to become readable. In Zap, this condition is satisfied immediately after SQLite restore.
+    /// Wait for local object store to become readable. In Zaplex, this condition is satisfied immediately after SQLite restore.
     pub fn initial_load_complete(&self) -> impl Future<Output = ()> {
         self.initial_load_complete.wait()
     }
@@ -728,7 +728,7 @@ impl ObjectStoreModel {
             .count()
     }
 
-    /// Number of local objects that have entered an error state and will appear in the Zap Drive index.
+    /// Number of local objects that have entered an error state and will appear in the Zaplex Drive index.
     pub fn num_visible_errored_objects(&self) -> usize {
         self.objects_by_id
             .values()

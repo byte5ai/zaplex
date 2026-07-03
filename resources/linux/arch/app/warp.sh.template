@@ -4,8 +4,8 @@ XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-~/.config}
 
 # Allow users to override command-line options
 if [[ -f $XDG_CONFIG_HOME/@@PACKAGE_NAME@@-flags.conf ]]; then
-    WARP_USER_FLAGS="$(grep -v '^#' $XDG_CONFIG_HOME/@@PACKAGE_NAME@@-flags.conf)"
+    ZAPLEX_USER_FLAGS="$(grep -v '^#' $XDG_CONFIG_HOME/@@PACKAGE_NAME@@-flags.conf)"
 fi
 
 # Launch
-exec @@OPT_DIR@@/@@BINARY_NAME@@ $WARP_USER_FLAGS "$@"
+exec @@OPT_DIR@@/@@BINARY_NAME@@ $ZAPLEX_USER_FLAGS "$@"

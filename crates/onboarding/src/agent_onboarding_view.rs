@@ -201,7 +201,7 @@ impl AgentOnboardingView {
         ctx.focus_self();
 
         // Preload customize-slide images so they're ready when the user reaches that slide.
-        if FeatureFlag::ZapNewSettingsModes.is_enabled() {
+        if FeatureFlag::ZaplexNewSettingsModes.is_enabled() {
             Self::preload_onboarding_images(ctx);
         }
 

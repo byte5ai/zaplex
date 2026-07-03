@@ -16,9 +16,9 @@ Param (
     [String]$RELEASE_TAG = '',
     [String]$FEATURES = 'release_bundle,crash_reporting,gui',
 
-    # Builds only the Zap binary, skips the installer.
+    # Builds only the Zaplex binary, skips the installer.
     [Switch]$SKIP_BUILD_INSTALLER = $False,
-    # Builds only the installer, skips the Zap binary. Use this if the Zap
+    # Builds only the installer, skips the Zaplex binary. Use this if the Zaplex
     # binary has already been built.
     [Switch]$SKIP_BUILD_BINARY = $False,
 
@@ -86,45 +86,45 @@ $BUNDLE_ID = "dev.warp.$app_name"
 # APP_NAME here must match the value used in Rust as the
 # application name; see app/src/channel.rs.
 #
-# WARP_BIN is the name of the binary produced by cargo;
+# ZAPLEX_BIN is the name of the binary produced by cargo;
 # BINARY_NAME is the desired name of the binary in the final package.
 if ("$CHANNEL" -eq 'local') {
-    $WARP_BIN = 'warp'
+    $ZAPLEX_BIN = 'warp'
     $BINARY_NAME = 'warp.exe'
     $APP_NAME = 'WarpLocal'
     $FEATURES = "$FEATURES,nld_improvements"
 } elseif ("$CHANNEL" -eq 'dev') {
-    $WARP_BIN = 'dev'
+    $ZAPLEX_BIN = 'dev'
     $BINARY_NAME = 'dev.exe'
     $APP_NAME = 'WarpDev'
     $FEATURES = "$FEATURES,agent_mode_debug,nld_improvements"
 } elseif ("$CHANNEL" -eq 'preview') {
-    $WARP_BIN = 'preview'
+    $ZAPLEX_BIN = 'preview'
     $BINARY_NAME = 'preview.exe'
     $APP_NAME = 'WarpPreview'
     $FEATURES = "$FEATURES,preview_channel,nld_improvements"
 } elseif ("$CHANNEL" -eq 'stable') {
-    $WARP_BIN = 'stable'
+    $ZAPLEX_BIN = 'stable'
     $BINARY_NAME = 'warp.exe'
-    $APP_NAME = 'Zap'
+    $APP_NAME = 'Zaplex'
     # TODO(vorporeal): Remove this once we get tests passing with this default enabled.
     $FEATURES = "$FEATURES,nld_improvements"
 } elseif ("$CHANNEL" -eq 'oss') {
-    $WARP_BIN = 'zap-oss'
-    $BINARY_NAME = 'zap-oss.exe'
-    $APP_NAME = 'Zap'
-    # OSS channel 使用本地 crash reporting,不启用 release 默认特性集合。
-    # autoupdate 走 GitHub Release(zerx-lab/warp),仅下载到 Downloads,不调 Inno Setup。
+    $ZAPLEX_BIN = 'zaplex'
+    $BINARY_NAME = 'zaplex.exe'
+    $APP_NAME = 'Zaplex'
+    # OSS channel uses local crash reporting, does not enable release default feature set.
+    # autoupdate goes through GitHub Release (zerx-lab/warp), only downloads to Downloads, does not call Inno Setup.
     $FEATURES = 'release_bundle,gui,nld_improvements,autoupdate'
 }
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"
-# AUMID(Windows AppUserModel ID)—— 必须与进程端 `ChannelState::app_id()` 生成的完全一致,
-# 否则 Windows ToastNotificationManager 会在 Start Menu 快捷方式 / 进程 AUMID 不匹配时
-# 静默吞掉 toast。OSS(Zap)在 `app/src/bin/oss.rs` 里是 `dev.zap.Zap`,
-# 其他官方 channel 是 `dev.warp.<Name>`。
+# AUMID (Windows AppUserModel ID) — must match exactly with what the process side `ChannelState::app_id()` generates,
+# otherwise Windows ToastNotificationManager will silently drop toasts when Start Menu shortcut / process AUMID doesn't match.
+# OSS (Zaplex) in `app/src/bin/oss.rs` is `dev.zaplex.Zaplex`,
+# other official channels are `dev.warp.<Name>`.
 if ("$CHANNEL" -eq 'oss') {
-    $AUMID = "dev.zap.$APP_NAME"
+    $AUMID = "dev.zaplex.$APP_NAME"
 } else {
     $AUMID = "dev.warp.$APP_NAME"
 }
@@ -132,7 +132,7 @@ $BUNDLE_ID = $AUMID
 $INSTALLER_OUTPUT_DIR = "$WINDOWS_INSTALLER_DIR\Output"
 $INSTALLER_NAME = "$($APP_NAME)$($FILE_ENDING)"
 $INSTALLER_PATH = "$($INSTALLER_OUTPUT_DIR)\$($INSTALLER_NAME).exe"
-$PDB_PATH = "$CARGO_TARGET_OUTPUT_DIR\$WARP_BIN.pdb"
+$PDB_PATH = "$CARGO_TARGET_OUTPUT_DIR\$ZAPLEX_BIN.pdb"
 
 # The CARGO_FULL_PROFILE environment variable is read by the `cargo` build
 # script (`app/build.rs`) to determine where to place `conpty.dll`.
@@ -146,28 +146,28 @@ if ($DEBUG_BUILD) {
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
 # using the same feature flags and profile that we would be using in production.
 if ($CHECK_ONLY) {
-    cargo check -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" --target $PLATFORM_TARGET
+    cargo check -p warp --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --features "$FEATURES" --target $PLATFORM_TARGET
     if (-Not $?) {
-        Write-Error "Failed to verify Zap $WARP_BIN compilation with profile $CARGO_PROFILE"
+        Write-Error "Failed to verify Zaplex $ZAPLEX_BIN compilation with profile $CARGO_PROFILE"
         exit 1
     }
     exit 0
 }
 
 if (-Not $SKIP_BUILD_BINARY) {
-    Write-Output "Building Zap for channel $CHANNEL and bundle id $BUNDLE_ID"
+    Write-Output "Building Zaplex for channel $CHANNEL and bundle id $BUNDLE_ID"
     $env:CARGO_BIN_NAME = $CHANNEL
-    $env:WARP_APP_NAME = $APP_NAME
-    cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" --target $PLATFORM_TARGET
+    $env:ZAPLEX_APP_NAME = $APP_NAME
+    cargo build -p warp --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --features "$FEATURES" --target $PLATFORM_TARGET
     if (-Not $?) {
-        Write-Error "Failed to build Zap $WARP_BIN binary with profile $CARGO_PROFILE"
+        Write-Error "Failed to build Zaplex $ZAPLEX_BIN binary with profile $CARGO_PROFILE"
         exit 1
     }
 
     # If we desire an executable name different from the cargo bin, rename it.
-    if ("$WARP_BIN.exe" -ne $BINARY_NAME) {
-        $binarySource = "$CARGO_TARGET_OUTPUT_DIR\$WARP_BIN.exe"
-        Write-Output "Renaming executable $WARP_BIN.exe to $BINARY_NAME"
+    if ("$ZAPLEX_BIN.exe" -ne $BINARY_NAME) {
+        $binarySource = "$CARGO_TARGET_OUTPUT_DIR\$ZAPLEX_BIN.exe"
+        Write-Output "Renaming executable $ZAPLEX_BIN.exe to $BINARY_NAME"
         Move-Item -Path "$binarySource" -Destination "$BINARY_PATH" -Force
     }
 }
@@ -211,12 +211,12 @@ if (-Not $?) {
     exit 1
 }
 
-Write-Output 'Building Zap installer'
-# Inno Setup `AppId` 决定注册表 Uninstall 条目与升级跟踪键。OSS 下固定为 `zap-oss`,
-# 避免留在默认的 `warp-terminal-oss` 上。其他 channel 走 .iss 里的默认
-# `warp-terminal-{ReleaseChannel}`。
+Write-Output 'Building Zaplex installer'
+# Inno Setup `AppId` determines the registry Uninstall entry and upgrade tracking key. Under OSS, fixed to `zaplex`,
+# avoiding the default `warp-terminal-oss`. Other channels use the default in .iss
+# `warp-terminal-{ReleaseChannel}`.
 if ("$CHANNEL" -eq 'oss') {
-    $INNO_APP_ID = 'zap-oss'
+    $INNO_APP_ID = 'zaplex'
 } else {
     $INNO_APP_ID = "warp-terminal-$CHANNEL"
 }

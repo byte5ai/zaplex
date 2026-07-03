@@ -21,7 +21,7 @@ use crate::{
             selection::{ExpandedSelectionRange, Selection, SelectionDirection},
             terminal_model::{BlockIndex, WithinBlock},
         },
-        warpify::success_block::WarpifySuccessBlock,
+        zaplexify::success_block::ZaplexifySuccessBlock,
         GridType,
     },
 };
@@ -955,11 +955,11 @@ impl BlockList {
 
                             if let Some(active_window_id) = app.windows().active_window() {
                                 if let Some(ssh_block) = app
-                                    .view_with_id::<WarpifySuccessBlock>(active_window_id, *view_id)
+                                    .view_with_id::<ZaplexifySuccessBlock>(active_window_id, *view_id)
                                 {
-                                    let warpify_success_block = app.view(&ssh_block);
+                                    let zaplexify_success_block = app.view(&ssh_block);
                                     if let Some(selected_text) =
-                                        warpify_success_block.selected_text()
+                                        zaplexify_success_block.selected_text()
                                     {
                                         selected_texts.push(selected_text);
                                     }
@@ -1074,10 +1074,10 @@ impl BlockList {
                         }
 
                         if let Some(ssh_block) =
-                            app.view_with_id::<WarpifySuccessBlock>(active_window_id, view_id)
+                            app.view_with_id::<ZaplexifySuccessBlock>(active_window_id, view_id)
                         {
-                            let warpify_success_block = app.view(&ssh_block);
-                            if let Some(selected_text) = warpify_success_block.selected_text() {
+                            let zaplexify_success_block = app.view(&ssh_block);
+                            if let Some(selected_text) = zaplexify_success_block.selected_text() {
                                 selected_texts.push(selected_text);
                             }
                         }

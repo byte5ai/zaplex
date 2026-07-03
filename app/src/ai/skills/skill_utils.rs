@@ -24,7 +24,7 @@ use crate::warp_managed_paths_watcher::warp_managed_skill_dirs;
 /// Priority rules (when multiple skills have the same name):
 ///
 /// 1. **Lower provider rank wins**: follows [`SKILL_PROVIDER_DEFINITIONS`] order (index 0 = highest priority),
-///    e.g., `Agents > Zap > Claude > …`.
+///    e.g., `Agents > Zaplex > Claude > …`.
 /// 2. **On equal rank, shorter reference path wins**: used as stable tiebreaker.
 ///
 /// This implementation covers three scenarios:
@@ -148,7 +148,7 @@ pub fn icon_override_for_skill_name(name: &str) -> Option<Icon> {
 
 pub fn skill_path_from_file_path(file_path: &Path) -> Option<PathBuf> {
     for definition in SKILL_PROVIDER_DEFINITIONS.iter() {
-        let home_skill_dirs = if definition.provider == SkillProvider::Zap {
+        let home_skill_dirs = if definition.provider == SkillProvider::Zaplex {
             warp_managed_skill_dirs()
         } else {
             home_skills_path(definition.provider).into_iter().collect()

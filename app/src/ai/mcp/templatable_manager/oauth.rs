@@ -50,7 +50,7 @@ pub type PersistedCredentialsMap = HashMap<Uuid, PersistedCredentials>;
 pub type FileBasedPersistedCredentialsMap = HashMap<u64, PersistedCredentials>;
 
 /// A credential store that wraps [`InMemoryCredentialStore`] and persists token
-/// updates to Zap's secure storage via a channel.
+/// updates to Zaplex's secure storage via a channel.
 ///
 /// When rmcp auto-refreshes an expired access token at runtime, the rotated
 /// tokens are only saved to the in-memory store by default. This wrapper
@@ -126,7 +126,7 @@ impl CredentialStore for PersistingCredentialStore {
 }
 
 /// Installs a [`PersistingCredentialStore`] on the given auth manager so that
-/// runtime token auto-refreshes are written back to Zap's secure storage.
+/// runtime token auto-refreshes are written back to Zaplex's secure storage.
 ///
 /// A background tokio task is spawned to receive credential updates and persist
 /// them via the [`ModelSpawner`]. The task terminates when the auth manager (and
@@ -291,19 +291,19 @@ pub async fn make_authenticated_client(
             log::warn!(
                 "File-based MCP server {uuid} requires OAuth authentication; \
                  skipping in headless mode. To use this server, authenticate it \
-                 in the Zap desktop app first."
+                 in the Zaplex desktop app first."
             );
         }
         return Err(AuthError::AuthorizationFailed(
             "MCP server requires OAuth authentication. Please authenticate this server in the \
-             Zap desktop app first, then try again."
+             Zaplex desktop app first, then try again."
                 .to_string(),
         ));
     }
 
     // Start the authorization process with our custom redirect URI
     oauth_state
-        .start_authorization(&[], &redirect_uri, Some("Zap"))
+        .start_authorization(&[], &redirect_uri, Some("Zaplex"))
         .await?;
 
     let OAuthState::Session(AuthorizationSession {
@@ -321,7 +321,7 @@ pub async fn make_authenticated_client(
     // For apps for which we have static client IDs (e.g. GitHub), we manually override scopes.
     let mut scopes: &[&str] = &[];
 
-    let config = match auth_manager.register_client("Zap", &redirect_uri).await {
+    let config = match auth_manager.register_client("Zaplex", &redirect_uri).await {
         Ok(config) => config,
         Err(err @ AuthError::RegistrationFailed(_)) => {
             // If we failed dynamic registration, check to see if this is an auth

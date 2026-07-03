@@ -2,7 +2,7 @@ use settings::{macros::define_settings_group, Setting, SupportedPlatforms, SyncT
 
 // Debug mode settings.
 //
-// If "shell debug mode" is enabled, the `WARP_SHELL_DEBUG_MODE` environment variable is
+// If "shell debug mode" is enabled, the `ZAPLEX_SHELL_DEBUG_MODE` environment variable is
 // set in subsequently spawned terminal sessions.
 //
 // If `are_in_band_generators_for_all_sessions_enabled` is `true`, then all new sessions employ

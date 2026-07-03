@@ -14,9 +14,9 @@ use crate::auth::AuthStateProvider;
 use crate::auth::SyncedUserSettings;
 use crate::cloud_object::model::persistence::ObjectStoreModel;
 use crate::report_error;
-// Zap Wave 3-1: `AuthClient` trait + `MockAuthClient` physically deleted with server_api/auth.rs;
+// Zaplex Wave 3-1: `AuthClient` trait + `MockAuthClient` physically deleted with server_api/auth.rs;
 // `SyncedUserSettings` moved to `crate::auth`.
-// Zap Wave 3-1: `ServerApiProvider` no longer used in this file —
+// Zaplex Wave 3-1: `ServerApiProvider` no longer used in this file —
 // all call sites of `auth_client = ServerApiProvider::as_ref(ctx).get_auth_client()`
 // physically deleted along with AuthClient trait.
 use crate::terminal::safe_mode_settings::SafeModeSettings;
@@ -28,7 +28,7 @@ use settings::{
 
 use serde::{Deserialize, Serialize};
 
-// Zap (localization, Phase 5): `PreferencesSyncer` physically deleted.
+// Zaplex (localization, Phase 5): `PreferencesSyncer` physically deleted.
 use crate::workspaces::workspace::EnterpriseSecretRegex;
 
 pub trait RegexDisplayInfo {
@@ -94,7 +94,7 @@ impl PartialEq for CustomSecretRegex {
 impl settings_value::SettingsValue for CustomSecretRegex {}
 
 // openWarp closed-source telemetry stripping: three privacy toggles default true → false.
-// Original Zap defaulted on for commercial "opt-out" mode; Zap has physically cut telemetry,
+// Original Zaplex defaulted on for commercial "opt-out" mode; Zaplex has physically cut telemetry,
 // crash reporting, and cloud conversation storage. Default-on toggles only showed ON to new users
 // but never actually sent data, creating cognitive split. Changed to default OFF.
 define_settings_group!(WarpDrivePrivacySettings, settings: [
@@ -142,9 +142,9 @@ maybe_define_setting!(HasInitializedDefaultSecretRegexes, group: PrivacySettings
 /// reporting and/or telemetry).
 pub struct PrivacySettings {
     auth_state: Arc<AuthState>,
-    // Zap Wave 3-1: `auth_client: Arc<dyn AuthClient>` field physically deleted with AuthClient trait.
+    // Zaplex Wave 3-1: `auth_client: Arc<dyn AuthClient>` field physically deleted with AuthClient trait.
     // Originally used to sync telemetry/crash reporting settings to server on change;
-    // Zap no longer syncs any server settings.
+    // Zaplex no longer syncs any server settings.
     pub is_telemetry_enabled: bool,
     pub is_crash_reporting_enabled: bool,
     pub has_initialized_default_secret_regexes: HasInitializedDefaultSecretRegexes,
@@ -364,8 +364,8 @@ impl PrivacySettings {
 
     /// Fetch the user's privacy settings from the server if any or update the server settings.
     pub fn fetch_or_update_settings(&self, _ctx: &mut ModelContext<Self>) {
-        // Zap Wave 3-1: originally called `auth_client.get_user_settings().await`,
-        // physically deleted with AuthClient trait. After Zap localization, privacy
+        // Zaplex Wave 3-1: originally called `auth_client.get_user_settings().await`,
+        // physically deleted with AuthClient trait. After Zaplex localization, privacy
         // settings saved locally only; entry is no-op.
     }
 
@@ -480,8 +480,8 @@ impl PrivacySettings {
             });
 
             if self.auth_state.is_logged_in() {
-                // Zap Wave 3-1: originally called `auth_client.set_is_crash_reporting_enabled(new_value)`,
-                // physically deleted with AuthClient. Zap locally only updates local state.
+                // Zaplex Wave 3-1: originally called `auth_client.set_is_crash_reporting_enabled(new_value)`,
+                // physically deleted with AuthClient. Zaplex locally only updates local state.
                 log::debug!(
                     "set_is_crash_reporting_enabled remote sync localized, new_value={new_value}"
                 );
@@ -514,7 +514,7 @@ impl PrivacySettings {
             });
 
             if self.auth_state.is_logged_in() {
-                // Zap Wave 3-1: same as above.
+                // Zaplex Wave 3-1: same as above.
                 log::debug!("set_is_telemetry_enabled remote sync localized, new_value={new_value}");
             }
             ctx.emit(PrivacySettingsChangedEvent::UpdateIsTelemetryEnabled {
@@ -651,7 +651,7 @@ impl PrivacySettings {
         match (cloud_telemetry_value, cloud_crash_reporting_value) {
             (Some(is_telemetry_enabled), Some(is_crash_reporting_enabled)) => {
                 log::info!(
-                    "Zap Drive privacy preferences are set, using those for telemetry={is_telemetry_enabled}, \
+                    "Zaplex Drive privacy preferences are set, using those for telemetry={is_telemetry_enabled}, \
                     crash_reporting={is_crash_reporting_enabled}"
                 );
                 self.set_is_telemetry_enabled(is_telemetry_enabled, ctx);
@@ -659,7 +659,7 @@ impl PrivacySettings {
             }
             _ => {
                 log::info!(
-                    "Zap Drive privacy preferences are not set, syncing local PrivacySettings values to \
+                    "Zaplex Drive privacy preferences are not set, syncing local PrivacySettings values to \
                     WarpDrivePrivacySettings and cloud. telemetry={}, crash_reporting={}",
                     self.is_telemetry_enabled,
                     self.is_crash_reporting_enabled
@@ -672,7 +672,7 @@ impl PrivacySettings {
                         .is_crash_reporting_enabled
                         .set_value(self.is_crash_reporting_enabled, ctx));
                 });
-                // Zap (localization, Phase 5): originally `PreferencesSyncer::maybe_sync_local_prefs_to_cloud`
+                // Zaplex (localization, Phase 5): originally `PreferencesSyncer::maybe_sync_local_prefs_to_cloud`
                 // synced local privacy settings to cloud; physically deleted with syncer. Local settings only written to sqlite.
             }
         }

@@ -34,6 +34,8 @@ use warp_ssh_manager::{
     SshServerInfo,
 };
 
+use remote_server::proto::SessionInfo;
+
 use settings::Setting;
 
 use crate::editor::{
@@ -57,7 +59,7 @@ const PANEL_HORIZONTAL_PADDING: f32 = 8.0;
 const CONTEXT_MENU_WIDTH: f32 = 200.0;
 const CONTEXT_MENU_ITEM_PADDING_V: f32 = 7.0;
 const CONTEXT_MENU_ITEM_PADDING_H: f32 = 12.0;
-const MAX_CONTEXT_MENU_ITEMS: usize = 5;
+const MAX_CONTEXT_MENU_ITEMS: usize = 6;
 const SSH_PANEL_POSITION_ID: &str = "ssh_manager_panel_root";
 
 #[derive(Clone, Debug)]
@@ -71,6 +73,14 @@ pub enum SshManagerPanelAction {
     Connect,
     Edit,
     CloneServer(String),
+    /// Context menu on a server: toggle the inline list of its running daemon
+    /// sessions (fetched via connect-to-list on first expand).
+    ToggleSessions(String),
+    /// Click a listed daemon session: adopt it (attach + replay) in a new tab.
+    AdoptSession {
+        node_id: String,
+        pty_session_id: String,
+    },
     /// Click a row; the handling depends on the node kind:
     /// - server: select + emit OpenSshTerminal (connect directly)
     /// - folder: select only
@@ -96,6 +106,10 @@ pub enum SshManagerPanelAction {
     DoubleClick(String),
     /// Right-click a server → "File management": open the SFTP file browser pane.
     OpenSftp,
+    /// Toolbar "+": open/close the guided "Add a host" block (blank server +
+    /// on-demand `~/.ssh/config` suggestions). The saved list stays untouched
+    /// until the user explicitly creates or imports.
+    ToggleAddMode,
     /// "Candidates" section: copy one candidate from `~/.ssh/config` into the saved tree.
     ImportCandidate {
         alias: String,
@@ -123,6 +137,13 @@ pub enum SshManagerPanelEvent {
     OpenSftpPane {
         node_id: String,
         server: SshServerInfo,
+    },
+    /// The user clicked a listed (running) daemon session under a host, asking to
+    /// adopt it in a new tab (attach + replay). The list comes from the
+    /// multi-session sidebar (`headless_connect::list_daemon_sessions`).
+    AdoptDaemonSession {
+        server: SshServerInfo,
+        pty_session_id: String,
     },
     PersistenceError(String),
 }
@@ -194,6 +215,37 @@ pub struct SshManagerPanel {
     /// Hover state for the section header's Refresh / Toggle buttons.
     candidates_refresh_btn: MouseStateHandle,
     candidates_toggle_btn: MouseStateHandle,
+    /// "Add a host" guided block is open (toggled by the toolbar "+").
+    /// The `~/.ssh/config` suggestions are shown **only** while this is true, so
+    /// nothing unsolicited ever appears in the saved list (PRODUCT decision:
+    /// suggestions on-demand-when-adding, not always-on).
+    adding_mode: bool,
+    /// Hover state for the "Create a blank server" button in the add block.
+    add_blank_btn: MouseStateHandle,
+    /// Hover state for the "Cancel" button in the add block.
+    add_cancel_btn: MouseStateHandle,
+
+    // --- Adopt-sidebar: per-host running daemon sessions (multi-session) ---
+    /// Running daemon sessions per server node, fetched on demand via
+    /// `headless_connect::list_daemon_sessions` (connect-to-list, so it also
+    /// surfaces sessions that survived a restart / drop — the main use case).
+    host_sessions: HashMap<String, Vec<SessionInfo>>,
+    /// Server node_ids whose session list is currently shown (expanded).
+    sessions_expanded: std::collections::HashSet<String>,
+    /// Server node_ids with an in-flight session fetch.
+    sessions_loading: std::collections::HashSet<String>,
+    /// Server node_ids with an in-flight connect (daemon preflight/install or
+    /// classic open). Gives instant feedback on the row and guards against
+    /// double-triggering while the preflight runs. Cleared by a bounded timer
+    /// (the preflight itself is bounded), so a stray entry can't stick.
+    connecting: std::collections::HashSet<String>,
+    /// Server node_ids whose host has session resilience (Zaplexify persistent
+    /// sessions) enabled — rendered with the ⚡ mark. Refreshed with the tree.
+    resilient_hosts: std::collections::HashSet<String>,
+    /// Last fetch error per server node_id (shown inline under the host).
+    sessions_error: HashMap<String, String>,
+    /// Hover/click state per session row (key = "<node_id>:<pty_session_id>").
+    session_row_states: HashMap<String, MouseStateHandle>,
 }
 
 impl SshManagerPanel {
@@ -220,9 +272,20 @@ impl SshManagerPanel {
             candidate_add_states: HashMap::new(),
             candidates_refresh_btn: MouseStateHandle::default(),
             candidates_toggle_btn: MouseStateHandle::default(),
+            adding_mode: false,
+            add_blank_btn: MouseStateHandle::default(),
+            add_cancel_btn: MouseStateHandle::default(),
+            host_sessions: HashMap::new(),
+            sessions_expanded: std::collections::HashSet::new(),
+            sessions_loading: std::collections::HashSet::new(),
+            connecting: std::collections::HashSet::new(),
+            resilient_hosts: std::collections::HashSet::new(),
+            sessions_error: HashMap::new(),
+            session_row_states: HashMap::new(),
         };
-        // First time the panel opens → read ssh_config once immediately (PRODUCT.md decision A).
-        me.candidates.update(ctx, |vm, ctx| vm.refresh(ctx));
+        // `~/.ssh/config` is read on-demand only when the user opens the "Add a
+        // host" block (`on_toggle_add_mode`) — never unsolicited on mount, so the
+        // saved list never shows hosts the user didn't deliberately add.
         me.refresh_tree(ctx);
 
         ctx.subscribe_to_model(
@@ -258,6 +321,25 @@ impl SshManagerPanel {
                         self.rename_state = None;
                     }
                 }
+                // Refresh which hosts have Zaplexify persistence enabled (⚡ mark).
+                let server_ids: Vec<String> = self
+                    .nodes
+                    .iter()
+                    .filter(|n| matches!(n.kind, NodeKind::Server))
+                    .map(|n| n.id.clone())
+                    .collect();
+                self.resilient_hosts = warp_ssh_manager::with_conn(|c| {
+                    let mut resilient = std::collections::HashSet::new();
+                    for id in &server_ids {
+                        if let Some(server) = SshRepository::get_server(c, id)? {
+                            if server.session_resilience.is_enabled() {
+                                resilient.insert(id.clone());
+                            }
+                        }
+                    }
+                    Ok(resilient)
+                })
+                .unwrap_or_default();
             }
             Err(e) => {
                 log::error!("ssh_manager: failed to load tree: {e:?}");
@@ -275,6 +357,23 @@ impl SshManagerPanel {
             self.row_states.entry(n.id.clone()).or_default();
             self.row_drag_states.entry(n.id.clone()).or_default();
         }
+
+        // Prune per-host adopt-session state for nodes that were deleted, so these
+        // maps don't grow unbounded across deletions (keyed by node_id; the
+        // row-state map is keyed by "<node_id>:<pty_session_id>").
+        self.host_sessions
+            .retain(|k, _| active_ids.contains(k.as_str()));
+        self.sessions_expanded
+            .retain(|k| active_ids.contains(k.as_str()));
+        self.sessions_loading
+            .retain(|k| active_ids.contains(k.as_str()));
+        self.sessions_error
+            .retain(|k, _| active_ids.contains(k.as_str()));
+        self.session_row_states.retain(|k, _| {
+            k.split(':')
+                .next()
+                .is_some_and(|node_id| active_ids.contains(node_id))
+        });
 
         // Tree changed → recompute the "Added" set (PRODUCT.md decision E). "Imported" is determined by
         // `server.host == candidate.alias` — aligned with ImportCandidate's write
@@ -354,6 +453,8 @@ impl SshManagerPanel {
     /// On completion it emits `OpenServerEditor` (same as manual creation) + broadcasts
     /// `SshTreeChangedEvent::TreeChanged` so the `Added` badge flips immediately.
     fn on_import_candidate(&mut self, alias: String, ctx: &mut ViewContext<Self>) {
+        // Picking a suggestion is an explicit, deliberate add — close the add block.
+        self.adding_mode = false;
         let candidate = self
             .candidates
             .read(ctx, |vm, _| vm.find_candidate(&alias).cloned());
@@ -386,6 +487,8 @@ impl SshManagerPanel {
             startup_command: None,
             notes: Some(format!("Imported from {path_display}")),
             last_connected_at: None,
+            session_resilience: warp_ssh_manager::SessionResilience::default(),
+            ring_ceiling_mb: 0,
         };
 
         let parent = self.parent_for_new_node();
@@ -419,7 +522,22 @@ impl SshManagerPanel {
         }
     }
 
+    /// Toolbar "+" — toggle the guided "Add a host" block. When opening, re-read
+    /// `~/.ssh/config` so the suggestions reflect the current file (the user may
+    /// have edited it since the panel mounted). Closing is a pure UI toggle; it
+    /// never touches the saved list.
+    fn on_toggle_add_mode(&mut self, ctx: &mut ViewContext<Self>) {
+        self.adding_mode = !self.adding_mode;
+        if self.adding_mode {
+            self.candidates.update(ctx, |vm, ctx| vm.refresh(ctx));
+            self.sync_candidate_row_states(ctx);
+        }
+        ctx.notify();
+    }
+
     fn on_add_server(&mut self, ctx: &mut ViewContext<Self>) {
+        // Either path out of the add block (create blank / import) closes it.
+        self.adding_mode = false;
         let parent = self.parent_for_new_node();
         let info_template = SshServerInfo::new_default(String::new());
         let result = warp_ssh_manager::with_conn(|c| {
@@ -541,18 +659,162 @@ impl SshManagerPanel {
         }
     }
 
-    fn dispatch_connect_for(&self, id: &str, ctx: &mut ViewContext<Self>) {
+    fn dispatch_connect_for(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
         let kind = self.nodes.iter().find(|n| n.id == id).map(|n| n.kind);
         if !matches!(kind, Some(NodeKind::Server)) {
+            return;
+        }
+        // Instant acknowledgment + double-trigger guard: the daemon preflight
+        // takes a few seconds before any tab appears; without row feedback the
+        // click feels dead and users click again.
+        if self.connecting.contains(id) {
             return;
         }
         let server = warp_ssh_manager::with_conn(|c| Ok(SshRepository::get_server(c, id)?))
             .ok()
             .flatten();
         if let Some(server) = server {
+            self.connecting.insert(id.to_string());
+            ctx.notify();
+            // Bounded self-clear: the preflight resolves (tab or fallback) well
+            // within this window; a stray entry can't wedge the row.
+            let id_owned = id.to_string();
+            ctx.spawn(
+                async move {
+                    async_io::Timer::after(std::time::Duration::from_secs(10)).await;
+                },
+                move |me, (), ctx| {
+                    me.connecting.remove(&id_owned);
+                    ctx.notify();
+                },
+            );
             ctx.emit(SshManagerPanelEvent::OpenSshTerminal {
                 node_id: id.to_string(),
                 server,
+            });
+        }
+    }
+
+    /// Toggle the inline running-sessions list for a server node; the first
+    /// expand kicks off a connect-to-list fetch.
+    fn on_toggle_sessions(&mut self, id: String, ctx: &mut ViewContext<Self>) {
+        if self.sessions_expanded.remove(&id) {
+            ctx.notify();
+            return;
+        }
+        self.sessions_expanded.insert(id.clone());
+        self.fetch_sessions(id, ctx);
+        ctx.notify();
+    }
+
+    /// Fetches a server's running daemon sessions via connect-to-list and stores
+    /// them in `host_sessions` (or records `sessions_error`).
+    #[allow(unused_variables)]
+    fn fetch_sessions(&mut self, id: String, ctx: &mut ViewContext<Self>) {
+        let server = warp_ssh_manager::with_conn(|c| Ok(SshRepository::get_server(c, &id)?))
+            .ok()
+            .flatten();
+        let Some(server) = server else {
+            return;
+        };
+        self.sessions_error.remove(&id);
+
+        #[cfg(unix)]
+        {
+            use crate::auth::AuthStateProvider;
+            use crate::remote_server::auth_context::server_api_auth_context;
+            use crate::remote_server::headless_connect;
+
+            if !server.session_resilience.is_enabled() {
+                self.sessions_error.insert(
+                    id,
+                    crate::t!("workspace-left-panel-ssh-manager-sessions-not-persistent"),
+                );
+                return;
+            }
+            // Resolve OneKey → effective auth. The daemon listing runs headless
+            // (BatchMode), which only works with key auth, AND it must use the
+            // resolved username/key_path so it targets the SAME per-host
+            // ControlMaster the connect path uses (`control_socket_path` keys on
+            // user@host:port, and `open_ssh_terminal` connects with the resolved
+            // server). Using the unresolved record would key a different socket
+            // and/or fail auth for OneKey-key hosts.
+            let resolved = warp_ssh_manager::with_conn(|c| {
+                let auth = SshRepository::resolve_server_auth(c, &server)?;
+                let mut resolved = server.clone();
+                resolved.username = auth.username;
+                resolved.key_path = auth.key_path;
+                resolved.auth_type = auth.auth_type;
+                Ok(resolved)
+            });
+            let server = match resolved {
+                Ok(s) if s.auth_type == AuthType::Key => s,
+                _ => {
+                    self.sessions_error.insert(
+                        id,
+                        crate::t!("workspace-left-panel-ssh-manager-sessions-needs-key"),
+                    );
+                    return;
+                }
+            };
+            self.sessions_loading.insert(id.clone());
+            let auth_context = std::sync::Arc::new(server_api_auth_context(
+                AuthStateProvider::as_ref(ctx).get().clone(),
+            ));
+            let socket_path = headless_connect::control_socket_path(&server);
+            let executor = ctx.background_executor().clone();
+            ctx.spawn(
+                headless_connect::list_daemon_sessions(server, socket_path, auth_context, executor),
+                move |me, result, ctx| {
+                    me.sessions_loading.remove(&id);
+                    match result {
+                        Ok(sessions) => {
+                            me.host_sessions.insert(id, sessions);
+                        }
+                        Err(e) => {
+                            me.sessions_error.insert(id, e);
+                        }
+                    }
+                    ctx.notify();
+                },
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            self.sessions_error.insert(
+                id,
+                "Daemon sessions are only supported on Unix hosts.".to_string(),
+            );
+        }
+    }
+
+    /// Adopt a listed daemon session in a new tab (attach + replay).
+    fn on_adopt_session(
+        &mut self,
+        node_id: String,
+        pty_session_id: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Resolve OneKey → effective auth so the adopt connects with the same
+        // username/key_path the listing + connect paths use — otherwise an
+        // OneKey-key host would target a different ControlMaster / fail auth.
+        let server = warp_ssh_manager::with_conn(|c| {
+            let Some(server) = SshRepository::get_server(c, &node_id)? else {
+                return Ok(None);
+            };
+            let auth = SshRepository::resolve_server_auth(c, &server)?;
+            let mut resolved = server;
+            resolved.username = auth.username;
+            resolved.key_path = auth.key_path;
+            resolved.auth_type = auth.auth_type;
+            Ok(Some(resolved))
+        })
+        .ok()
+        .flatten();
+        if let Some(server) = server {
+            ctx.emit(SshManagerPanelEvent::AdoptDaemonSession {
+                server,
+                pty_session_id,
             });
         }
     }
@@ -659,6 +921,9 @@ impl SshManagerPanel {
         // — the clear only applies to exit paths with no new selection (Enter/ESC/blur to empty space); a click
         // itself already provides a new selection context.
         self.selected_id = Some(id.clone());
+        // Navigating the tree dismisses the guided add block — it's only relevant
+        // while the user is actively adding a host from the toolbar.
+        self.adding_mode = false;
         let kind = self.nodes.iter().find(|n| n.id == id).map(|n| n.kind);
         match kind {
             Some(NodeKind::Server) => {
@@ -931,7 +1196,7 @@ impl SshManagerPanel {
             .with_child(make_btn(
                 crate::ui_components::icons::Icon::Plus,
                 self.add_server_btn.clone(),
-                SshManagerPanelAction::AddServer,
+                SshManagerPanelAction::ToggleAddMode,
             ))
             .with_main_axis_size(MainAxisSize::Min)
             .finish();
@@ -963,11 +1228,145 @@ impl SshManagerPanel {
             .finish()
     }
 
+    /// Guided "Add a host" block (toolbar "+"). Renders a prominent
+    /// "Create a blank server" action plus the on-demand `~/.ssh/config`
+    /// suggestions (`render_candidates`, which renders nothing when
+    /// auto-discovery is off or the config has no importable hosts).
+    ///
+    /// Shown only while `adding_mode` is true; the saved tree below stays
+    /// untouched until the user explicitly creates or imports.
+    fn render_add_block(
+        &self,
+        appearance: &warp_core::ui::appearance::Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let muted = theme.sub_text_color(theme.background());
+        let main = theme.main_text_color(theme.background());
+        let accent = theme.accent().into_solid();
+        let icon_color = muted;
+
+        // Header: "Add a host" + a Cancel button on the right. Accent-colored so the
+        // add-mode block reads as an active, distinct state.
+        let heading = Text::new_inline(
+            crate::t!("workspace-left-panel-ssh-manager-add-heading"),
+            appearance.ui_font_family(),
+            appearance.ui_font_subheading(),
+        )
+        .with_color(accent.into())
+        .finish();
+        let cancel_label = Text::new_inline(
+            crate::t!("workspace-left-panel-ssh-manager-add-cancel"),
+            appearance.ui_font_family(),
+            appearance.ui_font_body(),
+        )
+        .with_color(muted.into())
+        .finish();
+        let cancel_btn = Hoverable::new(self.add_cancel_btn.clone(), move |mouse| {
+            let mut c = Container::new(cancel_label)
+                .with_padding_top(ITEM_PADDING_VERTICAL)
+                .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+            if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_3(theme));
+            }
+            c.finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(SshManagerPanelAction::ToggleAddMode);
+        })
+        .finish();
+        let header_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_child(
+                Container::new(heading)
+                    .with_padding_top(ITEM_PADDING_VERTICAL)
+                    .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                    .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                    .finish(),
+            )
+            .with_child(cancel_btn)
+            .finish();
+
+        // Primary action: create a blank server (the manual path) and open its editor.
+        let plus_icon = ConstrainedBox::new(
+            crate::ui_components::icons::Icon::Plus
+                .to_warpui_icon(icon_color)
+                .finish(),
+        )
+        .with_width(ITEM_ICON_SIZE)
+        .with_height(ITEM_ICON_SIZE)
+        .finish();
+        let blank_label = Text::new_inline(
+            crate::t!("workspace-left-panel-ssh-manager-add-blank"),
+            appearance.ui_font_family(),
+            appearance.ui_font_subheading(),
+        )
+        .with_color(main.into())
+        .finish();
+        let blank_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(ITEM_ICON_TEXT_SPACING)
+            .with_child(plus_icon)
+            .with_child(blank_label)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::Start)
+            .finish();
+        let blank_btn = Hoverable::new(self.add_blank_btn.clone(), move |mouse| {
+            let mut c = Container::new(blank_row)
+                .with_padding_top(ITEM_PADDING_VERTICAL)
+                .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+            if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_3(theme));
+            }
+            c.finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(SshManagerPanelAction::AddServer);
+        })
+        .finish();
+
+        let mut col = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        col.add_child(header_row);
+        col.add_child(blank_btn);
+        // Suggestions from ~/.ssh/config — renders nothing when auto-discovery is
+        // off or the config has no importable hosts. When present, give it a small
+        // top margin so the "from ~/.ssh/config" suggestions read as a distinct
+        // group from the blank-server CTA above (no dangling gap when empty).
+        if !self.candidates.as_ref(app).rows().is_empty() {
+            col.add_child(
+                Container::new(self.render_candidates(appearance, app))
+                    .with_margin_top(ITEM_PADDING_VERTICAL)
+                    .finish(),
+            );
+        }
+        // Set the whole "Add a host" block apart from the saved tree with an accent
+        // left-bar + subtle background, so it's unmistakable that you're in add mode.
+        Container::new(col.with_main_axis_size(MainAxisSize::Min).finish())
+            .with_background(internal_colors::fg_overlay_1(theme))
+            .with_border(Border::left(2.0).with_border_color(accent))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+            .with_padding_top(ITEM_PADDING_VERTICAL)
+            .with_padding_bottom(ITEM_PADDING_VERTICAL)
+            .with_margin_bottom(ITEM_PADDING_VERTICAL)
+            .finish()
+    }
+
     /// "Candidates" section — the list of importable hosts parsed from `~/.ssh/config`.
     ///
-    /// The section is shown **above** the saved tree; its layout style (row height, indent, font size) matches the tree,
-    /// with just an extra Refresh button + collapse chevron in the section header. Each candidate row ends with
-    /// a "+" or "Added" badge (PRODUCT.md decision E).
+    /// Rendered inside the guided "Add a host" block (`render_add_block`), shown only while the user is
+    /// actively adding. Its layout style (row height, indent, font size) matches the tree, with just an extra
+    /// Refresh button + collapse chevron in the section header. Each candidate row ends with a "+" or "Added"
+    /// badge (PRODUCT.md decision E). Returns Empty when auto-discovery is off or the config has no hosts.
     fn render_candidates(
         &self,
         appearance: &warp_core::ui::appearance::Appearance,
@@ -1122,7 +1521,7 @@ impl SshManagerPanel {
             Hoverable::new(refresh_state, move |_| {
                 Container::new(refresh_icon)
                     .with_uniform_padding(2.0)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
                     .finish()
             })
             .with_cursor(Cursor::PointingHand)
@@ -1134,34 +1533,38 @@ impl SshManagerPanel {
             refresh_icon
         };
 
-        // The whole row: chevron + label (takes the middle space) + count + Refresh button.
-        // Use MainAxisSize::Max so the row fills the panel width, eliminating the gap on the right.
-        let row = Flex::row()
+        // chevron + label + count grouped at the left; the Refresh button pinned to
+        // the right edge via SpaceBetween (same pattern as render_toolbar) so the
+        // trailing action right-aligns instead of floating after the label.
+        let left_group = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(ITEM_ICON_TEXT_SPACING)
             .with_child(chevron_el)
             .with_child(label)
             .with_child(count_label)
-            .with_child(
-                ConstrainedBox::new(Empty::new().finish())
-                    .with_width(8.0)
-                    .finish(),
-            )
-            .with_child(refresh_btn)
+            .with_main_axis_size(MainAxisSize::Min)
+            .finish();
+        let row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::Start)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_child(left_group)
+            .with_child(refresh_btn)
             .finish();
 
         // Clicking the whole header = toggle (similar to a folder row's single-click).
         let toggle_state = self.candidates_toggle_btn.clone();
-        Hoverable::new(toggle_state, move |_| {
-            Container::new(row)
+        Hoverable::new(toggle_state, move |mouse| {
+            let mut c = Container::new(row)
                 .with_padding_top(ITEM_PADDING_VERTICAL)
                 .with_padding_bottom(ITEM_PADDING_VERTICAL)
                 .with_padding_left(ITEM_PADDING_HORIZONTAL)
                 .with_padding_right(ITEM_PADDING_HORIZONTAL)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                .finish()
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+            if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_3(theme));
+            }
+            c.finish()
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(|ctx, _, _| {
@@ -1320,7 +1723,7 @@ impl SshManagerPanel {
             Hoverable::new(add_state, move |_| {
                 Container::new(plus_icon)
                     .with_uniform_padding(2.0)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
                     .finish()
             })
             .with_cursor(Cursor::PointingHand)
@@ -1332,8 +1735,10 @@ impl SshManagerPanel {
             .finish()
         };
 
-        // Use MainAxisSize::Max so the candidate row fills the panel width, eliminating the gap on the right.
-        let row = Flex::row()
+        // indent + icon + label grouped at the left; the trailing "+"/"Added"
+        // pinned to the right edge via SpaceBetween, so it right-aligns instead of
+        // floating right after the label.
+        let left_group = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(ITEM_ICON_TEXT_SPACING)
             .with_child(
@@ -1343,13 +1748,14 @@ impl SshManagerPanel {
             )
             .with_child(icon_el)
             .with_child(label_block)
-            .with_child(
-                ConstrainedBox::new(Empty::new().finish())
-                    .with_width(8.0)
-                    .finish(),
-            )
-            .with_child(trailing)
+            .with_main_axis_size(MainAxisSize::Min)
+            .finish();
+        let row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_child(left_group)
+            .with_child(trailing)
             .finish();
 
         let row_state = self
@@ -1372,10 +1778,126 @@ impl SshManagerPanel {
         .finish()
     }
 
+    /// Renders the inline running-daemon-session rows shown under an expanded
+    /// host: a loading / error / empty message, or one clickable row per session
+    /// (click → adopt). Indented one level past the host row.
+    fn render_session_rows(
+        &self,
+        node: &SshNode,
+        appearance: &warp_core::ui::appearance::Appearance,
+    ) -> Vec<Box<dyn Element>> {
+        let theme = appearance.theme();
+        let muted: pathfinder_color::ColorU = theme.sub_text_color(theme.background()).into();
+        let depth = self.depths.get(&node.id).copied().unwrap_or(0);
+        // Align the session title under the host *name*: the tree row places its
+        // label after the depth indent + chevron + icon (each ITEM_ICON_SIZE) with
+        // ITEM_ICON_TEXT_SPACING between, so a child session lines up on that grid.
+        let indent =
+            depth as f32 * FOLDER_DEPTH_INDENT + 2.0 * ITEM_ICON_SIZE + 2.0 * ITEM_ICON_TEXT_SPACING;
+
+        let message = |text: String, color: pathfinder_color::ColorU| -> Box<dyn Element> {
+            Container::new(
+                Text::new_inline(text, appearance.ui_font_family(), appearance.ui_font_body())
+                    .with_color(color)
+                    .finish(),
+            )
+            .with_padding_top(ITEM_PADDING_VERTICAL)
+            .with_padding_bottom(ITEM_PADDING_VERTICAL)
+            .with_padding_left(indent)
+            .with_padding_right(ITEM_PADDING_HORIZONTAL)
+            .with_margin_bottom(ITEM_MARGIN_BOTTOM)
+            .finish()
+        };
+
+        if self.sessions_loading.contains(&node.id) {
+            return vec![message(
+                crate::t!("workspace-left-panel-ssh-manager-sessions-loading"),
+                muted,
+            )];
+        }
+        if let Some(err) = self.sessions_error.get(&node.id) {
+            // A failed session fetch is an error — render it in the theme's error
+            // color, matching the candidates error row (no glyph needed).
+            return vec![message(err.clone(), theme.ui_error_color())];
+        }
+        let sessions = match self.host_sessions.get(&node.id) {
+            Some(sessions) if !sessions.is_empty() => sessions,
+            _ => {
+                return vec![message(
+                    crate::t!("workspace-left-panel-ssh-manager-sessions-empty"),
+                    muted,
+                )]
+            }
+        };
+
+        sessions
+            .iter()
+            .map(|session| {
+                let key = format!("{}:{}", node.id, session.session_id);
+                let state = self
+                    .session_row_states
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_default();
+                let node_id = node.id.clone();
+                let pty_session_id = session.session_id.clone();
+                let title = if !session.title.is_empty() {
+                    session.title.clone()
+                } else if !session.cwd.is_empty() {
+                    session.cwd.clone()
+                } else {
+                    pty_session_id.clone()
+                };
+                let row = Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(ITEM_ICON_TEXT_SPACING)
+                    .with_child(
+                        ConstrainedBox::new(Empty::new().finish())
+                            .with_width(indent)
+                            .finish(),
+                    )
+                    .with_child(
+                        Text::new_inline(
+                            title,
+                            appearance.ui_font_family(),
+                            appearance.ui_font_subheading(),
+                        )
+                        .with_color(theme.main_text_color(theme.background()).into())
+                        .finish(),
+                    )
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .finish();
+                Hoverable::new(state, move |mouse| {
+                    let mut c = Container::new(row)
+                        .with_padding_top(ITEM_PADDING_VERTICAL)
+                        .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                        .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                        .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                        .with_margin_bottom(ITEM_MARGIN_BOTTOM)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+                    if mouse.is_hovered() {
+                        c = c.with_background(internal_colors::fg_overlay_3(theme));
+                    }
+                    c.finish()
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(SshManagerPanelAction::AdoptSession {
+                        node_id: node_id.clone(),
+                        pty_session_id: pty_session_id.clone(),
+                    });
+                })
+                .finish()
+            })
+            .collect()
+    }
+
     fn render_tree(&self, appearance: &warp_core::ui::appearance::Appearance) -> Box<dyn Element> {
         let mut col = Flex::column();
 
-        if self.nodes.is_empty() {
+        // While the "Add a host" block is shown, suppress the "no servers yet"
+        // empty-state — showing both at once reads as a contradiction.
+        if self.nodes.is_empty() && !self.adding_mode {
             let theme = appearance.theme();
             let muted = theme.sub_text_color(theme.background());
             col.add_child(
@@ -1400,6 +1922,14 @@ impl SshManagerPanel {
                     continue;
                 }
                 col.add_child(self.render_row(node, appearance));
+                // Adopt-sidebar: inline running daemon sessions under an expanded host.
+                if matches!(node.kind, NodeKind::Server)
+                    && self.sessions_expanded.contains(&node.id)
+                {
+                    for child in self.render_session_rows(node, appearance) {
+                        col.add_child(child);
+                    }
+                }
             }
         }
         let inner = col
@@ -1508,7 +2038,7 @@ impl SshManagerPanel {
         };
 
         // Use MainAxisSize::Max so the tree node row fills the panel width, eliminating the gap on the right.
-        let row = Flex::row()
+        let mut row_flex = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(ITEM_ICON_TEXT_SPACING)
             .with_child(
@@ -1518,9 +2048,34 @@ impl SshManagerPanel {
             )
             .with_child(chevron_el)
             .with_child(icon_el)
-            .with_child(label_or_editor)
-            .with_main_axis_size(MainAxisSize::Max)
-            .finish();
+            .with_child(label_or_editor);
+        // ⚡ mark: this host opens as a Zaplexify persistent session (survives
+        // disconnects). The mark is the at-a-glance signal in the host list.
+        if self.resilient_hosts.contains(&node.id) {
+            row_flex = row_flex.with_child(
+                Text::new_inline(
+                    "⚡".to_string(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_subheading(),
+                )
+                .with_color(theme.accent().into_solid())
+                .finish(),
+            );
+        }
+        // Instant connect feedback: the daemon preflight runs a few seconds
+        // before any tab appears; show it on the row instead of feeling dead.
+        if self.connecting.contains(&node.id) {
+            row_flex = row_flex.with_child(
+                Text::new_inline(
+                    crate::t!("workspace-left-panel-ssh-manager-connecting"),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_subheading(),
+                )
+                .with_color(theme.sub_text_color(theme.background()).into_solid())
+                .finish(),
+            );
+        }
+        let row = row_flex.with_main_axis_size(MainAxisSize::Max).finish();
 
         let state = self.row_states.get(&node.id).cloned().unwrap_or_default();
         let id_for_click = node.id.clone();
@@ -1528,13 +2083,15 @@ impl SshManagerPanel {
         let id_for_right_click = node.id.clone();
 
         // While renaming, don't accept clicks/right-clicks (let EditorView handle them).
+        // Padding must match the normal (hoverable) branch exactly so the row does
+        // not shift when rename mode toggles — the normal branch adds no bottom
+        // margin, so this one must not either.
         if is_renaming {
             return Container::new(row)
                 .with_padding_top(ITEM_PADDING_VERTICAL)
                 .with_padding_bottom(ITEM_PADDING_VERTICAL)
                 .with_padding_left(ITEM_PADDING_HORIZONTAL)
                 .with_padding_right(ITEM_PADDING_HORIZONTAL)
-                .with_margin_bottom(ITEM_MARGIN_BOTTOM)
                 .finish();
         }
 
@@ -1664,6 +2221,10 @@ impl SshManagerPanel {
                             SshManagerPanelAction::Connect,
                         ),
                         (
+                            crate::t!("workspace-left-panel-ssh-manager-menu-sessions"),
+                            SshManagerPanelAction::ToggleSessions(id.clone()),
+                        ),
+                        (
                             crate::t!("workspace-left-panel-ssh-manager-menu-sftp"),
                             SshManagerPanelAction::OpenSftp,
                         ),
@@ -1756,11 +2317,17 @@ impl TypedActionView for SshManagerPanel {
                 let parent = self.parent_for_new_node();
                 self.on_add_folder_with_parent(parent, ctx)
             }
+            SshManagerPanelAction::ToggleAddMode => self.on_toggle_add_mode(ctx),
             SshManagerPanelAction::AddServer => self.on_add_server(ctx),
             SshManagerPanelAction::DeleteSelected => self.on_delete_selected(ctx),
             SshManagerPanelAction::Connect => self.on_connect(ctx),
             SshManagerPanelAction::Edit => self.on_edit(ctx),
             SshManagerPanelAction::CloneServer(id) => self.on_clone_server(id, ctx),
+            SshManagerPanelAction::ToggleSessions(id) => self.on_toggle_sessions(id.clone(), ctx),
+            SshManagerPanelAction::AdoptSession {
+                node_id,
+                pty_session_id,
+            } => self.on_adopt_session(node_id.clone(), pty_session_id.clone(), ctx),
             SshManagerPanelAction::Click(id) => self.on_click(id.clone(), ctx),
             SshManagerPanelAction::StartRename(id) => self.enter_rename(id.clone(), false, ctx),
             SshManagerPanelAction::CommitRename => self.commit_rename(ctx),
@@ -1807,17 +2374,21 @@ impl View for SshManagerPanel {
         let appearance = warp_core::ui::appearance::Appearance::as_ref(app);
 
         let toolbar = Container::new(self.render_toolbar(appearance))
-            .with_uniform_padding(8.0)
+            .with_uniform_padding(PANEL_HORIZONTAL_PADDING)
             .finish();
 
-        // PRODUCT.md §2: the Candidates section sits **above** the saved tree, sharing the same panel
-        // horizontal padding. Before the view-model has refreshed, the section returns Empty and takes
-        // no height. When auto-discovery is off, the section is not rendered.
-        let auto_discover = *SshSettings::as_ref(app).enable_ssh_auto_discovery.value();
-        let candidates_section = if auto_discover {
-            Container::new(self.render_candidates(appearance, app))
+        // The saved tree shows **only** what the user deliberately added. The
+        // guided "Add a host" block — a blank-server action plus on-demand
+        // `~/.ssh/config` suggestions — is shown above the tree only while the
+        // user is actively adding (toolbar "+"), so nothing unsolicited ever
+        // appears in the list.
+        let candidates_section = if self.adding_mode {
+            Container::new(self.render_add_block(appearance, app))
                 .with_padding_left(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
                 .with_padding_right(PANEL_HORIZONTAL_PADDING - ITEM_PADDING_HORIZONTAL)
+                // Separate the "Add a host" block from the saved tree below, so
+                // "what I can add" reads as distinct from "what I have".
+                .with_padding_bottom(ITEM_ICON_TEXT_SPACING)
                 .finish()
         } else {
             Empty::new().finish()

@@ -429,7 +429,7 @@ impl ConversationEndedTombstoneView {
         #[cfg(not(target_family = "wasm"))]
         {
             // Hide for non-Oz harnesses (e.g. Claude, Gemini): they can't be
-            // forked into a local Zap conversation. Unknown harness (None) is
+            // forked into a local Zaplex conversation. Unknown harness (None) is
             // treated as allowed so plain conversations and pre-load tasks still
             // show the button.
             let harness_allows_continue =

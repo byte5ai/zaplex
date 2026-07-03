@@ -13,7 +13,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::InputConfig;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::code::editor_management::CodeSource;
-use crate::drive::ZapDriveObjectSettings;
+use crate::drive::ZaplexDriveObjectSettings;
 use crate::root_view::quake_mode_window_id;
 use crate::server::ids::SyncId;
 use crate::settings_view::SettingsSection;
@@ -127,7 +127,7 @@ pub enum LeafContents {
     AIDocument(AIDocumentPaneSnapshot),
     Code(CodePaneSnapShot),
     EnvVarCollection(EnvVarCollectionPaneSnapshot),
-    // Zap Wave 7-3: the `EnvironmentManagement` LeafContents variant was physically removed
+    // Zaplex Wave 7-3: the `EnvironmentManagement` LeafContents variant was physically removed
     // along with the Ambient Agent UI subsystem.
     Workflow(WorkflowPaneSnapshot),
     Settings(SettingsPaneSnapshot),
@@ -152,6 +152,10 @@ pub enum LeafContents {
     Sftp {
         node_id: String,
     },
+    /// Cockpit dashboard pane (account usage/cost/heat overview). **Not
+    /// persisted** — after a restart the user reopens it from the cockpit
+    /// sidebar; all data is re-derived from the data spine anyway.
+    Cockpit,
 }
 
 #[cfg(feature = "local_fs")]
@@ -167,7 +171,7 @@ impl LeafContents {
     /// restoration to fail and the whole tab to disappear on restart.
     pub(crate) fn is_persisted(&self) -> bool {
         match self {
-            // Zap Wave 7-3: the `EnvironmentManagement` arm was physically removed along with the variant.
+            // Zaplex Wave 7-3: the `EnvironmentManagement` arm was physically removed along with the variant.
             // SSH server editor: the data (host/user/...) is persisted in the ssh_servers table,
             // the pane itself is just a view, so closing and reopening makes no difference.
             LeafContents::SshServer { .. } => false,
@@ -176,6 +180,8 @@ impl LeafContents {
             // Image viewer panes are intentionally not persisted: they render in-session but
             // are not restored after restart.
             LeafContents::Image { .. } => false,
+            // Cockpit dashboard: pure lens over the data spine; reopened from the sidebar.
+            LeafContents::Cockpit => false,
             // Remote-file code pane: the remote buffer depends on an active SSH connection, and the `RemoteFileTree`
             // source is not restorable (`is_restorable() == false`). Persisting it would leave behind
             // an orphan `Code` row that is skipped during the restore phase, causing the whole tab to be lost —
@@ -237,7 +243,7 @@ pub enum NotebookPaneSnapshot {
         ///    server ID.
         notebook_id: Option<SyncId>,
         // Settings for the notebook pane when it's opened (such as a folder to focus upon opening)
-        settings: ZapDriveObjectSettings,
+        settings: ZaplexDriveObjectSettings,
     },
     LocalFileNotebook {
         /// The path to the local file that was open in this pane. This may be `None` if
@@ -276,7 +282,7 @@ pub enum WorkflowPaneSnapshot {
     WorkflowObject {
         workflow_id: Option<SyncId>,
         // Settings for the workflow pane when it's opened (such as a folder to focus upon opening)
-        settings: ZapDriveObjectSettings,
+        settings: ZaplexDriveObjectSettings,
     },
 }
 
@@ -289,7 +295,7 @@ pub enum EnvVarCollectionPaneSnapshot {
     },
 }
 
-// Zap Wave 7-3: `EnvironmentManagementPaneSnapshot` was physically removed along with the LeafContents variant.
+// Zaplex Wave 7-3: `EnvironmentManagementPaneSnapshot` was physically removed along with the LeafContents variant.
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SettingsPaneSnapshot {
@@ -316,11 +322,12 @@ pub enum CodeReviewPaneSnapshot {
 pub enum LeftPanelDisplayedTab {
     FileTree,
     GlobalSearch,
-    ZapDrive,
+    ZaplexDrive,
     ConversationListView,
     SshManager,
     ServerFileBrowser,
     SkillManager,
+    Cockpit,
 }
 
 impl From<ToolPanelView> for LeftPanelDisplayedTab {
@@ -328,11 +335,12 @@ impl From<ToolPanelView> for LeftPanelDisplayedTab {
         match view {
             ToolPanelView::ProjectExplorer => LeftPanelDisplayedTab::FileTree,
             ToolPanelView::GlobalSearch { .. } => LeftPanelDisplayedTab::GlobalSearch,
-            ToolPanelView::ZapDrive => LeftPanelDisplayedTab::ZapDrive,
+            ToolPanelView::ZaplexDrive => LeftPanelDisplayedTab::ZaplexDrive,
             ToolPanelView::ConversationListView => LeftPanelDisplayedTab::ConversationListView,
             ToolPanelView::SshManager => LeftPanelDisplayedTab::SshManager,
             ToolPanelView::ServerFileBrowser => LeftPanelDisplayedTab::ServerFileBrowser,
             ToolPanelView::SkillManager => LeftPanelDisplayedTab::SkillManager,
+            ToolPanelView::Cockpit => LeftPanelDisplayedTab::Cockpit,
         }
     }
 }

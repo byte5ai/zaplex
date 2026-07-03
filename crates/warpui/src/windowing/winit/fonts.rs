@@ -136,7 +136,7 @@ mod loader {
     }
 }
 
-// We use font-kit's family handle to load fonts that come with Zap as
+// We use font-kit's family handle to load fonts that come with Zaplex as
 // these binaries are already in memory and won't increase our memory load.
 fn load_font_family_from_bytes(name: &str, font_bytes: Vec<Vec<u8>>) -> Result<FontFamily> {
     use owned_ttf_parser::OwnedFace;
@@ -318,7 +318,7 @@ impl Default for TextLayoutSystem {
 /// mmap-backed font file data itself is not reloaded.
 ///
 /// This is acceptable because UI locale switching is rare (currently driven by Settings →
-/// Language and "restart Zap" prompts), and users already expect a brief interruption.
+/// Language and "restart Zaplex" prompts), and users already expect a brief interruption.
 /// If zero-latency hot-reload is needed later, the hook is at `app::i18n::set_locale`.
 fn rebuild_font_system_for_locale(
     store: &std::sync::Arc<RwLock<cosmic_text::FontSystem>>,

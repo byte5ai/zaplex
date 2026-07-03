@@ -1,7 +1,7 @@
 //! BYOP (Bring Your Own Provider) `LLMId` prefix encoding/decoding.
 //!
 //! Custom Agent provider models are distinguished in the `LLMId` string by the `byop:` prefix,
-//! allowing the controller to determine at request egress whether to use the Zap backend
+//! allowing the controller to determine at request egress whether to use the Zaplex backend
 //! or the user's own OpenAI-compatible endpoint.
 //!
 //! Encoding format: `byop:<provider_id>:<model_id>`

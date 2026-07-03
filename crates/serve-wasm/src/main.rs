@@ -14,7 +14,7 @@ use std::time::Duration;
 use tower::ServiceBuilder;
 use tracing::Span;
 
-/// A small webserver to serve the Zap wasm bundle and assets for local development.
+/// A small webserver to serve the Zaplex wasm bundle and assets for local development.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -38,7 +38,7 @@ async fn main() {
 
     let args = Args::parse();
 
-    println!("Serving Zap on http://localhost:{}", args.port);
+    println!("Serving Zaplex on http://localhost:{}", args.port);
     serve(make_router(&args.directory), args.port).await
 }
 

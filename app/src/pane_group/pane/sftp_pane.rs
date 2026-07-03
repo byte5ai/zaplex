@@ -41,6 +41,25 @@ impl SftpPane {
             node_id,
         }
     }
+
+    /// Creates a file-manager pane over the **local** filesystem (FM pane-mode
+    /// P1), rooted at `start_path`. Snapshots as `LeafContents::Sftp` with an
+    /// empty node id — irrelevant in practice since SFTP/FM panes are not
+    /// persisted (`is_persisted()` is false).
+    pub fn new_local<V: View>(start_path: std::path::PathBuf, ctx: &mut ViewContext<V>) -> Self {
+        let browser_view =
+            ctx.add_typed_action_view(move |ctx| SftpBrowserView::new_local(start_path, ctx));
+        let pane_configuration = browser_view.as_ref(ctx).pane_configuration();
+        let pane_view = ctx.add_typed_action_view(|ctx| {
+            let pane_id = PaneId::from_sftp_pane_ctx(ctx);
+            PaneView::new(pane_id, browser_view, (), pane_configuration.clone(), ctx)
+        });
+        Self {
+            view: pane_view,
+            pane_configuration,
+            node_id: String::new(),
+        }
+    }
 }
 
 impl PaneContent for SftpPane {

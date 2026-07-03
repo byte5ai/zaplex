@@ -147,7 +147,7 @@ fn version_is_compatible(client: Option<&str>, server: &str) -> bool {
 
 /// Whether to enforce strict tag matching for the remote `server_version`.
 ///
-/// For [`Channel::Oss`](Zap), locally-built source has no `GIT_RELEASE_TAG`,
+/// For [`Channel::Oss`](Zaplex), locally-built source has no `GIT_RELEASE_TAG`,
 /// but SSH Extension may install a latest-release remote-server.
 /// Enforcing strict version check would cause a delete/reinstall/mismatch loop
 /// when client is `None` and server has a non-empty tag. Release builds avoid stale binaries
@@ -372,6 +372,37 @@ pub enum RemoteServerManagerEvent {
     },
     /// A server message could not be decoded (no parseable request_id).
     ServerMessageDecodingError { session_id: SessionId },
+
+    // --- Native session host (Stage 2) ---
+    /// Live PTY output for a daemon-hosted session. `session_id` is the
+    /// manager/connection session; `pty_session_id` is the daemon's PTY session
+    /// id (from OpenSession/AttachSession). `seq` is the byte offset of the
+    /// first byte in `bytes` (monotonic), for replay alignment.
+    SessionOutput {
+        session_id: SessionId,
+        host_id: HostId,
+        pty_session_id: String,
+        seq: u64,
+        bytes: Vec<u8>,
+    },
+    /// A daemon-hosted session's shell exited.
+    SessionExited {
+        session_id: SessionId,
+        host_id: HostId,
+        pty_session_id: String,
+        exit_code: Option<i32>,
+    },
+    /// Advisory about a daemon-hosted session's environment, e.g. kind
+    /// "multiplexer-detected" (the session landed inside tmux/screen via a
+    /// hand-rolled auto-attach) with the multiplexer name in `detail`.
+    /// Consumers must ignore unknown kinds.
+    SessionNotice {
+        session_id: SessionId,
+        host_id: HostId,
+        pty_session_id: String,
+        kind: String,
+        detail: String,
+    },
 }
 
 impl RemoteServerManagerEvent {
@@ -390,7 +421,10 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::BinaryCheckComplete { session_id, .. }
             | RemoteServerManagerEvent::BinaryInstallComplete { session_id, .. }
             | RemoteServerManagerEvent::ClientRequestFailed { session_id, .. }
-            | RemoteServerManagerEvent::ServerMessageDecodingError { session_id } => {
+            | RemoteServerManagerEvent::ServerMessageDecodingError { session_id }
+            | RemoteServerManagerEvent::SessionOutput { session_id, .. }
+            | RemoteServerManagerEvent::SessionExited { session_id, .. }
+            | RemoteServerManagerEvent::SessionNotice { session_id, .. } => {
                 Some(*session_id)
             }
             RemoteServerManagerEvent::HostConnected { .. }
@@ -445,6 +479,12 @@ pub struct RemoteServerManager {
     /// Detected remote platform per session, populated during the binary check
     /// phase via `detect_platform()`. Used for telemetry.
     session_platforms: HashMap<SessionId, RemotePlatform>,
+    /// Sessions backed by a persistent daemon (native remote-session layer). For
+    /// these, a transport-child exit on a network blip does NOT mean the remote
+    /// session died — the daemon keeps it running — so `mark_session_disconnected`
+    /// must still attempt reconnect (the generic path skips reconnect on child
+    /// exit). Populated by `mark_session_persistent`; cleared on teardown.
+    persistent_session_ids: HashSet<SessionId>,
 }
 
 impl Entity for RemoteServerManager {
@@ -463,7 +503,15 @@ impl RemoteServerManager {
             session_bootstrap_info: HashMap::new(),
             auth_context: None,
             session_platforms: HashMap::new(),
+            persistent_session_ids: HashSet::new(),
         }
+    }
+
+    /// Marks `session_id` as backed by a persistent daemon, so a transport-child
+    /// exit is treated as a recoverable transport drop (reconnect) rather than a
+    /// terminal disconnect. Call before `connect_session` on the daemon path.
+    pub fn mark_session_persistent(&mut self, session_id: SessionId) {
+        self.persistent_session_ids.insert(session_id);
     }
 
     /// Returns a connected client for the given host by picking an arbitrary
@@ -850,7 +898,7 @@ impl RemoteServerManager {
         // tag than the client expects, the binary on disk is stale. Remove it so
         // the next reconnect (or explicit reconnect by the user) will reinstall.
         //
-        // Under `Channel::Oss`(Zap), we temporarily reuse the official release binary;
+        // Under `Channel::Oss`(Zaplex), we temporarily reuse the official release binary;
         // the client has no `GIT_RELEASE_TAG`, so it will never match the server.
         // Therefore, strict version checking is skipped. See [`should_enforce_remote_version_check`] for details.
         let client_version = ChannelState::app_version();
@@ -919,10 +967,54 @@ impl RemoteServerManager {
     ///   was in, because the entry is being removed from `sessions`
     ///   outright. Unlike `SessionDisconnected`, this one never fires for
     ///   spontaneous drops -- only for explicit teardown.
-    pub fn deregister_session(&mut self, session_id: SessionId, ctx: &mut ModelContext<Self>) {
+    /// Surface a *pre-connect* setup failure for `session_id` to subscribers,
+    /// for callers that fail before they could even invoke `connect_session`
+    /// (e.g. bringing up the ControlMaster or installing the remote-server
+    /// binary failed). Without this, a tab created for the session would hang
+    /// forever waiting for output. Emits the same `SessionConnectionFailed`
+    /// event the normal connect path emits on handshake failure, so consumers
+    /// (e.g. the daemon terminal) render the error instead of a blank view.
+    pub fn fail_session(
+        &mut self,
+        session_id: SessionId,
+        phase: RemoteServerInitPhase,
+        error: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        log::error!("Pre-connect setup failed for session {session_id:?} at {phase:?}: {error}");
+        ctx.emit(RemoteServerManagerEvent::SetupStateChanged {
+            session_id,
+            state: RemoteServerSetupState::Failed {
+                error: error.clone(),
+            },
+        });
+        ctx.emit(RemoteServerManagerEvent::SessionConnectionFailed {
+            session_id,
+            phase,
+            error,
+        });
+    }
+
+    /// Tears down the manager's tracking for `session_id` and drops its transport
+    /// (killing the per-session `ssh … remote-server-proxy` child via
+    /// `kill_on_drop`).
+    ///
+    /// `stop_control_master` controls whether the local SSH ControlMaster is also
+    /// forced to exit. Pass `true` for per-session masters (the legacy ssh-wrapper
+    /// path) so the foreground ssh can exit cleanly. Pass `false` for daemon
+    /// sessions: their ControlMaster is **per-host and shared** across daemon tabs,
+    /// so stopping it would drop sibling tabs' transports — leave it for reuse /
+    /// its own ControlPersist timeout.
+    pub fn deregister_session(
+        &mut self,
+        session_id: SessionId,
+        stop_control_master: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         self.last_navigated_path.remove(&session_id);
         self.session_bootstrap_info.remove(&session_id);
         self.session_platforms.remove(&session_id);
+        self.persistent_session_ids.remove(&session_id);
 
         // Remove the session entry. Dropping the `RemoteSessionState`
         // here drops the transport's owned `Child` (if any), which
@@ -965,13 +1057,16 @@ impl RemoteServerManager {
         // Force the local SSH ControlMaster to exit after teardown.
         // Spawned detached because the ssh subcommand may take a moment
         // to complete and we don't want to block the main thread on it.
+        // Skipped for daemon sessions (shared per-host master — see the doc above).
         #[cfg(not(target_family = "wasm"))]
-        if let Some(control_path) = control_path {
-            ctx.background_executor()
-                .spawn(async move {
-                    crate::ssh::stop_control_master(&control_path).await;
-                })
-                .detach();
+        if stop_control_master {
+            if let Some(control_path) = control_path {
+                ctx.background_executor()
+                    .spawn(async move {
+                        crate::ssh::stop_control_master(&control_path).await;
+                    })
+                    .detach();
+            }
         }
     }
 
@@ -1257,6 +1352,43 @@ impl RemoteServerManager {
                     edits,
                 });
             }
+            ClientEvent::SessionOutput {
+                session_id: pty_session_id,
+                seq,
+                bytes,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::SessionOutput {
+                    session_id,
+                    host_id,
+                    pty_session_id,
+                    seq,
+                    bytes,
+                });
+            }
+            ClientEvent::SessionExited {
+                session_id: pty_session_id,
+                exit_code,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::SessionExited {
+                    session_id,
+                    host_id,
+                    pty_session_id,
+                    exit_code,
+                });
+            }
+            ClientEvent::SessionNotice {
+                session_id: pty_session_id,
+                kind,
+                detail,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::SessionNotice {
+                    session_id,
+                    host_id,
+                    pty_session_id,
+                    kind,
+                    detail,
+                });
+            }
             ClientEvent::MessageDecodingError => {
                 ctx.emit(RemoteServerManagerEvent::ServerMessageDecodingError { session_id });
             }
@@ -1403,7 +1535,16 @@ impl RemoteServerManager {
             // terminal pane to hang 2-4 seconds before terminating; so skip auto-reconnect and go straight to Disconnected.
             // Only `exit_status.is_none()` (child still running but reader got EOF) — true transient network hiccup —
             // retains the reconnect logic.
-            let child_already_exited = exit_status.is_some();
+            //
+            // EXCEPTION — persistent daemon sessions: the transport child is the
+            // per-connection ssh/proxy slave, which exits on a network blip while
+            // the remote daemon (a separate process) keeps the PTY session alive.
+            // So for these we must NOT skip reconnect on child exit; the
+            // self-healing ControlMaster + `SessionReconnected`/reattach path then
+            // restores the live view. (If the daemon truly died, reconnect just
+            // fails after the bounded retries.)
+            let is_persistent = self.persistent_session_ids.contains(&session_id);
+            let child_already_exited = exit_status.is_some() && !is_persistent;
             let Some(auth_context) = self.auth_context.clone().filter(|_| !child_already_exited)
             else {
                 if child_already_exited {
@@ -1418,6 +1559,7 @@ impl RemoteServerManager {
                          but no auth context is available for reconnect"
                     );
                 }
+                self.persistent_session_ids.remove(&session_id);
                 self.sessions
                     .insert(session_id, RemoteSessionState::Disconnected);
                 self.remove_from_host_index(&host_id, session_id);
@@ -1622,6 +1764,9 @@ impl RemoteServerManager {
                 "Reconnect exhausted for session {session_id:?} after {} attempt(s)",
                 params.attempt
             );
+            // Terminal state — drop the persistent flag so the id doesn't linger
+            // in the set (daemon session ids are monotonic and never reused).
+            self.persistent_session_ids.remove(&session_id);
             self.sessions
                 .insert(session_id, RemoteSessionState::Disconnected);
             ctx.emit(RemoteServerManagerEvent::SessionDisconnected {

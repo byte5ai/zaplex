@@ -82,7 +82,7 @@ pub fn open_url_in_system(url: &str) {
         // 1. First attempt to open with `wslview`, since that is basically made to open stuff in wsl
         // 2. Use `cmd.exe /c start {url}` to open in the user's default windows browser
         //    - If a user does not want this behavior, and wants all opening to go through
-        //      WSL, they can set the env variable WARP_FORCE_WSL_BROWSER.
+        //      WSL, they can set the env variable ZAPLEX_FORCE_WSL_BROWSER.
         // 3. Fall back to default linux url opening behavior.
         if platform::linux::is_wsl() {
             match open::with_detached(url, "wslview") {
@@ -129,7 +129,7 @@ pub fn open_url_in_system(url: &str) {
 fn use_wsl_browser() -> bool {
     static USE_WSL_BROWSER: OnceLock<bool> = OnceLock::new();
     USE_WSL_BROWSER
-        .get_or_init(|| std::env::var("WARP_FORCE_WSL_BROWSER").is_ok())
+        .get_or_init(|| std::env::var("ZAPLEX_FORCE_WSL_BROWSER").is_ok())
         .to_owned()
 }
 

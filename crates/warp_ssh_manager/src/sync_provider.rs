@@ -6,7 +6,7 @@
 use crate::db::with_conn;
 use crate::repository::{SshRepository, SyncMetaRepository};
 use crate::secrets::{KeychainSecretStore, SecretKind, SshSecretStore};
-use crate::types::{NodeKind, OneKeyCredentialKind};
+use crate::types::{NodeKind, OneKeyCredentialKind, SessionResilience};
 use diesel::connection::{Connection, SimpleConnection};
 use diesel::{QueryDsl, RunQueryDsl};
 use serde::{Deserialize, Serialize};
@@ -47,9 +47,24 @@ pub struct SyncServer {
     pub notes: Option<String>,
     #[serde(default)]
     pub credential_id: Option<String>,
+    /// Native-session per-host opt-in (DB string form). Defaults to "off" so
+    /// payloads written by older clients deserialize cleanly.
+    #[serde(default = "default_session_resilience")]
+    pub session_resilience: String,
+    /// Per-host daemon scrollback ceiling in MiB (0 = daemon default). Defaults
+    /// to 0 so payloads written by older clients deserialize cleanly.
+    #[serde(default)]
+    pub ring_ceiling_mb: u32,
     pub password_encrypted: Option<String>,
     pub passphrase_encrypted: Option<String>,
     pub root_password_encrypted: Option<String>,
+}
+
+fn default_session_resilience() -> String {
+    // A sync payload predating this field represents a host from before persistence
+    // existed — keep it `off`. (Explicit, not the enum default, which is now
+    // `persist_only` for *new* hosts; we must not silently upgrade synced hosts.)
+    SessionResilience::Off.as_db_str().to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +167,8 @@ impl SyncDataProvider for SshSyncProvider {
                         startup_command: server.startup_command.clone(),
                         notes: server.notes.clone(),
                         credential_id: server.credential_id.clone(),
+                        session_resilience: server.session_resilience.as_db_str().to_string(),
+                        ring_ceiling_mb: server.ring_ceiling_mb,
                         password_encrypted: encrypt_optional(token, password.as_deref())?,
                         passphrase_encrypted: encrypt_optional(token, passphrase.as_deref())?,
                         root_password_encrypted: encrypt_optional(token, root_password.as_deref())?,
@@ -335,6 +352,8 @@ impl SyncDataProvider for SshSyncProvider {
                             startup_command: server.startup_command.as_deref(),
                             notes: server.notes.as_deref(),
                             credential_id: server.credential_id.as_deref(),
+                            session_resilience: &server.session_resilience,
+                            ring_ceiling_mb: server.ring_ceiling_mb as i32,
                         })
                         .execute(conn)?;
                 }
@@ -607,6 +626,8 @@ mod tests {
             startup_command: None,
             notes: Some("test".to_string()),
             credential_id: None,
+            session_resilience: "off".to_string(),
+            ring_ceiling_mb: 0,
             password_encrypted: Some("enc123".to_string()),
             passphrase_encrypted: None,
             root_password_encrypted: Some("enc456".to_string()),
@@ -632,6 +653,8 @@ mod tests {
             startup_command: None,
             notes: None,
             credential_id: None,
+            session_resilience: "off".to_string(),
+            ring_ceiling_mb: 0,
             password_encrypted: None,
             passphrase_encrypted: None,
             root_password_encrypted: None,
@@ -664,6 +687,8 @@ mod tests {
                 startup_command: None,
                 notes: None,
                 credential_id: None,
+                session_resilience: "off".to_string(),
+                ring_ceiling_mb: 0,
                 password_encrypted: Some("enc".to_string()),
                 passphrase_encrypted: None,
                 root_password_encrypted: None,
@@ -715,6 +740,8 @@ mod tests {
 
         assert!(parsed.onekey_credentials.is_empty());
         assert_eq!(parsed.servers[0].credential_id, None);
+        // A payload predating the field deserializes to the "off" default.
+        assert_eq!(parsed.servers[0].session_resilience, "off");
     }
 
     #[test]

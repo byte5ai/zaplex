@@ -526,8 +526,8 @@ pub mod regexes {
     /// We know those sections are JSON and should begin with '{"'.
     pub const JWT: &str = r"\b(ey[a-zA-z0-9_\-=]{10,}\.){2}[a-zA-z0-9_\-=]{10,}\b";
 
-    /// Identifies a Zap API Key. Format: wk- followed by a version number and any combination of hex digits, hyphens, or periods.
-    pub const WARP_API_KEY: &str = r"\bwk-[0-9]+\.[A-Fa-f0-9.\-]+\b";
+    /// Identifies a Zaplex API Key. Format: wk- followed by a version number and any combination of hex digits, hyphens, or periods.
+    pub const ZAPLEX_API_KEY: &str = r"\bwk-[0-9]+\.[A-Fa-f0-9.\-]+\b";
 
     /// Returns a slice of regex strings that can be used to identify secrets.
     // NOTE: All regexes added here must also be added server-side in logic/ai/util.go.
@@ -609,8 +609,8 @@ pub mod regexes {
             name: "Fireworks API Key",
         },
         DefaultRegex {
-            pattern: WARP_API_KEY,
-            name: "Zap API Key",
+            pattern: ZAPLEX_API_KEY,
+            name: "Zaplex API Key",
         },
     ];
 }

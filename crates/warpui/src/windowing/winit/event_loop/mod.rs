@@ -921,7 +921,7 @@ impl EventLoop {
                 };
 
                 // There is a winit bug such that events which cause a window to switch displays to
-                // one with a different scale factor resize the Zap window to an absurdly small
+                // one with a different scale factor resize the Zaplex window to an absurdly small
                 // size, <157, 25> on my system when I repro it. Events include unplugging a
                 // display, changing a display from extended to mirrored, and the like. We work
                 // around that by listening for [`WindowEvent::ScaleFactorChanged`] and changing

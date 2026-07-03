@@ -19,7 +19,6 @@ use crate::cloud_object::{
     model::persistence::ObjectStoreModel, GenericStringObjectFormat, JsonObjectType, ObjectType,
     Owner,
 };
-use crate::pricing::PricingInfoModel;
 use crate::search::files::model::FileSearchModel;
 use crate::server::ids::ClientId;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -147,7 +146,7 @@ pub fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| crate::code_review::git_status_update::GitStatusUpdateModel::new());
     app.add_singleton_model(RepoMetadataModel::new);
     app.add_singleton_model(FileSearchModel::new);
-    // Zap: RepoOutlines removed, no longer registered.
+    // Zaplex: RepoOutlines removed, no longer registered.
     #[cfg(feature = "voice_input")]
     app.add_singleton_model(voice_input::VoiceInput::new);
 
@@ -187,7 +186,6 @@ pub fn initialize_app(app: &mut App) {
     app.add_singleton_model(OneTimeModalModel::new);
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(|_| ToastStack);
-    app.add_singleton_model(|_| PricingInfoModel::new());
     app.add_singleton_model(ByoLlmAuthBannerSessionState::new);
     app.add_singleton_model(|_| {
         crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier::new()

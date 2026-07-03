@@ -2,7 +2,7 @@
 //! Repository metadata model singleton.
 //!
 //! This module provides a singleton model that manages repository metadata across
-//! all repositories tracked by Zap.
+//! all repositories tracked by Zaplex.
 
 use std::{
     collections::HashMap,

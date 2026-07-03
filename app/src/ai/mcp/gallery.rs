@@ -96,7 +96,7 @@ pub struct MCPGalleryManager {
 
 impl MCPGalleryManager {
     pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
-        // Zap (localization, Phase 2d-2): originally subscribed to `UpdateManager`'s `MCPGalleryUpdated` event
+        // Zaplex (localization, Phase 2d-2): originally subscribed to `UpdateManager`'s `MCPGalleryUpdated` event
         // to distribute gallery items after cloud fetch. Post-localization, cloud object fetch/fan-in removed;
         // this Phase keeps gallery empty and unsubscribes ——
         // gallery locally always empty, rendered as empty canvas by `MCPServersListPageView`; local MCP uses `file_based_manager`

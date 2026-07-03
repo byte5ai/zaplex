@@ -11,7 +11,7 @@ use crate::cloud_object::model::persistence::ObjectStoreModel;
 use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType, ObjectType};
 use crate::drive::export::ExportManager;
 use crate::drive::items::WarpDriveItemId;
-use crate::drive::{ObjectTypeAndId, ZapDriveObjectArgs, ZapDriveObjectSettings};
+use crate::drive::{ObjectTypeAndId, ZaplexDriveObjectArgs, ZaplexDriveObjectSettings};
 use crate::experiments::{BlockOnboarding, Experiment};
 use crate::interval_timer::IntervalTimer;
 use crate::launch_configs::launch_config;
@@ -102,10 +102,10 @@ use crate::auth::{WebHandoffEvent, WebHandoffView};
 
 /// Return the product name of the current channel as the initial window title and for quake/transferred window titles.
 ///
-/// Using `ChannelState::app_id().application_name()` allows OSS builds to show `Zap`, while
-/// upstream channels (Stable/Preview/Dev) still show their own names (`Zap` / `WarpPreview` / `WarpDev`),
+/// Using `ChannelState::app_id().application_name()` allows OSS builds to show `Zaplex`, while
+/// upstream channels (Stable/Preview/Dev) still show their own names (`Zaplex` / `WarpPreview` / `WarpDev`),
 /// avoiding hardcoded strings scattered across forks (Windows Task Manager groups processes by window title,
-/// hardcoding `"Zap"` would display Zap as `Zap(N)` in Task Manager).
+/// hardcoding `"Zaplex"` would display Zaplex as `Zaplex(N)` in Task Manager).
 ///
 /// Note: After window creation, `Workspace::update_window_title()` overrides this value on each tab switch/rename,
 /// so this function only determines the initial title when the window first opens before any tab is attached.
@@ -747,7 +747,7 @@ fn path_if_directory(path: &Path) -> Option<&Path> {
 /// Opens a new window with the workspace configured according to `source`. Returns the
 /// newly-opened window ID and a handle to the root view in that window.
 ///
-/// This is the canonical way to open a new Zap window - all other entrypoints should delegate to
+/// This is the canonical way to open a new Zaplex window - all other entrypoints should delegate to
 /// it if possible.
 pub(crate) fn open_new_with_workspace_source(
     source: NewWorkspaceSource,
@@ -862,7 +862,7 @@ fn open_linear_issue_work_in_new_window(args: &LinearIssueWork, ctx: &mut AppCon
     });
 }
 
-fn open_warp_drive_object(arg: &ZapDriveObjectArgs, ctx: &mut AppContext) {
+fn open_warp_drive_object(arg: &ZaplexDriveObjectArgs, ctx: &mut AppContext) {
     match arg.object_type {
         ObjectType::Notebook => open_new_workspace_with_notebook_open(
             SyncId::ServerId(arg.server_id),
@@ -888,7 +888,7 @@ fn display_object_missing_error_in_window(window_id: WindowId, ctx: &mut AppCont
 
 fn open_new_workspace_with_notebook_open(
     notebook_id: SyncId,
-    settings: ZapDriveObjectSettings,
+    settings: ZaplexDriveObjectSettings,
     ctx: &mut AppContext,
 ) {
     open_new_with_workspace_source(
@@ -902,7 +902,7 @@ fn open_new_workspace_with_notebook_open(
 
 fn open_new_workspace_with_workflow_open(
     workflow_id: SyncId,
-    settings: ZapDriveObjectSettings,
+    settings: ZaplexDriveObjectSettings,
     ctx: &mut AppContext,
 ) {
     open_new_with_workspace_source(
@@ -1250,11 +1250,11 @@ fn toggle_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx
     };
 }
 
-/// This action will show or hide all of Zap's windows except the quake window
+/// This action will show or hide all of Zaplex's windows except the quake window
 ///
-/// - If Zap is active and has any windows, hide those windows.
-/// - If Zap is hidden, show all windows.
-/// - If Zap is active but has 0 normal windows, create a new window with a new session.
+/// - If Zaplex is active and has any windows, hide those windows.
+/// - If Zaplex is hidden, show all windows.
+/// - If Zaplex is active but has 0 normal windows, create a new window with a new session.
 fn show_or_hide_non_quake_mode_windows(_: &(), ctx: &mut AppContext) {
     let quake_window_id = get_quake_mode_state(ctx).map(|state| state.window_id);
     let non_quake_mode_window_ids = ctx
@@ -1265,7 +1265,7 @@ fn show_or_hide_non_quake_mode_windows(_: &(), ctx: &mut AppContext) {
         open_new(&(), ctx);
     }
     let windowing_model = ctx.windows();
-    // Now there is at least one window. If a Zap window is active, hide the app.
+    // Now there is at least one window. If a Zaplex window is active, hide the app.
     // Otherwise, show activate the app to show it in front.
     let active_window_id = windowing_model.active_window();
     match active_window_id {
@@ -1310,11 +1310,11 @@ pub enum NewWorkspaceSource {
     },
     NotebookById {
         id: SyncId,
-        settings: ZapDriveObjectSettings,
+        settings: ZaplexDriveObjectSettings,
     },
     WorkflowById {
         id: SyncId,
-        settings: ZapDriveObjectSettings,
+        settings: ZaplexDriveObjectSettings,
     },
     AgentSession {
         options: Box<NewTerminalOptions>,
@@ -1447,7 +1447,7 @@ impl RootView {
             me.handle_auth_manager_event(event, ctx);
         });
 
-        // Zap(localization, Phase 5): `PreferencesSyncer` physically deleted.
+        // Zaplex(localization, Phase 5): `PreferencesSyncer` physically deleted.
         // Original `InitialLoadCompleted` event was used to call `apply_onboarding_settings`
         // after cloud preferences sync completes. In localized scenario, onboarding settings applied locally directly.
 
@@ -1478,11 +1478,11 @@ impl RootView {
                 if #[cfg(target_family = "wasm")] {
                     AuthOnboardingState::WebImport(AuthOnboardingTarget::Workspace(workspace_args.into()))
                 } else {
-                    // When ZapNewSettingsModes is enabled, show onboarding before login for
+                    // When ZaplexNewSettingsModes is enabled, show onboarding before login for
                     // users who haven't completed it yet (tracked via a local UserPreferences key).
-                    let has_completed_local_onboarding = FeatureFlag::ZapNewSettingsModes.is_enabled()
+                    let has_completed_local_onboarding = FeatureFlag::ZaplexNewSettingsModes.is_enabled()
                         && has_completed_local_onboarding(ctx);
-                    let should_show_pre_login_onboarding = FeatureFlag::ZapNewSettingsModes.is_enabled()
+                    let should_show_pre_login_onboarding = FeatureFlag::ZaplexNewSettingsModes.is_enabled()
                         && FeatureFlag::AgentOnboarding.is_enabled()
                         && !has_completed_local_onboarding;
                     if FeatureFlag::ForceLogin.is_enabled() {
@@ -1954,7 +1954,7 @@ impl RootView {
 
     pub fn open_warp_drive_object_in_existing_window(
         &mut self,
-        arg: &ZapDriveObjectArgs,
+        arg: &ZaplexDriveObjectArgs,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
@@ -2087,7 +2087,7 @@ impl RootView {
     }
 
     /// Insert a command that should create a subshell. If we support bootstrapping AKA
-    /// "warpifying" its [`ShellType`], set a flag to automatically bootstrap it when the command's
+    /// "zaplexifying" its [`ShellType`], set a flag to automatically bootstrap it when the command's
     /// block receives the [`AfterBlockStarted`] event.
     pub fn insert_subshell_command_and_bootstrap_if_supported(
         &mut self,
@@ -2233,7 +2233,7 @@ impl RootView {
                 } else if let AuthOnboardingState::NeedsSsoLink { .. } = &self.auth_onboarding_state
                 {
                     // We should be able to access their SSO state; if not, default to true,
-                    // since we should err on the side of them _not_ being able to use Zap.
+                    // since we should err on the side of them _not_ being able to use Zaplex.
                     if auth_state.needs_sso_link() == Some(false) {
                         self.auth_onboarding_state.complete_sso_link(ctx);
                     }
@@ -2269,8 +2269,8 @@ impl RootView {
                             // application, which ought to be valid.
                             self.web_handoff(ctx);
                         } else {
-                            // Zap removed log_out UI entry; native no longer forces logout.
-                            log::warn!("User account disabled; ignoring (Zap removed log_out)");
+                            // Zaplex removed log_out UI entry; native no longer forces logout.
+                            log::warn!("User account disabled; ignoring (Zaplex removed log_out)");
                         }
                     }
                 }
@@ -2301,7 +2301,7 @@ impl RootView {
     ) {
         match event {
             AuthOverrideWarningModalEvent::Close => {
-                // Zap removed log_out entry; closing no longer triggers logout.
+                // Zaplex removed log_out entry; closing no longer triggers logout.
             }
             AuthOverrideWarningModalEvent::BulkExport => {
                 self.export_all_warp_drive_objects(ctx);
@@ -2422,7 +2422,7 @@ impl RootView {
         true
     }
 
-    /// Zap(localization, Phase 5): Original `handle_preferences_syncer_event` applied onboarding settings
+    /// Zaplex(localization, Phase 5): Original `handle_preferences_syncer_event` applied onboarding settings
     /// after cloud preferences sync initial load completes, physically deleted with syncer.
     /// Onboarding settings now applied directly when onboarding completes; no need to defer until cloud sync.
     /// If onboarding stored a pending tutorial (because login was required first),
@@ -2436,7 +2436,7 @@ impl RootView {
             return;
         };
 
-        if FeatureFlag::ZapNewSettingsModes.is_enabled()
+        if FeatureFlag::ZaplexNewSettingsModes.is_enabled()
             && FeatureFlag::TabConfigs.is_enabled()
         {
             let intention = tutorial.intention();

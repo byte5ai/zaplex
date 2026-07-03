@@ -1,4 +1,4 @@
-//! Fluent-based localization layer for Zap Desktop.
+//! Fluent-based localization layer for Zaplex Desktop.
 //!
 //! Loading chain:
 //!   1. `init()` is called once at startup (idempotent), loading `app/i18n/{locale}/*.ftl` via `RustEmbed`

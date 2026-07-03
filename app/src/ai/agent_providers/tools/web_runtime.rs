@@ -8,7 +8,7 @@
 //! ## Alignment with opencode
 //!
 //! - `webfetch` mirrors `packages/opencode/src/tool/webfetch.ts`:
-//!   * User-Agent defaults to Chrome; 403 + `cf-mitigated: challenge` → retry once with `Zap` UA
+//!   * User-Agent defaults to Chrome; 403 + `cf-mitigated: challenge` → retry once with `Zaplex` UA
 //!   * `Accept` header negotiated by format parameter q priority
 //!   * Content-Length pre-check + actual byte double-check, 5 MB limit
 //!   * Timeout defaults to 30s, max 120s
@@ -43,7 +43,7 @@ pub const SEARCH_TIMEOUT_SECS: u64 = 25;
 
 pub const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
-pub const FALLBACK_UA: &str = "Zap";
+pub const FALLBACK_UA: &str = "Zaplex";
 
 // ---------------------------------------------------------------------------
 // webfetch

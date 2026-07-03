@@ -37,7 +37,7 @@ lazy_static! {
     /// of Mesa's llvmpipe software renderer.
     ///
     /// While lavapipe is theoretically Vulkan 1.3 compatible starting in version
-    /// 22.1.2, in practice, Zap windows don't render properly until 24.0.2.
+    /// 22.1.2, in practice, Zaplex windows don't render properly until 24.0.2.
     static ref MIN_SUPPORTED_LAVAPIPE_VERSION: Version<'static> = Version::from("24.0.2")
         .expect("should not fail to parse version");
 

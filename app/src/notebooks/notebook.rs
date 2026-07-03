@@ -53,7 +53,7 @@ use crate::{
     drive::{
         drive_helpers::has_feature_gated_anonymous_user_reached_notebook_limit,
         export::ExportManager, items::WarpDriveItemId, ObjectTypeAndId,
-        ZapDriveObjectSettings,
+        ZaplexDriveObjectSettings,
     },
     editor::{
         EditOrigin, EditorView, Event as EditorEvent, InteractionState,
@@ -224,7 +224,7 @@ enum NotebookSyncError {
     FeatureNotAvailable,
 }
 
-/// A view that allows viewing/execution and editing of a Zap notebook.
+/// A view that allows viewing/execution and editing of a Zaplex notebook.
 /// We don't currently persist any data.
 pub struct NotebookView {
     /// This is a stateful component that shows information about the notebook like its location
@@ -1515,7 +1515,7 @@ impl NotebookView {
     pub fn wait_for_initial_load_then_load(
         &mut self,
         notebook_id: SyncId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         window_id: WindowId,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -1562,7 +1562,7 @@ impl NotebookView {
     fn fetch_and_load_notebook(
         &mut self,
         notebook_id: ServerId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         window_id: WindowId,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -1606,7 +1606,7 @@ impl NotebookView {
     pub fn load(
         &mut self,
         notebook: NotebookObject,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         ctx: &mut ViewContext<Self>,
     ) -> SpawnedFutureHandle {
         self.set_title(&notebook.model().title, ctx);
@@ -1679,7 +1679,7 @@ impl NotebookView {
             }
         });
         self.update_breadcrumbs(ctx);
-        // Zap Phase 2a: invitee-driven sharing dialog removed.
+        // Zaplex Phase 2a: invitee-driven sharing dialog removed.
         if let Some(focused_folder_id) = settings.focused_folder_id.map(SyncId::ServerId) {
             self.view_in_warp_drive(
                 WarpDriveItemId::Object(ObjectTypeAndId::Folder(focused_folder_id)),
@@ -1855,7 +1855,7 @@ impl NotebookView {
         if let Some(notebook) = ObjectStoreModel::as_ref(ctx).get_notebook(&id) {
             self.load(
                 notebook.clone(),
-                &ZapDriveObjectSettings::default(),
+                &ZaplexDriveObjectSettings::default(),
                 ctx,
             );
         }

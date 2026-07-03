@@ -188,7 +188,7 @@ fn flock_wait(fd: std::os::unix::io::RawFd, operation: libc::c_int) -> anyhow::R
 /// stdin/stdout and the socket.
 ///
 /// The proxy is protocol-agnostic — it forwards raw bytes without parsing the
-/// length-prefixed framing.  The framing is handled at the endpoints (Zap
+/// length-prefixed framing.  The framing is handled at the endpoints (Zaplex
 /// client and daemon).
 ///
 /// **Important**: the stdout direction uses a manual read→write→flush loop

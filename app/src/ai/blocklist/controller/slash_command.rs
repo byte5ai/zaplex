@@ -33,7 +33,7 @@ pub enum SlashCommandRequest {
     },
     Summarize {
         prompt: Option<String>,
-        /// Zap BYOP local conversation compaction: whether this summary was triggered automatically by token overflow.
+        /// Zaplex BYOP local conversation compaction: whether this summary was triggered automatically by token overflow.
         /// The chat_stream::SummarizeConversation branch uses this to decide the follow-up wording
         /// (the overflow path appends a "previous request exceeded ..." explanation).
         /// false for manual /compact and /compact-and triggers; true for the auto-trigger path.

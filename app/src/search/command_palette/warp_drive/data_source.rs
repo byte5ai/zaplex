@@ -21,7 +21,7 @@ use crate::workflows::WorkflowObject;
 use std::collections::HashMap;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-/// Datasource that searches against all Zap Drive objects
+/// Datasource that searches against all Zaplex Drive objects
 pub struct DataSource {
     searcher: Box<dyn WarpDriveSearcher>,
 }
@@ -549,10 +549,10 @@ mod full_text_searcher {
     use warpui::{AppContext, SingletonEntity};
 
     /// Memory budget for the search index of zap drive.
-    /// Zap could potentially have a lot of objects, so we increase it from the default of 50MB to 100MB
+    /// Zaplex could potentially have a lot of objects, so we increase it from the default of 50MB to 100MB
     const MEMORY_BUDGET: usize = 100_000_000; // TODO: is 100MB really necessary?
 
-    // All Zap Drive objects are boosted due to multiple fields being a part of the same total score,
+    // All Zaplex Drive objects are boosted due to multiple fields being a part of the same total score,
     // putting them at an inherent disadvantage, as each field would only have a fractional weight.
     define_search_schema!(
         schema_name: NOTEBOOK_SEARCH_SCHEMA,

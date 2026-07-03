@@ -19,7 +19,7 @@ use crate::{
         session_settings::{SessionSettings, SessionSettingsChangedEvent},
         settings::TerminalSettings,
         shared_session::settings::SharedSessionSettings,
-        warpify::settings::WarpifySettings,
+        zaplexify::settings::ZaplexifySettings,
         BlockListSettings,
     },
     undo_close::UndoCloseSettings,
@@ -73,7 +73,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     GPUSettings::register(ctx);
     GeneralSettings::register(ctx);
     AISettings::register_and_subscribe_to_events(ctx);
-    // Zap Wave 7-3: `AmbientAgentSettings` physically removed with ambient-agent UI subsystem.
+    // Zaplex Wave 7-3: `AmbientAgentSettings` physically removed with ambient-agent UI subsystem.
     ScrollSettings::register(ctx);
     SelectionSettings::register(ctx);
     InputModeSettings::register(ctx);
@@ -89,10 +89,11 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     LanguageSettings::register(ctx);
     AppEditorSettings::register(ctx);
     InputSettings::register(ctx);
-    WarpifySettings::register(ctx);
+    ZaplexifySettings::register(ctx);
     AltScreenReporting::register(ctx);
     UndoCloseSettings::register(ctx);
     SshSettings::register(ctx);
+    crate::cockpit::CockpitSettings::register(ctx);
     VimBannerSettings::register(ctx);
     SharedSessionSettings::register(ctx);
     WarpDriveSettings::register(ctx);

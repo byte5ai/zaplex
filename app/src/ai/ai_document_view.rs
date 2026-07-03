@@ -364,7 +364,7 @@ impl AIDocumentView {
             pane_config.refresh_pane_header_overflow_menu_items(ctx)
         });
 
-        // Create sync button mouse state (for Zap Drive syncing)
+        // Create sync button mouse state (for Zaplex Drive syncing)
         let sync_button_mouse_state = MouseStateHandle::default();
 
         // Create Update Agent button
@@ -1163,7 +1163,7 @@ impl BackingView for AIDocumentView {
     ) -> Vec<MenuItem<Self::PaneHeaderOverflowMenuAction>> {
         let mut menu_items = vec![];
 
-        // openWarp localization: cloud menu items "Copy Link" / "Show in Zap Drive"
+        // openWarp localization: cloud menu items "Copy Link" / "Show in Zaplex Drive"
         // were only shown after successful cloud sync. Local path is unreachable, remove directly.
 
         #[cfg(feature = "local_fs")]

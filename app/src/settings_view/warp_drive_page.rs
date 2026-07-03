@@ -68,11 +68,11 @@ impl View for WarpDriveSettingsPageView {
 
 impl SettingsPageMeta for WarpDriveSettingsPageView {
     fn section() -> SettingsSection {
-        SettingsSection::ZapDrive
+        SettingsSection::ZaplexDrive
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {
-        FeatureFlag::ZapNewSettingsModes.is_enabled()
+        FeatureFlag::ZaplexNewSettingsModes.is_enabled()
     }
 
     fn update_filter(&mut self, query: &str, ctx: &mut ViewContext<Self>) -> MatchData {
@@ -90,7 +90,7 @@ impl SettingsPageMeta for WarpDriveSettingsPageView {
 
 impl From<ViewHandle<WarpDriveSettingsPageView>> for SettingsPageViewHandle {
     fn from(view_handle: ViewHandle<WarpDriveSettingsPageView>) -> Self {
-        SettingsPageViewHandle::ZapDrive(view_handle)
+        SettingsPageViewHandle::ZaplexDrive(view_handle)
     }
 }
 
@@ -116,7 +116,7 @@ impl SettingsWidget for WarpDriveToggleWidget {
         let settings = WarpDriveSettings::as_ref(app);
 
         render_body_item::<WarpDriveSettingsPageAction>(
-            "Zap Drive".into(),
+            "Zaplex Drive".into(),
             Some(AdditionalInfo {
                 mouse_state: self.info_icon_mouse_state.clone(),
                 on_click_action: Some(WarpDriveSettingsPageAction::OpenUrl(
@@ -137,7 +137,7 @@ impl SettingsWidget for WarpDriveToggleWidget {
                     ctx.dispatch_typed_action(WarpDriveSettingsPageAction::ToggleShowWarpDrive);
                 })
                 .finish(),
-            Some("Zap Drive is a local workspace in your terminal where you can save Workflows, Notebooks, Prompts, and Environment Variables on this device.".into()),
+            Some("Zaplex Drive is a local workspace in your terminal where you can save Workflows, Notebooks, Prompts, and Environment Variables on this device.".into()),
         )
     }
 }

@@ -303,7 +303,7 @@ impl LLMInfo {
 /// The set of LLMs available for a feature.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AvailableLLMs {
-    /// The Zap "default" LLM.
+    /// The Zaplex "default" LLM.
     default_id: LLMId,
     choices: Vec<LLMInfo>,
 

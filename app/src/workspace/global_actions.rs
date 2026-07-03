@@ -1,12 +1,12 @@
 use crate::network::NetworkStatus;
 use crate::persistence::ModelEvent;
-// Zap Wave 3-1: `AuthClient` trait and `workspace:debug_create_anonymous_user`
+// Zaplex Wave 3-1: `AuthClient` trait and `workspace:debug_create_anonymous_user`
 // debug action physically removed together with auth subsystem sunset.
 use crate::app_state::get_app_state;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
-// Zap Wave 3-1: `ServerApiProvider` is no longer used in this file;
+// Zaplex Wave 3-1: `ServerApiProvider` is no longer used in this file;
 // `debug_create_anonymous_user` debug action physically removed with AuthClient.
 use ::settings::ToggleableSetting;
 use warp_core::execution_mode::AppExecutionMode;
@@ -125,7 +125,7 @@ pub fn init_global_actions(app: &mut AppContext) {
         "workspace:toggle_debug_network_status",
         toggle_debug_network_status,
     );
-    // Zap Wave 3-1: `workspace:debug_create_anonymous_user` global action physically removed
+    // Zaplex Wave 3-1: `workspace:debug_create_anonymous_user` global action physically removed
     // together with upstream anonymous user creation cloud endpoint.
     app.add_global_action("workspace:open_repository", open_repository);
     app.add_global_action("app:undo_close", undo_close);
@@ -215,8 +215,8 @@ fn toggle_debug_network_status(_: &(), ctx: &mut AppContext) {
     });
 }
 
-// Zap Wave 3-1: `fn create_anonymous_user` debug entry point physically removed
-// together with upstream anonymous user creation cloud endpoint. Zap no longer
+// Zaplex Wave 3-1: `fn create_anonymous_user` debug entry point physically removed
+// together with upstream anonymous user creation cloud endpoint. Zaplex no longer
 // has the concept of anonymous users.
 
 /// Reopens the last closed item (window or tab).

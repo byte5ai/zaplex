@@ -28,8 +28,9 @@ use super::proto::{
 use zaplex_remote_session::types::supported_features;
 #[cfg(unix)]
 use super::proto::{
-    CloseSession, OpenSession, ResizeSession, SessionExited, SessionInput, SessionOpened,
-    SessionOutput,
+    AttachSession, CloseSession, DetachSession, OpenSession, ResizeSession, SessionAttached,
+    SessionExited, SessionInfo, SessionInput, SessionList, SessionNotice, SessionOpened,
+    SessionOutput, SessionSize,
 };
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -55,6 +56,21 @@ use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent
 
 /// How long the daemon waits with no connections before exiting.
 pub const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Reap a session that has had no attached connection for this long. Detached
+/// sessions otherwise live indefinitely so a client can reconnect (laptop
+/// closed, etc.); this bounds memory against truly abandoned ones (Stage 4).
+#[cfg(unix)]
+const MAX_DETACHED_SESSION_AGE: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
+/// Soft cap on total output-ring bytes across all of this host's sessions. When
+/// exceeded, the oldest *detached* sessions are reaped until back under it
+/// (live, attached sessions are never reaped).
+#[cfg(unix)]
+const HOST_RING_CAP_BYTES: usize = 256 * 1024 * 1024;
+/// How often the detached-session GC sweep runs.
+#[cfg(unix)]
+const GC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 /// Unique identifier for a connected proxy session in daemon mode.
 pub type ConnectionId = uuid::Uuid;
@@ -176,7 +192,7 @@ pub struct ServerModel {
     /// Per-connection outbound channels, keyed by `ConnectionId`.
     ///
     /// The daemon can serve multiple proxy connections simultaneously — one
-    /// per SSH session / Zap tab connecting to this host.  Each entry maps
+    /// per SSH session / Zaplex tab connecting to this host.  Each entry maps
     /// a connection's `Uuid` to the channel the connection task drains to
     /// write `ServerMessage`s back to its proxy.
     connection_senders: HashMap<ConnectionId, async_channel::Sender<ServerMessage>>,
@@ -522,6 +538,9 @@ impl ServerModel {
         // register_connection will cancel the timer the moment the first proxy
         // arrives.
         model.start_grace_timer(ctx);
+        // Periodic memory governor for detached sessions (Stage 4).
+        #[cfg(unix)]
+        model.start_gc_timer(ctx);
         model
     }
 
@@ -564,10 +583,31 @@ impl ServerModel {
         let remaining = self.connection_senders.len();
         log::info!("Daemon: connection {conn_id} deregistered — {remaining} active remaining");
         if remaining == 0 {
-            log::info!("Daemon: grace timer started ({GRACE_PERIOD:?})");
-            self.start_grace_timer(ctx);
+            // Persistent sessions keep the daemon alive across client
+            // disconnects (the whole point of the native session layer): only
+            // arm the shutdown grace timer when nothing is still running.
+            // (A detached-idle GC for long-abandoned sessions is Stage 4.)
+            if self.has_live_sessions() {
+                log::info!("Daemon: no connections, but live session(s) remain — staying up");
+            } else {
+                log::info!("Daemon: grace timer started ({GRACE_PERIOD:?})");
+                self.start_grace_timer(ctx);
+            }
         }
         ctx.notify();
+    }
+
+    /// Whether any daemon-hosted session is still alive. Keeps the daemon up
+    /// across client disconnects so the session survives until reattach.
+    fn has_live_sessions(&self) -> bool {
+        #[cfg(unix)]
+        {
+            !self.sessions.is_empty()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
     }
 
     /// Starts (or restarts) a timer that shuts the daemon down after
@@ -662,7 +702,7 @@ impl ServerModel {
             Some(client_message::Message::ResolveConflict(msg)) => {
                 self.handle_resolve_conflict(msg, &request_id, conn_id, ctx)
             }
-            // Zap: Remote terminal file link directory listing (for path form validation).
+            // Zaplex: Remote terminal file link directory listing (for path form validation).
             #[cfg(feature = "local_fs")]
             Some(client_message::Message::ListDirectory(msg)) => self.handle_list_directory(msg),
             #[cfg(feature = "local_fs")]
@@ -695,15 +735,35 @@ impl ServerModel {
                 self.handle_close_session(msg);
                 return;
             }
-            // Attach/detach/list are not implemented yet (Stages 3-4) — reject
-            // honestly on all platforms.
+            // Re-attach a reconnecting client to a still-running session and
+            // replay the output it missed (Stage 3).
+            #[cfg(unix)]
+            Some(client_message::Message::AttachSession(msg)) => {
+                self.handle_attach_session(conn_id, msg)
+            }
+            #[cfg(unix)]
+            Some(client_message::Message::DetachSession(msg)) => {
+                self.handle_detach_session(conn_id, msg);
+                return;
+            }
+            // Multi-session listing for the sidebar / adopt-by-id (Stage 4).
+            #[cfg(unix)]
+            Some(client_message::Message::ListSessions(_)) => self.handle_list_sessions(),
+            #[cfg(not(unix))]
+            Some(client_message::Message::ListSessions(_)) => {
+                HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: "zaplex session host requires a unix daemon".to_string(),
+                }))
+            }
+            // Non-unix daemons have no session host (PTY ownership is unix-only).
+            #[cfg(not(unix))]
             Some(
                 client_message::Message::AttachSession(_)
-                | client_message::Message::DetachSession(_)
-                | client_message::Message::ListSessions(_),
+                | client_message::Message::DetachSession(_),
             ) => HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                 code: ErrorCode::InvalidRequest.into(),
-                message: "session attach/detach/list is not implemented yet".to_string(),
+                message: "zaplex session host requires a unix daemon".to_string(),
             })),
             // Non-unix daemons have no session host (PTY ownership is unix-only).
             #[cfg(not(unix))]
@@ -1563,7 +1623,7 @@ impl ServerModel {
         }
     }
 
-    /// Zap: Handle `ListDirectory` — sync listing of direct children in a directory.
+    /// Zaplex: Handle `ListDirectory` — sync listing of direct children in a directory.
     ///
     /// For precise validation by remote terminal file link detection: client caches real directory
     /// entries under a cwd, link detector uses this to extract correct filenames from `ls -l` lines.
@@ -1863,6 +1923,16 @@ fn file_context_result_to_proto(result: ReadFileContextResult) -> ReadFileContex
     }
 }
 
+/// Current Unix time in epoch milliseconds (`0` if the clock is before the
+/// epoch). Used to stamp session attach times for `ListSessions` / the GC.
+#[cfg(unix)]
+fn now_epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Daemon-side session-host handlers (Stage 1). Unix-only: the daemon owns the
 /// PTYs. The per-session state and async tasks live in `super::session_host`.
 #[cfg(unix)]
@@ -1886,6 +1956,14 @@ impl ServerModel {
             .or_else(|| std::env::var("SHELL").ok())
             .unwrap_or_else(|| "/bin/bash".to_string());
         let cwd = msg.cwd.filter(|c| !c.is_empty());
+        // Per-host scrollback ceiling (bytes) for this session's OutputRing;
+        // 0/absent → daemon default. Clamp to the host cap so a client can't
+        // request an unbounded buffer.
+        let ring_ceiling = msg
+            .ring_ceiling_bytes
+            .filter(|&b| b > 0)
+            .map(|b| (b as usize).min(HOST_RING_CAP_BYTES))
+            .unwrap_or(super::session_host::RING_CEILING_BYTES);
 
         let (leader_fd, child) = match crate::terminal::local_tty::spawn_session_pty(
             cwd.as_deref().map(std::path::Path::new),
@@ -1916,18 +1994,20 @@ impl ServerModel {
 
         let session_id = uuid::Uuid::new_v4().to_string();
         let (input_tx, input_rx) = async_channel::unbounded::<Vec<u8>>();
+        let shell_pid = child.id();
         self.sessions.insert(
             session_id.clone(),
             super::session_host::Session {
                 leader: async_leader.clone(),
                 child,
-                ring: zaplex_remote_session::server::output_ring::OutputRing::new(
-                    super::session_host::RING_CEILING_BYTES,
-                ),
+                ring: zaplex_remote_session::server::output_ring::OutputRing::new(ring_ceiling),
                 rows,
                 cols,
                 attached: conn_id,
                 input_tx,
+                cwd,
+                shell: shell.clone(),
+                last_attached_ms: now_epoch_millis(),
             },
         );
 
@@ -1936,11 +2016,50 @@ impl ServerModel {
         exec.spawn(super::session_host::run_session_reader(
             session_id.clone(),
             async_leader.clone(),
-            spawner,
+            ctx.spawner(),
         ))
         .detach();
         exec.spawn(super::session_host::run_session_writer(async_leader, input_rx))
             .detach();
+        // Advisory probe: did the user's profile auto-attach tmux/screen into
+        // this session despite the spawn-env opt-outs? See run_multiplexer_probe.
+        exec.spawn(super::session_host::run_multiplexer_probe(
+            session_id.clone(),
+            shell_pid,
+            spawner,
+        ))
+        .detach();
+
+        // Bootstrap the daemon-spawned shell with the Zaplexify shell integration
+        // (blocks, prompt marks, completions) by writing the init script as the
+        // session's first input — the ordered writer delivers it ahead of any
+        // user input. The script emits the InitShell DCS hook and is idempotent
+        // (ZAPLEX_BOOTSTRAPPED guard), so a later re-attach won't double-run it.
+        // The terminal *identity* (TERM_PROGRAM=ZaplexTerminal etc.) is set as a
+        // spawn env var in `spawn_session_pty`, not by this script. Together the
+        // identity env and the integration script are what make a daemon session
+        // a real Zaplex terminal rather than a bare VT.
+        match crate::terminal::shell::ShellType::from_name(&shell) {
+            Some(shell_type) => {
+                let mut bootstrap =
+                    crate::terminal::bootstrap::init_shell_script_for_shell(shell_type, &crate::ASSETS)
+                        .into_bytes();
+                bootstrap.extend_from_slice(shell_type.execute_command_bytes());
+                if let Some(session) = self.sessions.get(&session_id) {
+                    if let Err(e) = session.input_tx.try_send(bootstrap) {
+                        log::warn!("Daemon: failed to enqueue bootstrap for {session_id}: {e}");
+                    } else {
+                        log::info!("Daemon: bootstrapped session {session_id} ({})", shell_type.name());
+                    }
+                }
+            }
+            None => {
+                log::info!(
+                    "Daemon: shell {shell:?} is not Zaplexify-capable; session {session_id} \
+                     runs as a plain shell (no blocks)"
+                );
+            }
+        }
 
         log::info!("Daemon: opened session {session_id} ({rows}x{cols}, shell={shell})");
         HandlerOutcome::Sync(server_message::Message::SessionOpened(SessionOpened {
@@ -1955,6 +2074,223 @@ impl ServerModel {
                 log::warn!("Daemon: dropping input for session {}: {e}", msg.session_id);
             }
         }
+    }
+
+    /// Re-attaches a (possibly reconnected) connection to a still-running
+    /// session and replays the output it missed. Re-points the session's live
+    /// stream at `conn_id`, so subsequent `SessionOutput` pushes go to the
+    /// reconnected client. This is the heart of "survives the drop": the session
+    /// kept running and buffering into its ring while the client was gone.
+    fn handle_attach_session(
+        &mut self,
+        conn_id: ConnectionId,
+        msg: AttachSession,
+    ) -> HandlerOutcome {
+        let Some(session) = self.sessions.get_mut(&msg.session_id) else {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: format!("no such session: {}", msg.session_id),
+            }));
+        };
+        let (base_seq, replay) = session.ring.replay_from(msg.last_seq);
+        // Route live output to the reconnected connection from now on.
+        session.attached = conn_id;
+        session.last_attached_ms = now_epoch_millis();
+        let size = SessionSize {
+            rows: session.rows as u32,
+            cols: session.cols as u32,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        log::info!(
+            "Daemon: attached conn {conn_id} to session {} (replay {} bytes from seq {base_seq})",
+            msg.session_id,
+            replay.len()
+        );
+        HandlerOutcome::Sync(server_message::Message::SessionAttached(SessionAttached {
+            session_id: msg.session_id,
+            size: Some(size),
+            base_seq,
+            replay,
+        }))
+    }
+
+    /// Detaches a connection from a session without ending it: the session keeps
+    /// running and its output accumulates in the ring (live pushes to the now
+    /// non-attached connection become harmless no-ops) until a later attach.
+    fn handle_detach_session(&mut self, conn_id: ConnectionId, msg: DetachSession) {
+        if let Some(session) = self.sessions.get_mut(&msg.session_id) {
+            // Only the connection that currently owns the attachment may clear it.
+            // A late DetachSession from a previously-attached tab must not steal
+            // the attachment from a newer tab that has since adopted this session
+            // (which would silently cut off the new tab's live output).
+            if session.attached == conn_id {
+                session.attached = uuid::Uuid::nil();
+                log::info!("Daemon: detached session {} (still running)", msg.session_id);
+            } else {
+                log::debug!(
+                    "Daemon: ignoring stale detach for session {} from conn {conn_id} \
+                     (currently attached to {})",
+                    msg.session_id,
+                    session.attached
+                );
+            }
+        }
+    }
+
+    /// Lists all live daemon-hosted sessions (Stage 4: multi-session UI / adopt).
+    /// Registry membership means alive — exited sessions are removed (and
+    /// `SessionExited`-announced) by the reader-EOF/close paths.
+    fn handle_list_sessions(&self) -> HandlerOutcome {
+        let sessions = self
+            .sessions
+            .iter()
+            .map(|(id, session)| {
+                let title = session
+                    .cwd
+                    .as_deref()
+                    .filter(|c| !c.is_empty())
+                    .and_then(|cwd| {
+                        std::path::Path::new(cwd)
+                            .file_name()
+                            .map(|b| b.to_string_lossy().into_owned())
+                    })
+                    .unwrap_or_else(|| {
+                        std::path::Path::new(&session.shell)
+                            .file_name()
+                            .map(|b| b.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| session.shell.clone())
+                    });
+                SessionInfo {
+                    session_id: id.clone(),
+                    title,
+                    cwd: session.cwd.clone().unwrap_or_default(),
+                    alive: true,
+                    last_attached_epoch_millis: session.last_attached_ms,
+                }
+            })
+            .collect();
+        HandlerOutcome::Sync(server_message::Message::SessionList(SessionList { sessions }))
+    }
+
+    /// Memory governor (Stage 4): reaps detached sessions that are either idle
+    /// past `max_detached_age_ms`, or — if total ring bytes exceed
+    /// `host_ring_cap_bytes` — the oldest detached ones until back under the cap.
+    /// Never touches a session with a live attached connection. Returns the
+    /// number reaped. Wall-clock is passed in (`now_ms`) so it is unit-testable.
+    fn gc_sessions(
+        &mut self,
+        now_ms: u64,
+        max_detached_age_ms: u64,
+        host_ring_cap_bytes: usize,
+    ) -> usize {
+        let mut reaped = 0;
+
+        // Phase 1: detached and idle longer than the max age.
+        let aged: Vec<String> = {
+            let senders = &self.connection_senders;
+            self.sessions
+                .iter()
+                .filter(|(_, s)| {
+                    let detached =
+                        s.attached == uuid::Uuid::nil() || !senders.contains_key(&s.attached);
+                    detached && now_ms.saturating_sub(s.last_attached_ms) >= max_detached_age_ms
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for id in aged {
+            if let Some(mut session) = self.sessions.remove(&id) {
+                let _ = session.child.kill();
+                let _ = session.child.wait();
+                reaped += 1;
+            }
+        }
+
+        // Phase 2: enforce the host-wide ring-bytes cap by reaping oldest
+        // detached sessions until back under it.
+        let total: usize = self.sessions.values().map(|s| s.ring.len()).sum();
+        if total > host_ring_cap_bytes {
+            let mut over = total - host_ring_cap_bytes;
+            let mut candidates: Vec<(u64, String)> = {
+                let senders = &self.connection_senders;
+                self.sessions
+                    .iter()
+                    .filter(|(_, s)| {
+                        s.attached == uuid::Uuid::nil() || !senders.contains_key(&s.attached)
+                    })
+                    .map(|(id, s)| (s.last_attached_ms, id.clone()))
+                    .collect()
+            };
+            candidates.sort_by_key(|(age, _)| *age); // oldest (smallest ms) first
+            for (_, id) in candidates {
+                if over == 0 {
+                    break;
+                }
+                if let Some(mut session) = self.sessions.remove(&id) {
+                    over = over.saturating_sub(session.ring.len());
+                    let _ = session.child.kill();
+                    let _ = session.child.wait();
+                    reaped += 1;
+                }
+            }
+        }
+
+        if reaped > 0 {
+            log::info!("Daemon GC: reaped {reaped} detached session(s)");
+        }
+        reaped
+    }
+
+    /// After a GC sweep, arm the shutdown grace timer if the daemon is now fully
+    /// idle: no connected proxies *and* no live sessions. This closes the leak
+    /// where `deregister_connection` left the daemon up because sessions still
+    /// existed, and those sessions were later reaped by the GC (age / RAM cap) —
+    /// leaving a daemon with nothing to do and no timer to retire it. The
+    /// `grace_timer_cancel.is_none()` guard avoids restarting an already-running
+    /// timer (which would reset the countdown each tick).
+    fn maybe_arm_grace_after_gc(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.connection_senders.is_empty()
+            && !self.has_live_sessions()
+            && self.grace_timer_cancel.is_none()
+        {
+            log::info!(
+                "Daemon: idle after GC (no connections, no sessions) — grace timer started ({GRACE_PERIOD:?})"
+            );
+            self.start_grace_timer(ctx);
+        }
+    }
+
+    /// Starts the periodic detached-session GC sweep on the background executor,
+    /// re-entering the model each tick. Runs for the daemon's lifetime.
+    fn start_gc_timer(&self, ctx: &mut ModelContext<Self>) {
+        let spawner = ctx.spawner();
+        ctx.background_executor()
+            .spawn(async move {
+                loop {
+                    async_io::Timer::after(GC_INTERVAL).await;
+                    let now = now_epoch_millis();
+                    let outcome = spawner
+                        .spawn(move |me, ctx| {
+                            me.gc_sessions(
+                                now,
+                                MAX_DETACHED_SESSION_AGE.as_millis() as u64,
+                                HOST_RING_CAP_BYTES,
+                            );
+                            // GC may have reaped the last session. If no proxies
+                            // are connected either, the daemon is now fully idle —
+                            // arm the grace timer so it exits. deregister_connection
+                            // deliberately skipped the timer while sessions existed,
+                            // so without this the daemon would linger forever.
+                            me.maybe_arm_grace_after_gc(ctx);
+                        })
+                        .await;
+                    if outcome.is_err() {
+                        break; // model gone — daemon shutting down
+                    }
+                }
+            })
+            .detach();
     }
 
     /// Applies a window resize to the session's PTY (TIOCSWINSZ).
@@ -2017,6 +2353,25 @@ impl ServerModel {
                 session_id: session_id.to_string(),
                 seq,
                 bytes,
+            }),
+        );
+    }
+
+    /// Probe-task callback: the session landed inside a terminal multiplexer
+    /// (hand-rolled auto-attach). Push an advisory `SessionNotice` to the
+    /// attached connection — the client renders a tab notice + warning toast.
+    pub(super) fn on_session_multiplexer_detected(&mut self, session_id: &str, mux: &str) {
+        let Some(conn) = self.sessions.get(session_id).map(|s| s.attached) else {
+            return;
+        };
+        log::info!("Daemon: session {session_id} is nested inside {mux} (auto-attach)");
+        self.send_server_message(
+            Some(conn),
+            None,
+            server_message::Message::SessionNotice(SessionNotice {
+                session_id: session_id.to_string(),
+                kind: "multiplexer-detected".to_string(),
+                detail: mux.to_string(),
             }),
         );
     }

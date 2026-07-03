@@ -110,7 +110,7 @@ case "$PROFILE_MODE" in
 esac
 
 FEATURES="release_bundle,crash_reporting,standalone,agent_mode_debug"
-WARP_BIN="warp"
+ZAPLEX_BIN="warp"
 BINARY_NAME="oz-local"
 REMOTE_DIR=".warp-local/remote-server"
 
@@ -124,10 +124,10 @@ case "$CARGO_PROFILE" in
     OUTPUT_DIR="$CARGO_TARGET_DIR/$TARGET/$CARGO_PROFILE"
     ;;
 esac
-BUILT_BINARY="$OUTPUT_DIR/$WARP_BIN"
+BUILT_BINARY="$OUTPUT_DIR/$ZAPLEX_BIN"
 
 echo "==> Building Oz CLI for $TARGET (profile=$CARGO_PROFILE)"
-echo "    Binary: $WARP_BIN -> $BINARY_NAME"
+echo "    Binary: $ZAPLEX_BIN -> $BINARY_NAME"
 echo "    Features: $FEATURES"
 echo ""
 
@@ -137,7 +137,7 @@ CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=x86_64-linux-musl-gcc \
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C symbol-mangling-version=v0" \
   cargo build \
     -p warp \
-    --bin "$WARP_BIN" \
+    --bin "$ZAPLEX_BIN" \
     --target "$TARGET" \
     --profile "$CARGO_PROFILE" \
     --features "$FEATURES"

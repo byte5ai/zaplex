@@ -250,10 +250,10 @@ impl ProjectContextModel {
         ctx.spawn(
             async move { Self::read_persisted_rules(persisted_rules).await },
             |me, mut res, ctx| {
-                // Zap: Originally, this would call `try_initialize_and_register_watcher` for each persisted root,
+                // Zaplex: Originally, this would call `try_initialize_and_register_watcher` for each persisted root,
                 // which internally invokes `DetectedRepositories::detect_possible_git_repo(ProjectRulesIndexing)`
                 // to trigger events, having RepoMetadataModel perform full indexing of 6 persisted repos
-                // (biggest cold-startup background CPU cost for Zap BYOP).
+                // (biggest cold-startup background CPU cost for Zaplex BYOP).
                 //
                 // Now only populates in-memory path_to_rules cache, no proactive detect events.
                 // When user later cd into a repo via terminal, RepoDetectionSource::TerminalNavigation
@@ -328,7 +328,7 @@ impl ProjectContextModel {
         Ok(())
     }
 
-    // Zap: `try_initialize_and_register_watcher` was originally the entry point to force repo detection
+    // Zaplex: `try_initialize_and_register_watcher` was originally the entry point to force repo detection
     // on startup from persisted rule paths, leading to RepoMetadataModel full indexing.
     // Removed together with detect call in `new_from_persisted`; now only passive `register_watcher_for_path`
     // path triggered by terminal cd via `RepoDetectionSource::TerminalNavigation`.

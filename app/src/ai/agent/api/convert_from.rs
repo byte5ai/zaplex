@@ -540,7 +540,7 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
         params: ConversionParams,
     ) -> Result<MaybeAIAgentAction, ToolToAIAgentActionError> {
         let Some(tool) = self.tool else {
-            // Zap BYOP: `make_tool_call_carrier_message` intentionally emits `tool: None` ToolCall
+            // Zaplex BYOP: `make_tool_call_carrier_message` intentionally emits `tool: None` ToolCall
             // when from_args parsing fails, serving as a carrier for the next build_chat_request round to restore
             // the original fn_name + args_str to the upstream model (server_message_data carries the original content);
             // the synthetic error ToolCallResult immediately following is the content to display to the user.

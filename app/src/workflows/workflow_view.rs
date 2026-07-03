@@ -40,7 +40,7 @@ use crate::{
             workflow_arg_selector::{WorkflowArgSelector, WorkflowArgSelectorEvent},
             workflow_arg_type_helpers::{self, ArgumentEditorRowIndex},
         },
-        DriveObjectType, ObjectTypeAndId, ZapDriveObjectSettings,
+        DriveObjectType, ObjectTypeAndId, ZaplexDriveObjectSettings,
     },
     editor::{
         EditorOptions, EditorView, EnterAction, EnterSettings, Event as EditorEvent,
@@ -172,7 +172,7 @@ const AI_ASSIST_LOADING_TEXT: &str = "Loading";
 
 const ALIAS_HELP_TEXT: &str = "Aliases allow you to create short strings to execute workflows. Each alias can have different argument values and environment variables, and aliases are personal to you.";
 
-const RUN_ON_DESKTOP_BUTTON_TEXT: &str = "Run in Zap";
+const RUN_ON_DESKTOP_BUTTON_TEXT: &str = "Run in Zaplex";
 const RUN_ON_DESKTOP_BUTTON_WIDTH: f32 = 108.;
 
 const UNSAVED_CHANGES_TEXT: &str = "You have unsaved changes.";
@@ -576,7 +576,7 @@ impl WorkflowView {
                 {
                     self.load(
                         workflow.clone(),
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         self.workflow_view_mode,
                         ctx,
                     );
@@ -596,7 +596,7 @@ impl WorkflowView {
                 {
                     self.load(
                         workflow,
-                        &ZapDriveObjectSettings::default(),
+                        &ZaplexDriveObjectSettings::default(),
                         self.workflow_view_mode,
                         ctx,
                     );
@@ -614,7 +614,7 @@ impl WorkflowView {
         if let Some(workflow) = workflow {
             self.load(
                 workflow,
-                &ZapDriveObjectSettings::default(),
+                &ZaplexDriveObjectSettings::default(),
                 self.workflow_view_mode,
                 ctx,
             );
@@ -624,7 +624,7 @@ impl WorkflowView {
     pub fn wait_for_initial_load_then_load(
         &mut self,
         workflow_id: SyncId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         mode: WorkflowViewMode,
         window_id: WindowId,
         ctx: &mut ViewContext<Self>,
@@ -673,7 +673,7 @@ impl WorkflowView {
     fn fetch_and_load_workflow(
         &mut self,
         workflow_id: ServerId,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         mode: WorkflowViewMode,
         window_id: WindowId,
         ctx: &mut ViewContext<Self>,
@@ -711,7 +711,7 @@ impl WorkflowView {
     pub fn load(
         &mut self,
         workflow: WorkflowObject,
-        settings: &ZapDriveObjectSettings,
+        settings: &ZaplexDriveObjectSettings,
         mode: WorkflowViewMode,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -1565,7 +1565,7 @@ impl WorkflowView {
     }
 
     /// Save the workflow and associated state. This makes a best-effort attempt to not
-    /// unnecessarily modify the backing Zap Drive object.
+    /// unnecessarily modify the backing Zaplex Drive object.
     fn save(&mut self, ctx: &mut ViewContext<Self>) {
         if FeatureFlag::WorkflowAliases.is_enabled() && self.are_aliases_dirty(ctx) {
             self.save_aliases(ctx);
@@ -2465,7 +2465,7 @@ impl WorkflowView {
                     .finish();
 
                 let button_with_tool_tip = appearance.ui_builder().tool_tip_on_element(
-                    "Generate a title, descriptions, or parameters with Zap AI".to_string(),
+                    "Generate a title, descriptions, or parameters with Zaplex AI".to_string(),
                     self.ui_state_handles.ai_assist_tool_tip.clone(),
                     rendered_button,
                     ParentAnchor::TopMiddle,
@@ -2625,7 +2625,7 @@ impl WorkflowView {
             },
         ) else {
             self.display_error_toast(
-                "Autofill 需要 BYOP 模型。请到 Settings → AI 中配置一个 provider 与模型。"
+                "Autofill requires a BYOP model. Please configure a provider and model in Settings → AI."
                     .to_string(),
                 ctx,
             );
