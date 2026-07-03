@@ -1,7 +1,7 @@
 [package]
 authors = ["Zaplex Team"]
 default-run = "zaplex"
-description = "The local-first agentic terminal"
+description = "The terminal cockpit for AI coding agents on remote machines"
 edition = "2021"
 autobins = false
 name = "warp"
@@ -844,7 +844,7 @@ identifier = "dev.zaplex.Zaplex"
 name = "Zaplex"
 resources = ["assets/onboarding"]
 icon = ["channels/oss/icon/zaplex.icns", "channels/oss/icon/padded/icon.ico"]
-short_description = "The open-source, local-first agentic terminal."
+short_description = "The open-source terminal cockpit for AI coding agents on remote machines."
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["embed_plist"]
