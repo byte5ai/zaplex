@@ -9,7 +9,7 @@
 #            [-f arch=aarch64|x86_64] [-f dmg_tag=v0.daemontest]
 #
 # Das .dmg ist ad-hoc-signiert (wie zap_release.yml, --selfsign) → beim ersten
-# Öffnen auf dem Mac einmal:  xattr -rd com.apple.quarantine /Applications/Zap.app
+# Öffnen auf dem Mac einmal:  xattr -rd com.apple.quarantine /Applications/Zaplex.app
 # (bzw. das .dmg), siehe issue #51. Kein Developer-ID/Notarize im OSS-Channel.
 #
 # `dmg_tag` wird als GIT_RELEASE_TAG eingebrannt und bestimmt den remote-server-
