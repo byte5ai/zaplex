@@ -129,6 +129,7 @@ pub fn build_account_usage(
         heat_week,
         sessions: Vec::new(),
         status: crate::types::AccountStatus::Offline,
+        provenance: crate::types::UsageProvenance::Estimate,
     }
 }
 

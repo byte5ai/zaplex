@@ -37,5 +37,15 @@ define_settings_group!(CockpitSettings,
             toml_path: "cockpit.budget_week",
             description: "Per-week token budget (0 = built-in estimate). Reserved for later use.",
         },
+        oauth_usage: CockpitOauthUsage {
+            type: bool,
+            default: true,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+            private: false,
+            storage_key: "CockpitOauthUsage",
+            toml_path: "cockpit.oauth_usage",
+            description: "Show real Claude subscription utilization from the account's own OAuth usage endpoint (read-only; off = transcript-based estimates only, no requests).",
+        },
     ]
 );
