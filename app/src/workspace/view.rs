@@ -2657,10 +2657,10 @@ impl Workspace {
                     me.toast_stack.update(ctx, |stack, ctx| {
                         // Not an error — an attention signal. Plain toast text.
                         stack.add_persistent_toast(
-                            DismissibleToast::new(crate::t!(
-                                "cockpit-sessions-waiting-toast",
-                                sessions = body
-                            )),
+                            DismissibleToast::new(
+                                crate::t!("cockpit-sessions-waiting-toast", sessions = body),
+                                crate::view_components::ToastFlavor::Default,
+                            ),
                             ctx,
                         );
                     });
