@@ -48,7 +48,7 @@ fn windows_bucket_correctly_with_fixed_now() {
     ];
     let now = ts("2026-06-30T12:00:00Z");
     let pricing = PricingTable::default();
-    let u = build_account_usage(acct(), entries, now, 6600, &pricing);
+    let u = build_account_usage(acct(), entries, now, 6600, DEFAULT_BUDGET_WEEK, &pricing);
 
     // 5h block = the two same-day turns; older turn is a separate expired block.
     assert_eq!(u.block5h.messages, 2);
@@ -81,7 +81,7 @@ fn idle_past_the_window_yields_empty_block_and_no_reset() {
     // 20:00 is > 5h after the block start (10:00 → resets 15:00).
     let now = ts("2026-06-30T20:00:00Z");
     let pricing = PricingTable::default();
-    let u = build_account_usage(acct(), entries, now, DEFAULT_BUDGET_5H, &pricing);
+    let u = build_account_usage(acct(), entries, now, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK, &pricing);
 
     assert_eq!(u.block5h.messages, 0);
     assert_eq!(u.block5h.work, 0);
@@ -101,7 +101,7 @@ fn a_gap_of_at_least_the_window_starts_a_new_block() {
     ];
     let now = ts("2026-06-30T16:30:00Z");
     let pricing = PricingTable::default();
-    let u = build_account_usage(acct(), entries, now, DEFAULT_BUDGET_5H, &pricing);
+    let u = build_account_usage(acct(), entries, now, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK, &pricing);
 
     // Current 5h block only contains the second turn.
     assert_eq!(u.block5h.messages, 1);
@@ -113,7 +113,7 @@ fn a_gap_of_at_least_the_window_starts_a_new_block() {
 fn empty_entries_are_all_zero() {
     let now = ts("2026-06-30T12:00:00Z");
     let pricing = PricingTable::default();
-    let u = build_account_usage(acct(), vec![], now, DEFAULT_BUDGET_5H, &pricing);
+    let u = build_account_usage(acct(), vec![], now, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK, &pricing);
     assert_eq!(u.block5h, WindowTotals::default());
     assert_eq!(u.today, WindowTotals::default());
     assert_eq!(u.week, WindowTotals::default());

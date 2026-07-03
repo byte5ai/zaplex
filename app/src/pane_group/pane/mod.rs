@@ -28,6 +28,7 @@ pub(crate) mod sftp_pane;
 pub(crate) mod ssh_server_pane;
 pub(super) mod terminal_pane;
 pub mod view;
+pub(crate) mod cockpit_pane;
 pub(super) mod welcome_pane;
 pub(crate) mod welcome_view;
 pub mod workflow_pane;
@@ -154,6 +155,7 @@ pub(crate) enum IPaneType {
     SshServer,
     Sftp,
     Welcome,
+    Cockpit,
     DeferredPlaceholder,
     /// A pane type only for tests.
     #[cfg(test)]
@@ -180,6 +182,7 @@ impl Display for IPaneType {
             IPaneType::SshServer => write!(f, "SSH Server"),
             IPaneType::Sftp => write!(f, "SFTP"),
             IPaneType::Welcome => write!(f, "Welcome"),
+            IPaneType::Cockpit => write!(f, "Cockpit"),
             IPaneType::DeferredPlaceholder => write!(f, "Placeholder"),
             #[cfg(test)]
             IPaneType::Dummy => write!(f, "Dummy"),
@@ -270,6 +273,12 @@ impl PaneId {
 
     pub fn from_welcome_pane_ctx(ctx: &ViewContext<PaneView<WelcomeView>>) -> Self {
         Self::new_from_ctx(IPaneType::Welcome, ctx)
+    }
+
+    pub fn from_cockpit_pane_ctx(
+        ctx: &ViewContext<PaneView<crate::cockpit::CockpitPaneView>>,
+    ) -> Self {
+        Self::new_from_ctx(IPaneType::Cockpit, ctx)
     }
 
     pub fn from_get_started_pane_ctx(ctx: &ViewContext<PaneView<GetStartedView>>) -> Self {
@@ -387,6 +396,12 @@ impl PaneId {
 
     pub fn from_welcome_pane_view(welcome_pane_view: &ViewHandle<PaneView<WelcomeView>>) -> Self {
         Self::new(IPaneType::Welcome, welcome_pane_view)
+    }
+
+    pub fn from_cockpit_pane_view(
+        cockpit_pane_view: &ViewHandle<PaneView<crate::cockpit::CockpitPaneView>>,
+    ) -> Self {
+        Self::new(IPaneType::Cockpit, cockpit_pane_view)
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
@@ -512,6 +527,10 @@ impl PaneId {
             }
             IPaneType::Welcome => {
                 ChildView::<PaneView<WelcomeView>>::with_id(self.0.pane_view_id).finish()
+            }
+            IPaneType::Cockpit => {
+                ChildView::<PaneView<crate::cockpit::CockpitPaneView>>::with_id(self.0.pane_view_id)
+                    .finish()
             }
             IPaneType::DeferredPlaceholder => warpui::elements::Empty::new().finish(),
             #[cfg(test)]

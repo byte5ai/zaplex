@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use zaplex_cockpit::{build_snapshot, PricingTable, Provider, DEFAULT_BUDGET_5H};
+use zaplex_cockpit::{build_snapshot, PricingTable, Provider, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK};
 
 fn write(path: &Path, content: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -53,7 +53,7 @@ fn build_snapshot_aggregates_both_providers() {
 
     let now = ts("2026-06-30T12:00:00Z");
     let pricing = PricingTable::default();
-    let snap = build_snapshot(home, codex_home, None, now, DEFAULT_BUDGET_5H, &pricing);
+    let snap = build_snapshot(home, codex_home, None, now, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK, &pricing);
 
     assert_eq!(snap.generated_at, now);
     assert_eq!(snap.accounts.len(), 2, "one Claude + one Codex account");

@@ -18,7 +18,7 @@ use std::time::Duration;
 use chrono::Utc;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use watcher::HomeDirectoryWatcher;
-use zaplex_cockpit::{build_snapshot, CockpitSnapshot, PricingTable, DEFAULT_BUDGET_5H};
+use zaplex_cockpit::{build_snapshot, CockpitSnapshot, PricingTable, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK};
 
 use crate::cockpit::settings::CockpitSettings;
 
@@ -41,6 +41,7 @@ struct RefreshInputs {
     codex_home: PathBuf,
     claude_config_dir_env: Option<String>,
     budget_5h: u64,
+    budget_week: u64,
     pricing: PricingTable,
 }
 
@@ -81,11 +82,18 @@ impl CockpitModel {
         } else {
             DEFAULT_BUDGET_5H
         };
+        let week_override = *CockpitSettings::as_ref(ctx).budget_week as u64;
+        let budget_week = if week_override > 0 {
+            week_override
+        } else {
+            DEFAULT_BUDGET_WEEK
+        };
         Some(RefreshInputs {
             codex_home: home.join(".codex"),
             claude_config_dir_env: std::env::var("CLAUDE_CONFIG_DIR").ok(),
             home,
             budget_5h,
+            budget_week,
             pricing: self.pricing.clone(),
         })
     }
@@ -104,6 +112,7 @@ impl CockpitModel {
                     inputs.claude_config_dir_env.as_deref(),
                     Utc::now(),
                     inputs.budget_5h,
+                    inputs.budget_week,
                     &inputs.pricing,
                 );
                 let _ = spawner

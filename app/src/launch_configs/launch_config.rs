@@ -156,6 +156,7 @@ impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
                 | LeafContents::ExecutionProfileEditor
                 | LeafContents::GetStarted
                 | LeafContents::Welcome { .. }
+                | LeafContents::Cockpit
                 | LeafContents::AIDocument(_)
                 // Zaplex Wave 7-3: `EnvironmentManagement` arm physically removed along with ambient-agent UI subsystem.
                 | LeafContents::SshServer { .. }

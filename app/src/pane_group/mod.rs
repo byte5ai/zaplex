@@ -1828,6 +1828,14 @@ impl PaneGroup {
                     "Image pane should not have been persisted, as it is not restorable"
                 ))
             }
+            LeafContents::Cockpit => {
+                // Cockpit dashboard panes are intentionally not persisted (see
+                // `LeafContents::is_persisted`); users reopen from the cockpit
+                // sidebar.
+                Err(anyhow::anyhow!(
+                    "Cockpit pane should not have been persisted, as it is not restorable"
+                ))
+            }
             LeafContents::GetStarted => {
                 if !FeatureFlag::GetStartedTab.is_enabled() {
                     Err(anyhow::anyhow!("GetStarted pane not supported"))

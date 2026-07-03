@@ -8,8 +8,8 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Fill as ElementFill, Flex, MainAxisAlignment, MainAxisSize,
-    ParentElement, Radius, Rect, ScrollbarWidth, Shrinkable, Text,
+    CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Rect, ScrollbarWidth, Shrinkable, Text,
 };
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 use zaplex_cockpit::{
@@ -35,8 +35,15 @@ fn heat_coloru(level: HeatLevel) -> ColorU {
     }
 }
 
+/// Events the sidebar emits toward the workspace (via the left panel).
+pub enum CockpitPanelEvent {
+    /// Open the full cockpit dashboard pane in the main area.
+    OpenDashboardPane,
+}
+
 pub struct CockpitPanel {
     scroll_state: ClippedScrollStateHandle,
+    expand_btn: MouseStateHandle,
 }
 
 impl CockpitPanel {
@@ -49,6 +56,7 @@ impl CockpitPanel {
         });
         Self {
             scroll_state: ClippedScrollStateHandle::default(),
+            expand_btn: MouseStateHandle::default(),
         }
     }
 
@@ -189,7 +197,34 @@ impl CockpitPanel {
                 body,
                 muted,
             ))
+            .with_child(self.render_expand_button(appearance))
             .finish()
+    }
+
+    /// "Open dashboard" affordance: expands the compact sidebar into the roomy
+    /// main-area cockpit pane (C2b).
+    fn render_expand_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        Hoverable::new(self.expand_btn.clone(), move |mouse| {
+            let mut c = Container::new(Self::text("⤢".to_string(), family, body, muted))
+                .with_padding_left(6.0)
+                .with_padding_right(6.0)
+                .with_padding_top(2.0)
+                .with_padding_bottom(2.0)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+            if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_2(theme));
+            }
+            c.finish()
+        })
+        .with_cursor(warpui::platform::Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(CockpitPanelAction::OpenDashboardPane);
+        })
+        .finish()
     }
 }
 
@@ -256,9 +291,23 @@ impl View for CockpitPanel {
 }
 
 impl Entity for CockpitPanel {
-    type Event = ();
+    type Event = CockpitPanelEvent;
+}
+
+/// Sidebar actions (routed back into the view by the action system).
+#[derive(Clone, Copy, Debug)]
+pub enum CockpitPanelAction {
+    OpenDashboardPane,
 }
 
 impl TypedActionView for CockpitPanel {
-    type Action = ();
+    type Action = CockpitPanelAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            CockpitPanelAction::OpenDashboardPane => {
+                ctx.emit(CockpitPanelEvent::OpenDashboardPane);
+            }
+        }
+    }
 }

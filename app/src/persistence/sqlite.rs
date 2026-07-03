@@ -1267,7 +1267,7 @@ fn save_pane_state(
         LeafContents::Welcome { .. } => WELCOME_PANE_KIND,
         LeafContents::AIDocument(_) => AI_DOCUMENT_PANE_KIND,
         // Zaplex Wave 7-3: `EnvironmentManagement` arm physically removed along with variant.
-        LeafContents::SshServer { .. } => {
+        LeafContents::SshServer { .. } | LeafContents::Cockpit => {
             // These pane types are filtered out before this function is
             // called; see `LeafContents::is_persisted` and the skip in
             // `save_app_state`. Reaching this arm would mean a `pane_nodes`
@@ -1527,6 +1527,9 @@ fn save_pane_state(
             // Unreachable: filtered by `is_persisted` in `save_app_state`.
         }
         LeafContents::Image { .. } => {
+            // Unreachable: filtered by `is_persisted` in `save_app_state`.
+        }
+        LeafContents::Cockpit => {
             // Unreachable: filtered by `is_persisted` in `save_app_state`.
         }
     }

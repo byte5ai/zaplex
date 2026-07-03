@@ -35,15 +35,17 @@ use chrono::{DateTime, Utc};
 /// their transcripts within the widest (week) window, and aggregate per-account
 /// usage / cost / heat.
 ///
-/// `now` is explicit so windowing is deterministic and testable. `budget_5h` sizes
-/// heat (0 = disable heat). This is the crate's single I/O entry point; the app's
-/// `CockpitModel` calls it off the main thread on file-watch/reconcile ticks.
+/// `now` is explicit so windowing is deterministic and testable. `budget_5h` /
+/// `budget_week` size the two heats (0 = disable). This is the crate's single
+/// I/O entry point; the app's `CockpitModel` calls it off the main thread on
+/// file-watch/reconcile ticks.
 pub fn build_snapshot(
     home: &Path,
     codex_home: &Path,
     claude_config_dir_env: Option<&str>,
     now: DateTime<Utc>,
     budget_5h: u64,
+    budget_week: u64,
     pricing: &PricingTable,
 ) -> CockpitSnapshot {
     let since = now - window_week();
@@ -51,11 +53,15 @@ pub fn build_snapshot(
 
     for account in claude::discover_accounts(home, claude_config_dir_env) {
         let entries = claude::usage_for_account(&account, since);
-        accounts.push(build_account_usage(account, entries, now, budget_5h, pricing));
+        accounts.push(build_account_usage(
+            account, entries, now, budget_5h, budget_week, pricing,
+        ));
     }
     for account in codex::discover_accounts(codex_home) {
         let entries = codex::usage_for_account(&account, since);
-        accounts.push(build_account_usage(account, entries, now, budget_5h, pricing));
+        accounts.push(build_account_usage(
+            account, entries, now, budget_5h, budget_week, pricing,
+        ));
     }
 
     CockpitSnapshot {

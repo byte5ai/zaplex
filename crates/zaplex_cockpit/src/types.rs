@@ -117,6 +117,9 @@ pub struct AccountUsage {
     pub reset_week: Option<DateTime<Utc>>,
     /// `block5h.work / budget_5h`, clamped at 0; may exceed 1.0 (over budget).
     pub heat: f64,
+    /// `week.work / budget_week` — the slower weekly budget's heat; same
+    /// semantics as `heat` (may exceed 1.0).
+    pub heat_week: f64,
 }
 
 /// A full cockpit snapshot: every discovered account with its usage.

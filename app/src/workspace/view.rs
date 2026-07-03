@@ -5361,6 +5361,9 @@ impl Workspace {
             LeftPanelEvent::OpenSftpPane { node_id, server: _ } => {
                 self.open_sftp_pane(node_id.clone(), ctx);
             }
+            LeftPanelEvent::OpenCockpitPane => {
+                self.open_cockpit_pane(ctx);
+            }
             LeftPanelEvent::AdoptDaemonSession {
                 server,
                 pty_session_id,
@@ -5374,6 +5377,24 @@ impl Workspace {
                 }
             }
         }
+    }
+
+    /// Opens the roomy cockpit dashboard pane in the central area (C2b). Like
+    /// the SSH panes, always opens a new pane (multi-instance is fine — it's a
+    /// read-only lens over the data spine).
+    pub fn open_cockpit_pane(&mut self, ctx: &mut ViewContext<Self>) {
+        use crate::pane_group::pane::cockpit_pane::CockpitPane;
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            let pane = CockpitPane::new(ctx);
+            let smart_split_direction =
+                pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
+            pane_group.add_pane_with_direction(
+                smart_split_direction,
+                pane,
+                true, /* focus_new_pane */
+                ctx,
+            );
+        });
     }
 
     /// Opens an edit pane for the given SSH node in the central area. MVP implementation:

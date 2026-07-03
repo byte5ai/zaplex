@@ -101,6 +101,7 @@ pub fn build_account_usage(
     mut entries: Vec<UsageEntry>,
     now: DateTime<Utc>,
     budget_5h: u64,
+    budget_week: u64,
     pricing: &PricingTable,
 ) -> AccountUsage {
     entries.sort_by_key(|e| e.ts);
@@ -112,6 +113,11 @@ pub fn build_account_usage(
     } else {
         0.0
     };
+    let heat_week = if budget_week > 0 {
+        week.work as f64 / budget_week as f64
+    } else {
+        0.0
+    };
     AccountUsage {
         account,
         block5h,
@@ -120,6 +126,7 @@ pub fn build_account_usage(
         reset5h,
         reset_week,
         heat,
+        heat_week,
     }
 }
 

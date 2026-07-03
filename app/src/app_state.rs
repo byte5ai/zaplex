@@ -152,6 +152,10 @@ pub enum LeafContents {
     Sftp {
         node_id: String,
     },
+    /// Cockpit dashboard pane (account usage/cost/heat overview). **Not
+    /// persisted** — after a restart the user reopens it from the cockpit
+    /// sidebar; all data is re-derived from the data spine anyway.
+    Cockpit,
 }
 
 #[cfg(feature = "local_fs")]
@@ -176,6 +180,8 @@ impl LeafContents {
             // Image viewer panes are intentionally not persisted: they render in-session but
             // are not restored after restart.
             LeafContents::Image { .. } => false,
+            // Cockpit dashboard: pure lens over the data spine; reopened from the sidebar.
+            LeafContents::Cockpit => false,
             // Remote-file code pane: the remote buffer depends on an active SSH connection, and the `RemoteFileTree`
             // source is not restorable (`is_restorable() == false`). Persisting it would leave behind
             // an orphan `Code` row that is skipped during the restore phase, causing the whole tab to be lost —

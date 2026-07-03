@@ -3247,6 +3247,7 @@ impl PaneGroup {
             IPaneType::ImageViewer
             | IPaneType::GetStarted
             | IPaneType::SshServer
+            | IPaneType::Cockpit
             | IPaneType::Sftp
             | IPaneType::Welcome
             | IPaneType::DeferredPlaceholder => TypedPane::Other,

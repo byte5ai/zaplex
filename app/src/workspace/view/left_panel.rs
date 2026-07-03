@@ -142,6 +142,9 @@ pub enum LeftPanelEvent {
         node_id: String,
         server: warp_ssh_manager::SshServerInfo,
     },
+    /// User clicked "open dashboard" in the cockpit sidebar → main window opens
+    /// the roomy cockpit pane in the central area.
+    OpenCockpitPane,
     /// User clicked a listed running daemon session in the SSH manager → main
     /// window adopts it (attach + replay) in a new tab.
     AdoptDaemonSession {
@@ -278,6 +281,11 @@ impl LeftPanelView {
         let server_file_browser_view = ctx.add_typed_action_view(ServerFileBrowserView::new);
         let skill_manager_view = ctx.add_typed_action_view(SkillManagerPanel::new);
         let cockpit_view = ctx.add_typed_action_view(CockpitPanel::new);
+        ctx.subscribe_to_view(&cockpit_view, |_, _, event, ctx| match event {
+            crate::cockpit::panel::CockpitPanelEvent::OpenDashboardPane => {
+                ctx.emit(LeftPanelEvent::OpenCockpitPane);
+            }
+        });
         ctx.subscribe_to_view(&ssh_manager_view, |_me, _, event, ctx| {
             use crate::ssh_manager::SshManagerPanelEvent;
             match event {
