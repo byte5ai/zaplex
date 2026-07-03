@@ -73,10 +73,10 @@ zaplex is in **early, active development** — no releases yet. Honest state of 
 
 | Area | State |
 |---|---|
-| Native session daemon: persistence, attach/replay, multi-session, GC | 🔍 daemon core merged; client attach in review ([PR #16](https://github.com/byte5ai/zaplex/pull/16)) |
-| Cockpit: account discovery, usage/heat/cost, live session states | 🔍 built, in review |
-| File manager pane mode (stage 1) | 🔍 built, in review |
-| Fix/ask with *your* agent (routes to your own CLI agent) | 🔍 built, in review |
+| Native session daemon: persistence, attach/replay, multi-session, GC | ✅ merged ([PR #16](https://github.com/byte5ai/zaplex/pull/16)) |
+| Cockpit: account discovery, usage/heat/cost, live session states | ✅ merged |
+| File manager pane mode (stage 1) | ✅ merged |
+| Fix/ask with *your* agent (routes to your own CLI agent) | ✅ merged |
 | Real subscription utilization (OAuth usage endpoint) | 📋 designed |
 | Launch wizard + launch-on-freest account routing | 📋 planned |
 | Session fork & isolated-worktree launches | 📋 designed |
