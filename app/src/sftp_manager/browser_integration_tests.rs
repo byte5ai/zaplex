@@ -2016,3 +2016,87 @@ fn test_f5_skips_existing_target() {
         );
     });
 }
+
+// ============================================================
+// Cross-connection routing (MC F5 across local↔remote, increment C)
+// ============================================================
+
+/// Create a view with an explicit node id (empty = local, non-empty = a remote host).
+fn create_view_with_node(
+    app: &mut warpui::App,
+    node_id: &str,
+) -> (warpui::WindowId, warpui::ViewHandle<SftpBrowserView>) {
+    app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        SftpBrowserView::new(node_id.to_string(), ctx)
+    })
+}
+
+/// F5 from a local pane to a remote pane routes through the transfer engine
+/// (an upload task appears) rather than a direct filesystem copy.
+#[test]
+fn test_f5_local_to_remote_starts_an_upload_transfer() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("left/foo.txt", b"hi"), ("right/.keep", b"")]);
+        let root = temp.path().to_path_buf();
+
+        // Pane A: local (node ""), at /left. Pane B: "remote" host, at /right.
+        let (_, view_a) = create_view_with_node(&mut app, "");
+        view_a.update(&mut app, |v, ctx| {
+            let backend =
+                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/left"), ctx);
+        });
+        let (_, view_b) = create_view_with_node(&mut app, "host");
+        view_b.update(&mut app, |v, ctx| {
+            let backend =
+                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
+        });
+
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+
+        view_a.read(&app, |v, _| {
+            assert_eq!(v.transfers.len(), 1, "local→remote copy starts one transfer");
+            assert_eq!(
+                v.transfers[0].direction,
+                TransferDirection::Upload,
+                "the transfer is an upload"
+            );
+        });
+    });
+}
+
+/// F6 (move) across connections is deferred, not partially done: no transfer
+/// starts and nothing is renamed.
+#[test]
+fn test_f6_move_across_connections_is_deferred() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("left/bar.txt", b"x"), ("right/.keep", b"")]);
+        let root = temp.path().to_path_buf();
+
+        let (_, view_a) = create_view_with_node(&mut app, "");
+        view_a.update(&mut app, |v, ctx| {
+            let backend =
+                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/left"), ctx);
+        });
+        let (_, view_b) = create_view_with_node(&mut app, "host");
+        view_b.update(&mut app, |v, ctx| {
+            let backend =
+                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
+        });
+
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::MoveToOtherPane, ctx);
+        });
+
+        view_a.read(&app, |v, _| assert!(v.transfers.is_empty(), "no transfer started"));
+        assert!(root.join("left/bar.txt").exists(), "source untouched");
+        assert!(!root.join("right/bar.txt").exists(), "nothing moved");
+    });
+}
