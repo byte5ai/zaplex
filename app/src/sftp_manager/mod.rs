@@ -10,6 +10,7 @@ pub mod context_menu;
 pub mod dialogs;
 pub mod drop_target;
 pub mod file_list;
+pub mod keynav;
 pub mod sftp_backend;
 pub mod sftp_ops;
 pub mod transfer_panel;

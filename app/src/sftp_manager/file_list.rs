@@ -32,27 +32,48 @@ pub fn file_icon(entry_type: &FileEntryType) -> Icon {
     }
 }
 
-/// Render a single file row
+/// Render a single file row.
+///
+/// Two independent highlights, MC-style: `is_cursor` is the single keyboard
+/// cursor (an accent bar with inverse text, like MC's cyan cursor), while
+/// `is_selected` is the multi-selection set (a subtle neutral background). The
+/// cursor wins when a row is both.
 pub fn render_file_row(
     entry: &FileEntry,
     index: usize,
     is_selected: bool,
+    is_cursor: bool,
     mouse_handle: MouseStateHandle,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let bg_color = if is_selected {
+    let bg_color = if is_cursor {
+        theme.accent().into_solid()
+    } else if is_selected {
         internal_colors::neutral_3(theme)
     } else {
         theme.background().into_solid()
     };
-    let icon_color = if matches!(entry.file_type, FileEntryType::Directory | FileEntryType::Symlink) {
+    let is_dir = matches!(entry.file_type, FileEntryType::Directory | FileEntryType::Symlink);
+    // On the accent cursor bar, use the background colour for foreground marks
+    // so icon/name/columns stay legible (inverse video, the MC cursor look).
+    let icon_color = if is_cursor {
+        theme.background().into_solid()
+    } else if is_dir {
         theme.accent().into_solid()
     } else {
         theme.sub_text_color(theme.background()).into_solid()
     };
-    let text_color = theme.active_ui_text_color();
-    let sub_color = theme.sub_text_color(theme.background());
+    let text_color = if is_cursor {
+        theme.background()
+    } else {
+        theme.active_ui_text_color()
+    };
+    let sub_color = if is_cursor {
+        theme.background()
+    } else {
+        theme.sub_text_color(theme.background())
+    };
 
     let name = entry.name.clone();
     let file_type = entry.file_type;
@@ -200,11 +221,16 @@ pub fn render_header(appearance: &Appearance) -> Box<dyn Element> {
         .finish()
 }
 
-/// Render list of file rows
+/// Render list of file rows.
+///
+/// `cursor_entry_index` is the entry index of the MC keyboard cursor (the
+/// single accent-highlighted row), or `None` when the pane isn't the active
+/// keyboard target.
 pub fn render_file_rows(
     entries: &[FileEntry],
     filtered_indices: &[usize],
     selected: &HashSet<usize>,
+    cursor_entry_index: Option<usize>,
     mouse_handles: &[MouseStateHandle],
     appearance: &Appearance,
 ) -> Box<dyn Element> {
@@ -214,8 +240,9 @@ pub fn render_file_rows(
     for &index in filtered_indices {
         let entry = &entries[index];
         let is_selected = selected.contains(&index);
+        let is_cursor = cursor_entry_index == Some(index);
         let mouse_handle = mouse_handles.get(index).cloned().unwrap_or_default();
-        let row = render_file_row(entry, index, is_selected, mouse_handle, appearance);
+        let row = render_file_row(entry, index, is_selected, is_cursor, mouse_handle, appearance);
         let position_id = format!("sftp_row:{index}");
         let positioned = SavePosition::new(row, &position_id).finish();
         col.add_child(positioned);

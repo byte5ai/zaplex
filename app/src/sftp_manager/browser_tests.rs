@@ -17,7 +17,9 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use pathfinder_geometry::vector::Vector2F;
 
 use super::browser::{SftpBrowserAction, SftpBrowserView};
-use super::types::{ConnectionState, Dialog, TransferDirection, TransferState};
+use super::types::{
+    ConnectionState, Dialog, FileEntry, FileEntryType, TransferDirection, TransferState,
+};
 use crate::editor::EditorView;
 
 /// Initializes the minimal set of singletons required by the tests
@@ -1604,6 +1606,160 @@ fn test_render_is_loading_initial_false() {
 
         view.read(&app, |view, _| {
             assert!(!view.is_loading);
+        });
+    });
+}
+
+// ============================================================
+// MC-style keyboard cursor tests (Increment A)
+// ============================================================
+
+/// Build a simple entry (file or directory) rooted under `/`.
+fn entry(name: &str, is_dir: bool) -> FileEntry {
+    FileEntry {
+        name: name.to_string(),
+        path: PathBuf::from("/").join(name),
+        file_type: if is_dir {
+            FileEntryType::Directory
+        } else {
+            FileEntryType::File
+        },
+        size: 0,
+        modified: None,
+        permissions: None,
+    }
+}
+
+/// Seed the view with a fixed listing, bypassing the async backend.
+fn seed(view: &warpui::ViewHandle<SftpBrowserView>, app: &mut warpui::App, entries: Vec<FileEntry>) {
+    view.update(app, |view, _| {
+        view.entries = entries;
+    });
+}
+
+/// Cursor moves down/up without wrapping, and maps to the right entry index.
+#[test]
+fn test_cursor_moves_and_maps_to_entry() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("a", true), entry("b", false), entry("c", false)]);
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.cursor, 0);
+            assert_eq!(view.cursor_entry_index(), Some(0));
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CursorDown, ctx);
+            view.handle_action(&SftpBrowserAction::CursorDown, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.cursor, 2);
+            assert_eq!(view.cursor_entry_index(), Some(2));
+        });
+
+        // Down at the bottom stays; two Ups land on 0 and stay.
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CursorDown, ctx);
+        });
+        view.read(&app, |view, _| assert_eq!(view.cursor, 2));
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CursorUp, ctx);
+            view.handle_action(&SftpBrowserAction::CursorUp, ctx);
+            view.handle_action(&SftpBrowserAction::CursorUp, ctx);
+        });
+        view.read(&app, |view, _| assert_eq!(view.cursor, 0));
+    });
+}
+
+/// First/Last jump to the ends of the visible list.
+#[test]
+fn test_cursor_first_and_last() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("a", false), entry("b", false), entry("c", false)]);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CursorLast, ctx);
+        });
+        view.read(&app, |view, _| assert_eq!(view.cursor, 2));
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CursorFirst, ctx);
+        });
+        view.read(&app, |view, _| assert_eq!(view.cursor, 0));
+    });
+}
+
+/// Space toggles the cursor row in the multi-selection.
+#[test]
+fn test_toggle_select_cursor() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("a", false), entry("b", false)]);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CursorDown, ctx);
+            view.handle_action(&SftpBrowserAction::ToggleSelectCursor, ctx);
+        });
+        view.read(&app, |view, _| assert!(view.selected.contains(&1)));
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ToggleSelectCursor, ctx);
+        });
+        view.read(&app, |view, _| assert!(!view.selected.contains(&1)));
+    });
+}
+
+/// A narrowing search filter snaps a now-hidden cursor back into range and the
+/// cursor still maps to a currently-visible entry.
+#[test]
+fn test_filter_clamps_cursor_into_range() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(
+            &view,
+            &mut app,
+            vec![
+                entry("alpha", false),
+                entry("beta", false),
+                entry("gamma", false),
+                entry("delta", false),
+                entry("target", false),
+            ],
+        );
+
+        // Park the cursor on the last row, then filter down to one match.
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CursorLast, ctx);
+            view.handle_action(&SftpBrowserAction::SetSearchFilter("target".to_string()), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.cursor, 0, "cursor clamped to the single visible row");
+            let idx = view.cursor_entry_index().expect("a row is visible");
+            assert_eq!(view.entries[idx].name, "target");
+        });
+    });
+}
+
+/// Activating the cursor on a directory navigates into it (path set synchronously).
+#[test]
+fn test_activate_cursor_on_directory_navigates() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("subdir", true), entry("file", false)]);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ActivateCursor, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/subdir"));
         });
     });
 }

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
+use warp_core::ui::theme::color::internal_colors;
 use warp_ssh_manager::{KeychainSecretStore, SshRepository};
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
@@ -38,6 +39,7 @@ use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 
 use super::context_menu::ContextMenuState;
+use super::keynav::{apply_cursor_move, clamp_cursor, CursorMove};
 use super::sftp_backend::{LiveSftpBackend, SftpBackend};
 use super::sftp_ops;
 use super::sftp_ops::normalize_remote_path;
@@ -45,6 +47,20 @@ use super::types::{
     ConnectionState, Dialog, FileEntry, FileEntryType, TransferDirection, TransferState,
     TransferTask,
 };
+
+/// The MC-style function-key bar: `(key label, caption, action)`. Rendered as
+/// a footer and mirroring the physical F-keys handled in `on_keydown`, so the
+/// same verbs are reachable by keyboard (pros) and click (beginners). F5/F6
+/// cross-pane copy/move light up fully once a second file panel exists.
+const FUNCTION_BAR: &[(&str, &str, fn() -> SftpBrowserAction)] = &[
+    ("F3", "View", || SftpBrowserAction::ActivateCursor),
+    ("F4", "Edit", || SftpBrowserAction::ActivateCursor),
+    ("F5", "Copy", || SftpBrowserAction::CopyToOtherPane),
+    ("F6", "Rename", || SftpBrowserAction::RenameCursor),
+    ("F7", "MkDir", || SftpBrowserAction::CreateFolder),
+    ("F8", "Delete", || SftpBrowserAction::DeleteSelected),
+    ("F10", "Quit", || SftpBrowserAction::CloseFileManager),
+];
 
 /// Toolbar button size
 const TOOLBAR_BTN_SIZE: f32 = 28.0;
@@ -125,6 +141,35 @@ pub enum SftpBrowserAction {
     DownloadSaveAs { index: usize, local_path: String },
     /// Confirm move
     ConfirmMove,
+    // ---- MC-style keyboard cursor ----
+    /// Move the keyboard cursor down one row.
+    CursorDown,
+    /// Move the keyboard cursor up one row.
+    CursorUp,
+    /// Move the cursor to the first row.
+    CursorFirst,
+    /// Move the cursor to the last row.
+    CursorLast,
+    /// Move the cursor up one page.
+    CursorPageUp,
+    /// Move the cursor down one page.
+    CursorPageDown,
+    /// Activate the row under the cursor (Enter / F3): a directory is entered,
+    /// a file is opened (details).
+    ActivateCursor,
+    /// Enter the directory under the cursor (Right arrow); no-op on a file.
+    EnterCursorDir,
+    /// Toggle the row under the cursor in the multi-selection (Space).
+    ToggleSelectCursor,
+    /// Rename the row under the cursor (F6 in the single-pane case).
+    RenameCursor,
+    /// Copy the selection to another file-manager pane (F5) — cross-pane
+    /// transfer is the next increment; today this explains itself.
+    CopyToOtherPane,
+    /// Move the selection to another file-manager pane (F6 cross-pane).
+    MoveToOtherPane,
+    /// Close the file manager (F10), reverting the pane to its terminal.
+    CloseFileManager,
     /// Cancel a transfer task
     CancelTransfer(usize),
     /// Toggle transfer panel visibility
@@ -206,6 +251,14 @@ pub struct SftpBrowserView {
     pub(crate) new_folder_editor: ViewHandle<EditorView>,
     /// Search filter editor
     search_editor: ViewHandle<EditorView>,
+    // ---- Keyboard cursor (MC-style) ----
+    /// Position of the keyboard cursor within the *visible* (filtered) row
+    /// list, MC-style. Distinct from `selected` (the multi-selection set).
+    /// Always clamped into range after any change to the visible list.
+    pub(crate) cursor: usize,
+    /// Hover/click state for each cell of the F-key function bar (mouse parity
+    /// with the keyboard function keys). One per [`FUNCTION_BAR`] entry.
+    fn_bar_handles: Vec<MouseStateHandle>,
     // ---- File row mouse handles ----
     /// Mouse state handle for each file entry row
     row_mouse_handles: Vec<MouseStateHandle>,
@@ -264,6 +317,8 @@ impl SftpBrowserView {
             rename_editor,
             new_folder_editor,
             search_editor,
+            cursor: 0,
+            fn_bar_handles: FUNCTION_BAR.iter().map(|_| MouseStateHandle::default()).collect(),
             row_mouse_handles: Vec::new(),
             scroll_state: ClippedScrollStateHandle::default(),
             connect_handle: None,
@@ -313,6 +368,7 @@ impl SftpBrowserView {
                     me.search_filter = None;
                     me.search_editor
                         .update(ctx, |e, ctx| e.set_buffer_text("", ctx));
+                    me.clamp_cursor_to_visible();
                     ctx.notify();
                 }
                 _ => {
@@ -323,6 +379,9 @@ impl SftpBrowserView {
                     } else {
                         me.search_filter = Some(trimmed);
                     }
+                    // A narrower/wider filter changes the visible set — a
+                    // filtered-out cursor must snap back into range.
+                    me.clamp_cursor_to_visible();
                     ctx.notify();
                 }
             },
@@ -420,6 +479,7 @@ impl SftpBrowserView {
                 self.entries = entries;
                 self.selected.clear();
                 self.sync_row_mouse_handles();
+                self.clamp_cursor_to_visible();
             }
             Err(_) => {}
         }
@@ -626,6 +686,9 @@ impl SftpBrowserView {
                         me.entries = entries;
                         me.selected.clear();
                         me.sync_row_mouse_handles();
+                        // A refresh may have shrunk the listing (files removed);
+                        // keep the cursor in range rather than pointing past it.
+                        me.clamp_cursor_to_visible();
                     }
                     Ok(Err(e)) => {
                         me.show_error_toast(format!("Failed to list directory: {e}"), ctx);
@@ -651,6 +714,86 @@ impl SftpBrowserView {
         self.row_mouse_handles.truncate(self.entries.len());
     }
 
+    /// Entry indices currently visible (after the search filter), in display
+    /// order. The single source of truth for both rendering and cursor
+    /// arithmetic, so the MC cursor and the rows never disagree.
+    pub(crate) fn visible_indices(&self) -> Vec<usize> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                self.search_filter.as_ref().map_or(true, |filter| {
+                    entry.name.to_lowercase().contains(&filter.to_lowercase())
+                })
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The entry index under the keyboard cursor, or `None` when nothing is
+    /// visible.
+    pub(crate) fn cursor_entry_index(&self) -> Option<usize> {
+        self.visible_indices().get(self.cursor).copied()
+    }
+
+    /// Re-clamp the cursor into the current visible range. Call after any
+    /// change to the entries or the filter so a stale cursor can't point past
+    /// the end.
+    fn clamp_cursor_to_visible(&mut self) {
+        self.cursor = clamp_cursor(self.cursor, self.visible_indices().len());
+    }
+
+    /// Fixed page size for PageUp/PageDown. The model doesn't know the
+    /// viewport height, so a sensible constant keeps paging predictable.
+    fn cursor_page_size(&self) -> usize {
+        15
+    }
+
+    /// Apply an MC cursor movement.
+    fn move_cursor(&mut self, mv: CursorMove, ctx: &mut ViewContext<Self>) {
+        let len = self.visible_indices().len();
+        self.cursor = apply_cursor_move(self.cursor, len, mv);
+        ctx.notify();
+    }
+
+    /// Activate the row under the cursor: enter a directory, or open a file.
+    fn activate_cursor(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(index) = self.cursor_entry_index() {
+            self.open_entry(index, ctx);
+        }
+    }
+
+    /// Enter the directory under the cursor (Right arrow); a file is a no-op.
+    fn enter_cursor_dir(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(index) = self.cursor_entry_index() {
+            if let Some(entry) = self.entries.get(index) {
+                if matches!(
+                    entry.file_type,
+                    FileEntryType::Directory | FileEntryType::Symlink
+                ) {
+                    self.navigate_to(entry.path.clone(), ctx);
+                }
+            }
+        }
+    }
+
+    /// Toggle the row under the cursor in the multi-selection (Space).
+    fn toggle_select_cursor(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(index) = self.cursor_entry_index() {
+            if !self.selected.insert(index) {
+                self.selected.remove(&index);
+            }
+            ctx.notify();
+        }
+    }
+
+    /// Rename the row under the cursor (F6, single-pane case).
+    fn rename_cursor(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(index) = self.cursor_entry_index() {
+            self.rename_entry(index, ctx);
+        }
+    }
+
     /// Show an error toast notification
     fn show_error_toast(&self, message: String, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
@@ -668,6 +811,8 @@ impl SftpBrowserView {
             return;
         }
         self.current_path = path;
+        // A new directory listing starts with the cursor at the top (MC).
+        self.cursor = 0;
         // Truncate the forward history
         self.path_history.truncate(self.history_index + 1);
         self.path_history.push(self.current_path.clone());
@@ -1019,22 +1164,73 @@ impl SftpBrowserView {
         render_centered_status(icon, &msg, 12.0, appearance)
     }
 
+    /// Render the MC-style function-key bar footer. Each cell shows `F<n>` in
+    /// the accent colour followed by its caption, and clicking it dispatches
+    /// the same action as the physical function key.
+    fn render_function_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let size = appearance.ui_font_size();
+        let key_color = theme.accent().into_solid();
+        let caption_color = theme.sub_text_color(theme.background());
+
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_spacing(4.0);
+
+        for (i, (key, caption, make_action)) in FUNCTION_BAR.iter().enumerate() {
+            let handle = self.fn_bar_handles.get(i).cloned().unwrap_or_default();
+            let key = *key;
+            let caption = *caption;
+            let make_action = *make_action;
+            let cell = Hoverable::new(handle, move |mouse| {
+                let content = Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(3.0)
+                    .with_child(
+                        Text::new_inline(key.to_string(), family, size)
+                            .with_color(key_color.into())
+                            .finish(),
+                    )
+                    .with_child(
+                        Text::new_inline(caption.to_string(), family, size)
+                            .with_color(caption_color.into())
+                            .finish(),
+                    )
+                    .finish();
+                let mut container = Container::new(content)
+                    .with_padding_left(6.0)
+                    .with_padding_right(6.0)
+                    .with_padding_top(2.0)
+                    .with_padding_bottom(2.0)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)));
+                if mouse.is_hovered() {
+                    container = container.with_background(internal_colors::neutral_3(theme));
+                }
+                container.finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(make_action()))
+            .finish();
+            row.add_child(cell);
+        }
+
+        Container::new(row.finish())
+            .with_padding_left(PANEL_PADDING)
+            .with_padding_right(PANEL_PADDING)
+            .with_padding_top(4.0)
+            .with_padding_bottom(4.0)
+            .with_background(theme.background())
+            .finish()
+    }
+
     /// Render the file list
     fn render_file_list(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
 
-        // Filter the entries
-        let filtered_indices: Vec<usize> = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| {
-                self.search_filter.as_ref().map_or(true, |filter| {
-                    entry.name.to_lowercase().contains(&filter.to_lowercase())
-                })
-            })
-            .map(|(i, _)| i)
-            .collect();
+        // Filter the entries — same source of truth as the keyboard cursor.
+        let filtered_indices = self.visible_indices();
 
         if filtered_indices.is_empty() {
             let text_el = Text::new_inline(
@@ -1057,6 +1253,7 @@ impl SftpBrowserView {
             &self.entries,
             &filtered_indices,
             &self.selected,
+            self.cursor_entry_index(),
             &self.row_mouse_handles,
             appearance,
         );
@@ -1641,10 +1838,12 @@ impl TypedActionView for SftpBrowserView {
             }
             SftpBrowserAction::SetSearchFilter(filter) => {
                 self.search_filter = Some(filter.clone());
+                self.clamp_cursor_to_visible();
                 ctx.notify();
             }
             SftpBrowserAction::ClearSearchFilter => {
                 self.search_filter = None;
+                self.clamp_cursor_to_visible();
                 ctx.notify();
             }
             SftpBrowserAction::NavigateUp => {
@@ -1700,6 +1899,38 @@ impl TypedActionView for SftpBrowserView {
                         self.dialog = None;
                     }
                 }
+            }
+            // ---- MC-style keyboard cursor ----
+            SftpBrowserAction::CursorDown => self.move_cursor(CursorMove::Down, ctx),
+            SftpBrowserAction::CursorUp => self.move_cursor(CursorMove::Up, ctx),
+            SftpBrowserAction::CursorFirst => self.move_cursor(CursorMove::First, ctx),
+            SftpBrowserAction::CursorLast => self.move_cursor(CursorMove::Last, ctx),
+            SftpBrowserAction::CursorPageUp => {
+                let page = self.cursor_page_size();
+                self.move_cursor(CursorMove::PageUp(page), ctx);
+            }
+            SftpBrowserAction::CursorPageDown => {
+                let page = self.cursor_page_size();
+                self.move_cursor(CursorMove::PageDown(page), ctx);
+            }
+            SftpBrowserAction::ActivateCursor => self.activate_cursor(ctx),
+            SftpBrowserAction::EnterCursorDir => self.enter_cursor_dir(ctx),
+            SftpBrowserAction::ToggleSelectCursor => self.toggle_select_cursor(ctx),
+            SftpBrowserAction::RenameCursor => self.rename_cursor(ctx),
+            SftpBrowserAction::CopyToOtherPane | SftpBrowserAction::MoveToOtherPane => {
+                // Cross-pane transfer (the registry + transfer engine) is the
+                // next increment. Until then, say so plainly rather than
+                // silently doing nothing.
+                self.show_error_toast(
+                    "Copy/Move to another file panel is coming next — open a second \
+                     file-manager pane to use it."
+                        .to_string(),
+                    ctx,
+                );
+            }
+            SftpBrowserAction::CloseFileManager => {
+                // Reverts the pane to its underlying terminal (temporary-replacement seam).
+                ctx.emit(PaneEvent::Close);
             }
             SftpBrowserAction::CancelTransfer(task_id) => {
                 let task_id = *task_id;
@@ -1840,6 +2071,9 @@ impl View for SftpBrowserView {
             col.add_child(Shrinkable::new(1.0, scrollable).finish());
         }
 
+        // 6. MC-style function-key bar (footer)
+        col.add_child(self.render_function_bar(appearance));
+
         // 7. Transfer panel (floating at the bottom)
         let mut main_content = col.finish();
 
@@ -1926,23 +2160,43 @@ impl View for SftpBrowserView {
         let positioned_content =
             SavePosition::new(main_content, SFTP_PANEL_POSITION_ID).finish();
 
-        // 12. Keyboard event interception
+        // 12. Keyboard event interception — MC-style navigation. A modifier
+        // (other than Shift, used for range operations later) means the
+        // keystroke belongs to a shortcut elsewhere; let it propagate.
         let key_handler = EventHandler::new(positioned_content).on_keydown(
             move |ctx, _app, keystroke| {
-                match keystroke.key.as_str() {
-                    "delete" => {
-                        ctx.dispatch_typed_action(SftpBrowserAction::DeleteSelected);
+                if keystroke.ctrl || keystroke.cmd || keystroke.alt || keystroke.meta {
+                    return DispatchEventResult::PropagateToParent;
+                }
+                let action = match keystroke.key.as_str() {
+                    // Cursor movement
+                    "down" => Some(SftpBrowserAction::CursorDown),
+                    "up" => Some(SftpBrowserAction::CursorUp),
+                    "home" => Some(SftpBrowserAction::CursorFirst),
+                    "end" => Some(SftpBrowserAction::CursorLast),
+                    "pageup" => Some(SftpBrowserAction::CursorPageUp),
+                    "pagedown" => Some(SftpBrowserAction::CursorPageDown),
+                    // Directory traversal, MC-style: Enter/Right open, Left/Backspace go up.
+                    "enter" | "numpadenter" => Some(SftpBrowserAction::ActivateCursor),
+                    "right" => Some(SftpBrowserAction::EnterCursorDir),
+                    "left" | "backspace" => Some(SftpBrowserAction::NavigateUp),
+                    "space" => Some(SftpBrowserAction::ToggleSelectCursor),
+                    // Function-key bar (MC parity)
+                    "f3" | "f4" => Some(SftpBrowserAction::ActivateCursor),
+                    "f5" => Some(SftpBrowserAction::CopyToOtherPane),
+                    "f6" => Some(SftpBrowserAction::RenameCursor),
+                    "f7" => Some(SftpBrowserAction::CreateFolder),
+                    "f8" | "delete" => Some(SftpBrowserAction::DeleteSelected),
+                    "f10" => Some(SftpBrowserAction::CloseFileManager),
+                    "escape" => Some(SftpBrowserAction::CloseDialog),
+                    _ => None,
+                };
+                match action {
+                    Some(action) => {
+                        ctx.dispatch_typed_action(action);
                         DispatchEventResult::StopPropagation
                     }
-                    "backspace" => {
-                        ctx.dispatch_typed_action(SftpBrowserAction::NavigateUp);
-                        DispatchEventResult::StopPropagation
-                    }
-                    "escape" => {
-                        ctx.dispatch_typed_action(SftpBrowserAction::CloseDialog);
-                        DispatchEventResult::StopPropagation
-                    }
-                    _ => DispatchEventResult::PropagateToParent,
+                    None => DispatchEventResult::PropagateToParent,
                 }
             },
         );
