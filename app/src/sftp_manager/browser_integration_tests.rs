@@ -2102,3 +2102,110 @@ fn test_f6_move_across_connections_starts_transfer() {
         });
     });
 }
+
+// ============================================================
+// Overwrite-on-conflict for copy/move (FM Pflicht 1)
+// ============================================================
+
+/// A copy whose target already exists pauses on the conflict dialog instead of
+/// silently skipping; "Overwrite" replaces the target with the source content.
+#[test]
+fn test_copy_conflict_overwrites_on_confirm() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, temp) = create_two_panes_sharing_fs(
+            &mut app,
+            &[("left/dup.txt", b"new"), ("right/dup.txt", b"old")],
+        );
+        let root = temp.path().to_path_buf();
+
+        // F5 → conflict (right/dup.txt exists) → dialog opens, nothing copied yet.
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        view_a.read(&app, |v, _| {
+            assert!(
+                matches!(v.dialog, Some(Dialog::CopyMoveConflict { .. })),
+                "conflict opens a dialog"
+            );
+        });
+        assert_eq!(
+            std::fs::read(root.join("right/dup.txt")).unwrap(),
+            b"old",
+            "target untouched until the user decides"
+        );
+
+        // Overwrite → target replaced, dialog closed.
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::OverwriteConflict { all: false }, ctx);
+        });
+        view_a.read(&app, |v, _| assert!(v.dialog.is_none(), "dialog closed after resolve"));
+        assert_eq!(
+            std::fs::read(root.join("right/dup.txt")).unwrap(),
+            b"new",
+            "target overwritten with source content"
+        );
+    });
+}
+
+/// "Skip" on the conflict leaves the target untouched.
+#[test]
+fn test_copy_conflict_skips_on_skip() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, temp) = create_two_panes_sharing_fs(
+            &mut app,
+            &[("left/dup.txt", b"new"), ("right/dup.txt", b"old")],
+        );
+        let root = temp.path().to_path_buf();
+
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+            v.handle_action(&SftpBrowserAction::SkipConflict { all: false }, ctx);
+        });
+        assert_eq!(
+            std::fs::read(root.join("right/dup.txt")).unwrap(),
+            b"old",
+            "skipped target kept its content"
+        );
+    });
+}
+
+/// "Overwrite all" resolves the current conflict AND every following one in the
+/// batch without re-prompting.
+#[test]
+fn test_copy_conflict_overwrite_all_applies_to_batch() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, temp) = create_two_panes_sharing_fs(
+            &mut app,
+            &[
+                ("left/a.txt", b"A2"),
+                ("left/b.txt", b"B2"),
+                ("right/a.txt", b"A1"),
+                ("right/b.txt", b"B1"),
+            ],
+        );
+        let root = temp.path().to_path_buf();
+
+        // Select both files, then F5 → conflict on the first.
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CursorFirst, ctx);
+            v.handle_action(&SftpBrowserAction::ToggleSelectCursor, ctx);
+            v.handle_action(&SftpBrowserAction::CursorDown, ctx);
+            v.handle_action(&SftpBrowserAction::ToggleSelectCursor, ctx);
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        view_a.read(&app, |v, _| {
+            assert!(matches!(v.dialog, Some(Dialog::CopyMoveConflict { .. })));
+        });
+
+        // Overwrite all → both targets replaced, no dialog left.
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::OverwriteConflict { all: true }, ctx);
+        });
+        view_a.read(&app, |v, _| assert!(v.dialog.is_none(), "no further prompt"));
+        assert_eq!(std::fs::read(root.join("right/a.txt")).unwrap(), b"A2");
+        assert_eq!(std::fs::read(root.join("right/b.txt")).unwrap(), b"B2");
+    });
+}
