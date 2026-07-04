@@ -173,12 +173,39 @@ pub enum SftpBrowserAction {
     MoveToOtherPane,
     /// Close the file manager (F10), reverting the pane to its terminal.
     CloseFileManager,
+    /// Resolve a copy/move conflict: overwrite this target (`all` = the rest too).
+    OverwriteConflict { all: bool },
+    /// Resolve a copy/move conflict: skip this target (`all` = the rest too).
+    SkipConflict { all: bool },
     /// Cancel a transfer task
     CancelTransfer(usize),
     /// Toggle transfer panel visibility
     ToggleTransferPanel,
     /// Confirm closing the transfer panel (cancel all transfers and clear the history)
     ConfirmCloseTransferPanel,
+}
+
+/// One planned copy/move within a same-filesystem batch.
+struct CopyMoveOp {
+    source: PathBuf,
+    dest: PathBuf,
+    is_dir: bool,
+}
+
+/// The in-progress state of a same-filesystem copy/move batch, paused whenever
+/// a destination already exists so the user can decide (overwrite/skip, with
+/// "…all" applying to the rest). Lives on the view so the conflict dialog can
+/// resume it.
+struct PendingCopyMove {
+    ops: std::collections::VecDeque<CopyMoveOp>,
+    backend: Arc<dyn SftpBackend>,
+    target_label: String,
+    is_move: bool,
+    /// `None` = ask on each conflict; `Some(true)` = overwrite all; `Some(false)` = skip all.
+    overwrite_default: Option<bool>,
+    done: usize,
+    skipped: usize,
+    errors: usize,
 }
 
 /// SFTP browser view
@@ -265,6 +292,11 @@ pub struct SftpBrowserView {
     /// Process-unique id for the cross-pane file-manager registry (F5/F6
     /// copy/move target discovery).
     fm_id: u64,
+    /// An in-progress same-fs copy/move batch, paused on a conflict dialog.
+    pending_copy_move: Option<PendingCopyMove>,
+    /// Dialog button handles for the copy/move conflict "…all" options.
+    overwrite_all_btn: MouseStateHandle,
+    skip_all_btn: MouseStateHandle,
     // ---- File row mouse handles ----
     /// Mouse state handle for each file entry row
     row_mouse_handles: Vec<MouseStateHandle>,
@@ -326,6 +358,9 @@ impl SftpBrowserView {
             cursor: 0,
             fn_bar_handles: FUNCTION_BAR.iter().map(|_| MouseStateHandle::default()).collect(),
             fm_id: super::fm_registry::next_fm_id(),
+            pending_copy_move: None,
+            overwrite_all_btn: MouseStateHandle::default(),
+            skip_all_btn: MouseStateHandle::default(),
             row_mouse_handles: Vec::new(),
             scroll_state: ClippedScrollStateHandle::default(),
             connect_handle: None,
@@ -922,9 +957,10 @@ impl SftpBrowserView {
         }
     }
 
-    /// Same-filesystem copy/move: a direct backend `copy`/`rename`, synchronous
-    /// (no bytes cross the wire). Existing targets are skipped, never
-    /// overwritten. Both panes share this pane's backend namespace.
+    /// Same-filesystem copy/move: direct backend `copy`/`rename`, synchronous
+    /// (no bytes cross the wire). Builds the batch and runs it; existing targets
+    /// pause the batch for an overwrite/skip decision rather than being silently
+    /// skipped.
     fn copy_move_same_fs(
         &mut self,
         sources: &[PathBuf],
@@ -951,56 +987,210 @@ impl SftpBrowserView {
             return;
         }
 
-        let mut copied = 0usize;
-        let mut skipped = 0usize;
-        let mut errors = 0usize;
+        let mut ops = std::collections::VecDeque::new();
         for source in sources {
             let Some(name) = source.file_name() else {
                 continue;
             };
             let dest = normalize_remote_path(&target_dir.join(name));
-            if backend.stat(&dest).is_ok() {
-                skipped += 1;
-                continue;
-            }
             let is_dir = self
                 .entries
                 .iter()
                 .find(|e| &e.path == source)
                 .map(|e| matches!(e.file_type, FileEntryType::Directory))
                 .unwrap_or(false);
-            let result = if is_move {
-                backend.rename(source, &dest)
-            } else if is_dir {
-                backend.copy_dir_recursive(source, &dest)
-            } else {
-                backend.copy_file(source, &dest)
+            ops.push_back(CopyMoveOp {
+                source: source.clone(),
+                dest,
+                is_dir,
+            });
+        }
+
+        self.pending_copy_move = Some(PendingCopyMove {
+            ops,
+            backend,
+            target_label: target.label.clone(),
+            is_move,
+            overwrite_default: None,
+            done: 0,
+            skipped: 0,
+            errors: 0,
+        });
+        self.process_pending_copy_move(ctx);
+    }
+
+    /// Drive the current copy/move batch until it finishes or hits a conflict
+    /// that needs the user (a destination that already exists, with no blanket
+    /// decision yet). On a conflict it opens [`Dialog::CopyMoveConflict`] and
+    /// returns, to be resumed by the dialog actions.
+    fn process_pending_copy_move(&mut self, ctx: &mut ViewContext<Self>) {
+        enum Step {
+            Done,
+            Conflict { name: String, remaining: usize, is_move: bool },
+            Skip,
+            Execute { overwrite: bool },
+        }
+        loop {
+            // Decide the next step under a short immutable borrow.
+            let step = {
+                let Some(pending) = self.pending_copy_move.as_ref() else {
+                    return;
+                };
+                match pending.ops.front() {
+                    None => Step::Done,
+                    Some(op) => {
+                        let exists = pending.backend.stat(&op.dest).is_ok();
+                        if !exists {
+                            Step::Execute { overwrite: false }
+                        } else {
+                            match pending.overwrite_default {
+                                Some(true) => Step::Execute { overwrite: true },
+                                Some(false) => Step::Skip,
+                                None => Step::Conflict {
+                                    name: op
+                                        .dest
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().to_string())
+                                        .unwrap_or_default(),
+                                    remaining: pending.ops.len(),
+                                    is_move: pending.is_move,
+                                },
+                            }
+                        }
+                    }
+                }
             };
-            match result {
-                Ok(()) => copied += 1,
-                Err(e) => {
-                    errors += 1;
-                    log::warn!("fm {verb} {source:?} -> {dest:?} failed: {e}");
+            match step {
+                Step::Done => {
+                    self.finish_pending_copy_move(ctx);
+                    return;
+                }
+                Step::Conflict { name, remaining, is_move } => {
+                    self.dialog = Some(Dialog::CopyMoveConflict { name, remaining, is_move });
+                    ctx.notify();
+                    return;
+                }
+                Step::Skip => {
+                    if let Some(p) = self.pending_copy_move.as_mut() {
+                        p.ops.pop_front();
+                        p.skipped += 1;
+                    }
+                }
+                Step::Execute { overwrite } => {
+                    let op = self
+                        .pending_copy_move
+                        .as_mut()
+                        .and_then(|p| p.ops.pop_front());
+                    if let Some(op) = op {
+                        self.execute_copy_move_op(&op, overwrite);
+                    }
                 }
             }
         }
+    }
 
-        let past = if is_move { "moved" } else { "copied" };
-        let mut parts = vec![format!("{copied} {past}")];
-        if skipped > 0 {
-            parts.push(format!("{skipped} skipped (already exist)"));
+    /// Perform one copy/move op (the op is already popped off the queue).
+    /// `overwrite` means the destination existed and must be replaced — remove
+    /// it first so a rename over a non-empty dir (or a copy into an existing
+    /// tree) behaves as "replace".
+    fn execute_copy_move_op(&mut self, op: &CopyMoveOp, overwrite: bool) {
+        let Some(pending) = self.pending_copy_move.as_mut() else {
+            return;
+        };
+        let backend = pending.backend.clone();
+        let is_move = pending.is_move;
+
+        if overwrite {
+            let dest_is_dir = backend
+                .stat(&op.dest)
+                .map(|e| matches!(e.file_type, FileEntryType::Directory))
+                .unwrap_or(false);
+            let remove = if dest_is_dir {
+                backend.delete_dir_recursive(&op.dest)
+            } else {
+                backend.delete_file(&op.dest)
+            };
+            if let Err(e) = remove {
+                log::warn!("fm overwrite: could not remove existing {:?}: {e}", op.dest);
+                pending.errors += 1;
+                return;
+            }
         }
-        if errors > 0 {
-            parts.push(format!("{errors} failed"));
+
+        let result = if is_move {
+            backend.rename(&op.source, &op.dest)
+        } else if op.is_dir {
+            backend.copy_dir_recursive(&op.source, &op.dest)
+        } else {
+            backend.copy_file(&op.source, &op.dest)
+        };
+        match result {
+            Ok(()) => pending.done += 1,
+            Err(e) => {
+                pending.errors += 1;
+                log::warn!("fm copy/move {:?} -> {:?} failed: {e}", op.source, op.dest);
+            }
         }
-        let summary = format!("{} → {}", parts.join(", "), target.label);
-        if errors > 0 {
+    }
+
+    /// Finalise the batch: report, refresh, clear state.
+    fn finish_pending_copy_move(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(pending) = self.pending_copy_move.take() else {
+            return;
+        };
+        let past = if pending.is_move { "moved" } else { "copied" };
+        let mut parts = vec![format!("{} {past}", pending.done)];
+        if pending.skipped > 0 {
+            parts.push(format!("{} skipped", pending.skipped));
+        }
+        if pending.errors > 0 {
+            parts.push(format!("{} failed", pending.errors));
+        }
+        let summary = format!("{} → {}", parts.join(", "), pending.target_label);
+        if pending.errors > 0 {
             self.show_error_toast(summary, ctx);
         } else {
             self.show_info_toast(summary, ctx);
         }
         self.selected.clear();
+        self.dialog = None;
         self.refresh_dir(ctx);
+    }
+
+    /// Resolve the open copy/move conflict dialog (overwrite/skip, optionally
+    /// for all remaining conflicts) and resume the batch.
+    fn resolve_copy_move_conflict(&mut self, overwrite: bool, all: bool, ctx: &mut ViewContext<Self>) {
+        self.dialog = None;
+        // Pop the conflicting op (at the front) under a short borrow.
+        let op = {
+            let Some(pending) = self.pending_copy_move.as_mut() else {
+                return;
+            };
+            if all {
+                pending.overwrite_default = Some(overwrite);
+            }
+            pending.ops.pop_front()
+        };
+        if let Some(op) = op {
+            if overwrite {
+                self.execute_copy_move_op(&op, true);
+            } else if let Some(p) = self.pending_copy_move.as_mut() {
+                p.skipped += 1;
+            }
+        }
+        self.process_pending_copy_move(ctx);
+    }
+
+    /// Cancel an in-progress copy/move batch (the X / dismiss on the conflict
+    /// dialog): report what was done so far and stop.
+    fn cancel_pending_copy_move(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.pending_copy_move.is_some() {
+            // Drop the remaining queue, then finalise with the partial counts.
+            if let Some(p) = self.pending_copy_move.as_mut() {
+                p.ops.clear();
+            }
+            self.finish_pending_copy_move(ctx);
+        }
     }
 
     /// Cross-connection copy (local↔remote): each source *file* becomes an
@@ -1333,6 +1523,7 @@ impl SftpBrowserView {
             | Some(Dialog::CreateFolder { .. })
             | Some(Dialog::Move { .. })
             | Some(Dialog::OverwriteConfirm { .. })
+            | Some(Dialog::CopyMoveConflict { .. })
             | Some(Dialog::FileDetails { .. })
             | Some(Dialog::CloseTransferPanelConfirm)
             | None => {
@@ -2215,6 +2406,7 @@ impl TypedActionView for SftpBrowserView {
                     | Some(Dialog::Rename { .. })
                     | Some(Dialog::CreateFolder { .. })
                     | Some(Dialog::Move { .. })
+                    | Some(Dialog::CopyMoveConflict { .. })
                     | Some(Dialog::FileDetails { .. })
                     | Some(Dialog::CloseTransferPanelConfirm)
                     | None => {
@@ -2250,6 +2442,12 @@ impl TypedActionView for SftpBrowserView {
                 ctx.notify();
             }
             SftpBrowserAction::CloseDialog => {
+                // Cancelling the copy/move conflict dialog aborts the batch.
+                if matches!(self.dialog, Some(Dialog::CopyMoveConflict { .. })) {
+                    self.cancel_pending_copy_move(ctx);
+                    ctx.notify();
+                    return;
+                }
                 // When the user cancels the overwrite confirmation, clear the remaining batch upload queue
                 let was_upload_overwrite = matches!(
                     self.dialog,
@@ -2351,6 +2549,12 @@ impl TypedActionView for SftpBrowserView {
             SftpBrowserAction::CloseFileManager => {
                 // Reverts the pane to its underlying terminal (temporary-replacement seam).
                 ctx.emit(PaneEvent::Close);
+            }
+            SftpBrowserAction::OverwriteConflict { all } => {
+                self.resolve_copy_move_conflict(true, *all, ctx);
+            }
+            SftpBrowserAction::SkipConflict { all } => {
+                self.resolve_copy_move_conflict(false, *all, ctx);
             }
             SftpBrowserAction::CancelTransfer(task_id) => {
                 let task_id = *task_id;
@@ -2543,6 +2747,8 @@ impl View for SftpBrowserView {
                 self.dialog_confirm_btn.clone(),
                 self.dialog_cancel_btn.clone(),
                 self.dialog_close_btn.clone(),
+                self.overwrite_all_btn.clone(),
+                self.skip_all_btn.clone(),
             );
             let mut stack = Stack::new();
             stack.add_child(main_content);

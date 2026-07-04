@@ -213,6 +213,103 @@ fn render_confirm_dialog(
     wrap_dismiss(dialog_body)
 }
 
+/// Render the copy/move conflict dialog: the destination already exists, so
+/// offer Overwrite / Skip and their "…all remaining" variants; the title-bar X
+/// (and click-outside) cancels the whole batch.
+#[allow(clippy::too_many_arguments)]
+fn render_copy_move_conflict(
+    name: &str,
+    remaining: usize,
+    is_move: bool,
+    appearance: &Appearance,
+    overwrite_btn_state: MouseStateHandle,
+    skip_btn_state: MouseStateHandle,
+    overwrite_all_btn_state: MouseStateHandle,
+    skip_all_btn_state: MouseStateHandle,
+    close_btn_state: MouseStateHandle,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let sub_color = theme.sub_text_color(theme.background());
+    let ui_font = appearance.ui_font_family();
+    let ui_font_size = appearance.ui_font_size();
+
+    let verb = if is_move { "Move" } else { "Copy" };
+    let title_bar = render_title_bar(&format!("{verb} — target exists"), appearance, close_btn_state);
+
+    let desc = if remaining > 1 {
+        format!(
+            "\"{name}\" already exists in the destination. Overwrite it? ({remaining} conflicts remaining)"
+        )
+    } else {
+        format!("\"{name}\" already exists in the destination. Overwrite it?")
+    };
+    let desc_el = Shrinkable::new(
+        1.0,
+        Text::new(desc, ui_font, ui_font_size)
+            .with_color(sub_color.into())
+            .finish(),
+    )
+    .finish();
+
+    let overwrite_btn = render_button(
+        "Overwrite",
+        true,
+        appearance,
+        SftpBrowserAction::OverwriteConflict { all: false },
+        overwrite_btn_state,
+        Some("sftp_btn:dialog_confirm"),
+    );
+    let skip_btn = render_button(
+        "Skip",
+        false,
+        appearance,
+        SftpBrowserAction::SkipConflict { all: false },
+        skip_btn_state,
+        Some("sftp_btn:dialog_cancel"),
+    );
+    let overwrite_all_btn = render_button(
+        "Overwrite all",
+        false,
+        appearance,
+        SftpBrowserAction::OverwriteConflict { all: true },
+        overwrite_all_btn_state,
+        Some("sftp_btn:dialog_overwrite_all"),
+    );
+    let skip_all_btn = render_button(
+        "Skip all",
+        false,
+        appearance,
+        SftpBrowserAction::SkipConflict { all: true },
+        skip_all_btn_state,
+        Some("sftp_btn:dialog_skip_all"),
+    );
+
+    let buttons = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_alignment(MainAxisAlignment::End)
+        .with_spacing(8.0)
+        .with_child(overwrite_btn)
+        .with_child(skip_btn)
+        .with_child(overwrite_all_btn)
+        .with_child(skip_all_btn)
+        .finish();
+
+    let content = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_spacing(12.0)
+        .with_child(title_bar)
+        .with_child(desc_el)
+        .with_child(buttons)
+        .finish();
+
+    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
+        .with_max_width(DIALOG_MAX_WIDTH)
+        .with_max_height(DIALOG_MAX_HEIGHT)
+        .finish();
+
+    wrap_dismiss(dialog_body)
+}
+
 /// Wrap dialog content in Dismiss + centered container.
 fn wrap_dismiss(dialog_content: Box<dyn Element>) -> Box<dyn Element> {
     Dismiss::new(dialog_content)
@@ -544,6 +641,7 @@ fn render_overwrite_confirm(
 /// Render dialog (main entry point).
 ///
 /// Dispatch to the corresponding render function based on dialog type.
+#[allow(clippy::too_many_arguments)]
 pub fn render_dialog(
     dialog: &Dialog,
     rename_editor: &ViewHandle<EditorView>,
@@ -552,8 +650,21 @@ pub fn render_dialog(
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
     close_btn_state: MouseStateHandle,
+    overwrite_all_btn_state: MouseStateHandle,
+    skip_all_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     match dialog {
+        Dialog::CopyMoveConflict { name, remaining, is_move } => render_copy_move_conflict(
+            name,
+            *remaining,
+            *is_move,
+            appearance,
+            confirm_btn_state,
+            cancel_btn_state,
+            overwrite_all_btn_state,
+            skip_all_btn_state,
+            close_btn_state,
+        ),
         Dialog::DeleteConfirm { paths, .. } => {
             render_delete_confirm(paths, appearance, confirm_btn_state, cancel_btn_state, close_btn_state)
         }

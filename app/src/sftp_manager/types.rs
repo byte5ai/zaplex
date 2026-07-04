@@ -137,6 +137,16 @@ pub enum Dialog {
         file_size: u64,
         direction: TransferDirection,
     },
+    /// A copy/move batch hit an existing target: ask the user per item, with
+    /// "…all" options that apply to the rest of the batch.
+    CopyMoveConflict {
+        /// Name of the conflicting item.
+        name: String,
+        /// How many conflicts (including this one) are still queued.
+        remaining: usize,
+        /// Move vs copy (wording only).
+        is_move: bool,
+    },
     FileDetails { entry: FileEntry },
     /// Confirm closing transfer panel (when active transfers exist)
     CloseTransferPanelConfirm,

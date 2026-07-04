@@ -165,6 +165,8 @@ pub fn render_context_menu(state: &ContextMenuState, appearance: &Appearance) ->
             | SftpBrowserAction::CopyToOtherPane
             | SftpBrowserAction::MoveToOtherPane
             | SftpBrowserAction::CloseFileManager
+            | SftpBrowserAction::OverwriteConflict { .. }
+            | SftpBrowserAction::SkipConflict { .. }
             | SftpBrowserAction::CancelTransfer(_)
             | SftpBrowserAction::ToggleTransferPanel
             | SftpBrowserAction::ConfirmCloseTransferPanel => "sftp_ctx:unknown",
