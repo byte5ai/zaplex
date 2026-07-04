@@ -1014,15 +1014,6 @@ impl SftpBrowserView {
         is_move: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        if is_move {
-            self.show_error_toast(
-                "Moving across connections is coming next — copy, then delete the source."
-                    .to_string(),
-                ctx,
-            );
-            return;
-        }
-
         // Upload (local source → remote target) transfers through the target's
         // session; download (remote source → local target) through ours.
         let direction = match plan_transfer(&self.fs_namespace(), &target.fs) {
@@ -1048,6 +1039,9 @@ impl SftpBrowserView {
                 }
             },
         };
+        // For a move, the source is deleted after the transfer succeeds, via the
+        // *source* pane's own backend (ours) — a cross-connection copy-then-delete.
+        let source_backend = self.sftp.clone();
 
         let target_dir = target.current_path.clone();
         let mut started = 0usize;
@@ -1082,11 +1076,23 @@ impl SftpBrowserView {
                 TransferDirection::Upload => (source.clone(), dest),
                 TransferDirection::Download => (dest, source.clone()),
             };
-            self.spawn_transfer_with_backend(local_path, remote_path, backend.clone(), direction, ctx);
+            let delete_after = match (is_move, &source_backend) {
+                (true, Some(b)) => Some((b.clone(), source.clone())),
+                _ => None,
+            };
+            self.spawn_transfer_with_backend(
+                local_path,
+                remote_path,
+                backend.clone(),
+                direction,
+                delete_after,
+                ctx,
+            );
             started += 1;
         }
 
-        let mut parts = vec![format!("{started} transfer(s) started")];
+        let verb = if is_move { "move" } else { "copy" };
+        let mut parts = vec![format!("{started} {verb} transfer(s) started")];
         if skipped_exist > 0 {
             parts.push(format!("{skipped_exist} skipped (already exist)"));
         }
@@ -1100,12 +1106,18 @@ impl SftpBrowserView {
     /// Spawn a single upload/download on the transfer engine using an explicit
     /// backend (the target's for uploads, ours for downloads), mirroring the
     /// drag-and-drop upload path but parameterised by direction and backend.
+    ///
+    /// `delete_after` = `Some((source_backend, source_path))` turns a copy into
+    /// a **move**: on success the source is deleted through its own backend
+    /// (copy-then-delete across connections). It is never deleted on failure or
+    /// cancellation, so a failed move can't lose data.
     fn spawn_transfer_with_backend(
         &mut self,
         local_path: PathBuf,
         remote_path: PathBuf,
         backend: Arc<dyn SftpBackend>,
         direction: TransferDirection,
+        delete_after: Option<(Arc<dyn SftpBackend>, PathBuf)>,
         ctx: &mut ViewContext<Self>,
     ) {
         let total_size = match direction {
@@ -1174,7 +1186,20 @@ impl SftpBrowserView {
                 }
                 me.transfer_handles.remove(&task_id);
                 match &result {
-                    Ok(Ok(())) => me.refresh_dir(ctx),
+                    Ok(Ok(())) => {
+                        // Copy-then-delete: only remove the source once the
+                        // transfer has fully succeeded (never on error/cancel).
+                        if let Some((source_backend, source_path)) = &delete_after {
+                            if let Err(e) = source_backend.delete_file(source_path) {
+                                log::warn!("fm move: source delete failed: {e}");
+                                me.show_error_toast(
+                                    format!("Copied, but removing the source failed: {e}"),
+                                    ctx,
+                                );
+                            }
+                        }
+                        me.refresh_dir(ctx);
+                    }
                     Ok(Err(e)) => {
                         log::error!("sftp: cross-pane transfer failed: {e}");
                         me.show_error_toast(format!("Transfer failed: {e}"), ctx);
