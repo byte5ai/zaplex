@@ -56,8 +56,8 @@ use super::types::{
 /// same verbs are reachable by keyboard (pros) and click (beginners). F5/F6
 /// cross-pane copy/move light up fully once a second file panel exists.
 const FUNCTION_BAR: &[(&str, &str, fn() -> SftpBrowserAction)] = &[
-    ("F3", "View", || SftpBrowserAction::ActivateCursor),
-    ("F4", "Edit", || SftpBrowserAction::ActivateCursor),
+    ("F3", "View", || SftpBrowserAction::OpenCursorInEditor),
+    ("F4", "Edit", || SftpBrowserAction::OpenCursorInEditor),
     ("F5", "Copy", || SftpBrowserAction::CopyToOtherPane),
     ("F6", "Move", || SftpBrowserAction::MoveToOtherPane),
     ("F7", "MkDir", || SftpBrowserAction::CreateFolder),
@@ -157,9 +157,12 @@ pub enum SftpBrowserAction {
     CursorPageUp,
     /// Move the cursor down one page.
     CursorPageDown,
-    /// Activate the row under the cursor (Enter / F3): a directory is entered,
-    /// a file is opened (details).
+    /// Activate the row under the cursor (Enter): a directory is entered, a
+    /// file is downloaded.
     ActivateCursor,
+    /// Open the row under the cursor in the code editor (F3 View / F4 Edit): a
+    /// directory is entered; a file opens in an editor pane.
+    OpenCursorInEditor,
     /// Enter the directory under the cursor (Right arrow); no-op on a file.
     EnterCursorDir,
     /// Toggle the row under the cursor in the multi-selection (Space).
@@ -805,6 +808,30 @@ impl SftpBrowserView {
         if let Some(index) = self.cursor_entry_index() {
             self.open_entry(index, ctx);
         }
+    }
+
+    /// F3/F4: open the row under the cursor in the code editor. A directory is
+    /// entered; a file is opened in an editor pane (view + edit). The workspace
+    /// resolves local vs remote (`node_id`).
+    fn open_cursor_in_editor(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(index) = self.cursor_entry_index() else {
+            return;
+        };
+        let Some(entry) = self.entries.get(index) else {
+            return;
+        };
+        if matches!(
+            entry.file_type,
+            FileEntryType::Directory | FileEntryType::Symlink
+        ) {
+            let path = entry.path.clone();
+            self.navigate_to(path, ctx);
+            return;
+        }
+        ctx.dispatch_typed_action(&crate::WorkspaceAction::OpenFileInEditor {
+            node_id: self.node_id.clone(),
+            path: entry.path.clone(),
+        });
     }
 
     /// Enter the directory under the cursor (Right arrow); a file is a no-op.
@@ -2541,6 +2568,7 @@ impl TypedActionView for SftpBrowserView {
                 self.move_cursor(CursorMove::PageDown(page), ctx);
             }
             SftpBrowserAction::ActivateCursor => self.activate_cursor(ctx),
+            SftpBrowserAction::OpenCursorInEditor => self.open_cursor_in_editor(ctx),
             SftpBrowserAction::EnterCursorDir => self.enter_cursor_dir(ctx),
             SftpBrowserAction::ToggleSelectCursor => self.toggle_select_cursor(ctx),
             SftpBrowserAction::RenameCursor => self.rename_cursor(ctx),
@@ -2810,8 +2838,8 @@ impl View for SftpBrowserView {
                     // Rename (F2, the common file-manager convention; MC's F6
                     // is repurposed here for the cross-pane move).
                     "f2" => Some(SftpBrowserAction::RenameCursor),
-                    // Function-key bar (MC parity)
-                    "f3" | "f4" => Some(SftpBrowserAction::ActivateCursor),
+                    // Function-key bar (MC parity): F3 View / F4 Edit open the editor.
+                    "f3" | "f4" => Some(SftpBrowserAction::OpenCursorInEditor),
                     "f5" => Some(SftpBrowserAction::CopyToOtherPane),
                     "f6" => Some(SftpBrowserAction::MoveToOtherPane),
                     "f7" => Some(SftpBrowserAction::CreateFolder),

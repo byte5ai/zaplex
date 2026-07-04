@@ -2209,3 +2209,25 @@ fn test_copy_conflict_overwrite_all_applies_to_batch() {
         assert_eq!(std::fs::read(root.join("right/b.txt")).unwrap(), b"B2");
     });
 }
+
+// ============================================================
+// F3/F4 open-in-editor (FM Pflicht 2 — directory branch)
+// ============================================================
+
+/// F3/F4 on a directory enters it (the file branch dispatches a workspace
+/// action, which the file-manager harness can't observe here).
+#[test]
+fn test_open_in_editor_on_directory_navigates() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("subdir/inner.txt", b"x")]);
+
+        // /subdir is the only entry → cursor on it → F3/F4 enters it.
+        view.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::OpenCursorInEditor, ctx);
+        });
+        view.read(&app, |v, _| {
+            assert_eq!(v.current_path, PathBuf::from("/subdir"));
+        });
+    });
+}
