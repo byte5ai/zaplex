@@ -39,6 +39,7 @@ use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 
 use super::context_menu::ContextMenuState;
+use super::fm_registry::{FileManagerRegistry, FmPaneDescriptor, FsNamespace};
 use super::keynav::{apply_cursor_move, clamp_cursor, CursorMove};
 use super::sftp_backend::{LiveSftpBackend, SftpBackend};
 use super::sftp_ops;
@@ -56,7 +57,7 @@ const FUNCTION_BAR: &[(&str, &str, fn() -> SftpBrowserAction)] = &[
     ("F3", "View", || SftpBrowserAction::ActivateCursor),
     ("F4", "Edit", || SftpBrowserAction::ActivateCursor),
     ("F5", "Copy", || SftpBrowserAction::CopyToOtherPane),
-    ("F6", "Rename", || SftpBrowserAction::RenameCursor),
+    ("F6", "Move", || SftpBrowserAction::MoveToOtherPane),
     ("F7", "MkDir", || SftpBrowserAction::CreateFolder),
     ("F8", "Delete", || SftpBrowserAction::DeleteSelected),
     ("F10", "Quit", || SftpBrowserAction::CloseFileManager),
@@ -259,6 +260,9 @@ pub struct SftpBrowserView {
     /// Hover/click state for each cell of the F-key function bar (mouse parity
     /// with the keyboard function keys). One per [`FUNCTION_BAR`] entry.
     fn_bar_handles: Vec<MouseStateHandle>,
+    /// Process-unique id for the cross-pane file-manager registry (F5/F6
+    /// copy/move target discovery).
+    fm_id: u64,
     // ---- File row mouse handles ----
     /// Mouse state handle for each file entry row
     row_mouse_handles: Vec<MouseStateHandle>,
@@ -319,6 +323,7 @@ impl SftpBrowserView {
             search_editor,
             cursor: 0,
             fn_bar_handles: FUNCTION_BAR.iter().map(|_| MouseStateHandle::default()).collect(),
+            fm_id: super::fm_registry::next_fm_id(),
             row_mouse_handles: Vec::new(),
             scroll_state: ClippedScrollStateHandle::default(),
             connect_handle: None,
@@ -488,6 +493,7 @@ impl SftpBrowserView {
         self.pane_configuration.update(ctx, |config, ctx| {
             config.set_title(title, ctx);
         });
+        self.publish_to_registry(ctx);
         ctx.notify();
     }
 
@@ -701,6 +707,7 @@ impl SftpBrowserView {
                 me.pane_configuration.update(ctx, |config, ctx| {
                     config.set_title(title, ctx);
                 });
+                me.publish_to_registry(ctx);
                 ctx.notify();
             },
         );
@@ -794,12 +801,192 @@ impl SftpBrowserView {
         }
     }
 
+    // ---- Cross-pane copy/move (MC F5/F6) --------------------------------
+
+    /// Which filesystem this pane browses — local, or a specific remote host.
+    /// Two panes can copy/move between each other only within one namespace.
+    fn fs_namespace(&self) -> FsNamespace {
+        if self.node_id.is_empty() {
+            FsNamespace::Local
+        } else {
+            FsNamespace::Remote(self.node_id.clone())
+        }
+    }
+
+    /// Human label for the destination picker, kept live with the current dir.
+    fn fm_label(&self) -> String {
+        let where_ = if self.node_id.is_empty() {
+            "local".to_string()
+        } else {
+            self.node_id.clone()
+        };
+        format!("{where_}:{}", self.current_path.display())
+    }
+
+    /// Publish this pane's live descriptor into the cross-pane registry.
+    fn publish_to_registry(&self, ctx: &mut ViewContext<Self>) {
+        let descriptor = FmPaneDescriptor {
+            id: self.fm_id,
+            label: self.fm_label(),
+            fs: self.fs_namespace(),
+            current_path: self.current_path.clone(),
+        };
+        FileManagerRegistry::handle(ctx).update(ctx, move |reg, _| reg.upsert(descriptor));
+    }
+
+    /// Remove this pane from the registry (on close).
+    fn deregister_from_registry(&self, ctx: &mut ViewContext<Self>) {
+        let id = self.fm_id;
+        FileManagerRegistry::handle(ctx).update(ctx, move |reg, _| reg.remove(id));
+    }
+
+    /// The paths this operation acts on: the multi-selection if any, otherwise
+    /// the single row under the cursor.
+    fn operation_sources(&self) -> Vec<PathBuf> {
+        if self.selected.is_empty() {
+            self.cursor_entry_index()
+                .and_then(|i| self.entries.get(i))
+                .map(|e| vec![e.path.clone()])
+                .unwrap_or_default()
+        } else {
+            let mut indices: Vec<usize> = self.selected.iter().copied().collect();
+            indices.sort_unstable();
+            indices
+                .iter()
+                .filter_map(|&i| self.entries.get(i).map(|e| e.path.clone()))
+                .collect()
+        }
+    }
+
+    /// F5/F6: copy (or move) the operation's sources into another file-manager
+    /// pane on the same filesystem. Chooses the single other same-namespace
+    /// pane automatically (the MC two-panel case); 0 or >1 candidates are
+    /// reported rather than guessing. Cross-connection (local↔remote) transfer
+    /// is a separate increment.
+    fn copy_or_move_to_other_pane(&mut self, is_move: bool, ctx: &mut ViewContext<Self>) {
+        let verb = if is_move { "move" } else { "copy" };
+        let sources = self.operation_sources();
+        if sources.is_empty() {
+            self.show_error_toast(format!("Nothing selected to {verb}."), ctx);
+            return;
+        }
+
+        let fs = self.fs_namespace();
+        let self_id = self.fm_id;
+        let candidates = FileManagerRegistry::as_ref(ctx).others_same_fs(self_id, &fs);
+        let target = match candidates.as_slice() {
+            [] => {
+                self.show_error_toast(format!(
+                    "Open a second file-manager pane on the same {} to {verb} into it.",
+                    if matches!(fs, FsNamespace::Local) { "machine" } else { "host" }
+                ), ctx);
+                return;
+            }
+            [only] => only.clone(),
+            _ => {
+                // A destination picker across >2 panes is the next step; be
+                // explicit rather than picking an arbitrary target.
+                self.show_error_toast(
+                    "More than one other file panel is open — the target picker is coming; \
+                     for now keep exactly two panels to copy/move between them."
+                        .to_string(),
+                    ctx,
+                );
+                return;
+            }
+        };
+
+        let backend = match &self.sftp {
+            Some(b) => b.clone(),
+            None => {
+                self.show_error_toast("Not connected.".to_string(), ctx);
+                return;
+            }
+        };
+        let target_dir = target.current_path.clone();
+
+        // Copying into our own current directory would collide name-for-name;
+        // guard against the no-op/foot-gun.
+        if target_dir == self.current_path {
+            self.show_error_toast(
+                format!("Source and destination are the same folder — nothing to {verb}."),
+                ctx,
+            );
+            return;
+        }
+
+        let mut copied = 0usize;
+        let mut skipped = 0usize;
+        let mut errors = 0usize;
+        for source in &sources {
+            let Some(name) = source.file_name() else {
+                continue;
+            };
+            let dest = normalize_remote_path(&target_dir.join(name));
+            // Never overwrite silently: skip existing targets and report.
+            if backend.stat(&dest).is_ok() {
+                skipped += 1;
+                continue;
+            }
+            let is_dir = self
+                .entries
+                .iter()
+                .find(|e| &e.path == source)
+                .map(|e| matches!(e.file_type, FileEntryType::Directory))
+                .unwrap_or(false);
+            let result = if is_move {
+                // Same filesystem → a rename moves atomically without copying.
+                backend.rename(source, &dest)
+            } else if is_dir {
+                backend.copy_dir_recursive(source, &dest)
+            } else {
+                backend.copy_file(source, &dest)
+            };
+            match result {
+                Ok(()) => copied += 1,
+                Err(e) => {
+                    errors += 1;
+                    log::warn!("fm {verb} {source:?} -> {dest:?} failed: {e}");
+                }
+            }
+        }
+
+        // Report and refresh: a move changes our listing; a copy changes the
+        // target's (which refreshes itself on its own cadence / user refresh).
+        let past = if is_move { "moved" } else { "copied" };
+        let mut parts = vec![format!("{copied} {past}")];
+        if skipped > 0 {
+            parts.push(format!("{skipped} skipped (already exist)"));
+        }
+        if errors > 0 {
+            parts.push(format!("{errors} failed"));
+        }
+        let summary = format!("{} → {}", parts.join(", "), target.label);
+        if errors > 0 {
+            self.show_error_toast(summary, ctx);
+        } else {
+            self.show_info_toast(summary, ctx);
+        }
+        self.selected.clear();
+        self.refresh_dir(ctx);
+    }
+
     /// Show an error toast notification
     fn show_error_toast(&self, message: String, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
             let toast = DismissibleToast::error(message)
                 .with_object_id("sftp_error".to_string());
+            toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+        });
+    }
+
+    /// Show a success/info toast notification (e.g. a copy/move summary).
+    fn show_info_toast(&self, message: String, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            let toast = DismissibleToast::success(message)
+                .with_object_id("sftp_info".to_string());
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
     }
@@ -1917,17 +2104,8 @@ impl TypedActionView for SftpBrowserView {
             SftpBrowserAction::EnterCursorDir => self.enter_cursor_dir(ctx),
             SftpBrowserAction::ToggleSelectCursor => self.toggle_select_cursor(ctx),
             SftpBrowserAction::RenameCursor => self.rename_cursor(ctx),
-            SftpBrowserAction::CopyToOtherPane | SftpBrowserAction::MoveToOtherPane => {
-                // Cross-pane transfer (the registry + transfer engine) is the
-                // next increment. Until then, say so plainly rather than
-                // silently doing nothing.
-                self.show_error_toast(
-                    "Copy/Move to another file panel is coming next — open a second \
-                     file-manager pane to use it."
-                        .to_string(),
-                    ctx,
-                );
-            }
+            SftpBrowserAction::CopyToOtherPane => self.copy_or_move_to_other_pane(false, ctx),
+            SftpBrowserAction::MoveToOtherPane => self.copy_or_move_to_other_pane(true, ctx),
             SftpBrowserAction::CloseFileManager => {
                 // Reverts the pane to its underlying terminal (temporary-replacement seam).
                 ctx.emit(PaneEvent::Close);
@@ -2181,10 +2359,13 @@ impl View for SftpBrowserView {
                     "right" => Some(SftpBrowserAction::EnterCursorDir),
                     "left" | "backspace" => Some(SftpBrowserAction::NavigateUp),
                     "space" => Some(SftpBrowserAction::ToggleSelectCursor),
+                    // Rename (F2, the common file-manager convention; MC's F6
+                    // is repurposed here for the cross-pane move).
+                    "f2" => Some(SftpBrowserAction::RenameCursor),
                     // Function-key bar (MC parity)
                     "f3" | "f4" => Some(SftpBrowserAction::ActivateCursor),
                     "f5" => Some(SftpBrowserAction::CopyToOtherPane),
-                    "f6" => Some(SftpBrowserAction::RenameCursor),
+                    "f6" => Some(SftpBrowserAction::MoveToOtherPane),
                     "f7" => Some(SftpBrowserAction::CreateFolder),
                     "f8" | "delete" => Some(SftpBrowserAction::DeleteSelected),
                     "f10" => Some(SftpBrowserAction::CloseFileManager),
@@ -2236,6 +2417,8 @@ impl BackingView for SftpBrowserView {
         self._session = None;
         self.sftp = None;
         self.connection = ConnectionState::Disconnected;
+        // Stop advertising this pane as a copy/move target.
+        self.deregister_from_registry(ctx);
         ctx.emit(PaneEvent::Close);
     }
 
