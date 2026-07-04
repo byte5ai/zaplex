@@ -39,7 +39,9 @@ use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 
 use super::context_menu::ContextMenuState;
-use super::fm_registry::{FileManagerRegistry, FmPaneDescriptor, FsNamespace};
+use super::fm_registry::{
+    plan_transfer, FileManagerRegistry, FmPaneDescriptor, FsNamespace, TransferKind,
+};
 use super::keynav::{apply_cursor_move, clamp_cursor, CursorMove};
 use super::sftp_backend::{LiveSftpBackend, SftpBackend};
 use super::sftp_ops;
@@ -823,7 +825,8 @@ impl SftpBrowserView {
         format!("{where_}:{}", self.current_path.display())
     }
 
-    /// Publish this pane's live descriptor into the cross-pane registry.
+    /// Publish this pane's live descriptor (and backend handle) into the
+    /// cross-pane registry, so others can target — and transfer through — it.
     fn publish_to_registry(&self, ctx: &mut ViewContext<Self>) {
         let descriptor = FmPaneDescriptor {
             id: self.fm_id,
@@ -831,7 +834,14 @@ impl SftpBrowserView {
             fs: self.fs_namespace(),
             current_path: self.current_path.clone(),
         };
-        FileManagerRegistry::handle(ctx).update(ctx, move |reg, _| reg.upsert(descriptor));
+        let id = self.fm_id;
+        let backend = self.sftp.clone();
+        FileManagerRegistry::handle(ctx).update(ctx, move |reg, _| {
+            reg.upsert(descriptor);
+            if let Some(backend) = backend {
+                reg.set_backend(id, backend);
+            }
+        });
     }
 
     /// Remove this pane from the registry (on close).
@@ -859,10 +869,11 @@ impl SftpBrowserView {
     }
 
     /// F5/F6: copy (or move) the operation's sources into another file-manager
-    /// pane on the same filesystem. Chooses the single other same-namespace
-    /// pane automatically (the MC two-panel case); 0 or >1 candidates are
-    /// reported rather than guessing. Cross-connection (local↔remote) transfer
-    /// is a separate increment.
+    /// pane. Chooses the single other pane automatically (the MC two-panel
+    /// case); 0 or >1 candidates are reported rather than guessed. Routes by
+    /// filesystem: same fs → a direct backend copy/rename; local↔remote → an
+    /// upload/download through the transfer engine (with progress). Two
+    /// different remote hosts is a later increment.
     fn copy_or_move_to_other_pane(&mut self, is_move: bool, ctx: &mut ViewContext<Self>) {
         let verb = if is_move { "move" } else { "copy" };
         let sources = self.operation_sources();
@@ -871,15 +882,14 @@ impl SftpBrowserView {
             return;
         }
 
-        let fs = self.fs_namespace();
         let self_id = self.fm_id;
-        let candidates = FileManagerRegistry::as_ref(ctx).others_same_fs(self_id, &fs);
+        let candidates = FileManagerRegistry::as_ref(ctx).others(self_id);
         let target = match candidates.as_slice() {
             [] => {
-                self.show_error_toast(format!(
-                    "Open a second file-manager pane on the same {} to {verb} into it.",
-                    if matches!(fs, FsNamespace::Local) { "machine" } else { "host" }
-                ), ctx);
+                self.show_error_toast(
+                    format!("Open a second file-manager pane to {verb} into it."),
+                    ctx,
+                );
                 return;
             }
             [only] => only.clone(),
@@ -896,6 +906,33 @@ impl SftpBrowserView {
             }
         };
 
+        match plan_transfer(&self.fs_namespace(), &target.fs) {
+            TransferKind::DirectSameFs => self.copy_move_same_fs(&sources, &target, is_move, ctx),
+            TransferKind::Upload | TransferKind::Download => {
+                self.transfer_cross_connection(&sources, &target, is_move, ctx)
+            }
+            TransferKind::RemoteToRemote => {
+                self.show_error_toast(
+                    "Copying between two different hosts is coming next — route it through a \
+                     local pane for now."
+                        .to_string(),
+                    ctx,
+                );
+            }
+        }
+    }
+
+    /// Same-filesystem copy/move: a direct backend `copy`/`rename`, synchronous
+    /// (no bytes cross the wire). Existing targets are skipped, never
+    /// overwritten. Both panes share this pane's backend namespace.
+    fn copy_move_same_fs(
+        &mut self,
+        sources: &[PathBuf],
+        target: &FmPaneDescriptor,
+        is_move: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let verb = if is_move { "move" } else { "copy" };
         let backend = match &self.sftp {
             Some(b) => b.clone(),
             None => {
@@ -905,8 +942,7 @@ impl SftpBrowserView {
         };
         let target_dir = target.current_path.clone();
 
-        // Copying into our own current directory would collide name-for-name;
-        // guard against the no-op/foot-gun.
+        // Copying into our own current directory would collide name-for-name.
         if target_dir == self.current_path {
             self.show_error_toast(
                 format!("Source and destination are the same folder — nothing to {verb}."),
@@ -918,12 +954,11 @@ impl SftpBrowserView {
         let mut copied = 0usize;
         let mut skipped = 0usize;
         let mut errors = 0usize;
-        for source in &sources {
+        for source in sources {
             let Some(name) = source.file_name() else {
                 continue;
             };
             let dest = normalize_remote_path(&target_dir.join(name));
-            // Never overwrite silently: skip existing targets and report.
             if backend.stat(&dest).is_ok() {
                 skipped += 1;
                 continue;
@@ -935,7 +970,6 @@ impl SftpBrowserView {
                 .map(|e| matches!(e.file_type, FileEntryType::Directory))
                 .unwrap_or(false);
             let result = if is_move {
-                // Same filesystem → a rename moves atomically without copying.
                 backend.rename(source, &dest)
             } else if is_dir {
                 backend.copy_dir_recursive(source, &dest)
@@ -951,8 +985,6 @@ impl SftpBrowserView {
             }
         }
 
-        // Report and refresh: a move changes our listing; a copy changes the
-        // target's (which refreshes itself on its own cadence / user refresh).
         let past = if is_move { "moved" } else { "copied" };
         let mut parts = vec![format!("{copied} {past}")];
         if skipped > 0 {
@@ -969,6 +1001,191 @@ impl SftpBrowserView {
         }
         self.selected.clear();
         self.refresh_dir(ctx);
+    }
+
+    /// Cross-connection copy (local↔remote): each source *file* becomes an
+    /// upload or download on the transfer engine, so large files show progress
+    /// and can be cancelled. Directories, and moving across connections, are
+    /// reported as not-yet-supported rather than done partially.
+    fn transfer_cross_connection(
+        &mut self,
+        sources: &[PathBuf],
+        target: &FmPaneDescriptor,
+        is_move: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if is_move {
+            self.show_error_toast(
+                "Moving across connections is coming next — copy, then delete the source."
+                    .to_string(),
+                ctx,
+            );
+            return;
+        }
+
+        // Upload (local source → remote target) transfers through the target's
+        // session; download (remote source → local target) through ours.
+        let direction = match plan_transfer(&self.fs_namespace(), &target.fs) {
+            TransferKind::Upload => TransferDirection::Upload,
+            TransferKind::Download => TransferDirection::Download,
+            _ => return, // dispatcher only routes Upload/Download here
+        };
+        let backend = match direction {
+            TransferDirection::Upload => {
+                match FileManagerRegistry::as_ref(ctx).backend_for(target.id) {
+                    Some(b) => b,
+                    None => {
+                        self.show_error_toast("The other pane is no longer connected.".to_string(), ctx);
+                        return;
+                    }
+                }
+            }
+            TransferDirection::Download => match &self.sftp {
+                Some(b) => b.clone(),
+                None => {
+                    self.show_error_toast("Not connected.".to_string(), ctx);
+                    return;
+                }
+            },
+        };
+
+        let target_dir = target.current_path.clone();
+        let mut started = 0usize;
+        let mut skipped_dirs = 0usize;
+        let mut skipped_exist = 0usize;
+        for source in sources {
+            let Some(name) = source.file_name() else {
+                continue;
+            };
+            let is_dir = self
+                .entries
+                .iter()
+                .find(|e| &e.path == source)
+                .map(|e| matches!(e.file_type, FileEntryType::Directory))
+                .unwrap_or(false);
+            if is_dir {
+                // Recursive cross-connection directory transfer is a follow-up.
+                skipped_dirs += 1;
+                continue;
+            }
+            let dest = normalize_remote_path(&target_dir.join(name));
+            // Skip existing targets (checked on whichever side owns the dest).
+            let exists = match direction {
+                TransferDirection::Upload => backend.stat(&dest).is_ok(),
+                TransferDirection::Download => std::fs::metadata(&dest).is_ok(),
+            };
+            if exists {
+                skipped_exist += 1;
+                continue;
+            }
+            let (local_path, remote_path) = match direction {
+                TransferDirection::Upload => (source.clone(), dest),
+                TransferDirection::Download => (dest, source.clone()),
+            };
+            self.spawn_transfer_with_backend(local_path, remote_path, backend.clone(), direction, ctx);
+            started += 1;
+        }
+
+        let mut parts = vec![format!("{started} transfer(s) started")];
+        if skipped_exist > 0 {
+            parts.push(format!("{skipped_exist} skipped (already exist)"));
+        }
+        if skipped_dirs > 0 {
+            parts.push(format!("{skipped_dirs} folder(s) skipped (not yet across connections)"));
+        }
+        self.show_info_toast(format!("{} → {}", parts.join(", "), target.label), ctx);
+        self.selected.clear();
+    }
+
+    /// Spawn a single upload/download on the transfer engine using an explicit
+    /// backend (the target's for uploads, ours for downloads), mirroring the
+    /// drag-and-drop upload path but parameterised by direction and backend.
+    fn spawn_transfer_with_backend(
+        &mut self,
+        local_path: PathBuf,
+        remote_path: PathBuf,
+        backend: Arc<dyn SftpBackend>,
+        direction: TransferDirection,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let total_size = match direction {
+            TransferDirection::Upload => {
+                std::fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0)
+            }
+            TransferDirection::Download => {
+                backend.stat(&remote_path).map(|e| e.size).unwrap_or(0)
+            }
+        };
+        let task = TransferTask::new(
+            self.next_transfer_id,
+            local_path.clone(),
+            remote_path.clone(),
+            direction,
+            total_size,
+        );
+        self.next_transfer_id += 1;
+        let task_id = task.id;
+        let cancel_flag = task.cancel_flag.clone();
+        self.transfers.push(task);
+        if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
+            t.state = TransferState::InProgress;
+        }
+        self.transfer_panel_hidden = false;
+        ctx.notify();
+
+        let transferred = Arc::new(AtomicU64::new(0));
+        let transferred_clone = transferred.clone();
+        let progress_cb: sftp_ops::ProgressCallback = Box::new(move |bytes, _total| {
+            transferred_clone.store(bytes, Ordering::SeqCst);
+        });
+        let work_backend = backend.clone();
+        let lp = local_path.clone();
+        let rp = remote_path.clone();
+        if let Some(handle) = self.run_blocking(
+            ctx,
+            move || match direction {
+                TransferDirection::Upload => {
+                    work_backend.upload_file(&lp, &rp, Some(&progress_cb), Some(&cancel_flag))
+                }
+                TransferDirection::Download => {
+                    work_backend.download_file(&rp, &lp, Some(&progress_cb), Some(&cancel_flag))
+                }
+            },
+            move |me, result, ctx| {
+                if let Some(t) = me.transfers.iter_mut().find(|t| t.id == task_id) {
+                    match &result {
+                        Ok(Ok(())) => {
+                            t.state = TransferState::Completed;
+                            t.transferred = t.total_size;
+                        }
+                        Ok(Err(e)) => {
+                            if matches!(e, super::sftp_ops::SftpOpsError::Cancelled) {
+                                t.state = TransferState::Cancelled;
+                            } else {
+                                t.state = TransferState::Failed(e.to_string());
+                            }
+                            t.transferred = transferred.load(Ordering::SeqCst);
+                        }
+                        Err(_) => {
+                            t.state = TransferState::Cancelled;
+                            t.transferred = transferred.load(Ordering::SeqCst);
+                        }
+                    }
+                }
+                me.transfer_handles.remove(&task_id);
+                match &result {
+                    Ok(Ok(())) => me.refresh_dir(ctx),
+                    Ok(Err(e)) => {
+                        log::error!("sftp: cross-pane transfer failed: {e}");
+                        me.show_error_toast(format!("Transfer failed: {e}"), ctx);
+                        ctx.notify();
+                    }
+                    Err(_) => ctx.notify(),
+                }
+            },
+        ) {
+            self.transfer_handles.insert(task_id, handle);
+        }
     }
 
     /// Show an error toast notification

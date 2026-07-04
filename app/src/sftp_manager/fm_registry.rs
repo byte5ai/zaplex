@@ -6,10 +6,14 @@
 //! The registry is a singleton ([`SingletonEntity`]); it is registered at app
 //! startup and in the file-manager test harnesses.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use warpui::{Entity, SingletonEntity};
+
+use super::sftp_backend::SftpBackend;
 
 /// Process-unique id for a file-manager pane, handed out at construction.
 static NEXT_FM_ID: AtomicU64 = AtomicU64::new(1);
@@ -43,10 +47,41 @@ pub struct FmPaneDescriptor {
     pub current_path: PathBuf,
 }
 
+/// How a copy/move between two panes must be carried out, decided purely from
+/// the two panes' filesystem namespaces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferKind {
+    /// Same filesystem — a direct backend copy / rename, no byte transfer.
+    DirectSameFs,
+    /// Local source → remote target: upload through the *target's* session.
+    Upload,
+    /// Remote source → local target: download through the *source's* session.
+    Download,
+    /// Two different remote hosts: round-trip via the local machine.
+    RemoteToRemote,
+}
+
+/// Decide how to move bytes from a `source` pane into a `target` pane.
+pub fn plan_transfer(source: &FsNamespace, target: &FsNamespace) -> TransferKind {
+    match (source, target) {
+        (FsNamespace::Local, FsNamespace::Local) => TransferKind::DirectSameFs,
+        (FsNamespace::Remote(a), FsNamespace::Remote(b)) if a == b => TransferKind::DirectSameFs,
+        (FsNamespace::Local, FsNamespace::Remote(_)) => TransferKind::Upload,
+        (FsNamespace::Remote(_), FsNamespace::Local) => TransferKind::Download,
+        (FsNamespace::Remote(_), FsNamespace::Remote(_)) => TransferKind::RemoteToRemote,
+    }
+}
+
 /// The set of currently-open file-manager panes.
+///
+/// `panes` is plain data (for target discovery + the picker); `backends` is a
+/// parallel map of each pane's backend handle, needed so a local pane can
+/// upload through a remote pane's session (cross-connection transfers). Both
+/// are keyed by pane id and cleared together on close.
 #[derive(Default)]
 pub struct FileManagerRegistry {
     panes: Vec<FmPaneDescriptor>,
+    backends: HashMap<u64, Arc<dyn SftpBackend>>,
 }
 
 impl FileManagerRegistry {
@@ -63,9 +98,22 @@ impl FileManagerRegistry {
         }
     }
 
-    /// Remove a pane (on close). A no-op if it was never registered.
+    /// Record (or replace) a pane's backend handle, so other panes can transfer
+    /// through its connection.
+    pub fn set_backend(&mut self, id: u64, backend: Arc<dyn SftpBackend>) {
+        self.backends.insert(id, backend);
+    }
+
+    /// The backend handle for a pane, if it is still open.
+    pub fn backend_for(&self, id: u64) -> Option<Arc<dyn SftpBackend>> {
+        self.backends.get(&id).cloned()
+    }
+
+    /// Remove a pane (on close). A no-op if it was never registered. Drops the
+    /// pane's backend handle too (releasing its session once nothing else holds it).
     pub fn remove(&mut self, id: u64) {
         self.panes.retain(|p| p.id != id);
+        self.backends.remove(&id);
     }
 
     /// Every other pane that shares `fs` — the candidate copy/move targets for
@@ -74,6 +122,16 @@ impl FileManagerRegistry {
         self.panes
             .iter()
             .filter(|p| p.id != self_id && &p.fs == fs)
+            .cloned()
+            .collect()
+    }
+
+    /// Every other pane, regardless of filesystem — copy/move candidates
+    /// including cross-connection ones (routed via [`plan_transfer`]).
+    pub fn others(&self, self_id: u64) -> Vec<FmPaneDescriptor> {
+        self.panes
+            .iter()
+            .filter(|p| p.id != self_id)
             .cloned()
             .collect()
     }
@@ -145,5 +203,41 @@ mod tests {
         assert!(reg
             .others_same_fs(3, &FsNamespace::Remote("host1".into()))
             .is_empty());
+
+        // `others` ignores the namespace: pane 1 sees 2, 3 and 4.
+        let all = reg.others(1);
+        assert_eq!(all.len(), 3);
+        assert!(all.iter().all(|p| p.id != 1));
+    }
+
+    #[test]
+    fn backend_handle_is_stored_and_dropped_with_the_pane() {
+        use super::super::sftp_backend::InMemorySftpBackend;
+        let mut reg = FileManagerRegistry::new();
+        reg.upsert(desc(1, FsNamespace::Local, "/a"));
+        assert!(reg.backend_for(1).is_none());
+
+        let backend: Arc<dyn SftpBackend> =
+            Arc::new(InMemorySftpBackend::new(PathBuf::from("/")));
+        reg.set_backend(1, backend);
+        assert!(reg.backend_for(1).is_some());
+
+        // Removing the pane drops its backend handle.
+        reg.remove(1);
+        assert!(reg.backend_for(1).is_none());
+    }
+
+    #[test]
+    fn plan_transfer_covers_every_direction() {
+        let local = FsNamespace::Local;
+        let host_a = FsNamespace::Remote("a".into());
+        let host_a2 = FsNamespace::Remote("a".into());
+        let host_b = FsNamespace::Remote("b".into());
+
+        assert_eq!(plan_transfer(&local, &local), TransferKind::DirectSameFs);
+        assert_eq!(plan_transfer(&host_a, &host_a2), TransferKind::DirectSameFs);
+        assert_eq!(plan_transfer(&local, &host_a), TransferKind::Upload);
+        assert_eq!(plan_transfer(&host_a, &local), TransferKind::Download);
+        assert_eq!(plan_transfer(&host_a, &host_b), TransferKind::RemoteToRemote);
     }
 }
