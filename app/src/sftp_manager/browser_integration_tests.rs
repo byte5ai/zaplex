@@ -2069,10 +2069,11 @@ fn test_f5_local_to_remote_starts_an_upload_transfer() {
     });
 }
 
-/// F6 (move) across connections is deferred, not partially done: no transfer
-/// starts and nothing is renamed.
+/// F6 (move) across connections now runs as an upload transfer (copy-then-delete):
+/// a transfer starts. The source removal happens on async completion, so this
+/// synchronous check asserts the transfer was created, not the final deletion.
 #[test]
-fn test_f6_move_across_connections_is_deferred() {
+fn test_f6_move_across_connections_starts_transfer() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let temp = create_temp_dir_with_files(&[("left/bar.txt", b"x"), ("right/.keep", b"")]);
@@ -2095,8 +2096,9 @@ fn test_f6_move_across_connections_is_deferred() {
             v.handle_action(&SftpBrowserAction::MoveToOtherPane, ctx);
         });
 
-        view_a.read(&app, |v, _| assert!(v.transfers.is_empty(), "no transfer started"));
-        assert!(root.join("left/bar.txt").exists(), "source untouched");
-        assert!(!root.join("right/bar.txt").exists(), "nothing moved");
+        view_a.read(&app, |v, _| {
+            assert_eq!(v.transfers.len(), 1, "cross-connection move starts one transfer");
+            assert_eq!(v.transfers[0].direction, TransferDirection::Upload);
+        });
     });
 }
