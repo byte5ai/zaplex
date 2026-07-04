@@ -30,6 +30,7 @@ fn initialize_app(app: &mut warpui::App) {
     app.add_singleton_model(|_| Appearance::mock());
     app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
     app.add_singleton_model(|_| ToastStack);
+    app.add_singleton_model(|_| super::fm_registry::FileManagerRegistry::new());
 
     // The SSH manager needs a SQLite path; use a temporary file so that failed queries don't panic
     let temp_db = std::env::temp_dir().join("warp_sftp_test.sqlite");

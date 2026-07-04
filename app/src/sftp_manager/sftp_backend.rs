@@ -56,6 +56,26 @@ pub trait SftpBackend: Send + Sync {
         progress_cb: Option<&ProgressCallback>,
         cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError>;
+
+    /// Copies a single file *within this backend* (same filesystem namespace),
+    /// e.g. between two local file-manager panes or two panes on the same host.
+    /// Cross-connection copy (local↔remote) is a separate transfer path.
+    fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError>;
+
+    /// Recursively copies a directory within this backend. The default walks
+    /// with `list_dir` + `create_dir` + `copy_file`; backends may override with
+    /// a native recursive copy.
+    fn copy_dir_recursive(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
+        self.create_dir(dst)?;
+        for entry in self.list_dir(src)? {
+            let child_dst = dst.join(&entry.name);
+            match entry.file_type {
+                FileEntryType::Directory => self.copy_dir_recursive(&entry.path, &child_dst)?,
+                _ => self.copy_file(&entry.path, &child_dst)?,
+            }
+        }
+        Ok(())
+    }
 }
 
 // ============================================================
@@ -158,6 +178,28 @@ impl SftpBackend for LiveSftpBackend {
         let flag = cancel_flag.unwrap_or(&NEVER_CANCEL);
         sftp_ops::download_file_streaming(&self.sftp, remote_path, local_path, progress_cb, flag)
     }
+
+    fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
+        // SFTP has no server-side copy, so round-trip the bytes through a local
+        // temp file using the proven streaming primitives. Same-host only (the
+        // caller guarantees source and destination share this session). Not the
+        // most efficient path, but copy is a rare, non-hot operation and this
+        // reuses fully-tested transfer code rather than a new protocol path.
+        let tmp = unique_temp_path("zaplex-fmcopy");
+        self.download_file(src, &tmp, None, None)?;
+        let result = self.upload_file(&tmp, dst, None, None);
+        let _ = fs::remove_file(&tmp);
+        result
+    }
+}
+
+/// A collision-free temp path (process id + monotonic counter; no wall clock so
+/// it stays deterministic-friendly and needs no rng).
+fn unique_temp_path(prefix: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{prefix}-{}-{n}", std::process::id()))
 }
 
 
@@ -376,6 +418,18 @@ impl SftpBackend for InMemorySftpBackend {
         dest_file.flush().map_err(|e| {
             SftpOpsError::LocalIo(format!("Flush failed: {e}"))
         })?;
+        Ok(())
+    }
+
+    fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
+        let src_local = self.to_local(src);
+        let dst_local = self.to_local(dst);
+        if let Some(parent) = dst_local.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| SftpOpsError::LocalIo(format!("Failed to create directory: {e}")))?;
+        }
+        fs::copy(&src_local, &dst_local)
+            .map_err(|e| SftpOpsError::LocalIo(format!("Failed to copy file: {e}")))?;
         Ok(())
     }
 }

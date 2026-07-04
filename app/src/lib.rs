@@ -1633,6 +1633,9 @@ fn initialize_app(
     // Cockpit data spine: registered after HomeDirectoryWatcher (which it subscribes to).
     ctx.add_singleton_model(cockpit::CockpitModel::new);
 
+    // Cross-pane file-manager registry (F5/F6 copy/move target discovery).
+    ctx.add_singleton_model(|_| sftp_manager::fm_registry::FileManagerRegistry::new());
+
     // TemplatableMCPServerManager must be registered after UpdateManager and MCPServerManager so it can migrate legacy MCPs on start up
     // It should also be registered after FileBasedMCPManager so it can receive file-based server updates.
     ctx.add_singleton_model(|ctx| {

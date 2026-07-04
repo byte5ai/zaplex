@@ -30,6 +30,7 @@ fn initialize_app(app: &mut warpui::App) {
     app.add_singleton_model(|_| Appearance::mock());
     app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
     app.add_singleton_model(|_| ToastStack);
+    app.add_singleton_model(|_| super::fm_registry::FileManagerRegistry::new());
 
     let temp_db = std::env::temp_dir().join("warp_sftp_integration_test.sqlite");
     let _ = warp_ssh_manager::set_database_path(temp_db);
@@ -1865,5 +1866,153 @@ fn test_render_after_multiple_operations() {
             assert!(!v.entries.is_empty());
             assert!(v.search_filter.is_none());
         });
+    });
+}
+
+// ============================================================
+// Cross-pane copy/move (MC F5/F6, increment B)
+// ============================================================
+
+/// Two file-manager panes over one shared filesystem, at `/left` and `/right`.
+/// Returns both handles; keep `TempDir` alive for the test's duration.
+fn create_two_panes_sharing_fs(
+    app: &mut warpui::App,
+    files: &[(&str, &[u8])],
+) -> (
+    warpui::ViewHandle<SftpBrowserView>,
+    warpui::ViewHandle<SftpBrowserView>,
+    tempfile::TempDir,
+) {
+    let temp = create_temp_dir_with_files(files);
+    let root = temp.path().to_path_buf();
+
+    let (_, view_a) = create_view(app);
+    view_a.update(app, |v, ctx| {
+        let backend =
+            Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+        v.set_backend_for_test(backend, PathBuf::from("/left"), ctx);
+    });
+    let (_, view_b) = create_view(app);
+    view_b.update(app, |v, ctx| {
+        let backend =
+            Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+        v.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
+    });
+
+    (view_a, view_b, temp)
+}
+
+/// F5 copies the cursor row from one pane into the other pane's directory,
+/// leaving the source in place.
+#[test]
+fn test_f5_copies_cursor_file_into_other_pane() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, temp) = create_two_panes_sharing_fs(
+            &mut app,
+            &[("left/foo.txt", b"hello"), ("right/.keep", b"")],
+        );
+        let root = temp.path().to_path_buf();
+
+        // Pane A's cursor is on the only file in /left → F5 → into /right.
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+
+        assert!(root.join("right/foo.txt").exists(), "copied into /right");
+        assert!(root.join("left/foo.txt").exists(), "source kept after copy");
+        assert_eq!(
+            std::fs::read(root.join("right/foo.txt")).unwrap(),
+            b"hello",
+            "copied content matches"
+        );
+    });
+}
+
+/// F6 moves the cursor row into the other pane (source removed).
+#[test]
+fn test_f6_moves_cursor_file_into_other_pane() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, temp) = create_two_panes_sharing_fs(
+            &mut app,
+            &[("left/bar.txt", b"data"), ("right/.keep", b"")],
+        );
+        let root = temp.path().to_path_buf();
+
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::MoveToOtherPane, ctx);
+        });
+
+        assert!(root.join("right/bar.txt").exists(), "moved into /right");
+        assert!(!root.join("left/bar.txt").exists(), "source removed after move");
+    });
+}
+
+/// F5 with a directory selected copies it recursively.
+#[test]
+fn test_f5_copies_directory_recursively() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, temp) = create_two_panes_sharing_fs(
+            &mut app,
+            &[("left/sub/deep.txt", b"deep"), ("right/.keep", b"")],
+        );
+        let root = temp.path().to_path_buf();
+
+        // /left contains exactly one entry, the directory "sub" → cursor on it.
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+
+        assert!(
+            root.join("right/sub/deep.txt").exists(),
+            "directory copied recursively into /right"
+        );
+    });
+}
+
+/// With no second pane, F5 is a no-op (reports, copies nothing).
+#[test]
+fn test_f5_without_second_pane_copies_nothing() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, temp) = create_connected_view(&mut app, &[("only.txt", b"x")]);
+        let root = temp.path().to_path_buf();
+
+        view.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+
+        // Nothing new appeared anywhere.
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            1,
+            "no copy target → nothing created"
+        );
+    });
+}
+
+/// An existing target is skipped, never silently overwritten.
+#[test]
+fn test_f5_skips_existing_target() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, temp) = create_two_panes_sharing_fs(
+            &mut app,
+            &[("left/dup.txt", b"new"), ("right/dup.txt", b"original")],
+        );
+        let root = temp.path().to_path_buf();
+
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+
+        // The pre-existing /right/dup.txt is untouched.
+        assert_eq!(
+            std::fs::read(root.join("right/dup.txt")).unwrap(),
+            b"original",
+            "existing target must not be overwritten"
+        );
     });
 }
