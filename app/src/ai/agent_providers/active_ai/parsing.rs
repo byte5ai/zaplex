@@ -16,7 +16,9 @@ use crate::ai::predict::generate_am_query_suggestions::{
 };
 
 /// Strip code fences like ```` ```json … ``` ```` / ```` ``` … ``` ````.
-fn strip_code_fence(raw: &str) -> &str {
+/// Shared with the GitHub instance-driven flows (`cockpit::github_flows`),
+/// which parse the same fault-tolerant fenced-JSON an agent emits.
+pub(crate) fn strip_code_fence(raw: &str) -> &str {
     let trimmed = raw.trim();
     if let Some(rest) = trimmed.strip_prefix("```") {
         // Skip possible language identifier (json/JSON/javascript/...) + up to newline
