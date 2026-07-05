@@ -180,6 +180,9 @@ pub enum SftpBrowserAction {
     OverwriteConflict { all: bool },
     /// Resolve a copy/move conflict: skip this target (`all` = the rest too).
     SkipConflict { all: bool },
+    /// Destination picker: copy/move into the candidate pane at this index
+    /// (index into `pending_target_pick.candidates`).
+    PickCopyMoveTarget(usize),
     /// Cancel a transfer task
     CancelTransfer(usize),
     /// Toggle transfer panel visibility
@@ -209,6 +212,15 @@ struct PendingCopyMove {
     done: usize,
     skipped: usize,
     errors: usize,
+}
+
+/// F5/F6 with more than one other file-manager pane open: the sources and the
+/// candidate target panes, held while the target-picker dialog is up so the
+/// user's choice can be routed once they pick one.
+struct PendingTargetPick {
+    sources: Vec<PathBuf>,
+    is_move: bool,
+    candidates: Vec<FmPaneDescriptor>,
 }
 
 /// SFTP browser view
@@ -297,9 +309,15 @@ pub struct SftpBrowserView {
     fm_id: u64,
     /// An in-progress same-fs copy/move batch, paused on a conflict dialog.
     pending_copy_move: Option<PendingCopyMove>,
+    /// Sources + candidate panes held while the target-picker dialog is up
+    /// (F5/F6 with more than one other pane open).
+    pending_target_pick: Option<PendingTargetPick>,
     /// Dialog button handles for the copy/move conflict "…all" options.
     overwrite_all_btn: MouseStateHandle,
     skip_all_btn: MouseStateHandle,
+    /// One mouse-state handle per row of the target-picker dialog (resized when
+    /// the picker opens), so each pane row hovers/presses independently.
+    target_pick_btn_states: Vec<MouseStateHandle>,
     // ---- File row mouse handles ----
     /// Mouse state handle for each file entry row
     row_mouse_handles: Vec<MouseStateHandle>,
@@ -362,8 +380,10 @@ impl SftpBrowserView {
             fn_bar_handles: FUNCTION_BAR.iter().map(|_| MouseStateHandle::default()).collect(),
             fm_id: super::fm_registry::next_fm_id(),
             pending_copy_move: None,
+            pending_target_pick: None,
             overwrite_all_btn: MouseStateHandle::default(),
             skip_all_btn: MouseStateHandle::default(),
+            target_pick_btn_states: Vec::new(),
             row_mouse_handles: Vec::new(),
             scroll_state: ClippedScrollStateHandle::default(),
             connect_handle: None,
@@ -946,32 +966,64 @@ impl SftpBrowserView {
 
         let self_id = self.fm_id;
         let candidates = FileManagerRegistry::as_ref(ctx).others(self_id);
-        let target = match candidates.as_slice() {
+        match candidates.as_slice() {
             [] => {
                 self.show_error_toast(
                     format!("Open a second file-manager pane to {verb} into it."),
                     ctx,
                 );
-                return;
             }
-            [only] => only.clone(),
+            [only] => {
+                let target = only.clone();
+                self.route_copy_move(&sources, &target, is_move, ctx);
+            }
             _ => {
-                // A destination picker across >2 panes is the next step; be
-                // explicit rather than picking an arbitrary target.
-                self.show_error_toast(
-                    "More than one other file panel is open — the target picker is coming; \
-                     for now keep exactly two panels to copy/move between them."
-                        .to_string(),
-                    ctx,
-                );
-                return;
+                // More than one other pane open — let the user pick which one
+                // (MC never guesses the target).
+                self.open_target_picker(sources, candidates, is_move, ctx);
             }
-        };
+        }
+    }
 
+    /// Open the destination picker (F5/F6 with more than one other pane open):
+    /// stash the sources + candidates and show a dialog listing every candidate
+    /// pane as `host:/path`. The chosen row routes through [`Self::route_copy_move`].
+    fn open_target_picker(
+        &mut self,
+        sources: Vec<PathBuf>,
+        candidates: Vec<FmPaneDescriptor>,
+        is_move: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let labels: Vec<String> = candidates.iter().map(|c| c.label.clone()).collect();
+        self.target_pick_btn_states = candidates
+            .iter()
+            .map(|_| MouseStateHandle::default())
+            .collect();
+        self.pending_target_pick = Some(PendingTargetPick {
+            sources,
+            is_move,
+            candidates,
+        });
+        self.dialog = Some(Dialog::CopyMoveTargetPicker { is_move, labels });
+        ctx.notify();
+    }
+
+    /// Route a chosen copy/move into `target` by filesystem: same fs → a direct
+    /// backend copy/rename; local↔remote → the transfer engine; remote↔remote →
+    /// (currently) an honest message. Shared by the single-candidate fast path
+    /// and the destination picker.
+    fn route_copy_move(
+        &mut self,
+        sources: &[PathBuf],
+        target: &FmPaneDescriptor,
+        is_move: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
         match plan_transfer(&self.fs_namespace(), &target.fs) {
-            TransferKind::DirectSameFs => self.copy_move_same_fs(&sources, &target, is_move, ctx),
+            TransferKind::DirectSameFs => self.copy_move_same_fs(sources, target, is_move, ctx),
             TransferKind::Upload | TransferKind::Download => {
-                self.transfer_cross_connection(&sources, &target, is_move, ctx)
+                self.transfer_cross_connection(sources, target, is_move, ctx)
             }
             TransferKind::RemoteToRemote => {
                 self.show_error_toast(
@@ -1551,6 +1603,7 @@ impl SftpBrowserView {
             | Some(Dialog::Move { .. })
             | Some(Dialog::OverwriteConfirm { .. })
             | Some(Dialog::CopyMoveConflict { .. })
+            | Some(Dialog::CopyMoveTargetPicker { .. })
             | Some(Dialog::FileDetails { .. })
             | Some(Dialog::CloseTransferPanelConfirm)
             | None => {
@@ -2434,6 +2487,7 @@ impl TypedActionView for SftpBrowserView {
                     | Some(Dialog::CreateFolder { .. })
                     | Some(Dialog::Move { .. })
                     | Some(Dialog::CopyMoveConflict { .. })
+                    | Some(Dialog::CopyMoveTargetPicker { .. })
                     | Some(Dialog::FileDetails { .. })
                     | Some(Dialog::CloseTransferPanelConfirm)
                     | None => {
@@ -2469,6 +2523,13 @@ impl TypedActionView for SftpBrowserView {
                 ctx.notify();
             }
             SftpBrowserAction::CloseDialog => {
+                // Cancelling the target picker discards the pending pick.
+                if matches!(self.dialog, Some(Dialog::CopyMoveTargetPicker { .. })) {
+                    self.pending_target_pick = None;
+                    self.dialog = None;
+                    ctx.notify();
+                    return;
+                }
                 // Cancelling the copy/move conflict dialog aborts the batch.
                 if matches!(self.dialog, Some(Dialog::CopyMoveConflict { .. })) {
                     self.cancel_pending_copy_move(ctx);
@@ -2583,6 +2644,16 @@ impl TypedActionView for SftpBrowserView {
             }
             SftpBrowserAction::SkipConflict { all } => {
                 self.resolve_copy_move_conflict(false, *all, ctx);
+            }
+            SftpBrowserAction::PickCopyMoveTarget(index) => {
+                let index = *index;
+                self.dialog = None;
+                if let Some(pick) = self.pending_target_pick.take() {
+                    if let Some(target) = pick.candidates.get(index).cloned() {
+                        self.route_copy_move(&pick.sources, &target, pick.is_move, ctx);
+                    }
+                }
+                ctx.notify();
             }
             SftpBrowserAction::CancelTransfer(task_id) => {
                 let task_id = *task_id;
@@ -2777,6 +2848,7 @@ impl View for SftpBrowserView {
                 self.dialog_close_btn.clone(),
                 self.overwrite_all_btn.clone(),
                 self.skip_all_btn.clone(),
+                &self.target_pick_btn_states,
             );
             let mut stack = Stack::new();
             stack.add_child(main_content);

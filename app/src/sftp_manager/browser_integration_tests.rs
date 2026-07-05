@@ -1972,6 +1972,105 @@ fn test_f5_copies_directory_recursively() {
     });
 }
 
+/// F5 with more than one other pane open shows the destination picker instead
+/// of guessing; picking a row routes the copy into exactly that pane.
+#[test]
+fn test_f5_with_multiple_panes_opens_target_picker() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        // Three panes over one shared fs: source /left (holds the file) plus two
+        // candidate targets /right and /third.
+        let temp = create_temp_dir_with_files(&[
+            ("left/foo.txt", b"hello"),
+            ("right/.keep", b""),
+            ("third/.keep", b""),
+        ]);
+        let root = temp.path().to_path_buf();
+
+        let (_, view_a) = create_view(&mut app);
+        view_a.update(&mut app, |v, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/left"), ctx);
+        });
+        let (_, view_b) = create_view(&mut app);
+        view_b.update(&mut app, |v, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
+        });
+        let (_, view_c) = create_view(&mut app);
+        view_c.update(&mut app, |v, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/third"), ctx);
+        });
+
+        // F5 on pane A: two candidates → picker opens, nothing copied yet.
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        view_a.read(&app, |v, _| match &v.dialog {
+            Some(Dialog::CopyMoveTargetPicker { labels, is_move }) => {
+                assert_eq!(labels.len(), 2, "two candidate panes offered");
+                assert!(!*is_move, "F5 is a copy");
+            }
+            _ => panic!("expected the target picker dialog"),
+        });
+        assert!(!root.join("right/foo.txt").exists(), "nothing copied before a pick");
+        assert!(!root.join("third/foo.txt").exists(), "nothing copied before a pick");
+
+        // Pick the first candidate (insertion order → pane B, /right).
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::PickCopyMoveTarget(0), ctx);
+        });
+        view_a.read(&app, |v, _| {
+            assert!(v.dialog.is_none(), "dialog clears after picking");
+        });
+        assert!(root.join("right/foo.txt").exists(), "copied into the picked pane (/right)");
+        assert!(!root.join("third/foo.txt").exists(), "the unpicked pane is untouched");
+        assert!(root.join("left/foo.txt").exists(), "source kept after copy");
+    });
+}
+
+/// Cancelling the destination picker discards the pending pick and copies nothing.
+#[test]
+fn test_target_picker_cancel_copies_nothing() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("left/foo.txt", b"hello"),
+            ("right/.keep", b""),
+            ("third/.keep", b""),
+        ]);
+        let root = temp.path().to_path_buf();
+
+        let (_, view_a) = create_view(&mut app);
+        view_a.update(&mut app, |v, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/left"), ctx);
+        });
+        for dir in ["/right", "/third"] {
+            let (_, view) = create_view(&mut app);
+            view.update(&mut app, |v, ctx| {
+                let backend =
+                    Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+                v.set_backend_for_test(backend, PathBuf::from(dir), ctx);
+            });
+        }
+
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        // Cancel the picker.
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CloseDialog, ctx);
+        });
+        view_a.read(&app, |v, _| {
+            assert!(v.dialog.is_none(), "picker dismissed");
+        });
+        assert!(!root.join("right/foo.txt").exists(), "cancel copies nothing");
+        assert!(!root.join("third/foo.txt").exists(), "cancel copies nothing");
+    });
+}
+
 /// With no second pane, F5 is a no-op (reports, copies nothing).
 #[test]
 fn test_f5_without_second_pane_copies_nothing() {
