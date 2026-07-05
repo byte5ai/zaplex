@@ -872,6 +872,17 @@ pub struct Workspace {
     /// host-scoped advisories (e.g. the multiplexer-nesting warning toast).
     #[cfg(unix)]
     daemon_session_hosts: std::collections::HashMap<SessionId, String>,
+    /// SSH host `node_id` → its daemon connection `SessionId`, recorded when a
+    /// resilient host opens (or adopts) a daemon-backed session. The SFTP file
+    /// manager is keyed by `node_id`; this lets it resolve a live daemon
+    /// `HostId` so it can open remote files in the *native* editor (buffer-sync
+    /// with safe save-back) instead of a download-only copy. Pull-based:
+    /// `daemon_host_for_node` re-checks the manager for a live client on every
+    /// lookup, so a stale entry (session since gone) is harmless — it just falls
+    /// back. `SessionId`s are never reused, so an entry can only ever resolve to
+    /// its own host or to nothing, never to a wrong host.
+    #[cfg(all(unix, feature = "local_tty"))]
+    daemon_node_sessions: std::collections::HashMap<String, SessionId>,
     /// Hosts already warned about multiplexer nesting this app run — one
     /// warning per host, not one per session/tab.
     #[cfg(unix)]
@@ -2918,6 +2929,8 @@ impl Workspace {
             ssh_tab_nodes: std::collections::HashMap::new(),
             #[cfg(unix)]
             daemon_session_hosts: std::collections::HashMap::new(),
+            #[cfg(all(unix, feature = "local_tty"))]
+            daemon_node_sessions: std::collections::HashMap::new(),
             #[cfg(unix)]
             multiplexer_warned_hosts: std::collections::HashSet::new(),
             hovered_tab_index: None,
@@ -5678,6 +5691,71 @@ impl Workspace {
         );
     }
 
+    /// Opens a file that lives on a remote host — dispatched from the SFTP file
+    /// manager (F3/F4) via `WorkspaceAction::OpenFileInEditor` with a non-empty
+    /// `node_id`. On a host that has a live persistent (daemon) session the file
+    /// is opened *natively*: the editor buffer syncs with the daemon and writes
+    /// back safely, exactly like the sidebar server file browser. On a classic
+    /// SSH-only host (no daemon) native buffer-sync isn't wired yet; rather than
+    /// silently editing a throwaway download that never saves back, we say so.
+    fn open_file_in_editor_remote(
+        &mut self,
+        node_id: String,
+        path: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        #[cfg(all(unix, feature = "local_tty"))]
+        if let Some(host_id) = self.daemon_host_for_node(&node_id, &*ctx) {
+            let path_str = path.to_string_lossy();
+            match warp_util::standardized_path::StandardizedPath::try_new(&path_str) {
+                Ok(remote_path) => {
+                    self.open_remote_file(
+                        crate::code::buffer_location::RemotePath::new(host_id, remote_path),
+                        ctx,
+                    );
+                    return;
+                }
+                Err(error) => {
+                    log::warn!(
+                        "file manager: cannot open remote file {} on {node_id}: {error}",
+                        path.display()
+                    );
+                }
+            }
+        }
+
+        // Classic SSH-only host, or the daemon session isn't currently live:
+        // editing via an SFTP working copy (with save-back on save) is the next
+        // increment. Be honest instead of handing back a copy that won't persist.
+        let message = format!(
+            "Editing {} on {node_id} in the editor needs a persistent (daemon) session on that \
+             host. Working-copy editing over classic SSH is coming — use the file manager's \
+             Enter / Download for now.",
+            path.display()
+        );
+        self.toast_stack.update(ctx, |view, ctx| {
+            view.add_ephemeral_toast(DismissibleToast::error(message), ctx);
+        });
+    }
+
+    /// Resolves an SFTP file-manager `node_id` to a live daemon `HostId`, if that
+    /// host currently has a connected daemon session with a usable client. The
+    /// SFTP file manager is keyed by `node_id`; the native remote editor needs a
+    /// `HostId`, which is opaque and only known once the daemon handshake
+    /// completes — hence this pull-based lookup against the live manager state.
+    /// Returns `None` for classic SSH hosts (no daemon session recorded) and for
+    /// daemon hosts whose session has since dropped, so the caller falls back.
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn daemon_host_for_node(&self, node_id: &str, ctx: &AppContext) -> Option<warp_core::HostId> {
+        let session_id = *self.daemon_node_sessions.get(node_id)?;
+        let manager = crate::remote_server::manager::RemoteServerManager::as_ref(ctx);
+        let host_id = manager.host_id_for_session(session_id)?;
+        // Buffer-sync needs a live client for the host; if there is none the
+        // session is not usable and we fall back rather than open a dead editor.
+        manager.client_for_host(host_id)?;
+        Some(host_id.clone())
+    }
+
     /// Opens a new terminal pane in the current tab, automatically runs the `ssh ...` command,
     /// and spawns a SecretInjector that watches the PTY output and automatically injects the
     /// secret from the keychain when a `password:` / `passphrase:` prompt appears.
@@ -5963,6 +6041,13 @@ impl Workspace {
                         .ssh_tab_nodes
                         .insert(pane_group.id(), node_id_owned.clone());
                 }
+                // Record node_id → daemon session so the SFTP file manager on this
+                // host can later resolve a live `HostId` and open files in the
+                // native editor (see `daemon_host_for_node`).
+                #[cfg(feature = "local_tty")]
+                workspace
+                    .daemon_node_sessions
+                    .insert(node_id_owned.clone(), session_id);
 
                 match progress_tx {
                     // Daemon already installed → connect right away.
@@ -6173,6 +6258,11 @@ impl Workspace {
             self.ssh_tab_nodes
                 .insert(pane_group_id, server.node_id.clone());
         }
+        // Same node_id → daemon session mapping as the fresh-connect path, so the
+        // file manager on an adopted host can open files natively too.
+        #[cfg(feature = "local_tty")]
+        self.daemon_node_sessions
+            .insert(server.node_id.clone(), session_id);
 
         self.spawn_daemon_session_connect(server, session_id, ctx);
     }
@@ -19738,18 +19828,9 @@ impl TypedActionView for Workspace {
                     // Local file: open it directly in a code pane (view + edit).
                     self.add_tab_for_code_file(path.clone(), None, ctx);
                 } else {
-                    // Remote file: native editing (buffer-sync via the SSH daemon)
-                    // needs the host's daemon connection + HostId; not yet wired
-                    // from the SFTP file manager. Report honestly rather than
-                    // download-and-edit a local copy that wouldn't save back.
-                    let message = format!(
-                        "Opening remote files in the editor is coming — {} is on {node_id}. \
-                         Use the file manager's Download for now.",
-                        path.display()
-                    );
-                    self.toast_stack.update(ctx, |view, ctx| {
-                        view.add_ephemeral_toast(DismissibleToast::error(message), ctx);
-                    });
+                    // Remote file: open natively on daemon hosts (real buffer-sync
+                    // save-back), honest fallback on classic SSH-only hosts.
+                    self.open_file_in_editor_remote(node_id.clone(), path.clone(), ctx);
                 }
             }
             FixSettingsWithOz { error_description } => {
