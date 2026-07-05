@@ -16,6 +16,7 @@ pub mod codex;
 pub mod format;
 pub mod oauth;
 pub mod pricing;
+pub mod overrides;
 pub mod routing;
 pub mod sessions;
 pub mod types;
@@ -27,6 +28,7 @@ pub use format::{
 };
 pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
 pub use pricing::{ModelPrice, PricingTable};
+pub use overrides::{AccountOverride, AccountOverrides};
 pub use routing::{is_over_budget, pick_freest, rank_by_freeness, OVER_BUDGET_HEAT};
 pub use types::{
     Account, AccountStatus, AccountUsage, CockpitSnapshot, Provider, SessionSnapshot, SessionState,
