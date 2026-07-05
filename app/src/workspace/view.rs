@@ -4181,17 +4181,58 @@ impl Workspace {
     }
 
     /// Launch a *fresh* CLI agent routed to a subscription (C4 `LaunchAgent`):
-    /// open a terminal tab in `cwd` (or the default dir) and run
-    /// `agent.launch_command_routed(config_dir)` — the account pin + API-key
-    /// scrub. Mirrors [`Self::fork_agent_session_in_place`] but starts a new
-    /// agent rather than resuming a fork, and the directory is optional.
+    /// runs `agent.launch_command_routed(config_dir)` — the account pin + API-key
+    /// scrub. `node_id = None` opens a local tab in `cwd` (or the default dir);
+    /// `Some(host)` opens that host and runs the command via its session's
+    /// startup command. A remote launch uses the host's own default account
+    /// (config dirs are local paths), still API-key-scrubbed.
     fn launch_routed_agent(
         &mut self,
         agent: CLIAgent,
         config_dir: Option<&Path>,
         cwd: Option<&Path>,
+        node_id: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
+        if let Some(node_id) = node_id {
+            let cmd = agent.launch_command_routed(None);
+            let full = match cwd {
+                Some(dir) => format!(
+                    "cd {} && {cmd}",
+                    shell_words::quote(&dir.to_string_lossy())
+                ),
+                None => cmd,
+            };
+            let server = warp_ssh_manager::with_conn(|conn| {
+                Ok(warp_ssh_manager::SshRepository::get_server(conn, node_id)?)
+            });
+            match server {
+                Ok(Some(mut server)) => {
+                    // Prepend the host's own startup command (if any) so host
+                    // setup still runs, then the routed agent launch.
+                    server.startup_command = Some(match server.startup_command {
+                        Some(existing) if !existing.trim().is_empty() => {
+                            format!("{existing}; {full}")
+                        }
+                        _ => full,
+                    });
+                    self.open_ssh_terminal(node_id.to_string(), server, false, ctx);
+                }
+                _ => {
+                    self.toast_stack.update(ctx, |view, ctx| {
+                        view.add_ephemeral_toast(
+                            DismissibleToast::error(format!(
+                                "Couldn't find host '{node_id}' to launch {} on.",
+                                agent.display_name()
+                            )),
+                            ctx,
+                        );
+                    });
+                }
+            }
+            return;
+        }
+
         let cmd = agent.launch_command_routed(config_dir);
         let mut options = NewTerminalOptions::default();
         if let Some(dir) = cwd {
@@ -7148,6 +7189,7 @@ impl Workspace {
                                             agent,
                                             config_dir: Some(freest.account.config_dir.clone()),
                                             cwd: None,
+                                            node_id: None,
                                         })
                                         .with_icon(icon)
                                         .into_item(),
@@ -7168,11 +7210,35 @@ impl Workspace {
                                                 agent,
                                                 config_dir: Some(a.account.config_dir.clone()),
                                                 cwd: None,
+                                                node_id: None,
                                             })
                                             .with_icon(icon)
                                             .into_item(),
                                     );
                                 }
+                            }
+                            // C4-4 — remote-host launch: run this agent on a saved
+                            // SSH host (its own default account, remote home dir).
+                            let hosts = warp_ssh_manager::with_conn(|c| {
+                                Ok(warp_ssh_manager::SshRepository::list_nodes(c)?)
+                            })
+                            .unwrap_or_default();
+                            for host in hosts.iter().filter(|n| {
+                                matches!(n.kind, warp_ssh_manager::types::NodeKind::Server)
+                            }) {
+                                let label =
+                                    format!("{} @ {}", agent.display_name(), host.name);
+                                menu_items.push(
+                                    MenuItemFields::new(label)
+                                        .with_on_select_action(WorkspaceAction::LaunchAgent {
+                                            agent,
+                                            config_dir: None,
+                                            cwd: None,
+                                            node_id: Some(host.id.clone()),
+                                        })
+                                        .with_icon(icon)
+                                        .into_item(),
+                                );
                             }
                         }
                     }
@@ -20186,8 +20252,15 @@ impl TypedActionView for Workspace {
                 agent,
                 config_dir,
                 cwd,
+                node_id,
             } => {
-                self.launch_routed_agent(*agent, config_dir.as_deref(), cwd.as_deref(), ctx);
+                self.launch_routed_agent(
+                    *agent,
+                    config_dir.as_deref(),
+                    cwd.as_deref(),
+                    node_id.as_deref(),
+                    ctx,
+                );
             }
             OpenFileInEditor { node_id, path } => {
                 if node_id.is_empty() {
