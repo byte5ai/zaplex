@@ -646,6 +646,14 @@ pub enum WorkspaceAction {
         /// Isolate the fork's file effects in a fresh sibling worktree.
         into_worktree: bool,
     },
+    /// Open a file from the file manager in a code editor pane. `node_id` empty
+    /// = a local file (opened directly); non-empty = a remote host — native
+    /// remote editing (buffer-sync via the SSH daemon) is a follow-up, so a
+    /// remote path is reported rather than silently downloaded.
+    OpenFileInEditor {
+        node_id: String,
+        path: PathBuf,
+    },
     FixSettingsWithOz {
         error_description: String,
     },
@@ -882,6 +890,7 @@ impl WorkspaceAction {
             | OpenSettingsFile
             | AskAgent { .. }
             | ForkAgentSession { .. }
+            | OpenFileInEditor { .. }
             | FixSettingsWithOz { .. } => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,

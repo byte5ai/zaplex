@@ -19733,6 +19733,25 @@ impl TypedActionView for Workspace {
                     ctx,
                 );
             }
+            OpenFileInEditor { node_id, path } => {
+                if node_id.is_empty() {
+                    // Local file: open it directly in a code pane (view + edit).
+                    self.add_tab_for_code_file(path.clone(), None, ctx);
+                } else {
+                    // Remote file: native editing (buffer-sync via the SSH daemon)
+                    // needs the host's daemon connection + HostId; not yet wired
+                    // from the SFTP file manager. Report honestly rather than
+                    // download-and-edit a local copy that wouldn't save back.
+                    let message = format!(
+                        "Opening remote files in the editor is coming — {} is on {node_id}. \
+                         Use the file manager's Download for now.",
+                        path.display()
+                    );
+                    self.toast_stack.update(ctx, |view, ctx| {
+                        view.add_ephemeral_toast(DismissibleToast::error(message), ctx);
+                    });
+                }
+            }
             FixSettingsWithOz { error_description } => {
                 // Repurposed (Oz-repurpose P1): the fix goes to the USER's own
                 // CLI coding agent, not the retired in-app agent mode.
