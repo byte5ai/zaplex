@@ -1053,14 +1053,74 @@ impl SftpBrowserView {
                 self.transfer_cross_connection(sources, target, is_move, ctx)
             }
             TransferKind::RemoteToRemote => {
-                self.show_error_toast(
-                    "Copying between two different hosts is coming next — route it through a \
-                     local pane for now."
-                        .to_string(),
-                    ctx,
-                );
+                self.relay_remote_to_remote(sources, target, is_move, ctx)
             }
         }
+    }
+
+    /// Copy/move between two *different* remote hosts by relaying through a local
+    /// temp: download each source from this host, upload it to the target host,
+    /// then delete the temp. For a **move** the source is removed on this host
+    /// only after the upload to the other host has fully succeeded — all on the
+    /// blocking thread, so a failure never loses data. Directories relay
+    /// recursively (reusing the same enumeration as a direct cross-connection
+    /// transfer). One relay runs per source; progress is per-item.
+    fn relay_remote_to_remote(
+        &mut self,
+        sources: &[PathBuf],
+        target: &FmPaneDescriptor,
+        is_move: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(source_backend) = self.sftp.clone() else {
+            self.show_error_toast("Not connected.".to_string(), ctx);
+            return;
+        };
+        let Some(target_backend) = FileManagerRegistry::as_ref(ctx).backend_for(target.id) else {
+            self.show_error_toast("The other pane is no longer connected.".to_string(), ctx);
+            return;
+        };
+        let target_dir = target.current_path.clone();
+        let target_label = target.label.clone();
+        let mut started = 0usize;
+        for source in sources {
+            let Some(name) = source.file_name() else {
+                continue;
+            };
+            let is_dir = self
+                .entries
+                .iter()
+                .find(|e| &e.path == source)
+                .map(|e| matches!(e.file_type, FileEntryType::Directory))
+                .unwrap_or(false);
+            let dest = normalize_remote_path(&target_dir.join(name));
+            let src_backend = source_backend.clone();
+            let tgt_backend = target_backend.clone();
+            let source_path = source.clone();
+            let temp = relay_temp_path();
+            let label = format!("{} → {}", name.to_string_lossy(), target_label);
+            self.run_blocking(
+                ctx,
+                move || relay_one(&src_backend, &tgt_backend, &source_path, &dest, is_dir, is_move, &temp),
+                move |me, result, ctx| match result {
+                    Ok(Ok(())) => {
+                        me.show_info_toast(format!("Relayed {label}."), ctx);
+                        me.refresh_dir(ctx);
+                    }
+                    Ok(Err(e)) => me.show_error_toast(format!("Relay of {label} failed: {e}"), ctx),
+                    Err(_) => me.show_error_toast(format!("Relay of {label} was cancelled."), ctx),
+                },
+            );
+            started += 1;
+        }
+        if started > 0 {
+            let verb = if is_move { "move" } else { "copy" };
+            self.show_info_toast(
+                format!("Relaying {started} item(s) to {target_label} ({verb} via this machine)…"),
+                ctx,
+            );
+        }
+        self.selected.clear();
     }
 
     /// Same-filesystem copy/move: direct backend `copy`/`rename`, synchronous
@@ -2557,6 +2617,88 @@ pub(super) fn plan_dir_transfer(
         files,
         skipped_existing,
     })
+}
+
+/// A unique local temp path for one remote↔remote relay (file or directory).
+/// Under the OS temp dir; pid + counter, never reused.
+fn relay_temp_path() -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("zaplex-relay-{}-{n}", std::process::id()))
+}
+
+/// Relay one entry between two remote hosts through a local temp: download from
+/// `source_backend`, upload to `target_backend`, always clean up the temp, and
+/// — for a move — delete the source on the origin host only after the upload
+/// fully succeeded (so a failure can never lose data). Directories relay
+/// recursively via [`plan_dir_transfer`]. Blocking: run off the main thread.
+#[allow(clippy::too_many_arguments)]
+fn relay_one(
+    source_backend: &Arc<dyn SftpBackend>,
+    target_backend: &Arc<dyn SftpBackend>,
+    source_path: &Path,
+    dest_path: &Path,
+    is_dir: bool,
+    is_move: bool,
+    temp: &Path,
+) -> Result<(), String> {
+    let transfer = (|| -> Result<(), String> {
+        if is_dir {
+            // Download the source tree from host A into a local temp directory…
+            let download = plan_dir_transfer(
+                TransferDirection::Download,
+                source_backend.clone(),
+                source_path,
+                temp,
+            )?;
+            for (local, remote) in &download.files {
+                source_backend
+                    .download_file(remote, local, None, None)
+                    .map_err(|e| e.to_string())?;
+            }
+            // …then upload the temp tree to host B.
+            let upload = plan_dir_transfer(
+                TransferDirection::Upload,
+                target_backend.clone(),
+                temp,
+                dest_path,
+            )?;
+            for (local, remote) in &upload.files {
+                target_backend
+                    .upload_file(local, remote, None, None)
+                    .map_err(|e| e.to_string())?;
+            }
+        } else {
+            source_backend
+                .download_file(source_path, temp, None, None)
+                .map_err(|e| e.to_string())?;
+            target_backend
+                .upload_file(temp, dest_path, None, None)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })();
+
+    // Always remove the temp, success or failure.
+    if is_dir {
+        let _ = std::fs::remove_dir_all(temp);
+    } else {
+        let _ = std::fs::remove_file(temp);
+    }
+    transfer?;
+
+    // Move: remove the source on the origin host, but only after a fully
+    // successful relay (the `transfer?` above returned early on any failure).
+    if is_move {
+        let removed = if is_dir {
+            source_backend.delete_dir_recursive(source_path)
+        } else {
+            source_backend.delete_file(source_path)
+        };
+        removed.map_err(|e| format!("relayed, but removing the source failed: {e}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

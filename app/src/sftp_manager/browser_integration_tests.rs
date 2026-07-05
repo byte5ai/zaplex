@@ -2326,6 +2326,97 @@ fn test_dir_move_cleanup_keeps_source_on_failure() {
     });
 }
 
+/// F5 between two *different* remote hosts relays the file through the local
+/// machine (download from A, upload to B) instead of the old "coming soon" toast.
+#[test]
+fn test_f5_remote_to_remote_relays_file() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("a/foo.txt", b"payload"), ("b/.keep", b"")]);
+        let root = temp.path().to_path_buf();
+
+        // Two *different* hosts: pane A on "hostA" at /a, pane B on "hostB" at /b.
+        let (_, view_a) = create_view_with_node(&mut app, "hostA");
+        view_a.update(&mut app, |v, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/a"), ctx);
+        });
+        let (_, view_b) = create_view_with_node(&mut app, "hostB");
+        view_b.update(&mut app, |v, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/b"), ctx);
+        });
+
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+
+        assert!(root.join("b/foo.txt").exists(), "relayed onto host B");
+        assert_eq!(std::fs::read(root.join("b/foo.txt")).unwrap(), b"payload", "content matches");
+        assert!(root.join("a/foo.txt").exists(), "source kept after a copy");
+    });
+}
+
+/// F6 between two different remote hosts relays then removes the source (only
+/// after the upload to the other host has fully succeeded).
+#[test]
+fn test_f6_remote_to_remote_moves_file() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("a/bar.txt", b"data"), ("b/.keep", b"")]);
+        let root = temp.path().to_path_buf();
+
+        let (_, view_a) = create_view_with_node(&mut app, "hostA");
+        view_a.update(&mut app, |v, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/a"), ctx);
+        });
+        let (_, view_b) = create_view_with_node(&mut app, "hostB");
+        view_b.update(&mut app, |v, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/b"), ctx);
+        });
+
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::MoveToOtherPane, ctx);
+        });
+
+        assert!(root.join("b/bar.txt").exists(), "relayed onto host B");
+        assert!(!root.join("a/bar.txt").exists(), "source removed after a successful move");
+    });
+}
+
+/// A directory relays recursively between two different remote hosts.
+#[test]
+fn test_f5_remote_to_remote_relays_directory() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("a/dir/sub/deep.txt", b"deep"), ("b/.keep", b"")]);
+        let root = temp.path().to_path_buf();
+
+        let (_, view_a) = create_view_with_node(&mut app, "hostA");
+        view_a.update(&mut app, |v, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/a"), ctx);
+        });
+        let (_, view_b) = create_view_with_node(&mut app, "hostB");
+        view_b.update(&mut app, |v, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            v.set_backend_for_test(backend, PathBuf::from("/b"), ctx);
+        });
+
+        // /a contains exactly one entry, the directory "dir" → cursor on it.
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+
+        assert!(
+            root.join("b/dir/sub/deep.txt").exists(),
+            "directory relayed recursively onto host B"
+        );
+    });
+}
+
 // ============================================================
 // Overwrite-on-conflict for copy/move (FM Pflicht 1)
 // ============================================================
