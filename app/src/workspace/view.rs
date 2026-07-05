@@ -7113,6 +7113,70 @@ impl Workspace {
                     .with_on_select_action(WorkspaceAction::AddSpecificAgentTab(agent))
                     .with_icon(icon);
                 menu_items.push(item.into_item());
+
+                // C4 — subscription-routed launch: for agents with a subscription
+                // model (Claude/Codex), add "⚡ on freest" plus a per-account entry
+                // so a new agent starts on a chosen (or the least-loaded) account,
+                // pinned via its config dir (billing on the subscription, not an
+                // API key). Only when the cockpit is enabled and accounts exist.
+                let provider = match agent {
+                    CLIAgent::Claude => Some(zaplex_cockpit::Provider::Claude),
+                    CLIAgent::Codex => Some(zaplex_cockpit::Provider::Codex),
+                    _ => None,
+                };
+                if let Some(provider) = provider {
+                    if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+                        let snapshot = crate::cockpit::CockpitModel::as_ref(ctx).snapshot();
+                        let accounts: Vec<_> = snapshot
+                            .accounts
+                            .iter()
+                            .filter(|a| a.account.provider == provider)
+                            .collect();
+                        if !accounts.is_empty() {
+                            if let Some(freest) =
+                                zaplex_cockpit::pick_freest(provider, &snapshot.accounts)
+                            {
+                                let label = format!(
+                                    "⚡ {} on freest — {} ({})",
+                                    agent.display_name(),
+                                    freest.account.label,
+                                    zaplex_cockpit::heat_pct_label(freest.heat),
+                                );
+                                menu_items.push(
+                                    MenuItemFields::new(label)
+                                        .with_on_select_action(WorkspaceAction::LaunchAgent {
+                                            agent,
+                                            config_dir: Some(freest.account.config_dir.clone()),
+                                            cwd: None,
+                                        })
+                                        .with_icon(icon)
+                                        .into_item(),
+                                );
+                            }
+                            // Explicit per-account choices, when the user has more than one.
+                            if accounts.len() > 1 {
+                                for a in &accounts {
+                                    let label = format!(
+                                        "{} · {} ({})",
+                                        agent.display_name(),
+                                        a.account.label,
+                                        zaplex_cockpit::heat_pct_label(a.heat),
+                                    );
+                                    menu_items.push(
+                                        MenuItemFields::new(label)
+                                            .with_on_select_action(WorkspaceAction::LaunchAgent {
+                                                agent,
+                                                config_dir: Some(a.account.config_dir.clone()),
+                                                cwd: None,
+                                            })
+                                            .with_icon(icon)
+                                            .into_item(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
             menu_items.len() - start_len
         };
