@@ -109,6 +109,18 @@ impl FileManagerRegistry {
         self.backends.get(&id).cloned()
     }
 
+    /// A live backend for *any* open pane browsing `fs`. Lets a non-file-manager
+    /// caller (e.g. the workspace opening a remote file for editing over classic
+    /// SSH) borrow an already-established SFTP connection for that host instead
+    /// of opening a second one. Returns `None` if no open pane browses `fs` yet
+    /// has a backend registered.
+    pub fn backend_for_namespace(&self, fs: &FsNamespace) -> Option<Arc<dyn SftpBackend>> {
+        self.panes
+            .iter()
+            .filter(|p| &p.fs == fs)
+            .find_map(|p| self.backends.get(&p.id).cloned())
+    }
+
     /// Remove a pane (on close). A no-op if it was never registered. Drops the
     /// pane's backend handle too (releasing its session once nothing else holds it).
     pub fn remove(&mut self, id: u64) {
@@ -225,6 +237,33 @@ mod tests {
         // Removing the pane drops its backend handle.
         reg.remove(1);
         assert!(reg.backend_for(1).is_none());
+    }
+
+    #[test]
+    fn backend_for_namespace_finds_a_live_backend_for_the_host() {
+        use super::super::sftp_backend::InMemorySftpBackend;
+        let mut reg = FileManagerRegistry::new();
+        let host = FsNamespace::Remote("h1".into());
+        // Two panes on the same host; only the second has a backend registered.
+        reg.upsert(desc(1, host.clone(), "/a"));
+        reg.upsert(desc(2, host.clone(), "/b"));
+        reg.upsert(desc(3, FsNamespace::Local, "/c"));
+        assert!(reg.backend_for_namespace(&host).is_none());
+
+        let backend: Arc<dyn SftpBackend> =
+            Arc::new(InMemorySftpBackend::new(PathBuf::from("/")));
+        reg.set_backend(2, backend);
+        // A pane on the host now has a backend → resolves.
+        assert!(reg.backend_for_namespace(&host).is_some());
+        // A different host / the local namespace does not.
+        assert!(reg
+            .backend_for_namespace(&FsNamespace::Remote("other".into()))
+            .is_none());
+        assert!(reg.backend_for_namespace(&FsNamespace::Local).is_none());
+
+        // Dropping the only backed pane makes it unresolvable again.
+        reg.remove(2);
+        assert!(reg.backend_for_namespace(&host).is_none());
     }
 
     #[test]
