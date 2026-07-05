@@ -225,6 +225,38 @@ impl CLIAgent {
         Some(format!("{var}={dir} {fork}"))
     }
 
+    /// The **subscription-routed launch command** (C4): start this agent *fresh*,
+    /// authenticated via a *subscription* rather than a pay-per-token API key —
+    /// the plexing model. Two parts, both inline so the string works verbatim in
+    /// local tabs, worktree tab-configs, and daemon `startup_command`s:
+    /// 1. **API-key scrub** — `unset` any inherited key env, so the config-dir /
+    ///    default login wins (a set `ANTHROPIC_API_KEY` would otherwise override
+    ///    the pin, silently defeating account routing *and* subscription billing).
+    /// 2. **Account pin** — `VAR=<config_dir> …` when a specific account is chosen
+    ///    (`None` = the provider's default login, still scrubbed).
+    ///
+    /// Agents without a subscription/config-dir model launch bare (no scrub, no pin).
+    pub fn launch_command_routed(&self, config_dir: Option<&Path>) -> String {
+        let cmd = self.command_prefix();
+        let (dir_var, key_vars): (&str, &[&str]) = match self {
+            CLIAgent::Claude => (
+                "CLAUDE_CONFIG_DIR",
+                &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+            ),
+            CLIAgent::Codex => ("CODEX_HOME", &["OPENAI_API_KEY"]),
+            // No known subscription/config-dir routing for other agents.
+            _ => return cmd.to_string(),
+        };
+        // 1. Scrub inherited API-key env so the subscription authenticates.
+        let mut prefix = format!("unset {}; ", key_vars.join(" "));
+        // 2. Pin the chosen account's config dir, if any.
+        if let Some(dir) = config_dir {
+            let dir = shell_words::quote(&dir.to_string_lossy()).into_owned();
+            prefix.push_str(&format!("{dir_var}={dir} "));
+        }
+        format!("{prefix}{cmd}")
+    }
+
     /// Serialized version of the CLIAgent name (e.g. "Claude", "Gemini"). Used for the
     /// session-sharing protocol's opaque `cli_agent` string field.
     pub fn to_serialized_name(&self) -> String {
