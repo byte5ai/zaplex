@@ -582,6 +582,48 @@ fn fork_command_pinned_prepends_inline_env_for_non_default_accounts() {
 }
 
 #[test]
+fn resume_command_per_provider_continues_in_place() {
+    // Adopt-in-place: same session, no `--fork-session` (verified 2026-07-05).
+    assert_eq!(
+        CLIAgent::Claude.resume_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
+        Some("claude --resume 0198c8f3-aaaa-bbbb-cccc-1234567890ab".to_string())
+    );
+    assert_eq!(
+        CLIAgent::Codex.resume_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
+        Some("codex resume 0198c8f3-aaaa-bbbb-cccc-1234567890ab".to_string())
+    );
+    // No known resume mechanism → None, surfaces stay disabled.
+    assert_eq!(CLIAgent::Gemini.resume_command("x"), None);
+    assert_eq!(CLIAgent::Unknown.resume_command("x"), None);
+}
+
+#[test]
+fn resume_command_quotes_hostile_session_ids() {
+    let cmd = CLIAgent::Claude
+        .resume_command("evil; rm -rf /")
+        .expect("claude resumes");
+    assert_eq!(cmd, "claude --resume 'evil; rm -rf /'");
+}
+
+#[test]
+fn resume_command_pinned_prepends_inline_env_for_non_default_accounts() {
+    let dir = PathBuf::from("/home/u/claude-work dir");
+    assert_eq!(
+        CLIAgent::Claude.resume_command_pinned("abc", Some(&dir)),
+        Some("CLAUDE_CONFIG_DIR='/home/u/claude-work dir' claude --resume abc".to_string())
+    );
+    assert_eq!(
+        CLIAgent::Codex.resume_command_pinned("abc", Some(Path::new("/home/u/.codex-alt"))),
+        Some("CODEX_HOME=/home/u/.codex-alt codex resume abc".to_string())
+    );
+    // Default account (None) → bare resume command, no env prefix.
+    assert_eq!(
+        CLIAgent::Claude.resume_command_pinned("abc", None),
+        Some("claude --resume abc".to_string())
+    );
+}
+
+#[test]
 fn launch_command_routed_scrubs_and_pins_claude() {
     // Default account: scrub the API key env, no config-dir pin, bare `claude`.
     assert_eq!(

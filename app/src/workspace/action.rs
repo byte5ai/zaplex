@@ -646,6 +646,19 @@ pub enum WorkspaceAction {
         /// Isolate the fork's file effects in a fresh sibling worktree.
         into_worktree: bool,
     },
+    /// Adopt an idle CLI session in place (cockpit "open = focus" verb): opens a
+    /// terminal tab in the session's cwd and *resumes the same session* (no
+    /// fork, no new session) via the provider's resume command, pinned to
+    /// `config_dir`'s account. See [`CLIAgent::resume_command_pinned`].
+    AdoptAgentSession {
+        agent: CLIAgent,
+        session_id: String,
+        /// The session's working directory.
+        cwd: PathBuf,
+        /// Non-default account config dir for subscription pinning
+        /// (`None` = the provider's default login).
+        config_dir: Option<PathBuf>,
+    },
     /// Launch a *fresh* CLI agent routed to a subscription (the C4 "plexing"
     /// launch): open a terminal tab in `cwd` (or the default dir) and run the
     /// agent pinned to `config_dir`'s account (`None` = default login) with the
@@ -907,6 +920,7 @@ impl WorkspaceAction {
             | OpenSettingsFile
             | AskAgent { .. }
             | ForkAgentSession { .. }
+            | AdoptAgentSession { .. }
             | LaunchAgent { .. }
             | OpenFileInEditor { .. }
             | FixSettingsWithOz { .. } => false,
