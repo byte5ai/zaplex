@@ -852,6 +852,39 @@ pub struct TransferredTab {
     pub draggable_state: DraggableState,
 }
 
+/// One remote file being edited over *classic* SSH (no daemon) via a local
+/// working copy: the editor edits the copy, and each save uploads it back to
+/// the host over SFTP. Held in [`Workspace::remote_sftp_edits`], keyed by the
+/// working copy's canonical local path.
+#[cfg(all(unix, feature = "local_tty"))]
+struct RemoteSftpEdit {
+    /// SSH node id the file lives on (used in status/error toasts).
+    node_label: String,
+    /// Absolute path on the remote host to upload back to.
+    remote_path: PathBuf,
+    /// The SFTP connection to upload through. Held as an `Arc` so save-back keeps
+    /// working even after the file-manager pane that opened the file is closed.
+    backend: std::sync::Arc<dyn crate::sftp_manager::sftp_backend::SftpBackend>,
+    /// An upload is in flight; coalesce a save that lands during it.
+    uploading: bool,
+    /// A save arrived while an upload was in flight — re-upload once it finishes,
+    /// so no keystroke-run is silently dropped.
+    resave_pending: bool,
+}
+
+/// A unique local directory for one classic-SSH remote-edit working copy. The
+/// original filename is placed *inside* it (kept intact for the editor's
+/// language detection + tab title). Lives under the OS temp dir; leftovers are
+/// small text files reclaimed by the OS. Never reused (pid + monotonic counter),
+/// so two edits — even of the same remote file — never collide.
+#[cfg(all(unix, feature = "local_tty"))]
+fn remote_sftp_edit_working_dir() -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("zaplex-remote-edit-{}-{n}", std::process::id()))
+}
+
 pub struct Workspace {
     window_id: WindowId,
     pub(crate) tabs: Vec<TabData>,
@@ -872,6 +905,24 @@ pub struct Workspace {
     /// host-scoped advisories (e.g. the multiplexer-nesting warning toast).
     #[cfg(unix)]
     daemon_session_hosts: std::collections::HashMap<SessionId, String>,
+    /// SSH host `node_id` → its daemon connection `SessionId`, recorded when a
+    /// resilient host opens (or adopts) a daemon-backed session. The SFTP file
+    /// manager is keyed by `node_id`; this lets it resolve a live daemon
+    /// `HostId` so it can open remote files in the *native* editor (buffer-sync
+    /// with safe save-back) instead of a download-only copy. Pull-based:
+    /// `daemon_host_for_node` re-checks the manager for a live client on every
+    /// lookup, so a stale entry (session since gone) is harmless — it just falls
+    /// back. `SessionId`s are never reused, so an entry can only ever resolve to
+    /// its own host or to nothing, never to a wrong host.
+    #[cfg(all(unix, feature = "local_tty"))]
+    daemon_node_sessions: std::collections::HashMap<String, SessionId>,
+    /// Remote files opened for editing over *classic* SSH (no daemon), keyed by
+    /// their local working-copy path. On a `GlobalBufferModelEvent::FileSaved`
+    /// for one of these paths, the working copy is uploaded back to the host
+    /// over SFTP. See [`RemoteSftpEdit`]. Stale entries (the editor tab was
+    /// closed) are harmless: a closed buffer emits no further save event.
+    #[cfg(all(unix, feature = "local_tty"))]
+    remote_sftp_edits: std::collections::HashMap<PathBuf, RemoteSftpEdit>,
     /// Hosts already warned about multiplexer nesting this app run — one
     /// warning per host, not one per session/tab.
     #[cfg(unix)]
@@ -2624,6 +2675,28 @@ impl Workspace {
             Self::handle_session_settings_event,
         );
 
+        // Classic-SSH remote editing (Type 3): when a local working copy of a
+        // remote file is saved, upload it back to its host over SFTP. Cheap for
+        // ordinary local saves — the handler returns immediately unless the
+        // saved path is a tracked remote working copy.
+        #[cfg(all(unix, feature = "local_tty"))]
+        ctx.subscribe_to_model(
+            &crate::code::global_buffer_model::GlobalBufferModel::handle(ctx),
+            |me, _handle, event, ctx| {
+                if let crate::code::global_buffer_model::GlobalBufferModelEvent::FileSaved {
+                    file_id,
+                } = event
+                {
+                    let saved = crate::code::global_buffer_model::GlobalBufferModel::as_ref(ctx)
+                        .file_path(*file_id)
+                        .map(|path| path.to_path_buf());
+                    if let Some(path) = saved {
+                        me.on_remote_working_copy_saved(path, ctx);
+                    }
+                }
+            },
+        );
+
         // When a remote server session finishes its initialize handshake, re-run
         // update_active_session so navigate_to_directory fires now that the
         // client is connected (it may have been skipped on the initial pwd change
@@ -2918,6 +2991,10 @@ impl Workspace {
             ssh_tab_nodes: std::collections::HashMap::new(),
             #[cfg(unix)]
             daemon_session_hosts: std::collections::HashMap::new(),
+            #[cfg(all(unix, feature = "local_tty"))]
+            daemon_node_sessions: std::collections::HashMap::new(),
+            #[cfg(all(unix, feature = "local_tty"))]
+            remote_sftp_edits: std::collections::HashMap::new(),
             #[cfg(unix)]
             multiplexer_warned_hosts: std::collections::HashSet::new(),
             hovered_tab_index: None,
@@ -5678,6 +5755,270 @@ impl Workspace {
         );
     }
 
+    /// Opens a file that lives on a remote host — dispatched from the SFTP file
+    /// manager (F3/F4) via `WorkspaceAction::OpenFileInEditor` with a non-empty
+    /// `node_id`. Two paths, picked by whether the host has a live daemon:
+    /// - **Daemon host:** opened *natively* — the editor buffer syncs with the
+    ///   daemon and writes back safely, like the sidebar server file browser.
+    /// - **Classic SSH-only host:** downloaded to a local working copy, edited
+    ///   in the native editor, and uploaded back over SFTP on each save
+    ///   (`begin_remote_sftp_edit` + `on_remote_working_copy_saved`).
+    fn open_file_in_editor_remote(
+        &mut self,
+        node_id: String,
+        path: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        #[cfg(all(unix, feature = "local_tty"))]
+        if let Some(host_id) = self.daemon_host_for_node(&node_id, &*ctx) {
+            let path_str = path.to_string_lossy();
+            match warp_util::standardized_path::StandardizedPath::try_new(&path_str) {
+                Ok(remote_path) => {
+                    self.open_remote_file(
+                        crate::code::buffer_location::RemotePath::new(host_id, remote_path),
+                        ctx,
+                    );
+                    return;
+                }
+                Err(error) => {
+                    log::warn!(
+                        "file manager: cannot open remote file {} on {node_id}: {error}",
+                        path.display()
+                    );
+                }
+            }
+        }
+
+        // Classic SSH-only host (no live daemon): download a local working copy,
+        // edit it in the native editor, and upload it back on each save.
+        #[cfg(all(unix, feature = "local_tty"))]
+        if self.begin_remote_sftp_edit(&node_id, &path, ctx) {
+            return;
+        }
+
+        // Non-unix, or no live SFTP connection for this host to borrow: nothing
+        // to open. Be honest instead of silently doing nothing.
+        let message = format!(
+            "Couldn't open {} from {node_id} in the editor — no live connection to that host. \
+             Open a file manager on it and try again.",
+            path.display()
+        );
+        self.toast_stack.update(ctx, |view, ctx| {
+            view.add_ephemeral_toast(DismissibleToast::error(message), ctx);
+        });
+    }
+
+    /// Classic-SSH remote edit (no daemon): borrow a live SFTP connection for
+    /// `node_id` from an open file-manager pane, download `remote_path` into a
+    /// unique local working copy, open it in the native editor, and register it
+    /// in [`Workspace::remote_sftp_edits`] so each save uploads it back. Returns
+    /// `false` (caller falls back to a toast) when no live SFTP connection for
+    /// the host is available; `true` once the download has been kicked off.
+    ///
+    /// No-data-loss contract: the remote file is only ever *written* by a
+    /// save-back upload (never on open), and a failed upload keeps the working
+    /// copy and surfaces the error — the user's edits are never lost. Concurrent
+    /// external changes to the remote file are last-write-wins on the next save,
+    /// which is inherent to editing over plain SFTP (a daemon host gets the
+    /// version-checked native path instead).
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn begin_remote_sftp_edit(
+        &mut self,
+        node_id: &str,
+        remote_path: &std::path::Path,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        use crate::sftp_manager::fm_registry::{FileManagerRegistry, FsNamespace};
+
+        let Some(backend) = FileManagerRegistry::as_ref(ctx)
+            .backend_for_namespace(&FsNamespace::Remote(node_id.to_string()))
+        else {
+            return false;
+        };
+
+        let file_name = remote_path
+            .file_name()
+            .map(|name| name.to_os_string())
+            .unwrap_or_else(|| std::ffi::OsString::from("remote-file"));
+        let display_name = file_name.to_string_lossy().to_string();
+        let working_dir = remote_sftp_edit_working_dir();
+        if let Err(error) = std::fs::create_dir_all(&working_dir) {
+            self.toast_stack.update(ctx, |view, ctx| {
+                view.add_ephemeral_toast(
+                    DismissibleToast::error(format!(
+                        "Couldn't prepare a local copy of {display_name}: {error}"
+                    )),
+                    ctx,
+                );
+            });
+            return true;
+        }
+        let working_copy = working_dir.join(&file_name);
+
+        let node_label = node_id.to_string();
+        let remote_path = remote_path.to_path_buf();
+        let download_backend = backend.clone();
+        let download_remote = remote_path.clone();
+        let download_target = working_copy.clone();
+
+        ctx.spawn(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    download_backend.download_file(&download_remote, &download_target, None, None)
+                })
+                .await
+            },
+            move |me, result, ctx| {
+                match result {
+                    Ok(Ok(())) => {
+                        // Canonicalize so the registry key matches the path that
+                        // `GlobalBufferModel::file_path` reports back on save.
+                        let key = std::fs::canonicalize(&working_copy)
+                            .unwrap_or_else(|_| working_copy.clone());
+                        me.add_tab_for_code_file(key.clone(), None, ctx);
+                        me.remote_sftp_edits.insert(
+                            key,
+                            RemoteSftpEdit {
+                                node_label: node_label.clone(),
+                                remote_path,
+                                backend,
+                                uploading: false,
+                                resave_pending: false,
+                            },
+                        );
+                        me.toast_stack.update(ctx, |view, ctx| {
+                            view.add_ephemeral_toast(
+                                DismissibleToast::success(format!(
+                                    "Editing {display_name} from {node_label} — each save uploads \
+                                     it back over SFTP."
+                                )),
+                                ctx,
+                            );
+                        });
+                    }
+                    Ok(Err(error)) => {
+                        let _ = std::fs::remove_dir_all(&working_dir);
+                        me.toast_stack.update(ctx, |view, ctx| {
+                            view.add_persistent_toast(
+                                DismissibleToast::error(format!(
+                                    "Couldn't download {display_name} from {node_label}: {error}"
+                                )),
+                                ctx,
+                            );
+                        });
+                    }
+                    Err(join_error) => {
+                        let _ = std::fs::remove_dir_all(&working_dir);
+                        me.toast_stack.update(ctx, |view, ctx| {
+                            view.add_persistent_toast(
+                                DismissibleToast::error(format!(
+                                    "Couldn't download {display_name} from {node_label}: {join_error}"
+                                )),
+                                ctx,
+                            );
+                        });
+                    }
+                }
+            },
+        );
+        true
+    }
+
+    /// A local file was just saved. If it is a tracked classic-SSH remote working
+    /// copy, upload it back to its host over SFTP. A no-op for every ordinary
+    /// local save. A save that lands while an upload is already in flight is
+    /// coalesced (`resave_pending`) and re-run afterward, so no save is dropped.
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn on_remote_working_copy_saved(&mut self, working_copy: PathBuf, ctx: &mut ViewContext<Self>) {
+        let Some(edit) = self.remote_sftp_edits.get_mut(&working_copy) else {
+            return;
+        };
+        if edit.uploading {
+            edit.resave_pending = true;
+            return;
+        }
+        edit.uploading = true;
+        let backend = edit.backend.clone();
+        let remote_path = edit.remote_path.clone();
+        let node_label = edit.node_label.clone();
+        let display_name = working_copy
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| node_label.clone());
+
+        let upload_source = working_copy.clone();
+        let upload_remote = remote_path.clone();
+        let upload_backend = backend.clone();
+        ctx.spawn(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    upload_backend.upload_file(&upload_source, &upload_remote, None, None)
+                })
+                .await
+            },
+            move |me, result, ctx| {
+                let error = match result {
+                    Ok(Ok(())) => None,
+                    Ok(Err(error)) => Some(error.to_string()),
+                    Err(join_error) => Some(join_error.to_string()),
+                };
+                // Clear the in-flight flag and see whether a save landed meanwhile.
+                let mut resave = false;
+                if let Some(edit) = me.remote_sftp_edits.get_mut(&working_copy) {
+                    edit.uploading = false;
+                    resave = std::mem::take(&mut edit.resave_pending);
+                }
+                match error {
+                    None => {
+                        me.toast_stack.update(ctx, |view, ctx| {
+                            view.add_ephemeral_toast(
+                                DismissibleToast::success(format!(
+                                    "Saved {display_name} to {node_label}."
+                                )),
+                                ctx,
+                            );
+                        });
+                    }
+                    Some(error) => {
+                        // The editor already reported the *local* save as done, so
+                        // a failed upload must be prominent — the host does NOT
+                        // have the change. The working copy keeps the edits.
+                        me.toast_stack.update(ctx, |view, ctx| {
+                            view.add_persistent_toast(
+                                DismissibleToast::error(format!(
+                                    "Couldn't save {display_name} to {node_label}: {error}. \
+                                     Your changes are kept locally; retry with another save."
+                                )),
+                                ctx,
+                            );
+                        });
+                    }
+                }
+                if resave {
+                    me.on_remote_working_copy_saved(working_copy, ctx);
+                }
+            },
+        );
+    }
+
+    /// Resolves an SFTP file-manager `node_id` to a live daemon `HostId`, if that
+    /// host currently has a connected daemon session with a usable client. The
+    /// SFTP file manager is keyed by `node_id`; the native remote editor needs a
+    /// `HostId`, which is opaque and only known once the daemon handshake
+    /// completes — hence this pull-based lookup against the live manager state.
+    /// Returns `None` for classic SSH hosts (no daemon session recorded) and for
+    /// daemon hosts whose session has since dropped, so the caller falls back.
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn daemon_host_for_node(&self, node_id: &str, ctx: &AppContext) -> Option<warp_core::HostId> {
+        let session_id = *self.daemon_node_sessions.get(node_id)?;
+        let manager = crate::remote_server::manager::RemoteServerManager::as_ref(ctx);
+        let host_id = manager.host_id_for_session(session_id)?;
+        // Buffer-sync needs a live client for the host; if there is none the
+        // session is not usable and we fall back rather than open a dead editor.
+        manager.client_for_host(host_id)?;
+        Some(host_id.clone())
+    }
+
     /// Opens a new terminal pane in the current tab, automatically runs the `ssh ...` command,
     /// and spawns a SecretInjector that watches the PTY output and automatically injects the
     /// secret from the keychain when a `password:` / `passphrase:` prompt appears.
@@ -5963,6 +6304,13 @@ impl Workspace {
                         .ssh_tab_nodes
                         .insert(pane_group.id(), node_id_owned.clone());
                 }
+                // Record node_id → daemon session so the SFTP file manager on this
+                // host can later resolve a live `HostId` and open files in the
+                // native editor (see `daemon_host_for_node`).
+                #[cfg(feature = "local_tty")]
+                workspace
+                    .daemon_node_sessions
+                    .insert(node_id_owned.clone(), session_id);
 
                 match progress_tx {
                     // Daemon already installed → connect right away.
@@ -6173,6 +6521,11 @@ impl Workspace {
             self.ssh_tab_nodes
                 .insert(pane_group_id, server.node_id.clone());
         }
+        // Same node_id → daemon session mapping as the fresh-connect path, so the
+        // file manager on an adopted host can open files natively too.
+        #[cfg(feature = "local_tty")]
+        self.daemon_node_sessions
+            .insert(server.node_id.clone(), session_id);
 
         self.spawn_daemon_session_connect(server, session_id, ctx);
     }
@@ -19738,18 +20091,9 @@ impl TypedActionView for Workspace {
                     // Local file: open it directly in a code pane (view + edit).
                     self.add_tab_for_code_file(path.clone(), None, ctx);
                 } else {
-                    // Remote file: native editing (buffer-sync via the SSH daemon)
-                    // needs the host's daemon connection + HostId; not yet wired
-                    // from the SFTP file manager. Report honestly rather than
-                    // download-and-edit a local copy that wouldn't save back.
-                    let message = format!(
-                        "Opening remote files in the editor is coming — {} is on {node_id}. \
-                         Use the file manager's Download for now.",
-                        path.display()
-                    );
-                    self.toast_stack.update(ctx, |view, ctx| {
-                        view.add_ephemeral_toast(DismissibleToast::error(message), ctx);
-                    });
+                    // Remote file: open natively on daemon hosts (real buffer-sync
+                    // save-back), honest fallback on classic SSH-only hosts.
+                    self.open_file_in_editor_remote(node_id.clone(), path.clone(), ctx);
                 }
             }
             FixSettingsWithOz { error_description } => {
