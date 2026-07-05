@@ -147,6 +147,16 @@ pub enum Dialog {
         /// Move vs copy (wording only).
         is_move: bool,
     },
+    /// F5/F6 with more than one other file-manager pane open: let the user pick
+    /// which pane to copy/move into. The candidate descriptors (with ids, for
+    /// routing) live on the view in `pending_target_pick`; this carries only the
+    /// display labels (`host:/path`, one per candidate, in the same order).
+    CopyMoveTargetPicker {
+        /// Move vs copy (wording only).
+        is_move: bool,
+        /// `host:/path` label per candidate pane, in `pending_target_pick` order.
+        labels: Vec<String>,
+    },
     FileDetails { entry: FileEntry },
     /// Confirm closing transfer panel (when active transfers exist)
     CloseTransferPanelConfirm,
