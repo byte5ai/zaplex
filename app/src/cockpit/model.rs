@@ -20,7 +20,9 @@ use async_compat::CompatExt as _;
 use chrono::Utc;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use watcher::HomeDirectoryWatcher;
-use zaplex_cockpit::{apply_oauth_usage, build_snapshot, CockpitSnapshot, PricingTable, Provider};
+use zaplex_cockpit::{
+    apply_oauth_usage, build_snapshot, AccountOverrides, CockpitSnapshot, PricingTable, Provider,
+};
 
 use crate::cockpit::oauth::{self, CachedOauth};
 use crate::cockpit::settings::CockpitSettings;
@@ -43,6 +45,10 @@ pub struct CockpitModel {
     /// Lives here so the 15-min TTL survives across refresh cycles; the token
     /// itself is never stored — only the parsed, secret-free usage numbers.
     oauth_cache: HashMap<PathBuf, CachedOauth>,
+    /// User overrides (instances.json: label/color/order/hide), applied to every
+    /// snapshot. Kept here so the card renderer can look up per-account colors
+    /// (color isn't an `Account` field). Empty when the file is absent/broken.
+    overrides: AccountOverrides,
 }
 
 /// Inputs captured on the model thread, moved into the off-thread build.
@@ -58,6 +64,8 @@ struct RefreshInputs {
     /// Cache state moved into the build; the (possibly refreshed) cache comes
     /// back with the snapshot via `apply`.
     oauth_cache: HashMap<PathBuf, CachedOauth>,
+    /// Path to the user's `instances.json` account overrides (read off-thread).
+    instances_path: PathBuf,
 }
 
 impl CockpitModel {
@@ -74,6 +82,7 @@ impl CockpitModel {
             },
             pricing: PricingTable::default(),
             oauth_cache: HashMap::new(),
+            overrides: AccountOverrides::default(),
         };
         model.spawn_refresh(ctx);
         model.start_reconcile_timer(ctx);
@@ -99,6 +108,7 @@ impl CockpitModel {
         Some(RefreshInputs {
             codex_home: home.join(".codex"),
             claude_config_dir_env: std::env::var("CLAUDE_CONFIG_DIR").ok(),
+            instances_path: home.join(".zap").join("instances.json"),
             home,
             budget_5h,
             budget_week,
@@ -148,17 +158,32 @@ impl CockpitModel {
                 } else {
                     inputs.oauth_cache
                 };
+                // Apply user overrides (instances.json) last, on the fully-built
+                // snapshot: hide / relabel / reorder for display. Read off-thread;
+                // a missing or broken file yields no overrides (never blanks the
+                // cockpit — see `AccountOverrides::parse`).
+                let overrides = AccountOverrides::parse(
+                    &std::fs::read_to_string(&inputs.instances_path).unwrap_or_default(),
+                );
+                snapshot.accounts = overrides.apply(std::mem::take(&mut snapshot.accounts));
                 let _ = spawner
-                    .spawn(move |me, ctx| me.apply(snapshot, oauth_cache, ctx))
+                    .spawn(move |me, ctx| me.apply(snapshot, oauth_cache, overrides, ctx))
                     .await;
             })
             .detach();
+    }
+
+    /// The user-overridden display color for an account key, if any (hex string
+    /// like `#22C55E`; the renderer parses/validates it).
+    pub fn override_color(&self, key: &str) -> Option<&str> {
+        self.overrides.color_for(key)
     }
 
     fn apply(
         &mut self,
         snapshot: CockpitSnapshot,
         oauth_cache: HashMap<PathBuf, CachedOauth>,
+        overrides: AccountOverrides,
         ctx: &mut ModelContext<Self>,
     ) {
         // Transition detection (claudeplex's most-loved signal): a session that
@@ -198,6 +223,7 @@ impl CockpitModel {
 
         self.snapshot = snapshot;
         self.oauth_cache = oauth_cache;
+        self.overrides = overrides;
         ctx.emit(CockpitEvent::Updated);
         if !became_waiting.is_empty() {
             ctx.emit(CockpitEvent::SessionsBecameWaiting(became_waiting));

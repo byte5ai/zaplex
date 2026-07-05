@@ -41,6 +41,27 @@ const HEAT_BAR_HEIGHT: f32 = 8.0;
 /// Fixed column width for the cost/token matrix cells.
 const MATRIX_COL_WIDTH: f32 = 110.0;
 
+/// Parse a `#RRGGBB` or `#RGB` hex string into an opaque color. Returns `None`
+/// for anything malformed, so an invalid instances.json override color simply
+/// yields no tint (never a panic, never a wrong color).
+fn parse_hex_color(s: &str) -> Option<ColorU> {
+    let hex = s.strip_prefix('#')?;
+    let (r, g, b) = match hex.len() {
+        6 => (
+            u8::from_str_radix(&hex[0..2], 16).ok()?,
+            u8::from_str_radix(&hex[2..4], 16).ok()?,
+            u8::from_str_radix(&hex[4..6], 16).ok()?,
+        ),
+        // Shorthand #RGB → each nibble doubled (f → ff).
+        3 => {
+            let dup = |c: &str| u8::from_str_radix(c, 16).ok().map(|v| v * 17);
+            (dup(&hex[0..1])?, dup(&hex[1..2])?, dup(&hex[2..3])?)
+        }
+        _ => return None,
+    };
+    Some(ColorU::new(r, g, b, 255))
+}
+
 /// Heat band → display colour (kept in sync with `CockpitPanel::heat_coloru`;
 /// reference palette lives in `zaplex_cockpit::HeatLevel::hex`).
 fn heat_coloru(level: HeatLevel) -> ColorU {
@@ -346,7 +367,12 @@ impl CockpitPaneView {
 
     /// A full account card: header (label + plan), both heat bars, the
     /// today/5h/week cost+token matrix, and the reset line.
-    fn render_card(&self, acct: &AccountUsage, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_card(
+        &self,
+        acct: &AccountUsage,
+        override_color: Option<ColorU>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
@@ -365,7 +391,13 @@ impl CockpitPaneView {
         let mut header = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
-            .with_spacing(8.0)
+            .with_spacing(8.0);
+        // User override color (instances.json): a small leading swatch so a
+        // recolored account is recognizable at a glance.
+        if let Some(color) = override_color {
+            header = header.with_child(Self::text("▉".to_string(), family, body, color));
+        }
+        header = header
             .with_child(Self::text(status_glyph.to_string(), family, body, status_color))
             .with_child(
                 Shrinkable::new(
@@ -600,7 +632,12 @@ impl View for CockpitPaneView {
                         .finish(),
                 );
             for acct in &snapshot.accounts {
-                col = col.with_child(self.render_card(acct, appearance));
+                // Per-account override color (instances.json), resolved from the
+                // model and parsed from its hex string.
+                let override_color = CockpitModel::as_ref(app)
+                    .override_color(&acct.account.key)
+                    .and_then(parse_hex_color);
+                col = col.with_child(self.render_card(acct, override_color, appearance));
             }
             // C3b: explain the ~ marker whenever any bar shows an estimate
             // (real numbers stay unmarked — no chrome for the good case).
@@ -674,5 +711,30 @@ impl BackingView for CockpitPaneView {
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {
         self.focus_handle = Some(focus_handle);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_hex_color;
+
+    #[test]
+    fn parses_six_digit_hex() {
+        let c = parse_hex_color("#22C55E").expect("valid 6-digit hex");
+        assert_eq!((c.r, c.g, c.b, c.a), (0x22, 0xC5, 0x5E, 255));
+    }
+
+    #[test]
+    fn parses_three_digit_shorthand() {
+        // #f0a → ff 00 aa (each nibble doubled).
+        let c = parse_hex_color("#f0a").expect("valid 3-digit hex");
+        assert_eq!((c.r, c.g, c.b, c.a), (0xff, 0x00, 0xaa, 255));
+    }
+
+    #[test]
+    fn rejects_malformed_returns_none() {
+        for bad in ["", "22C55E", "#", "#12", "#1234", "#12345", "#GGGGGG", "#12345Z"] {
+            assert!(parse_hex_color(bad).is_none(), "{bad:?} must not parse");
+        }
     }
 }
