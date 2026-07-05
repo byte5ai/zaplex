@@ -183,6 +183,9 @@ pub enum SftpBrowserAction {
     /// Destination picker: copy/move into the candidate pane at this index
     /// (index into `pending_target_pick.candidates`).
     PickCopyMoveTarget(usize),
+    /// Resolve the cross-connection overwrite prompt: `overwrite` transfers the
+    /// conflicting files (overwriting), otherwise they are skipped.
+    ResolveCrossConnConflict { overwrite: bool },
     /// Cancel a transfer task
     CancelTransfer(usize),
     /// Toggle transfer panel visibility
@@ -241,6 +244,31 @@ struct PendingTargetPick {
     sources: Vec<PathBuf>,
     is_move: bool,
     candidates: Vec<FmPaneDescriptor>,
+}
+
+/// One conflicting cross-connection file transfer, held (with the paths already
+/// oriented for its direction) while the overwrite prompt is up.
+struct CrossConnConflictFile {
+    local_path: PathBuf,
+    remote_path: PathBuf,
+    /// Original source path — deleted through the source backend on a move.
+    source: PathBuf,
+}
+
+/// The conflicting transfers of a cross-connection copy/move, paused on the
+/// overwrite prompt. The non-conflicting files of the same operation are already
+/// transferring; these run (overwriting) or are dropped (skip) once the user
+/// decides.
+struct PendingCrossConn {
+    files: Vec<CrossConnConflictFile>,
+    is_move: bool,
+    direction: TransferDirection,
+    /// The backend the transfer runs through (target's for upload, ours for download).
+    backend: Arc<dyn SftpBackend>,
+    /// The source pane's backend, for copy-then-delete on a move.
+    source_backend: Option<Arc<dyn SftpBackend>>,
+    /// Destination label for the summary toast.
+    target_label: String,
 }
 
 /// SFTP browser view
@@ -332,6 +360,8 @@ pub struct SftpBrowserView {
     /// Sources + candidate panes held while the target-picker dialog is up
     /// (F5/F6 with more than one other pane open).
     pending_target_pick: Option<PendingTargetPick>,
+    /// Conflicting cross-connection transfers paused on the overwrite prompt.
+    pending_cross_conn: Option<PendingCrossConn>,
     /// Dialog button handles for the copy/move conflict "…all" options.
     overwrite_all_btn: MouseStateHandle,
     skip_all_btn: MouseStateHandle,
@@ -406,6 +436,7 @@ impl SftpBrowserView {
             fm_id: super::fm_registry::next_fm_id(),
             pending_copy_move: None,
             pending_target_pick: None,
+            pending_cross_conn: None,
             overwrite_all_btn: MouseStateHandle::default(),
             skip_all_btn: MouseStateHandle::default(),
             target_pick_btn_states: Vec::new(),
@@ -1402,7 +1433,9 @@ impl SftpBrowserView {
         let target_dir = target.current_path.clone();
         let mut started_files = 0usize;
         let mut started_dirs = 0usize;
-        let mut skipped_exist = 0usize;
+        // Files whose destination already exists — collected for one overwrite
+        // prompt rather than being silently skipped.
+        let mut conflicts: Vec<CrossConnConflictFile> = Vec::new();
         for source in sources {
             let Some(name) = source.file_name() else {
                 continue;
@@ -1431,19 +1464,22 @@ impl SftpBrowserView {
                 started_dirs += 1;
                 continue;
             }
-            // Skip existing targets (checked on whichever side owns the dest).
             let exists = match direction {
                 TransferDirection::Upload => backend.stat(&dest).is_ok(),
                 TransferDirection::Download => std::fs::metadata(&dest).is_ok(),
             };
-            if exists {
-                skipped_exist += 1;
-                continue;
-            }
             let (local_path, remote_path) = match direction {
                 TransferDirection::Upload => (source.clone(), dest),
                 TransferDirection::Download => (dest, source.clone()),
             };
+            if exists {
+                conflicts.push(CrossConnConflictFile {
+                    local_path,
+                    remote_path,
+                    source: source.clone(),
+                });
+                continue;
+            }
             let delete_after = match (is_move, &source_backend) {
                 (true, Some(b)) => Some((b.clone(), source.clone())),
                 _ => None,
@@ -1460,6 +1496,7 @@ impl SftpBrowserView {
             started_files += 1;
         }
 
+        // Report what started right away.
         let verb = if is_move { "move" } else { "copy" };
         let mut parts = Vec::new();
         if started_files > 0 {
@@ -1468,14 +1505,72 @@ impl SftpBrowserView {
         if started_dirs > 0 {
             parts.push(format!("{started_dirs} folder {verb}(s) started"));
         }
-        if parts.is_empty() {
-            parts.push(format!("nothing to {verb}"));
+        if !parts.is_empty() {
+            self.show_info_toast(format!("{} → {}", parts.join(", "), target.label), ctx);
         }
-        if skipped_exist > 0 {
-            parts.push(format!("{skipped_exist} skipped (already exist)"));
+
+        // Ask once about any files that already exist on the destination.
+        if conflicts.is_empty() {
+            if parts.is_empty() {
+                self.show_info_toast(format!("Nothing to {verb} → {}", target.label), ctx);
+            }
+        } else {
+            let existing = conflicts.len();
+            self.pending_cross_conn = Some(PendingCrossConn {
+                files: conflicts,
+                is_move,
+                direction,
+                backend: backend.clone(),
+                source_backend: source_backend.clone(),
+                target_label: target.label.clone(),
+            });
+            self.dialog = Some(Dialog::CrossConnConflict { existing, is_move });
         }
-        self.show_info_toast(format!("{} → {}", parts.join(", "), target.label), ctx);
         self.selected.clear();
+    }
+
+    /// Resolve the cross-connection overwrite prompt: `overwrite` spawns the
+    /// conflicting transfers (they overwrite the destination), otherwise they are
+    /// skipped. The non-conflicting files of the same operation already started.
+    fn resolve_cross_conn_conflict(&mut self, overwrite: bool, ctx: &mut ViewContext<Self>) {
+        self.dialog = None;
+        let Some(pending) = self.pending_cross_conn.take() else {
+            return;
+        };
+        let verb = if pending.is_move { "move" } else { "copy" };
+        if !overwrite {
+            self.show_info_toast(
+                format!(
+                    "Skipped {} existing item(s) → {}",
+                    pending.files.len(),
+                    pending.target_label
+                ),
+                ctx,
+            );
+            ctx.notify();
+            return;
+        }
+        let count = pending.files.len();
+        for file in pending.files {
+            let delete_after = match (pending.is_move, &pending.source_backend) {
+                (true, Some(b)) => Some((b.clone(), file.source.clone())),
+                _ => None,
+            };
+            self.spawn_transfer_with_backend(
+                file.local_path,
+                file.remote_path,
+                pending.backend.clone(),
+                pending.direction,
+                delete_after,
+                None,
+                ctx,
+            );
+        }
+        self.show_info_toast(
+            format!("Overwriting {count} existing item(s) ({verb}) → {}", pending.target_label),
+            ctx,
+        );
+        ctx.notify();
     }
 
     /// Recursively copy (or move) a directory across a connection. The source
@@ -1860,6 +1955,7 @@ impl SftpBrowserView {
             | Some(Dialog::OverwriteConfirm { .. })
             | Some(Dialog::CopyMoveConflict { .. })
             | Some(Dialog::CopyMoveTargetPicker { .. })
+            | Some(Dialog::CrossConnConflict { .. })
             | Some(Dialog::FileDetails { .. })
             | Some(Dialog::CloseTransferPanelConfirm)
             | None => {
@@ -2739,6 +2835,11 @@ impl SftpBrowserView {
     pub(super) fn has_pending_dir_move_cleanup(&self) -> bool {
         !self.pending_dir_move_cleanups.is_empty()
     }
+
+    /// Whether a cross-connection overwrite prompt is still pending (for assertions).
+    pub(super) fn has_pending_cross_conn(&self) -> bool {
+        self.pending_cross_conn.is_some()
+    }
 }
 
 /// Safely join a file name to a parent path, preventing path injection and path traversal
@@ -2946,6 +3047,7 @@ impl TypedActionView for SftpBrowserView {
                     | Some(Dialog::Move { .. })
                     | Some(Dialog::CopyMoveConflict { .. })
                     | Some(Dialog::CopyMoveTargetPicker { .. })
+                    | Some(Dialog::CrossConnConflict { .. })
                     | Some(Dialog::FileDetails { .. })
                     | Some(Dialog::CloseTransferPanelConfirm)
                     | None => {
@@ -2985,6 +3087,13 @@ impl TypedActionView for SftpBrowserView {
                 if matches!(self.dialog, Some(Dialog::CopyMoveTargetPicker { .. })) {
                     self.pending_target_pick = None;
                     self.dialog = None;
+                    ctx.notify();
+                    return;
+                }
+                // Cancelling the cross-connection overwrite prompt skips the
+                // conflicting files (the non-conflicting ones already started).
+                if matches!(self.dialog, Some(Dialog::CrossConnConflict { .. })) {
+                    self.resolve_cross_conn_conflict(false, ctx);
                     ctx.notify();
                     return;
                 }
@@ -3112,6 +3221,9 @@ impl TypedActionView for SftpBrowserView {
                     }
                 }
                 ctx.notify();
+            }
+            SftpBrowserAction::ResolveCrossConnConflict { overwrite } => {
+                self.resolve_cross_conn_conflict(*overwrite, ctx);
             }
             SftpBrowserAction::CancelTransfer(task_id) => {
                 let task_id = *task_id;

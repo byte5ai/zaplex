@@ -213,6 +213,82 @@ fn render_confirm_dialog(
     wrap_dismiss(dialog_body)
 }
 
+/// Render the cross-connection overwrite prompt: some destination files already
+/// exist, so offer to Overwrite them all or Skip them. The title-bar X (and
+/// click-outside) skips, since the non-conflicting files already started.
+fn render_cross_conn_conflict(
+    existing: usize,
+    is_move: bool,
+    appearance: &Appearance,
+    confirm_btn_state: MouseStateHandle,
+    cancel_btn_state: MouseStateHandle,
+    close_btn_state: MouseStateHandle,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let sub_color = theme.sub_text_color(theme.background());
+    let ui_font = appearance.ui_font_family();
+    let ui_font_size = appearance.ui_font_size();
+
+    let verb = if is_move { "Move" } else { "Copy" };
+    let title_bar = render_title_bar(
+        &format!("{verb} — {existing} file(s) already exist"),
+        appearance,
+        close_btn_state,
+    );
+    let desc = if existing == 1 {
+        "1 file already exists on the destination. Overwrite it, or skip it?".to_string()
+    } else {
+        format!("{existing} files already exist on the destination. Overwrite them, or skip them?")
+    };
+    let desc_el = Shrinkable::new(
+        1.0,
+        Text::new(desc, ui_font, ui_font_size)
+            .with_color(sub_color.into())
+            .finish(),
+    )
+    .finish();
+
+    let overwrite_btn = render_button(
+        "Overwrite",
+        true,
+        appearance,
+        SftpBrowserAction::ResolveCrossConnConflict { overwrite: true },
+        confirm_btn_state,
+        Some("sftp_btn:dialog_confirm"),
+    );
+    let skip_btn = render_button(
+        "Skip",
+        false,
+        appearance,
+        SftpBrowserAction::ResolveCrossConnConflict { overwrite: false },
+        cancel_btn_state,
+        Some("sftp_btn:dialog_cancel"),
+    );
+
+    let buttons = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_alignment(MainAxisAlignment::End)
+        .with_spacing(8.0)
+        .with_child(overwrite_btn)
+        .with_child(skip_btn)
+        .finish();
+
+    let content = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_spacing(12.0)
+        .with_child(title_bar)
+        .with_child(desc_el)
+        .with_child(buttons)
+        .finish();
+
+    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
+        .with_max_width(DIALOG_MAX_WIDTH)
+        .with_max_height(DIALOG_MAX_HEIGHT)
+        .finish();
+
+    wrap_dismiss(dialog_body)
+}
+
 /// Render the copy/move conflict dialog: the destination already exists, so
 /// offer Overwrite / Skip and their "…all remaining" variants; the title-bar X
 /// (and click-outside) cancels the whole batch.
@@ -781,6 +857,14 @@ pub fn render_dialog(
             cancel_btn_state,
             overwrite_all_btn_state,
             skip_all_btn_state,
+            close_btn_state,
+        ),
+        Dialog::CrossConnConflict { existing, is_move } => render_cross_conn_conflict(
+            *existing,
+            *is_move,
+            appearance,
+            confirm_btn_state,
+            cancel_btn_state,
             close_btn_state,
         ),
         Dialog::DeleteConfirm { paths, .. } => {
