@@ -211,6 +211,26 @@ struct PendingCopyMove {
     errors: usize,
 }
 
+/// A cross-connection directory **move** in flight: the source directory is
+/// deleted only once every file the recursive copy spawned has finished
+/// successfully. Tracked by a batch id so each file transfer's completion can
+/// report back; the source is kept (never a partial data loss) if any file
+/// failed.
+struct PendingDirMoveCleanup {
+    /// Batch id shared by every file transfer of this directory move.
+    id: u64,
+    /// Files still in flight (started, not yet in a terminal state).
+    remaining: usize,
+    /// Any file transfer failed or was cancelled → keep the source.
+    any_failed: bool,
+    /// The source pane's backend, used to delete the source directory tree.
+    source_backend: Arc<dyn SftpBackend>,
+    /// The source directory to remove once every file has transferred.
+    source_dir: PathBuf,
+    /// Human label for the completion toast, e.g. `sub → host:/var/www`.
+    label: String,
+}
+
 /// SFTP browser view
 pub struct SftpBrowserView {
     /// ID of the associated SSH server node
@@ -315,6 +335,11 @@ pub struct SftpBrowserView {
     transfer_handles: HashMap<usize, SpawnedFutureHandle>,
     /// Pending queue for batched drag-and-drop uploads
     pending_uploads: Vec<PathBuf>,
+    /// Cross-connection directory **moves** awaiting their file transfers so the
+    /// source tree can be removed once (and only if) all files land.
+    pending_dir_move_cleanups: Vec<PendingDirMoveCleanup>,
+    /// Monotonic id handed to each cross-connection directory-move batch.
+    next_dir_move_batch_id: u64,
 }
 
 impl SftpBrowserView {
@@ -370,6 +395,8 @@ impl SftpBrowserView {
             refresh_handle: None,
             transfer_handles: HashMap::new(),
             pending_uploads: Vec::new(),
+            pending_dir_move_cleanups: Vec::new(),
+            next_dir_move_batch_id: 1,
         };
 
         // Subscribe to rename editor events
@@ -1261,8 +1288,8 @@ impl SftpBrowserView {
         let source_backend = self.sftp.clone();
 
         let target_dir = target.current_path.clone();
-        let mut started = 0usize;
-        let mut skipped_dirs = 0usize;
+        let mut started_files = 0usize;
+        let mut started_dirs = 0usize;
         let mut skipped_exist = 0usize;
         for source in sources {
             let Some(name) = source.file_name() else {
@@ -1274,12 +1301,24 @@ impl SftpBrowserView {
                 .find(|e| &e.path == source)
                 .map(|e| matches!(e.file_type, FileEntryType::Directory))
                 .unwrap_or(false);
+            let dest = normalize_remote_path(&target_dir.join(name));
             if is_dir {
-                // Recursive cross-connection directory transfer is a follow-up.
-                skipped_dirs += 1;
+                // Recursively copy/move the directory across the connection: the
+                // tree is enumerated + created off-thread, then a transfer is
+                // spawned per file (move deletes the source once all files land).
+                let label = format!("{} → {}", name.to_string_lossy(), target.label);
+                self.spawn_dir_transfer(
+                    source.clone(),
+                    dest,
+                    direction,
+                    backend.clone(),
+                    is_move,
+                    label,
+                    ctx,
+                );
+                started_dirs += 1;
                 continue;
             }
-            let dest = normalize_remote_path(&target_dir.join(name));
             // Skip existing targets (checked on whichever side owns the dest).
             let exists = match direction {
                 TransferDirection::Upload => backend.stat(&dest).is_ok(),
@@ -1303,21 +1342,165 @@ impl SftpBrowserView {
                 backend.clone(),
                 direction,
                 delete_after,
+                None,
                 ctx,
             );
-            started += 1;
+            started_files += 1;
         }
 
         let verb = if is_move { "move" } else { "copy" };
-        let mut parts = vec![format!("{started} {verb} transfer(s) started")];
+        let mut parts = Vec::new();
+        if started_files > 0 {
+            parts.push(format!("{started_files} file {verb}(s) started"));
+        }
+        if started_dirs > 0 {
+            parts.push(format!("{started_dirs} folder {verb}(s) started"));
+        }
+        if parts.is_empty() {
+            parts.push(format!("nothing to {verb}"));
+        }
         if skipped_exist > 0 {
             parts.push(format!("{skipped_exist} skipped (already exist)"));
         }
-        if skipped_dirs > 0 {
-            parts.push(format!("{skipped_dirs} folder(s) skipped (not yet across connections)"));
-        }
         self.show_info_toast(format!("{} → {}", parts.join(", "), target.label), ctx);
         self.selected.clear();
+    }
+
+    /// Recursively copy (or move) a directory across a connection. The source
+    /// tree is enumerated and the target directory structure created off the
+    /// main thread; then one file transfer is spawned per file through the
+    /// existing transfer engine. Existing target files are skipped (matching the
+    /// single-file cross-connection path; a conflict prompt is a later step).
+    /// For a move, every file is copied and the whole source tree is removed
+    /// only once all files have landed successfully (see
+    /// [`Self::note_dir_move_progress`]) — a partial failure keeps the source.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_dir_transfer(
+        &mut self,
+        source_dir: PathBuf,
+        dest_dir: PathBuf,
+        direction: TransferDirection,
+        remote_backend: Arc<dyn SftpBackend>,
+        is_move: bool,
+        label: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // The source pane's own backend removes the source tree on a move.
+        let Some(source_backend) = self.sftp.clone() else {
+            self.show_error_toast("Not connected.".to_string(), ctx);
+            return;
+        };
+        let plan_backend = remote_backend.clone();
+        let src = source_dir.clone();
+        let dst = dest_dir.clone();
+        self.run_blocking(
+            ctx,
+            move || plan_dir_transfer(direction, plan_backend, &src, &dst),
+            move |me, result, ctx| match result {
+                Ok(Ok(plan)) => {
+                    if plan.files.is_empty() {
+                        me.show_info_toast(
+                            format!(
+                                "{label}: nothing to transfer{}",
+                                if plan.skipped_existing > 0 {
+                                    format!(" ({} already exist)", plan.skipped_existing)
+                                } else {
+                                    String::new()
+                                }
+                            ),
+                            ctx,
+                        );
+                        return;
+                    }
+                    // Register the move batch *before* spawning so a synchronous
+                    // (test-mode) completion still counts down correctly.
+                    let batch_id = if is_move {
+                        let id = me.next_dir_move_batch_id;
+                        me.next_dir_move_batch_id += 1;
+                        me.pending_dir_move_cleanups.push(PendingDirMoveCleanup {
+                            id,
+                            remaining: plan.files.len(),
+                            any_failed: false,
+                            source_backend: source_backend.clone(),
+                            source_dir: source_dir.clone(),
+                            label: label.clone(),
+                        });
+                        Some(id)
+                    } else {
+                        None
+                    };
+                    let count = plan.files.len();
+                    for (local_path, remote_path) in plan.files {
+                        me.spawn_transfer_with_backend(
+                            local_path,
+                            remote_path,
+                            remote_backend.clone(),
+                            direction,
+                            None,
+                            batch_id,
+                            ctx,
+                        );
+                    }
+                    me.show_info_toast(
+                        format!(
+                            "{label}: {count} file(s) started{}",
+                            if plan.skipped_existing > 0 {
+                                format!(", {} skipped (exist)", plan.skipped_existing)
+                            } else {
+                                String::new()
+                            }
+                        ),
+                        ctx,
+                    );
+                }
+                Ok(Err(e)) => {
+                    me.show_error_toast(format!("{label}: couldn't prepare the transfer: {e}"), ctx)
+                }
+                Err(_) => me.show_error_toast(format!("{label}: preparation was cancelled"), ctx),
+            },
+        );
+    }
+
+    /// A file that belonged to a cross-connection directory move has finished.
+    /// Count it down; when the whole batch is done, remove the source tree (only
+    /// if every file succeeded — otherwise keep it and report).
+    fn note_dir_move_progress(&mut self, batch_id: u64, succeeded: bool, ctx: &mut ViewContext<Self>) {
+        let Some(pos) = self
+            .pending_dir_move_cleanups
+            .iter()
+            .position(|b| b.id == batch_id)
+        else {
+            return;
+        };
+        {
+            let batch = &mut self.pending_dir_move_cleanups[pos];
+            if !succeeded {
+                batch.any_failed = true;
+            }
+            batch.remaining = batch.remaining.saturating_sub(1);
+            if batch.remaining > 0 {
+                return;
+            }
+        }
+        let batch = self.pending_dir_move_cleanups.remove(pos);
+        if batch.any_failed {
+            self.show_error_toast(
+                format!(
+                    "{}: source kept — some files didn't transfer, so the move is incomplete.",
+                    batch.label
+                ),
+                ctx,
+            );
+        } else {
+            match batch.source_backend.delete_dir_recursive(&batch.source_dir) {
+                Ok(()) => self.show_info_toast(format!("Moved {}.", batch.label), ctx),
+                Err(e) => self.show_error_toast(
+                    format!("Copied {} but couldn't remove the source: {e}", batch.label),
+                    ctx,
+                ),
+            }
+        }
+        self.refresh_dir(ctx);
     }
 
     /// Spawn a single upload/download on the transfer engine using an explicit
@@ -1328,6 +1511,11 @@ impl SftpBrowserView {
     /// a **move**: on success the source is deleted through its own backend
     /// (copy-then-delete across connections). It is never deleted on failure or
     /// cancellation, so a failed move can't lose data.
+    ///
+    /// `dir_move_batch` = `Some(id)` ties this file to a cross-connection
+    /// directory move: on completion it reports back to that batch (see
+    /// [`Self::note_dir_move_progress`]) instead of deleting a single source.
+    /// Returns the new transfer's task id.
     fn spawn_transfer_with_backend(
         &mut self,
         local_path: PathBuf,
@@ -1335,8 +1523,9 @@ impl SftpBrowserView {
         backend: Arc<dyn SftpBackend>,
         direction: TransferDirection,
         delete_after: Option<(Arc<dyn SftpBackend>, PathBuf)>,
+        dir_move_batch: Option<u64>,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> usize {
         let total_size = match direction {
             TransferDirection::Upload => {
                 std::fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0)
@@ -1424,10 +1613,17 @@ impl SftpBrowserView {
                     }
                     Err(_) => ctx.notify(),
                 }
+                // Report back to a directory-move batch, if this file is part of
+                // one, so the source tree is removed once all files have landed.
+                if let Some(batch_id) = dir_move_batch {
+                    let succeeded = matches!(&result, Ok(Ok(())));
+                    me.note_dir_move_progress(batch_id, succeeded, ctx);
+                }
             },
         ) {
             self.transfer_handles.insert(task_id, handle);
         }
+        task_id
     }
 
     /// Show an error toast notification
@@ -2228,6 +2424,126 @@ fn render_centered_status(
         .finish();
 
     Align::new(Container::new(content).with_uniform_padding(24.0).finish()).finish()
+}
+
+/// The plan for a cross-connection directory transfer: the (local, remote) file
+/// pairs still to move, plus how many were skipped because a same-named file
+/// already exists on the destination.
+pub(super) struct DirTransferPlan {
+    /// Each entry is `(local_path, remote_path)`, matching
+    /// [`SftpBrowserView::spawn_transfer_with_backend`]'s argument order for
+    /// either direction.
+    pub(super) files: Vec<(PathBuf, PathBuf)>,
+    pub(super) skipped_existing: usize,
+}
+
+/// Enumerate `source_dir` and create the destination directory structure for a
+/// cross-connection transfer, returning the per-file work. `remote_backend` is
+/// the SFTP side — the *target* for an upload, the *source* for a download; the
+/// other side is the local filesystem. Existing destination files are skipped
+/// (counted), matching the single-file cross-connection path. Blocking: run off
+/// the main thread.
+pub(super) fn plan_dir_transfer(
+    direction: TransferDirection,
+    remote_backend: Arc<dyn SftpBackend>,
+    source_dir: &Path,
+    dest_dir: &Path,
+) -> Result<DirTransferPlan, String> {
+    let mut files: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut skipped_existing = 0usize;
+    match direction {
+        TransferDirection::Upload => {
+            // Local source → remote dest: walk the local tree (parents before
+            // children), mkdir on the remote, collect the files to upload.
+            let _ = remote_backend.create_dir(dest_dir); // ignore "already exists"
+            // WalkDir yields a directory before its contents, so each parent is
+            // created before the files that go into it.
+            for entry in walkdir::WalkDir::new(source_dir).min_depth(1) {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let rel = entry
+                    .path()
+                    .strip_prefix(source_dir)
+                    .map_err(|e| e.to_string())?;
+                let remote_target = normalize_remote_path(&dest_dir.join(rel));
+                if entry.file_type().is_dir() {
+                    let _ = remote_backend.create_dir(&remote_target); // ignore exists
+                } else if entry.file_type().is_file() {
+                    if remote_backend.stat(&remote_target).is_ok() {
+                        skipped_existing += 1;
+                        continue;
+                    }
+                    files.push((entry.path().to_path_buf(), remote_target));
+                }
+            }
+        }
+        TransferDirection::Download => {
+            // Remote source → local dest: walk the remote tree via `list_dir`,
+            // create local directories, collect the files to download.
+            std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
+            let mut stack = vec![source_dir.to_path_buf()];
+            while let Some(dir) = stack.pop() {
+                let entries = remote_backend.list_dir(&dir).map_err(|e| e.to_string())?;
+                for entry in entries {
+                    let rel = entry.path.strip_prefix(source_dir).unwrap_or(&entry.path);
+                    let local_target = dest_dir.join(rel);
+                    if matches!(entry.file_type, FileEntryType::Directory) {
+                        std::fs::create_dir_all(&local_target).map_err(|e| e.to_string())?;
+                        stack.push(entry.path.clone());
+                    } else {
+                        if std::fs::metadata(&local_target).is_ok() {
+                            skipped_existing += 1;
+                            continue;
+                        }
+                        files.push((local_target, entry.path.clone()));
+                    }
+                }
+            }
+        }
+    }
+    Ok(DirTransferPlan {
+        files,
+        skipped_existing,
+    })
+}
+
+#[cfg(test)]
+impl SftpBrowserView {
+    /// Seed a pending directory-move cleanup (as `spawn_dir_transfer` would) so
+    /// [`Self::note_dir_move_progress`] can be exercised without a live transfer.
+    /// Returns the batch id.
+    pub(super) fn seed_dir_move_cleanup_for_test(
+        &mut self,
+        remaining: usize,
+        source_backend: Arc<dyn SftpBackend>,
+        source_dir: PathBuf,
+    ) -> u64 {
+        let id = self.next_dir_move_batch_id;
+        self.next_dir_move_batch_id += 1;
+        self.pending_dir_move_cleanups.push(PendingDirMoveCleanup {
+            id,
+            remaining,
+            any_failed: false,
+            source_backend,
+            source_dir,
+            label: "test-dir".to_string(),
+        });
+        id
+    }
+
+    /// Test wrapper around the private [`Self::note_dir_move_progress`].
+    pub(super) fn note_dir_move_progress_for_test(
+        &mut self,
+        batch_id: u64,
+        succeeded: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.note_dir_move_progress(batch_id, succeeded, ctx);
+    }
+
+    /// Whether any directory-move cleanup is still pending (for assertions).
+    pub(super) fn has_pending_dir_move_cleanup(&self) -> bool {
+        !self.pending_dir_move_cleanups.is_empty()
+    }
 }
 
 /// Safely join a file name to a parent path, preventing path injection and path traversal
