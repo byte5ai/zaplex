@@ -16,6 +16,7 @@ pub mod codex;
 pub mod format;
 pub mod oauth;
 pub mod pricing;
+pub mod fleet;
 pub mod overrides;
 pub mod routing;
 pub mod sessions;
