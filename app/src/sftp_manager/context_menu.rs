@@ -167,6 +167,7 @@ pub fn render_context_menu(state: &ContextMenuState, appearance: &Appearance) ->
             | SftpBrowserAction::CloseFileManager
             | SftpBrowserAction::OverwriteConflict { .. }
             | SftpBrowserAction::SkipConflict { .. }
+            | SftpBrowserAction::PickCopyMoveTarget(_)
             | SftpBrowserAction::OpenCursorInEditor
             | SftpBrowserAction::CancelTransfer(_)
             | SftpBrowserAction::ToggleTransferPanel

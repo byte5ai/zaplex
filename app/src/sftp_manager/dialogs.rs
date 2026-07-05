@@ -310,6 +310,115 @@ fn render_copy_move_conflict(
     wrap_dismiss(dialog_body)
 }
 
+/// One selectable row of the target picker: a full-width button showing a
+/// candidate pane's `host:/path`, dispatching `PickCopyMoveTarget(index)`.
+fn render_target_row(
+    label: &str,
+    index: usize,
+    appearance: &Appearance,
+    mouse_state: MouseStateHandle,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let ui_font = appearance.ui_font_family();
+    let ui_font_size = appearance.ui_font_size();
+    let text_color = theme.active_ui_text_color();
+    let bg = theme.surface_2();
+    let label_owned = label.to_string();
+
+    Hoverable::new(mouse_state, move |_| {
+        let text_el = Shrinkable::new(
+            1.0,
+            Text::new(label_owned.clone(), ui_font, ui_font_size)
+                .with_color(text_color.into())
+                .finish(),
+        )
+        .finish();
+        let row = Flex::row()
+            .with_main_axis_alignment(MainAxisAlignment::Start)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(text_el)
+            .finish();
+        Container::new(ConstrainedBox::new(row).with_height(BUTTON_HEIGHT).finish())
+            .with_background(bg)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+            .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(SftpBrowserAction::PickCopyMoveTarget(index));
+    })
+    .finish()
+}
+
+/// Destination picker (F5/F6 with more than one other pane open): a titled
+/// dialog listing every candidate pane as a full-width row; picking one routes
+/// the copy/move, Cancel/X aborts. `row_btn_states` holds one mouse-state
+/// handle per label, in the same order.
+fn render_target_picker(
+    is_move: bool,
+    labels: &[String],
+    appearance: &Appearance,
+    cancel_btn_state: MouseStateHandle,
+    close_btn_state: MouseStateHandle,
+    row_btn_states: &[MouseStateHandle],
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let sub_color = theme.sub_text_color(theme.background());
+    let ui_font = appearance.ui_font_family();
+    let ui_font_size = appearance.ui_font_size();
+
+    let verb = if is_move { "Move" } else { "Copy" };
+    let title_bar = render_title_bar(&format!("{verb} to which panel?"), appearance, close_btn_state);
+
+    let desc_el = Shrinkable::new(
+        1.0,
+        Text::new(
+            format!(
+                "More than one other file panel is open. Choose where to {}:",
+                verb.to_lowercase()
+            ),
+            ui_font,
+            ui_font_size,
+        )
+        .with_color(sub_color.into())
+        .finish(),
+    )
+    .finish();
+
+    let mut rows = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_spacing(6.0);
+    for (index, label) in labels.iter().enumerate() {
+        let state = row_btn_states.get(index).cloned().unwrap_or_default();
+        rows = rows.with_child(render_target_row(label, index, appearance, state));
+    }
+    let rows = rows.finish();
+
+    let buttons = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_alignment(MainAxisAlignment::End)
+        .with_spacing(8.0)
+        .with_child(render_cancel_button(appearance, cancel_btn_state))
+        .finish();
+
+    let content = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_spacing(12.0)
+        .with_child(title_bar)
+        .with_child(desc_el)
+        .with_child(rows)
+        .with_child(buttons)
+        .finish();
+
+    let dialog_body = ConstrainedBox::new(dialog_shell(content, appearance))
+        .with_max_width(DIALOG_MAX_WIDTH)
+        .with_max_height(DIALOG_MAX_HEIGHT)
+        .finish();
+
+    wrap_dismiss(dialog_body)
+}
+
 /// Wrap dialog content in Dismiss + centered container.
 fn wrap_dismiss(dialog_content: Box<dyn Element>) -> Box<dyn Element> {
     Dismiss::new(dialog_content)
@@ -652,8 +761,17 @@ pub fn render_dialog(
     close_btn_state: MouseStateHandle,
     overwrite_all_btn_state: MouseStateHandle,
     skip_all_btn_state: MouseStateHandle,
+    target_pick_btn_states: &[MouseStateHandle],
 ) -> Box<dyn Element> {
     match dialog {
+        Dialog::CopyMoveTargetPicker { is_move, labels } => render_target_picker(
+            *is_move,
+            labels,
+            appearance,
+            cancel_btn_state,
+            close_btn_state,
+            target_pick_btn_states,
+        ),
         Dialog::CopyMoveConflict { name, remaining, is_move } => render_copy_move_conflict(
             name,
             *remaining,
