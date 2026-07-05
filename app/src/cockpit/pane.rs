@@ -64,6 +64,9 @@ pub struct CockpitPaneView {
     session_fork_states: HashMap<String, MouseStateHandle>,
     /// Hover state of each session row's "⑂ fork in worktree" action.
     session_forkwt_states: HashMap<String, MouseStateHandle>,
+    /// Hover state of each session row's "▸ adopt" action (resume-in-place):
+    /// pull an idle CLI session discovered by the cockpit into a live pane.
+    session_adopt_states: HashMap<String, MouseStateHandle>,
     /// Whether a session's cwd sits inside a git repo (key = session_id) —
     /// precomputed on cockpit updates so render never touches the filesystem.
     /// Non-repo cwds simply don't get the worktree action (design §3: toggle
@@ -88,6 +91,7 @@ impl CockpitPaneView {
             focus_handle: None,
             session_fork_states: HashMap::new(),
             session_forkwt_states: HashMap::new(),
+            session_adopt_states: HashMap::new(),
             session_in_repo: HashMap::new(),
         };
         me.sync_session_action_states(ctx);
@@ -110,6 +114,7 @@ impl CockpitPaneView {
             sessions.iter().map(|(id, _)| id).collect();
         self.session_fork_states.retain(|id, _| live.contains(id));
         self.session_forkwt_states.retain(|id, _| live.contains(id));
+        self.session_adopt_states.retain(|id, _| live.contains(id));
         self.session_in_repo.retain(|id, _| live.contains(id));
         for (id, cwd) in sessions {
             // `.git` may be a dir (repo root) or a file (linked worktree) —
@@ -119,7 +124,8 @@ impl CockpitPaneView {
                 .any(|p| p.join(".git").exists());
             self.session_in_repo.insert(id.clone(), in_repo);
             self.session_fork_states.entry(id.clone()).or_default();
-            self.session_forkwt_states.entry(id).or_default();
+            self.session_forkwt_states.entry(id.clone()).or_default();
+            self.session_adopt_states.entry(id).or_default();
         }
     }
 
@@ -175,6 +181,49 @@ impl CockpitPaneView {
             // Non-default accounts pin the fork to the same subscription.
             config_dir: (!acct.account.is_default).then(|| acct.account.config_dir.clone()),
             into_worktree,
+        };
+        Some(
+            Hoverable::new(state, move |mouse| {
+                let color = if mouse.is_hovered() { accent } else { muted };
+                Self::text(label.to_string(), family, body, color)
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+            .finish(),
+        )
+    }
+
+    /// One session-row "▸ adopt" action: resume an idle CLI session in place
+    /// (same session, no fork) into a live local pane — the cockpit's
+    /// "open = focus/adopt" verb (audit (b)#13, (c)#4). `None` when the provider
+    /// has no resume mechanism (disabled-by-absence, never a broken session).
+    fn session_adopt_action(
+        &self,
+        acct: &AccountUsage,
+        session: &zaplex_cockpit::SessionSnapshot,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let agent = match acct.account.provider {
+            Provider::Claude => CLIAgent::Claude,
+            Provider::Codex => CLIAgent::Codex,
+        };
+        // Capability gate — agents without a resume mechanism get no surface.
+        agent.resume_command(&session.session_id)?;
+        let state = self.session_adopt_states.get(&session.session_id).cloned()?;
+
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let accent = theme.accent().into_solid();
+        let label = crate::t!("cockpit-session-adopt");
+
+        let action = WorkspaceAction::AdoptAgentSession {
+            agent,
+            session_id: session.session_id.clone(),
+            cwd: PathBuf::from(&session.cwd),
+            // Non-default accounts resume on the same subscription.
+            config_dir: (!acct.account.is_default).then(|| acct.account.config_dir.clone()),
         };
         Some(
             Hoverable::new(state, move |mouse| {
@@ -421,6 +470,10 @@ impl CockpitPaneView {
             }
             if !meta.is_empty() {
                 row = row.with_child(Self::text(meta, family, body, muted));
+            }
+            // Adopt verb: "open = focus" — resume this idle session in place.
+            if let Some(action) = self.session_adopt_action(acct, session, appearance) {
+                row = row.with_child(action);
             }
             // Fork verbs (fork/worktree design §2): branch a copy of the
             // conversation — plain, or into an isolated sibling worktree.
