@@ -580,3 +580,28 @@ fn fork_command_pinned_prepends_inline_env_for_non_default_accounts() {
         Some("claude --resume abc --fork-session".to_string())
     );
 }
+
+#[test]
+fn launch_command_routed_scrubs_and_pins_claude() {
+    // Default account: scrub the API key env, no config-dir pin, bare `claude`.
+    assert_eq!(
+        CLIAgent::Claude.launch_command_routed(None),
+        "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; claude"
+    );
+    // Pinned account: scrub + CLAUDE_CONFIG_DIR before the command.
+    assert_eq!(
+        CLIAgent::Claude.launch_command_routed(Some(Path::new("/home/u/.claude-work"))),
+        "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; CLAUDE_CONFIG_DIR=/home/u/.claude-work claude"
+    );
+}
+
+#[test]
+fn launch_command_routed_handles_codex_and_bare_agents() {
+    assert_eq!(
+        CLIAgent::Codex.launch_command_routed(Some(Path::new("/home/u/.codex"))),
+        "unset OPENAI_API_KEY; CODEX_HOME=/home/u/.codex codex"
+    );
+    // An agent with no subscription/config-dir model launches bare (no scrub/pin).
+    assert_eq!(CLIAgent::Gemini.launch_command_routed(None), "gemini");
+    assert_eq!(CLIAgent::Gemini.launch_command_routed(Some(Path::new("/x"))), "gemini");
+}

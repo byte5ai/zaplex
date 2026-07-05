@@ -646,6 +646,19 @@ pub enum WorkspaceAction {
         /// Isolate the fork's file effects in a fresh sibling worktree.
         into_worktree: bool,
     },
+    /// Launch a *fresh* CLI agent routed to a subscription (the C4 "plexing"
+    /// launch): open a terminal tab in `cwd` (or the default dir) and run the
+    /// agent pinned to `config_dir`'s account (`None` = default login) with the
+    /// inherited API-key env scrubbed, so it authenticates via the chosen
+    /// subscription. See [`CLIAgent::launch_command_routed`].
+    LaunchAgent {
+        agent: CLIAgent,
+        /// Non-default account config dir for subscription pinning
+        /// (`None` = the provider's default login).
+        config_dir: Option<PathBuf>,
+        /// Working directory for the new agent (`None` = the default dir).
+        cwd: Option<PathBuf>,
+    },
     /// Open a file from the file manager in a code editor pane. `node_id` empty
     /// = a local file (opened directly); non-empty = a remote host — native
     /// remote editing (buffer-sync via the SSH daemon) is a follow-up, so a
@@ -890,6 +903,7 @@ impl WorkspaceAction {
             | OpenSettingsFile
             | AskAgent { .. }
             | ForkAgentSession { .. }
+            | LaunchAgent { .. }
             | OpenFileInEditor { .. }
             | FixSettingsWithOz { .. } => false,
             #[cfg(debug_assertions)]

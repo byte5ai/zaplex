@@ -4180,6 +4180,38 @@ impl Workspace {
         });
     }
 
+    /// Launch a *fresh* CLI agent routed to a subscription (C4 `LaunchAgent`):
+    /// open a terminal tab in `cwd` (or the default dir) and run
+    /// `agent.launch_command_routed(config_dir)` — the account pin + API-key
+    /// scrub. Mirrors [`Self::fork_agent_session_in_place`] but starts a new
+    /// agent rather than resuming a fork, and the directory is optional.
+    fn launch_routed_agent(
+        &mut self,
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        cwd: Option<&Path>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let cmd = agent.launch_command_routed(config_dir);
+        let mut options = NewTerminalOptions::default();
+        if let Some(dir) = cwd {
+            options = options.with_initial_directory(dir.to_path_buf());
+        }
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(options)),
+            Arc::new(HashMap::new()),
+            None,
+            ctx,
+        );
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            if let Some(terminal_view) = pane_group.active_session_view(ctx) {
+                terminal_view.update(ctx, |view, ctx| {
+                    view.execute_command_or_set_pending(&cmd, ctx);
+                });
+            }
+        });
+    }
+
     fn toggle_ai_assistant_panel(&mut self, ctx: &mut ViewContext<Self>) {
         // Now that the user has interacted with the panel, we can close
         // the dialogue and mark it as dismissed.
@@ -20085,6 +20117,13 @@ impl TypedActionView for Workspace {
                     *into_worktree,
                     ctx,
                 );
+            }
+            LaunchAgent {
+                agent,
+                config_dir,
+                cwd,
+            } => {
+                self.launch_routed_agent(*agent, config_dir.as_deref(), cwd.as_deref(), ctx);
             }
             OpenFileInEditor { node_id, path } => {
                 if node_id.is_empty() {
