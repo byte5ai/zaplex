@@ -2203,6 +2203,130 @@ fn test_f6_move_across_connections_starts_transfer() {
 }
 
 // ============================================================
+// Cross-connection directory transfers (FM backlog)
+// ============================================================
+
+/// Uploading a directory: the local tree is walked, the remote target dirs are
+/// created, and every file is planned as an upload.
+#[test]
+fn test_plan_dir_transfer_upload_lists_files_and_makes_remote_dirs() {
+    let source = create_temp_dir_with_files(&[("sub/deep.txt", b"deep"), ("top.txt", b"top")]);
+    let remote_root = tempfile::tempdir().expect("remote temp");
+    let backend: Arc<dyn SftpBackend> =
+        Arc::new(InMemorySftpBackend::new(remote_root.path().to_path_buf()));
+
+    let plan = super::browser::plan_dir_transfer(
+        TransferDirection::Upload,
+        backend.clone(),
+        source.path(),
+        std::path::Path::new("/dst"),
+    )
+    .expect("plan ok");
+
+    assert_eq!(plan.files.len(), 2, "both files planned");
+    assert_eq!(plan.skipped_existing, 0);
+    assert!(backend.stat(std::path::Path::new("/dst")).is_ok(), "/dst created on remote");
+    assert!(backend.stat(std::path::Path::new("/dst/sub")).is_ok(), "/dst/sub created on remote");
+    for (local, remote) in &plan.files {
+        assert!(local.starts_with(source.path()), "source is the real local file");
+        assert!(remote.starts_with("/dst"), "target is under /dst");
+    }
+}
+
+/// Downloading a directory: the remote tree is walked via `list_dir`, the local
+/// target dirs are created, and every file is planned as a download.
+#[test]
+fn test_plan_dir_transfer_download_lists_files_and_makes_local_dirs() {
+    let remote = create_temp_dir_with_files(&[("src/sub/deep.txt", b"deep"), ("src/top.txt", b"top")]);
+    let backend: Arc<dyn SftpBackend> =
+        Arc::new(InMemorySftpBackend::new(remote.path().to_path_buf()));
+    let local_dest = tempfile::tempdir().expect("local temp");
+    let dest = local_dest.path().join("out");
+
+    let plan = super::browser::plan_dir_transfer(
+        TransferDirection::Download,
+        backend,
+        std::path::Path::new("/src"),
+        &dest,
+    )
+    .expect("plan ok");
+
+    assert_eq!(plan.files.len(), 2, "both files planned");
+    assert_eq!(plan.skipped_existing, 0);
+    assert!(dest.exists(), "local dest created");
+    assert!(dest.join("sub").exists(), "local dest/sub created");
+    for (local, remote) in &plan.files {
+        assert!(local.starts_with(&dest), "target is under the local dest");
+        assert!(remote.starts_with("/src"), "source is under /src");
+    }
+}
+
+/// A same-named file already at the destination is skipped, not re-transferred.
+#[test]
+fn test_plan_dir_transfer_skips_existing_destination_files() {
+    let remote = create_temp_dir_with_files(&[("src/a.txt", b"a"), ("src/b.txt", b"b")]);
+    let backend: Arc<dyn SftpBackend> =
+        Arc::new(InMemorySftpBackend::new(remote.path().to_path_buf()));
+    let local_dest = tempfile::tempdir().expect("local temp");
+    let dest = local_dest.path().join("out");
+    std::fs::create_dir_all(&dest).unwrap();
+    std::fs::write(dest.join("a.txt"), b"already here").unwrap();
+
+    let plan = super::browser::plan_dir_transfer(
+        TransferDirection::Download,
+        backend,
+        std::path::Path::new("/src"),
+        &dest,
+    )
+    .expect("plan ok");
+
+    assert_eq!(plan.files.len(), 1, "only the not-yet-present file is planned");
+    assert_eq!(plan.skipped_existing, 1, "the existing file was skipped");
+}
+
+/// A directory move removes the whole source tree once every file has landed
+/// successfully.
+#[test]
+fn test_dir_move_cleanup_deletes_source_when_all_succeed() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, temp) = create_connected_view(&mut app, &[("srcdir/inner.txt", b"x")]);
+        let backend: Arc<dyn SftpBackend> =
+            Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf()));
+        let src_on_disk = temp.path().join("srcdir");
+        assert!(src_on_disk.exists(), "source dir exists before the move completes");
+
+        view.update(&mut app, |v, ctx| {
+            let id = v.seed_dir_move_cleanup_for_test(1, backend.clone(), PathBuf::from("/srcdir"));
+            v.note_dir_move_progress_for_test(id, true, ctx);
+        });
+
+        assert!(!src_on_disk.exists(), "source tree removed after a fully-successful move");
+        view.read(&app, |v, _| assert!(!v.has_pending_dir_move_cleanup(), "batch cleared"));
+    });
+}
+
+/// A directory move keeps the source if any file failed — never a partial loss.
+#[test]
+fn test_dir_move_cleanup_keeps_source_on_failure() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, temp) = create_connected_view(&mut app, &[("srcdir/inner.txt", b"x")]);
+        let backend: Arc<dyn SftpBackend> =
+            Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf()));
+        let src_on_disk = temp.path().join("srcdir");
+
+        view.update(&mut app, |v, ctx| {
+            let id = v.seed_dir_move_cleanup_for_test(1, backend.clone(), PathBuf::from("/srcdir"));
+            v.note_dir_move_progress_for_test(id, false, ctx); // a file failed
+        });
+
+        assert!(src_on_disk.exists(), "source kept when a file failed (no data loss)");
+        view.read(&app, |v, _| assert!(!v.has_pending_dir_move_cleanup(), "batch cleared"));
+    });
+}
+
+// ============================================================
 // Overwrite-on-conflict for copy/move (FM Pflicht 1)
 // ============================================================
 
