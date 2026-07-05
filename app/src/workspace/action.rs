@@ -654,10 +654,14 @@ pub enum WorkspaceAction {
     LaunchAgent {
         agent: CLIAgent,
         /// Non-default account config dir for subscription pinning
-        /// (`None` = the provider's default login).
+        /// (`None` = the provider's default login). Local launches only —
+        /// a remote host uses its own default account (config dirs are local).
         config_dir: Option<PathBuf>,
         /// Working directory for the new agent (`None` = the default dir).
         cwd: Option<PathBuf>,
+        /// SSH host node to launch on (`None` = local). When set, the routed
+        /// command runs on that host via the daemon session's startup command.
+        node_id: Option<String>,
     },
     /// Open a file from the file manager in a code editor pane. `node_id` empty
     /// = a local file (opened directly); non-empty = a remote host — native
