@@ -23,7 +23,7 @@ use warpui::{
 };
 use zaplex_cockpit::{
     format_cost, format_reset, format_tokens, heat_fill, heat_pct_label_with_provenance,
-    AccountUsage, HeatLevel, Provider, SessionState, UsageProvenance, WindowTotals,
+    AccountStatus, AccountUsage, HeatLevel, Provider, SessionState, UsageProvenance, WindowTotals,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
@@ -307,10 +307,17 @@ impl CockpitPaneView {
         let accent = theme.accent().into_solid();
         let now = chrono::Utc::now();
 
+        // Account activity glyph (WORKING/LIVE/OFFLINE), derived by the spine.
+        let (status_glyph, status_color) = match acct.status {
+            AccountStatus::Working => ("●", heat_coloru(HeatLevel::Ok)),
+            AccountStatus::Live => ("◐", muted),
+            AccountStatus::Offline => ("○", muted),
+        };
         let mut header = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(8.0)
+            .with_child(Self::text(status_glyph.to_string(), family, body, status_color))
             .with_child(
                 Shrinkable::new(
                     1.0,
@@ -396,6 +403,25 @@ impl CockpitPaneView {
                 .with_child(
                     Shrinkable::new(1.0, Self::text(label, family, body, main)).finish(),
                 );
+            // Model + context-window fill of the latest turn (spine populates
+            // these; previously computed but never surfaced).
+            let short_model = session
+                .model
+                .strip_prefix("claude-")
+                .unwrap_or(&session.model);
+            let mut meta = String::new();
+            if !short_model.is_empty() {
+                meta.push_str(short_model);
+            }
+            if session.ctx_tokens > 0 {
+                if !meta.is_empty() {
+                    meta.push_str(" · ");
+                }
+                meta.push_str(&format!("{}k ctx", session.ctx_tokens / 1000));
+            }
+            if !meta.is_empty() {
+                row = row.with_child(Self::text(meta, family, body, muted));
+            }
             // Fork verbs (fork/worktree design §2): branch a copy of the
             // conversation — plain, or into an isolated sibling worktree.
             for into_worktree in [false, true] {
