@@ -8,6 +8,7 @@ pub mod github_flows;
 pub mod model;
 pub mod oauth;
 pub mod pane;
+pub mod tailscale;
 pub mod panel;
 pub mod settings;
 

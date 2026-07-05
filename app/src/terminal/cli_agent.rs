@@ -212,17 +212,58 @@ impl CLIAgent {
         session_id: &str,
         config_dir: Option<&Path>,
     ) -> Option<String> {
-        let fork = self.fork_command(session_id)?;
+        Some(self.pin_config_dir(self.fork_command(session_id)?, config_dir))
+    }
+
+    /// The shell command that **resumes an existing conversation in place** —
+    /// same session, same history, continues where it left off (no fork, no new
+    /// session). This is how an idle CLI session surfaced by the cockpit is
+    /// *adopted* into a live pane: "open = focus/adopt" (audit (b)#13, (c)#4).
+    ///
+    /// Verified against the current CLIs (2026-07-05):
+    /// `claude --resume <id>` and `codex resume <id>`.
+    /// `None` = this agent has no known resume mechanism; surfaces stay
+    /// visibly disabled rather than guessing.
+    pub fn resume_command(&self, session_id: &str) -> Option<String> {
+        // Ids come from the providers' own registries (UUIDs) but land on a
+        // shell command line — quote defensively.
+        let id = shell_words::quote(session_id).into_owned();
+        match self {
+            CLIAgent::Claude => Some(format!("claude --resume {id}")),
+            CLIAgent::Codex => Some(format!("codex resume {id}")),
+            _ => None,
+        }
+    }
+
+    /// [`Self::resume_command`] with account pinning (see
+    /// [`Self::fork_command_pinned`] for the inline-env rationale), so the
+    /// adopted session resumes on its original subscription.
+    pub fn resume_command_pinned(
+        &self,
+        session_id: &str,
+        config_dir: Option<&Path>,
+    ) -> Option<String> {
+        Some(self.pin_config_dir(self.resume_command(session_id)?, config_dir))
+    }
+
+    /// Prepend an account's config dir as an inline env assignment
+    /// (`CLAUDE_CONFIG_DIR=… <cmd>` / `CODEX_HOME=… <cmd>`) so `<cmd>` runs on a
+    /// specific subscription. Inline env (not per-launch injection) keeps the
+    /// same string working verbatim in local tabs, worktree tab-configs, and
+    /// daemon `startup_command`s — and keeps the pin visible in the block.
+    /// Shared by fork/resume pinning. No-op when `config_dir` is `None` or the
+    /// agent has no config-dir model.
+    fn pin_config_dir(&self, cmd: String, config_dir: Option<&Path>) -> String {
         let Some(dir) = config_dir else {
-            return Some(fork);
+            return cmd;
         };
         let var = match self {
             CLIAgent::Claude => "CLAUDE_CONFIG_DIR",
             CLIAgent::Codex => "CODEX_HOME",
-            _ => return Some(fork),
+            _ => return cmd,
         };
         let dir = shell_words::quote(&dir.to_string_lossy()).into_owned();
-        Some(format!("{var}={dir} {fork}"))
+        format!("{var}={dir} {cmd}")
     }
 
     /// The **subscription-routed launch command** (C4): start this agent *fresh*,
