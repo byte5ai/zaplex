@@ -2418,6 +2418,132 @@ fn test_f5_remote_to_remote_relays_directory() {
 }
 
 // ============================================================
+// Cross-connection overwrite prompt (FM backlog)
+// ============================================================
+
+/// A local→remote pane pair, both over one shared fs. Returns pane A (local),
+/// pane B (remote target — keep it in scope so it stays registered), and the
+/// shared `TempDir`.
+fn two_panes_cross_conn(
+    app: &mut warpui::App,
+    files: &[(&str, &[u8])],
+) -> (
+    warpui::ViewHandle<SftpBrowserView>,
+    warpui::ViewHandle<SftpBrowserView>,
+    tempfile::TempDir,
+) {
+    let temp = create_temp_dir_with_files(files);
+    let root = temp.path().to_path_buf();
+    let (_, view_a) = create_view_with_node(app, ""); // local
+    view_a.update(app, |v, ctx| {
+        let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+        v.set_backend_for_test(backend, PathBuf::from("/a"), ctx);
+    });
+    let (_, view_b) = create_view_with_node(app, "host"); // remote target
+    view_b.update(app, |v, ctx| {
+        let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+        v.set_backend_for_test(backend, PathBuf::from("/b"), ctx);
+    });
+    (view_a, view_b, temp)
+}
+
+/// A cross-connection copy whose destination file already exists pauses on the
+/// overwrite prompt instead of silently skipping — and nothing transfers yet.
+#[test]
+fn test_cross_conn_existing_file_opens_overwrite_prompt() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, _temp) = two_panes_cross_conn(
+            &mut app,
+            &[("a/foo.txt", b"new"), ("b/foo.txt", b"old")],
+        );
+
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+
+        view_a.read(&app, |v, _| {
+            assert!(
+                matches!(v.dialog, Some(Dialog::CrossConnConflict { existing: 1, is_move: false })),
+                "the overwrite prompt is shown for the existing file"
+            );
+            assert!(v.has_pending_cross_conn(), "the conflicting transfer is held");
+            assert!(v.transfers.is_empty(), "nothing transfers before the user decides");
+        });
+    });
+}
+
+/// Choosing Overwrite starts the conflicting transfer and clears the prompt.
+#[test]
+fn test_cross_conn_overwrite_starts_the_transfer() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, _temp) = two_panes_cross_conn(
+            &mut app,
+            &[("a/foo.txt", b"new"), ("b/foo.txt", b"old")],
+        );
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::ResolveCrossConnConflict { overwrite: true }, ctx);
+        });
+
+        view_a.read(&app, |v, _| {
+            assert!(v.dialog.is_none(), "prompt cleared");
+            assert!(!v.has_pending_cross_conn(), "pending resolved");
+            assert_eq!(v.transfers.len(), 1, "the overwrite spawns the transfer");
+        });
+    });
+}
+
+/// Choosing Skip clears the prompt without starting the conflicting transfer.
+#[test]
+fn test_cross_conn_skip_starts_no_transfer() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, _temp) = two_panes_cross_conn(
+            &mut app,
+            &[("a/foo.txt", b"new"), ("b/foo.txt", b"old")],
+        );
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::ResolveCrossConnConflict { overwrite: false }, ctx);
+        });
+
+        view_a.read(&app, |v, _| {
+            assert!(v.dialog.is_none(), "prompt cleared");
+            assert!(!v.has_pending_cross_conn(), "pending resolved");
+            assert!(v.transfers.is_empty(), "skip transfers nothing");
+        });
+    });
+}
+
+/// No conflict → no prompt; the transfer starts directly.
+#[test]
+fn test_cross_conn_without_conflict_transfers_directly() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, _temp) = two_panes_cross_conn(
+            &mut app,
+            &[("a/foo.txt", b"new"), ("b/.keep", b"")],
+        );
+
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+
+        view_a.read(&app, |v, _| {
+            assert!(v.dialog.is_none(), "no prompt when nothing conflicts");
+            assert!(!v.has_pending_cross_conn());
+            assert_eq!(v.transfers.len(), 1, "the transfer starts directly");
+        });
+    });
+}
+
+// ============================================================
 // Overwrite-on-conflict for copy/move (FM Pflicht 1)
 // ============================================================
 

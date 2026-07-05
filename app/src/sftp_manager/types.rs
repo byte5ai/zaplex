@@ -157,6 +157,16 @@ pub enum Dialog {
         /// `host:/path` label per candidate pane, in `pending_target_pick` order.
         labels: Vec<String>,
     },
+    /// A cross-connection copy/move found files that already exist on the
+    /// destination: ask once whether to overwrite them all or skip them (the
+    /// non-conflicting files start transferring immediately). The conflicting
+    /// transfers live on the view in `pending_cross_conn`.
+    CrossConnConflict {
+        /// How many destination files already exist.
+        existing: usize,
+        /// Move vs copy (wording only).
+        is_move: bool,
+    },
     FileDetails { entry: FileEntry },
     /// Confirm closing transfer panel (when active transfers exist)
     CloseTransferPanelConfirm,
