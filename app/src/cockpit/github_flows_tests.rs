@@ -151,3 +151,20 @@ fn pr_merge_command_is_squash() {
     assert_eq!(gh_pr_merge_cmd(5, Some("o/r")), "gh pr merge 5 --repo o/r --squash");
     assert_eq!(gh_pr_merge_cmd(5, None), "gh pr merge 5 --squash");
 }
+
+// ── flow prompts ───────────────────────────────────────────────────────────
+
+#[test]
+fn flow_prompts_keep_human_in_the_loop() {
+    // Every flow prompt must require explicit confirmation before running gh —
+    // an instance never mutates GitHub on its own.
+    for p in [quick_issue_prompt(), pr_review_prompt(), triage_prompt()] {
+        let lower = p.to_lowercase();
+        assert!(lower.contains("confirm") || lower.contains("go-ahead"),
+            "prompt must gate on user confirmation: {p}");
+        assert!(p.contains("gh "), "prompt must reference the gh CLI: {p}");
+    }
+    assert!(quick_issue_prompt().contains("gh issue create"));
+    assert!(pr_review_prompt().contains("gh pr review"));
+    assert!(triage_prompt().contains("gh issue list"));
+}

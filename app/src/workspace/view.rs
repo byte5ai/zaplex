@@ -4057,6 +4057,39 @@ impl Workspace {
         });
     }
 
+    /// Like [`Self::ask_agent`] but launches Claude **routed to a subscription**
+    /// (C4 plexing): a new tab runs the API-key-scrubbed, config-dir-pinned
+    /// launch command, with `prompt` prefilled and ready to send. Backs the C5
+    /// GitHub instance-flows on the freest instance.
+    fn ask_agent_routed(
+        &mut self,
+        prompt: String,
+        config_dir: Option<&Path>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let launch = CLIAgent::Claude.launch_command_routed(config_dir);
+        self.add_terminal_tab(false, ctx);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            if let Some(terminal_view) = pane_group.active_session_view(ctx) {
+                terminal_view.update(ctx, |view, ctx| {
+                    view.execute_command_or_set_pending(&launch, ctx);
+                });
+            }
+        });
+        // Prefill the task prompt in the input box for review (not auto-sent) —
+        // the human stays in the loop, exactly like `ask_agent`.
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
+                terminal_view.update(ctx, |terminal_view, ctx| {
+                    terminal_view.input().update(ctx, |input, ctx| {
+                        input.replace_buffer_content(&prompt, ctx);
+                        input.focus_input_box(ctx);
+                    });
+                });
+            }
+        });
+    }
+
     /// Creates a new default terminal tab, then runs the startup command of the specified CLI agent.
     fn add_tab_with_specific_agent(&mut self, agent: CLIAgent, ctx: &mut ViewContext<Self>) {
         self.add_terminal_tab(false, ctx);
@@ -7302,6 +7335,42 @@ impl Workspace {
                                         .with_icon(icon)
                                         .into_item(),
                                 );
+                            }
+                            // C5 — GitHub instance-flows: run a task on the
+                            // freest Claude instance (Quick-Issue / PR-Review /
+                            // Triage). Claude-only — they drive the `gh` CLI —
+                            // and human-in-the-loop (prompt prefilled, not sent).
+                            if agent == CLIAgent::Claude {
+                                let flow_dir =
+                                    zaplex_cockpit::pick_freest(provider, &snapshot.accounts)
+                                        .map(|f| f.account.config_dir.clone());
+                                let flows = [
+                                    (
+                                        crate::t!("cockpit-flow-quick-issue").to_string(),
+                                        crate::cockpit::github_flows::quick_issue_prompt(),
+                                    ),
+                                    (
+                                        crate::t!("cockpit-flow-pr-review").to_string(),
+                                        crate::cockpit::github_flows::pr_review_prompt(),
+                                    ),
+                                    (
+                                        crate::t!("cockpit-flow-triage").to_string(),
+                                        crate::cockpit::github_flows::triage_prompt(),
+                                    ),
+                                ];
+                                for (label, prompt) in flows {
+                                    menu_items.push(
+                                        MenuItemFields::new(label)
+                                            .with_on_select_action(
+                                                WorkspaceAction::AskAgentRouted {
+                                                    prompt,
+                                                    config_dir: flow_dir.clone(),
+                                                },
+                                            )
+                                            .with_icon(icon)
+                                            .into_item(),
+                                    );
+                                }
                             }
                         }
                     }
@@ -20294,6 +20363,9 @@ impl TypedActionView for Workspace {
             }
             AskAgent { prompt, agent } => {
                 self.ask_agent(prompt.clone(), *agent, ctx);
+            }
+            AskAgentRouted { prompt, config_dir } => {
+                self.ask_agent_routed(prompt.clone(), config_dir.as_deref(), ctx);
             }
             ForkAgentSession {
                 agent,
