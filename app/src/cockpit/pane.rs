@@ -88,6 +88,8 @@ pub struct CockpitPaneView {
     /// Hover state of each session row's "▸ adopt" action (resume-in-place):
     /// pull an idle CLI session discovered by the cockpit into a live pane.
     session_adopt_states: HashMap<String, MouseStateHandle>,
+    /// Hover state of each session row's "◇ log" action (open transcript).
+    session_transcript_states: HashMap<String, MouseStateHandle>,
     /// Whether a session's cwd sits inside a git repo (key = session_id) —
     /// precomputed on cockpit updates so render never touches the filesystem.
     /// Non-repo cwds simply don't get the worktree action (design §3: toggle
@@ -113,6 +115,7 @@ impl CockpitPaneView {
             session_fork_states: HashMap::new(),
             session_forkwt_states: HashMap::new(),
             session_adopt_states: HashMap::new(),
+            session_transcript_states: HashMap::new(),
             session_in_repo: HashMap::new(),
         };
         me.sync_session_action_states(ctx);
@@ -136,6 +139,8 @@ impl CockpitPaneView {
         self.session_fork_states.retain(|id, _| live.contains(id));
         self.session_forkwt_states.retain(|id, _| live.contains(id));
         self.session_adopt_states.retain(|id, _| live.contains(id));
+        self.session_transcript_states
+            .retain(|id, _| live.contains(id));
         self.session_in_repo.retain(|id, _| live.contains(id));
         for (id, cwd) in sessions {
             // `.git` may be a dir (repo root) or a file (linked worktree) —
@@ -146,7 +151,8 @@ impl CockpitPaneView {
             self.session_in_repo.insert(id.clone(), in_repo);
             self.session_fork_states.entry(id.clone()).or_default();
             self.session_forkwt_states.entry(id.clone()).or_default();
-            self.session_adopt_states.entry(id).or_default();
+            self.session_adopt_states.entry(id.clone()).or_default();
+            self.session_transcript_states.entry(id).or_default();
         }
     }
 
@@ -245,6 +251,48 @@ impl CockpitPaneView {
             cwd: PathBuf::from(&session.cwd),
             // Non-default accounts resume on the same subscription.
             config_dir: (!acct.account.is_default).then(|| acct.account.config_dir.clone()),
+        };
+        Some(
+            Hoverable::new(state, move |mouse| {
+                let color = if mouse.is_hovered() { accent } else { muted };
+                Self::text(label.to_string(), family, body, color)
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+            .finish(),
+        )
+    }
+
+    /// One session-row "◇ log" action: open the session's conversation
+    /// transcript in a code/text pane (no regression vs claudeplex's transcript
+    /// view). Claude-only — transcripts live under a Claude account's
+    /// `projects/…/<id>.jsonl`; Codex has no equivalent here, so it gets no
+    /// surface (disabled-by-absence).
+    fn session_transcript_action(
+        &self,
+        acct: &AccountUsage,
+        session: &zaplex_cockpit::SessionSnapshot,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        if acct.account.provider != Provider::Claude {
+            return None;
+        }
+        let state = self
+            .session_transcript_states
+            .get(&session.session_id)
+            .cloned()?;
+
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let accent = theme.accent().into_solid();
+        let label = crate::t!("cockpit-session-transcript");
+
+        let action = WorkspaceAction::ViewTranscript {
+            session_id: session.session_id.clone(),
+            config_dir: acct.account.config_dir.clone(),
+            cwd: PathBuf::from(&session.cwd),
         };
         Some(
             Hoverable::new(state, move |mouse| {
@@ -505,6 +553,10 @@ impl CockpitPaneView {
             }
             // Adopt verb: "open = focus" — resume this idle session in place.
             if let Some(action) = self.session_adopt_action(acct, session, appearance) {
+                row = row.with_child(action);
+            }
+            // Open the conversation transcript (claudeplex-parity read view).
+            if let Some(action) = self.session_transcript_action(acct, session, appearance) {
                 row = row.with_child(action);
             }
             // Fork verbs (fork/worktree design §2): branch a copy of the

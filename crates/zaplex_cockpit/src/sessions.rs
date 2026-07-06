@@ -243,6 +243,12 @@ fn transcripts_by_id(config_dir: &Path) -> HashMap<String, PathBuf> {
     map
 }
 
+/// The on-disk transcript path for a given session id under `config_dir`, if
+/// one exists. Used by the transcript viewer to locate a session's `.jsonl`.
+pub fn transcript_path(config_dir: &Path, session_id: &str) -> Option<PathBuf> {
+    transcripts_by_id(config_dir).remove(session_id)
+}
+
 /// Collects the live sessions of a Claude Code account: registry entries that
 /// are real, PID-alive and transcript-backed, joined with their transcript
 /// tail for the waiting/working classification.

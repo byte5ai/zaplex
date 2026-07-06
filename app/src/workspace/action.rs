@@ -659,6 +659,17 @@ pub enum WorkspaceAction {
         /// (`None` = the provider's default login).
         config_dir: Option<PathBuf>,
     },
+    /// Open a session's conversation transcript (cockpit "◇ log" verb): reads the
+    /// session's `.jsonl`, renders it to Markdown, and opens it read-only in a
+    /// code/text pane. No regression vs claudeplex/-desktop's transcript view.
+    ViewTranscript {
+        session_id: String,
+        /// The account's config dir under which the transcript lives
+        /// (`projects/<mangled-cwd>/<session_id>.jsonl`).
+        config_dir: PathBuf,
+        /// The session's working directory (for the tab label).
+        cwd: PathBuf,
+    },
     /// Launch a *fresh* CLI agent routed to a subscription (the C4 "plexing"
     /// launch): open a terminal tab in `cwd` (or the default dir) and run the
     /// agent pinned to `config_dir`'s account (`None` = default login) with the
@@ -921,6 +932,7 @@ impl WorkspaceAction {
             | AskAgent { .. }
             | ForkAgentSession { .. }
             | AdoptAgentSession { .. }
+            | ViewTranscript { .. }
             | LaunchAgent { .. }
             | OpenFileInEditor { .. }
             | FixSettingsWithOz { .. } => false,
