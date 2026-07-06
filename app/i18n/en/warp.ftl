@@ -506,6 +506,7 @@ drive-toast-finished-exporting = Finished exporting objects
 settings-environment-delete-button = Delete environment
 settings-language-system-default = System default
 settings-language-english = English
+settings-language-german = German
 tab-config-open-tab = Open Tab
 tab-config-make-default = Make default
 tab-config-already-default = Already the default
