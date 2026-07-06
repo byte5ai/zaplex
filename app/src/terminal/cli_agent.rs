@@ -278,6 +278,34 @@ impl CLIAgent {
     ///
     /// Agents without a subscription/config-dir model launch bare (no scrub, no pin).
     pub fn launch_command_routed(&self, config_dir: Option<&Path>) -> String {
+        self.launch_command_routed_with(config_dir, None, None)
+    }
+
+    /// [`Self::launch_command_routed`] extended with an explicit **model** and
+    /// **thinking-effort** chosen at launch (the Spawn-Karte core: a launch must
+    /// be unmistakable about *which* model + effort it starts — Haiku/Low vs a
+    /// top model/Extra-High is a huge difference).
+    ///
+    /// Flags are appended to the same scrub+pin prefix, so the string still works
+    /// verbatim in local tabs, worktree tab-configs, and daemon `startup_command`s.
+    /// Provider-correct injection (verified against the current CLIs, 2026-07-06):
+    /// - **Claude Code:** `--model <model>` (e.g. `opus`/`sonnet`/`haiku`). Claude
+    ///   Code has **no** CLI flag for reasoning effort, so `effort` is intentionally
+    ///   **not** placed on the command line here (it is recorded for the Conductor
+    ///   via the launch registry, not faked as a CLI arg).
+    /// - **Codex:** `--model <model>` plus reasoning effort as a config override
+    ///   `-c model_reasoning_effort="<low|medium|high>"` (Codex's documented way to
+    ///   set effort non-interactively; it has no dedicated `--effort` flag).
+    ///
+    /// `model`/`effort` `None` = today's behavior verbatim (bare routed launch).
+    /// Agents without a subscription/config-dir model launch bare (no scrub, no
+    /// pin, no flags), unchanged.
+    pub fn launch_command_routed_with(
+        &self,
+        config_dir: Option<&Path>,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> String {
         let cmd = self.command_prefix();
         let (dir_var, key_vars): (&str, &[&str]) = match self {
             CLIAgent::Claude => (
@@ -295,7 +323,43 @@ impl CLIAgent {
             let dir = shell_words::quote(&dir.to_string_lossy()).into_owned();
             prefix.push_str(&format!("{dir_var}={dir} "));
         }
-        format!("{prefix}{cmd}")
+        // 3. Append the provider-correct model/effort flags, if chosen.
+        let flags = self.model_effort_flags(model, effort);
+        format!("{prefix}{cmd}{flags}")
+    }
+
+    /// The provider-correct model + effort CLI flags (with a leading space each),
+    /// or an empty string when neither applies. Split out so it is unit-testable
+    /// in isolation and reused by any launch path. See
+    /// [`Self::launch_command_routed_with`] for the per-provider rationale.
+    fn model_effort_flags(&self, model: Option<&str>, effort: Option<&str>) -> String {
+        let mut flags = String::new();
+        match self {
+            CLIAgent::Claude => {
+                if let Some(model) = model {
+                    let model = shell_words::quote(model).into_owned();
+                    flags.push_str(&format!(" --model {model}"));
+                }
+                // Claude Code has no reasoning-effort CLI flag: effort is tracked,
+                // not placed on the command line (no fake flag).
+            }
+            CLIAgent::Codex => {
+                if let Some(model) = model {
+                    let model = shell_words::quote(model).into_owned();
+                    flags.push_str(&format!(" --model {model}"));
+                }
+                if let Some(effort) = effort {
+                    // Codex sets reasoning effort via a config override, not a
+                    // dedicated flag. Quote the whole `key="value"` token so the
+                    // value survives the shell verbatim.
+                    let kv = shell_words::quote(&format!("model_reasoning_effort={effort}"))
+                        .into_owned();
+                    flags.push_str(&format!(" -c {kv}"));
+                }
+            }
+            _ => {}
+        }
+        flags
     }
 
     /// Serialized version of the CLIAgent name (e.g. "Claude", "Gemini"). Used for the

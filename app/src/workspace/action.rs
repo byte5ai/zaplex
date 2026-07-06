@@ -705,6 +705,24 @@ pub enum WorkspaceAction {
         /// SSH host node to launch on (`None` = local). When set, the routed
         /// command runs on that host via the daemon session's startup command.
         node_id: Option<String>,
+        /// Model to start the agent with (Spawn-Karte). `None` = provider
+        /// default. Claude: `--model <model>`; Codex: `--model <model>`.
+        model: Option<String>,
+        /// Thinking-effort to start with (Spawn-Karte). `None` = provider
+        /// default. Codex: `-c model_reasoning_effort=<effort>`; Claude has no
+        /// effort CLI flag, so it is only recorded (launch registry), not passed.
+        effort: Option<String>,
+    },
+    /// Open the Spawn-Karte: the launch card that makes model + effort a real,
+    /// visible launch attribute (which model / thinking-effort / account / host /
+    /// project you are starting). `host`/`project` pre-scope the card when it is
+    /// opened from a Conductor host/project header `+`; both `None` opens it
+    /// unscoped (the global "New Agent" entry).
+    OpenSpawnCard {
+        /// Pre-selected host label (`None` = local / unscoped).
+        host: Option<String>,
+        /// Pre-selected project directory (`None` = the default dir).
+        project: Option<PathBuf>,
     },
     /// Open a file from the file manager in a code editor pane. `node_id` empty
     /// = a local file (opened directly); non-empty = a remote host — native
@@ -970,6 +988,7 @@ impl WorkspaceAction {
             | OpenAttentionInbox
             | ViewTranscript { .. }
             | LaunchAgent { .. }
+            | OpenSpawnCard { .. }
             | OpenFileInEditor { .. }
             | AttachFleetSession { .. }
             | JumpToNextWaiting

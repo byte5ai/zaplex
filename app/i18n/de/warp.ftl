@@ -46,6 +46,7 @@ cockpit-session-fork-worktree = ⑂ +Worktree
 cockpit-flow-quick-issue = ⚡ GitHub-Issue entwerfen (freieste)
 cockpit-flow-pr-review = ⚡ PR reviewen (freieste)
 cockpit-flow-triage = ⚡ Issue triagieren (freieste)
+cockpit-spawn-card-new-agent = ✧ Neuer Agent…
 
 # ── SSH-Hosts (linkes Panel) ─────────────────────────────────────────────────
 workspace-left-panel-ssh-manager-tree-empty = Noch keine SSH-Server. Klicke 📁 für einen Ordner, + für einen Server.

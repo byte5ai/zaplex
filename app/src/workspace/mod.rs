@@ -114,6 +114,7 @@ pub fn init(app: &mut AppContext) {
     tab_configs::session_config_modal::init(app);
     view::zap_launch_modal::init(app);
     view::codex_modal::init(app);
+    view::spawn_card::init(app);
     view::attention_inbox::init(app);
     view::global_search::view::GlobalSearchView::init(app);
     view::right_panel::RightPanelView::init(app);

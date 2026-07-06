@@ -44,6 +44,8 @@ pub(super) struct WorkspaceMouseStates {
     pub(super) session_config_tab_config_chip_close: MouseStateHandle,
     pub(super) tools_panel_icon: MouseStateHandle,
     pub(super) title_bar_search_bar: MouseStateHandle,
+    /// Hover state of the titlebar attention pulse (`✋ N`, jump-to-next-waiting).
+    pub(super) attention_pulse: MouseStateHandle,
     /// Per-agent titlebar button hover states, keyed by CLIAgent serialized name.
     pub(super) cli_agent_titlebar_button_states: RefCell<HashMap<String, MouseStateHandle>>,
     #[cfg(target_family = "wasm")]
@@ -120,6 +122,9 @@ pub struct WorkspaceState {
     pub is_notification_mailbox_open: bool,
     pub is_agent_management_view_open: bool,
     pub is_codex_modal_open: bool,
+    /// The Spawn-Karte: the launch card that makes model + effort a visible
+    /// launch attribute (which model / effort / account / host / project).
+    pub is_spawn_card_open: bool,
     /// The calm "Offene Punkte" attention inbox (fleet-wide waiting agents).
     pub is_attention_inbox_open: bool,
     pub is_tab_config_params_modal_open: bool,
@@ -157,6 +162,7 @@ impl WorkspaceState {
             || self.is_suggested_rule_modal_open
             || self.is_suggested_agent_mode_workflow_modal_open
             || self.is_codex_modal_open
+            || self.is_spawn_card_open
             || self.is_attention_inbox_open
             || self.is_tab_config_params_modal_open
             || self.is_session_config_modal_open
@@ -195,6 +201,7 @@ impl WorkspaceState {
         self.is_suggested_rule_modal_open = false;
         self.is_suggested_agent_mode_workflow_modal_open = false;
         self.is_codex_modal_open = false;
+        self.is_spawn_card_open = false;
         self.is_attention_inbox_open = false;
         self.is_tab_config_params_modal_open = false;
         self.is_session_config_modal_open = false;

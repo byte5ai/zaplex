@@ -6,6 +6,7 @@
 
 pub mod ambient;
 pub mod github_flows;
+pub mod launch_registry;
 pub mod model;
 pub mod oauth;
 pub mod pane;
