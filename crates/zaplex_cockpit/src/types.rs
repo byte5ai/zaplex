@@ -110,9 +110,15 @@ pub enum SessionState {
     Waiting,
     /// Mid tool-run or a live background job: working, hands off.
     Monitor,
+    /// A transcript exists but the conversation has **no live PTY / registry
+    /// entry** — dormant, resumable. Idle is never "needs me" and sorts after
+    /// the live states (Waiting/Active/Monitor).
+    Idle,
 }
 
-/// One live Claude Code session (registry-backed, transcript-joined).
+/// One agent-session snapshot (registry-backed + transcript-joined for live
+/// Claude Code sessions; the same shape carries dormant [`SessionState::Idle`]
+/// sessions once transcript-only discovery lands).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionSnapshot {
     pub session_id: String,
@@ -120,10 +126,20 @@ pub struct SessionSnapshot {
     /// The session's registry name (native `--name`), often empty.
     pub name: String,
     pub state: SessionState,
+    /// Which CLI provider owns this session.
+    pub provider: Provider,
     /// Model of the latest assistant turn (may be empty).
     pub model: String,
+    /// Reasoning effort. Not recorded in the transcript, so `None` at discovery
+    /// time; populated at launch time later. `None` = honestly unknown.
+    pub effort: Option<String>,
     /// Context-window fill of the latest assistant turn.
     pub ctx_tokens: u64,
+    /// Git-root of `cwd` (or `cwd` itself when not inside a repo). The
+    /// project-grouping key for the Agent-Inventory tree.
+    pub project_root: String,
+    /// Human repo label — origin-url basename, else the root's dir basename.
+    pub project_name: String,
     pub last_activity: DateTime<Utc>,
     pub pid: u32,
 }

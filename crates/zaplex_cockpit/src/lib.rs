@@ -18,12 +18,14 @@ pub mod oauth;
 pub mod pricing;
 pub mod fleet;
 pub mod overrides;
+pub mod project;
 pub mod routing;
 pub mod transcript;
 pub mod sessions;
 pub mod types;
 pub mod windows;
 
+pub use fleet::AgentSession;
 pub use format::{
     context_fill, context_window, format_cost, format_reset, format_tokens, heat_fill,
     heat_pct_label, heat_pct_label_with_provenance, model_family, HeatLevel,
@@ -31,6 +33,7 @@ pub use format::{
 pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
 pub use pricing::{ModelPrice, PricingTable};
 pub use overrides::{AccountOverride, AccountOverrides};
+pub use project::{resolve_project, ResolvedProject};
 pub use routing::{is_over_budget, pick_freest, rank_by_freeness, OVER_BUDGET_HEAT};
 pub use transcript::{
     format_transcript_markdown, parse_transcript, ToolCall, TranscriptTurn, TurnRole, TurnUsage,

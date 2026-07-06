@@ -2,7 +2,7 @@ use chrono::Utc;
 use serde_json::json;
 
 use super::*;
-use crate::types::SessionState;
+use crate::types::{Provider, SessionState};
 
 /// Builds a fake account dir with one registry entry + transcript.
 fn fake_account(
@@ -69,6 +69,12 @@ fn busy_session_is_active() {
     assert_eq!(sessions[0].state, SessionState::Active);
     assert_eq!(sessions[0].model, "claude-opus-4-8");
     assert_eq!(sessions[0].ctx_tokens, 1000);
+    // New inventory fields: Claude provider, unknown effort, project resolved
+    // from the (non-repo) cwd — root == cwd, name == basename.
+    assert_eq!(sessions[0].provider, Provider::Claude);
+    assert_eq!(sessions[0].effort, None);
+    assert_eq!(sessions[0].project_root, "/tmp/proj");
+    assert_eq!(sessions[0].project_name, "proj");
 }
 
 #[test]

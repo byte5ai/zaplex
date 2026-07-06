@@ -1,10 +1,15 @@
 //! Fleet aggregation + Conductor tree (audit (d)#6 + #8).
 //!
 //! Given the CLI sessions discovered on each host, build a **Host ▸ Project ▸
-//! Session** tree in which the *needs-me* count — sessions in
-//! [`SessionState::Waiting`], i.e. the agent handed control back to you — bubbles
-//! up from session to project to host. This is the "conductor" leit-view over
-//! the unified inventory: at a glance, which host/project is waiting on you.
+//! AgentSession** tree — this IS the Agent-Inventory: the native hierarchy of
+//! the cockpit. The *needs-me* count — sessions in [`SessionState::Waiting`],
+//! i.e. the agent handed control back to you — bubbles up from session to
+//! project to host. This is the "conductor" leit-view over the unified
+//! inventory: at a glance, which host/project is waiting on you.
+//!
+//! Projects are keyed by **git root** ([`SessionSnapshot::project_root`]), so
+//! sessions launched in different sub-directories of the same repo collapse
+//! into one project node. Idle/Monitor/Active sessions never count as needs-me.
 //!
 //! Pure aggregation (no IO, no remote calls): given per-host session lists it
 //! yields the sorted tree. Fetching sessions cross-host (`list_sessions` over
@@ -13,19 +18,24 @@
 use crate::types::{SessionSnapshot, SessionState};
 use std::collections::BTreeMap;
 
+/// An agent-session in the inventory. Alias for the snapshot the spine already
+/// produces — the leaf of the Host ▸ Project ▸ AgentSession tree.
+pub type AgentSession = SessionSnapshot;
+
 /// One host's contribution to the fleet: its label + the sessions found on it.
 pub struct HostSessions {
     pub host: String,
     pub sessions: Vec<SessionSnapshot>,
 }
 
-/// A project (working directory) grouping within a host, with its own
-/// needs-me tally.
+/// A project grouping within a host, with its own needs-me tally. Sessions are
+/// grouped by their git **root** (see [`SessionSnapshot::project_root`]), so
+/// nested sub-directory launches of one repo share a single node.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectNode {
-    /// The sessions' shared working directory (the grouping key).
-    pub cwd: String,
-    /// Short label for display (final path component of `cwd`).
+    /// The sessions' shared git root — the grouping key.
+    pub root: String,
+    /// Human repo label (from [`SessionSnapshot::project_name`]).
     pub name: String,
     /// Count of [`SessionState::Waiting`] sessions in this project.
     pub needs_me: usize,
@@ -49,14 +59,6 @@ pub struct FleetTree {
     pub needs_me: usize,
 }
 
-fn project_name(cwd: &str) -> String {
-    cwd.trim_end_matches('/')
-        .rsplit('/')
-        .find(|s| !s.is_empty())
-        .unwrap_or(cwd)
-        .to_string()
-}
-
 fn is_waiting(s: &SessionSnapshot) -> bool {
     matches!(s.state, SessionState::Waiting)
 }
@@ -75,14 +77,14 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
         .into_iter()
         .filter(|h| !h.sessions.is_empty())
         .map(|h| {
-            // Group sessions by cwd (stable order via BTreeMap on the key).
-            let mut by_cwd: BTreeMap<String, Vec<SessionSnapshot>> = BTreeMap::new();
+            // Group sessions by git root (stable order via BTreeMap on the key).
+            let mut by_root: BTreeMap<String, Vec<SessionSnapshot>> = BTreeMap::new();
             for s in h.sessions {
-                by_cwd.entry(s.cwd.clone()).or_default().push(s);
+                by_root.entry(s.project_root.clone()).or_default().push(s);
             }
-            let mut projects: Vec<ProjectNode> = by_cwd
+            let mut projects: Vec<ProjectNode> = by_root
                 .into_iter()
-                .map(|(cwd, mut sessions)| {
+                .map(|(root, mut sessions)| {
                     // Waiting first, then most-recent activity.
                     sessions.sort_by(|a, b| {
                         is_waiting(b)
@@ -90,9 +92,13 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
                             .then_with(|| b.last_activity.cmp(&a.last_activity))
                     });
                     let needs_me = sessions.iter().filter(|s| is_waiting(s)).count();
-                    let name = project_name(&cwd);
+                    // All sessions in the group share a root → share the label.
+                    let name = sessions
+                        .first()
+                        .map(|s| s.project_name.clone())
+                        .unwrap_or_default();
                     ProjectNode {
-                        cwd,
+                        root,
                         name,
                         needs_me,
                         sessions,

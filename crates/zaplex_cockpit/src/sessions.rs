@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
 
-use crate::types::{SessionSnapshot, SessionState};
+use crate::types::{Provider, SessionSnapshot, SessionState};
 
 /// How much transcript tail to inspect for the ended/model/context signals.
 /// Registry sessions' last turns are comfortably inside this window; if a
@@ -270,13 +270,19 @@ pub fn live_sessions(config_dir: &Path, now: DateTime<Utc>) -> Vec<SessionSnapsh
             let background = r.kind == "bg"
                 && (r.status == "busy"
                     || (now - last_activity).num_milliseconds() < ACTIVE_WINDOW_MS);
+            let project = crate::project::resolve_project(Path::new(&r.cwd));
             SessionSnapshot {
                 session_id: r.session_id,
                 cwd: r.cwd,
                 name: r.name,
                 state: state_of(&r.status, tail.ended, background),
+                provider: Provider::Claude,
                 model: tail.model,
+                // Not in the transcript; populated at launch time later.
+                effort: None,
                 ctx_tokens: tail.ctx_tokens,
+                project_root: project.root,
+                project_name: project.name,
                 last_activity,
                 pid: r.pid,
             }
@@ -288,6 +294,7 @@ pub fn live_sessions(config_dir: &Path, now: DateTime<Utc>) -> Vec<SessionSnapsh
             SessionState::Waiting => 0u8,
             SessionState::Active => 1,
             SessionState::Monitor => 2,
+            SessionState::Idle => 3,
         };
         rank(a)
             .cmp(&rank(b))
