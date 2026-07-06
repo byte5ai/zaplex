@@ -18,8 +18,8 @@ use warp_util::file::FileId;
 
 use super::proto::{
     client_message, delete_file_response, run_command_response, server_message,
-    write_file_response, Abort, Authenticate, ClientMessage, DeleteFile, DeleteFileResponse,
-    DeleteFileSuccess, ErrorCode, ErrorResponse, FailedFileRead, FileContextProto,
+    write_file_response, Abort, AgentSessionList, Authenticate, ClientMessage, DeleteFile,
+    DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse, FailedFileRead, FileContextProto,
     FileOperationError, Initialize, InitializeResponse, NavigatedToDirectory,
     NavigatedToDirectoryResponse, ReadFileContextResponse, RunCommandError, RunCommandErrorCode,
     RunCommandRequest, RunCommandResponse, RunCommandSuccess, ServerMessage, SessionBootstrapped,
@@ -745,6 +745,12 @@ impl ServerModel {
             Some(client_message::Message::DetachSession(msg)) => {
                 self.handle_detach_session(conn_id, msg);
                 return;
+            }
+            // Agent-session inventory (Agent-Cockpit): report this host's
+            // Claude/Codex agent-sessions discovered on the daemon's filesystem.
+            // Not PTY-bound, so available on every platform.
+            Some(client_message::Message::ListAgentSessions(_)) => {
+                self.handle_list_agent_sessions()
             }
             // Multi-session listing for the sidebar / adopt-by-id (Stage 4).
             #[cfg(unix)]
@@ -1931,6 +1937,43 @@ fn now_epoch_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Discovers the agent-sessions (Claude/Codex CLI conversations) present on
+/// this daemon's filesystem and maps them to the wire shape. Pure filesystem +
+/// transcript reads — no PTY, so it works on every platform. Runs the same
+/// `zaplex_cockpit` discovery the local app uses, over the daemon's own home:
+/// discover Claude accounts, tail each account's transcripts, flatten.
+///
+/// Returns an empty list (never an error) when the home directory can't be
+/// resolved — an inventory the client can safely fold as "zero sessions here".
+fn collect_agent_sessions() -> Vec<super::proto::AgentSessionInfo> {
+    let Some(home) = dirs::home_dir() else {
+        log::warn!("Daemon: ListAgentSessions: no home dir; reporting empty inventory");
+        return Vec::new();
+    };
+    let now = chrono::Utc::now();
+    // Codex has no session registry yet, so agent-session discovery is
+    // Claude-only for now (matches zaplex_cockpit::sessions::live_sessions).
+    zaplex_cockpit::claude::discover_accounts(&home, None)
+        .into_iter()
+        .flat_map(|account| zaplex_cockpit::sessions::live_sessions(&account.config_dir, now))
+        .map(|snapshot| super::agent_session::snapshot_to_proto(&snapshot))
+        .collect()
+}
+
+/// Daemon-side agent-session inventory handler (Agent-Cockpit). Cross-platform:
+/// filesystem/transcript discovery, no PTY ownership required.
+impl ServerModel {
+    /// Reports this host's agent-session inventory for the unified cross-host
+    /// Agent-Inventory tree. Discovery failures degrade to an empty list rather
+    /// than erroring the client's whole tree.
+    fn handle_list_agent_sessions(&self) -> HandlerOutcome {
+        let sessions = collect_agent_sessions();
+        HandlerOutcome::Sync(server_message::Message::AgentSessionList(AgentSessionList {
+            sessions,
+        }))
+    }
 }
 
 /// Daemon-side session-host handlers (Stage 1). Unix-only: the daemon owns the

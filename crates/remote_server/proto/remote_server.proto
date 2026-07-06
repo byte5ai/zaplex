@@ -42,6 +42,10 @@ message ClientMessage {
     ResizeSession resize_session = 27;
     CloseSession close_session = 28;
     ListSessions list_sessions = 29;
+    // Agent-session inventory (Agent-Cockpit): the host's Claude/Codex
+    // transcript-backed agent-sessions, a different axis from the PTY sessions
+    // above. See the "Agent-Session Inventory" section at the end of this file.
+    ListAgentSessions list_agent_sessions = 30;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -78,6 +82,9 @@ message ServerMessage {
     SessionOutput session_output = 26;
     SessionExited session_exited = 27;
     SessionNotice session_notice = 28;
+    // Agent-session inventory response (Agent-Cockpit). See the
+    // "Agent-Session Inventory" section at the end of this file.
+    AgentSessionList agent_session_list = 29;
   }
 }
 
@@ -701,4 +708,56 @@ message SessionNotice {
   string session_id = 1;
   string kind = 2;
   string detail = 3;
+}
+
+// ── Agent-Session Inventory (zaplex Agent-Cockpit) ─────────────────────
+//
+// Agent-sessions (Claude/Codex CLI conversations, transcript-backed) are a
+// SEPARATE axis from the PTY sessions above: a PTY hosts 0..n agent-sessions
+// over its lifetime, and an agent-session can be dormant (Idle) with no live
+// PTY at all. So the daemon reports them via their own request/response rather
+// than overloading SessionInfo/SessionList.
+//
+// The daemon runs zaplex_cockpit's discovery on its OWN (remote) filesystem —
+// discovering Claude accounts under the daemon's home and tailing their
+// transcripts — and ships SessionSnapshot-shaped rows. The client then folds
+// every host's rows (local + each daemon's) into the single unified
+// Agent-Inventory tree.
+//
+// Capability: gated behind the "agent-inventory" feature in
+// InitializeResponse.features (zaplex_remote_session::types::
+// FEATURE_AGENT_INVENTORY). A client talking to an OLD daemon that does not
+// advertise it must skip ListAgentSessions entirely and treat that host as
+// contributing zero agent-sessions — never error the whole tree.
+
+// Client → daemon: list the agent-sessions discoverable on the daemon's host.
+message ListAgentSessions {}
+
+// One agent-session row. Mirrors zaplex_cockpit::types::SessionSnapshot.
+//
+// `state` and `provider` are lowercase string enum-ish values rather than proto
+// enums, deliberately: they keep the wire forward-compatible (an unknown future
+// state decodes as a plain string the client folds as Idle / a plain provider)
+// and avoid churning a proto enum for every classification tweak.
+//   state    ∈ {"active","waiting","monitor","idle"}  (unknown → treated Idle)
+//   provider ∈ {"claude","codex"}                      (unknown → treated Claude)
+//   effort   empty string = honestly unknown (maps back to Option::None)
+message AgentSessionInfo {
+  string session_id = 1;
+  string cwd = 2;
+  string name = 3;
+  string state = 4;
+  string provider = 5;
+  string model = 6;
+  string effort = 7;
+  uint64 ctx_tokens = 8;
+  string project_root = 9;
+  string project_name = 10;
+  uint64 last_activity_epoch_millis = 11;
+  uint32 pid = 12;
+}
+
+// Daemon → client: result of ListAgentSessions.
+message AgentSessionList {
+  repeated AgentSessionInfo sessions = 1;
 }
