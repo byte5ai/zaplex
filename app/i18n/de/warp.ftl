@@ -291,3 +291,43 @@ search-filter-display-prompt-history = Prompt-Verlauf
 search-filter-display-files = Dateien
 search-filter-display-commands = Befehle
 search-filter-display-blocks = Blöcke
+
+# ── Neue Session (weitere) ───────────────────────────────────────────────────
+workspace-new-session-cloud-oz = Agent-Tab
+workspace-new-session-local-docker-sandbox = Lokale Docker-Sandbox
+workspace-tab-configs-tooltip = Tab-Konfigurationen
+workspace-close-session = Session schließen
+workspace-restart-app-and-update-now = App neu starten und jetzt aktualisieren
+
+# ── Vertikale Tabs: Pane-Arten ───────────────────────────────────────────────
+vertical-tabs-pane-kind-terminal = Terminal
+vertical-tabs-pane-kind-code = Code
+vertical-tabs-pane-kind-code-diff = Code-Diff
+vertical-tabs-pane-kind-file = Datei
+vertical-tabs-pane-kind-notebook = Notizbuch
+vertical-tabs-pane-kind-workflow = Workflow
+vertical-tabs-pane-kind-environment-variables = Umgebungsvariablen
+vertical-tabs-pane-kind-environments = Umgebungen
+vertical-tabs-pane-kind-rules = Regeln
+vertical-tabs-pane-kind-plan = Plan
+vertical-tabs-pane-kind-execution-profile = Ausführungsprofil
+vertical-tabs-pane-kind-other = Sonstiges
+
+# ── Vertikale Tabs: Einstellungen ────────────────────────────────────────────
+vertical-tabs-setting-view-as = Anzeigen als
+vertical-tabs-setting-panes = Panes
+vertical-tabs-setting-tabs = Tabs
+vertical-tabs-setting-tab-item = Tab-Element
+vertical-tabs-setting-focused-session = Fokussierte Session
+vertical-tabs-setting-summary = Zusammenfassung
+vertical-tabs-setting-density = Dichte
+vertical-tabs-setting-pane-title-as = Pane-Titel als
+vertical-tabs-setting-command-conversation = Befehl / Unterhaltung
+vertical-tabs-setting-working-directory = Arbeitsverzeichnis
+vertical-tabs-setting-branch = Branch
+vertical-tabs-setting-additional-metadata = Zusätzliche Metadaten
+vertical-tabs-setting-show = Anzeigen
+vertical-tabs-setting-pr-link-requires-gh = Erfordert eine installierte und authentifizierte GitHub-CLI
+vertical-tabs-setting-pr-link = PR-Link
+vertical-tabs-setting-diff-stats = Diff-Statistik
+vertical-tabs-setting-show-details-on-hover = Details beim Überfahren anzeigen
