@@ -71,6 +71,41 @@ pub fn heat_pct_label_with_provenance(
     }
 }
 
+/// The model's usable context window in tokens: 1M for the Opus/Sonnet 1M-beta,
+/// 200k otherwise. Turns a raw context-token count into a fill fraction.
+pub fn context_window(model: &str) -> u64 {
+    let m = model.to_ascii_lowercase();
+    if m.contains("opus") || m.contains("sonnet") {
+        1_000_000
+    } else {
+        200_000
+    }
+}
+
+/// Context-window fill fraction (0.0..) for a turn's token count + model. Feed
+/// to [`HeatLevel::from_fraction`] for the fill color, like claudeplex's
+/// context meter.
+pub fn context_fill(model: &str, ctx_tokens: u64) -> f64 {
+    let max = context_window(model);
+    if max == 0 {
+        0.0
+    } else {
+        ctx_tokens as f64 / max as f64
+    }
+}
+
+/// Short model family for display (`claude-opus-4-8` -> `opus`), else the raw id
+/// (empty stays empty). Case-insensitive.
+pub fn model_family(model: &str) -> &str {
+    let lower = model.to_ascii_lowercase();
+    for fam in ["opus", "sonnet", "haiku", "fable"] {
+        if lower.contains(fam) {
+            return fam;
+        }
+    }
+    model
+}
+
 /// USD cost with 2 decimals: 4.2 -> "$4.20".
 pub fn format_cost(usd: f64) -> String {
     format!("${usd:.2}")
