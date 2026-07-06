@@ -665,6 +665,10 @@ message SessionInfo {
   bool alive = 4;
   // Unix epoch millis of the last attach; 0 means never attached.
   uint64 last_attached_epoch_millis = 5;
+  // This session's output-ring memory footprint on the host, in bytes — what
+  // the daemon's memory governor accounts against the host cap. Surfaced so the
+  // multi-session UI can show per-session RAM. 0 = unknown.
+  uint64 ring_bytes = 6;
 }
 
 // Daemon → client: result of ListSessions.

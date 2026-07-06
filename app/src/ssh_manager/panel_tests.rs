@@ -252,3 +252,15 @@ fn sort_keeps_orphaned_existing_nodes_visible_as_roots() {
     assert_eq!(depths["s1"], 0);
     assert_eq!(depths["f1"], 0);
 }
+
+#[test]
+fn format_ring_bytes_is_human_readable_and_none_at_zero() {
+    use super::format_ring_bytes;
+    assert_eq!(format_ring_bytes(0), None);
+    // < 1 MiB → KB, rounded up so a non-zero footprint never shows "0 KB".
+    assert_eq!(format_ring_bytes(1), Some("1 KB".to_string()));
+    assert_eq!(format_ring_bytes(500 * 1024), Some("500 KB".to_string()));
+    // >= 1 MiB → MB with one decimal.
+    assert_eq!(format_ring_bytes(1024 * 1024), Some("1.0 MB".to_string()));
+    assert_eq!(format_ring_bytes(3 * 1024 * 1024 + 512 * 1024), Some("3.5 MB".to_string()));
+}

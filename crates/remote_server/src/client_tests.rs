@@ -659,6 +659,7 @@ async fn list_sessions_round_trip() {
                     cwd: "/home/me/work".to_string(),
                     alive: true,
                     last_attached_epoch_millis: 123,
+                    ring_bytes: 0,
                 },
                 SessionInfo {
                     session_id: "s2".to_string(),
@@ -666,6 +667,7 @@ async fn list_sessions_round_trip() {
                     cwd: "/var/log".to_string(),
                     alive: true,
                     last_attached_epoch_millis: 456,
+                    ring_bytes: 0,
                 },
             ],
         })

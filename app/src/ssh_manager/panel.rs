@@ -1978,7 +1978,10 @@ impl SshManagerPanel {
                 } else {
                     pty_session_id.clone()
                 };
-                let row = Flex::row()
+                // Per-session RAM (the daemon's output-ring footprint the memory
+                // governor accounts against the host cap) — muted, trailing.
+                let ram_text = format_ring_bytes(session.ring_bytes);
+                let mut row = Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_spacing(ITEM_ICON_TEXT_SPACING)
                     .with_child(
@@ -1994,9 +1997,19 @@ impl SshManagerPanel {
                         )
                         .with_color(theme.main_text_color(theme.background()).into())
                         .finish(),
-                    )
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .finish();
+                    );
+                if let Some(ram) = ram_text {
+                    row = row.with_child(
+                        Text::new_inline(
+                            ram,
+                            appearance.ui_font_family(),
+                            appearance.ui_font_subheading(),
+                        )
+                        .with_color(theme.sub_text_color(theme.background()).into())
+                        .finish(),
+                    );
+                }
+                let row = row.with_main_axis_size(MainAxisSize::Max).finish();
                 Hoverable::new(state, move |mouse| {
                     let mut c = Container::new(row)
                         .with_padding_top(ITEM_PADDING_VERTICAL)
@@ -2694,6 +2707,21 @@ fn unique_name(
         }
     }
     Ok(format!("{base} {}", uuid::Uuid::new_v4()))
+}
+
+/// Human-readable per-session RAM (output-ring bytes) for the session list.
+/// `None` for 0 (unknown / not reported) so no chrome shows. KB below 1 MiB,
+/// else MB with one decimal.
+fn format_ring_bytes(bytes: u64) -> Option<String> {
+    if bytes == 0 {
+        return None;
+    }
+    let b = bytes as f64;
+    if b >= 1024.0 * 1024.0 {
+        Some(format!("{:.1} MB", b / (1024.0 * 1024.0)))
+    } else {
+        Some(format!("{} KB", (b / 1024.0).ceil() as u64))
+    }
 }
 
 #[cfg(test)]

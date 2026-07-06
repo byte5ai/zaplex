@@ -2167,6 +2167,9 @@ impl ServerModel {
                     cwd: session.cwd.clone().unwrap_or_default(),
                     alive: true,
                     last_attached_epoch_millis: session.last_attached_ms,
+                    // Per-session output-ring footprint the memory governor
+                    // accounts against the host cap (see `gc_sessions`).
+                    ring_bytes: session.ring.len() as u64,
                 }
             })
             .collect();
