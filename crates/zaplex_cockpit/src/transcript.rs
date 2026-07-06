@@ -223,6 +223,57 @@ pub fn parse_transcript(jsonl: &str) -> Vec<TranscriptTurn> {
     turns
 }
 
+/// Short model family for a turn header (`claude-opus-4-8` → `opus`), falling
+/// back to the raw id. Empty string for an unknown/missing model.
+fn model_family(model: &str) -> &str {
+    for fam in ["opus", "sonnet", "haiku", "fable"] {
+        if model.to_ascii_lowercase().contains(fam) {
+            return fam;
+        }
+    }
+    model
+}
+
+/// Render parsed turns as a readable Markdown document for the transcript
+/// viewer (opened in the existing code/text pane — no bespoke pane type).
+/// User turns become `## You`, assistant turns `## Claude · <model>`; thinking
+/// is a collapsed detail, tool calls a compact list. This is the human-facing
+/// projection of [`parse_transcript`]; the structured turns stay available for
+/// other consumers (usage, watch mode).
+pub fn format_transcript_markdown(turns: &[TranscriptTurn]) -> String {
+    let mut out = String::new();
+    for turn in turns {
+        match turn.role {
+            TurnRole::User => out.push_str("## You\n\n"),
+            TurnRole::Assistant => {
+                let fam = turn.model.as_deref().map(model_family).unwrap_or("");
+                if fam.is_empty() {
+                    out.push_str("## Claude\n\n");
+                } else {
+                    out.push_str(&format!("## Claude · {fam}\n\n"));
+                }
+            }
+        }
+        if !turn.thinking.is_empty() {
+            // Collapsed so the answer stays front-and-center, available on demand.
+            out.push_str("<details><summary>thinking</summary>\n\n");
+            out.push_str(turn.thinking.trim());
+            out.push_str("\n\n</details>\n\n");
+        }
+        if !turn.tools.is_empty() {
+            let names: Vec<&str> = turn.tools.iter().map(|t| t.name.as_str()).collect();
+            out.push_str(&format!("`⚙ {}`\n\n", names.join(", ")));
+        }
+        if !turn.text.is_empty() {
+            out.push_str(turn.text.trim());
+            out.push_str("\n\n");
+        }
+        out.push_str("---\n\n");
+    }
+    out.truncate(out.trim_end().len());
+    out
+}
+
 #[cfg(test)]
 #[path = "transcript_tests.rs"]
 mod tests;

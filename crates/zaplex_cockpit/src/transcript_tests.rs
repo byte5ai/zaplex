@@ -83,3 +83,59 @@ fn bare_string_assistant_content_is_read_as_text() {
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].text, "plain string answer");
 }
+
+// ── format_transcript_markdown ─────────────────────────────────────────────
+
+#[test]
+fn markdown_renders_roles_model_thinking_tools() {
+    let turns = vec![
+        TranscriptTurn {
+            role: TurnRole::User,
+            text: "do the thing".into(),
+            thinking: String::new(),
+            tools: vec![],
+            model: None,
+            usage: None,
+            timestamp: None,
+        },
+        TranscriptTurn {
+            role: TurnRole::Assistant,
+            text: "done".into(),
+            thinking: "plan it".into(),
+            tools: vec![ToolCall { name: "Bash".into() }, ToolCall { name: "Edit".into() }],
+            model: Some("claude-opus-4-8".into()),
+            usage: None,
+            timestamp: None,
+        },
+    ];
+    let md = format_transcript_markdown(&turns);
+    assert!(md.contains("## You"));
+    assert!(md.contains("## Claude · opus"), "model family in header: {md}");
+    assert!(md.contains("<details><summary>thinking</summary>"));
+    assert!(md.contains("plan it"));
+    assert!(md.contains("`⚙ Bash, Edit`"));
+    assert!(md.contains("done"));
+}
+
+#[test]
+fn markdown_assistant_without_model_and_empty_is_clean() {
+    let turns = vec![TranscriptTurn {
+        role: TurnRole::Assistant,
+        text: "hi".into(),
+        thinking: String::new(),
+        tools: vec![],
+        model: None,
+        usage: None,
+        timestamp: None,
+    }];
+    let md = format_transcript_markdown(&turns);
+    assert!(md.contains("## Claude\n"));
+    assert!(!md.contains("· "), "no family separator when model unknown");
+    // No trailing separator whitespace.
+    assert!(!md.ends_with("\n\n"));
+}
+
+#[test]
+fn empty_transcript_formats_to_empty_string() {
+    assert_eq!(format_transcript_markdown(&[]), "");
+}

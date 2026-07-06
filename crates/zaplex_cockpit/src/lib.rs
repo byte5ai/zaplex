@@ -32,7 +32,9 @@ pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
 pub use pricing::{ModelPrice, PricingTable};
 pub use overrides::{AccountOverride, AccountOverrides};
 pub use routing::{is_over_budget, pick_freest, rank_by_freeness, OVER_BUDGET_HEAT};
-pub use transcript::{parse_transcript, ToolCall, TranscriptTurn, TurnRole, TurnUsage};
+pub use transcript::{
+    format_transcript_markdown, parse_transcript, ToolCall, TranscriptTurn, TurnRole, TurnUsage,
+};
 pub use types::{
     Account, AccountStatus, AccountUsage, CockpitSnapshot, Provider, SessionSnapshot, SessionState,
     UsageEntry, UsageProvenance, WindowTotals,
