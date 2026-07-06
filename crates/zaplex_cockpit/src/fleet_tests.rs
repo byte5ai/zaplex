@@ -171,6 +171,94 @@ fn idle_sessions_never_count_as_needs_me() {
 }
 
 #[test]
+fn fold_empty_remote_list_is_exactly_the_local_tree() {
+    // With no daemons, the fold must equal building a single-host tree from the
+    // local sessions — nothing regresses when nothing is connected.
+    let local = vec![
+        session("a", "/home/me/proj", SessionState::Waiting, 10),
+        session("b", "/home/me/other", SessionState::Active, 20),
+    ];
+    let folded = fold_inventory("local", local.clone(), vec![]);
+    let expected = build_fleet_tree(vec![host("local", local)]);
+    assert_eq!(folded, expected);
+    assert_eq!(folded.hosts.len(), 1);
+    assert_eq!(folded.hosts[0].host, "local");
+    assert_eq!(folded.needs_me, 1);
+}
+
+#[test]
+fn fold_two_hosts_sharing_a_path_stay_isolated() {
+    // The SAME absolute path on two different hosts must NOT collapse into one
+    // project node — projects are namespaced by host.
+    let shared = "/home/me/proj";
+    let local = vec![session("l", shared, SessionState::Waiting, 10)];
+    let remote = vec![session("r", shared, SessionState::Active, 20)];
+    let tree = fold_inventory("local", local, vec![("devhost".to_string(), remote)]);
+
+    assert_eq!(
+        tree.hosts.len(),
+        2,
+        "two hosts, never merged by shared path"
+    );
+    let local_host = tree.hosts.iter().find(|h| h.host == "local").unwrap();
+    let dev_host = tree.hosts.iter().find(|h| h.host == "devhost").unwrap();
+    // Each host keeps its own single project rooted at the shared path.
+    assert_eq!(local_host.projects.len(), 1);
+    assert_eq!(dev_host.projects.len(), 1);
+    assert_eq!(local_host.projects[0].root, shared);
+    assert_eq!(dev_host.projects[0].root, shared);
+    // The waiting session is local's; devhost's identical path is a separate node.
+    assert_eq!(local_host.projects[0].sessions[0].session_id, "l");
+    assert_eq!(dev_host.projects[0].sessions[0].session_id, "r");
+}
+
+#[test]
+fn fold_needs_me_bubbles_across_the_whole_fleet() {
+    let local = vec![session("a", "/p/one", SessionState::Waiting, 5)];
+    let dev = vec![
+        session("b", "/p/two", SessionState::Waiting, 6),
+        session("c", "/p/two", SessionState::Active, 7),
+    ];
+    let mac = vec![session("d", "/p/three", SessionState::Monitor, 8)];
+    let tree = fold_inventory(
+        "local",
+        local,
+        vec![("devhost".to_string(), dev), ("macmini".to_string(), mac)],
+    );
+    // Grand total spans every host: 1 (local) + 1 (devhost) + 0 (macmini).
+    assert_eq!(tree.needs_me, 2);
+    assert_eq!(tree.hosts.len(), 3);
+    // Hosts with waiting work sort ahead of the quiet one.
+    assert_eq!(tree.hosts[0].needs_me, 1);
+    assert_eq!(tree.hosts[1].needs_me, 1);
+    assert_eq!(
+        tree.hosts
+            .iter()
+            .find(|h| h.host == "macmini")
+            .unwrap()
+            .needs_me,
+        0
+    );
+}
+
+#[test]
+fn fold_identity_is_host_scoped_session_id() {
+    // The same session_id on two hosts must remain two distinct leaves — id is
+    // unique only within a host.
+    let local = vec![session("dup", "/p/a", SessionState::Waiting, 10)];
+    let remote = vec![session("dup", "/p/b", SessionState::Waiting, 20)];
+    let tree = fold_inventory("local", local, vec![("devhost".to_string(), remote)]);
+    assert_eq!(tree.needs_me, 2, "same id on two hosts counts twice");
+    let total_sessions: usize = tree
+        .hosts
+        .iter()
+        .flat_map(|h| h.projects.iter())
+        .map(|p| p.sessions.len())
+        .sum();
+    assert_eq!(total_sessions, 2);
+}
+
+#[test]
 fn empty_hosts_are_dropped_and_empty_fleet_is_zero() {
     let tree = build_fleet_tree(vec![
         host("idle", vec![]),

@@ -6621,11 +6621,12 @@ impl Workspace {
 
         self.daemon_session_hosts
             .insert(session_id, server.host.clone());
+        let host_label = server.host.clone();
         let transport =
             SshTransport::new(socket_path, auth_context.clone()).with_self_heal(server);
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.mark_session_persistent(session_id);
-            mgr.connect_session(session_id, transport, auth_context, ctx);
+            mgr.connect_session(session_id, transport, auth_context, host_label, ctx);
         });
     }
 
@@ -6790,11 +6791,12 @@ impl Workspace {
                     );
                     let transport = SshTransport::new(socket_path, auth_context.clone())
                         .with_self_heal(server_for_transport);
+                    let host_label = host.clone();
                     RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
                         // Persistent: a transport drop (ssh slave exit) must trigger
                         // reconnect — the daemon keeps the session alive (§9).
                         mgr.mark_session_persistent(session_id);
-                        mgr.connect_session(session_id, transport, auth_context, ctx);
+                        mgr.connect_session(session_id, transport, auth_context, host_label, ctx);
                     });
                 }
                 Err(e) => {

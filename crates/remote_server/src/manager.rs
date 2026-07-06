@@ -195,6 +195,17 @@ pub enum RemoteSessionState {
     Connected {
         client: Arc<RemoteServerClient>,
         host_id: HostId,
+        /// Human host label (the SSH host name), carried from `connect_session`
+        /// so cross-host surfaces (the Agent-Inventory fold) can tag this host's
+        /// sessions with a stable, user-recognizable name rather than the opaque
+        /// `HostId`. Falls back to the `HostId` string when no label was
+        /// supplied. Survives reconnects via `session_host_labels`.
+        host_label: String,
+        /// Capabilities the daemon advertised in its `InitializeResponse`
+        /// (see [`zaplex_remote_session::types::supported_features`]). Consumed
+        /// by capability-gated calls such as `list_agent_sessions` — a host
+        /// that does not advertise `agent-inventory` is skipped, never errored.
+        features: Vec<String>,
         /// Identity key that was active when this session was established.
         /// Used by `rotate_auth_token` to ensure token rotation notifications
         /// are only delivered to sessions that belong to the current user
@@ -448,6 +459,20 @@ struct SessionBootstrapInfo {
     shell_path: Option<String>,
 }
 
+/// A live daemon connection as seen by cross-host consumers (the Agent-Inventory
+/// fold). One entry per connected **host** — see [`RemoteServerManager::connected_daemons`].
+#[derive(Clone)]
+pub struct ConnectedDaemon {
+    /// Human host label (SSH host name) for tagging this host's sessions.
+    pub host_label: String,
+    /// Live client handle — call e.g. `list_agent_sessions()` on it.
+    pub client: Arc<RemoteServerClient>,
+    /// Capabilities the daemon advertised at handshake. Gate feature-specific
+    /// requests on this (e.g. `agent-inventory`) so an old daemon is skipped
+    /// rather than erroring.
+    pub features: Vec<String>,
+}
+
 /// Singleton model that manages connections to `remote_server` processes on
 /// remote hosts.
 ///
@@ -479,6 +504,11 @@ pub struct RemoteServerManager {
     /// Detected remote platform per session, populated during the binary check
     /// phase via `detect_platform()`. Used for telemetry.
     session_platforms: HashMap<SessionId, RemotePlatform>,
+    /// Human host label (SSH host name) per session, recorded at
+    /// `connect_session` time. Kept in its own map so it survives the
+    /// `Connected → Reconnecting → Connected` cycle (the reconnect path only
+    /// carries the `HostId`); cleared on `deregister_session`.
+    session_host_labels: HashMap<SessionId, String>,
     /// Sessions backed by a persistent daemon (native remote-session layer). For
     /// these, a transport-child exit on a network blip does NOT mean the remote
     /// session died — the daemon keeps it running — so `mark_session_disconnected`
@@ -503,6 +533,7 @@ impl RemoteServerManager {
             session_bootstrap_info: HashMap::new(),
             auth_context: None,
             session_platforms: HashMap::new(),
+            session_host_labels: HashMap::new(),
             persistent_session_ids: HashSet::new(),
         }
     }
@@ -734,10 +765,18 @@ impl RemoteServerManager {
         session_id: SessionId,
         transport: T,
         auth_context: Arc<RemoteServerAuthContext>,
+        host_label: String,
         ctx: &mut ModelContext<Self>,
     ) where
         T: RemoteTransport + 'static,
     {
+        // Record the human host label up front so it survives the whole
+        // connect (and any later reconnect) and can tag this host's sessions in
+        // the cross-host Agent-Inventory fold.
+        if !host_label.is_empty() {
+            self.session_host_labels.insert(session_id, host_label);
+        }
+
         #[cfg(target_family = "wasm")]
         {
             log::warn!("connect_session is a no-op on WASM");
@@ -779,12 +818,13 @@ impl RemoteServerManager {
                     )
                     .await
                     {
-                        Ok(host_id) => {
+                        Ok((host_id, features)) => {
                             let _ = spawner
                                 .spawn(move |me, ctx| {
                                     me.mark_session_connected(
                                         session_id,
                                         host_id,
+                                        features,
                                         identity_key,
                                         transport,
                                         ctx,
@@ -835,7 +875,7 @@ impl RemoteServerManager {
         auth_context: &RemoteServerAuthContext,
         spawner: &ModelSpawner<Self>,
         executor: &Arc<warpui::r#async::executor::Background>,
-    ) -> Result<HostId, ConnectAndHandshakeError> {
+    ) -> Result<(HostId, Vec<String>), ConnectAndHandshakeError> {
         // Phase 1: Connect (establish streams, create client).
         let Connection {
             client,
@@ -927,7 +967,7 @@ impl RemoteServerManager {
             )));
         }
 
-        Ok(HostId::new(resp.host_id))
+        Ok((HostId::new(resp.host_id), resp.features))
     }
 
     /// Removes a session from the manager and tears down its connection.
@@ -1014,6 +1054,7 @@ impl RemoteServerManager {
         self.last_navigated_path.remove(&session_id);
         self.session_bootstrap_info.remove(&session_id);
         self.session_platforms.remove(&session_id);
+        self.session_host_labels.remove(&session_id);
         self.persistent_session_ids.remove(&session_id);
 
         // Remove the session entry. Dropping the `RemoteSessionState`
@@ -1068,6 +1109,38 @@ impl RemoteServerManager {
                     .detach();
             }
         }
+    }
+
+    /// Returns one entry per connected **host** for cross-host consumers (the
+    /// Agent-Inventory fold): its human label, a live client handle, and the
+    /// capabilities it advertised at handshake.
+    ///
+    /// Deduplicated by `HostId`: a host may back several sessions (multiple
+    /// tabs), but its agent-session inventory is host-wide, so querying it once
+    /// per host is both sufficient and correct. Only `Connected` sessions are
+    /// included; connecting/reconnecting/disconnected ones contribute nothing.
+    pub fn connected_daemons(&self) -> Vec<ConnectedDaemon> {
+        let mut seen: HashSet<&HostId> = HashSet::new();
+        let mut out = Vec::new();
+        for state in self.sessions.values() {
+            if let RemoteSessionState::Connected {
+                client,
+                host_id,
+                host_label,
+                features,
+                ..
+            } = state
+            {
+                if seen.insert(host_id) {
+                    out.push(ConnectedDaemon {
+                        host_label: host_label.clone(),
+                        client: Arc::clone(client),
+                        features: features.clone(),
+                    });
+                }
+            }
+        }
+        out
     }
 
     /// Returns the client for this session, if connected.
@@ -1405,6 +1478,7 @@ impl RemoteServerManager {
         &mut self,
         session_id: SessionId,
         host_id: HostId,
+        features: Vec<String>,
         identity_key: String,
         transport: Arc<dyn RemoteTransport>,
         ctx: &mut ModelContext<Self>,
@@ -1421,12 +1495,22 @@ impl RemoteServerManager {
             return;
         };
 
+        // Human host label recorded at connect time; fall back to the opaque
+        // HostId string when none was supplied (keeps the fold's tags non-empty).
+        let host_label = self
+            .session_host_labels
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_else(|| host_id.to_string());
+
         let is_first_session = !self.host_to_sessions.contains_key(&host_id);
         self.sessions.insert(
             session_id,
             RemoteSessionState::Connected {
                 client: client.clone(),
                 host_id: host_id.clone(),
+                host_label,
+                features,
                 identity_key,
                 _child,
                 control_path,
@@ -1675,7 +1759,7 @@ impl RemoteServerManager {
                 )
                 .await
                 {
-                    Ok(new_host_id) => {
+                    Ok((new_host_id, features)) => {
                         let _ = spawner
                             .spawn(move |me, ctx| {
                                 // If the session was deregistered during the
@@ -1690,6 +1774,7 @@ impl RemoteServerManager {
                                 me.mark_session_connected(
                                     session_id,
                                     new_host_id.clone(),
+                                    features,
                                     identity_key,
                                     transport,
                                     ctx,

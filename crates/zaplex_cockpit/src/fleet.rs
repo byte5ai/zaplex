@@ -127,6 +127,45 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
     FleetTree { hosts, needs_me }
 }
 
+/// Fold this machine's local sessions plus every connected daemon's
+/// contribution into a single cross-host [`FleetTree`] — the unified
+/// Agent-Inventory the Conductor renders and the attention ambient-bit reads.
+///
+/// `local_label` names the local host (the machine hostname, or `"local"` when
+/// that is unavailable); `local` are its sessions. `remotes` is one
+/// `(host_label, sessions)` entry per connected daemon that advertised the
+/// agent-inventory capability — a daemon without it (or one that errored)
+/// simply contributes no entry, so a single unreachable host never fails the
+/// whole fold.
+///
+/// **Host namespacing.** Every host — local and each remote — becomes its own
+/// [`HostSessions`], so two hosts that happen to share an absolute path (e.g.
+/// `/home/me/proj` on both `local` and `devhost`) land in *separate* host
+/// nodes and never collapse into one project. [`build_fleet_tree`] groups
+/// sessions by `project_root` **within** a host only; identity is therefore
+/// `(host, session_id)`, and a host-local `pid` is never assumed globally
+/// unique. Empty hosts are dropped by `build_fleet_tree` (a host with no
+/// sessions is not listed), so `fold_inventory` with an empty `remotes` list
+/// yields exactly the local tree.
+///
+/// Pure — no IO, no remote calls. The live fetch that produces `remotes` lives
+/// in the app's `CockpitModel`.
+pub fn fold_inventory(
+    local_label: impl Into<String>,
+    local: Vec<SessionSnapshot>,
+    remotes: Vec<(String, Vec<SessionSnapshot>)>,
+) -> FleetTree {
+    let mut inputs = Vec::with_capacity(1 + remotes.len());
+    inputs.push(HostSessions {
+        host: local_label.into(),
+        sessions: local,
+    });
+    for (host, sessions) in remotes {
+        inputs.push(HostSessions { host, sessions });
+    }
+    build_fleet_tree(inputs)
+}
+
 #[cfg(test)]
 #[path = "fleet_tests.rs"]
 mod tests;
