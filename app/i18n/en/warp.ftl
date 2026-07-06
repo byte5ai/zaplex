@@ -3682,3 +3682,6 @@ workflow-enum-variants = Variants
 quit-warning-dont-save = Don't Save
 quit-warning-show-running-processes = Show running processes
 quit-warning-save-changes-title = Save changes?
+cockpit-flow-quick-issue = ⚡ Draft GitHub issue (freest)
+cockpit-flow-pr-review = ⚡ Review a PR (freest)
+cockpit-flow-triage = ⚡ Triage an issue (freest)

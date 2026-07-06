@@ -185,6 +185,47 @@ pub fn gh_pr_merge_cmd(number: u64, repo: Option<&str>) -> String {
     format!("gh pr merge {}{} --squash", number, repo_flag(repo))
 }
 
+// ── Flow prompts ───────────────────────────────────────────────────────────
+//
+// The instance-driven flows launch a Claude agent (on the freest subscription)
+// with a task prompt prefilled and ready to send — the "instance drafts →
+// review loop" the audit calls for, in zaplex's delegate-to-your-agent idiom.
+// The prompts keep the human in the loop: the agent drafts and *shows* the exact
+// `gh` command, and only runs it after the user confirms.
+
+/// Quick-Issue: draft a GitHub issue from the current repo context.
+pub fn quick_issue_prompt() -> String {
+    "You are drafting a GitHub issue for this repository. \
+     Look at the recent work (git log/diff, failing tests, TODOs as relevant), \
+     then propose a concise issue: a clear title, a body with context + \
+     repro/acceptance criteria, and suggested labels. \
+     Show me the draft and the exact `gh issue create` command, and only run it \
+     after I confirm. Do not create anything without my explicit go-ahead."
+        .to_string()
+}
+
+/// PR-Review: pick an open PR, analyze it, and act via `gh`.
+pub fn pr_review_prompt() -> String {
+    "You are reviewing a pull request for this repository. \
+     Run `gh pr list` and ask me which PR to review (or take the number I give). \
+     Read the diff, summarize the change, and flag correctness/security/style \
+     issues with file:line references. Then recommend approve / comment / \
+     request-changes, show me the exact `gh pr review` command, and only run it \
+     after I confirm."
+        .to_string()
+}
+
+/// Issue-Triage: classify an open issue and act via `gh`.
+pub fn triage_prompt() -> String {
+    "You are triaging GitHub issues for this repository. \
+     Run `gh issue list` and ask me which issue to triage (or take the number I \
+     give). Classify its type (bug/feature/question/docs), priority, and whether \
+     it is actionable as written. Propose a triage comment and, if it is a \
+     duplicate or not-a-bug, whether to close it. Show me the exact `gh` \
+     command(s) and only run them after I confirm."
+        .to_string()
+}
+
 #[cfg(test)]
 #[path = "github_flows_tests.rs"]
 mod tests;

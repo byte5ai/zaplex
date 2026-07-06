@@ -631,6 +631,16 @@ pub enum WorkspaceAction {
         prompt: String,
         agent: Option<crate::terminal::cli_agent::CLIAgent>,
     },
+    /// Like [`WorkspaceAction::AskAgent`] but the agent is launched **routed to a
+    /// subscription** (C4 plexing): open a Claude tab pinned to `config_dir`'s
+    /// account (API-key env scrubbed) with `prompt` prefilled and ready to send.
+    /// Backs the C5 GitHub instance-flows (Quick-Issue / PR-Review / Triage) so a
+    /// background task runs on the freest instance. `config_dir: None` = default
+    /// login.
+    AskAgentRouted {
+        prompt: String,
+        config_dir: Option<PathBuf>,
+    },
     /// Fork an agent conversation into a NEW session (fork/worktree design §2):
     /// opens a terminal tab in the source session's cwd — or, with
     /// `into_worktree`, in a fresh sibling git worktree of its repo — and runs
@@ -930,6 +940,7 @@ impl WorkspaceAction {
             | TabConfigSidecarRemoveConfig { .. }
             | OpenSettingsFile
             | AskAgent { .. }
+            | AskAgentRouted { .. }
             | ForkAgentSession { .. }
             | AdoptAgentSession { .. }
             | ViewTranscript { .. }
