@@ -3,11 +3,11 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::proto::{
     client_message, read_file_chunk_response, resolve_path_response, run_command_response,
-    server_message, write_file_chunk_response, ClientMessage, ErrorCode, FileSystemEntryKind,
-    InitializeResponse, ReadFileChunkResponse, ReadFileChunkSuccess, ResolvePathResponse,
-    ResolvePathSuccess, RunCommandResponse, RunCommandSuccess, ServerMessage, SessionAttached,
-    SessionExited, SessionInfo, SessionList, SessionOpened, SessionOutput, SessionSize,
-    WriteFileChunkResponse, WriteFileChunkSuccess,
+    server_message, write_file_chunk_response, AgentSessionInfo, AgentSessionList, ClientMessage,
+    ErrorCode, FileSystemEntryKind, InitializeResponse, ReadFileChunkResponse,
+    ReadFileChunkSuccess, ResolvePathResponse, ResolvePathSuccess, RunCommandResponse,
+    RunCommandSuccess, ServerMessage, SessionAttached, SessionExited, SessionInfo, SessionList,
+    SessionOpened, SessionOutput, SessionSize, WriteFileChunkResponse, WriteFileChunkSuccess,
 };
 use crate::protocol;
 use warp_core::SessionId;
@@ -474,7 +474,10 @@ async fn attach_session_round_trip() {
         })
     });
 
-    let resp = client.attach_session("sess-1".to_string(), 42).await.unwrap();
+    let resp = client
+        .attach_session("sess-1".to_string(), 42)
+        .await
+        .unwrap();
     assert_eq!(resp.base_seq, 42);
     assert_eq!(resp.replay, b"replayed");
 }
@@ -582,7 +585,10 @@ async fn send_session_input_sends_frame() {
 
     let msg = read_one_client_frame(
         client,
-        |c| c.send_session_input("sess-1".to_string(), b"abc".to_vec()).unwrap(),
+        |c| {
+            c.send_session_input("sess-1".to_string(), b"abc".to_vec())
+                .unwrap()
+        },
         server_read,
     )
     .await;
@@ -606,7 +612,10 @@ async fn send_resize_session_sends_frame() {
 
     let msg = read_one_client_frame(
         client,
-        |c| c.send_resize_session("sess-1".to_string(), 50, 120).unwrap(),
+        |c| {
+            c.send_resize_session("sess-1".to_string(), 50, 120)
+                .unwrap()
+        },
         server_read,
     )
     .await;
@@ -679,4 +688,61 @@ async fn list_sessions_round_trip() {
     assert_eq!(resp.sessions[0].cwd, "/home/me/work");
     assert!(resp.sessions[0].alive);
     assert_eq!(resp.sessions[1].last_attached_epoch_millis, 456);
+}
+
+#[tokio::test]
+async fn list_agent_sessions_round_trip() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        match &msg.message {
+            Some(client_message::Message::ListAgentSessions(_)) => {}
+            other => panic!("expected ListAgentSessions, got {other:?}"),
+        }
+        server_message::Message::AgentSessionList(AgentSessionList {
+            sessions: vec![
+                AgentSessionInfo {
+                    session_id: "a1".to_string(),
+                    cwd: "/home/me/proj/src".to_string(),
+                    name: "feature-work".to_string(),
+                    state: "waiting".to_string(),
+                    provider: "claude".to_string(),
+                    model: "claude-opus-4-8".to_string(),
+                    effort: "high".to_string(),
+                    ctx_tokens: 42_000,
+                    project_root: "/home/me/proj".to_string(),
+                    project_name: "proj".to_string(),
+                    last_activity_epoch_millis: 1_720_000_000_123,
+                    pid: 4242,
+                },
+                AgentSessionInfo {
+                    session_id: "a2".to_string(),
+                    cwd: "/home/me/other".to_string(),
+                    name: String::new(),
+                    state: "idle".to_string(),
+                    provider: "codex".to_string(),
+                    model: String::new(),
+                    // Empty = honestly-unknown effort.
+                    effort: String::new(),
+                    ctx_tokens: 0,
+                    project_root: "/home/me/other".to_string(),
+                    project_name: "other".to_string(),
+                    last_activity_epoch_millis: 0,
+                    pid: 0,
+                },
+            ],
+        })
+    });
+
+    let resp = client.list_agent_sessions().await.unwrap();
+    assert_eq!(resp.sessions.len(), 2);
+    assert_eq!(resp.sessions[0].session_id, "a1");
+    assert_eq!(resp.sessions[0].state, "waiting");
+    assert_eq!(resp.sessions[0].provider, "claude");
+    assert_eq!(resp.sessions[0].effort, "high");
+    assert_eq!(
+        resp.sessions[0].last_activity_epoch_millis,
+        1_720_000_000_123
+    );
+    assert_eq!(resp.sessions[1].state, "idle");
+    assert_eq!(resp.sessions[1].provider, "codex");
+    assert!(resp.sessions[1].effort.is_empty());
 }

@@ -28,8 +28,17 @@ fn supported_features_advertises_session_host_on_unix() {
     assert!(has_feature(&supported_features(), FEATURE_SESSION_HOST));
 }
 
+#[test]
+fn supported_features_advertises_agent_inventory_on_all_platforms() {
+    // Agent-session inventory is filesystem-based (no PTY), so it is advertised
+    // regardless of platform.
+    assert!(has_feature(&supported_features(), FEATURE_AGENT_INVENTORY));
+}
+
 #[cfg(not(unix))]
 #[test]
-fn supported_features_empty_on_non_unix() {
-    assert!(supported_features().is_empty());
+fn supported_features_omits_session_host_on_non_unix() {
+    // Non-unix daemons own no PTYs, so they do not advertise the session host —
+    // but they still report agent inventory.
+    assert!(!has_feature(&supported_features(), FEATURE_SESSION_HOST));
 }

@@ -10,17 +10,16 @@ use futures::io::{AsyncRead, AsyncWrite};
 use warpui::r#async::{executor, FutureExt as _};
 
 use crate::proto::{
-    client_message, server_message, Abort, Authenticate, BufferEdit, ClientMessage, CloseBuffer,
-    CreateDirectory, CreateDirectoryResponse, DeleteFile, ErrorCode, Initialize,
-    InitializeResponse, ListDirectory, ListDirectoryResponse, LoadRepoMetadataDirectoryResponse,
-    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileChunk,
-    read_file_chunk_response, ReadFileChunkResponse, ReadFileContextRequest,
-    ReadFileContextResponse, ResolveConflict,
-    ResolveConflictResponse, ResolvePath, ResolvePathResponse, RunCommandRequest,
-    RunCommandResponse, SaveBuffer, SaveBufferResponse, ServerMessage, SessionBootstrapped,
-    TextEdit, WriteFile, WriteFileChunk, WriteFileChunkResponse,
-    AttachSession, DetachSession, ListSessions, OpenSession, ResizeSession, SessionAttached,
-    SessionInput, SessionList, SessionOpened, SessionSize,
+    client_message, read_file_chunk_response, server_message, Abort, AgentSessionList,
+    AttachSession, Authenticate, BufferEdit, ClientMessage, CloseBuffer, CreateDirectory,
+    CreateDirectoryResponse, DeleteFile, DetachSession, ErrorCode, Initialize, InitializeResponse,
+    ListAgentSessions, ListDirectory, ListDirectoryResponse, ListSessions,
+    LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, OpenBuffer,
+    OpenBufferResponse, OpenSession, ReadFileChunk, ReadFileChunkResponse, ReadFileContextRequest,
+    ReadFileContextResponse, ResizeSession, ResolveConflict, ResolveConflictResponse, ResolvePath,
+    ResolvePathResponse, RunCommandRequest, RunCommandResponse, SaveBuffer, SaveBufferResponse,
+    ServerMessage, SessionAttached, SessionBootstrapped, SessionInput, SessionList, SessionOpened,
+    SessionSize, TextEdit, WriteFile, WriteFileChunk, WriteFileChunkResponse,
 };
 
 use crate::protocol::{self, ProtocolError, RequestId};
@@ -498,7 +497,9 @@ impl RemoteServerClient {
         let mut bytes = Vec::new();
         let mut offset = 0u64;
         loop {
-            let response = self.read_file_chunk(path.clone(), offset, CHUNK_SIZE).await?;
+            let response = self
+                .read_file_chunk(path.clone(), offset, CHUNK_SIZE)
+                .await?;
             let success = match response.result {
                 Some(read_file_chunk_response::Result::Success(success)) => success,
                 Some(read_file_chunk_response::Result::Error(err)) => {
@@ -720,6 +721,33 @@ impl RemoteServerClient {
             Some(server_message::Message::SessionList(resp)) => Ok(resp),
             other => {
                 log::error!("Unexpected response variant for ListSessions: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Lists the daemon host's agent-session inventory (Claude/Codex CLI
+    /// conversations discovered on the daemon's filesystem) for the unified
+    /// cross-host Agent-Inventory tree.
+    ///
+    /// Capability-gated: callers must only invoke this against a daemon that
+    /// advertises [`FEATURE_AGENT_INVENTORY`](zaplex_remote_session::types::FEATURE_AGENT_INVENTORY)
+    /// in its `InitializeResponse.features`. An old daemon without that feature
+    /// must be skipped entirely (treated as contributing zero agent-sessions),
+    /// never erroring the whole tree.
+    pub async fn list_agent_sessions(&self) -> Result<AgentSessionList, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::ListAgentSessions(
+                ListAgentSessions {},
+            )),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::AgentSessionList(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for ListAgentSessions: {other:?}");
                 Err(ClientError::UnexpectedResponse)
             }
         }

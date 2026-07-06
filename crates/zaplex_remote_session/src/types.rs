@@ -24,6 +24,19 @@ pub const FEATURE_SESSION_HOST: &str = "session-host";
 /// `docs/superpowers/specs/2026-06-28-stage-b3-udp-transport-design.md`.
 pub const FEATURE_UDP_TRANSPORT: &str = "udp-transport";
 
+/// Capability identifier advertised by the daemon in `InitializeResponse.features`:
+/// it signals that the daemon can report its host's **agent-session inventory**
+/// (Claude/Codex CLI conversations discovered on the daemon's filesystem) via
+/// `ListAgentSessions` → `AgentSessionList` — the Agent-Cockpit's cross-host tree.
+///
+/// A client talking to an old daemon that omits this feature must skip the
+/// `ListAgentSessions` call and treat that host as contributing zero
+/// agent-sessions, never erroring the whole tree.
+///
+/// Unlike [`FEATURE_SESSION_HOST`] this is filesystem-based (no PTY ownership),
+/// so it is advertised on all platforms.
+pub const FEATURE_AGENT_INVENTORY: &str = "agent-inventory";
+
 /// A persistent session identifier assigned by the daemon.
 ///
 /// Unlike the protocol's existing `session_id: uint64` (which is the client's
@@ -72,14 +85,15 @@ impl std::fmt::Display for SessionId {
 /// Non-unix targets do not own PTYs, so they advertise nothing — honest
 /// advertisement: never claim a capability we cannot fulfil.
 pub fn supported_features() -> Vec<String> {
+    // Agent-session inventory is filesystem-based (no PTY), so every daemon
+    // build advertises it regardless of platform.
+    let mut features = vec![FEATURE_AGENT_INVENTORY.to_string()];
+    // The native PTY session host is unix-only: non-unix targets do not own
+    // PTYs, so they advertise nothing more — honest advertisement, never claim
+    // a capability we cannot fulfil.
     #[cfg(unix)]
-    {
-        vec![FEATURE_SESSION_HOST.to_string()]
-    }
-    #[cfg(not(unix))]
-    {
-        Vec::new()
-    }
+    features.push(FEATURE_SESSION_HOST.to_string());
+    features
 }
 
 /// Returns whether `feature` appears in the daemon-advertised `features` list.
