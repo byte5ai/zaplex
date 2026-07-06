@@ -37,6 +37,8 @@ pub enum Language {
     System,
     #[schemars(description = "English")]
     English,
+    #[schemars(description = "Deutsch (German)")]
+    German,
 }
 
 impl std::fmt::Display for Language {
@@ -44,6 +46,7 @@ impl std::fmt::Display for Language {
         let value = match self {
             Language::System => "System default",
             Language::English => "English",
+            Language::German => "Deutsch",
         };
         write!(f, "{value}")
     }
@@ -55,6 +58,7 @@ impl Language {
         match self {
             Language::System => None,
             Language::English => Some("en"),
+            Language::German => Some("de"),
         }
     }
 }
