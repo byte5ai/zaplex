@@ -114,6 +114,7 @@ pub fn init(app: &mut AppContext) {
     tab_configs::session_config_modal::init(app);
     view::zap_launch_modal::init(app);
     view::codex_modal::init(app);
+    view::attention_inbox::init(app);
     view::global_search::view::GlobalSearchView::init(app);
     view::right_panel::RightPanelView::init(app);
     header_toolbar_editor::init(app);
@@ -132,6 +133,17 @@ pub fn init(app: &mut AppContext) {
         WorkspaceAction::DumpDebugInfo,
         id!("Workspace"),
     )]);
+
+    // Attention inbox ("Offene Punkte"): the calm, on-demand list of fleet-wide
+    // waiting agents. Editable so the user can rebind; default cmd/ctrl-shift-o.
+    app.register_editable_bindings([EditableBinding::new(
+        "workspace:open_attention_inbox",
+        crate::t!("keybinding-desc-workspace-open-attention-inbox"),
+        WorkspaceAction::OpenAttentionInbox,
+    )
+    .with_context_predicate(id!("Workspace"))
+    .with_mac_key_binding("cmd-shift-o")
+    .with_linux_or_windows_key_binding("ctrl-shift-o")]);
     app.register_fixed_bindings([
         FixedBinding::new(
             "escape",

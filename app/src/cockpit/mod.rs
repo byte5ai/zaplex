@@ -4,6 +4,7 @@
 //! Increment 1: data only (no UI). The account cards / heat bars / cost UI that
 //! subscribe to `CockpitEvent::Updated` land in Increment 2 (`app/src/cockpit/…`).
 
+pub mod ambient;
 pub mod github_flows;
 pub mod model;
 pub mod oauth;
@@ -12,6 +13,7 @@ pub mod tailscale;
 pub mod panel;
 pub mod settings;
 
+pub use ambient::AttentionDriver;
 pub use model::CockpitModel;
 pub use pane::CockpitPaneView;
 pub use panel::CockpitPanel;

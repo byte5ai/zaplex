@@ -1633,6 +1633,11 @@ fn initialize_app(
     // Cockpit data spine: registered after HomeDirectoryWatcher (which it subscribes to).
     ctx.add_singleton_model(cockpit::CockpitModel::new);
 
+    // Attention ambient-bit driver: subscribes to CockpitModel and paints the
+    // fleet-wide needs-me count onto the Dock badge (+ the single calm→needy
+    // chime). Registered after CockpitModel, which it reads/subscribes to.
+    ctx.add_singleton_model(cockpit::AttentionDriver::new);
+
     // Cross-pane file-manager registry (F5/F6 copy/move target discovery).
     ctx.add_singleton_model(|_| sftp_manager::fm_registry::FileManagerRegistry::new());
 
