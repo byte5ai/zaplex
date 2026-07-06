@@ -585,6 +585,89 @@ impl CockpitPaneView {
     }
 
     /// Aggregate header: account count + summed today/5h/week cost.
+    /// Compact "By project" conductor over *all* accounts' sessions (fleet
+    /// spine): groups by working directory with the needs-me (Waiting) count
+    /// bubbled up, so the project that wants you rises to the top — "which
+    /// project needs me?" at a glance. Cross-account today; extends to
+    /// cross-host when remote session lists land. `None` when there are no live
+    /// sessions (no empty section — design §2.1, no noise).
+    fn render_conductor(
+        &self,
+        accounts: &[AccountUsage],
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let sessions: Vec<_> = accounts
+            .iter()
+            .flat_map(|a| a.sessions.iter().cloned())
+            .collect();
+        if sessions.is_empty() {
+            return None;
+        }
+        let tree = zaplex_cockpit::fleet::build_fleet_tree(vec![
+            zaplex_cockpit::fleet::HostSessions {
+                host: "local".to_string(),
+                sessions,
+            },
+        ]);
+        let projects = tree.hosts.into_iter().next()?.projects;
+        if projects.is_empty() {
+            return None;
+        }
+
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+
+        let mut col = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_child(Self::text(
+                crate::t!("cockpit-conductor-title").to_string(),
+                family,
+                body,
+                muted,
+            ));
+        for p in projects.iter().take(8) {
+            let mut row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(8.0);
+            if p.needs_me > 0 {
+                row = row.with_child(Self::text(
+                    format!("✋ {}", p.needs_me),
+                    family,
+                    body,
+                    heat_coloru(HeatLevel::Critical),
+                ));
+            }
+            row = row
+                .with_child(
+                    Shrinkable::new(1.0, Self::text(p.name.clone(), family, body, main)).finish(),
+                )
+                .with_child(Self::text(
+                    format!(
+                        "{} session{}",
+                        p.sessions.len(),
+                        if p.sessions.len() == 1 { "" } else { "s" }
+                    ),
+                    family,
+                    body,
+                    muted,
+                ));
+            col = col.with_child(row.with_main_axis_size(MainAxisSize::Max).finish());
+        }
+        if projects.len() > 8 {
+            col = col.with_child(Self::text(
+                format!("… {} more", projects.len() - 8),
+                family,
+                body,
+                muted,
+            ));
+        }
+        Some(col.finish())
+    }
+
     fn render_aggregate(
         &self,
         accounts: &[AccountUsage],
@@ -685,6 +768,14 @@ impl View for CockpitPaneView {
                         .with_margin_bottom(CARD_SPACING * 2.0)
                         .finish(),
                 );
+            // "By project" conductor — which project needs me, across accounts.
+            if let Some(conductor) = self.render_conductor(&snapshot.accounts, appearance) {
+                col = col.with_child(
+                    Container::new(conductor)
+                        .with_margin_bottom(CARD_SPACING * 2.0)
+                        .finish(),
+                );
+            }
             for acct in &snapshot.accounts {
                 // Per-account override color (instances.json), resolved from the
                 // model and parsed from its hex string.
