@@ -518,6 +518,7 @@ impl CockpitPaneView {
                 SessionState::Waiting => ("✋", heat_coloru(HeatLevel::Critical)),
                 SessionState::Active => ("●", heat_coloru(HeatLevel::Ok)),
                 SessionState::Monitor => ("◌", muted),
+                SessionState::Idle => ("◦", muted),
             };
             let dir = std::path::Path::new(&session.cwd)
                 .file_name()
