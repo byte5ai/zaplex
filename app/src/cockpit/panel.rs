@@ -3,6 +3,9 @@
 //! live-session quick-list + quick-launch land in later increments (see the cockpit
 //! native-integration design doc). The roomy full dashboard is the main-area pane (C2b).
 
+use std::collections::HashMap;
+use std::path::Path;
+
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
@@ -11,13 +14,25 @@ use warpui::elements::{
     CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Radius, Rect, ScrollbarWidth, Shrinkable, Text,
 };
+use warpui::platform::Cursor;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 use zaplex_cockpit::{
-    format_cost, format_reset, format_tokens, heat_fill, heat_pct_label_with_provenance,
-    AccountUsage, HeatLevel, SessionState, UsageProvenance,
+    fleet_is_large, format_cost, format_reset, format_tokens, heat_fill,
+    heat_pct_label_with_provenance, host_auto_collapsed, host_summary, session_glyph, AccountUsage,
+    FleetTree, HeatLevel, SessionSnapshot, SessionState, UsageProvenance,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
+use crate::WorkspaceAction;
+
+/// Composite `(host, id)` key — session ids are unique only within a host.
+fn host_key(host: &str, id: &str) -> String {
+    format!("{host}\u{0}{id}")
+}
+
+/// Max session rows shown per host in the compact sidebar before an overflow
+/// line — the sidebar is glanceable, the roomy pane is the full view.
+const SIDEBAR_MAX_ROWS_PER_HOST: usize = 6;
 
 const CARD_PADDING: f32 = 8.0;
 const CARD_SPACING: f32 = 4.0;
@@ -45,24 +60,57 @@ pub enum CockpitPanelEvent {
 pub struct CockpitPanel {
     scroll_state: ClippedScrollStateHandle,
     expand_btn: MouseStateHandle,
+    /// Hover/click state per Conductor session row (key = `host\0id`), synced
+    /// against the unified inventory. Clicking a row attaches the agent.
+    conductor_row_states: HashMap<String, MouseStateHandle>,
 }
 
 impl CockpitPanel {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         // Re-render on theme change and whenever the snapshot updates.
         ctx.subscribe_to_model(&Appearance::handle(ctx), |_, _, _, ctx| ctx.notify());
-        ctx.subscribe_to_model(&CockpitModel::handle(ctx), |_, _, event, ctx| {
+        ctx.subscribe_to_model(&CockpitModel::handle(ctx), |me, _, event, ctx| {
             if matches!(event, CockpitEvent::Updated) {
+                me.sync_conductor_states(ctx);
                 ctx.notify();
             }
         });
-        Self {
+        let mut me = Self {
             scroll_state: ClippedScrollStateHandle::default(),
             expand_btn: MouseStateHandle::default(),
+            conductor_row_states: HashMap::new(),
+        };
+        me.sync_conductor_states(ctx);
+        me
+    }
+
+    /// Keep one stable row handle per live fleet session (hover needs a stable
+    /// handle across renders); drop handles of sessions that disappeared.
+    fn sync_conductor_states(&mut self, ctx: &mut ViewContext<Self>) {
+        let inv = CockpitModel::as_ref(ctx).inventory();
+        let live: std::collections::HashSet<String> = inv
+            .hosts
+            .iter()
+            .flat_map(|h| {
+                h.projects.iter().flat_map(move |p| {
+                    p.sessions
+                        .iter()
+                        .map(move |s| host_key(&h.host, &s.session_id))
+                })
+            })
+            .collect();
+        self.conductor_row_states.retain(|k, _| live.contains(k));
+        for key in live {
+            self.conductor_row_states.entry(key).or_default();
         }
     }
 
-    fn text(s: String, family: warpui::fonts::FamilyId, size: f32, color: ColorU) -> Box<dyn Element> {
+    fn text(
+        s: String,
+        family: warpui::fonts::FamilyId,
+        size: f32,
+        color: ColorU,
+    ) -> Box<dyn Element> {
         Text::new_inline(s, family, size).with_color(color).finish()
     }
 
@@ -133,8 +181,11 @@ impl CockpitPanel {
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(6.0)
             .with_child(
-                Shrinkable::new(1.0, Self::text(acct.account.label.clone(), family, sub, main))
-                    .finish(),
+                Shrinkable::new(
+                    1.0,
+                    Self::text(acct.account.label.clone(), family, sub, main),
+                )
+                .finish(),
             );
         if let Some(plan) = &acct.account.plan_tier {
             header = header.with_child(
@@ -218,7 +269,177 @@ impl CockpitPanel {
             .finish()
     }
 
-    fn render_header(&self, snapshot_len: usize, cost5h: f64, cost_wk: f64, appearance: &Appearance) -> Box<dyn Element> {
+    /// The glanceable **Conductor** for the sidebar: the unified cross-host
+    /// inventory in condensed form, waiting-first, collapsing under scale (calm
+    /// hosts fold to a one-line [`host_summary`] when the fleet is large). Rows
+    /// are clickable — a local session attaches on click via
+    /// [`WorkspaceAction::AttachFleetSession`], the same path as the roomy pane
+    /// and the `w`-jump. `None` when the fleet has no live sessions.
+    fn render_conductor(
+        &self,
+        tree: &FleetTree,
+        local_label: &str,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        if tree.hosts.is_empty() {
+            return None;
+        }
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let sub = appearance.ui_font_subheading();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let fleet_large = fleet_is_large(tree);
+
+        let mut col = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_child(Self::text(
+                crate::t!("cockpit-conductor-title").to_string(),
+                family,
+                sub,
+                main,
+            ));
+
+        for host in &tree.hosts {
+            // Inverse-complexity: a calm host in a large fleet folds to one line.
+            if host_auto_collapsed(host, fleet_large) {
+                col = col.with_child(Self::text(host_summary(host), family, body, muted));
+                continue;
+            }
+            let is_local = host.host == local_label;
+            let mut host_header = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(6.0)
+                .with_child(
+                    Shrinkable::new(1.0, Self::text(host.host.clone(), family, body, main))
+                        .finish(),
+                );
+            if host.needs_me > 0 {
+                host_header = host_header.with_child(Self::text(
+                    format!("✋ {}", host.needs_me),
+                    family,
+                    body,
+                    heat_coloru(HeatLevel::Critical),
+                ));
+            }
+            col = col.with_child(host_header.with_main_axis_size(MainAxisSize::Max).finish());
+
+            // Sessions across the host's projects, already waiting-first per
+            // project (projects are needs-me-first). Capped for glanceability.
+            let mut shown = 0usize;
+            let total: usize = host.projects.iter().map(|p| p.sessions.len()).sum();
+            'host: for project in &host.projects {
+                for session in &project.sessions {
+                    if shown >= SIDEBAR_MAX_ROWS_PER_HOST {
+                        break 'host;
+                    }
+                    shown += 1;
+                    col = col.with_child(
+                        Container::new(self.render_conductor_row(
+                            &host.host,
+                            &project.name,
+                            session,
+                            is_local,
+                            appearance,
+                        ))
+                        .with_padding_left(10.0)
+                        .finish(),
+                    );
+                }
+            }
+            if total > shown {
+                col = col.with_child(
+                    Container::new(Self::text(
+                        format!("… {} more", total - shown),
+                        family,
+                        body,
+                        muted,
+                    ))
+                    .with_padding_left(10.0)
+                    .finish(),
+                );
+            }
+        }
+        Some(col.finish())
+    }
+
+    /// One compact Conductor row: `<glyph> <project/name> · <ctx%>`. Local
+    /// sessions attach on click; remote sessions are informational (their agent
+    /// lives on the host — honest, matching the pane and the `w`-jump).
+    fn render_conductor_row(
+        &self,
+        host_label: &str,
+        project_name: &str,
+        session: &SessionSnapshot,
+        is_local: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+
+        let glyph_color = match session.state {
+            SessionState::Waiting => heat_coloru(HeatLevel::Critical),
+            SessionState::Active | SessionState::Monitor => heat_coloru(HeatLevel::Ok),
+            SessionState::Idle => muted,
+        };
+        let dir = Path::new(&session.cwd)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| session.cwd.clone());
+        let label = if !session.name.is_empty() {
+            session.name.clone()
+        } else if !project_name.is_empty() {
+            format!("{project_name} — {dir}")
+        } else {
+            dir
+        };
+
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.0)
+            .with_child(Self::text(
+                session_glyph(session.state).to_string(),
+                family,
+                body,
+                glyph_color,
+            ))
+            .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish());
+        if session.ctx_tokens > 0 {
+            let frac = zaplex_cockpit::context_fill(&session.model, session.ctx_tokens);
+            let pct = (frac * 100.0).round() as u32;
+            let color = heat_coloru(HeatLevel::from_fraction(frac));
+            row = row.with_child(Self::text(format!("· {pct}%"), family, body, color));
+        }
+        let row_el = row.with_main_axis_size(MainAxisSize::Max).finish();
+
+        let key = host_key(host_label, &session.session_id);
+        match (is_local, self.conductor_row_states.get(&key).cloned()) {
+            (true, Some(state)) => {
+                let action = WorkspaceAction::AttachFleetSession {
+                    host: host_label.to_string(),
+                    session_id: session.session_id.clone(),
+                };
+                Hoverable::new(state, move |_mouse| row_el)
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                    .finish()
+            }
+            _ => row_el,
+        }
+    }
+
+    fn render_header(
+        &self,
+        snapshot_len: usize,
+        cost5h: f64,
+        cost_wk: f64,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let sub = appearance.ui_font_subheading();
@@ -231,7 +452,11 @@ impl CockpitPanel {
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_child(Self::text(
-                format!("{} account{}", snapshot_len, if snapshot_len == 1 { "" } else { "s" }),
+                format!(
+                    "{} account{}",
+                    snapshot_len,
+                    if snapshot_len == 1 { "" } else { "s" }
+                ),
                 family,
                 sub,
                 main,
@@ -313,6 +538,17 @@ impl View for CockpitPanel {
                     .with_margin_bottom(CARD_SPACING * 2.0)
                     .finish(),
                 );
+            // Glanceable Conductor: the unified cross-host inventory, waiting-first.
+            let model = CockpitModel::as_ref(app);
+            let inventory = model.inventory().clone();
+            let local_label = model.local_label().to_string();
+            if let Some(conductor) = self.render_conductor(&inventory, &local_label, appearance) {
+                cards = cards.with_child(
+                    Container::new(conductor)
+                        .with_margin_bottom(CARD_SPACING * 2.0)
+                        .finish(),
+                );
+            }
             for acct in &snapshot.accounts {
                 cards = cards.with_child(self.render_card(acct, appearance));
             }

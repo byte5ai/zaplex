@@ -711,6 +711,21 @@ pub enum WorkspaceAction {
     FixSettingsWithOz {
         error_description: String,
     },
+    /// Attach to a specific agent from the unified Conductor inventory, keyed by
+    /// `(host, session_id)` (session ids are unique only within a host). A local
+    /// host adopts the session in place (resume, no fork); a remote host's agent
+    /// lives on that host, so it's handled honestly (see the workspace handler).
+    /// The workspace resolves provider / cwd / config_dir from the live
+    /// inventory, so the action stays tiny and is shared by the Conductor
+    /// row-click and the `w`-jump.
+    AttachFleetSession {
+        host: String,
+        session_id: String,
+    },
+    /// The `w`-jump: cycle to the next Waiting agent across the whole fleet (the
+    /// Conductor's waiting-first order) and attach it. Cursor + resolution live
+    /// on the workspace.
+    JumpToNextWaiting,
 }
 
 impl From<&WorkspaceAction> for LoginGatedFeature {
@@ -949,6 +964,8 @@ impl WorkspaceAction {
             | ViewTranscript { .. }
             | LaunchAgent { .. }
             | OpenFileInEditor { .. }
+            | AttachFleetSession { .. }
+            | JumpToNextWaiting
             | FixSettingsWithOz { .. } => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,

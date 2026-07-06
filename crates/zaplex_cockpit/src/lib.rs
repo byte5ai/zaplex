@@ -13,18 +13,23 @@
 
 pub mod claude;
 pub mod codex;
+pub mod conductor;
+pub mod fleet;
 pub mod format;
 pub mod oauth;
-pub mod pricing;
-pub mod fleet;
 pub mod overrides;
+pub mod pricing;
 pub mod project;
 pub mod routing;
-pub mod transcript;
 pub mod sessions;
+pub mod transcript;
 pub mod types;
 pub mod windows;
 
+pub use conductor::{
+    fleet_is_large, fleet_session_count, host_auto_collapsed, host_session_count, host_summary,
+    next_waiting, session_glyph, waiting_sessions, GLYPH_IDLE, GLYPH_WAITING, GLYPH_WORKING,
+};
 pub use fleet::{
     build_fleet_tree, fold_inventory, AgentSession, FleetTree, HostNode, HostSessions, ProjectNode,
 };
@@ -33,8 +38,8 @@ pub use format::{
     heat_pct_label, heat_pct_label_with_provenance, model_family, HeatLevel,
 };
 pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
-pub use pricing::{ModelPrice, PricingTable};
 pub use overrides::{AccountOverride, AccountOverrides};
+pub use pricing::{ModelPrice, PricingTable};
 pub use project::{resolve_project, ResolvedProject};
 pub use routing::{is_over_budget, pick_freest, rank_by_freeness, OVER_BUDGET_HEAT};
 pub use transcript::{
@@ -79,15 +84,29 @@ pub fn build_snapshot(
         // Enterprise/Team accounts aren't shown falsely maxed.
         let (plan_5h, plan_week) = windows::plan_budgets(account.plan_tier.as_deref());
         let b5h = if budget_5h > 0 { budget_5h } else { plan_5h };
-        let bwk = if budget_week > 0 { budget_week } else { plan_week };
+        let bwk = if budget_week > 0 {
+            budget_week
+        } else {
+            plan_week
+        };
         let usage = build_account_usage(account, entries, now, b5h, bwk, pricing);
         accounts.push(windows::with_sessions(usage, live));
     }
     for account in codex::discover_accounts(codex_home) {
         let entries = codex::usage_for_account(&account, since);
-        let b5h = if budget_5h > 0 { budget_5h } else { DEFAULT_BUDGET_5H };
-        let bwk = if budget_week > 0 { budget_week } else { DEFAULT_BUDGET_WEEK };
-        accounts.push(build_account_usage(account, entries, now, b5h, bwk, pricing));
+        let b5h = if budget_5h > 0 {
+            budget_5h
+        } else {
+            DEFAULT_BUDGET_5H
+        };
+        let bwk = if budget_week > 0 {
+            budget_week
+        } else {
+            DEFAULT_BUDGET_WEEK
+        };
+        accounts.push(build_account_usage(
+            account, entries, now, b5h, bwk, pricing,
+        ));
     }
 
     CockpitSnapshot {

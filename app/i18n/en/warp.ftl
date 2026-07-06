@@ -1721,6 +1721,7 @@ keybinding-desc-workspace-new-tab = Create new tab
 keybinding-desc-workspace-new-terminal-tab = New Terminal Tab
 keybinding-desc-workspace-new-agent-tab = New Agent Tab
 keybinding-desc-workspace-new-cloud-agent-tab = New Agent Tab
+keybinding-desc-workspace-jump-to-next-waiting = Jump to next waiting agent
 new-session-create-new-tab = Create New Tab
 new-session-create-new-window = Create New Window
 new-session-split-pane-down = Split Pane Down
