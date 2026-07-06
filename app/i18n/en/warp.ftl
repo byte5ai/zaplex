@@ -2861,6 +2861,7 @@ workspace-left-panel-ssh-manager-candidates-added = Added
 workspace-left-panel-ssh-manager-candidates-refresh = Refresh from ~/.ssh/config
 workspace-left-panel-ssh-manager-add-heading = Add a host
 workspace-left-panel-ssh-manager-add-blank = Create a blank server
+workspace-left-panel-ssh-manager-discover-tailscale = Discover Tailscale hosts
 workspace-left-panel-ssh-manager-add-cancel = Cancel
 terminal-su-root-password-confirm = Auto-fill Root Password
 terminal-su-root-password-confirm-subtitle = Click to confirm and inject the saved Root password

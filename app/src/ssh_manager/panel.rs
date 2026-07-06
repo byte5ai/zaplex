@@ -69,6 +69,9 @@ pub enum SshManagerPanelAction {
     /// Context menu: the parent is determined by context.
     AddFolder,
     AddServer,
+    /// Add-block button: discover Tailscale peers (`tailscale status --json`) and
+    /// add the online ones as SSH servers (skipping hosts already saved).
+    DiscoverTailscale,
     DeleteSelected,
     Connect,
     Edit,
@@ -222,6 +225,8 @@ pub struct SshManagerPanel {
     adding_mode: bool,
     /// Hover state for the "Create a blank server" button in the add block.
     add_blank_btn: MouseStateHandle,
+    /// Hover state for the "Discover Tailscale hosts" button in the add block.
+    add_tailscale_btn: MouseStateHandle,
     /// Hover state for the "Cancel" button in the add block.
     add_cancel_btn: MouseStateHandle,
 
@@ -274,6 +279,7 @@ impl SshManagerPanel {
             candidates_toggle_btn: MouseStateHandle::default(),
             adding_mode: false,
             add_blank_btn: MouseStateHandle::default(),
+            add_tailscale_btn: MouseStateHandle::default(),
             add_cancel_btn: MouseStateHandle::default(),
             host_sessions: HashMap::new(),
             sessions_expanded: std::collections::HashSet::new(),
@@ -560,6 +566,87 @@ impl SshManagerPanel {
             }
             Err(e) => {
                 log::error!("ssh_manager: create server failed: {e:?}");
+                ctx.emit(SshManagerPanelEvent::PersistenceError(e.to_string()));
+            }
+        }
+    }
+
+    /// Discover Tailscale peers and add the online ones as SSH servers, skipping
+    /// any host already saved. Runs `tailscale status --json` (a fast local
+    /// command), parses it via [`crate::cockpit::tailscale`], and bulk-creates
+    /// the new hosts (tagged in `notes` so they're easy to spot/remove). An
+    /// explicit, reversible action — the button is the user's intent.
+    fn on_discover_tailscale(&mut self, ctx: &mut ViewContext<Self>) {
+        self.adding_mode = false;
+        let output = std::process::Command::new("tailscale")
+            .args(["status", "--json"])
+            .output();
+        let json = match output {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
+            Ok(_) | Err(_) => {
+                ctx.emit(SshManagerPanelEvent::PersistenceError(
+                    "Tailscale not found or not running (`tailscale status` failed).".to_string(),
+                ));
+                return;
+            }
+        };
+        let candidates: Vec<_> = crate::cockpit::tailscale::parse_tailscale_status(&json)
+            .into_iter()
+            .filter(|c| c.online)
+            .collect();
+
+        let parent = self.parent_for_new_node();
+        let result = warp_ssh_manager::with_conn(|conn| {
+            // Existing hosts → skip peers we've already saved (idempotent).
+            let mut existing = std::collections::HashSet::new();
+            for node in SshRepository::list_nodes(conn)? {
+                if matches!(node.kind, NodeKind::Server) {
+                    if let Some(info) = SshRepository::get_server(conn, &node.id)? {
+                        existing.insert(info.host);
+                    }
+                }
+            }
+            let mut count = 0usize;
+            for c in &candidates {
+                let host = c.connect_host().to_string();
+                if host.is_empty() || existing.contains(&host) {
+                    continue;
+                }
+                let info = SshServerInfo {
+                    node_id: String::new(),
+                    host: host.clone(),
+                    port: 22,
+                    username: String::new(),
+                    auth_type: AuthType::Key,
+                    key_path: None,
+                    credential_id: None,
+                    startup_command: None,
+                    notes: Some(format!("Discovered via Tailscale ({})", c.os)),
+                    last_connected_at: None,
+                    session_resilience: warp_ssh_manager::SessionResilience::default(),
+                    ring_ceiling_mb: 0,
+                };
+                let name = unique_name(conn, parent.as_deref(), &c.hostname)?;
+                SshRepository::create_server(conn, parent.as_deref(), &name, &info)?;
+                existing.insert(host);
+                count += 1;
+            }
+            Ok(count)
+        });
+        match result {
+            Ok(0) => {
+                log::info!("ssh_manager: Tailscale discovery — no new hosts to add");
+                self.refresh_tree(ctx);
+            }
+            Ok(n) => {
+                log::info!("ssh_manager: Tailscale discovery added {n} host(s)");
+                self.refresh_tree(ctx);
+                SshTreeChangedNotifier::handle(ctx).update(ctx, |_, ctx| {
+                    ctx.emit(SshTreeChangedEvent::TreeChanged);
+                });
+            }
+            Err(e) => {
+                log::error!("ssh_manager: Tailscale discovery failed: {e:?}");
                 ctx.emit(SshManagerPanelEvent::PersistenceError(e.to_string()));
             }
         }
@@ -1335,9 +1422,52 @@ impl SshManagerPanel {
         })
         .finish();
 
+        // Secondary action: discover Tailscale peers and add the online ones.
+        let ts_icon = ConstrainedBox::new(
+            crate::ui_components::icons::Icon::Plus
+                .to_warpui_icon(icon_color)
+                .finish(),
+        )
+        .with_width(ITEM_ICON_SIZE)
+        .with_height(ITEM_ICON_SIZE)
+        .finish();
+        let ts_label = Text::new_inline(
+            crate::t!("workspace-left-panel-ssh-manager-discover-tailscale"),
+            appearance.ui_font_family(),
+            appearance.ui_font_subheading(),
+        )
+        .with_color(main.into())
+        .finish();
+        let ts_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(ITEM_ICON_TEXT_SPACING)
+            .with_child(ts_icon)
+            .with_child(ts_label)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::Start)
+            .finish();
+        let tailscale_btn = Hoverable::new(self.add_tailscale_btn.clone(), move |mouse| {
+            let mut c = Container::new(ts_row)
+                .with_padding_top(ITEM_PADDING_VERTICAL)
+                .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+            if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_3(theme));
+            }
+            c.finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(SshManagerPanelAction::DiscoverTailscale);
+        })
+        .finish();
+
         let mut col = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         col.add_child(header_row);
         col.add_child(blank_btn);
+        col.add_child(tailscale_btn);
         // Suggestions from ~/.ssh/config — renders nothing when auto-discovery is
         // off or the config has no importable hosts. When present, give it a small
         // top margin so the "from ~/.ssh/config" suggestions read as a distinct
@@ -2319,6 +2449,7 @@ impl TypedActionView for SshManagerPanel {
             }
             SshManagerPanelAction::ToggleAddMode => self.on_toggle_add_mode(ctx),
             SshManagerPanelAction::AddServer => self.on_add_server(ctx),
+            SshManagerPanelAction::DiscoverTailscale => self.on_discover_tailscale(ctx),
             SshManagerPanelAction::DeleteSelected => self.on_delete_selected(ctx),
             SshManagerPanelAction::Connect => self.on_connect(ctx),
             SshManagerPanelAction::Edit => self.on_edit(ctx),
