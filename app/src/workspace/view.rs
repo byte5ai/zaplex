@@ -1,5 +1,6 @@
 pub(crate) mod attention_inbox;
 pub(crate) mod codex_modal;
+pub(crate) mod spawn_card;
 pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
 mod crash_recovery;
@@ -110,6 +111,7 @@ use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabCloseButtonPosition;
 use crate::workspace::view::attention_inbox::{AttentionInbox, AttentionInboxEvent};
 use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
+use crate::workspace::view::spawn_card::{SpawnCard, SpawnCardEvent};
 use crate::workspace::view::zap_launch_modal::{
     ZaplexLaunchModal, ZaplexLaunchModalEvent,
 };
@@ -1003,6 +1005,8 @@ pub struct Workspace {
     suggested_rule_modal: ViewHandle<SuggestedRuleModal>,
     zap_launch_modal: ViewHandle<ZaplexLaunchModal>,
     codex_modal: ViewHandle<CodexModal>,
+    /// The Spawn-Karte: model + effort as a visible launch attribute.
+    spawn_card: ViewHandle<SpawnCard>,
     /// The calm "Offene Punkte" attention inbox (fleet-wide waiting agents).
     attention_inbox: ViewHandle<AttentionInbox>,
     toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
@@ -2587,6 +2591,11 @@ impl Workspace {
             me.handle_codex_modal_event(event, ctx);
         });
 
+        let spawn_card = ctx.add_typed_action_view(SpawnCard::new);
+        ctx.subscribe_to_view(&spawn_card, |me, _, event, ctx| {
+            me.handle_spawn_card_event(event, ctx);
+        });
+
         let attention_inbox = ctx.add_typed_action_view(AttentionInbox::new);
         ctx.subscribe_to_view(&attention_inbox, |me, _, event, ctx| {
             me.handle_attention_inbox_event(event, ctx);
@@ -3105,6 +3114,7 @@ impl Workspace {
             tab_fixed_width: None,
             zap_launch_modal: zap_launch_view,
             codex_modal,
+            spawn_card,
             attention_inbox,
             lightbox_view: None,
             hoa_onboarding_flow: None,
@@ -4433,16 +4443,30 @@ impl Workspace {
     /// `Some(host)` opens that host and runs the command via its session's
     /// startup command. A remote launch uses the host's own default account
     /// (config dirs are local paths), still API-key-scrubbed.
+    #[allow(clippy::too_many_arguments)]
     fn launch_routed_agent(
         &mut self,
         agent: CLIAgent,
         config_dir: Option<&Path>,
         cwd: Option<&Path>,
         node_id: Option<&str>,
+        model: Option<&str>,
+        effort: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Record the chosen (model, effort) at launch so the Conductor can show
+        // what a session was started with — effort is in no transcript, so this
+        // registry is its only source. Keyed by (host, cwd, agent); see
+        // `crate::cockpit::launch_registry` for the honest binding caveat.
+        crate::cockpit::launch_registry::record(
+            agent,
+            node_id,
+            cwd,
+            model.map(str::to_owned),
+            effort.map(str::to_owned),
+        );
         if let Some(node_id) = node_id {
-            let cmd = agent.launch_command_routed(None);
+            let cmd = agent.launch_command_routed_with(None, model, effort);
             let full = match cwd {
                 Some(dir) => format!(
                     "cd {} && {cmd}",
@@ -4480,7 +4504,7 @@ impl Workspace {
             return;
         }
 
-        let cmd = agent.launch_command_routed(config_dir);
+        let cmd = agent.launch_command_routed_with(config_dir, model, effort);
         let mut options = NewTerminalOptions::default();
         if let Some(dir) = cwd {
             options = options.with_initial_directory(dir.to_path_buf());
@@ -7382,6 +7406,21 @@ impl Workspace {
             menu_items.push(agent_item.into_item());
         }
 
+        // 4b. Spawn-Karte — the launch card that makes model + effort a visible
+        // launch attribute (unscoped: host/project default to the local context).
+        // Shown once, above the per-agent quick launches, when the cockpit is on.
+        if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+            menu_items.push(
+                MenuItemFields::new(crate::t!("cockpit-spawn-card-new-agent"))
+                    .with_on_select_action(WorkspaceAction::OpenSpawnCard {
+                        host: None,
+                        project: None,
+                    })
+                    .with_icon(icons::Icon::LayoutAlt01)
+                    .into_item(),
+            );
+        }
+
         // 5. Coding Agents — only those installed and with tab_menu enabled appear in the menu
         let coding_agent_count = {
             let start_len = menu_items.len();
@@ -7439,6 +7478,8 @@ impl Workspace {
                                             config_dir: Some(freest.account.config_dir.clone()),
                                             cwd: None,
                                             node_id: None,
+                                            model: None,
+                                            effort: None,
                                         })
                                         .with_icon(icon)
                                         .into_item(),
@@ -7460,6 +7501,8 @@ impl Workspace {
                                                 config_dir: Some(a.account.config_dir.clone()),
                                                 cwd: None,
                                                 node_id: None,
+                                                model: None,
+                                                effort: None,
                                             })
                                             .with_icon(icon)
                                             .into_item(),
@@ -7484,6 +7527,8 @@ impl Workspace {
                                             config_dir: None,
                                             cwd: None,
                                             node_id: Some(host.id.clone()),
+                                            model: None,
+                                            effort: None,
                                         })
                                         .with_icon(icon)
                                         .into_item(),
@@ -16760,6 +16805,131 @@ impl Workspace {
         }
     }
 
+    /// Build the account options offered by the Spawn-Karte for one provider:
+    /// its accounts (label + config dir + heat) and the precomputed freest pick.
+    /// Empty when the cockpit is disabled or the provider has no accounts — the
+    /// card then launches under the provider's default login.
+    fn spawn_card_provider_options(
+        &self,
+        provider: zaplex_cockpit::Provider,
+        installed: bool,
+        ctx: &AppContext,
+    ) -> spawn_card::ProviderOptions {
+        let mut opts = spawn_card::ProviderOptions {
+            installed,
+            ..Default::default()
+        };
+        if !*crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+            return opts;
+        }
+        let snapshot = crate::cockpit::CockpitModel::as_ref(ctx).snapshot();
+        for a in snapshot
+            .accounts
+            .iter()
+            .filter(|a| a.account.provider == provider)
+        {
+            opts.accounts.push(spawn_card::AccountOption {
+                label: a.account.label.clone(),
+                config_dir: a.account.config_dir.clone(),
+                heat_label: zaplex_cockpit::heat_pct_label(a.heat),
+            });
+        }
+        if let Some(f) = zaplex_cockpit::pick_freest(provider, &snapshot.accounts) {
+            opts.freest_label = Some(format!(
+                "{} ({})",
+                f.account.label,
+                zaplex_cockpit::heat_pct_label(f.heat)
+            ));
+            // Only a non-default account needs a config-dir pin; the default
+            // login is the API-key-scrubbed fallback (`None`).
+            if !f.account.is_default {
+                opts.freest_dir = Some(f.account.config_dir.clone());
+            }
+        }
+        opts
+    }
+
+    /// Open the Spawn-Karte, optionally pre-scoped to a Conductor host/project.
+    /// Gathers fresh account/host options, configures the card with smart
+    /// defaults, then shows + focuses it.
+    fn open_spawn_card(
+        &mut self,
+        host: Option<String>,
+        project: Option<PathBuf>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::terminal::cli_agent::CLIAgentInstallModel;
+
+        let install = CLIAgentInstallModel::as_ref(ctx);
+        let claude_installed = install.is_cli_agent_installed(CLIAgent::Claude);
+        let codex_installed = install.is_cli_agent_installed(CLIAgent::Codex);
+
+        let claude = self.spawn_card_provider_options(
+            zaplex_cockpit::Provider::Claude,
+            claude_installed,
+            ctx,
+        );
+        let codex =
+            self.spawn_card_provider_options(zaplex_cockpit::Provider::Codex, codex_installed, ctx);
+
+        let hosts =
+            warp_ssh_manager::with_conn(|c| Ok(warp_ssh_manager::SshRepository::list_nodes(c)?))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|n| matches!(n.kind, warp_ssh_manager::types::NodeKind::Server))
+                .map(|n| spawn_card::HostOption {
+                    id: n.id.clone(),
+                    name: n.name.clone(),
+                })
+                .collect();
+
+        let cfg = spawn_card::SpawnCardConfig {
+            claude,
+            codex,
+            hosts,
+            scoped_host: host,
+            project,
+        };
+        self.spawn_card.update(ctx, |card, _| card.configure(cfg));
+
+        self.current_workspace_state.close_all_modals();
+        self.current_workspace_state.is_spawn_card_open = true;
+        ctx.focus(&self.spawn_card);
+        ctx.notify();
+    }
+
+    /// Handle Spawn-Karte events: cancel closes it; confirm turns the chosen
+    /// (agent, model, effort, account, host, project) into a routed launch.
+    fn handle_spawn_card_event(&mut self, event: &SpawnCardEvent, ctx: &mut ViewContext<Self>) {
+        match event {
+            SpawnCardEvent::Close => {
+                self.current_workspace_state.is_spawn_card_open = false;
+                self.focus_active_tab(ctx);
+                ctx.notify();
+            }
+            SpawnCardEvent::Launch {
+                agent,
+                config_dir,
+                cwd,
+                node_id,
+                model,
+                effort,
+            } => {
+                self.current_workspace_state.is_spawn_card_open = false;
+                self.launch_routed_agent(
+                    *agent,
+                    config_dir.as_deref(),
+                    cwd.as_deref(),
+                    node_id.as_deref(),
+                    model.as_deref(),
+                    effort.as_deref(),
+                    ctx,
+                );
+                ctx.notify();
+            }
+        }
+    }
+
     #[cfg(not(target_family = "wasm"))]
     fn open_plugin_instructions_pane(
         &mut self,
@@ -17819,7 +17989,10 @@ impl Workspace {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_main_axis_size(MainAxisSize::Min);
 
-            // Title-bar agent quick-launch buttons (vertical tab-bar mode)
+            // Attention pulse (✋ N) + agent quick-launch buttons (vertical mode)
+            if let Some(pulse) = self.render_attention_pulse(appearance, ctx) {
+                right_controls.add_child(pulse);
+            }
             for button in self.render_cli_agent_titlebar_buttons(appearance, ctx) {
                 right_controls.add_child(button);
             }
@@ -17963,7 +18136,10 @@ impl Workspace {
         // Placeholder to make sure the flex row expands across the entire width of the app.
         tab_bar.add_child(Shrinkable::new(0.5, Empty::new().finish()).finish());
 
-        // Title-bar agent quick-launch buttons (horizontal tab-bar mode)
+        // Attention pulse (✋ N) + agent quick-launch buttons (horizontal mode)
+        if let Some(pulse) = self.render_attention_pulse(appearance, ctx) {
+            tab_bar.add_child(pulse);
+        }
         for button in self.render_cli_agent_titlebar_buttons(appearance, ctx) {
             tab_bar.add_child(button);
         }
@@ -18038,6 +18214,47 @@ impl Workspace {
                     .finish(),
             )
             .with_margin_left(TAB_BAR_ICON_PADDING)
+            .finish(),
+        )
+    }
+
+    /// The calm titlebar **attention pulse** `✋ N` — N = fleet-wide agents
+    /// waiting on the human ([`CockpitModel::needs_me`]). Clicking it jumps to the
+    /// next waiting agent ([`WorkspaceAction::JumpToNextWaiting`], the `w`-jump),
+    /// so one glance + one click clears the next thing needing you. Not a row of
+    /// per-agent launch buttons — a single ambient signal, hidden entirely when
+    /// nothing waits. `None` when the cockpit is off or nothing is waiting.
+    fn render_attention_pulse(
+        &self,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        if !*crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+            return None;
+        }
+        let n = crate::cockpit::CockpitModel::as_ref(ctx).needs_me();
+        if n == 0 {
+            return None;
+        }
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        // The one waiting glyph + the fleet's Critical color, kept small/quiet.
+        let critical = theme.ui_error_color();
+        let label = format!("{} {}", zaplex_cockpit::GLYPH_WAITING, n);
+        let handle = self.mouse_states.attention_pulse.clone();
+        Some(
+            Container::new(
+                Hoverable::new(handle, move |_mouse| {
+                    Text::new_inline(label.clone(), family, 13.)
+                        .with_color(critical)
+                        .finish()
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::JumpToNextWaiting))
+                .finish(),
+            )
+            .with_margin_left(TAB_BAR_ICON_PADDING)
+            .with_margin_right(TAB_BAR_ICON_PADDING)
             .finish(),
         )
     }
@@ -20592,14 +20809,21 @@ impl TypedActionView for Workspace {
                 config_dir,
                 cwd,
                 node_id,
+                model,
+                effort,
             } => {
                 self.launch_routed_agent(
                     *agent,
                     config_dir.as_deref(),
                     cwd.as_deref(),
                     node_id.as_deref(),
+                    model.as_deref(),
+                    effort.as_deref(),
                     ctx,
                 );
+            }
+            OpenSpawnCard { host, project } => {
+                self.open_spawn_card(host.clone(), project.clone(), ctx);
             }
             OpenFileInEditor { node_id, path } => {
                 if node_id.is_empty() {
@@ -22985,6 +23209,10 @@ impl View for Workspace {
 
         if self.current_workspace_state.is_codex_modal_open {
             stack.add_child(ChildView::new(&self.codex_modal).finish());
+        }
+
+        if self.current_workspace_state.is_spawn_card_open {
+            stack.add_child(ChildView::new(&self.spawn_card).finish());
         }
 
         if self.current_workspace_state.is_attention_inbox_open {

@@ -645,5 +645,65 @@ fn launch_command_routed_handles_codex_and_bare_agents() {
     );
     // An agent with no subscription/config-dir model launches bare (no scrub/pin).
     assert_eq!(CLIAgent::Gemini.launch_command_routed(None), "gemini");
-    assert_eq!(CLIAgent::Gemini.launch_command_routed(Some(Path::new("/x"))), "gemini");
+    assert_eq!(
+        CLIAgent::Gemini.launch_command_routed(Some(Path::new("/x"))),
+        "gemini"
+    );
+}
+
+#[test]
+fn launch_command_routed_with_model_claude() {
+    // Claude gets `--model <model>`; effort is NOT a Claude CLI flag, so it must
+    // never appear on the command line even when supplied.
+    assert_eq!(
+        CLIAgent::Claude.launch_command_routed_with(None, Some("opus"), None),
+        "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; claude --model opus"
+    );
+    assert_eq!(
+        CLIAgent::Claude.launch_command_routed_with(
+            Some(Path::new("/home/u/.claude-work")),
+            Some("haiku"),
+            Some("low"),
+        ),
+        "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; \
+         CLAUDE_CONFIG_DIR=/home/u/.claude-work claude --model haiku"
+    );
+}
+
+#[test]
+fn launch_command_routed_with_model_and_effort_codex() {
+    // Codex gets `--model <model>` plus the reasoning-effort config override.
+    assert_eq!(
+        CLIAgent::Codex.launch_command_routed_with(
+            Some(Path::new("/home/u/.codex")),
+            Some("gpt-5-codex"),
+            Some("high"),
+        ),
+        "unset OPENAI_API_KEY; CODEX_HOME=/home/u/.codex codex \
+         --model gpt-5-codex -c 'model_reasoning_effort=high'"
+    );
+    // Effort alone (no model) still emits the effort override. The `key=value`
+    // token is shell-quoted (the `=` triggers quoting) — harmless and safe.
+    assert_eq!(
+        CLIAgent::Codex.launch_command_routed_with(None, None, Some("medium")),
+        "unset OPENAI_API_KEY; codex -c 'model_reasoning_effort=medium'"
+    );
+}
+
+#[test]
+fn launch_command_routed_with_none_is_verbatim_today() {
+    // None/None must be byte-for-byte identical to the pre-existing bare launch.
+    assert_eq!(
+        CLIAgent::Claude.launch_command_routed_with(None, None, None),
+        CLIAgent::Claude.launch_command_routed(None),
+    );
+    assert_eq!(
+        CLIAgent::Codex.launch_command_routed_with(Some(Path::new("/home/u/.codex")), None, None),
+        CLIAgent::Codex.launch_command_routed(Some(Path::new("/home/u/.codex"))),
+    );
+    // Bare agents ignore model/effort entirely.
+    assert_eq!(
+        CLIAgent::Gemini.launch_command_routed_with(None, Some("pro"), Some("high")),
+        "gemini"
+    );
 }

@@ -14,7 +14,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment,
+    CrossAxisAlignment, Element, Empty, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Radius, Rect, ScrollbarWidth, Shrinkable, Text,
 };
 use warpui::platform::Cursor;
@@ -106,6 +106,10 @@ pub struct CockpitPaneView {
     conductor_host_toggle_states: HashMap<String, MouseStateHandle>,
     /// Hover state of each Conductor project collapse toggle (key = `host\0root`).
     conductor_project_toggle_states: HashMap<String, MouseStateHandle>,
+    /// Hover state of the contextual "+" (open the Spawn-Karte pre-scoped to
+    /// this host/project) on each Conductor host/project header. Keyed with a
+    /// `host:`/`proj:` prefix so host and project pluses never collide.
+    conductor_plus_states: HashMap<String, MouseStateHandle>,
     /// Explicit user collapse override per host (key = host label). Absent = use
     /// the inverse-complexity auto decision ([`host_auto_collapsed`]); present =
     /// the user has toggled it and their choice wins until the fleet changes.
@@ -155,6 +159,7 @@ impl CockpitPaneView {
             conductor_row_states: HashMap::new(),
             conductor_host_toggle_states: HashMap::new(),
             conductor_project_toggle_states: HashMap::new(),
+            conductor_plus_states: HashMap::new(),
             collapsed_hosts: HashMap::new(),
             collapsed_projects: HashMap::new(),
         };
@@ -239,6 +244,12 @@ impl CockpitPaneView {
             .retain(|k, _| live_hosts.contains(k));
         self.conductor_project_toggle_states
             .retain(|k, _| live_projects.contains(k));
+        self.conductor_plus_states.retain(|k, _| {
+            k.strip_prefix("host:")
+                .map(|h| live_hosts.contains(h))
+                .or_else(|| k.strip_prefix("proj:").map(|p| live_projects.contains(p)))
+                .unwrap_or(false)
+        });
         self.collapsed_hosts.retain(|k, _| live_hosts.contains(k));
         self.collapsed_projects
             .retain(|k, _| live_projects.contains(k));
@@ -246,9 +257,16 @@ impl CockpitPaneView {
             self.conductor_host_toggle_states
                 .entry(host.host.clone())
                 .or_default();
+            self.conductor_plus_states
+                .entry(format!("host:{}", host.host))
+                .or_default();
             for project in &host.projects {
+                let pkey = host_key(&host.host, &project.root);
                 self.conductor_project_toggle_states
-                    .entry(host_key(&host.host, &project.root))
+                    .entry(pkey.clone())
+                    .or_default();
+                self.conductor_plus_states
+                    .entry(format!("proj:{pkey}"))
                     .or_default();
                 for session in &project.sessions {
                     self.conductor_row_states
@@ -740,6 +758,33 @@ impl CockpitPaneView {
     /// A single Conductor host node: a collapse header (chevron + label +
     /// `✋ N` badge + working/idle tallies), then — when expanded — its projects.
     /// Collapsed, it shows only the one-line [`host_summary`] (60 rows become 1).
+    /// The contextual "+" on a Conductor host/project header: opens the
+    /// Spawn-Karte pre-scoped to that host/project (design: a new agent pre-bound
+    /// to where the user is looking). Muted, accent on hover. `None` when its
+    /// hover-state handle isn't ready yet (first frame before reconcile).
+    fn render_conductor_plus(
+        &self,
+        plus_key: &str,
+        action: WorkspaceAction,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let accent = theme.accent().into_solid();
+        let state = self.conductor_plus_states.get(plus_key).cloned()?;
+        Some(
+            Hoverable::new(state, move |mouse| {
+                let color = if mouse.is_hovered() { accent } else { muted };
+                Self::text("+".to_string(), family, body, color)
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+            .finish(),
+        )
+    }
+
     fn render_conductor_host(
         &self,
         host: &HostNode,
@@ -775,11 +820,12 @@ impl CockpitPaneView {
             // A quiet "remote" marker so the user knows attach behaves differently.
             header = header.with_child(Self::text("· remote".to_string(), family, body, muted));
         }
-        // The whole header toggles collapse.
+        // The header content toggles collapse; the trailing "+" opens a
+        // pre-scoped Spawn-Karte (its own click, kept outside the toggle area).
         let header_el: Box<dyn Element> =
             if let Some(state) = self.conductor_host_toggle_states.get(&host.host).cloned() {
                 let host_label = host.host.clone();
-                let inner = header.with_main_axis_size(MainAxisSize::Max).finish();
+                let inner = header.with_main_axis_size(MainAxisSize::Min).finish();
                 Hoverable::new(state, move |_mouse| inner)
                     .with_cursor(Cursor::PointingHand)
                     .on_click(move |ctx, _, _| {
@@ -787,14 +833,33 @@ impl CockpitPaneView {
                     })
                     .finish()
             } else {
-                header.with_main_axis_size(MainAxisSize::Max).finish()
+                header.with_main_axis_size(MainAxisSize::Min).finish()
             };
+
+        // A new agent scoped to this host (remote hosts pass their label; local
+        // passes `None` so the card defaults to the local machine).
+        let plus = self.render_conductor_plus(
+            &format!("host:{}", host.host),
+            WorkspaceAction::OpenSpawnCard {
+                host: (!is_local).then(|| host.host.clone()),
+                project: None,
+            },
+            appearance,
+        );
+        let mut header_bar = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(header_el)
+            .with_child(Shrinkable::new(1.0, Empty::new().finish()).finish());
+        if let Some(plus) = plus {
+            header_bar = header_bar.with_child(plus);
+        }
 
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(2.0)
-            .with_child(header_el);
+            .with_child(header_bar.finish());
 
         if collapsed {
             // One calm line instead of the host's whole subtree.
@@ -861,7 +926,7 @@ impl CockpitPaneView {
 
         let header_el: Box<dyn Element> =
             if let Some(state) = self.conductor_project_toggle_states.get(&key).cloned() {
-                let inner = header.with_main_axis_size(MainAxisSize::Max).finish();
+                let inner = header.with_main_axis_size(MainAxisSize::Min).finish();
                 let key = key.clone();
                 Hoverable::new(state, move |_mouse| inner)
                     .with_cursor(Cursor::PointingHand)
@@ -870,14 +935,36 @@ impl CockpitPaneView {
                     })
                     .finish()
             } else {
-                header.with_main_axis_size(MainAxisSize::Max).finish()
+                header.with_main_axis_size(MainAxisSize::Min).finish()
             };
+
+        // A new agent scoped to this project dir (and its host).
+        let plus = self.render_conductor_plus(
+            &format!("proj:{key}"),
+            WorkspaceAction::OpenSpawnCard {
+                host: (!is_local).then(|| host_label.to_string()),
+                project: Some(std::path::PathBuf::from(&project.root)),
+            },
+            appearance,
+        );
+        let mut header_bar = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(header_el)
+            .with_child(Shrinkable::new(1.0, Empty::new().finish()).finish());
+        if let Some(plus) = plus {
+            header_bar = header_bar.with_child(plus);
+        }
 
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(2.0)
-            .with_child(Container::new(header_el).with_padding_left(16.0).finish());
+            .with_child(
+                Container::new(header_bar.finish())
+                    .with_padding_left(16.0)
+                    .finish(),
+            );
         if !collapsed {
             for session in &project.sessions {
                 col =

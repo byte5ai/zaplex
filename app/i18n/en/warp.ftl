@@ -3696,4 +3696,5 @@ quit-warning-save-changes-title = Save changes?
 cockpit-flow-quick-issue = ⚡ Draft GitHub issue (freest)
 cockpit-flow-pr-review = ⚡ Review a PR (freest)
 cockpit-flow-triage = ⚡ Triage an issue (freest)
+cockpit-spawn-card-new-agent = ✧ New agent…
 cockpit-conductor-title = By project — what needs you
