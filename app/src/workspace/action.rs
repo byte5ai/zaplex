@@ -679,6 +679,9 @@ pub enum WorkspaceAction {
         config_dir: PathBuf,
         /// The session's working directory (for the tab label).
         cwd: PathBuf,
+        /// Keep the view following the live transcript: register it so each
+        /// cockpit reconcile re-renders + reloads it. `false` = one-shot open.
+        watch: bool,
     },
     /// Launch a *fresh* CLI agent routed to a subscription (the C4 "plexing"
     /// launch): open a terminal tab in `cwd` (or the default dir) and run the
