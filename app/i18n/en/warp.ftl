@@ -1869,6 +1869,7 @@ keybinding-desc-workspace-view-first-time-user-experience = [Debug] View first-t
 keybinding-desc-workspace-undismiss-aws-login-banner = [Debug] Un-dismiss AWS login banner
 keybinding-desc-workspace-open-oz-launch-modal = [Debug] Open Agent Launch Modal
 keybinding-desc-workspace-reset-oz-launch-modal-state = [Debug] Reset Agent Launch Modal State
+keybinding-desc-workspace-open-attention-inbox = Open the attention inbox (Offene Punkte)
 keybinding-desc-workspace-open-zap-launch-modal = [Debug] Open Zaplex Launch Modal
 keybinding-desc-workspace-reset-zap-launch-modal-state = [Debug] Reset Zaplex Launch Modal State
 keybinding-desc-workspace-install-opencode-warp-plugin = [Debug] Install OpenCode Warp plugin
@@ -2758,6 +2759,13 @@ workspace-left-panel-server-file-browser = Server files
 workspace-left-panel-skill-manager = Skill Manager
 workspace-left-panel-cockpit = Cockpit
 cockpit-sessions-waiting-toast = Waiting on you: { $sessions }
+cockpit-attention-inbox-title = Open items
+cockpit-attention-inbox-count = { $count ->
+    [0] Nothing is waiting on you
+    [one] { $count } agent is waiting on you
+   *[other] { $count } agents are waiting on you
+}
+cockpit-attention-inbox-empty = All clear — nothing is waiting on you.
 cockpit-open-dashboard-tooltip = Open cockpit dashboard
 cockpit-pane-title = Cockpit
 cockpit-pane-col-today = Today

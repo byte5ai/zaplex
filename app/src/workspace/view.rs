@@ -1,3 +1,4 @@
+pub(crate) mod attention_inbox;
 pub(crate) mod codex_modal;
 pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
@@ -107,6 +108,7 @@ use crate::terminal::CLIAgent;
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabCloseButtonPosition;
+use crate::workspace::view::attention_inbox::{AttentionInbox, AttentionInboxEvent};
 use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
 use crate::workspace::view::zap_launch_modal::{
     ZaplexLaunchModal, ZaplexLaunchModalEvent,
@@ -1001,6 +1003,8 @@ pub struct Workspace {
     suggested_rule_modal: ViewHandle<SuggestedRuleModal>,
     zap_launch_modal: ViewHandle<ZaplexLaunchModal>,
     codex_modal: ViewHandle<CodexModal>,
+    /// The calm "Offene Punkte" attention inbox (fleet-wide waiting agents).
+    attention_inbox: ViewHandle<AttentionInbox>,
     toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
     /// Transcript viewer "watch" registry: temp `.md` path → source `.jsonl`.
     /// On each cockpit reconcile the source is re-parsed, the temp file rewritten
@@ -2583,6 +2587,11 @@ impl Workspace {
             me.handle_codex_modal_event(event, ctx);
         });
 
+        let attention_inbox = ctx.add_typed_action_view(AttentionInbox::new);
+        ctx.subscribe_to_view(&attention_inbox, |me, _, event, ctx| {
+            me.handle_attention_inbox_event(event, ctx);
+        });
+
         let require_login_modal = Self::build_require_login_modal(ctx);
 
         let auth_override_warning_modal = Self::build_auth_override_warning_modal(ctx);
@@ -2728,27 +2737,15 @@ impl Workspace {
             );
         }
 
-        // Cockpit: a session flipping from working to WAITING is the signal the
-        // user must never miss — surface it as a toast wherever they are.
+        // Cockpit: attention is an *ambient* signal, never a per-event toast.
+        // A session flipping to WAITING is reflected passively — the Dock badge
+        // (driven by `AttentionDriver`) and the "Offene Punkte" inbox — so this
+        // subscription no longer raises a notification per event (that trained
+        // blind-clicking). It only keeps any open transcript views following the
+        // live session, since each reconcile re-scans transcripts.
         ctx.subscribe_to_model(
             &crate::cockpit::CockpitModel::handle(ctx),
-            |me, _handle, event, ctx| {
-                if let crate::cockpit::model::CockpitEvent::SessionsBecameWaiting(sessions) = event
-                {
-                    let body = sessions.join("\n");
-                    me.toast_stack.update(ctx, |stack, ctx| {
-                        // Not an error — an attention signal. Plain toast text.
-                        stack.add_persistent_toast(
-                            DismissibleToast::new(
-                                crate::t!("cockpit-sessions-waiting-toast", sessions = body),
-                                crate::view_components::ToastFlavor::Default,
-                            ),
-                            ctx,
-                        );
-                    });
-                }
-                // Any cockpit reconcile re-scans transcripts; refresh any watched
-                // transcript views so they follow live (no-op when none open).
+            |me, _handle, _event, ctx| {
                 me.refresh_watched_transcripts(ctx);
             },
         );
@@ -3108,6 +3105,7 @@ impl Workspace {
             tab_fixed_width: None,
             zap_launch_modal: zap_launch_view,
             codex_modal,
+            attention_inbox,
             lightbox_view: None,
             hoa_onboarding_flow: None,
             hoa_vtabs_callout_pinned_position: None,
@@ -16674,6 +16672,29 @@ impl Workspace {
         }
     }
 
+    fn handle_attention_inbox_event(
+        &mut self,
+        event: &AttentionInboxEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            AttentionInboxEvent::Close => {
+                self.current_workspace_state.is_attention_inbox_open = false;
+                self.focus_active_tab(ctx);
+                ctx.notify();
+            }
+        }
+    }
+
+    /// Open the calm "Offene Punkte" attention inbox — the in-app list of
+    /// fleet-wide waiting agents. Selecting a row jumps to that agent via the
+    /// cockpit's existing adopt verb.
+    pub fn open_attention_inbox(&mut self, ctx: &mut ViewContext<Self>) {
+        self.current_workspace_state.is_attention_inbox_open = true;
+        ctx.focus(&self.attention_inbox);
+        ctx.notify();
+    }
+
     fn handle_codex_modal_event(&mut self, event: &CodexModalEvent, ctx: &mut ViewContext<Self>) {
         use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
         use crate::AIExecutionProfilesModel;
@@ -20544,6 +20565,9 @@ impl TypedActionView for Workspace {
                 cwd,
                 config_dir,
             } => {
+                // Jumping to an agent clears it from the "Offene Punkte" inbox
+                // surface (harmless no-op when the inbox wasn't open).
+                self.current_workspace_state.is_attention_inbox_open = false;
                 self.adopt_agent_session(*agent, session_id, cwd, config_dir.as_deref(), ctx);
             }
             AttachFleetSession { host, session_id } => {
@@ -20559,6 +20583,9 @@ impl TypedActionView for Workspace {
                 watch,
             } => {
                 self.view_transcript(session_id, config_dir, cwd, *watch, ctx);
+            }
+            OpenAttentionInbox => {
+                self.open_attention_inbox(ctx);
             }
             LaunchAgent {
                 agent,
@@ -22958,6 +22985,10 @@ impl View for Workspace {
 
         if self.current_workspace_state.is_codex_modal_open {
             stack.add_child(ChildView::new(&self.codex_modal).finish());
+        }
+
+        if self.current_workspace_state.is_attention_inbox_open {
+            stack.add_child(ChildView::new(&self.attention_inbox).finish());
         }
 
         if let Some(lightbox_view) = &self.lightbox_view {

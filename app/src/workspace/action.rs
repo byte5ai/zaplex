@@ -683,6 +683,12 @@ pub enum WorkspaceAction {
         /// cockpit reconcile re-renders + reloads it. `false` = one-shot open.
         watch: bool,
     },
+    /// Open the calm "Offene Punkte" attention inbox: the in-app, fleet-wide
+    /// list of agents in [`SessionState::Waiting`], grouped waiting-first.
+    /// Selecting a row jumps to that agent (reuses [`AdoptAgentSession`]). The
+    /// deliberate, on-demand counterpart to the passive Dock badge — never a
+    /// per-event notification.
+    OpenAttentionInbox,
     /// Launch a *fresh* CLI agent routed to a subscription (the C4 "plexing"
     /// launch): open a terminal tab in `cwd` (or the default dir) and run the
     /// agent pinned to `config_dir`'s account (`None` = default login) with the
@@ -961,6 +967,7 @@ impl WorkspaceAction {
             | AskAgentRouted { .. }
             | ForkAgentSession { .. }
             | AdoptAgentSession { .. }
+            | OpenAttentionInbox
             | ViewTranscript { .. }
             | LaunchAgent { .. }
             | OpenFileInEditor { .. }

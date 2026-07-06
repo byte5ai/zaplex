@@ -27,6 +27,13 @@ cockpit-pane-col-5h = 5-Std-Block
 cockpit-pane-col-week = Woche
 cockpit-pane-provenance-legend = ~ = aus Transkripten geschätzt · ohne Markierung = Live-Abo-Verbrauch
 cockpit-sessions-waiting-toast = Wartet auf dich: { $sessions }
+cockpit-attention-inbox-title = Offene Punkte
+cockpit-attention-inbox-count = { $count ->
+    [0] Nichts wartet auf dich
+    [one] { $count } Agent wartet auf dich
+   *[other] { $count } Agents warten auf dich
+}
+cockpit-attention-inbox-empty = Alles erledigt — nichts wartet auf dich.
 cockpit-conductor-title = Nach Projekt — was dich braucht
 
 # Session-Zeilen-Aktionen im Cockpit
