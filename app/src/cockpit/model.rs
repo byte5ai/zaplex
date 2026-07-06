@@ -21,11 +21,15 @@ use chrono::Utc;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use watcher::HomeDirectoryWatcher;
 use zaplex_cockpit::{
-    apply_oauth_usage, build_snapshot, AccountOverrides, CockpitSnapshot, PricingTable, Provider,
+    apply_oauth_usage, build_snapshot, fold_inventory, AccountOverrides, CockpitSnapshot,
+    FleetTree, PricingTable, Provider, SessionSnapshot,
 };
+use zaplex_remote_session::types::{has_feature, FEATURE_AGENT_INVENTORY};
 
 use crate::cockpit::oauth::{self, CachedOauth};
 use crate::cockpit::settings::CockpitSettings;
+use crate::remote_server::agent_session::proto_to_snapshot;
+use crate::remote_server::manager::{ConnectedDaemon, RemoteServerManager};
 
 /// How often to re-scan transcripts even when no top-level home change fired.
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(45);
@@ -40,6 +44,12 @@ pub enum CockpitEvent {
 
 pub struct CockpitModel {
     snapshot: CockpitSnapshot,
+    /// The unified cross-host Agent-Inventory: local sessions folded together
+    /// with every connected daemon's sessions into one Host▸Project▸Session
+    /// tree. Rebuilt on every refresh; equals the local-only tree when no
+    /// daemon is connected. Read by the attention ambient-bit (`needs_me`) and
+    /// the Conductor UI (`inventory`).
+    inventory: FleetTree,
     pricing: PricingTable,
     /// Per-account real-usage cache (C3b), keyed by the account's config dir.
     /// Lives here so the 15-min TTL survives across refresh cycles; the token
@@ -66,6 +76,13 @@ struct RefreshInputs {
     oauth_cache: HashMap<PathBuf, CachedOauth>,
     /// Path to the user's `instances.json` account overrides (read off-thread).
     instances_path: PathBuf,
+    /// Live daemon connections captured on the model thread, moved into the
+    /// off-thread build so each host's agent-inventory can be fetched and folded
+    /// in. Empty when no daemon is connected (fold = local-only tree).
+    daemons: Vec<ConnectedDaemon>,
+    /// Label for the local host in the folded tree — the machine hostname, or
+    /// `"local"` when it can't be determined.
+    local_label: String,
 }
 
 impl CockpitModel {
@@ -80,6 +97,7 @@ impl CockpitModel {
                 accounts: Vec::new(),
                 generated_at: Utc::now(),
             },
+            inventory: FleetTree::default(),
             pricing: PricingTable::default(),
             oauth_cache: HashMap::new(),
             overrides: AccountOverrides::default(),
@@ -105,6 +123,16 @@ impl CockpitModel {
         // tier (Enterprise/Team/Pro/Max) instead of one flat default.
         let budget_5h = *CockpitSettings::as_ref(ctx).budget_5h as u64;
         let budget_week = *CockpitSettings::as_ref(ctx).budget_week as u64;
+        // Snapshot the live daemon connections now, on the model thread; the
+        // actual (async) inventory fetch happens off-thread in `spawn_refresh`.
+        // `RemoteServerManager` is a singleton registered before `CockpitModel`
+        // (see `app/src/lib.rs`), so this read is always available.
+        let daemons = RemoteServerManager::as_ref(ctx).connected_daemons();
+        let local_label = gethostname::gethostname()
+            .into_string()
+            .ok()
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| "local".to_string());
         Some(RefreshInputs {
             codex_home: home.join(".codex"),
             claude_config_dir_env: std::env::var("CLAUDE_CONFIG_DIR").ok(),
@@ -115,6 +143,8 @@ impl CockpitModel {
             pricing: self.pricing.clone(),
             oauth_enabled: *CockpitSettings::as_ref(ctx).oauth_usage,
             oauth_cache: self.oauth_cache.clone(),
+            daemons,
+            local_label,
         })
     }
 
@@ -166,8 +196,46 @@ impl CockpitModel {
                     &std::fs::read_to_string(&inputs.instances_path).unwrap_or_default(),
                 );
                 snapshot.accounts = overrides.apply(std::mem::take(&mut snapshot.accounts));
+
+                // Cross-host fold: fetch each capable daemon's agent-sessions and
+                // combine them with the local sessions into one Agent-Inventory
+                // tree. A daemon that doesn't advertise `agent-inventory` — or one
+                // whose request errors — contributes nothing and never fails the
+                // whole fold (honest degradation per host).
+                let mut remotes: Vec<(String, Vec<SessionSnapshot>)> =
+                    Vec::with_capacity(inputs.daemons.len());
+                for daemon in inputs.daemons {
+                    if !has_feature(&daemon.features, FEATURE_AGENT_INVENTORY) {
+                        continue;
+                    }
+                    match daemon.client.list_agent_sessions().await {
+                        Ok(list) => {
+                            let sessions: Vec<SessionSnapshot> =
+                                list.sessions.iter().map(proto_to_snapshot).collect();
+                            remotes.push((daemon.host_label, sessions));
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "cockpit fold: list_agent_sessions failed for host {:?}: {e} \
+                                 — skipping this host",
+                                daemon.host_label
+                            );
+                        }
+                    }
+                }
+                // Local contribution: every account's live sessions, tagged with
+                // the local host label.
+                let local: Vec<SessionSnapshot> = snapshot
+                    .accounts
+                    .iter()
+                    .flat_map(|a| a.sessions.iter().cloned())
+                    .collect();
+                let inventory = fold_inventory(inputs.local_label, local, remotes);
+
                 let _ = spawner
-                    .spawn(move |me, ctx| me.apply(snapshot, oauth_cache, overrides, ctx))
+                    .spawn(move |me, ctx| {
+                        me.apply(snapshot, oauth_cache, overrides, inventory, ctx)
+                    })
                     .await;
             })
             .detach();
@@ -184,27 +252,37 @@ impl CockpitModel {
         snapshot: CockpitSnapshot,
         oauth_cache: HashMap<PathBuf, CachedOauth>,
         overrides: AccountOverrides,
+        inventory: FleetTree,
         ctx: &mut ModelContext<Self>,
     ) {
         // Transition detection (claudeplex's most-loved signal): a session that
         // was working (Active/Monitor) and is now Waiting needs the user NOW.
         // Sessions first seen already-waiting don't fire (no old state).
+        //
+        // This diffs the WHOLE fleet — local and every remote host — off the
+        // unified inventory, keyed by `(host, session_id)` (session ids are
+        // unique only within a host), so a REMOTE agent going Waiting fires the
+        // signal too, not just local ones.
         use std::collections::HashMap;
         use zaplex_cockpit::SessionState;
-        let old_states: HashMap<&str, SessionState> = self
-            .snapshot
-            .accounts
+        let old_states: HashMap<(&str, &str), SessionState> = self
+            .inventory
+            .hosts
             .iter()
-            .flat_map(|a| a.sessions.iter())
-            .map(|s| (s.session_id.as_str(), s.state))
+            .flat_map(|h| {
+                h.projects
+                    .iter()
+                    .flat_map(|p| &p.sessions)
+                    .map(move |s| ((h.host.as_str(), s.session_id.as_str()), s.state))
+            })
             .collect();
         let mut became_waiting = Vec::new();
-        for account in &snapshot.accounts {
-            for session in &account.sessions {
+        for host in &inventory.hosts {
+            for session in host.projects.iter().flat_map(|p| &p.sessions) {
                 if session.state != SessionState::Waiting {
                     continue;
                 }
-                match old_states.get(session.session_id.as_str()) {
+                match old_states.get(&(host.host.as_str(), session.session_id.as_str())) {
                     Some(SessionState::Active) | Some(SessionState::Monitor) => {
                         let place = if session.name.is_empty() {
                             std::path::Path::new(&session.cwd)
@@ -214,7 +292,7 @@ impl CockpitModel {
                         } else {
                             session.name.clone()
                         };
-                        became_waiting.push(format!("{} — {place}", account.account.label));
+                        became_waiting.push(format!("{} — {place}", host.host));
                     }
                     _ => {}
                 }
@@ -222,12 +300,27 @@ impl CockpitModel {
         }
 
         self.snapshot = snapshot;
+        self.inventory = inventory;
         self.oauth_cache = oauth_cache;
         self.overrides = overrides;
         ctx.emit(CockpitEvent::Updated);
         if !became_waiting.is_empty() {
             ctx.emit(CockpitEvent::SessionsBecameWaiting(became_waiting));
         }
+    }
+
+    /// The unified cross-host Agent-Inventory tree (local + every connected
+    /// daemon). Equals the local-only tree when no daemon is connected. Read by
+    /// the Conductor UI.
+    pub fn inventory(&self) -> &FleetTree {
+        &self.inventory
+    }
+
+    /// The fleet-wide *needs-me* count — the total number of sessions in
+    /// [`SessionState::Waiting`] across every host. Read by the attention
+    /// ambient-bit / badge.
+    pub fn needs_me(&self) -> usize {
+        self.inventory.needs_me
     }
 
     /// Periodic reconcile: re-scan on a fixed interval for the model's lifetime.

@@ -275,12 +275,13 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         match result {
             Ok(true) => {
                 let socket_path = transport.socket_path().clone();
+                let host_label = session_info.hostname.clone();
                 self.state = SshInitState::AwaitingConnect {
                     session_id,
                     session_info,
                     setup_start,
                 };
-                self.connect_session_for_current_identity(session_id, socket_path, ctx);
+                self.connect_session_for_current_identity(session_id, socket_path, host_label, ctx);
             }
             Ok(false) if has_old_binary => {
                 // Auto-update: a prior install exists, so skip the modal
@@ -503,12 +504,13 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         match result {
             Ok(()) => {
                 let socket_path = transport.socket_path().clone();
+                let host_label = session_info.hostname.clone();
                 self.state = SshInitState::AwaitingConnect {
                     session_id,
                     session_info,
                     setup_start,
                 };
-                self.connect_session_for_current_identity(session_id, socket_path, ctx);
+                self.connect_session_for_current_identity(session_id, socket_path, host_label, ctx);
             }
             Err(err) => {
                 log::error!("Binary install failed for {session_id:?}: {err}");
@@ -521,12 +523,13 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         &mut self,
         session_id: SessionId,
         socket_path: PathBuf,
+        host_label: String,
         ctx: &mut ModelContext<Self>,
     ) {
         let transport = SshTransport::new(socket_path, self.auth_context.clone());
         let auth_context = self.auth_context.clone();
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.connect_session(session_id, transport, auth_context, ctx);
+            mgr.connect_session(session_id, transport, auth_context, host_label, ctx);
         });
     }
 }

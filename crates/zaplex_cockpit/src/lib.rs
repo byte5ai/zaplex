@@ -25,7 +25,9 @@ pub mod sessions;
 pub mod types;
 pub mod windows;
 
-pub use fleet::AgentSession;
+pub use fleet::{
+    build_fleet_tree, fold_inventory, AgentSession, FleetTree, HostNode, HostSessions, ProjectNode,
+};
 pub use format::{
     context_fill, context_window, format_cost, format_reset, format_tokens, heat_fill,
     heat_pct_label, heat_pct_label_with_provenance, model_family, HeatLevel,
