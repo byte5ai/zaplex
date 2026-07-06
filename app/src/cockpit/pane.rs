@@ -293,6 +293,9 @@ impl CockpitPaneView {
             session_id: session.session_id.clone(),
             config_dir: acct.account.config_dir.clone(),
             cwd: PathBuf::from(&session.cwd),
+            // Follow live: the opened transcript refreshes on each cockpit
+            // reconcile (claudeplex-desktop watch parity).
+            watch: true,
         };
         Some(
             Hoverable::new(state, move |mouse| {
