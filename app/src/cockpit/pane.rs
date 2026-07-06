@@ -532,24 +532,18 @@ impl CockpitPaneView {
                 .with_child(
                     Shrinkable::new(1.0, Self::text(label, family, body, main)).finish(),
                 );
-            // Model + context-window fill of the latest turn (spine populates
-            // these; previously computed but never surfaced).
-            let short_model = session
-                .model
-                .strip_prefix("claude-")
-                .unwrap_or(&session.model);
-            let mut meta = String::new();
-            if !short_model.is_empty() {
-                meta.push_str(short_model);
+            // Model family + context-window fill of the latest turn (claudeplex
+            // parity): family in accent, context as a percent of the model's
+            // real window, colored by how full it is.
+            let fam = zaplex_cockpit::model_family(&session.model);
+            if !fam.is_empty() {
+                row = row.with_child(Self::text(fam.to_string(), family, body, accent));
             }
             if session.ctx_tokens > 0 {
-                if !meta.is_empty() {
-                    meta.push_str(" · ");
-                }
-                meta.push_str(&format!("{}k ctx", session.ctx_tokens / 1000));
-            }
-            if !meta.is_empty() {
-                row = row.with_child(Self::text(meta, family, body, muted));
+                let frac = zaplex_cockpit::context_fill(&session.model, session.ctx_tokens);
+                let pct = (frac * 100.0).round() as u32;
+                let color = heat_coloru(HeatLevel::from_fraction(frac));
+                row = row.with_child(Self::text(format!("· {pct}%"), family, body, color));
             }
             // Adopt verb: "open = focus" — resume this idle session in place.
             if let Some(action) = self.session_adopt_action(acct, session, appearance) {

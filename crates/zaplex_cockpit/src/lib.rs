@@ -25,8 +25,8 @@ pub mod types;
 pub mod windows;
 
 pub use format::{
-    format_cost, format_reset, format_tokens, heat_fill, heat_pct_label,
-    heat_pct_label_with_provenance, HeatLevel,
+    context_fill, context_window, format_cost, format_reset, format_tokens, heat_fill,
+    heat_pct_label, heat_pct_label_with_provenance, model_family, HeatLevel,
 };
 pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
 pub use pricing::{ModelPrice, PricingTable};

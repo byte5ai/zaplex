@@ -77,3 +77,28 @@ fn reset_countdown() {
     assert_eq!(format_reset(Some(ts("2026-06-30T14:13:00Z")), now), "2h13m");
     assert_eq!(format_reset(Some(ts("2026-07-04T13:00:00Z")), now), "4d1h");
 }
+
+#[test]
+fn context_window_is_1m_for_opus_sonnet_else_200k() {
+    assert_eq!(context_window("claude-opus-4-8"), 1_000_000);
+    assert_eq!(context_window("claude-sonnet-4-6"), 1_000_000);
+    assert_eq!(context_window("claude-haiku-4-5"), 200_000);
+    assert_eq!(context_window("some-other"), 200_000);
+}
+
+#[test]
+fn context_fill_is_fraction_of_window() {
+    // 50k of a 1M opus window = 5%.
+    assert!((context_fill("claude-opus-4-8", 50_000) - 0.05).abs() < 1e-9);
+    // 100k of a 200k haiku window = 50%.
+    assert!((context_fill("claude-haiku-4-5", 100_000) - 0.5).abs() < 1e-9);
+    assert_eq!(context_fill("m", 0), 0.0);
+}
+
+#[test]
+fn model_family_shortens_or_passes_through() {
+    assert_eq!(model_family("claude-opus-4-8"), "opus");
+    assert_eq!(model_family("CLAUDE-SONNET-4-6"), "sonnet");
+    assert_eq!(model_family("gpt-5-codex"), "gpt-5-codex");
+    assert_eq!(model_family(""), "");
+}
