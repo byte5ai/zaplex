@@ -9849,6 +9849,16 @@ impl Input {
         image: ImageData,
         ctx: &mut ViewContext<Self>,
     ) {
+        // CLI agents (Claude Code / Codex) read images from disk, not as base64
+        // AI-context: when their rich input is open, write the pasted image to a
+        // temp file and insert its path so the agent can pick it up (#50). Falls
+        // through to AI-context attachment if the write fails.
+        if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
+            && self.insert_clipboard_image_as_file(&image, ctx)
+        {
+            return;
+        }
+
         self.maybe_enter_agent_view_for_image_add(ctx);
 
         // Switch to AI mode with block-level lock, unless already AI-mode-locked
@@ -9886,6 +9896,47 @@ impl Input {
         self.editor.update(ctx, |editor, ctx| {
             editor.process_and_attach_images_as_ai_context(1, vec![attached_image], ctx);
         });
+    }
+
+    /// Write a pasted clipboard image to a temp file and insert its (shell-quoted)
+    /// path into the input — the CLI-agent paste path (#50). Returns `false` on a
+    /// write failure so the caller can fall back to AI-context attachment.
+    fn insert_clipboard_image_as_file(
+        &mut self,
+        image: &ImageData,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let ext = match image.mime_type.as_str() {
+            "image/png" => "png",
+            "image/jpeg" | "image/jpg" => "jpg",
+            "image/gif" => "gif",
+            "image/webp" => "webp",
+            _ => "img",
+        };
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let file_name = image
+            .filename
+            .clone()
+            .unwrap_or_else(|| format!("pasted-image-{ts}.{ext}"));
+        // Namespaced + timestamped so concurrent pastes don't collide.
+        let path = std::env::temp_dir().join(format!("zaplex-paste-{ts}-{file_name}"));
+        if std::fs::write(&path, &image.data).is_err() {
+            return false;
+        }
+        // Quote so paths with spaces survive in the agent's shell-like composer;
+        // trailing space lets the user keep typing after the path.
+        let quoted = shell_words::quote(&path.to_string_lossy()).into_owned();
+        self.editor.update(ctx, |editor, ctx| {
+            editor.user_initiated_insert(
+                &format!("{quoted} "),
+                PlainTextEditorViewAction::Paste,
+                ctx,
+            );
+        });
+        true
     }
 
     /// Enters agent view when adding images, unless the CLI agent rich input is
