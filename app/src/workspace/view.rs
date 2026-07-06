@@ -1007,6 +1007,10 @@ pub struct Workspace {
     /// and its open buffer reloaded, so an opened transcript follows live. Entries
     /// whose buffer is closed become harmless no-ops on refresh.
     watched_transcripts: HashMap<PathBuf, PathBuf>,
+    /// `w`-jump cursor: the `(host, session_id)` of the last Waiting agent the
+    /// Conductor jumped to, so the next press advances to the next one across the
+    /// whole fleet (cycling). `None` starts at the first waiting agent.
+    cockpit_jump_cursor: Option<(String, String)>,
     agent_toast_stack: ViewHandle<AgentToastStack>,
     update_toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
     /// Notification center inbox (the dropdown overlay for the Inbox button in the top-right of the title bar).
@@ -3065,6 +3069,7 @@ impl Workspace {
             window_id: ctx.window_id(),
             toast_stack,
             watched_transcripts: HashMap::new(),
+            cockpit_jump_cursor: None,
             agent_toast_stack,
             update_toast_stack,
             notification_mailbox_view,
@@ -4159,6 +4164,103 @@ impl Workspace {
             return;
         };
         self.fork_agent_session_in_place(&resume_cmd, cwd, ctx);
+    }
+
+    /// Attach to a fleet agent identified by `(host, session_id)` from the
+    /// unified Conductor inventory (`AttachFleetSession`) — the shared target of
+    /// the Conductor row-click and the `w`-jump. Everything is resolved from the
+    /// live [`CockpitModel::inventory`] so callers pass only the identity:
+    /// - **local host** → adopt the session in place (resume, no fork), pinned to
+    ///   the owning account's subscription when it isn't the default login.
+    /// - **remote host** → the agent lives on that host; in-place remote resume
+    ///   from the inventory isn't wired yet, so we say so honestly rather than
+    ///   opening the wrong thing.
+    fn attach_fleet_session(&mut self, host: &str, session_id: &str, ctx: &mut ViewContext<Self>) {
+        use crate::cockpit::CockpitModel;
+
+        // Resolve everything up front, then drop the model borrow before the
+        // mutable adopt call / toast.
+        let model = CockpitModel::as_ref(ctx);
+        let is_local = model.local_label() == host;
+        let resolved = model
+            .inventory()
+            .hosts
+            .iter()
+            .filter(|h| h.host == host)
+            .flat_map(|h| &h.projects)
+            .flat_map(|p| &p.sessions)
+            .find(|s| s.session_id == session_id)
+            .map(|s| (s.provider, s.cwd.clone(), s.name.clone()));
+        let config_dir = if is_local {
+            model.config_dir_for_session(session_id)
+        } else {
+            None
+        };
+
+        let Some((provider, cwd, name)) = resolved else {
+            // The inventory moved on (session ended between render and click).
+            return;
+        };
+
+        if is_local {
+            let agent = match provider {
+                zaplex_cockpit::Provider::Claude => CLIAgent::Claude,
+                zaplex_cockpit::Provider::Codex => CLIAgent::Codex,
+            };
+            self.adopt_agent_session(
+                agent,
+                session_id,
+                Path::new(&cwd),
+                config_dir.as_deref(),
+                ctx,
+            );
+        } else {
+            let place = if name.is_empty() {
+                Path::new(&cwd)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| cwd.clone())
+            } else {
+                name
+            };
+            self.toast_stack.update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::default(format!(
+                        "“{place}” is a remote agent on {host} — open that host's tab to attach \
+                         (in-place remote adopt is coming)."
+                    )),
+                    ctx,
+                );
+            });
+        }
+    }
+
+    /// The `w`-jump (`JumpToNextWaiting`): advance to the next Waiting agent
+    /// across the whole fleet in the Conductor's waiting-first order (cycling)
+    /// and attach it. A stale/absent cursor restarts at the first waiting agent;
+    /// when nothing is waiting, say so quietly.
+    fn jump_to_next_waiting(&mut self, ctx: &mut ViewContext<Self>) {
+        use crate::cockpit::CockpitModel;
+
+        let cursor = self.cockpit_jump_cursor.clone();
+        let next = zaplex_cockpit::next_waiting(
+            CockpitModel::as_ref(ctx).inventory(),
+            cursor.as_ref().map(|(h, s)| (h.as_str(), s.as_str())),
+        );
+        match next {
+            Some((host, session_id)) => {
+                self.cockpit_jump_cursor = Some((host.clone(), session_id.clone()));
+                self.attach_fleet_session(&host, &session_id, ctx);
+            }
+            None => {
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::default("Nothing is waiting on you.".to_string()),
+                        ctx,
+                    );
+                });
+            }
+        }
     }
 
     /// Open a session's conversation transcript (`ViewTranscript`, cockpit "◇ log"
@@ -20443,6 +20545,12 @@ impl TypedActionView for Workspace {
                 config_dir,
             } => {
                 self.adopt_agent_session(*agent, session_id, cwd, config_dir.as_deref(), ctx);
+            }
+            AttachFleetSession { host, session_id } => {
+                self.attach_fleet_session(host, session_id, ctx);
+            }
+            JumpToNextWaiting => {
+                self.jump_to_next_waiting(ctx);
             }
             ViewTranscript {
                 session_id,

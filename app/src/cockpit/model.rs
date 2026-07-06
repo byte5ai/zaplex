@@ -59,6 +59,11 @@ pub struct CockpitModel {
     /// snapshot. Kept here so the card renderer can look up per-account colors
     /// (color isn't an `Account` field). Empty when the file is absent/broken.
     overrides: AccountOverrides,
+    /// Label of the local host in [`Self::inventory`] — the machine hostname (or
+    /// `"local"` when unavailable). The Conductor uses it to tell which host node
+    /// is *this* machine, so its sessions can be adopted in place (a remote
+    /// host's sessions resume on that host, not locally).
+    local_label: String,
 }
 
 /// Inputs captured on the model thread, moved into the off-thread build.
@@ -101,6 +106,7 @@ impl CockpitModel {
             pricing: PricingTable::default(),
             oauth_cache: HashMap::new(),
             overrides: AccountOverrides::default(),
+            local_label: "local".to_string(),
         };
         model.spawn_refresh(ctx);
         model.start_reconcile_timer(ctx);
@@ -230,11 +236,19 @@ impl CockpitModel {
                     .iter()
                     .flat_map(|a| a.sessions.iter().cloned())
                     .collect();
+                let local_label = inputs.local_label.clone();
                 let inventory = fold_inventory(inputs.local_label, local, remotes);
 
                 let _ = spawner
                     .spawn(move |me, ctx| {
-                        me.apply(snapshot, oauth_cache, overrides, inventory, ctx)
+                        me.apply(
+                            snapshot,
+                            oauth_cache,
+                            overrides,
+                            inventory,
+                            local_label,
+                            ctx,
+                        )
                     })
                     .await;
             })
@@ -253,6 +267,7 @@ impl CockpitModel {
         oauth_cache: HashMap<PathBuf, CachedOauth>,
         overrides: AccountOverrides,
         inventory: FleetTree,
+        local_label: String,
         ctx: &mut ModelContext<Self>,
     ) {
         // Transition detection (claudeplex's most-loved signal): a session that
@@ -303,6 +318,7 @@ impl CockpitModel {
         self.inventory = inventory;
         self.oauth_cache = oauth_cache;
         self.overrides = overrides;
+        self.local_label = local_label;
         ctx.emit(CockpitEvent::Updated);
         if !became_waiting.is_empty() {
             ctx.emit(CockpitEvent::SessionsBecameWaiting(became_waiting));
@@ -321,6 +337,31 @@ impl CockpitModel {
     /// ambient-bit / badge.
     pub fn needs_me(&self) -> usize {
         self.inventory.needs_me
+    }
+
+    /// Label of the local host in [`Self::inventory`] (the machine hostname, or
+    /// `"local"`). A host node whose `host` equals this is *this* machine, so the
+    /// Conductor may adopt its sessions in place; any other host is remote.
+    pub fn local_label(&self) -> &str {
+        &self.local_label
+    }
+
+    /// Resolve the account `config_dir` that owns a given **local** session id,
+    /// so the Conductor can pin an in-place adopt/fork to the right subscription
+    /// (the folded inventory drops the session→account link). Returns `None` for
+    /// the default account or a session not found locally (remote sessions are
+    /// never in the local snapshot) — `None` means "resume under the default
+    /// login", which is the correct fallback.
+    pub fn config_dir_for_session(&self, session_id: &str) -> Option<PathBuf> {
+        self.snapshot.accounts.iter().find_map(|a| {
+            if a.account.is_default {
+                return None;
+            }
+            a.sessions
+                .iter()
+                .any(|s| s.session_id == session_id)
+                .then(|| a.account.config_dir.clone())
+        })
     }
 
     /// Periodic reconcile: re-scan on a fixed interval for the model's lifetime.

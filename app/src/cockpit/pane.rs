@@ -22,8 +22,10 @@ use warpui::{
     AppContext, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View, ViewContext,
 };
 use zaplex_cockpit::{
-    format_cost, format_reset, format_tokens, heat_fill, heat_pct_label_with_provenance,
-    AccountStatus, AccountUsage, HeatLevel, Provider, SessionState, UsageProvenance, WindowTotals,
+    fleet_is_large, format_cost, format_reset, format_tokens, heat_fill,
+    heat_pct_label_with_provenance, host_auto_collapsed, host_summary, session_glyph,
+    AccountStatus, AccountUsage, FleetTree, HeatLevel, HostNode, ProjectNode, Provider,
+    SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
@@ -95,6 +97,39 @@ pub struct CockpitPaneView {
     /// Non-repo cwds simply don't get the worktree action (design §3: toggle
     /// disabled, never a broken session).
     session_in_repo: HashMap<String, bool>,
+    /// Hover/click state of each Conductor session row (key = `host\0id`, since
+    /// session ids are unique only within a host). Clicking the row attaches the
+    /// agent (adopt in place for a local host). Synced against the unified
+    /// inventory on every update.
+    conductor_row_states: HashMap<String, MouseStateHandle>,
+    /// Hover state of each Conductor host collapse toggle (key = host label).
+    conductor_host_toggle_states: HashMap<String, MouseStateHandle>,
+    /// Hover state of each Conductor project collapse toggle (key = `host\0root`).
+    conductor_project_toggle_states: HashMap<String, MouseStateHandle>,
+    /// Explicit user collapse override per host (key = host label). Absent = use
+    /// the inverse-complexity auto decision ([`host_auto_collapsed`]); present =
+    /// the user has toggled it and their choice wins until the fleet changes.
+    collapsed_hosts: HashMap<String, bool>,
+    /// Explicit user collapse override per project (key = `host\0root`). Absent =
+    /// expanded (projects default open; collapse is opt-in per project).
+    collapsed_projects: HashMap<String, bool>,
+}
+
+/// Composite key for per-`(host, id)` maps — session ids are unique only within
+/// a host, so the fleet view keys everything by host + id.
+fn host_key(host: &str, id: &str) -> String {
+    format!("{host}\u{0}{id}")
+}
+
+/// Actions the Conductor rows dispatch back into this pane view (collapse
+/// toggles). Attach/jump go to the workspace via [`WorkspaceAction`] instead —
+/// they open panes, which is the workspace's job.
+#[derive(Clone, Debug)]
+pub enum CockpitPaneAction {
+    /// Fold/unfold a host node (key = host label).
+    ToggleHost(String),
+    /// Fold/unfold a project node (key = `host\0root`).
+    ToggleProject(String),
 }
 
 impl CockpitPaneView {
@@ -117,9 +152,32 @@ impl CockpitPaneView {
             session_adopt_states: HashMap::new(),
             session_transcript_states: HashMap::new(),
             session_in_repo: HashMap::new(),
+            conductor_row_states: HashMap::new(),
+            conductor_host_toggle_states: HashMap::new(),
+            conductor_project_toggle_states: HashMap::new(),
+            collapsed_hosts: HashMap::new(),
+            collapsed_projects: HashMap::new(),
         };
         me.sync_session_action_states(ctx);
         me
+    }
+
+    /// Effective collapse state of a host: the user's explicit toggle if set,
+    /// otherwise the inverse-complexity auto decision (calm hosts fold when the
+    /// fleet is large; a host that needs you never auto-folds).
+    fn host_collapsed(&self, host: &HostNode, fleet_large: bool) -> bool {
+        self.collapsed_hosts
+            .get(&host.host)
+            .copied()
+            .unwrap_or_else(|| host_auto_collapsed(host, fleet_large))
+    }
+
+    /// Effective collapse state of a project: expanded unless the user folded it.
+    fn project_collapsed(&self, host: &str, root: &str) -> bool {
+        self.collapsed_projects
+            .get(&host_key(host, root))
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Keep one stable `MouseStateHandle` per live session for each row action
@@ -134,8 +192,7 @@ impl CockpitPaneView {
             .flat_map(|a| a.sessions.iter())
             .map(|s| (s.session_id.clone(), s.cwd.clone()))
             .collect();
-        let live: std::collections::HashSet<&String> =
-            sessions.iter().map(|(id, _)| id).collect();
+        let live: std::collections::HashSet<&String> = sessions.iter().map(|(id, _)| id).collect();
         self.session_fork_states.retain(|id, _| live.contains(id));
         self.session_forkwt_states.retain(|id, _| live.contains(id));
         self.session_adopt_states.retain(|id, _| live.contains(id));
@@ -145,14 +202,60 @@ impl CockpitPaneView {
         for (id, cwd) in sessions {
             // `.git` may be a dir (repo root) or a file (linked worktree) —
             // `exists()` covers both, so forking from inside a worktree chains.
-            let in_repo = Path::new(&cwd)
-                .ancestors()
-                .any(|p| p.join(".git").exists());
+            let in_repo = Path::new(&cwd).ancestors().any(|p| p.join(".git").exists());
             self.session_in_repo.insert(id.clone(), in_repo);
             self.session_fork_states.entry(id.clone()).or_default();
             self.session_forkwt_states.entry(id.clone()).or_default();
             self.session_adopt_states.entry(id.clone()).or_default();
             self.session_transcript_states.entry(id).or_default();
+        }
+
+        // Conductor maps: keyed off the unified cross-host inventory (which
+        // includes remote sessions the local `accounts` list never sees), by
+        // `(host, id)` / `(host, root)` / host. Retain live keys, drop the rest,
+        // and prune stale collapse overrides so a disconnected host doesn't leak.
+        let inv = CockpitModel::as_ref(ctx).inventory();
+        let live_rows: std::collections::HashSet<String> = inv
+            .hosts
+            .iter()
+            .flat_map(|h| {
+                h.projects.iter().flat_map(move |p| {
+                    p.sessions
+                        .iter()
+                        .map(move |s| host_key(&h.host, &s.session_id))
+                })
+            })
+            .collect();
+        let live_hosts: std::collections::HashSet<String> =
+            inv.hosts.iter().map(|h| h.host.clone()).collect();
+        let live_projects: std::collections::HashSet<String> = inv
+            .hosts
+            .iter()
+            .flat_map(|h| h.projects.iter().map(move |p| host_key(&h.host, &p.root)))
+            .collect();
+        self.conductor_row_states
+            .retain(|k, _| live_rows.contains(k));
+        self.conductor_host_toggle_states
+            .retain(|k, _| live_hosts.contains(k));
+        self.conductor_project_toggle_states
+            .retain(|k, _| live_projects.contains(k));
+        self.collapsed_hosts.retain(|k, _| live_hosts.contains(k));
+        self.collapsed_projects
+            .retain(|k, _| live_projects.contains(k));
+        for host in &inv.hosts {
+            self.conductor_host_toggle_states
+                .entry(host.host.clone())
+                .or_default();
+            for project in &host.projects {
+                self.conductor_project_toggle_states
+                    .entry(host_key(&host.host, &project.root))
+                    .or_default();
+                for session in &project.sessions {
+                    self.conductor_row_states
+                        .entry(host_key(&host.host, &session.session_id))
+                        .or_default();
+                }
+            }
         }
     }
 
@@ -236,7 +339,10 @@ impl CockpitPaneView {
         };
         // Capability gate — agents without a resume mechanism get no surface.
         agent.resume_command(&session.session_id)?;
-        let state = self.session_adopt_states.get(&session.session_id).cloned()?;
+        let state = self
+            .session_adopt_states
+            .get(&session.session_id)
+            .cloned()?;
 
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
@@ -360,14 +466,11 @@ impl CockpitPaneView {
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(8.0)
-            .with_child(ConstrainedBox::new(Self::text(
-                label.to_string(),
-                family,
-                size,
-                muted,
-            ))
-            .with_width(24.0)
-            .finish())
+            .with_child(
+                ConstrainedBox::new(Self::text(label.to_string(), family, size, muted))
+                    .with_width(24.0)
+                    .finish(),
+            )
             .with_child(track)
             .with_child(Self::text(
                 heat_pct_label_with_provenance(fraction, provenance),
@@ -404,12 +507,7 @@ impl CockpitPaneView {
                     appearance.ui_font_subheading(),
                     main,
                 ))
-                .with_child(Self::text(
-                    format_tokens(totals.total),
-                    family,
-                    body,
-                    muted,
-                ))
+                .with_child(Self::text(format_tokens(totals.total), family, body, muted))
                 .finish(),
         )
         .with_width(MATRIX_COL_WIDTH)
@@ -449,7 +547,12 @@ impl CockpitPaneView {
             header = header.with_child(Self::text("▉".to_string(), family, body, color));
         }
         header = header
-            .with_child(Self::text(status_glyph.to_string(), family, body, status_color))
+            .with_child(Self::text(
+                status_glyph.to_string(),
+                family,
+                body,
+                status_color,
+            ))
             .with_child(
                 Shrinkable::new(
                     1.0,
@@ -533,9 +636,7 @@ impl CockpitPaneView {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
                 .with_child(Self::text(glyph.to_string(), family, body, color))
-                .with_child(
-                    Shrinkable::new(1.0, Self::text(label, family, body, main)).finish(),
-                );
+                .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish());
             // Model family + context-window fill of the latest turn (claudeplex
             // parity): family in accent, context as a percent of the model's
             // real window, colored by how full it is.
@@ -588,88 +689,285 @@ impl CockpitPaneView {
             .finish()
     }
 
-    /// Aggregate header: account count + summed today/5h/week cost.
-    /// Compact "By project" conductor over *all* accounts' sessions (fleet
-    /// spine): groups by working directory with the needs-me (Waiting) count
-    /// bubbled up, so the project that wants you rises to the top — "which
-    /// project needs me?" at a glance. Cross-account today; extends to
-    /// cross-host when remote session lists land. `None` when there are no live
-    /// sessions (no empty section — design §2.1, no noise).
+    /// The **Conductor**: the unified cross-host Agent-Inventory, rendered
+    /// Host ▸ Project ▸ Session, waiting-first (the tree is pre-sorted).
+    ///
+    /// Drives off [`CockpitModel::inventory`] — the whole fleet (this machine
+    /// plus every connected daemon), not a locally-rebuilt tree. The
+    /// inverse-complexity law governs density: calm hosts fold to a one-line
+    /// summary once the fleet is large (see [`Self::host_collapsed`]); a host
+    /// that needs you stays open. One consistent glyph vocabulary throughout
+    /// ([`session_glyph`]), with a `✋ N` needs-me badge bubbling up host→project.
+    /// `None` when the fleet has no live sessions (no empty section — no noise).
     fn render_conductor(
         &self,
-        accounts: &[AccountUsage],
+        tree: &FleetTree,
+        local_label: &str,
+        app: &AppContext,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let sessions: Vec<_> = accounts
-            .iter()
-            .flat_map(|a| a.sessions.iter().cloned())
-            .collect();
-        if sessions.is_empty() {
+        if tree.hosts.is_empty() {
             return None;
         }
-        let tree = zaplex_cockpit::fleet::build_fleet_tree(vec![
-            zaplex_cockpit::fleet::HostSessions {
-                host: "local".to_string(),
-                sessions,
-            },
-        ]);
-        let projects = tree.hosts.into_iter().next()?.projects;
-        if projects.is_empty() {
-            return None;
-        }
-
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
-        let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
+        let fleet_large = fleet_is_large(tree);
 
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(CARD_SPACING)
             .with_child(Self::text(
                 crate::t!("cockpit-conductor-title").to_string(),
                 family,
                 body,
                 muted,
             ));
-        for p in projects.iter().take(8) {
-            let mut row = Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(8.0);
-            if p.needs_me > 0 {
-                row = row.with_child(Self::text(
-                    format!("✋ {}", p.needs_me),
-                    family,
-                    body,
-                    heat_coloru(HeatLevel::Critical),
-                ));
-            }
-            row = row
-                .with_child(
-                    Shrinkable::new(1.0, Self::text(p.name.clone(), family, body, main)).finish(),
-                )
-                .with_child(Self::text(
-                    format!(
-                        "{} session{}",
-                        p.sessions.len(),
-                        if p.sessions.len() == 1 { "" } else { "s" }
-                    ),
-                    family,
-                    body,
-                    muted,
-                ));
-            col = col.with_child(row.with_main_axis_size(MainAxisSize::Max).finish());
+        for host in &tree.hosts {
+            col = col.with_child(self.render_conductor_host(
+                host,
+                host.host == local_label,
+                fleet_large,
+                app,
+                appearance,
+            ));
         }
-        if projects.len() > 8 {
-            col = col.with_child(Self::text(
-                format!("… {} more", projects.len() - 8),
+        Some(col.finish())
+    }
+
+    /// A single Conductor host node: a collapse header (chevron + label +
+    /// `✋ N` badge + working/idle tallies), then — when expanded — its projects.
+    /// Collapsed, it shows only the one-line [`host_summary`] (60 rows become 1).
+    fn render_conductor_host(
+        &self,
+        host: &HostNode,
+        is_local: bool,
+        fleet_large: bool,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let collapsed = self.host_collapsed(host, fleet_large);
+
+        let chevron = if collapsed { "▸" } else { "▾" };
+        let mut header = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.0)
+            .with_child(Self::text(chevron.to_string(), family, body, muted))
+            .with_child(
+                Shrinkable::new(1.0, Self::text(host.host.clone(), family, body, main)).finish(),
+            );
+        if host.needs_me > 0 {
+            header = header.with_child(Self::text(
+                format!("✋ {}", host.needs_me),
+                family,
+                body,
+                heat_coloru(HeatLevel::Critical),
+            ));
+        }
+        if !is_local {
+            // A quiet "remote" marker so the user knows attach behaves differently.
+            header = header.with_child(Self::text("· remote".to_string(), family, body, muted));
+        }
+        // The whole header toggles collapse.
+        let header_el: Box<dyn Element> =
+            if let Some(state) = self.conductor_host_toggle_states.get(&host.host).cloned() {
+                let host_label = host.host.clone();
+                let inner = header.with_main_axis_size(MainAxisSize::Max).finish();
+                Hoverable::new(state, move |_mouse| inner)
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(CockpitPaneAction::ToggleHost(host_label.clone()))
+                    })
+                    .finish()
+            } else {
+                header.with_main_axis_size(MainAxisSize::Max).finish()
+            };
+
+        let mut col = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(2.0)
+            .with_child(header_el);
+
+        if collapsed {
+            // One calm line instead of the host's whole subtree.
+            col = col.with_child(
+                Container::new(Self::text(host_summary(host), family, body, muted))
+                    .with_padding_left(16.0)
+                    .finish(),
+            );
+        } else {
+            for project in &host.projects {
+                col = col.with_child(
+                    self.render_conductor_project(&host.host, project, is_local, app, appearance),
+                );
+            }
+        }
+        col.finish()
+    }
+
+    /// A Conductor project node: a collapse header (`✋ N` badge + repo name +
+    /// session count), then — when expanded — its session rows (waiting-first).
+    fn render_conductor_project(
+        &self,
+        host_label: &str,
+        project: &ProjectNode,
+        is_local: bool,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let key = host_key(host_label, &project.root);
+        let collapsed = self.project_collapsed(host_label, &project.root);
+
+        let chevron = if collapsed { "▸" } else { "▾" };
+        let mut header = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.0)
+            .with_child(Self::text(chevron.to_string(), family, body, muted));
+        if project.needs_me > 0 {
+            header = header.with_child(Self::text(
+                format!("✋ {}", project.needs_me),
+                family,
+                body,
+                heat_coloru(HeatLevel::Critical),
+            ));
+        }
+        header = header
+            .with_child(
+                Shrinkable::new(1.0, Self::text(project.name.clone(), family, body, main)).finish(),
+            )
+            .with_child(Self::text(
+                format!(
+                    "{} session{}",
+                    project.sessions.len(),
+                    if project.sessions.len() == 1 { "" } else { "s" }
+                ),
                 family,
                 body,
                 muted,
             ));
+
+        let header_el: Box<dyn Element> =
+            if let Some(state) = self.conductor_project_toggle_states.get(&key).cloned() {
+                let inner = header.with_main_axis_size(MainAxisSize::Max).finish();
+                let key = key.clone();
+                Hoverable::new(state, move |_mouse| inner)
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(CockpitPaneAction::ToggleProject(key.clone()))
+                    })
+                    .finish()
+            } else {
+                header.with_main_axis_size(MainAxisSize::Max).finish()
+            };
+
+        let mut col = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(2.0)
+            .with_child(Container::new(header_el).with_padding_left(16.0).finish());
+        if !collapsed {
+            for session in &project.sessions {
+                col =
+                    col.with_child(
+                        Container::new(self.render_conductor_session(
+                            host_label, session, is_local, app, appearance,
+                        ))
+                        .with_padding_left(32.0)
+                        .finish(),
+                    );
+            }
         }
-        Some(col.finish())
+        col.finish()
+    }
+
+    /// One Conductor session row: `<glyph> <name — dir> <model> · <ctx%>`, using
+    /// the shared glyph vocabulary and the model-family/colored-context% styling.
+    /// The whole row is the **attach** affordance — clicking it adopts the agent
+    /// in place (local host) via [`WorkspaceAction::AttachFleetSession`], the same
+    /// path the `w`-jump uses. Step 8's per-session levers (`/compact`, `/clear`,
+    /// fork) hang as trailing children on this row.
+    fn render_conductor_session(
+        &self,
+        host_label: &str,
+        session: &SessionSnapshot,
+        is_local: bool,
+        _app: &AppContext,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let accent = theme.accent().into_solid();
+
+        let (glyph, glyph_color) = match session.state {
+            SessionState::Waiting => (
+                session_glyph(session.state),
+                heat_coloru(HeatLevel::Critical),
+            ),
+            SessionState::Active | SessionState::Monitor => {
+                (session_glyph(session.state), heat_coloru(HeatLevel::Ok))
+            }
+            SessionState::Idle => (session_glyph(session.state), muted),
+        };
+        let dir = Path::new(&session.cwd)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| session.cwd.clone());
+        let label = if session.name.is_empty() {
+            dir
+        } else {
+            format!("{} — {dir}", session.name)
+        };
+
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.0)
+            .with_child(Self::text(glyph.to_string(), family, body, glyph_color))
+            .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish());
+        let fam = zaplex_cockpit::model_family(&session.model);
+        if !fam.is_empty() {
+            row = row.with_child(Self::text(fam.to_string(), family, body, accent));
+        }
+        if session.ctx_tokens > 0 {
+            let frac = zaplex_cockpit::context_fill(&session.model, session.ctx_tokens);
+            let pct = (frac * 100.0).round() as u32;
+            let color = heat_coloru(HeatLevel::from_fraction(frac));
+            row = row.with_child(Self::text(format!("· {pct}%"), family, body, color));
+        }
+        let row_el = row.with_main_axis_size(MainAxisSize::Max).finish();
+
+        // Local sessions attach in place on click; remote sessions live on their
+        // host, so the row is informational (honest — remote in-place adopt is a
+        // follow-up; the `w`-jump reports the same).
+        let key = host_key(host_label, &session.session_id);
+        match (is_local, self.conductor_row_states.get(&key).cloned()) {
+            (true, Some(state)) => {
+                let action = WorkspaceAction::AttachFleetSession {
+                    host: host_label.to_string(),
+                    session_id: session.session_id.clone(),
+                };
+                Hoverable::new(state, move |_mouse| row_el)
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                    .finish()
+            }
+            _ => row_el,
+        }
     }
 
     fn render_aggregate(
@@ -772,8 +1070,14 @@ impl View for CockpitPaneView {
                         .with_margin_bottom(CARD_SPACING * 2.0)
                         .finish(),
                 );
-            // "By project" conductor — which project needs me, across accounts.
-            if let Some(conductor) = self.render_conductor(&snapshot.accounts, appearance) {
+            // The Conductor — the unified cross-host Agent-Inventory (this
+            // machine + every connected daemon), not a locally-rebuilt tree.
+            let model = CockpitModel::as_ref(app);
+            let inventory = model.inventory().clone();
+            let local_label = model.local_label().to_string();
+            if let Some(conductor) =
+                self.render_conductor(&inventory, &local_label, app, appearance)
+            {
                 col = col.with_child(
                     Container::new(conductor)
                         .with_margin_bottom(CARD_SPACING * 2.0)
@@ -826,7 +1130,33 @@ impl Entity for CockpitPaneView {
 }
 
 impl TypedActionView for CockpitPaneView {
-    type Action = ();
+    type Action = CockpitPaneAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            CockpitPaneAction::ToggleHost(host) => {
+                // Flip relative to the *effective* state (which may be the
+                // inverse-complexity auto decision), so one click always does the
+                // visible thing regardless of whether an override exists yet.
+                let model = CockpitModel::as_ref(ctx);
+                let fleet_large = fleet_is_large(model.inventory());
+                let eff = model
+                    .inventory()
+                    .hosts
+                    .iter()
+                    .find(|h| &h.host == host)
+                    .map(|h| self.host_collapsed(h, fleet_large))
+                    .unwrap_or(false);
+                self.collapsed_hosts.insert(host.clone(), !eff);
+                ctx.notify();
+            }
+            CockpitPaneAction::ToggleProject(key) => {
+                let eff = self.collapsed_projects.get(key).copied().unwrap_or(false);
+                self.collapsed_projects.insert(key.clone(), !eff);
+                ctx.notify();
+            }
+        }
+    }
 }
 
 impl BackingView for CockpitPaneView {
@@ -882,7 +1212,9 @@ mod tests {
 
     #[test]
     fn rejects_malformed_returns_none() {
-        for bad in ["", "22C55E", "#", "#12", "#1234", "#12345", "#GGGGGG", "#12345Z"] {
+        for bad in [
+            "", "22C55E", "#", "#12", "#1234", "#12345", "#GGGGGG", "#12345Z",
+        ] {
             assert!(parse_hex_color(bad).is_none(), "{bad:?} must not parse");
         }
     }
