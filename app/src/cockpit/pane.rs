@@ -605,25 +605,33 @@ impl CockpitPaneView {
             .flat_map(|a| &a.sessions)
             .filter(|s| s.state == SessionState::Waiting)
             .count();
+        // Working = the agent is busy (Active) or mid tool-run / live job
+        // (Monitor) — hands off. Surfaced next to the waiting count so the
+        // header answers "how much is running vs waiting on me" at a glance.
+        let working: usize = accounts
+            .iter()
+            .flat_map(|a| &a.sessions)
+            .filter(|s| matches!(s.state, SessionState::Active | SessionState::Monitor))
+            .count();
+
+        let mut summary = format!(
+            "{} account{}",
+            accounts.len(),
+            if accounts.len() == 1 { "" } else { "s" }
+        );
+        if working > 0 {
+            summary.push_str(&format!(" · ▶ {working} working"));
+        }
+        if waiting > 0 {
+            summary.push_str(&format!(" · ✋ {waiting} waiting on you"));
+        }
 
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_child(Self::text(
-                if waiting > 0 {
-                    format!(
-                        "{} account{} · ✋ {waiting} waiting on you",
-                        accounts.len(),
-                        if accounts.len() == 1 { "" } else { "s" }
-                    )
-                } else {
-                    format!(
-                        "{} account{}",
-                        accounts.len(),
-                        if accounts.len() == 1 { "" } else { "s" }
-                    )
-                },
+                summary,
                 family,
                 heading,
                 if waiting > 0 {
