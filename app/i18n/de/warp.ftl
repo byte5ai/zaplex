@@ -223,3 +223,71 @@ menu-block-split-pane-left = Pane links teilen
 menu-block-split-pane-down = Pane nach unten teilen
 menu-block-split-pane-up = Pane nach oben teilen
 menu-block-close-pane = Pane schließen
+
+# ── Terminal-Suche (Platzhalter) ─────────────────────────────────────────────
+terminal-input-search-queries = Anfragen suchen
+terminal-input-search-queries-rewind = Anfragen zum Zurückspulen suchen
+terminal-input-search-conversations = Unterhaltungen suchen
+terminal-input-search-skills = Skills suchen
+terminal-input-search-models = Modelle suchen
+terminal-input-search-profiles = Profile suchen
+terminal-input-search-commands = Befehle suchen
+terminal-input-search-prompts = Prompts suchen
+terminal-input-search-indexed-repos = Indizierte Repos suchen
+terminal-input-search-plans = Pläne suchen
+
+# ── Einstellungen: Bereiche ──────────────────────────────────────────────────
+settings-section-about = Über
+settings-section-mcp-servers = MCP-Server
+settings-section-billing-and-usage = Abrechnung und Nutzung
+settings-section-appearance = Erscheinungsbild
+settings-section-features = Funktionen
+settings-section-keybindings = Tastenkürzel
+settings-section-referrals = Empfehlungen
+settings-section-shared-blocks = Geteilte Blöcke
+settings-section-warp-drive = Zaplex Drive
+settings-section-zaplexify = Zaplexify
+settings-section-network = Netzwerk
+settings-section-cloud-sync = Cloud-Sync
+settings-section-ai = KI
+settings-section-warp-agent = Zaplex-Agent
+settings-section-agent-profiles = Profile
+settings-section-agent-mcp-servers = MCP-Server
+settings-section-agent-providers = Anbieter
+settings-section-knowledge = Wissen
+settings-section-third-party-cli-agents = Externe CLI-Agenten
+settings-section-code = Code
+settings-section-editor-and-code-review = Editor und Code-Review
+settings-section-cloud-environments = Umgebungen
+settings-section-oz-cloud-api-keys = Agent-API-Schlüssel
+
+# ── Einstellungen: Erscheinungsbild-Kategorien ───────────────────────────────
+settings-appearance-category-themes = Themes
+settings-appearance-category-language = Sprache
+settings-appearance-category-icon = Symbol
+settings-appearance-category-window = Fenster
+settings-appearance-category-input = Eingabe
+settings-appearance-category-panes = Panes
+settings-appearance-category-blocks = Blöcke
+settings-appearance-category-text = Text
+settings-appearance-category-cursor = Cursor
+settings-appearance-category-tabs = Tabs
+settings-appearance-category-fullscreen-apps = Vollbild-Apps
+
+# ── Suchfilter (Anzeige-Labels) ──────────────────────────────────────────────
+search-filter-display-history = Verlauf
+search-filter-display-workflows = Workflows
+search-filter-display-agent-mode-workflows = Prompts
+search-filter-display-notebooks = Notizbücher
+search-filter-display-plans = Pläne
+search-filter-display-natural-language = KI-Befehlsvorschläge
+search-filter-display-actions = Aktionen
+search-filter-display-sessions = Sessions
+search-filter-display-conversations = Unterhaltungen
+search-filter-display-launch-configurations = Start-Konfigurationen
+search-filter-display-drive = Zaplex Drive
+search-filter-display-environment-variables = Umgebungsvariablen
+search-filter-display-prompt-history = Prompt-Verlauf
+search-filter-display-files = Dateien
+search-filter-display-commands = Befehle
+search-filter-display-blocks = Blöcke
