@@ -673,20 +673,25 @@ fn launch_command_routed_with_model_claude() {
 #[test]
 fn launch_command_routed_with_model_and_effort_codex() {
     // Codex gets `--model <model>` plus the reasoning-effort config override.
-    assert_eq!(
-        CLIAgent::Codex.launch_command_routed_with(
-            Some(Path::new("/home/u/.codex")),
-            Some("gpt-5-codex"),
-            Some("high"),
-        ),
-        "unset OPENAI_API_KEY; CODEX_HOME=/home/u/.codex codex \
-         --model gpt-5-codex -c 'model_reasoning_effort=high'"
+    // `-c key=value` is parsed as TOML by Codex, so the value must itself be a
+    // TOML-quoted string — a bare `high` is not valid TOML.
+    let cmd = CLIAgent::Codex.launch_command_routed_with(
+        Some(Path::new("/home/u/.codex")),
+        Some("gpt-5-codex"),
+        Some("high"),
     );
+    assert_eq!(
+        cmd,
+        "unset OPENAI_API_KEY; CODEX_HOME=/home/u/.codex codex \
+         --model gpt-5-codex -c 'model_reasoning_effort=\"high\"'"
+    );
+    // The effort value is TOML-double-quoted inside the shell-quoted token.
+    assert!(cmd.contains(r#"model_reasoning_effort="high""#));
     // Effort alone (no model) still emits the effort override. The `key=value`
     // token is shell-quoted (the `=` triggers quoting) — harmless and safe.
     assert_eq!(
         CLIAgent::Codex.launch_command_routed_with(None, None, Some("medium")),
-        "unset OPENAI_API_KEY; codex -c 'model_reasoning_effort=medium'"
+        "unset OPENAI_API_KEY; codex -c 'model_reasoning_effort=\"medium\"'"
     );
 }
 

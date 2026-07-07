@@ -666,14 +666,28 @@ pub async fn get_review_working_changes(repo_path: &Path) -> (String, Vec<String
     let has_head = run_git_command(repo_path, &["rev-parse", "--verify", "HEAD"])
         .await
         .is_ok();
-    let diff_args: &[&str] = if has_head {
-        &["diff", "HEAD"]
+    let diff = if has_head {
+        // `git diff HEAD` already covers staged + unstaged changes to tracked
+        // files.
+        run_git_command(repo_path, &["diff", "HEAD"])
+            .await
+            .unwrap_or_default()
     } else {
-        &["diff"]
+        // No HEAD before the first commit: `git diff` alone only shows
+        // unstaged changes to already-tracked files. Files staged for the
+        // initial commit (`git add`ed, never committed) show up in neither
+        // `git diff` nor the untracked list below, so fold in `git diff
+        // --cached` (staged vs the empty tree) as well.
+        let mut diff = run_git_command(repo_path, &["diff", "--cached"])
+            .await
+            .unwrap_or_default();
+        diff.push_str(
+            &run_git_command(repo_path, &["diff"])
+                .await
+                .unwrap_or_default(),
+        );
+        diff
     };
-    let diff = run_git_command(repo_path, diff_args)
-        .await
-        .unwrap_or_default();
     let untracked = run_git_command(repo_path, &["ls-files", "--others", "--exclude-standard"])
         .await
         .unwrap_or_default()
