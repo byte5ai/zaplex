@@ -117,12 +117,38 @@ pub struct CockpitPaneView {
     /// Explicit user collapse override per project (key = `host\0root`). Absent =
     /// expanded (projects default open; collapse is opt-in per project).
     collapsed_projects: HashMap<String, bool>,
+    /// Hover state of each Conductor session row's review-loop verbs (step 6),
+    /// keyed `"{verb}\0{host}\0{id}"` (verb ∈ review/approve/redirect/commit/pr).
+    /// One combined map (rather than five) keeps the sync/retain cheap; hover
+    /// still needs a stable handle per (verb, session) across renders.
+    conductor_review_states: HashMap<String, MouseStateHandle>,
+    /// Sessions the user marked reviewed (approve verb), keyed by `host\0id`.
+    /// A lightweight local marker — never mutates the agent — retained across
+    /// the 45s reconcile like the hover-state maps, so approving doesn't flicker.
+    reviewed_sessions: std::collections::HashSet<String>,
 }
 
 /// Composite key for per-`(host, id)` maps — session ids are unique only within
 /// a host, so the fleet view keys everything by host + id.
 fn host_key(host: &str, id: &str) -> String {
     format!("{host}\u{0}{id}")
+}
+
+/// The review-loop verbs (step 6) that hang on a local Conductor session row, in
+/// render order. Used both to seed their hover-state handles and to render them.
+const REVIEW_VERB_KEYS: [&str; 5] = ["review", "approve", "redirect", "commit", "pr"];
+
+/// The **redirect** verb's seed prompt: opens a routed agent tab with a
+/// follow-up instruction prefilled (not auto-sent) for the user to complete, so
+/// they steer the work without leaving zaplex (reuses the `AskAgentRouted`
+/// path). Kept trailing-colon so the user types the actual redirect inline.
+fn review_redirect_prompt(project_name: &str) -> String {
+    let target = if project_name.trim().is_empty() {
+        "this project".to_string()
+    } else {
+        format!("\u{201c}{}\u{201d}", project_name.trim())
+    };
+    format!("I reviewed the working changes in {target}. Please adjust the approach: ")
 }
 
 /// Actions the Conductor rows dispatch back into this pane view (collapse
@@ -134,6 +160,10 @@ pub enum CockpitPaneAction {
     ToggleHost(String),
     /// Fold/unfold a project node (key = `host\0root`).
     ToggleProject(String),
+    /// Mark a reviewed session as reviewed (approve verb, key = `host\0id`).
+    /// A local, non-mutating marker — dims the row's review affordance so the
+    /// user's eye moves on; toggles off if approved twice.
+    MarkReviewed(String),
 }
 
 impl CockpitPaneView {
@@ -162,6 +192,8 @@ impl CockpitPaneView {
             conductor_plus_states: HashMap::new(),
             collapsed_hosts: HashMap::new(),
             collapsed_projects: HashMap::new(),
+            conductor_review_states: HashMap::new(),
+            reviewed_sessions: std::collections::HashSet::new(),
         };
         me.sync_session_action_states(ctx);
         me
@@ -240,6 +272,14 @@ impl CockpitPaneView {
             .collect();
         self.conductor_row_states
             .retain(|k, _| live_rows.contains(k));
+        // Review-loop maps: keyed `"{verb}\0{host}\0{id}"`; the tail after the
+        // first `\0` is the row's `host_key`. Retain live rows, drop the rest.
+        self.conductor_review_states.retain(|k, _| {
+            k.split_once('\u{0}')
+                .map(|(_, rest)| live_rows.contains(rest))
+                .unwrap_or(false)
+        });
+        self.reviewed_sessions.retain(|k| live_rows.contains(k));
         self.conductor_host_toggle_states
             .retain(|k, _| live_hosts.contains(k));
         self.conductor_project_toggle_states
@@ -269,9 +309,13 @@ impl CockpitPaneView {
                     .entry(format!("proj:{pkey}"))
                     .or_default();
                 for session in &project.sessions {
-                    self.conductor_row_states
-                        .entry(host_key(&host.host, &session.session_id))
-                        .or_default();
+                    let rk = host_key(&host.host, &session.session_id);
+                    self.conductor_row_states.entry(rk.clone()).or_default();
+                    for verb in REVIEW_VERB_KEYS {
+                        self.conductor_review_states
+                            .entry(format!("{verb}\u{0}{rk}"))
+                            .or_default();
+                    }
                 }
             }
         }
@@ -1036,25 +1080,152 @@ impl CockpitPaneView {
             let color = heat_coloru(HeatLevel::from_fraction(frac));
             row = row.with_child(Self::text(format!("· {pct}%"), family, body, color));
         }
-        let row_el = row.with_main_axis_size(MainAxisSize::Max).finish();
+        let info = row.with_main_axis_size(MainAxisSize::Max).finish();
 
-        // Local sessions attach in place on click; remote sessions live on their
-        // host, so the row is informational (honest — remote in-place adopt is a
-        // follow-up; the `w`-jump reports the same).
+        // Local sessions attach in place on click of the info span; remote
+        // sessions live on their host, so the row is informational (honest —
+        // remote in-place adopt is a follow-up; the `w`-jump reports the same).
+        // The click target is the info span (not the whole row) so the trailing
+        // review-loop verbs (step 6) have their own click targets alongside it.
         let key = host_key(host_label, &session.session_id);
-        match (is_local, self.conductor_row_states.get(&key).cloned()) {
+        let (info_el, verbs) = match (is_local, self.conductor_row_states.get(&key).cloned()) {
             (true, Some(state)) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
                     session_id: session.session_id.clone(),
                 };
-                Hoverable::new(state, move |_mouse| row_el)
+                let attach = Hoverable::new(state, move |_mouse| info)
                     .with_cursor(Cursor::PointingHand)
                     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                    .finish()
+                    .finish();
+                (
+                    attach,
+                    self.render_review_verbs(host_label, session, appearance),
+                )
             }
-            _ => row_el,
+            _ => (info, None),
+        };
+
+        match verbs {
+            Some(verbs) => Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(10.0)
+                .with_child(Shrinkable::new(1.0, info_el).finish())
+                .with_child(verbs)
+                .with_main_axis_size(MainAxisSize::Max)
+                .finish(),
+            None => info_el,
         }
+    }
+
+    /// The review-loop verb cluster for a **local** Conductor session row (step
+    /// 6): `◈ review · ✓ approve · ↻ redirect · ⎙ commit · ⬈ PR`. Each verb is
+    /// muted, accent on hover, and dispatches its action — review / redirect /
+    /// commit / PR to the workspace ([`WorkspaceAction`]); approve to this pane
+    /// ([`CockpitPaneAction::MarkReviewed`], a local non-mutating marker that
+    /// dims to "✓ reviewed"). `None` before the hover handles are seeded (first
+    /// frame), so a row never renders half a cluster. Remote sessions get no
+    /// cluster — their repo lives on the host (remote review is a follow-up via
+    /// the daemon's `RunCommandRequest`).
+    fn render_review_verbs(
+        &self,
+        host_label: &str,
+        session: &SessionSnapshot,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let accent = theme.accent().into_solid();
+
+        let rk = host_key(host_label, &session.session_id);
+        let state = |verb: &str| {
+            self.conductor_review_states
+                .get(&format!("{verb}\u{0}{rk}"))
+                .cloned()
+        };
+        let project_root = PathBuf::from(&session.project_root);
+        let project_name = session.project_name.clone();
+        let reviewed = self.reviewed_sessions.contains(&rk);
+
+        // One hoverable verb dispatching a WorkspaceAction (muted → accent).
+        let make =
+            |st: MouseStateHandle, label: &str, action: WorkspaceAction| -> Box<dyn Element> {
+                let label = label.to_string();
+                Hoverable::new(st, move |mouse| {
+                    let color = if mouse.is_hovered() { accent } else { muted };
+                    Self::text(label.clone(), family, body, color)
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                .finish()
+            };
+
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(10.0);
+
+        if let Some(st) = state("review") {
+            row = row.with_child(make(
+                st,
+                "◈ review",
+                WorkspaceAction::ReviewSession {
+                    project_root: project_root.clone(),
+                    project_name: project_name.clone(),
+                },
+            ));
+        }
+        // ✓ approve — local marker; label + base color flip once reviewed.
+        if let Some(st) = state("approve") {
+            let key = rk.clone();
+            let label = if reviewed {
+                "✓ reviewed"
+            } else {
+                "✓ approve"
+            }
+            .to_string();
+            let base = if reviewed { accent } else { muted };
+            row = row.with_child(
+                Hoverable::new(st, move |mouse| {
+                    let color = if mouse.is_hovered() { accent } else { base };
+                    Self::text(label.clone(), family, body, color)
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CockpitPaneAction::MarkReviewed(key.clone()))
+                })
+                .finish(),
+            );
+        }
+        if let Some(st) = state("redirect") {
+            row = row.with_child(make(
+                st,
+                "↻ redirect",
+                WorkspaceAction::AskAgentRouted {
+                    prompt: review_redirect_prompt(&project_name),
+                    config_dir: None,
+                },
+            ));
+        }
+        if let Some(st) = state("commit") {
+            row = row.with_child(make(
+                st,
+                "⎙ commit",
+                WorkspaceAction::CommitReviewChanges {
+                    project_root: project_root.clone(),
+                },
+            ));
+        }
+        if let Some(st) = state("pr") {
+            row = row.with_child(make(
+                st,
+                "⬈ PR",
+                WorkspaceAction::CreateReviewPr { project_root },
+            ));
+        }
+
+        Some(row.with_main_axis_size(MainAxisSize::Min).finish())
     }
 
     fn render_aggregate(
@@ -1240,6 +1411,12 @@ impl TypedActionView for CockpitPaneView {
             CockpitPaneAction::ToggleProject(key) => {
                 let eff = self.collapsed_projects.get(key).copied().unwrap_or(false);
                 self.collapsed_projects.insert(key.clone(), !eff);
+                ctx.notify();
+            }
+            CockpitPaneAction::MarkReviewed(key) => {
+                if !self.reviewed_sessions.remove(key) {
+                    self.reviewed_sessions.insert(key.clone());
+                }
                 ctx.notify();
             }
         }

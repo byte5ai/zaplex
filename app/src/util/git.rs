@@ -654,6 +654,41 @@ pub async fn get_diff_for_commit_message(
     Err(anyhow!("Not supported on wasm"))
 }
 
+/// Working changes for the cockpit **review pane** (step 6): the tracked diff
+/// (`git diff HEAD` = staged + unstaged, or `git diff` before the first commit)
+/// plus the list of untracked, non-ignored files. Unlike
+/// [`get_diff_for_commit_message`], the tracked diff is returned verbatim (no
+/// AI-token truncation, no synthesised untracked hunks) — a human reads it.
+/// Read failures degrade to empties so an unreadable repo renders as "no
+/// changes" rather than erroring the pane.
+#[cfg(feature = "local_fs")]
+pub async fn get_review_working_changes(repo_path: &Path) -> (String, Vec<String>) {
+    let has_head = run_git_command(repo_path, &["rev-parse", "--verify", "HEAD"])
+        .await
+        .is_ok();
+    let diff_args: &[&str] = if has_head {
+        &["diff", "HEAD"]
+    } else {
+        &["diff"]
+    };
+    let diff = run_git_command(repo_path, diff_args)
+        .await
+        .unwrap_or_default();
+    let untracked = run_git_command(repo_path, &["ls-files", "--others", "--exclude-standard"])
+        .await
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.to_string())
+        .collect();
+    (diff, untracked)
+}
+
+#[cfg(not(feature = "local_fs"))]
+pub async fn get_review_working_changes(_repo_path: &Path) -> (String, Vec<String>) {
+    (String::new(), Vec::new())
+}
+
 /// Commits changes. If `include_unstaged` is true, stages all changes first via `git add -A`.
 /// `path_env` is forwarded so commit hooks can find tools on the user's `PATH`.
 #[cfg(feature = "local_fs")]

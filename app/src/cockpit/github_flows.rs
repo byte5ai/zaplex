@@ -185,6 +185,28 @@ pub fn gh_pr_merge_cmd(number: u64, repo: Option<&str>) -> String {
     format!("gh pr merge {}{} --squash", number, repo_flag(repo))
 }
 
+/// Build the exact `gh pr create` command for a reviewed change (review-loop PR
+/// verb). Every value is shell-quoted, so a hostile title/body is passed
+/// literally — never interpreted. `base` adds `--base <branch>` (target the
+/// review's default branch); when `None`, `gh` defaults to the repo's default
+/// branch. `repo` adds `-R <owner/name>` when the caller wants to be explicit
+/// (matches the other builders; `gh` otherwise infers from the cwd's remote).
+pub fn gh_pr_create_cmd(title: &str, body: &str, base: Option<&str>, repo: Option<&str>) -> String {
+    let mut cmd = String::from("gh pr create");
+    if let Some(r) = repo {
+        cmd.push_str(&format!(" -R {}", shell_words::quote(r)));
+    }
+    if let Some(b) = base.map(str::trim).filter(|b| !b.is_empty()) {
+        cmd.push_str(&format!(" --base {}", shell_words::quote(b)));
+    }
+    cmd.push_str(&format!(
+        " --title {} --body {}",
+        shell_words::quote(title),
+        shell_words::quote(body),
+    ));
+    cmd
+}
+
 // ── Flow prompts ───────────────────────────────────────────────────────────
 //
 // The instance-driven flows launch a Claude agent (on the freest subscription)

@@ -4,7 +4,7 @@
 //! native-integration design doc). The roomy full dashboard is the main-area pane (C2b).
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
@@ -63,6 +63,10 @@ pub struct CockpitPanel {
     /// Hover/click state per Conductor session row (key = `host\0id`), synced
     /// against the unified inventory. Clicking a row attaches the agent.
     conductor_row_states: HashMap<String, MouseStateHandle>,
+    /// Hover state of each local row's compact "◈ review" verb (step 6, key =
+    /// `host\0id`). The sidebar is the glance surface, so it carries only the
+    /// review entry point; the full commit/PR cluster lives on the main pane.
+    conductor_review_states: HashMap<String, MouseStateHandle>,
 }
 
 impl CockpitPanel {
@@ -79,6 +83,7 @@ impl CockpitPanel {
             scroll_state: ClippedScrollStateHandle::default(),
             expand_btn: MouseStateHandle::default(),
             conductor_row_states: HashMap::new(),
+            conductor_review_states: HashMap::new(),
         };
         me.sync_conductor_states(ctx);
         me
@@ -100,8 +105,10 @@ impl CockpitPanel {
             })
             .collect();
         self.conductor_row_states.retain(|k, _| live.contains(k));
+        self.conductor_review_states.retain(|k, _| live.contains(k));
         for key in live {
-            self.conductor_row_states.entry(key).or_default();
+            self.conductor_row_states.entry(key.clone()).or_default();
+            self.conductor_review_states.entry(key).or_default();
         }
     }
 
@@ -415,21 +422,49 @@ impl CockpitPanel {
             let color = heat_coloru(HeatLevel::from_fraction(frac));
             row = row.with_child(Self::text(format!("· {pct}%"), family, body, color));
         }
-        let row_el = row.with_main_axis_size(MainAxisSize::Max).finish();
+        let info = row.with_main_axis_size(MainAxisSize::Max).finish();
 
+        // Attach on click of the info span (local only); the compact "◈ review"
+        // verb (step 6) sits alongside with its own click target.
         let key = host_key(host_label, &session.session_id);
-        match (is_local, self.conductor_row_states.get(&key).cloned()) {
+        let (info_el, review) = match (is_local, self.conductor_row_states.get(&key).cloned()) {
             (true, Some(state)) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
                     session_id: session.session_id.clone(),
                 };
-                Hoverable::new(state, move |_mouse| row_el)
+                let attach = Hoverable::new(state, move |_mouse| info)
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                    .finish();
+                let review = self.conductor_review_states.get(&key).cloned().map(|st| {
+                    let accent = theme.accent().into_solid();
+                    let action = WorkspaceAction::ReviewSession {
+                        project_root: PathBuf::from(&session.project_root),
+                        project_name: session.project_name.clone(),
+                    };
+                    Hoverable::new(st, move |mouse| {
+                        let color = if mouse.is_hovered() { accent } else { muted };
+                        Self::text("◈".to_string(), family, body, color)
+                    })
                     .with_cursor(Cursor::PointingHand)
                     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
                     .finish()
+                });
+                (attach, review)
             }
-            _ => row_el,
+            _ => (info, None),
+        };
+
+        match review {
+            Some(review) => Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(8.0)
+                .with_child(Shrinkable::new(1.0, info_el).finish())
+                .with_child(review)
+                .with_main_axis_size(MainAxisSize::Max)
+                .finish(),
+            None => info_el,
         }
     }
 
