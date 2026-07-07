@@ -37,6 +37,21 @@ pub const FEATURE_UDP_TRANSPORT: &str = "udp-transport";
 /// so it is advertised on all platforms.
 pub const FEATURE_AGENT_INVENTORY: &str = "agent-inventory";
 
+/// Capability identifier advertised by the daemon in `InitializeResponse.features`:
+/// it signals that the daemon can run a **session-less one-shot host command**
+/// via `HostExec` → `HostExecResult` — a command that needs no bootstrapped
+/// interactive session, run in the daemon's default user shell.
+///
+/// The Agent-Cockpit's cross-host guardrails use it to deliver `kill -<SIG>
+/// <pid>` to a remote agent on a host where the app holds a daemon connection
+/// but no bound session. A client talking to an old daemon that omits this
+/// feature must not send `HostExec`, and instead surface an honest "remote
+/// guardrails need a newer daemon" message rather than a misleading failure.
+///
+/// Like [`FEATURE_AGENT_INVENTORY`] this is not PTY-bound (the command runs in a
+/// forked subshell), so it is advertised on all platforms.
+pub const FEATURE_HOST_EXEC: &str = "host-exec";
+
 /// A persistent session identifier assigned by the daemon.
 ///
 /// Unlike the protocol's existing `session_id: uint64` (which is the client's
@@ -85,9 +100,13 @@ impl std::fmt::Display for SessionId {
 /// Non-unix targets do not own PTYs, so they advertise nothing — honest
 /// advertisement: never claim a capability we cannot fulfil.
 pub fn supported_features() -> Vec<String> {
-    // Agent-session inventory is filesystem-based (no PTY), so every daemon
-    // build advertises it regardless of platform.
-    let mut features = vec![FEATURE_AGENT_INVENTORY.to_string()];
+    // Agent-session inventory and session-less host-exec are both
+    // filesystem/subshell-based (no PTY), so every daemon build advertises them
+    // regardless of platform.
+    let mut features = vec![
+        FEATURE_AGENT_INVENTORY.to_string(),
+        FEATURE_HOST_EXEC.to_string(),
+    ];
     // The native PTY session host is unix-only: non-unix targets do not own
     // PTYs, so they advertise nothing more — honest advertisement, never claim
     // a capability we cannot fulfil.

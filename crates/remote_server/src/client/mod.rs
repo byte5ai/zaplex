@@ -12,9 +12,9 @@ use warpui::r#async::{executor, FutureExt as _};
 use crate::proto::{
     client_message, read_file_chunk_response, server_message, Abort, AgentSessionList,
     AttachSession, Authenticate, BufferEdit, ClientMessage, CloseBuffer, CreateDirectory,
-    CreateDirectoryResponse, DeleteFile, DetachSession, ErrorCode, Initialize, InitializeResponse,
-    ListAgentSessions, ListDirectory, ListDirectoryResponse, ListSessions,
-    LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, OpenBuffer,
+    CreateDirectoryResponse, DeleteFile, DetachSession, ErrorCode, HostExec, HostExecResult,
+    Initialize, InitializeResponse, ListAgentSessions, ListDirectory, ListDirectoryResponse,
+    ListSessions, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, OpenBuffer,
     OpenBufferResponse, OpenSession, ReadFileChunk, ReadFileChunkResponse, ReadFileContextRequest,
     ReadFileContextResponse, ResizeSession, ResolveConflict, ResolveConflictResponse, ResolvePath,
     ResolvePathResponse, RunCommandRequest, RunCommandResponse, SaveBuffer, SaveBufferResponse,
@@ -875,6 +875,37 @@ impl RemoteServerClient {
             Some(server_message::Message::RunCommandResponse(resp)) => Ok(resp),
             other => {
                 log::error!("Unexpected response variant for RunCommand: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Runs a **session-less** one-shot command on the daemon host and returns
+    /// its output. Unlike [`Self::run_command`], no bootstrapped session is
+    /// required: the daemon runs it in its default user shell (see the daemon's
+    /// `handle_host_exec`). This is the cross-host guardrail path — e.g.
+    /// `kill -<SIG> <pid>` against a remote agent.
+    ///
+    /// Capability-gated: callers must only invoke this against a daemon that
+    /// advertises [`FEATURE_HOST_EXEC`](zaplex_remote_session::types::FEATURE_HOST_EXEC)
+    /// in its `InitializeResponse.features`. An old daemon without it must not be
+    /// sent `HostExec`; the caller falls back with an honest message.
+    ///
+    /// A daemon-side failure to even spawn the command comes back as a
+    /// [`ClientError::ServerError`] (the daemon maps it to an `ErrorResponse`);
+    /// a command that ran but exited non-zero returns `Ok` with the non-zero
+    /// `exit_code`, so the caller can inspect stderr.
+    pub async fn host_exec(&self, command: String) -> Result<HostExecResult, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::HostExec(HostExec { command })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::HostExecResult(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for HostExec: {other:?}");
                 Err(ClientError::UnexpectedResponse)
             }
         }

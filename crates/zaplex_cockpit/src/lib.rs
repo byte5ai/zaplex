@@ -43,8 +43,8 @@ pub use format::{
 };
 pub use guardrails::{
     failed_toast, guardrail_target, kill_confirm_message, no_remote_connection_toast,
-    pid_signalable, sent_toast, session_label, stop_all_confirm_message, stop_all_summary_toast,
-    unsignalable_toast, GuardrailSignal, GuardrailTarget,
+    pid_signalable, remote_unsupported_toast, sent_toast, session_label, stop_all_confirm_message,
+    stop_all_summary_toast, unsignalable_toast, GuardrailSignal, GuardrailTarget,
 };
 pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
 pub use overrides::{AccountOverride, AccountOverrides};

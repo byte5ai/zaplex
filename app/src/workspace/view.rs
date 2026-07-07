@@ -231,7 +231,6 @@ use crate::pane_group::{
 use crate::remote_server::manager::RemoteServerManager;
 #[cfg(feature = "local_fs")]
 use crate::remote_server::manager::RemoteServerManagerEvent;
-use crate::remote_server::proto::run_command_response;
 use crate::terminal::keys_settings::KeysSettings;
 
 use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
@@ -904,6 +903,11 @@ enum GuardrailSendOutcome {
     /// — the honest degradation for the remote path (see guardrails design
     /// step 7 §1): reported, never silently skipped.
     NoRemoteConnection(String),
+    /// The target host is reachable, but its daemon is too old to run a
+    /// session-less host command (no `host-exec` capability). Reported honestly
+    /// as "update the daemon", never a misleading "could not kill" — carries the
+    /// host label.
+    RemoteUnsupported(String),
 }
 
 /// Send `signal` to a **local** process. `EPERM`/`ESRCH` and any other errno
@@ -929,40 +933,40 @@ fn send_local_guardrail_signal(
     GuardrailSendOutcome::Failed("signal sending is not supported on this platform".to_string())
 }
 
-/// Attempt `signal` on a **remote** host's pid via the daemon's
-/// `RunCommandRequest` (`kill -<SIG> <pid>`), reusing the same client the
+/// Attempt `signal` on a **remote** host's pid via the daemon's session-less
+/// `HostExec` path (`kill -<SIG> <pid>`), reusing the same client the
 /// Agent-Inventory fold already holds a connection to
-/// (`RemoteServerManager::connected_daemons`). This is a best-effort, ad hoc
-/// command — it does not require (and the cockpit has no way to obtain) a
-/// bound interactive session on that host, unlike the server-file-browser's
-/// `run_command` calls which route through an already-open tab. If the daemon
-/// build in use requires a bound session for `RunCommandRequest`, this
-/// surfaces as an `Err` here and a normal "could not interrupt" toast to the
-/// user — never a silent no-op. Full session-bound remote guardrails (routing
-/// through an actually-open tab on that host, mirroring the file browser) is
-/// a tracked follow-up.
+/// (`RemoteServerManager::connected_daemons`).
+///
+/// `HostExec` runs the command in the daemon's default user shell with **no**
+/// bootstrapped session — the correct mechanism here, because the cockpit holds
+/// a daemon connection to the host but no bound interactive session on it (the
+/// earlier `RunCommandRequest` path looked up a per-session executor by id and
+/// always returned `SessionNotFound`, so remote Stop/Kill never actually
+/// reached `kill`). A command that runs but exits non-zero (e.g. the pid is
+/// already gone) surfaces its stderr as a `Failed` toast; a daemon-side spawn
+/// failure surfaces as `Failed` too — never a silent no-op.
+///
+/// Capability: the caller must have already confirmed the daemon advertises
+/// `host-exec` (see [`FEATURE_HOST_EXEC`](zaplex_remote_session::types::FEATURE_HOST_EXEC));
+/// an old daemon without it is reported as `RemoteUnsupported` before this is
+/// ever called.
 async fn run_remote_guardrail_signal(
     client: &std::sync::Arc<remote_server::client::RemoteServerClient>,
     pid: u32,
     signal: zaplex_cockpit::GuardrailSignal,
 ) -> GuardrailSendOutcome {
     let command = signal.remote_kill_command(pid);
-    match client
-        .run_command(SessionId::from(0), command, None, HashMap::new())
-        .await
-    {
-        Ok(response) => match response.result {
-            Some(run_command_response::Result::Success(success))
-                if success.exit_code.unwrap_or(1) == 0 =>
-            {
-                GuardrailSendOutcome::Sent
-            }
-            Some(run_command_response::Result::Success(success)) => {
-                GuardrailSendOutcome::Failed(String::from_utf8_lossy(&success.stderr).trim().to_string())
-            }
-            Some(run_command_response::Result::Error(err)) => GuardrailSendOutcome::Failed(err.message),
-            None => GuardrailSendOutcome::Failed("empty response".to_string()),
-        },
+    match client.host_exec(command).await {
+        Ok(result) if result.exit_code.unwrap_or(1) == 0 => GuardrailSendOutcome::Sent,
+        Ok(result) => {
+            let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
+            GuardrailSendOutcome::Failed(if stderr.is_empty() {
+                format!("exited with status {}", result.exit_code.unwrap_or(-1))
+            } else {
+                stderr
+            })
+        }
         Err(e) => GuardrailSendOutcome::Failed(format!("{e:#}")),
     }
 }
@@ -11297,7 +11301,17 @@ impl Workspace {
                         send_local_guardrail_signal(pid, signal)
                     }
                     zaplex_cockpit::GuardrailTarget::Remote(_) => match daemon {
-                        Some(daemon) => run_remote_guardrail_signal(&daemon.client, pid, signal).await,
+                        Some(daemon)
+                            if zaplex_remote_session::types::has_feature(
+                                &daemon.features,
+                                zaplex_remote_session::types::FEATURE_HOST_EXEC,
+                            ) =>
+                        {
+                            run_remote_guardrail_signal(&daemon.client, pid, signal).await
+                        }
+                        // Reachable, but the daemon predates the session-less
+                        // host-command path — honest "update the daemon".
+                        Some(_) => GuardrailSendOutcome::RemoteUnsupported(host_owned),
                         None => GuardrailSendOutcome::NoRemoteConnection(host_owned),
                     },
                 }
@@ -11310,6 +11324,10 @@ impl Workspace {
                     }
                     GuardrailSendOutcome::NoRemoteConnection(host) => (
                         zaplex_cockpit::no_remote_connection_toast(&agent_label, &host),
+                        true,
+                    ),
+                    GuardrailSendOutcome::RemoteUnsupported(host) => (
+                        zaplex_cockpit::remote_unsupported_toast(&agent_label, &host),
                         true,
                     ),
                 };
@@ -11370,7 +11388,12 @@ impl Workspace {
                         ),
                         zaplex_cockpit::GuardrailTarget::Remote(_) => {
                             match daemons.iter().find(|d| d.host_label == host) {
-                                Some(daemon) => {
+                                Some(daemon)
+                                    if zaplex_remote_session::types::has_feature(
+                                        &daemon.features,
+                                        zaplex_remote_session::types::FEATURE_HOST_EXEC,
+                                    ) =>
+                                {
                                     run_remote_guardrail_signal(
                                         &daemon.client,
                                         pid,
@@ -11378,13 +11401,16 @@ impl Workspace {
                                     )
                                     .await
                                 }
+                                Some(_) => GuardrailSendOutcome::RemoteUnsupported(host),
                                 None => GuardrailSendOutcome::NoRemoteConnection(host),
                             }
                         }
                     };
                     match outcome {
                         GuardrailSendOutcome::Sent => sent += 1,
-                        GuardrailSendOutcome::Failed(_) | GuardrailSendOutcome::NoRemoteConnection(_) => {
+                        GuardrailSendOutcome::Failed(_)
+                        | GuardrailSendOutcome::NoRemoteConnection(_)
+                        | GuardrailSendOutcome::RemoteUnsupported(_) => {
                             failed += 1;
                         }
                     }

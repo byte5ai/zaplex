@@ -46,6 +46,9 @@ message ClientMessage {
     // transcript-backed agent-sessions, a different axis from the PTY sessions
     // above. See the "Agent-Session Inventory" section at the end of this file.
     ListAgentSessions list_agent_sessions = 30;
+    // Session-less one-shot host command (Agent-Cockpit remote guardrails). See
+    // the "Session-less Host Command" section at the end of this file.
+    HostExec host_exec = 31;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -85,6 +88,9 @@ message ServerMessage {
     // Agent-session inventory response (Agent-Cockpit). See the
     // "Agent-Session Inventory" section at the end of this file.
     AgentSessionList agent_session_list = 29;
+    // Session-less one-shot host command result. See the "Session-less Host
+    // Command" section at the end of this file.
+    HostExecResult host_exec_result = 30;
   }
 }
 
@@ -760,4 +766,35 @@ message AgentSessionInfo {
 // Daemon → client: result of ListAgentSessions.
 message AgentSessionList {
   repeated AgentSessionInfo sessions = 1;
+}
+
+// ── Session-less Host Command ──────────────────────────────────────────────
+//
+// Unlike RunCommandRequest — which requires a bootstrapped session's
+// LocalCommandExecutor (looked up by session_id) — HostExec runs one ad-hoc
+// command on the daemon host WITHOUT any bound session. It is the general
+// session-less host-command path, used by callers that hold a daemon
+// connection but no interactive session on that host (e.g. the Agent-Cockpit
+// remote guardrails, which send `kill -<SIG> <pid>` to a remote agent's pid).
+//
+// The daemon runs it in its default user shell (`$SHELL`, falling back to
+// `/bin/bash`) rooted at the daemon's home directory, with no session state.
+//
+// Capability: gated behind the "host-exec" feature in
+// InitializeResponse.features (zaplex_remote_session::types::FEATURE_HOST_EXEC).
+// A client talking to an OLD daemon that does not advertise it must NOT send
+// HostExec; it falls back with an honest "needs a newer daemon" message rather
+// than a misleading failure.
+
+// Client → daemon: run one command session-lessly on the daemon host.
+message HostExec {
+  string command = 1;
+}
+
+// Daemon → client: result of a HostExec. A failure to even spawn the command
+// comes back as a top-level ErrorResponse instead (mirrors other handlers).
+message HostExecResult {
+  bytes stdout = 1;
+  bytes stderr = 2;
+  optional int32 exit_code = 3;
 }
