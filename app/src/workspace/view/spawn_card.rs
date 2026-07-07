@@ -68,8 +68,15 @@ pub struct SpawnCardConfig {
     pub claude: ProviderOptions,
     pub codex: ProviderOptions,
     pub hosts: Vec<HostOption>,
-    /// Pre-scoped host id (from a Conductor host-header `+`); `None` = local.
-    pub scoped_host: Option<String>,
+    /// Pre-scoped host **id** (from a Conductor host/project-header `+`); `None`
+    /// = local or unknown id. This is the authoritative scoping key: same-named
+    /// hosts are disambiguated by id, so when present it resolves the scoped
+    /// host before [`Self::scoped_host_name`] is consulted.
+    pub scoped_host_id: Option<String>,
+    /// Pre-scoped host **name/label** (from a Conductor host/project-header `+`);
+    /// `None` = local. Only used as the resolution fallback when
+    /// [`Self::scoped_host_id`] is absent (e.g. a source without a stable id).
+    pub scoped_host_name: Option<String>,
     /// Pre-scoped project dir (from a Conductor project-header `+` / context).
     pub project: Option<PathBuf>,
 }
@@ -89,6 +96,35 @@ enum HostChoice {
     Local,
     /// A connected SSH host by index into [`SpawnCardConfig::hosts`].
     Remote(usize),
+}
+
+/// Resolve a pre-scoped Conductor host to a [`HostChoice`].
+///
+/// Prefers the stable `scoped_id`: two connected hosts can share a display
+/// label, so matching by name alone picks the *first* same-named node and can
+/// prep a launch on the wrong remote host. Only when no id is available (or it
+/// matches nothing) do we fall back to matching by `scoped_name`. Absent both,
+/// or with no match, the launch stays local.
+fn resolve_scoped_host(
+    hosts: &[HostOption],
+    scoped_id: Option<&str>,
+    scoped_name: Option<&str>,
+) -> HostChoice {
+    // Authoritative: resolve by stable id.
+    if let Some(id) = scoped_id {
+        if let Some(pos) = hosts.iter().position(|h| h.id == id) {
+            return HostChoice::Remote(pos);
+        }
+    }
+    // Fallback: resolve by display label (only when no id was supplied).
+    if scoped_id.is_none() {
+        if let Some(name) = scoped_name {
+            if let Some(pos) = hosts.iter().position(|h| h.name == name) {
+                return HostChoice::Remote(pos);
+            }
+        }
+    }
+    HostChoice::Local
 }
 
 pub fn init(app: &mut AppContext) {
@@ -155,17 +191,13 @@ impl SpawnCard {
             .to_string();
         self.effort = "high".to_string();
         self.account = AccountChoice::Freest;
-        // Pre-scope host from a Conductor host `+`, else local.
-        self.host = cfg
-            .scoped_host
-            .as_ref()
-            .and_then(|scoped| {
-                cfg.hosts
-                    .iter()
-                    .position(|h| &h.id == scoped || &h.name == scoped)
-            })
-            .map(HostChoice::Remote)
-            .unwrap_or(HostChoice::Local);
+        // Pre-scope host from a Conductor host/project `+`, else local. Resolve
+        // by stable id first so same-named hosts route to the right node.
+        self.host = resolve_scoped_host(
+            &cfg.hosts,
+            cfg.scoped_host_id.as_deref(),
+            cfg.scoped_host_name.as_deref(),
+        );
         self.project = cfg.project.clone();
         self.cfg = cfg;
     }
@@ -688,4 +720,68 @@ pub enum SpawnCardAction {
     SetHost(usize),
     Confirm,
     Close,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn host(id: &str, name: &str) -> HostOption {
+        HostOption {
+            id: id.to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    /// A stable id must route to the matching node — not the *first* node that
+    /// happens to share the display label. This is the regression the Codex
+    /// review flagged: clicking `+` on a later same-named host scoped the launch
+    /// to the wrong remote.
+    #[test]
+    fn scoped_id_resolves_past_same_named_hosts() {
+        let hosts = vec![
+            host("id-a", "devbox"),
+            host("id-b", "devbox"), // same label, different node
+        ];
+        // Given the second node's id, we must land on index 1 despite the shared
+        // "devbox" label that a name-only match would resolve to index 0.
+        assert_eq!(
+            resolve_scoped_host(&hosts, Some("id-b"), Some("devbox")),
+            HostChoice::Remote(1),
+        );
+        assert_eq!(
+            resolve_scoped_host(&hosts, Some("id-a"), Some("devbox")),
+            HostChoice::Remote(0),
+        );
+    }
+
+    /// With no id (e.g. a source that lacks a stable id), fall back to matching
+    /// by name — the first same-named node is the best we can do.
+    #[test]
+    fn name_fallback_when_no_id() {
+        let hosts = vec![host("id-a", "alpha"), host("id-b", "beta")];
+        assert_eq!(
+            resolve_scoped_host(&hosts, None, Some("beta")),
+            HostChoice::Remote(1),
+        );
+    }
+
+    /// Local scoping (no id, no name) stays local — the unscoped / local case.
+    #[test]
+    fn no_scope_stays_local() {
+        let hosts = vec![host("id-a", "alpha")];
+        assert_eq!(resolve_scoped_host(&hosts, None, None), HostChoice::Local);
+    }
+
+    /// A stale/unknown id does not silently fall back to a name match (which
+    /// could route to the wrong host — the very bug we are fixing); it stays
+    /// local, the safe default.
+    #[test]
+    fn unknown_id_does_not_fall_back_to_name() {
+        let hosts = vec![host("id-a", "devbox"), host("id-b", "devbox")];
+        assert_eq!(
+            resolve_scoped_host(&hosts, Some("id-missing"), Some("devbox")),
+            HostChoice::Local,
+        );
+    }
 }

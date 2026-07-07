@@ -7765,6 +7765,7 @@ impl Workspace {
             menu_items.push(
                 MenuItemFields::new(crate::t!("cockpit-spawn-card-new-agent"))
                     .with_on_select_action(WorkspaceAction::OpenSpawnCard {
+                        host_id: None,
                         host: None,
                         project: None,
                     })
@@ -17457,6 +17458,7 @@ impl Workspace {
     /// defaults, then shows + focuses it.
     fn open_spawn_card(
         &mut self,
+        host_id: Option<String>,
         host: Option<String>,
         project: Option<PathBuf>,
         ctx: &mut ViewContext<Self>,
@@ -17490,7 +17492,8 @@ impl Workspace {
             claude,
             codex,
             hosts,
-            scoped_host: host,
+            scoped_host_id: host_id,
+            scoped_host_name: host,
             project,
         };
         self.spawn_card.update(ctx, |card, _| card.configure(cfg));
@@ -21533,8 +21536,12 @@ impl TypedActionView for Workspace {
                     ctx,
                 );
             }
-            OpenSpawnCard { host, project } => {
-                self.open_spawn_card(host.clone(), project.clone(), ctx);
+            OpenSpawnCard {
+                host_id,
+                host,
+                project,
+            } => {
+                self.open_spawn_card(host_id.clone(), host.clone(), project.clone(), ctx);
             }
             OpenFileInEditor { node_id, path } => {
                 if node_id.is_empty() {

@@ -767,7 +767,14 @@ pub enum WorkspaceAction {
     /// opened from a Conductor host/project header `+`; both `None` opens it
     /// unscoped (the global "New Agent" entry).
     OpenSpawnCard {
-        /// Pre-selected host label (`None` = local / unscoped).
+        /// Stable id of the pre-selected host (`None` = local / unscoped). This
+        /// is the authoritative scoping key: two connected hosts can share a
+        /// display label, so `host` (the label) alone can resolve to the wrong
+        /// node. When present, the card resolves the scoped host by this id and
+        /// only falls back to `host` (name) when it is `None`.
+        host_id: Option<String>,
+        /// Pre-selected host label (`None` = local / unscoped). Used for display
+        /// and as the resolution fallback when `host_id` is absent.
         host: Option<String>,
         /// Pre-selected project directory (`None` = the default dir).
         project: Option<PathBuf>,

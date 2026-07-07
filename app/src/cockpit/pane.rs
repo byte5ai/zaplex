@@ -909,6 +909,9 @@ impl CockpitPaneView {
         let plus = self.render_conductor_plus(
             &format!("host:{}", host.host),
             WorkspaceAction::OpenSpawnCard {
+                // Carry the stable host id so a later same-named host scopes the
+                // launch to the *right* remote node (label alone is ambiguous).
+                host_id: (!is_local).then(|| host.host_id.clone()).flatten(),
                 host: (!is_local).then(|| host.host.clone()),
                 project: None,
             },
@@ -1017,6 +1020,9 @@ impl CockpitPaneView {
         let plus = self.render_conductor_plus(
             &format!("proj:{key}"),
             WorkspaceAction::OpenSpawnCard {
+                // A project belongs to a host — carry that host's stable id so the
+                // launch scopes to the right remote node even for same-named hosts.
+                host_id: (!is_local).then(|| host_id.map(str::to_string)).flatten(),
                 host: (!is_local).then(|| host_label.to_string()),
                 project: Some(std::path::PathBuf::from(&project.root)),
             },
