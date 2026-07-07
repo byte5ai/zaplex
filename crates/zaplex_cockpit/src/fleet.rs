@@ -22,9 +22,20 @@ use std::collections::BTreeMap;
 /// produces — the leaf of the Host ▸ Project ▸ AgentSession tree.
 pub type AgentSession = SessionSnapshot;
 
-/// One host's contribution to the fleet: its label + the sessions found on it.
+/// One host's contribution to the fleet: its label + the sessions found on it,
+/// plus an explicit **local/remote** marker. `is_local` is authoritative — it
+/// records which contribution came from *this* machine vs. a remote daemon at
+/// fold time, so downstream routing (guardrail signals, attach) never has to
+/// re-derive locality by comparing the display label against the local
+/// hostname. That label comparison is unsafe: a remote daemon whose label
+/// happens to equal the local hostname (SSH alias / matching `gethostname()`)
+/// would be misclassified as local, sending a host-local `pid` signal to the
+/// wrong machine.
 pub struct HostSessions {
     pub host: String,
+    /// `true` iff these sessions live on this machine (local `libc::kill`
+    /// applies); `false` for every remote daemon's contribution.
+    pub is_local: bool,
     pub sessions: Vec<SessionSnapshot>,
 }
 
@@ -46,6 +57,12 @@ pub struct ProjectNode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostNode {
     pub host: String,
+    /// Whether this host is *this* machine. Carried explicitly from the fold
+    /// (never re-derived from `host` label equality with the local hostname),
+    /// so guardrail Stop/Kill routing and attach can trust it: `true` → local
+    /// `libc::kill` / adopt-in-place; `false` → route over the daemon. A remote
+    /// daemon whose label collides with the local hostname stays `false`.
+    pub is_local: bool,
     /// Sum of the projects' needs-me counts.
     pub needs_me: usize,
     pub projects: Vec<ProjectNode>,
@@ -113,6 +130,7 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
             let needs_me = projects.iter().map(|p| p.needs_me).sum();
             HostNode {
                 host: h.host,
+                is_local: h.is_local,
                 needs_me,
                 projects,
             }
@@ -156,12 +174,21 @@ pub fn fold_inventory(
     remotes: Vec<(String, Vec<SessionSnapshot>)>,
 ) -> FleetTree {
     let mut inputs = Vec::with_capacity(1 + remotes.len());
+    // The local contribution is the ONLY one marked local — this is where the
+    // authoritative local/remote bit is set. Every remote daemon's entry is
+    // `is_local: false`, even if its label happens to equal `local_label`, so a
+    // label collision can never route a signal to the wrong machine.
     inputs.push(HostSessions {
         host: local_label.into(),
+        is_local: true,
         sessions: local,
     });
     for (host, sessions) in remotes {
-        inputs.push(HostSessions { host, sessions });
+        inputs.push(HostSessions {
+            host,
+            is_local: false,
+            sessions,
+        });
     }
     build_fleet_tree(inputs)
 }

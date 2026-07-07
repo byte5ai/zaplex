@@ -782,7 +782,6 @@ impl CockpitPaneView {
     fn render_conductor(
         &self,
         tree: &FleetTree,
-        local_label: &str,
         app: &AppContext,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
@@ -818,9 +817,11 @@ impl CockpitPaneView {
             .with_spacing(CARD_SPACING)
             .with_child(header.finish());
         for host in &tree.hosts {
+            // Locality comes from the inventory's explicit marker, never from a
+            // label comparison (a remote label can collide with the local one).
             col = col.with_child(self.render_conductor_host(
                 host,
-                host.host == local_label,
+                host.is_local,
                 fleet_large,
                 app,
                 appearance,
@@ -1127,6 +1128,7 @@ impl CockpitPaneView {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
                     session_id: session.session_id.clone(),
+                    is_local,
                 };
                 Hoverable::new(state, move |_mouse| info)
                     .with_cursor(Cursor::PointingHand)
@@ -1141,7 +1143,8 @@ impl CockpitPaneView {
         let review_verbs = is_local
             .then(|| self.render_review_verbs(host_label, session, appearance))
             .flatten();
-        let guardrail_verbs = self.render_guardrail_verbs(host_label, session, appearance);
+        let guardrail_verbs =
+            self.render_guardrail_verbs(host_label, is_local, session, appearance);
         // Model levers are local-only (they resume/fork into a local PTY);
         // compact/clear are additionally Claude-only (Claude Code slash commands).
         let lever_verbs = is_local
@@ -1390,6 +1393,7 @@ impl CockpitPaneView {
     fn render_guardrail_verbs(
         &self,
         host_label: &str,
+        is_local: bool,
         session: &SessionSnapshot,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
@@ -1420,6 +1424,7 @@ impl CockpitPaneView {
                     host: host_label.to_string(),
                     session_id: session.session_id.clone(),
                     pid: session.pid,
+                    is_local,
                     agent_label: label.clone(),
                 },
             ));
@@ -1432,6 +1437,7 @@ impl CockpitPaneView {
                     host: host_label.to_string(),
                     session_id: session.session_id.clone(),
                     pid: session.pid,
+                    is_local,
                     agent_label: label,
                     project_name: session.project_name.clone(),
                 },
@@ -1560,10 +1566,7 @@ impl View for CockpitPaneView {
             // machine + every connected daemon), not a locally-rebuilt tree.
             let model = CockpitModel::as_ref(app);
             let inventory = model.inventory().clone();
-            let local_label = model.local_label().to_string();
-            if let Some(conductor) =
-                self.render_conductor(&inventory, &local_label, app, appearance)
-            {
+            if let Some(conductor) = self.render_conductor(&inventory, app, appearance) {
                 col = col.with_child(
                     Container::new(conductor)
                         .with_margin_bottom(CARD_SPACING * 2.0)

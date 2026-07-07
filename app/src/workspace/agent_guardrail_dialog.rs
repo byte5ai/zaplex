@@ -39,6 +39,10 @@ pub enum AgentGuardrailKind {
         host: String,
         session_id: String,
         pid: u32,
+        /// Whether `host` is *this* machine (from the inventory's explicit
+        /// `is_local` marker). Carried through the confirm so the SIGKILL
+        /// routes by locality, never by a label comparison.
+        is_local: bool,
         /// Row label (name — dir), for the dialog's message.
         agent_label: String,
         project_name: String,

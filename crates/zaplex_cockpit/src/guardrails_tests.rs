@@ -44,14 +44,26 @@ fn remote_kill_command_is_a_plain_kill_invocation() {
 }
 
 #[test]
-fn guardrail_target_matches_local_label() {
+fn guardrail_target_routes_by_explicit_locality() {
+    // Local marker → Local, regardless of the label.
+    assert_eq!(guardrail_target(true, "devhost"), GuardrailTarget::Local);
+    // Remote marker → Remote, carrying the label for the daemon lookup.
     assert_eq!(
-        guardrail_target("devhost", "devhost"),
-        GuardrailTarget::Local
-    );
-    assert_eq!(
-        guardrail_target("macmini", "devhost"),
+        guardrail_target(false, "macmini"),
         GuardrailTarget::Remote("macmini".to_string())
+    );
+}
+
+#[test]
+fn guardrail_target_label_collision_does_not_route_local() {
+    // The exact P1: a REMOTE host whose label equals the local hostname must
+    // still route Remote — never Local — because the pid is host-local and a
+    // local `libc::kill` would signal an unrelated local process. Locality is
+    // decided by `is_local`, not by the label string.
+    assert_eq!(
+        guardrail_target(false, "devhost"),
+        GuardrailTarget::Remote("devhost".to_string()),
+        "a remote host colliding with the local label must NOT be Local"
     );
 }
 

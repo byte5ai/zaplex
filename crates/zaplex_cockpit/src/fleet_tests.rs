@@ -46,6 +46,9 @@ fn session_in(
 fn host(name: &str, sessions: Vec<SessionSnapshot>) -> HostSessions {
     HostSessions {
         host: name.into(),
+        // Test helper default: locality is asserted explicitly by the tests
+        // that care (see the fold + collision tests below).
+        is_local: false,
         sessions,
     }
 }
@@ -179,7 +182,11 @@ fn fold_empty_remote_list_is_exactly_the_local_tree() {
         session("b", "/home/me/other", SessionState::Active, 20),
     ];
     let folded = fold_inventory("local", local.clone(), vec![]);
-    let expected = build_fleet_tree(vec![host("local", local)]);
+    let expected = build_fleet_tree(vec![HostSessions {
+        host: "local".into(),
+        is_local: true, // fold marks the local contribution local
+        sessions: local,
+    }]);
     assert_eq!(folded, expected);
     assert_eq!(folded.hosts.len(), 1);
     assert_eq!(folded.hosts[0].host, "local");
@@ -210,6 +217,49 @@ fn fold_two_hosts_sharing_a_path_stay_isolated() {
     // The waiting session is local's; devhost's identical path is a separate node.
     assert_eq!(local_host.projects[0].sessions[0].session_id, "l");
     assert_eq!(dev_host.projects[0].sessions[0].session_id, "r");
+}
+
+#[test]
+fn fold_marks_only_the_local_contribution_local() {
+    // The local contribution is the only `is_local == true` node; every remote
+    // daemon's node is `is_local == false`.
+    let local = vec![session("l", "/p/a", SessionState::Active, 10)];
+    let remote = vec![session("r", "/p/b", SessionState::Active, 20)];
+    let tree = fold_inventory("local", local, vec![("devhost".to_string(), remote)]);
+    let local_host = tree.hosts.iter().find(|h| h.host == "local").unwrap();
+    let dev_host = tree.hosts.iter().find(|h| h.host == "devhost").unwrap();
+    assert!(local_host.is_local, "the local host must be marked local");
+    assert!(!dev_host.is_local, "a remote host must be marked remote");
+}
+
+#[test]
+fn fold_remote_host_label_colliding_with_local_is_still_remote() {
+    // The exact P1 collision: a remote daemon advertises the SAME label as the
+    // local host (SSH alias / matching hostname). Both nodes exist separately;
+    // the local one is `is_local`, the remote one is NOT — so guardrail routing
+    // (which reads `is_local`, never the label) can never signal the remote
+    // agent's host-local pid on the local machine.
+    let local = vec![session("l", "/p/a", SessionState::Active, 10)];
+    let remote = vec![session("r", "/p/b", SessionState::Active, 20)];
+    let tree = fold_inventory("devhost", local, vec![("devhost".to_string(), remote)]);
+    // Two distinct host nodes despite the shared label.
+    let colliding: Vec<&HostNode> = tree.hosts.iter().filter(|h| h.host == "devhost").collect();
+    assert_eq!(colliding.len(), 2, "shared label → still two host nodes");
+    // Exactly one is local; the one holding the remote session is NOT local.
+    let local_node = colliding
+        .iter()
+        .find(|h| h.is_local)
+        .expect("one local node");
+    let remote_node = colliding
+        .iter()
+        .find(|h| !h.is_local)
+        .expect("one remote node");
+    assert_eq!(local_node.projects[0].sessions[0].session_id, "l");
+    assert_eq!(remote_node.projects[0].sessions[0].session_id, "r");
+    assert!(
+        !remote_node.is_local,
+        "the remote contribution stays remote even when its label equals the local label"
+    );
 }
 
 #[test]
