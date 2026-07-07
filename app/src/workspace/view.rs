@@ -4326,6 +4326,7 @@ impl Workspace {
     fn attach_fleet_session(
         &mut self,
         host: &str,
+        host_id: Option<&str>,
         session_id: &str,
         is_local: bool,
         ctx: &mut ViewContext<Self>,
@@ -4337,12 +4338,20 @@ impl Workspace {
         // would defeat (routing a remote adopt to a local one).
         // Resolve everything up front, then drop the model borrow before the
         // mutable adopt call / toast.
+        //
+        // Match the inventory node by the stable `host_id` when the row carried
+        // one (every remote node has one), falling back to the `host` label only
+        // for the local node (`host_id == None`). This keeps two remotes sharing
+        // a label distinct, so a remote adopt resolves the right host's session.
         let model = CockpitModel::as_ref(ctx);
         let resolved = model
             .inventory()
             .hosts
             .iter()
-            .filter(|h| h.host == host)
+            .filter(|h| match host_id {
+                Some(id) => h.host_id.as_deref() == Some(id),
+                None => h.host == host && h.host_id.is_none(),
+            })
             .flat_map(|h| &h.projects)
             .flat_map(|p| &p.sessions)
             .find(|s| s.session_id == session_id)
@@ -4405,18 +4414,26 @@ impl Workspace {
         );
         match next {
             Some((host, session_id)) => {
-                // Read the target host's explicit locality from the inventory
-                // node (not a label comparison), so a colliding remote label
-                // can't misroute the jump's attach.
-                let is_local = CockpitModel::as_ref(ctx)
+                // Read the target host's explicit locality + stable id from the
+                // inventory node (not a label comparison), so a colliding remote
+                // label can't misroute the jump's attach. `next_waiting` keys by
+                // label; pick the node actually holding the waiting session so a
+                // shared label resolves to the right host's id.
+                let (is_local, host_id) = CockpitModel::as_ref(ctx)
                     .inventory()
                     .hosts
                     .iter()
-                    .find(|h| h.host == host)
-                    .map(|h| h.is_local)
-                    .unwrap_or(false);
+                    .find(|h| {
+                        h.host == host
+                            && h.projects
+                                .iter()
+                                .flat_map(|p| &p.sessions)
+                                .any(|s| s.session_id == session_id)
+                    })
+                    .map(|h| (h.is_local, h.host_id.clone()))
+                    .unwrap_or((false, None));
                 self.cockpit_jump_cursor = Some((host.clone(), session_id.clone()));
-                self.attach_fleet_session(&host, &session_id, is_local, ctx);
+                self.attach_fleet_session(&host, host_id.as_deref(), &session_id, is_local, ctx);
             }
             None => {
                 self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -4768,9 +4785,34 @@ impl Workspace {
         // what a session was started with — effort is in no transcript, so this
         // registry is its only source. Keyed by (host, cwd, agent); see
         // `crate::cockpit::launch_registry` for the honest binding caveat.
+        //
+        // The `host` key must be the SAME stable identity the cross-host
+        // Agent-Inventory carries for this host — the daemon's `host_id` — so the
+        // Conductor's `session_effort` lookup (keyed by the inventory node's
+        // `host_id`) actually hits for a remote launch. The launcher only knows
+        // the SSH `node_id`, so resolve it to the live daemon's `host_id` here;
+        // fall back to the raw `node_id` when the host has no daemon yet (the
+        // inventory only surfaces a remote session once its daemon connects, so
+        // an unresolved key simply yields the honest "effort unknown" until
+        // then). Local launches keep `host = None` unchanged.
+        let registry_host: Option<String> = match node_id {
+            None => None,
+            Some(node) => {
+                #[cfg(all(unix, feature = "local_tty"))]
+                {
+                    self.daemon_host_for_node(node, &*ctx)
+                        .map(|h| h.as_str().to_string())
+                        .or_else(|| Some(node.to_string()))
+                }
+                #[cfg(not(all(unix, feature = "local_tty")))]
+                {
+                    Some(node.to_string())
+                }
+            }
+        };
         crate::cockpit::launch_registry::record(
             agent,
-            node_id,
+            registry_host.as_deref(),
             cwd,
             model.map(str::to_owned),
             effort.map(str::to_owned),
@@ -11251,6 +11293,7 @@ impl Workspace {
             AgentGuardrailDialogEvent::Confirm { kind } => match kind {
                 AgentGuardrailKind::KillAgent {
                     host,
+                    host_id,
                     pid,
                     is_local,
                     agent_label,
@@ -11258,6 +11301,7 @@ impl Workspace {
                 } => {
                     self.send_guardrail_signal(
                         host,
+                        host_id.as_deref(),
                         *is_local,
                         agent_label.clone(),
                         *pid,
@@ -11284,6 +11328,7 @@ impl Workspace {
     fn send_guardrail_signal(
         &mut self,
         host: &str,
+        host_id: Option<&str>,
         is_local: bool,
         agent_label: String,
         pid: u32,
@@ -11305,18 +11350,20 @@ impl Workspace {
         // collides with the local hostname must NOT be signaled locally (its
         // `pid` is host-local and could match an unrelated local process).
         let target = zaplex_cockpit::guardrail_target(is_local, host);
-        // Remote lookup still matches the connected daemon by label. Remote↔remote
-        // label collision (two daemons sharing a label) would pick the first
-        // match — a narrower, non-destructive follow-up (it never routes to the
-        // local machine); the destructive remote→local misclassification is what
-        // `is_local` fixes here.
+        // Remote lookup resolves the connected daemon by its stable `host_id`,
+        // never by the display label: two daemons can share a label (SSH alias /
+        // matching hostname), and `pid` is host-local, so a label match could
+        // route `kill -INT/-KILL <pid>` to the WRONG remote machine. Matching by
+        // id sends it to exactly the host the inventory row belongs to; a row
+        // without an id (or an id with no live daemon) falls through to the
+        // honest "no connection" toast rather than guessing.
         let daemon = match &target {
-            zaplex_cockpit::GuardrailTarget::Remote(remote_host) => {
+            zaplex_cockpit::GuardrailTarget::Remote(_) => host_id.and_then(|id| {
                 RemoteServerManager::as_ref(ctx)
                     .connected_daemons()
                     .into_iter()
-                    .find(|d| &d.host_label == remote_host)
-            }
+                    .find(|d| d.host_id == id)
+            }),
             zaplex_cockpit::GuardrailTarget::Local => None,
         };
         let host_owned = host.to_string();
@@ -11381,19 +11428,23 @@ impl Workspace {
         // inventory node, so routing below never re-derives locality from a
         // label comparison (a colliding remote label could send a SIGINT to a
         // local process).
-        let targets: Vec<(String, bool, u32)> = crate::cockpit::CockpitModel::as_ref(ctx)
-            .inventory()
-            .hosts
-            .iter()
-            .flat_map(|h| {
-                h.projects.iter().flat_map(move |p| {
-                    p.sessions
-                        .iter()
-                        .map(move |s| (h.host.clone(), h.is_local, s.pid))
+        // Each target carries its host's stable `host_id` (None for local) so the
+        // remote path below resolves the exact daemon by id, never by the
+        // collidable label.
+        let targets: Vec<(String, Option<String>, bool, u32)> =
+            crate::cockpit::CockpitModel::as_ref(ctx)
+                .inventory()
+                .hosts
+                .iter()
+                .flat_map(|h| {
+                    h.projects.iter().flat_map(move |p| {
+                        p.sessions
+                            .iter()
+                            .map(move |s| (h.host.clone(), h.host_id.clone(), h.is_local, s.pid))
+                    })
                 })
-            })
-            .filter(|(_, _, pid)| zaplex_cockpit::pid_signalable(*pid))
-            .collect();
+                .filter(|(_, _, _, pid)| zaplex_cockpit::pid_signalable(*pid))
+                .collect();
 
         if targets.is_empty() {
             self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -11409,7 +11460,7 @@ impl Workspace {
             async move {
                 let mut sent = 0usize;
                 let mut failed = 0usize;
-                for (host, is_local, pid) in targets {
+                for (host, host_id, is_local, pid) in targets {
                     let target = zaplex_cockpit::guardrail_target(is_local, &host);
                     let outcome = match target {
                         zaplex_cockpit::GuardrailTarget::Local => send_local_guardrail_signal(
@@ -11417,7 +11468,11 @@ impl Workspace {
                             zaplex_cockpit::GuardrailSignal::Interrupt,
                         ),
                         zaplex_cockpit::GuardrailTarget::Remote(_) => {
-                            match daemons.iter().find(|d| d.host_label == host) {
+                            // Resolve the daemon by stable id, not by label.
+                            match host_id
+                                .as_deref()
+                                .and_then(|id| daemons.iter().find(|d| d.host_id == id))
+                            {
                                 Some(daemon)
                                     if zaplex_remote_session::types::has_feature(
                                         &daemon.features,
@@ -21365,10 +21420,11 @@ impl TypedActionView for Workspace {
             }
             AttachFleetSession {
                 host,
+                host_id,
                 session_id,
                 is_local,
             } => {
-                self.attach_fleet_session(host, session_id, *is_local, ctx);
+                self.attach_fleet_session(host, host_id.as_deref(), session_id, *is_local, ctx);
             }
             JumpToNextWaiting => {
                 self.jump_to_next_waiting(ctx);
@@ -21395,6 +21451,7 @@ impl TypedActionView for Workspace {
             }
             StopAgent {
                 host,
+                host_id,
                 session_id: _,
                 pid,
                 is_local,
@@ -21402,6 +21459,7 @@ impl TypedActionView for Workspace {
             } => {
                 self.send_guardrail_signal(
                     host,
+                    host_id.as_deref(),
                     *is_local,
                     agent_label.clone(),
                     *pid,
@@ -21411,6 +21469,7 @@ impl TypedActionView for Workspace {
             }
             KillAgentRequest {
                 host,
+                host_id,
                 session_id,
                 pid,
                 is_local,
@@ -21420,6 +21479,7 @@ impl TypedActionView for Workspace {
                 self.open_agent_guardrail_dialog(
                     super::agent_guardrail_dialog::AgentGuardrailKind::KillAgent {
                         host: host.clone(),
+                        host_id: host_id.clone(),
                         session_id: session_id.clone(),
                         pid: *pid,
                         is_local: *is_local,

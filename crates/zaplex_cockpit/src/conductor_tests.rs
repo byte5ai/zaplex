@@ -37,6 +37,7 @@ fn host(name: &str, sessions: Vec<SessionSnapshot>) -> HostSessions {
     HostSessions {
         host: name.into(),
         is_local: false,
+        host_id: None,
         sessions,
     }
 }

@@ -463,8 +463,15 @@ struct SessionBootstrapInfo {
 /// fold). One entry per connected **host** — see [`RemoteServerManager::connected_daemons`].
 #[derive(Clone)]
 pub struct ConnectedDaemon {
-    /// Human host label (SSH host name) for tagging this host's sessions.
+    /// Human host label (SSH host name) for tagging this host's sessions —
+    /// **display only**. Two connected daemons can share a label (SSH alias /
+    /// matching `gethostname()`), so it must never be used to route a signal.
     pub host_label: String,
+    /// Stable, opaque per-daemon id (from the daemon's `InitializeResponse`,
+    /// the same `HostId` the manager keys connections by). Unique per connected
+    /// host even when labels collide — the correct key for resolving *which*
+    /// daemon a guardrail Stop/Kill or attach targets.
+    pub host_id: String,
     /// Live client handle — call e.g. `list_agent_sessions()` on it.
     pub client: Arc<RemoteServerClient>,
     /// Capabilities the daemon advertised at handshake. Gate feature-specific
@@ -1134,6 +1141,7 @@ impl RemoteServerManager {
                 if seen.insert(host_id) {
                     out.push(ConnectedDaemon {
                         host_label: host_label.clone(),
+                        host_id: host_id.as_str().to_string(),
                         client: Arc::clone(client),
                         features: features.clone(),
                     });

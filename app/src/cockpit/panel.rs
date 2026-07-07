@@ -341,6 +341,7 @@ impl CockpitPanel {
                     col = col.with_child(
                         Container::new(self.render_conductor_row(
                             &host.host,
+                            host.host_id.as_deref(),
                             &project.name,
                             session,
                             is_local,
@@ -373,6 +374,7 @@ impl CockpitPanel {
     fn render_conductor_row(
         &self,
         host_label: &str,
+        host_id: Option<&str>,
         project_name: &str,
         session: &SessionSnapshot,
         is_local: bool,
@@ -412,7 +414,7 @@ impl CockpitPanel {
             .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish());
         // Always-visible model·effort·context (step 8), compact for the sidebar:
         // the "Opus·High" label in accent, then the colored context-fill %.
-        let effort = crate::cockpit::session_effort(session, is_local);
+        let effort = crate::cockpit::session_effort(session, is_local, host_id);
         let attrs = zaplex_cockpit::session_attrs(
             &session.model,
             effort.as_deref(),
@@ -435,6 +437,7 @@ impl CockpitPanel {
             (true, Some(state)) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
+                    host_id: host_id.map(str::to_string),
                     session_id: session.session_id.clone(),
                     is_local,
                 };

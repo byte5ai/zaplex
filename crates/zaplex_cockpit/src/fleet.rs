@@ -36,7 +36,29 @@ pub struct HostSessions {
     /// `true` iff these sessions live on this machine (local `libc::kill`
     /// applies); `false` for every remote daemon's contribution.
     pub is_local: bool,
+    /// Stable per-daemon host identity ([`crate::fleet::RemoteHost::host_id`]),
+    /// `None` for the local contribution and `Some(daemon host id)` for each
+    /// remote. Distinct from the display `host` label: two remote daemons can
+    /// share a label (SSH alias / matching `gethostname()`), but never a
+    /// `host_id`. Downstream guardrail routing resolves the target daemon by
+    /// this id, never by the label, so a label collision can't send a
+    /// host-local `pid` signal to the wrong machine.
+    pub host_id: Option<String>,
     pub sessions: Vec<SessionSnapshot>,
+}
+
+/// A remote daemon's contribution to the fold: its display label plus the
+/// stable per-daemon `host_id` the connection is keyed by. Carrying both keeps
+/// the label for display while routing (guardrails / attach) by the id, so two
+/// remote daemons that advertise the same label stay distinct and never
+/// misroute a signal to each other's host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteHost {
+    /// Human host label (SSH host name) — for display only.
+    pub label: String,
+    /// Stable, opaque per-daemon id (from the daemon's `InitializeResponse`).
+    /// Unique per connected host even when labels collide.
+    pub host_id: String,
 }
 
 /// A project grouping within a host, with its own needs-me tally. Sessions are
@@ -63,6 +85,13 @@ pub struct HostNode {
     /// `libc::kill` / adopt-in-place; `false` → route over the daemon. A remote
     /// daemon whose label collides with the local hostname stays `false`.
     pub is_local: bool,
+    /// Stable per-daemon host identity: `None` for the local host, `Some(daemon
+    /// host id)` for a remote. Guardrail Stop/Kill and attach resolve the target
+    /// [`ConnectedDaemon`](../../app/src/remote_server/manager.rs) by **this id**,
+    /// not by the `host` label — so two remote daemons sharing a label (SSH
+    /// alias / matching hostname) route to their own machine, never to each
+    /// other's. The label is kept for display only.
+    pub host_id: Option<String>,
     /// Sum of the projects' needs-me counts.
     pub needs_me: usize,
     pub projects: Vec<ProjectNode>,
@@ -131,6 +160,7 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
             HostNode {
                 host: h.host,
                 is_local: h.is_local,
+                host_id: h.host_id,
                 needs_me,
                 projects,
             }
@@ -151,10 +181,12 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
 ///
 /// `local_label` names the local host (the machine hostname, or `"local"` when
 /// that is unavailable); `local` are its sessions. `remotes` is one
-/// `(host_label, sessions)` entry per connected daemon that advertised the
+/// `(RemoteHost, sessions)` entry per connected daemon that advertised the
 /// agent-inventory capability — a daemon without it (or one that errored)
 /// simply contributes no entry, so a single unreachable host never fails the
-/// whole fold.
+/// whole fold. Each [`RemoteHost`] carries the daemon's display label **and**
+/// its stable `host_id`, so guardrail routing can resolve the exact daemon by
+/// id even when two remotes advertise the same label.
 ///
 /// **Host namespacing.** Every host — local and each remote — becomes its own
 /// [`HostSessions`], so two hosts that happen to share an absolute path (e.g.
@@ -171,22 +203,25 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
 pub fn fold_inventory(
     local_label: impl Into<String>,
     local: Vec<SessionSnapshot>,
-    remotes: Vec<(String, Vec<SessionSnapshot>)>,
+    remotes: Vec<(RemoteHost, Vec<SessionSnapshot>)>,
 ) -> FleetTree {
     let mut inputs = Vec::with_capacity(1 + remotes.len());
     // The local contribution is the ONLY one marked local — this is where the
     // authoritative local/remote bit is set. Every remote daemon's entry is
     // `is_local: false`, even if its label happens to equal `local_label`, so a
-    // label collision can never route a signal to the wrong machine.
+    // label collision can never route a signal to the wrong machine. The local
+    // node carries no `host_id` (routing uses `is_local` for it).
     inputs.push(HostSessions {
         host: local_label.into(),
         is_local: true,
+        host_id: None,
         sessions: local,
     });
-    for (host, sessions) in remotes {
+    for (remote, sessions) in remotes {
         inputs.push(HostSessions {
-            host,
+            host: remote.label,
             is_local: false,
+            host_id: Some(remote.host_id),
             sessions,
         });
     }

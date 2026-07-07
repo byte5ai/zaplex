@@ -792,6 +792,11 @@ pub enum WorkspaceAction {
     /// row-click and the `w`-jump.
     AttachFleetSession {
         host: String,
+        /// Stable per-daemon `host_id` from the inventory node
+        /// ([`zaplex_cockpit::HostNode::host_id`]): `None` for the local host,
+        /// `Some(id)` for a remote. Used to resolve the exact inventory node /
+        /// daemon by id rather than by the collidable `host` label.
+        host_id: Option<String>,
         session_id: String,
         /// Whether `host` is *this* machine, taken from the inventory's explicit
         /// [`zaplex_cockpit::HostNode::is_local`] marker — never re-derived from
@@ -813,6 +818,12 @@ pub enum WorkspaceAction {
     /// no-op.
     StopAgent {
         host: String,
+        /// Stable per-daemon `host_id` from the inventory node
+        /// ([`zaplex_cockpit::HostNode::host_id`]): `None` for the local host,
+        /// `Some(id)` for a remote. The remote path resolves the target daemon
+        /// by this id — never by the `host` label — so two daemons sharing a
+        /// label can't send a host-local `pid` signal to the wrong machine.
+        host_id: Option<String>,
         session_id: String,
         pid: u32,
         /// Whether `host` is *this* machine, from the inventory's explicit
@@ -831,6 +842,11 @@ pub enum WorkspaceAction {
     /// see `Workspace::handle_agent_guardrail_dialog_event`).
     KillAgentRequest {
         host: String,
+        /// Stable per-daemon `host_id` from the inventory node
+        /// ([`zaplex_cockpit::HostNode::host_id`]); `None` local, `Some(id)`
+        /// remote. Threaded through the confirm dialog so the eventual SIGKILL
+        /// resolves the target daemon by id, not by the collidable label.
+        host_id: Option<String>,
         session_id: String,
         pid: u32,
         /// Whether `host` is *this* machine, from the inventory's explicit
