@@ -350,9 +350,13 @@ impl CLIAgent {
                 }
                 if let Some(effort) = effort {
                     // Codex sets reasoning effort via a config override, not a
-                    // dedicated flag. Quote the whole `key="value"` token so the
-                    // value survives the shell verbatim.
-                    let kv = shell_words::quote(&format!("model_reasoning_effort={effort}"))
+                    // dedicated flag. `-c key=value` is parsed as TOML, so the
+                    // value must itself be a TOML-quoted string (a bare `high`
+                    // is not valid TOML) — hence `model_reasoning_effort="high"`.
+                    // The outer `shell_words::quote` then wraps the whole
+                    // `key="value"` token in shell quoting so it survives as a
+                    // single argv token verbatim.
+                    let kv = shell_words::quote(&format!("model_reasoning_effort=\"{effort}\""))
                         .into_owned();
                     flags.push_str(&format!(" -c {kv}"));
                 }
