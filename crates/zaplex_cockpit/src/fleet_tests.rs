@@ -49,7 +49,16 @@ fn host(name: &str, sessions: Vec<SessionSnapshot>) -> HostSessions {
         // Test helper default: locality is asserted explicitly by the tests
         // that care (see the fold + collision tests below).
         is_local: false,
+        host_id: None,
         sessions,
+    }
+}
+
+/// A `RemoteHost` whose display label and stable id are the given strings.
+fn remote_host(label: &str, host_id: &str) -> RemoteHost {
+    RemoteHost {
+        label: label.into(),
+        host_id: host_id.into(),
     }
 }
 
@@ -185,6 +194,7 @@ fn fold_empty_remote_list_is_exactly_the_local_tree() {
     let expected = build_fleet_tree(vec![HostSessions {
         host: "local".into(),
         is_local: true, // fold marks the local contribution local
+        host_id: None,  // the local node carries no daemon id
         sessions: local,
     }]);
     assert_eq!(folded, expected);
@@ -200,7 +210,11 @@ fn fold_two_hosts_sharing_a_path_stay_isolated() {
     let shared = "/home/me/proj";
     let local = vec![session("l", shared, SessionState::Waiting, 10)];
     let remote = vec![session("r", shared, SessionState::Active, 20)];
-    let tree = fold_inventory("local", local, vec![("devhost".to_string(), remote)]);
+    let tree = fold_inventory(
+        "local",
+        local,
+        vec![(remote_host("devhost", "devhost-id"), remote)],
+    );
 
     assert_eq!(
         tree.hosts.len(),
@@ -225,11 +239,19 @@ fn fold_marks_only_the_local_contribution_local() {
     // daemon's node is `is_local == false`.
     let local = vec![session("l", "/p/a", SessionState::Active, 10)];
     let remote = vec![session("r", "/p/b", SessionState::Active, 20)];
-    let tree = fold_inventory("local", local, vec![("devhost".to_string(), remote)]);
+    let tree = fold_inventory(
+        "local",
+        local,
+        vec![(remote_host("devhost", "devhost-id"), remote)],
+    );
     let local_host = tree.hosts.iter().find(|h| h.host == "local").unwrap();
     let dev_host = tree.hosts.iter().find(|h| h.host == "devhost").unwrap();
     assert!(local_host.is_local, "the local host must be marked local");
     assert!(!dev_host.is_local, "a remote host must be marked remote");
+    // The local node carries no daemon id; the remote node carries the id the
+    // connection advertised (guardrails route by it, not by the label).
+    assert_eq!(local_host.host_id, None);
+    assert_eq!(dev_host.host_id.as_deref(), Some("devhost-id"));
 }
 
 #[test]
@@ -241,7 +263,11 @@ fn fold_remote_host_label_colliding_with_local_is_still_remote() {
     // agent's host-local pid on the local machine.
     let local = vec![session("l", "/p/a", SessionState::Active, 10)];
     let remote = vec![session("r", "/p/b", SessionState::Active, 20)];
-    let tree = fold_inventory("devhost", local, vec![("devhost".to_string(), remote)]);
+    let tree = fold_inventory(
+        "devhost",
+        local,
+        vec![(remote_host("devhost", "devhost-id"), remote)],
+    );
     // Two distinct host nodes despite the shared label.
     let colliding: Vec<&HostNode> = tree.hosts.iter().filter(|h| h.host == "devhost").collect();
     assert_eq!(colliding.len(), 2, "shared label → still two host nodes");
@@ -263,6 +289,42 @@ fn fold_remote_host_label_colliding_with_local_is_still_remote() {
 }
 
 #[test]
+fn fold_two_remotes_sharing_a_label_carry_distinct_host_ids() {
+    // The remote↔remote collision: two connected daemons advertise the SAME
+    // label but different stable host ids. Both become separate host nodes, and
+    // each keeps its own `host_id` — so guardrail routing (which resolves the
+    // target daemon by id, never by the shared label) can never signal one
+    // remote's host-local pid on the other remote's machine.
+    let local = vec![session("l", "/p/a", SessionState::Active, 1)];
+    let box_a = vec![session("a", "/p/x", SessionState::Waiting, 10)];
+    let box_b = vec![session("b", "/p/y", SessionState::Waiting, 20)];
+    let tree = fold_inventory(
+        "local",
+        local,
+        vec![
+            (remote_host("prod", "prod-a-id"), box_a),
+            (remote_host("prod", "prod-b-id"), box_b),
+        ],
+    );
+    // Three nodes total: one local + two remotes sharing the "prod" label.
+    let prod_nodes: Vec<&HostNode> = tree.hosts.iter().filter(|h| h.host == "prod").collect();
+    assert_eq!(prod_nodes.len(), 2, "shared label → still two remote nodes");
+    // Each remote node carries its own id and holds only its own session — the
+    // ids are the routing key that keeps them apart.
+    let node_a = prod_nodes
+        .iter()
+        .find(|h| h.host_id.as_deref() == Some("prod-a-id"))
+        .expect("node with prod-a-id");
+    let node_b = prod_nodes
+        .iter()
+        .find(|h| h.host_id.as_deref() == Some("prod-b-id"))
+        .expect("node with prod-b-id");
+    assert!(!node_a.is_local && !node_b.is_local, "both are remote");
+    assert_eq!(node_a.projects[0].sessions[0].session_id, "a");
+    assert_eq!(node_b.projects[0].sessions[0].session_id, "b");
+}
+
+#[test]
 fn fold_needs_me_bubbles_across_the_whole_fleet() {
     let local = vec![session("a", "/p/one", SessionState::Waiting, 5)];
     let dev = vec![
@@ -273,7 +335,10 @@ fn fold_needs_me_bubbles_across_the_whole_fleet() {
     let tree = fold_inventory(
         "local",
         local,
-        vec![("devhost".to_string(), dev), ("macmini".to_string(), mac)],
+        vec![
+            (remote_host("devhost", "devhost-id"), dev),
+            (remote_host("macmini", "macmini-id"), mac),
+        ],
     );
     // Grand total spans every host: 1 (local) + 1 (devhost) + 0 (macmini).
     assert_eq!(tree.needs_me, 2);
@@ -297,7 +362,11 @@ fn fold_identity_is_host_scoped_session_id() {
     // unique only within a host.
     let local = vec![session("dup", "/p/a", SessionState::Waiting, 10)];
     let remote = vec![session("dup", "/p/b", SessionState::Waiting, 20)];
-    let tree = fold_inventory("local", local, vec![("devhost".to_string(), remote)]);
+    let tree = fold_inventory(
+        "local",
+        local,
+        vec![(remote_host("devhost", "devhost-id"), remote)],
+    );
     assert_eq!(tree.needs_me, 2, "same id on two hosts counts twice");
     let total_sessions: usize = tree
         .hosts

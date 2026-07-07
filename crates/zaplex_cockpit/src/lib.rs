@@ -36,6 +36,7 @@ pub use conductor::{
 };
 pub use fleet::{
     build_fleet_tree, fold_inventory, AgentSession, FleetTree, HostNode, HostSessions, ProjectNode,
+    RemoteHost,
 };
 pub use format::{
     context_fill, context_window, format_cost, format_reset, format_tokens, heat_fill,

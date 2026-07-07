@@ -31,22 +31,108 @@ use crate::terminal::cli_agent::CLIAgent;
 /// by the pane and the sidebar so both render the same model·effort label.
 ///
 /// Prefers the snapshot's own value (Codex records effort in its transcript),
-/// else — for a **local** session only — the launch registry's best-known intent
-/// for this `(agent, local host, cwd)` (Claude effort reaches no transcript, so
-/// the Spawn-Karte's launch record is its only source). `None` = honestly
-/// unknown; the label then omits the effort rather than inventing one. Remote
-/// sessions use only what the wire snapshot carried.
-pub(crate) fn session_effort(session: &SessionSnapshot, is_local: bool) -> Option<String> {
+/// else the launch registry's best-known intent for this session's launch
+/// coordinates — Claude effort reaches no transcript (local *or* remote), so the
+/// Spawn-Karte's launch record is its only source. The registry is keyed by the
+/// launch's `(agent, host, cwd)`, where `host` is the **stable host identity**:
+/// `None` for a local session, and the remote daemon's `host_id` for a remote
+/// one (the launch resolves and records the same id — see
+/// [`crate::workspace::view::Workspace::launch_routed_agent`]). Passing the
+/// inventory node's `host_id` here makes a remote Claude launch's effort
+/// resolve instead of being dropped. `None` = honestly unknown; the label then
+/// omits the effort rather than inventing one.
+pub(crate) fn session_effort(
+    session: &SessionSnapshot,
+    is_local: bool,
+    host_id: Option<&str>,
+) -> Option<String> {
     if let Some(effort) = session.effort.clone() {
         return Some(effort);
-    }
-    if !is_local {
-        return None;
     }
     let agent = match session.provider {
         Provider::Claude => CLIAgent::Claude,
         Provider::Codex => CLIAgent::Codex,
     };
-    launch_registry::lookup(agent, None, Some(Path::new(&session.cwd)))
+    // Local sessions are keyed with `host = None` (the launch recorded none);
+    // remote sessions key on the daemon's stable `host_id`, the same identity
+    // the launch resolved and stored. A remote node with no id (shouldn't
+    // happen — the fold always sets it) yields the honest `None`.
+    let host = if is_local { None } else { Some(host_id?) };
+    launch_registry::lookup(agent, host, Some(Path::new(&session.cwd)))
         .and_then(|record| record.effort)
+}
+
+#[cfg(test)]
+mod session_effort_tests {
+    use super::*;
+    use chrono::Utc;
+    use zaplex_cockpit::SessionState;
+
+    /// A Claude session at `cwd` whose transcript effort is `effort`.
+    fn snap(cwd: &str, effort: Option<String>) -> SessionSnapshot {
+        SessionSnapshot {
+            session_id: "s".into(),
+            cwd: cwd.into(),
+            name: String::new(),
+            state: SessionState::Active,
+            provider: Provider::Claude,
+            model: "opus".into(),
+            effort,
+            ctx_tokens: 0,
+            project_root: cwd.into(),
+            project_name: String::new(),
+            last_activity: Utc::now(),
+            pid: 0,
+        }
+    }
+
+    #[test]
+    fn remote_effort_resolves_from_registry_by_stable_host_id() {
+        // A remote Claude launch records its effort keyed by the daemon host_id.
+        let cwd = "/remote/proj/effort-remote";
+        let host_id = "daemon-host-id-xyz";
+        launch_registry::record(
+            CLIAgent::Claude,
+            Some(host_id),
+            Some(Path::new(cwd)),
+            Some("opus".into()),
+            Some("high".into()),
+        );
+        let s = snap(cwd, None);
+        // Passing the inventory node's stable host_id now recovers the effort
+        // that used to be dropped for remote sessions.
+        assert_eq!(
+            session_effort(&s, false, Some(host_id)).as_deref(),
+            Some("high"),
+        );
+        // A different host id (another daemon at the same cwd) must NOT leak the
+        // effort across hosts, and a missing id stays honestly unknown.
+        assert_eq!(session_effort(&s, false, Some("other-id")), None);
+        assert_eq!(session_effort(&s, false, None), None);
+    }
+
+    #[test]
+    fn snapshot_effort_wins_over_registry() {
+        // When the transcript carried effort, it wins regardless of host.
+        let s = snap("/remote/proj/snap-wins", Some("medium".into()));
+        assert_eq!(
+            session_effort(&s, false, Some("any-id")).as_deref(),
+            Some("medium"),
+        );
+    }
+
+    #[test]
+    fn local_effort_still_resolves_with_none_host() {
+        // The local path is unchanged: keyed by (agent, None, cwd).
+        let cwd = "/local/proj/effort-local";
+        launch_registry::record(
+            CLIAgent::Claude,
+            None,
+            Some(Path::new(cwd)),
+            Some("sonnet".into()),
+            Some("low".into()),
+        );
+        let s = snap(cwd, None);
+        assert_eq!(session_effort(&s, true, None).as_deref(), Some("low"));
+    }
 }

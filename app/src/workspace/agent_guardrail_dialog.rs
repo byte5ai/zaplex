@@ -37,6 +37,11 @@ pub enum AgentGuardrailKind {
     /// Per-row "⨯ kill" verb (guardrails step 7): SIGKILL a single agent.
     KillAgent {
         host: String,
+        /// Stable per-daemon `host_id` (from the inventory node's
+        /// [`zaplex_cockpit::HostNode::host_id`]); `None` local, `Some(id)`
+        /// remote. Carried through the confirm so the SIGKILL resolves the
+        /// target daemon by id, never by the collidable label.
+        host_id: Option<String>,
         session_id: String,
         pid: u32,
         /// Whether `host` is *this* machine (from the inventory's explicit

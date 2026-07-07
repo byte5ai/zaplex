@@ -22,7 +22,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 use watcher::HomeDirectoryWatcher;
 use zaplex_cockpit::{
     apply_oauth_usage, build_snapshot, fold_inventory, AccountOverrides, CockpitSnapshot,
-    FleetTree, PricingTable, Provider, SessionSnapshot,
+    FleetTree, PricingTable, Provider, RemoteHost, SessionSnapshot,
 };
 // Cross-host daemon fold is a native-only concern: the `agent_session` module
 // (and the whole remote-daemon layer it lives in) is `#[cfg(not(wasm))]`, and a
@@ -221,7 +221,7 @@ impl CockpitModel {
                 // no daemon connections, so `remotes` is empty and the fold below
                 // degrades to the local tree alone.
                 #[cfg(not(target_family = "wasm"))]
-                let remotes: Vec<(String, Vec<SessionSnapshot>)> = {
+                let remotes: Vec<(RemoteHost, Vec<SessionSnapshot>)> = {
                     let mut remotes = Vec::with_capacity(inputs.daemons.len());
                     for daemon in inputs.daemons {
                         if !has_feature(&daemon.features, FEATURE_AGENT_INVENTORY) {
@@ -231,7 +231,16 @@ impl CockpitModel {
                             Ok(list) => {
                                 let sessions: Vec<SessionSnapshot> =
                                     list.sessions.iter().map(proto_to_snapshot).collect();
-                                remotes.push((daemon.host_label, sessions));
+                                // Carry the daemon's stable `host_id` alongside its
+                                // display label so the folded inventory can route
+                                // guardrails/attach by id, not by a collidable label.
+                                remotes.push((
+                                    RemoteHost {
+                                        label: daemon.host_label,
+                                        host_id: daemon.host_id,
+                                    },
+                                    sessions,
+                                ));
                             }
                             Err(e) => {
                                 log::warn!(
@@ -245,7 +254,7 @@ impl CockpitModel {
                     remotes
                 };
                 #[cfg(target_family = "wasm")]
-                let remotes: Vec<(String, Vec<SessionSnapshot>)> = {
+                let remotes: Vec<(RemoteHost, Vec<SessionSnapshot>)> = {
                     // No daemon connections on WASM; the captured (empty) list is
                     // consumed here so the fold is honestly local-only.
                     let _ = inputs.daemons;

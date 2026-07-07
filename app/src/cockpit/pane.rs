@@ -939,9 +939,14 @@ impl CockpitPaneView {
             );
         } else {
             for project in &host.projects {
-                col = col.with_child(
-                    self.render_conductor_project(&host.host, project, is_local, app, appearance),
-                );
+                col = col.with_child(self.render_conductor_project(
+                    &host.host,
+                    host.host_id.as_deref(),
+                    project,
+                    is_local,
+                    app,
+                    appearance,
+                ));
             }
         }
         col.finish()
@@ -952,6 +957,7 @@ impl CockpitPaneView {
     fn render_conductor_project(
         &self,
         host_label: &str,
+        host_id: Option<&str>,
         project: &ProjectNode,
         is_local: bool,
         app: &AppContext,
@@ -1037,14 +1043,13 @@ impl CockpitPaneView {
             );
         if !collapsed {
             for session in &project.sessions {
-                col =
-                    col.with_child(
-                        Container::new(self.render_conductor_session(
-                            host_label, session, is_local, app, appearance,
-                        ))
-                        .with_padding_left(32.0)
-                        .finish(),
-                    );
+                col = col.with_child(
+                    Container::new(self.render_conductor_session(
+                        host_label, host_id, session, is_local, app, appearance,
+                    ))
+                    .with_padding_left(32.0)
+                    .finish(),
+                );
             }
         }
         col.finish()
@@ -1059,6 +1064,7 @@ impl CockpitPaneView {
     fn render_conductor_session(
         &self,
         host_label: &str,
+        host_id: Option<&str>,
         session: &SessionSnapshot,
         is_local: bool,
         app: &AppContext,
@@ -1101,7 +1107,7 @@ impl CockpitPaneView {
         // comes from the snapshot; when the transcript didn't carry it, fall
         // back to the launch registry's best-known intent for this (agent, host,
         // cwd) — honest "unknown" (label omits the effort) when neither knows.
-        let effort = crate::cockpit::session_effort(session, is_local);
+        let effort = crate::cockpit::session_effort(session, is_local, host_id);
         let attrs = zaplex_cockpit::session_attrs(
             &session.model,
             effort.as_deref(),
@@ -1127,6 +1133,7 @@ impl CockpitPaneView {
             (true, Some(state)) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
+                    host_id: host_id.map(str::to_string),
                     session_id: session.session_id.clone(),
                     is_local,
                 };
@@ -1144,7 +1151,7 @@ impl CockpitPaneView {
             .then(|| self.render_review_verbs(host_label, session, appearance))
             .flatten();
         let guardrail_verbs =
-            self.render_guardrail_verbs(host_label, is_local, session, appearance);
+            self.render_guardrail_verbs(host_label, host_id, is_local, session, appearance);
         // Model levers are local-only (they resume/fork into a local PTY);
         // compact/clear are additionally Claude-only (Claude Code slash commands).
         let lever_verbs = is_local
@@ -1393,6 +1400,7 @@ impl CockpitPaneView {
     fn render_guardrail_verbs(
         &self,
         host_label: &str,
+        host_id: Option<&str>,
         is_local: bool,
         session: &SessionSnapshot,
         appearance: &Appearance,
@@ -1422,6 +1430,7 @@ impl CockpitPaneView {
                 "⏸ stop",
                 WorkspaceAction::StopAgent {
                     host: host_label.to_string(),
+                    host_id: host_id.map(str::to_string),
                     session_id: session.session_id.clone(),
                     pid: session.pid,
                     is_local,
@@ -1435,6 +1444,7 @@ impl CockpitPaneView {
                 "⨯ kill",
                 WorkspaceAction::KillAgentRequest {
                     host: host_label.to_string(),
+                    host_id: host_id.map(str::to_string),
                     session_id: session.session_id.clone(),
                     pid: session.pid,
                     is_local,
