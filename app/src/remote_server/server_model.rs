@@ -753,7 +753,7 @@ impl ServerModel {
             // Claude/Codex agent-sessions discovered on the daemon's filesystem.
             // Not PTY-bound, so available on every platform.
             Some(client_message::Message::ListAgentSessions(_)) => {
-                self.handle_list_agent_sessions()
+                self.handle_list_agent_sessions(&request_id, conn_id, ctx)
             }
             // Multi-session listing for the sidebar / adopt-by-id (Stage 4).
             #[cfg(unix)]
@@ -2067,11 +2067,42 @@ impl ServerModel {
     /// Reports this host's agent-session inventory for the unified cross-host
     /// Agent-Inventory tree. Discovery failures degrade to an empty list rather
     /// than erroring the client's whole tree.
-    fn handle_list_agent_sessions(&self) -> HandlerOutcome {
-        let sessions = collect_agent_sessions();
-        HandlerOutcome::Sync(server_message::Message::AgentSessionList(AgentSessionList {
-            sessions,
-        }))
+    ///
+    /// The scan itself — account discovery plus a transcript-session filesystem
+    /// walk with JSON parsing — can be slow on hosts with many Claude/Codex
+    /// transcripts or a slow home dir. Running it inline on the model thread
+    /// would stall PTY/session servicing (`SessionInput`/`SessionOutput`/attach)
+    /// for the duration of every cockpit inventory poll. So we offload the work
+    /// off the model thread: [`Self::spawn_request_handler`] runs the future on
+    /// the background executor (see `ModelContext::spawn_abortable`) and invokes
+    /// `on_resolve` back on the model thread, where we send the response
+    /// correlated to the originating `request_id`/`conn_id`.
+    fn handle_list_agent_sessions(
+        &mut self,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let request_id_for_response = request_id.clone();
+        let conn_id_for_response = conn_id;
+        // `collect_agent_sessions` performs blocking filesystem/JSON work with no
+        // await points; because `spawn_request_handler` schedules this future on
+        // the background executor, that blocking work never touches the model
+        // thread. The "no home dir → empty list, never error" behavior is
+        // preserved inside `collect_agent_sessions`.
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move { collect_agent_sessions() },
+            move |me, sessions, _ctx| {
+                me.send_server_message(
+                    Some(conn_id_for_response),
+                    Some(&request_id_for_response),
+                    server_message::Message::AgentSessionList(AgentSessionList { sessions }),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
     }
 }
 
