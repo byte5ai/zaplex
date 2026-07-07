@@ -776,6 +776,37 @@ pub enum WorkspaceAction {
     /// Conductor's waiting-first order) and attach it. Cursor + resolution live
     /// on the workspace.
     JumpToNextWaiting,
+    /// Guardrails (step 7) "⏸ pause" verb: interrupt (SIGINT) a single Conductor
+    /// session in place — graceful, the same signal as Ctrl-C, no confirmation.
+    /// A local host signals the pid directly (`libc::kill`); a remote host
+    /// attempts the daemon's `RunCommandRequest` (`kill -INT <pid>`) via the
+    /// matching connected daemon, and reports honestly (toast) when it can't be
+    /// routed. `pid == 0` (unknown) always surfaces a toast, never a silent
+    /// no-op.
+    StopAgent {
+        host: String,
+        session_id: String,
+        pid: u32,
+        /// Session row label (name — dir), for the toast.
+        agent_label: String,
+    },
+    /// Guardrails "⨯ kill" verb: open the kill-confirmation dialog for one
+    /// Conductor session. Destructive (SIGKILL) — always confirms first via
+    /// [`crate::workspace::agent_guardrail_dialog::AgentGuardrailDialog`]; the
+    /// dialog itself dispatches the SIGKILL on confirm (no separate action —
+    /// see `Workspace::handle_agent_guardrail_dialog_event`).
+    KillAgentRequest {
+        host: String,
+        session_id: String,
+        pid: u32,
+        /// Session row label (name — dir), for the dialog's message.
+        agent_label: String,
+        project_name: String,
+    },
+    /// Guardrails fleet-wide control: open the "Stop all N agents?" confirmation
+    /// dialog (Conductor pane header). Destructive/broad — always confirms; the
+    /// dialog itself interrupts every live agent on confirm.
+    StopAllRequest,
 }
 
 impl From<&WorkspaceAction> for LoginGatedFeature {
@@ -1021,6 +1052,9 @@ impl WorkspaceAction {
             | OpenFileInEditor { .. }
             | AttachFleetSession { .. }
             | JumpToNextWaiting
+            | StopAgent { .. }
+            | KillAgentRequest { .. }
+            | StopAllRequest
             | FixSettingsWithOz { .. } => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,

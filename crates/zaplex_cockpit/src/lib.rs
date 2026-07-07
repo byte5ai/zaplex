@@ -16,6 +16,7 @@ pub mod codex;
 pub mod conductor;
 pub mod fleet;
 pub mod format;
+pub mod guardrails;
 pub mod oauth;
 pub mod overrides;
 pub mod pricing;
@@ -37,6 +38,11 @@ pub use fleet::{
 pub use format::{
     context_fill, context_window, format_cost, format_reset, format_tokens, heat_fill,
     heat_pct_label, heat_pct_label_with_provenance, model_family, HeatLevel,
+};
+pub use guardrails::{
+    failed_toast, guardrail_target, kill_confirm_message, no_remote_connection_toast,
+    pid_signalable, sent_toast, session_label, stop_all_confirm_message, stop_all_summary_toast,
+    unsignalable_toast, GuardrailSignal, GuardrailTarget,
 };
 pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
 pub use overrides::{AccountOverride, AccountOverrides};

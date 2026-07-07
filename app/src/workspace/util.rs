@@ -127,6 +127,10 @@ pub struct WorkspaceState {
     pub is_spawn_card_open: bool,
     /// The calm "Offene Punkte" attention inbox (fleet-wide waiting agents).
     pub is_attention_inbox_open: bool,
+    /// Guardrails (step 7) confirmation dialog — per-agent "kill" or fleet-wide
+    /// "stop all". Shared open-flag for the one dialog instance; `kind` inside
+    /// `AgentGuardrailDialog` decides which message renders.
+    pub is_agent_guardrail_dialog_open: bool,
     pub is_tab_config_params_modal_open: bool,
     pub is_session_config_modal_open: bool,
     pub is_new_worktree_modal_open: bool,
