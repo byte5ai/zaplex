@@ -131,6 +131,12 @@ pub struct CockpitPaneView {
     /// map. Unlike the review cluster, guardrails render on **every** live row
     /// — local and remote — since interrupt/kill are cross-host operations.
     conductor_guardrail_states: HashMap<String, MouseStateHandle>,
+    /// Hover state of each Conductor session row's model-lever verbs (step 8):
+    /// `⚙ /compact` · `⌫ /clear` · `⑂ fork` · `⑂ +worktree`, keyed
+    /// `"{verb}\0{host}\0{id}"` like the review-loop / guardrail maps. Levers are
+    /// local-only (they resume/fork into a local PTY); the compact/clear pair is
+    /// Claude-only (Claude Code slash commands).
+    conductor_lever_states: HashMap<String, MouseStateHandle>,
     /// Hover state of the Conductor pane's single fleet-wide "Stop all"
     /// control (step 7). Not keyed — one control for the whole pane.
     conductor_stop_all_state: MouseStateHandle,
@@ -151,6 +157,12 @@ const REVIEW_VERB_KEYS: [&str; 5] = ["review", "approve", "redirect", "commit", 
 /// local-only): `⏸ stop` (SIGINT, no confirm) and `⨯ kill` (SIGKILL, always
 /// confirmed). Used both to seed their hover-state handles and to render them.
 const GUARDRAIL_VERB_KEYS: [&str; 2] = ["pause", "kill"];
+
+/// The model-lever verbs (step 8) on a **local** Conductor session row, in
+/// render order: `/compact` and `/clear` (Claude Code slash commands, Claude
+/// rows only) plus `fork` / `+worktree` (branch the conversation). Used both to
+/// seed their hover-state handles and to render them.
+const LEVER_VERB_KEYS: [&str; 4] = ["compact", "clear", "fork", "forkwt"];
 
 /// The **redirect** verb's seed prompt: opens a routed agent tab with a
 /// follow-up instruction prefilled (not auto-sent) for the user to complete, so
@@ -209,6 +221,7 @@ impl CockpitPaneView {
             conductor_review_states: HashMap::new(),
             reviewed_sessions: std::collections::HashSet::new(),
             conductor_guardrail_states: HashMap::new(),
+            conductor_lever_states: HashMap::new(),
             conductor_stop_all_state: MouseStateHandle::default(),
         };
         me.sync_session_action_states(ctx);
@@ -303,6 +316,12 @@ impl CockpitPaneView {
                 .map(|(_, rest)| live_rows.contains(rest))
                 .unwrap_or(false)
         });
+        // Model-lever verb map: same key shape, retained the same way.
+        self.conductor_lever_states.retain(|k, _| {
+            k.split_once('\u{0}')
+                .map(|(_, rest)| live_rows.contains(rest))
+                .unwrap_or(false)
+        });
         self.conductor_host_toggle_states
             .retain(|k, _| live_hosts.contains(k));
         self.conductor_project_toggle_states
@@ -341,6 +360,11 @@ impl CockpitPaneView {
                     }
                     for verb in GUARDRAIL_VERB_KEYS {
                         self.conductor_guardrail_states
+                            .entry(format!("{verb}\u{0}{rk}"))
+                            .or_default();
+                    }
+                    for verb in LEVER_VERB_KEYS {
+                        self.conductor_lever_states
                             .entry(format!("{verb}\u{0}{rk}"))
                             .or_default();
                     }
@@ -1075,7 +1099,7 @@ impl CockpitPaneView {
         host_label: &str,
         session: &SessionSnapshot,
         is_local: bool,
-        _app: &AppContext,
+        app: &AppContext,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -1110,15 +1134,24 @@ impl CockpitPaneView {
             .with_spacing(6.0)
             .with_child(Self::text(glyph.to_string(), family, body, glyph_color))
             .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish());
-        let fam = zaplex_cockpit::model_family(&session.model);
-        if !fam.is_empty() {
-            row = row.with_child(Self::text(fam.to_string(), family, body, accent));
+        // Always-visible model·effort·context attributes (step 8): the compact
+        // "Opus·High" label in accent, then the colored context-fill %. Effort
+        // comes from the snapshot; when the transcript didn't carry it, fall
+        // back to the launch registry's best-known intent for this (agent, host,
+        // cwd) — honest "unknown" (label omits the effort) when neither knows.
+        let effort = crate::cockpit::session_effort(session, is_local);
+        let attrs = zaplex_cockpit::session_attrs(
+            &session.model,
+            effort.as_deref(),
+            session.ctx_tokens,
+            session.state,
+        );
+        if !attrs.model_effort.is_empty() {
+            row = row.with_child(Self::text(attrs.model_effort, family, body, accent));
         }
-        if session.ctx_tokens > 0 {
-            let frac = zaplex_cockpit::context_fill(&session.model, session.ctx_tokens);
-            let pct = (frac * 100.0).round() as u32;
-            let color = heat_coloru(HeatLevel::from_fraction(frac));
-            row = row.with_child(Self::text(format!("· {pct}%"), family, body, color));
+        if let Some(pct) = attrs.ctx_pct {
+            let color = heat_coloru(HeatLevel::from_fraction(attrs.ctx_fill));
+            row = row.with_child(Self::text(format!("· {pct}% ctx"), family, body, color));
         }
         let info = row.with_main_axis_size(MainAxisSize::Max).finish();
 
@@ -1149,8 +1182,13 @@ impl CockpitPaneView {
             .then(|| self.render_review_verbs(host_label, session, appearance))
             .flatten();
         let guardrail_verbs = self.render_guardrail_verbs(host_label, session, appearance);
+        // Model levers are local-only (they resume/fork into a local PTY);
+        // compact/clear are additionally Claude-only (Claude Code slash commands).
+        let lever_verbs = is_local
+            .then(|| self.render_lever_verbs(host_label, session, app, appearance))
+            .flatten();
 
-        if review_verbs.is_none() && guardrail_verbs.is_none() {
+        if review_verbs.is_none() && guardrail_verbs.is_none() && lever_verbs.is_none() {
             return info_el;
         }
         let mut verbs_row = Flex::row()
@@ -1162,6 +1200,9 @@ impl CockpitPaneView {
         if let Some(guardrail_verbs) = guardrail_verbs {
             verbs_row = verbs_row.with_child(guardrail_verbs);
         }
+        if let Some(lever_verbs) = lever_verbs {
+            verbs_row = verbs_row.with_child(lever_verbs);
+        }
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(10.0)
@@ -1169,6 +1210,124 @@ impl CockpitPaneView {
             .with_child(verbs_row.with_main_axis_size(MainAxisSize::Min).finish())
             .with_main_axis_size(MainAxisSize::Max)
             .finish()
+    }
+
+    /// The model-lever cluster on a **local** Conductor session row (step 8):
+    /// `⚙ /compact · ⌫ /clear · ⑂ fork · ⑂ +worktree`. Compact/clear resume the
+    /// same conversation into a local tab and prefill the Claude Code slash
+    /// command ([`WorkspaceAction::SlashCommandSession`]) — Claude-only; fork /
+    /// +worktree branch the conversation ([`WorkspaceAction::ForkAgentSession`])
+    /// for any provider with a fork mechanism, the worktree variant gated on the
+    /// cwd being inside a git repo. Muted, accent on hover (constructive verbs,
+    /// like the review cluster). `None` before the hover handles seed (first
+    /// frame) or when the row exposes no lever at all.
+    fn render_lever_verbs(
+        &self,
+        host_label: &str,
+        session: &SessionSnapshot,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let accent = theme.accent().into_solid();
+
+        let agent = match session.provider {
+            Provider::Claude => CLIAgent::Claude,
+            Provider::Codex => CLIAgent::Codex,
+        };
+        // Same subscription as the source session (None = default login).
+        let config_dir = CockpitModel::as_ref(app).config_dir_for_session(&session.session_id);
+
+        let rk = host_key(host_label, &session.session_id);
+        let state = |verb: &str| {
+            self.conductor_lever_states
+                .get(&format!("{verb}\u{0}{rk}"))
+                .cloned()
+        };
+
+        // One hoverable verb dispatching a WorkspaceAction (muted → accent).
+        let make =
+            |st: MouseStateHandle, label: &str, action: WorkspaceAction| -> Box<dyn Element> {
+                let label = label.to_string();
+                Hoverable::new(st, move |mouse| {
+                    let color = if mouse.is_hovered() { accent } else { muted };
+                    Self::text(label.clone(), family, body, color)
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                .finish()
+            };
+
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(10.0);
+        let mut any = false;
+
+        // /compact + /clear — Claude Code slash commands; gated to Claude and to
+        // a resumable session (belt-and-braces with the SlashCommandSession
+        // handler's own resume-command guard).
+        let has_resume = agent.resume_command(&session.session_id).is_some();
+        if session.provider == Provider::Claude && has_resume {
+            let slash = |command: &'static str| WorkspaceAction::SlashCommandSession {
+                agent,
+                session_id: session.session_id.clone(),
+                cwd: PathBuf::from(&session.cwd),
+                config_dir: config_dir.clone(),
+                command: command.to_string(),
+            };
+            if let Some(st) = state("compact") {
+                row = row.with_child(make(
+                    st,
+                    &crate::t!("cockpit-session-compact"),
+                    slash("/compact"),
+                ));
+                any = true;
+            }
+            if let Some(st) = state("clear") {
+                row = row.with_child(make(
+                    st,
+                    &crate::t!("cockpit-session-clear"),
+                    slash("/clear"),
+                ));
+                any = true;
+            }
+        }
+
+        // fork / +worktree — any provider with a fork mechanism; the worktree
+        // variant only when the cwd is inside a git repo (design §3).
+        if agent.fork_command(&session.session_id).is_some() {
+            let fork = |into_worktree: bool| WorkspaceAction::ForkAgentSession {
+                agent,
+                session_id: session.session_id.clone(),
+                cwd: PathBuf::from(&session.cwd),
+                config_dir: config_dir.clone(),
+                into_worktree,
+            };
+            if let Some(st) = state("fork") {
+                row = row.with_child(make(st, &crate::t!("cockpit-session-fork"), fork(false)));
+                any = true;
+            }
+            let in_repo = self
+                .session_in_repo
+                .get(&session.session_id)
+                .copied()
+                .unwrap_or(false);
+            if in_repo {
+                if let Some(st) = state("forkwt") {
+                    row = row.with_child(make(
+                        st,
+                        &crate::t!("cockpit-session-fork-worktree"),
+                        fork(true),
+                    ));
+                    any = true;
+                }
+            }
+        }
+
+        any.then(|| row.with_main_axis_size(MainAxisSize::Min).finish())
     }
 
     /// The review-loop verb cluster for a **local** Conductor session row (step

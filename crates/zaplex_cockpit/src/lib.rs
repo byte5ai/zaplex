@@ -13,6 +13,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod codex_sessions;
 pub mod conductor;
 pub mod fleet;
 pub mod format;
@@ -30,7 +31,8 @@ pub mod windows;
 
 pub use conductor::{
     fleet_is_large, fleet_session_count, host_auto_collapsed, host_session_count, host_summary,
-    next_waiting, session_glyph, waiting_sessions, GLYPH_IDLE, GLYPH_WAITING, GLYPH_WORKING,
+    model_effort_label, next_waiting, session_attr_line, session_attrs, session_glyph,
+    waiting_sessions, SessionAttrs, GLYPH_IDLE, GLYPH_WAITING, GLYPH_WORKING,
 };
 pub use fleet::{
     build_fleet_tree, fold_inventory, AgentSession, FleetTree, HostNode, HostSessions, ProjectNode,
@@ -112,9 +114,12 @@ pub fn build_snapshot(
         } else {
             DEFAULT_BUDGET_WEEK
         };
-        accounts.push(build_account_usage(
-            account, entries, now, b5h, bwk, pricing,
-        ));
+        // Codex live agent-sessions (Step 8 parity): transcript-inferred, no
+        // registry/pid (see `codex_sessions`). Attached so they flow into the
+        // unified Agent-Inventory exactly like Claude's.
+        let live = codex_sessions::live_sessions(&account.config_dir, now);
+        let usage = build_account_usage(account, entries, now, b5h, bwk, pricing);
+        accounts.push(windows::with_sessions(usage, live));
     }
 
     CockpitSnapshot {

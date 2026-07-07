@@ -669,6 +669,28 @@ pub enum WorkspaceAction {
         /// (`None` = the provider's default login).
         config_dir: Option<PathBuf>,
     },
+    /// Run a Claude Code slash command (`/compact`, `/clear`) against a
+    /// discovered agent-session (cockpit model-lever, step 8).
+    ///
+    /// Cockpit sessions are *external* processes — zaplex does not own their
+    /// stdin — so the honest mechanism is: **resume the same conversation into a
+    /// zaplex-owned tab** (`agent.resume_command_pinned`, exactly like adopt)
+    /// and prefill the slash command in that live PTY's input, ready to send.
+    /// The command operates on the same session, and the human presses Enter
+    /// (in-the-loop, mirroring the review-loop verbs). Local + Claude only:
+    /// resume runs a local PTY at `cwd`, and `/compact`/`/clear` are Claude Code
+    /// commands.
+    SlashCommandSession {
+        agent: CLIAgent,
+        session_id: String,
+        /// The session's working directory.
+        cwd: PathBuf,
+        /// Non-default account config dir for subscription pinning
+        /// (`None` = the provider's default login).
+        config_dir: Option<PathBuf>,
+        /// The literal slash command to prefill (e.g. `/compact`, `/clear`).
+        command: String,
+    },
     /// Open a session's conversation transcript (cockpit "◇ log" verb): reads the
     /// session's `.jsonl`, renders it to Markdown, and opens it read-only in a
     /// code/text pane. No regression vs claudeplex/-desktop's transcript view.
@@ -1042,6 +1064,7 @@ impl WorkspaceAction {
             | AskAgentRouted { .. }
             | ForkAgentSession { .. }
             | AdoptAgentSession { .. }
+            | SlashCommandSession { .. }
             | OpenAttentionInbox
             | ViewTranscript { .. }
             | ReviewSession { .. }

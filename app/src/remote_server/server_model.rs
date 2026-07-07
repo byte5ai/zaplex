@@ -1953,11 +1953,18 @@ fn collect_agent_sessions() -> Vec<super::proto::AgentSessionInfo> {
         return Vec::new();
     };
     let now = chrono::Utc::now();
-    // Codex has no session registry yet, so agent-session discovery is
-    // Claude-only for now (matches zaplex_cockpit::sessions::live_sessions).
-    zaplex_cockpit::claude::discover_accounts(&home, None)
+    // Claude sessions (registry + transcript joined) …
+    let claude = zaplex_cockpit::claude::discover_accounts(&home, None)
         .into_iter()
-        .flat_map(|account| zaplex_cockpit::sessions::live_sessions(&account.config_dir, now))
+        .flat_map(|account| zaplex_cockpit::sessions::live_sessions(&account.config_dir, now));
+    // … plus Codex sessions (transcript-inferred; no registry/pid — see
+    // zaplex_cockpit::codex_sessions), so remote Codex agents flow through the
+    // unified inventory too.
+    let codex = zaplex_cockpit::codex::discover_accounts(&home.join(".codex"))
+        .into_iter()
+        .flat_map(|account| zaplex_cockpit::codex_sessions::live_sessions(&account.config_dir, now));
+    claude
+        .chain(codex)
         .map(|snapshot| super::agent_session::snapshot_to_proto(&snapshot))
         .collect()
 }
