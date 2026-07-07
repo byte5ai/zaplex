@@ -36,11 +36,17 @@ use crate::terminal::cli_agent::CLIAgent;
 /// Spawn-Karte's launch record is its only source. The registry is keyed by the
 /// launch's `(agent, host, cwd)`, where `host` is the **stable host identity**:
 /// `None` for a local session, and the remote daemon's `host_id` for a remote
-/// one (the launch resolves and records the same id — see
-/// [`crate::workspace::view::Workspace::launch_routed_agent`]). Passing the
-/// inventory node's `host_id` here makes a remote Claude launch's effort
-/// resolve instead of being dropped. `None` = honestly unknown; the label then
-/// omits the effort rather than inventing one.
+/// one. The launch records under that same `host_id` when the host is already
+/// connected; when it is not, it records under the SSH `node_id` and migrates to
+/// the `host_id` the moment the daemon connects (before the session can appear
+/// in the inventory), so this lookup's `host_id` always matches the record — see
+/// [`crate::workspace::view::Workspace::launch_routed_agent`] and
+/// `rehost_launch_records_on_connect`. The `cwd` is likewise the *resolved*
+/// launch dir (a local default-dir launch records `$HOME`, the dir the shell
+/// actually starts in), so it equals the `session.cwd` reported here. Passing
+/// the inventory node's `host_id` makes a remote Claude launch's effort resolve
+/// instead of being dropped. `None` = honestly unknown; the label then omits the
+/// effort rather than inventing one.
 pub(crate) fn session_effort(
     session: &SessionSnapshot,
     is_local: bool,
@@ -134,5 +140,24 @@ mod session_effort_tests {
         );
         let s = snap(cwd, None);
         assert_eq!(session_effort(&s, true, None).as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn default_dir_launch_effort_resolves_when_recorded_at_resolved_cwd() {
+        // A local launch with no project selected lands in the shell's default
+        // dir ($HOME) and the launch now records under that *resolved* cwd (not
+        // `None`). The snapshot later reports the same concrete home path, so the
+        // effort resolves — the mismatch that used to drop it (record `None` vs
+        // lookup `Some(home)`) is gone.
+        let home = "/home/effort-default-dir";
+        launch_registry::record(
+            CLIAgent::Claude,
+            None,
+            Some(Path::new(home)),
+            Some("opus".into()),
+            Some("high".into()),
+        );
+        let s = snap(home, None);
+        assert_eq!(session_effort(&s, true, None).as_deref(), Some("high"));
     }
 }

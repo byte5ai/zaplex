@@ -23,7 +23,7 @@ use watcher::HomeDirectoryWatcher;
 #[cfg(test)]
 use zaplex_cockpit::HostNode;
 use zaplex_cockpit::{
-    apply_oauth_usage, build_snapshot, fold_inventory, AccountOverrides, CockpitSnapshot,
+    apply_oauth_usage, build_snapshot, fold_inventory, host_key, AccountOverrides, CockpitSnapshot,
     FleetTree, PricingTable, Provider, RemoteHost, SessionSnapshot,
 };
 // Cross-host daemon fold is a native-only concern: the `agent_session` module
@@ -332,47 +332,9 @@ impl CockpitModel {
     ) {
         // Transition detection (claudeplex's most-loved signal): a session that
         // was working (Active/Monitor) and is now Waiting needs the user NOW.
-        // Sessions first seen already-waiting don't fire (no old state).
-        //
-        // This diffs the WHOLE fleet — local and every remote host — off the
-        // unified inventory, keyed by `(host, session_id)` (session ids are
-        // unique only within a host), so a REMOTE agent going Waiting fires the
-        // signal too, not just local ones.
-        use std::collections::HashMap;
-        use zaplex_cockpit::SessionState;
-        let old_states: HashMap<(&str, &str), SessionState> = self
-            .inventory
-            .hosts
-            .iter()
-            .flat_map(|h| {
-                h.projects
-                    .iter()
-                    .flat_map(|p| &p.sessions)
-                    .map(move |s| ((h.host.as_str(), s.session_id.as_str()), s.state))
-            })
-            .collect();
-        let mut became_waiting = Vec::new();
-        for host in &inventory.hosts {
-            for session in host.projects.iter().flat_map(|p| &p.sessions) {
-                if session.state != SessionState::Waiting {
-                    continue;
-                }
-                match old_states.get(&(host.host.as_str(), session.session_id.as_str())) {
-                    Some(SessionState::Active) | Some(SessionState::Monitor) => {
-                        let place = if session.name.is_empty() {
-                            std::path::Path::new(&session.cwd)
-                                .file_name()
-                                .map(|n| n.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| session.cwd.clone())
-                        } else {
-                            session.name.clone()
-                        };
-                        became_waiting.push(format!("{} — {place}", host.host));
-                    }
-                    _ => {}
-                }
-            }
-        }
+        // Diffed off the unified inventory (old → new); see
+        // [`fleet_transitions_to_waiting`] for the identity-keying rationale.
+        let became_waiting = fleet_transitions_to_waiting(&self.inventory, &inventory);
 
         self.snapshot = snapshot;
         self.inventory = inventory;
@@ -450,6 +412,66 @@ fn is_blank(snapshot: &CockpitSnapshot, inventory: &FleetTree) -> bool {
     snapshot.accounts.is_empty() && *inventory == FleetTree::default()
 }
 
+/// Detect working→Waiting transitions across the WHOLE fleet — local and every
+/// remote host — by diffing the previous inventory against the next one, and
+/// return the display string (`"{host} — {place}"`) for each session that just
+/// flipped to Waiting from Active/Monitor. Sessions first seen already-waiting
+/// don't fire (no old state).
+///
+/// Sessions are keyed by the **stable host identity**
+/// ([`host_key`]`(is_local, host_id, session_id)`), never the display `host`
+/// label. Session ids are unique only within a host, and two remote daemons can
+/// advertise the same label (SSH alias / matching `gethostname()`); a label key
+/// would alias two such hosts' same-id sessions into one map entry, so one
+/// host's old state could overwrite the other's and a waiting-transition would
+/// be missed or misattributed. The identity (`is_local` + `host_id`, carried
+/// explicitly on each `HostNode`) keeps them distinct.
+fn fleet_transitions_to_waiting(old: &FleetTree, new: &FleetTree) -> Vec<String> {
+    use std::collections::HashMap;
+    use zaplex_cockpit::SessionState;
+    let old_states: HashMap<String, SessionState> = old
+        .hosts
+        .iter()
+        .flat_map(|h| {
+            let is_local = h.is_local;
+            let host_id = h.host_id.clone();
+            h.projects.iter().flat_map(|p| &p.sessions).map(move |s| {
+                (
+                    host_key(is_local, host_id.as_deref(), &s.session_id),
+                    s.state,
+                )
+            })
+        })
+        .collect();
+    let mut became_waiting = Vec::new();
+    for host in &new.hosts {
+        for session in host.projects.iter().flat_map(|p| &p.sessions) {
+            if session.state != SessionState::Waiting {
+                continue;
+            }
+            match old_states.get(&host_key(
+                host.is_local,
+                host.host_id.as_deref(),
+                &session.session_id,
+            )) {
+                Some(SessionState::Active) | Some(SessionState::Monitor) => {
+                    let place = if session.name.is_empty() {
+                        std::path::Path::new(&session.cwd)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| session.cwd.clone())
+                    } else {
+                        session.name.clone()
+                    };
+                    became_waiting.push(format!("{} — {place}", host.host));
+                }
+                _ => {}
+            }
+        }
+    }
+    became_waiting
+}
+
 impl Entity for CockpitModel {
     type Event = CockpitEvent;
 }
@@ -500,5 +522,83 @@ mod tests {
             needs_me: 0,
         });
         assert!(!is_blank(&empty_snapshot(), &inventory));
+    }
+
+    fn session(id: &str, state: zaplex_cockpit::SessionState) -> SessionSnapshot {
+        SessionSnapshot {
+            session_id: id.into(),
+            cwd: "/w".into(),
+            name: "job".into(),
+            state,
+            provider: Provider::Claude,
+            model: "opus".into(),
+            effort: None,
+            ctx_tokens: 0,
+            project_root: "/w".into(),
+            project_name: "proj".into(),
+            last_activity: Utc::now(),
+            pid: 0,
+        }
+    }
+
+    /// One remote host with `host_id` carrying a single session in `state`,
+    /// under the shared display `label`.
+    fn remote_host(label: &str, host_id: &str, session: SessionSnapshot) -> HostNode {
+        HostNode {
+            host: label.into(),
+            is_local: false,
+            host_id: Some(host_id.into()),
+            projects: vec![zaplex_cockpit::ProjectNode {
+                root: "/w".into(),
+                name: "proj".into(),
+                needs_me: 0,
+                sessions: vec![session],
+            }],
+            needs_me: 0,
+        }
+    }
+
+    /// Finding 2: two remote daemons sharing a display label, each with a session
+    /// under the SAME host-scoped id but DISTINCT `host_id`. A working→Waiting
+    /// transition on one must not be masked by the other's old state. A
+    /// label-keyed diff would alias both into one map entry (one overwriting the
+    /// other); keying by the stable host identity keeps them distinct.
+    #[test]
+    fn same_label_hosts_do_not_mask_each_others_waiting_transition() {
+        use zaplex_cockpit::SessionState;
+        // Both hosts labelled "box", same session id "s1", different host_id.
+        let old = FleetTree {
+            hosts: vec![
+                remote_host("box", "host-A", session("s1", SessionState::Active)),
+                remote_host("box", "host-B", session("s1", SessionState::Active)),
+            ],
+            needs_me: 0,
+        };
+        // Host A's session flips to Waiting; host B keeps working.
+        let new = FleetTree {
+            hosts: vec![
+                remote_host("box", "host-A", session("s1", SessionState::Waiting)),
+                remote_host("box", "host-B", session("s1", SessionState::Active)),
+            ],
+            needs_me: 1,
+        };
+        let transitions = fleet_transitions_to_waiting(&old, &new);
+        // Exactly one transition fires — host A's — and it isn't masked by host
+        // B's identical (label, session id).
+        assert_eq!(transitions, vec!["box — job".to_string()]);
+
+        // And symmetrically: a transition on B alone also fires (not swallowed by
+        // A's old Active state under the shared label).
+        let new_b = FleetTree {
+            hosts: vec![
+                remote_host("box", "host-A", session("s1", SessionState::Active)),
+                remote_host("box", "host-B", session("s1", SessionState::Waiting)),
+            ],
+            needs_me: 1,
+        };
+        assert_eq!(
+            fleet_transitions_to_waiting(&old, &new_b),
+            vec!["box — job".to_string()]
+        );
     }
 }
