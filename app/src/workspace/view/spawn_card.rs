@@ -20,7 +20,6 @@ use std::path::PathBuf;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
     Element, Flex, FormattedTextElement, Hoverable, MainAxisSize, MouseStateHandle,
@@ -31,6 +30,7 @@ use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
+use crate::cockpit::style::{modal_scrim, MODAL_RADIUS};
 use crate::terminal::CLIAgent;
 
 const MODAL_WIDTH: f32 = 480.;
@@ -557,7 +557,7 @@ impl SpawnCard {
         Container::new(col.finish())
             .with_uniform_padding(24.)
             .with_background(theme.background())
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(10.)))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(MODAL_RADIUS)))
             .with_border(Border::all(1.).with_border_fill(theme.outline()))
             .with_drop_shadow(DropShadow::default())
             .finish()
@@ -598,7 +598,8 @@ impl View for SpawnCard {
             )
             .finish(),
         )
-        .with_background(Fill::Solid(ColorU::new(97, 97, 97, 255)).with_opacity(50))
+        // The one cockpit modal scrim — identical veil behind card and inbox.
+        .with_background_color(modal_scrim())
         .finish()
     }
 }

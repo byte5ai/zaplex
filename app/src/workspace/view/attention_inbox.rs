@@ -36,6 +36,7 @@ use zaplex_cockpit::{Provider, SessionState};
 
 use crate::appearance::Appearance;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
+use crate::cockpit::style::{attention_coloru, glyph_cell, modal_scrim, MODAL_RADIUS};
 use crate::terminal::cli_agent::CLIAgent;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
@@ -246,14 +247,13 @@ impl AttentionInbox {
         let muted = theme.sub_text_color(theme.background()).into_solid();
         let accent = theme.accent().into_solid();
 
-        // Display copies owned by the (repeatedly-called) content builder.
+        // Display copies owned by the (repeatedly-called) content builder. The
+        // model shows in the Conductor's compact vocabulary ("Opus·High"), not
+        // as a raw model id — one attribute language on every surface.
         let disp_project = project.to_string();
         let disp_host = host.to_string();
-        let disp_model = if session.model.is_empty() {
-            String::new()
-        } else {
-            session.model.clone()
-        };
+        let disp_model =
+            zaplex_cockpit::model_effort_label(&session.model, session.effort.as_deref());
 
         let key = row_key(host, &session.session_id);
         // The adopt target (present only for locally-resumable sessions on the
@@ -268,8 +268,13 @@ impl AttentionInbox {
             let mut row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(8.0)
-                // Calm attention glyph — accent, never alarm-red.
-                .with_child(text_inline("✋".to_string(), family, body, accent))
+                // The one attention amber every ✋ shares — calm, never
+                // alarm-red — in the shared fixed-width glyph column.
+                .with_child(glyph_cell(
+                    zaplex_cockpit::GLYPH_WAITING,
+                    attention_coloru(),
+                    appearance,
+                ))
                 .with_child(
                     Shrinkable::new(
                         1.0,
@@ -442,14 +447,15 @@ impl View for AttentionInbox {
             .with_horizontal_padding(20.)
             .with_vertical_padding(20.)
             .with_background(Fill::Solid(PhenomenonStyle::modal_background()))
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(MODAL_RADIUS)))
             .finish(),
         )
         .with_width(MODAL_WIDTH)
         .finish();
 
+        // The one cockpit modal scrim — identical veil behind inbox and card.
         Container::new(Align::new(card).finish())
-            .with_background_color(ColorU::new(18, 18, 18, 128))
+            .with_background_color(modal_scrim())
             .finish()
     }
 }

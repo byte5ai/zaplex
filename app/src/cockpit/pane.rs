@@ -29,6 +29,10 @@ use zaplex_cockpit::{
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
+use crate::cockpit::style::{
+    cluster_divider, ctx_pct_element, glyph_cell, heat_coloru, verb_button, verb_button_colored,
+    VerbKind, INFO_VERBS_GAP, VERB_SPACING,
+};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
@@ -62,18 +66,6 @@ fn parse_hex_color(s: &str) -> Option<ColorU> {
         _ => return None,
     };
     Some(ColorU::new(r, g, b, 255))
-}
-
-/// Heat band → display colour (kept in sync with `CockpitPanel::heat_coloru`;
-/// reference palette lives in `zaplex_cockpit::HeatLevel::hex`).
-fn heat_coloru(level: HeatLevel) -> ColorU {
-    match level {
-        HeatLevel::Ok => ColorU::from_u32(0x22C55EFF),
-        HeatLevel::Elevated => ColorU::from_u32(0xEAB308FF),
-        HeatLevel::High => ColorU::from_u32(0xFB923CFF),
-        HeatLevel::Critical => ColorU::from_u32(0xF97316FF),
-        HeatLevel::Over => ColorU::from_u32(0xEF4444FF),
-    }
 }
 
 /// The dashboard view backing the cockpit pane.
@@ -407,11 +399,6 @@ impl CockpitPaneView {
         };
         let state = states.get(&session.session_id).cloned()?;
 
-        let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-        let accent = theme.accent().into_solid();
         let label = if into_worktree {
             crate::t!("cockpit-session-fork-worktree")
         } else {
@@ -426,15 +413,13 @@ impl CockpitPaneView {
             config_dir: (!acct.account.is_default).then(|| acct.account.config_dir.clone()),
             into_worktree,
         };
-        Some(
-            Hoverable::new(state, move |mouse| {
-                let color = if mouse.is_hovered() { accent } else { muted };
-                Self::text(label.to_string(), family, body, color)
-            })
-            .with_cursor(Cursor::PointingHand)
-            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-            .finish(),
-        )
+        Some(verb_button(
+            state,
+            label.to_string(),
+            VerbKind::Constructive,
+            appearance,
+            action,
+        ))
     }
 
     /// One session-row "▸ adopt" action: resume an idle CLI session in place
@@ -458,13 +443,6 @@ impl CockpitPaneView {
             .get(&session.session_id)
             .cloned()?;
 
-        let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-        let accent = theme.accent().into_solid();
-        let label = crate::t!("cockpit-session-adopt");
-
         let action = WorkspaceAction::AdoptAgentSession {
             agent,
             session_id: session.session_id.clone(),
@@ -472,15 +450,13 @@ impl CockpitPaneView {
             // Non-default accounts resume on the same subscription.
             config_dir: (!acct.account.is_default).then(|| acct.account.config_dir.clone()),
         };
-        Some(
-            Hoverable::new(state, move |mouse| {
-                let color = if mouse.is_hovered() { accent } else { muted };
-                Self::text(label.to_string(), family, body, color)
-            })
-            .with_cursor(Cursor::PointingHand)
-            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-            .finish(),
-        )
+        Some(verb_button(
+            state,
+            crate::t!("cockpit-session-adopt").to_string(),
+            VerbKind::Constructive,
+            appearance,
+            action,
+        ))
     }
 
     /// One session-row "◇ log" action: open the session's conversation
@@ -502,13 +478,6 @@ impl CockpitPaneView {
             .get(&session.session_id)
             .cloned()?;
 
-        let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-        let accent = theme.accent().into_solid();
-        let label = crate::t!("cockpit-session-transcript");
-
         let action = WorkspaceAction::ViewTranscript {
             session_id: session.session_id.clone(),
             config_dir: acct.account.config_dir.clone(),
@@ -517,15 +486,13 @@ impl CockpitPaneView {
             // reconcile (claudeplex-desktop watch parity).
             watch: true,
         };
-        Some(
-            Hoverable::new(state, move |mouse| {
-                let color = if mouse.is_hovered() { accent } else { muted };
-                Self::text(label.to_string(), family, body, color)
-            })
-            .with_cursor(Cursor::PointingHand)
-            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-            .finish(),
-        )
+        Some(verb_button(
+            state,
+            crate::t!("cockpit-session-transcript").to_string(),
+            VerbKind::Constructive,
+            appearance,
+            action,
+        ))
     }
 
     pub fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {
@@ -749,7 +716,7 @@ impl CockpitPaneView {
             let mut row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
-                .with_child(Self::text(glyph.to_string(), family, body, color))
+                .with_child(glyph_cell(glyph, color, appearance))
                 .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish());
             // Model family + context-window fill of the latest turn (claudeplex
             // parity): family in accent, context as a percent of the model's
@@ -761,8 +728,7 @@ impl CockpitPaneView {
             if session.ctx_tokens > 0 {
                 let frac = zaplex_cockpit::context_fill(&session.model, session.ctx_tokens);
                 let pct = (frac * 100.0).round() as u32;
-                let color = heat_coloru(HeatLevel::from_fraction(frac));
-                row = row.with_child(Self::text(format!("· {pct}%"), family, body, color));
+                row = row.with_child(ctx_pct_element(pct, frac, false, appearance));
             }
             // Adopt verb: "open = focus" — resume this idle session in place.
             if let Some(action) = self.session_adopt_action(acct, session, appearance) {
@@ -876,21 +842,14 @@ impl CockpitPaneView {
         action: WorkspaceAction,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-        let accent = theme.accent().into_solid();
         let state = self.conductor_plus_states.get(plus_key).cloned()?;
-        Some(
-            Hoverable::new(state, move |mouse| {
-                let color = if mouse.is_hovered() { accent } else { muted };
-                Self::text("+".to_string(), family, body, color)
-            })
-            .with_cursor(Cursor::PointingHand)
-            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-            .finish(),
-        )
+        Some(verb_button(
+            state,
+            "+",
+            VerbKind::Constructive,
+            appearance,
+            action,
+        ))
     }
 
     fn render_conductor_host(
@@ -966,7 +925,8 @@ impl CockpitPaneView {
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
-            .with_spacing(2.0)
+            // A touch of air between rows — calm rhythm over density.
+            .with_spacing(4.0)
             .with_child(header_bar.finish());
 
         if collapsed {
@@ -1067,7 +1027,8 @@ impl CockpitPaneView {
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
-            .with_spacing(2.0)
+            // Same row rhythm as the host level — one consistent cadence.
+            .with_spacing(4.0)
             .with_child(
                 Container::new(header_bar.finish())
                     .with_padding_left(16.0)
@@ -1132,7 +1093,7 @@ impl CockpitPaneView {
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0)
-            .with_child(Self::text(glyph.to_string(), family, body, glyph_color))
+            .with_child(glyph_cell(glyph, glyph_color, appearance))
             .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish());
         // Always-visible model·effort·context attributes (step 8): the compact
         // "Opus·High" label in accent, then the colored context-fill %. Effort
@@ -1150,8 +1111,7 @@ impl CockpitPaneView {
             row = row.with_child(Self::text(attrs.model_effort, family, body, accent));
         }
         if let Some(pct) = attrs.ctx_pct {
-            let color = heat_coloru(HeatLevel::from_fraction(attrs.ctx_fill));
-            row = row.with_child(Self::text(format!("· {pct}% ctx"), family, body, color));
+            row = row.with_child(ctx_pct_element(pct, attrs.ctx_fill, true, appearance));
         }
         let info = row.with_main_axis_size(MainAxisSize::Max).finish();
 
@@ -1191,21 +1151,25 @@ impl CockpitPaneView {
         if review_verbs.is_none() && guardrail_verbs.is_none() && lever_verbs.is_none() {
             return info_el;
         }
+        // The trailing toolbelt: review · guardrail · lever clusters separated
+        // by hairline dividers so they read as tidy segments, not loose glyphs.
         let mut verbs_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(10.0);
-        if let Some(review_verbs) = review_verbs {
-            verbs_row = verbs_row.with_child(review_verbs);
-        }
-        if let Some(guardrail_verbs) = guardrail_verbs {
-            verbs_row = verbs_row.with_child(guardrail_verbs);
-        }
-        if let Some(lever_verbs) = lever_verbs {
-            verbs_row = verbs_row.with_child(lever_verbs);
+            .with_spacing(VERB_SPACING);
+        let mut first = true;
+        for cluster in [review_verbs, guardrail_verbs, lever_verbs]
+            .into_iter()
+            .flatten()
+        {
+            if !first {
+                verbs_row = verbs_row.with_child(cluster_divider(appearance));
+            }
+            verbs_row = verbs_row.with_child(cluster);
+            first = false;
         }
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(10.0)
+            .with_spacing(INFO_VERBS_GAP)
             .with_child(Shrinkable::new(1.0, info_el).finish())
             .with_child(verbs_row.with_main_axis_size(MainAxisSize::Min).finish())
             .with_main_axis_size(MainAxisSize::Max)
@@ -1228,12 +1192,6 @@ impl CockpitPaneView {
         app: &AppContext,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-        let accent = theme.accent().into_solid();
-
         let agent = match session.provider {
             Provider::Claude => CLIAgent::Claude,
             Provider::Codex => CLIAgent::Codex,
@@ -1248,22 +1206,15 @@ impl CockpitPaneView {
                 .cloned()
         };
 
-        // One hoverable verb dispatching a WorkspaceAction (muted → accent).
+        // One shared-style verb dispatching a WorkspaceAction (muted → accent).
         let make =
             |st: MouseStateHandle, label: &str, action: WorkspaceAction| -> Box<dyn Element> {
-                let label = label.to_string();
-                Hoverable::new(st, move |mouse| {
-                    let color = if mouse.is_hovered() { accent } else { muted };
-                    Self::text(label.clone(), family, body, color)
-                })
-                .with_cursor(Cursor::PointingHand)
-                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                .finish()
+                verb_button(st, label, VerbKind::Constructive, appearance, action)
             };
 
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(10.0);
+            .with_spacing(VERB_SPACING);
         let mut any = false;
 
         // /compact + /clear — Claude Code slash commands; gated to Claude and to
@@ -1346,8 +1297,6 @@ impl CockpitPaneView {
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
         let muted = theme.sub_text_color(theme.background()).into_solid();
         let accent = theme.accent().into_solid();
 
@@ -1361,22 +1310,15 @@ impl CockpitPaneView {
         let project_name = session.project_name.clone();
         let reviewed = self.reviewed_sessions.contains(&rk);
 
-        // One hoverable verb dispatching a WorkspaceAction (muted → accent).
+        // One shared-style verb dispatching a WorkspaceAction (muted → accent).
         let make =
             |st: MouseStateHandle, label: &str, action: WorkspaceAction| -> Box<dyn Element> {
-                let label = label.to_string();
-                Hoverable::new(st, move |mouse| {
-                    let color = if mouse.is_hovered() { accent } else { muted };
-                    Self::text(label.clone(), family, body, color)
-                })
-                .with_cursor(Cursor::PointingHand)
-                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                .finish()
+                verb_button(st, label, VerbKind::Constructive, appearance, action)
             };
 
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(10.0);
+            .with_spacing(VERB_SPACING);
 
         if let Some(st) = state("review") {
             row = row.with_child(make(
@@ -1388,27 +1330,23 @@ impl CockpitPaneView {
                 },
             ));
         }
-        // ✓ approve — local marker; label + base color flip once reviewed.
+        // ✓ approve — local marker; label + rest color flip once reviewed
+        // (a reviewed row rests in accent so the eye can move on).
         if let Some(st) = state("approve") {
-            let key = rk.clone();
             let label = if reviewed {
                 "✓ reviewed"
             } else {
                 "✓ approve"
-            }
-            .to_string();
-            let base = if reviewed { accent } else { muted };
-            row = row.with_child(
-                Hoverable::new(st, move |mouse| {
-                    let color = if mouse.is_hovered() { accent } else { base };
-                    Self::text(label.clone(), family, body, color)
-                })
-                .with_cursor(Cursor::PointingHand)
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CockpitPaneAction::MarkReviewed(key.clone()))
-                })
-                .finish(),
-            );
+            };
+            let rest = if reviewed { accent } else { muted };
+            row = row.with_child(verb_button_colored(
+                st,
+                label,
+                rest,
+                accent,
+                appearance,
+                CockpitPaneAction::MarkReviewed(rk.clone()),
+            ));
         }
         if let Some(st) = state("redirect") {
             row = row.with_child(make(
@@ -1455,12 +1393,6 @@ impl CockpitPaneView {
         session: &SessionSnapshot,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-        let critical = heat_coloru(HeatLevel::Critical);
-
         let rk = host_key(host_label, &session.session_id);
         let state = |verb: &str| {
             self.conductor_guardrail_states
@@ -1469,22 +1401,16 @@ impl CockpitPaneView {
         };
         let label = zaplex_cockpit::session_label(session);
 
-        // One hoverable verb dispatching a WorkspaceAction (muted → Critical).
+        // One shared-style verb dispatching a WorkspaceAction (muted →
+        // attention amber — a danger affordance, quiet until reached for).
         let make =
             |st: MouseStateHandle, text: &str, action: WorkspaceAction| -> Box<dyn Element> {
-                let text = text.to_string();
-                Hoverable::new(st, move |mouse| {
-                    let color = if mouse.is_hovered() { critical } else { muted };
-                    Self::text(text.clone(), family, body, color)
-                })
-                .with_cursor(Cursor::PointingHand)
-                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                .finish()
+                verb_button(st, text, VerbKind::Destructive, appearance, action)
             };
 
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(10.0);
+            .with_spacing(VERB_SPACING);
 
         if let Some(st) = state("pause") {
             row = row.with_child(make(
@@ -1521,19 +1447,13 @@ impl CockpitPaneView {
     /// dialog (never sends anything without confirmation — this is the
     /// broadest, most destructive guardrail). Muted, Critical on hover.
     fn render_conductor_stop_all(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-        let critical = heat_coloru(HeatLevel::Critical);
-
-        Hoverable::new(self.conductor_stop_all_state.clone(), move |mouse| {
-            let color = if mouse.is_hovered() { critical } else { muted };
-            Self::text("⏹ stop all".to_string(), family, body, color)
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(move |ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::StopAllRequest))
-        .finish()
+        verb_button(
+            self.conductor_stop_all_state.clone(),
+            "⏹ stop all",
+            VerbKind::Destructive,
+            appearance,
+            WorkspaceAction::StopAllRequest,
+        )
     }
 
     fn render_aggregate(
