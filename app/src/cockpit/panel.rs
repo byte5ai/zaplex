@@ -23,6 +23,7 @@ use zaplex_cockpit::{
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
+use crate::cockpit::style::{ctx_pct_element, glyph_cell, heat_coloru, verb_button, VerbKind};
 use crate::WorkspaceAction;
 
 /// Composite `(host, id)` key — session ids are unique only within a host.
@@ -38,18 +39,6 @@ const CARD_PADDING: f32 = 8.0;
 const CARD_SPACING: f32 = 4.0;
 const HEAT_BAR_WIDTH: f32 = 90.0;
 const HEAT_BAR_HEIGHT: f32 = 6.0;
-
-/// Maps a heat band to its display colour (reference palette lives in
-/// `zaplex_cockpit::HeatLevel::hex`; kept in sync here as `ColorU`).
-fn heat_coloru(level: HeatLevel) -> ColorU {
-    match level {
-        HeatLevel::Ok => ColorU::from_u32(0x22C55EFF),
-        HeatLevel::Elevated => ColorU::from_u32(0xEAB308FF),
-        HeatLevel::High => ColorU::from_u32(0xFB923CFF),
-        HeatLevel::Critical => ColorU::from_u32(0xF97316FF),
-        HeatLevel::Over => ColorU::from_u32(0xEF4444FF),
-    }
-}
 
 /// Events the sidebar emits toward the workspace (via the left panel).
 pub enum CockpitPanelEvent {
@@ -302,12 +291,18 @@ impl CockpitPanel {
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
-            .with_child(Self::text(
-                crate::t!("cockpit-conductor-title").to_string(),
-                family,
-                sub,
-                main,
-            ));
+            // The same calm row rhythm as the roomy pane, scaled down.
+            .with_spacing(3.0)
+            .with_child(
+                Container::new(Self::text(
+                    crate::t!("cockpit-conductor-title").to_string(),
+                    family,
+                    sub,
+                    main,
+                ))
+                .with_margin_bottom(2.0)
+                .finish(),
+            );
 
         for host in &tree.hosts {
             // Inverse-complexity: a calm host in a large fleet folds to one line.
@@ -409,11 +404,10 @@ impl CockpitPanel {
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0)
-            .with_child(Self::text(
-                session_glyph(session.state).to_string(),
-                family,
-                body,
+            .with_child(glyph_cell(
+                session_glyph(session.state),
                 glyph_color,
+                appearance,
             ))
             .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish());
         // Always-visible model·effort·context (step 8), compact for the sidebar:
@@ -430,8 +424,7 @@ impl CockpitPanel {
             row = row.with_child(Self::text(attrs.model_effort, family, body, accent));
         }
         if let Some(pct) = attrs.ctx_pct {
-            let color = heat_coloru(HeatLevel::from_fraction(attrs.ctx_fill));
-            row = row.with_child(Self::text(format!("· {pct}%"), family, body, color));
+            row = row.with_child(ctx_pct_element(pct, attrs.ctx_fill, false, appearance));
         }
         let info = row.with_main_axis_size(MainAxisSize::Max).finish();
 
@@ -449,18 +442,11 @@ impl CockpitPanel {
                     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
                     .finish();
                 let review = self.conductor_review_states.get(&key).cloned().map(|st| {
-                    let accent = theme.accent().into_solid();
                     let action = WorkspaceAction::ReviewSession {
                         project_root: PathBuf::from(&session.project_root),
                         project_name: session.project_name.clone(),
                     };
-                    Hoverable::new(st, move |mouse| {
-                        let color = if mouse.is_hovered() { accent } else { muted };
-                        Self::text("◈".to_string(), family, body, color)
-                    })
-                    .with_cursor(Cursor::PointingHand)
-                    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                    .finish()
+                    verb_button(st, "◈", VerbKind::Constructive, appearance, action)
                 });
                 (attach, review)
             }

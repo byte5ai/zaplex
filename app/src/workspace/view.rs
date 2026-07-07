@@ -18730,16 +18730,28 @@ impl Workspace {
         }
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
-        // The one waiting glyph + the fleet's Critical color, kept small/quiet.
-        let critical = theme.ui_error_color();
+        // The one waiting glyph in the one attention amber — the same ✋ color
+        // as every Conductor badge and inbox row — kept small/quiet.
+        let critical = crate::cockpit::style::attention_coloru();
         let label = format!("{} {}", zaplex_cockpit::GLYPH_WAITING, n);
         let handle = self.mouse_states.attention_pulse.clone();
         Some(
             Container::new(
-                Hoverable::new(handle, move |_mouse| {
-                    Text::new_inline(label.clone(), family, 13.)
-                        .with_color(critical)
-                        .finish()
+                Hoverable::new(handle, move |mouse| {
+                    // Quiet at rest; a soft pill fill on hover signals the
+                    // click affordance (jump to the next waiting agent).
+                    let mut c = Container::new(
+                        Text::new_inline(label.clone(), family, 13.)
+                            .with_color(critical)
+                            .finish(),
+                    )
+                    .with_horizontal_padding(6.)
+                    .with_vertical_padding(2.)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
+                    if mouse.is_hovered() {
+                        c = c.with_background(internal_colors::fg_overlay_2(theme));
+                    }
+                    c.finish()
                 })
                 .with_cursor(Cursor::PointingHand)
                 .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::JumpToNextWaiting))

@@ -13,6 +13,7 @@ pub mod pane;
 pub mod tailscale;
 pub mod panel;
 pub mod settings;
+pub mod style;
 
 pub use ambient::AttentionDriver;
 pub use model::CockpitModel;
