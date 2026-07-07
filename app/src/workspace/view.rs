@@ -231,6 +231,7 @@ use crate::pane_group::{
 use crate::remote_server::manager::RemoteServerManager;
 #[cfg(feature = "local_fs")]
 use crate::remote_server::manager::RemoteServerManagerEvent;
+use crate::remote_server::proto::run_command_response;
 use crate::terminal::keys_settings::KeysSettings;
 
 use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
@@ -387,6 +388,9 @@ use crate::persistence::ModelEvent;
 use super::action::{
     InitContent, RestoreConversationLayout, TabContextMenuAnchor,
     VerticalTabsPaneContextMenuTarget, WorkspaceAction,
+};
+use super::agent_guardrail_dialog::{
+    AgentGuardrailDialog, AgentGuardrailDialogEvent, AgentGuardrailKind,
 };
 use super::close_session_confirmation_dialog::{
     CloseSessionConfirmationDialog, CloseSessionConfirmationEvent, OpenDialogSource,
@@ -889,6 +893,80 @@ fn remote_sftp_edit_working_dir() -> PathBuf {
     std::env::temp_dir().join(format!("zaplex-remote-edit-{}-{n}", std::process::id()))
 }
 
+/// The result of attempting one guardrail signal send (local or remote) —
+/// carries enough detail for the completion callback to build the exact toast
+/// text via `zaplex_cockpit::guardrails`' pure message builders. Never
+/// discarded silently: every variant maps to a user-visible toast.
+enum GuardrailSendOutcome {
+    Sent,
+    Failed(String),
+    /// The target host is remote and has no live daemon connection right now
+    /// — the honest degradation for the remote path (see guardrails design
+    /// step 7 §1): reported, never silently skipped.
+    NoRemoteConnection(String),
+}
+
+/// Send `signal` to a **local** process. `EPERM`/`ESRCH` and any other errno
+/// are reported (never swallowed) via [`std::io::Error::last_os_error`].
+#[cfg(unix)]
+fn send_local_guardrail_signal(pid: u32, signal: zaplex_cockpit::GuardrailSignal) -> GuardrailSendOutcome {
+    // SAFETY: `kill(2)` with a real signal on a pid we discovered from the
+    // Claude Code session registry; the syscall itself can't cause UB — worst
+    // case it fails with ESRCH (already exited) or EPERM (not ours).
+    let rc = unsafe { libc::kill(pid as libc::pid_t, signal.signal_number()) };
+    if rc == 0 {
+        GuardrailSendOutcome::Sent
+    } else {
+        GuardrailSendOutcome::Failed(std::io::Error::last_os_error().to_string())
+    }
+}
+
+#[cfg(not(unix))]
+fn send_local_guardrail_signal(
+    _pid: u32,
+    _signal: zaplex_cockpit::GuardrailSignal,
+) -> GuardrailSendOutcome {
+    GuardrailSendOutcome::Failed("signal sending is not supported on this platform".to_string())
+}
+
+/// Attempt `signal` on a **remote** host's pid via the daemon's
+/// `RunCommandRequest` (`kill -<SIG> <pid>`), reusing the same client the
+/// Agent-Inventory fold already holds a connection to
+/// (`RemoteServerManager::connected_daemons`). This is a best-effort, ad hoc
+/// command — it does not require (and the cockpit has no way to obtain) a
+/// bound interactive session on that host, unlike the server-file-browser's
+/// `run_command` calls which route through an already-open tab. If the daemon
+/// build in use requires a bound session for `RunCommandRequest`, this
+/// surfaces as an `Err` here and a normal "could not interrupt" toast to the
+/// user — never a silent no-op. Full session-bound remote guardrails (routing
+/// through an actually-open tab on that host, mirroring the file browser) is
+/// a tracked follow-up.
+async fn run_remote_guardrail_signal(
+    client: &std::sync::Arc<remote_server::client::RemoteServerClient>,
+    pid: u32,
+    signal: zaplex_cockpit::GuardrailSignal,
+) -> GuardrailSendOutcome {
+    let command = signal.remote_kill_command(pid);
+    match client
+        .run_command(SessionId::from(0), command, None, HashMap::new())
+        .await
+    {
+        Ok(response) => match response.result {
+            Some(run_command_response::Result::Success(success))
+                if success.exit_code.unwrap_or(1) == 0 =>
+            {
+                GuardrailSendOutcome::Sent
+            }
+            Some(run_command_response::Result::Success(success)) => {
+                GuardrailSendOutcome::Failed(String::from_utf8_lossy(&success.stderr).trim().to_string())
+            }
+            Some(run_command_response::Result::Error(err)) => GuardrailSendOutcome::Failed(err.message),
+            None => GuardrailSendOutcome::Failed("empty response".to_string()),
+        },
+        Err(e) => GuardrailSendOutcome::Failed(format!("{e:#}")),
+    }
+}
+
 pub struct Workspace {
     window_id: WindowId,
     pub(crate) tabs: Vec<TabData>,
@@ -980,6 +1058,7 @@ pub struct Workspace {
         Option<PendingSessionConfigTabConfigChipTutorial>,
     new_worktree_modal: ModalViewState<Modal<NewWorktreeModal>>,
     close_session_confirmation_dialog: ViewHandle<CloseSessionConfirmationDialog>,
+    agent_guardrail_dialog: ViewHandle<AgentGuardrailDialog>,
     rewind_confirmation_dialog: ViewHandle<RewindConfirmationDialog>,
     delete_conversation_confirmation_dialog: ViewHandle<DeleteConversationConfirmationDialog>,
     resource_center_view: ViewHandle<ResourceCenterView>,
@@ -1707,6 +1786,17 @@ impl Workspace {
         );
 
         close_session_confirmation_dialog
+    }
+
+    /// Guardrails (step 7): the shared confirm dialog for the "kill" (per-agent
+    /// SIGKILL) and "stop all" (fleet-wide SIGINT) verbs — see
+    /// `agent_guardrail_dialog.rs`.
+    fn build_agent_guardrail_dialog(ctx: &mut ViewContext<Self>) -> ViewHandle<AgentGuardrailDialog> {
+        let agent_guardrail_dialog = ctx.add_typed_action_view(|_| AgentGuardrailDialog::new());
+        ctx.subscribe_to_view(&agent_guardrail_dialog, move |me, _, event, ctx| {
+            me.handle_agent_guardrail_dialog_event(event, ctx);
+        });
+        agent_guardrail_dialog
     }
 
     fn build_rewind_confirmation_dialog(
@@ -2634,6 +2724,7 @@ impl Workspace {
         let session_config_modal = Self::build_session_config_modal(ctx);
 
         let close_session_confirmation_dialog = Self::build_close_session_confirmation_dialog(ctx);
+        let agent_guardrail_dialog = Self::build_agent_guardrail_dialog(ctx);
         let rewind_confirmation_dialog = Self::build_rewind_confirmation_dialog(ctx);
         let delete_conversation_confirmation_dialog =
             Self::build_delete_conversation_confirmation_dialog(ctx);
@@ -3058,6 +3149,7 @@ impl Workspace {
             pending_session_config_tab_config_chip_tutorial: None,
             new_worktree_modal,
             close_session_confirmation_dialog,
+            agent_guardrail_dialog,
             rewind_confirmation_dialog,
             delete_conversation_confirmation_dialog,
             resource_center_view,
@@ -11084,6 +11176,197 @@ impl Workspace {
         }
     }
 
+    /// Guardrails (step 7) confirm dialog result. `Cancel` closes it and
+    /// sends nothing. `Confirm` dispatches the destructive action the row's
+    /// verb already described — a single SIGKILL, or (stop-all) an interrupt
+    /// sweep of the whole fleet.
+    fn handle_agent_guardrail_dialog_event(
+        &mut self,
+        event: &AgentGuardrailDialogEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.current_workspace_state.is_agent_guardrail_dialog_open = false;
+        match event {
+            AgentGuardrailDialogEvent::Cancel => {}
+            AgentGuardrailDialogEvent::Confirm { kind } => match kind {
+                AgentGuardrailKind::KillAgent {
+                    host,
+                    pid,
+                    agent_label,
+                    ..
+                } => {
+                    self.send_guardrail_signal(
+                        host,
+                        agent_label.clone(),
+                        *pid,
+                        zaplex_cockpit::GuardrailSignal::Kill,
+                        ctx,
+                    );
+                }
+                AgentGuardrailKind::StopAll { .. } => {
+                    self.stop_all_confirmed(ctx);
+                }
+            },
+        }
+        ctx.notify();
+    }
+
+    /// Guardrails (step 7): send `signal` to one Conductor session's pid, off
+    /// the UI thread. A local host (`host == CockpitModel::local_label()`)
+    /// calls `libc::kill` directly; a remote host attempts the daemon's
+    /// `RunCommandRequest` (`kill -<SIG> <pid>`) on the matching connected
+    /// daemon (see [`run_remote_guardrail_signal`] for the remote path's
+    /// honest limits). Always reports the outcome as a toast — an
+    /// unknown/dead pid, a failed local kill, and an unreachable remote host
+    /// all surface rather than silently no-op'ing.
+    fn send_guardrail_signal(
+        &mut self,
+        host: &str,
+        agent_label: String,
+        pid: u32,
+        signal: zaplex_cockpit::GuardrailSignal,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !zaplex_cockpit::pid_signalable(pid) {
+            self.toast_stack.update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::error(zaplex_cockpit::unsignalable_toast(&agent_label)),
+                    ctx,
+                );
+            });
+            return;
+        }
+
+        let local_label = crate::cockpit::CockpitModel::as_ref(ctx)
+            .local_label()
+            .to_string();
+        let target = zaplex_cockpit::guardrail_target(host, &local_label);
+        let daemon = match &target {
+            zaplex_cockpit::GuardrailTarget::Remote(remote_host) => {
+                RemoteServerManager::as_ref(ctx)
+                    .connected_daemons()
+                    .into_iter()
+                    .find(|d| &d.host_label == remote_host)
+            }
+            zaplex_cockpit::GuardrailTarget::Local => None,
+        };
+        let host_owned = host.to_string();
+
+        ctx.spawn(
+            async move {
+                match target {
+                    zaplex_cockpit::GuardrailTarget::Local => {
+                        send_local_guardrail_signal(pid, signal)
+                    }
+                    zaplex_cockpit::GuardrailTarget::Remote(_) => match daemon {
+                        Some(daemon) => run_remote_guardrail_signal(&daemon.client, pid, signal).await,
+                        None => GuardrailSendOutcome::NoRemoteConnection(host_owned),
+                    },
+                }
+            },
+            move |me, outcome, ctx| {
+                let (message, is_error) = match outcome {
+                    GuardrailSendOutcome::Sent => (zaplex_cockpit::sent_toast(&agent_label, signal), false),
+                    GuardrailSendOutcome::Failed(e) => {
+                        (zaplex_cockpit::failed_toast(&agent_label, signal, &e), true)
+                    }
+                    GuardrailSendOutcome::NoRemoteConnection(host) => (
+                        zaplex_cockpit::no_remote_connection_toast(&agent_label, &host),
+                        true,
+                    ),
+                };
+                me.toast_stack.update(ctx, |toast_stack, ctx| {
+                    let toast = if is_error {
+                        DismissibleToast::error(message)
+                    } else {
+                        DismissibleToast::default(message)
+                    };
+                    toast_stack.add_ephemeral_toast(toast, ctx);
+                });
+            },
+        );
+    }
+
+    /// Guardrails "Stop all": interrupt every live agent across the unified
+    /// Agent-Inventory. Re-resolves the live target list at confirm time
+    /// (never the possibly-stale count the dialog opened with), signals each
+    /// off the UI thread, and reports a single summary toast — sent vs.
+    /// unreachable — rather than one toast per agent (calm, not noisy).
+    fn stop_all_confirmed(&mut self, ctx: &mut ViewContext<Self>) {
+        let local_label = crate::cockpit::CockpitModel::as_ref(ctx)
+            .local_label()
+            .to_string();
+        let daemons = RemoteServerManager::as_ref(ctx).connected_daemons();
+        let targets: Vec<(String, u32)> = crate::cockpit::CockpitModel::as_ref(ctx)
+            .inventory()
+            .hosts
+            .iter()
+            .flat_map(|h| {
+                h.projects
+                    .iter()
+                    .flat_map(move |p| p.sessions.iter().map(move |s| (h.host.clone(), s.pid)))
+            })
+            .filter(|(_, pid)| zaplex_cockpit::pid_signalable(*pid))
+            .collect();
+
+        if targets.is_empty() {
+            self.toast_stack.update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::default("No live agents to stop.".to_string()),
+                    ctx,
+                );
+            });
+            return;
+        }
+
+        ctx.spawn(
+            async move {
+                let mut sent = 0usize;
+                let mut failed = 0usize;
+                for (host, pid) in targets {
+                    let target = zaplex_cockpit::guardrail_target(&host, &local_label);
+                    let outcome = match target {
+                        zaplex_cockpit::GuardrailTarget::Local => send_local_guardrail_signal(
+                            pid,
+                            zaplex_cockpit::GuardrailSignal::Interrupt,
+                        ),
+                        zaplex_cockpit::GuardrailTarget::Remote(_) => {
+                            match daemons.iter().find(|d| d.host_label == host) {
+                                Some(daemon) => {
+                                    run_remote_guardrail_signal(
+                                        &daemon.client,
+                                        pid,
+                                        zaplex_cockpit::GuardrailSignal::Interrupt,
+                                    )
+                                    .await
+                                }
+                                None => GuardrailSendOutcome::NoRemoteConnection(host),
+                            }
+                        }
+                    };
+                    match outcome {
+                        GuardrailSendOutcome::Sent => sent += 1,
+                        GuardrailSendOutcome::Failed(_) | GuardrailSendOutcome::NoRemoteConnection(_) => {
+                            failed += 1;
+                        }
+                    }
+                }
+                (sent, failed)
+            },
+            move |me, (sent, failed), ctx| {
+                me.toast_stack.update(ctx, |toast_stack, ctx| {
+                    let message = zaplex_cockpit::stop_all_summary_toast(sent, failed);
+                    let toast = if failed == 0 {
+                        DismissibleToast::default(message)
+                    } else {
+                        DismissibleToast::error(message)
+                    };
+                    toast_stack.add_ephemeral_toast(toast, ctx);
+                });
+            },
+        );
+    }
+
     fn handle_rewind_confirmation_dialog_event(
         &mut self,
         event: &RewindConfirmationEvent,
@@ -16372,6 +16655,8 @@ impl Workspace {
                 .is_close_session_confirmation_dialog_open
             {
                 ctx.focus(&self.close_session_confirmation_dialog);
+            } else if self.current_workspace_state.is_agent_guardrail_dialog_open {
+                ctx.focus(&self.agent_guardrail_dialog);
             } else if self
                 .current_workspace_state
                 .is_rewind_confirmation_dialog_open
@@ -16472,6 +16757,17 @@ impl Workspace {
         self.current_workspace_state
             .is_close_session_confirmation_dialog_open = true;
         ctx.focus(&self.close_session_confirmation_dialog);
+        ctx.notify();
+    }
+
+    /// Open the guardrails confirm dialog (kill / stop-all) — see
+    /// `agent_guardrail_dialog.rs`.
+    fn open_agent_guardrail_dialog(&mut self, kind: AgentGuardrailKind, ctx: &mut ViewContext<Self>) {
+        self.agent_guardrail_dialog.update(ctx, |view, _| {
+            view.set_kind(kind);
+        });
+        self.current_workspace_state.is_agent_guardrail_dialog_open = true;
+        ctx.focus(&self.agent_guardrail_dialog);
         ctx.notify();
     }
 
@@ -20971,6 +21267,61 @@ impl TypedActionView for Workspace {
             CreateReviewPr { project_root } => {
                 self.open_review_git_dialog(project_root, true, ctx);
             }
+            StopAgent {
+                host,
+                session_id: _,
+                pid,
+                agent_label,
+            } => {
+                self.send_guardrail_signal(
+                    host,
+                    agent_label.clone(),
+                    *pid,
+                    zaplex_cockpit::GuardrailSignal::Interrupt,
+                    ctx,
+                );
+            }
+            KillAgentRequest {
+                host,
+                session_id,
+                pid,
+                agent_label,
+                project_name,
+            } => {
+                self.open_agent_guardrail_dialog(
+                    super::agent_guardrail_dialog::AgentGuardrailKind::KillAgent {
+                        host: host.clone(),
+                        session_id: session_id.clone(),
+                        pid: *pid,
+                        agent_label: agent_label.clone(),
+                        project_name: project_name.clone(),
+                    },
+                    ctx,
+                );
+            }
+            StopAllRequest => {
+                let count = crate::cockpit::CockpitModel::as_ref(ctx)
+                    .inventory()
+                    .hosts
+                    .iter()
+                    .flat_map(|h| h.projects.iter())
+                    .flat_map(|p| p.sessions.iter())
+                    .filter(|s| zaplex_cockpit::pid_signalable(s.pid))
+                    .count();
+                if count == 0 {
+                    self.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::default("No live agents to stop.".to_string()),
+                            ctx,
+                        );
+                    });
+                } else {
+                    self.open_agent_guardrail_dialog(
+                        super::agent_guardrail_dialog::AgentGuardrailKind::StopAll { count },
+                        ctx,
+                    );
+                }
+            }
             OpenAttentionInbox => {
                 self.open_attention_inbox(ctx);
             }
@@ -23405,6 +23756,18 @@ impl View for Workspace {
         {
             stack.add_positioned_overlay_child(
                 ChildView::new(&self.close_session_confirmation_dialog).finish(),
+                OffsetPositioning::offset_from_parent(
+                    Vector2F::zero(),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::Center,
+                    ChildAnchor::Center,
+                ),
+            );
+        }
+
+        if self.current_workspace_state.is_agent_guardrail_dialog_open {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.agent_guardrail_dialog).finish(),
                 OffsetPositioning::offset_from_parent(
                     Vector2F::zero(),
                     ParentOffsetBounds::WindowByPosition,

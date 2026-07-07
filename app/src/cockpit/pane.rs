@@ -22,7 +22,7 @@ use warpui::{
     AppContext, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View, ViewContext,
 };
 use zaplex_cockpit::{
-    fleet_is_large, format_cost, format_reset, format_tokens, heat_fill,
+    fleet_is_large, fleet_session_count, format_cost, format_reset, format_tokens, heat_fill,
     heat_pct_label_with_provenance, host_auto_collapsed, host_summary, session_glyph,
     AccountStatus, AccountUsage, FleetTree, HeatLevel, HostNode, ProjectNode, Provider,
     SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
@@ -126,6 +126,14 @@ pub struct CockpitPaneView {
     /// A lightweight local marker — never mutates the agent — retained across
     /// the 45s reconcile like the hover-state maps, so approving doesn't flicker.
     reviewed_sessions: std::collections::HashSet<String>,
+    /// Hover state of each Conductor session row's guardrail verbs (step 7):
+    /// `⏸ stop` / `⨯ kill`, keyed `"{verb}\0{host}\0{id}"` like the review-loop
+    /// map. Unlike the review cluster, guardrails render on **every** live row
+    /// — local and remote — since interrupt/kill are cross-host operations.
+    conductor_guardrail_states: HashMap<String, MouseStateHandle>,
+    /// Hover state of the Conductor pane's single fleet-wide "Stop all"
+    /// control (step 7). Not keyed — one control for the whole pane.
+    conductor_stop_all_state: MouseStateHandle,
 }
 
 /// Composite key for per-`(host, id)` maps — session ids are unique only within
@@ -137,6 +145,12 @@ fn host_key(host: &str, id: &str) -> String {
 /// The review-loop verbs (step 6) that hang on a local Conductor session row, in
 /// render order. Used both to seed their hover-state handles and to render them.
 const REVIEW_VERB_KEYS: [&str; 5] = ["review", "approve", "redirect", "commit", "pr"];
+
+/// The guardrail verbs (step 7) that hang on **every** live Conductor session
+/// row (local and remote alike — unlike the review cluster, which is
+/// local-only): `⏸ stop` (SIGINT, no confirm) and `⨯ kill` (SIGKILL, always
+/// confirmed). Used both to seed their hover-state handles and to render them.
+const GUARDRAIL_VERB_KEYS: [&str; 2] = ["pause", "kill"];
 
 /// The **redirect** verb's seed prompt: opens a routed agent tab with a
 /// follow-up instruction prefilled (not auto-sent) for the user to complete, so
@@ -194,6 +208,8 @@ impl CockpitPaneView {
             collapsed_projects: HashMap::new(),
             conductor_review_states: HashMap::new(),
             reviewed_sessions: std::collections::HashSet::new(),
+            conductor_guardrail_states: HashMap::new(),
+            conductor_stop_all_state: MouseStateHandle::default(),
         };
         me.sync_session_action_states(ctx);
         me
@@ -280,6 +296,13 @@ impl CockpitPaneView {
                 .unwrap_or(false)
         });
         self.reviewed_sessions.retain(|k| live_rows.contains(k));
+        // Guardrail verb map: same key shape as the review-loop map, retained
+        // the same way.
+        self.conductor_guardrail_states.retain(|k, _| {
+            k.split_once('\u{0}')
+                .map(|(_, rest)| live_rows.contains(rest))
+                .unwrap_or(false)
+        });
         self.conductor_host_toggle_states
             .retain(|k, _| live_hosts.contains(k));
         self.conductor_project_toggle_states
@@ -313,6 +336,11 @@ impl CockpitPaneView {
                     self.conductor_row_states.entry(rk.clone()).or_default();
                     for verb in REVIEW_VERB_KEYS {
                         self.conductor_review_states
+                            .entry(format!("{verb}\u{0}{rk}"))
+                            .or_default();
+                    }
+                    for verb in GUARDRAIL_VERB_KEYS {
+                        self.conductor_guardrail_states
                             .entry(format!("{verb}\u{0}{rk}"))
                             .or_default();
                     }
@@ -777,16 +805,28 @@ impl CockpitPaneView {
         let muted = theme.sub_text_color(theme.background()).into_solid();
         let fleet_large = fleet_is_large(tree);
 
-        let mut col = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_spacing(CARD_SPACING)
+        // Header: title, and — when at least one agent is live anywhere in
+        // the inventory — the fleet-wide "stop all" guardrail control (step
+        // 7), pinned to the trailing edge like the host/project "+" buttons.
+        let mut header = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
             .with_child(Self::text(
                 crate::t!("cockpit-conductor-title").to_string(),
                 family,
                 body,
                 muted,
-            ));
+            ))
+            .with_child(Shrinkable::new(1.0, Empty::new().finish()).finish());
+        if fleet_session_count(tree) > 0 {
+            header = header.with_child(self.render_conductor_stop_all(appearance));
+        }
+
+        let mut col = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(CARD_SPACING)
+            .with_child(header.finish());
         for host in &tree.hosts {
             col = col.with_child(self.render_conductor_host(
                 host,
@@ -1086,36 +1126,49 @@ impl CockpitPaneView {
         // sessions live on their host, so the row is informational (honest —
         // remote in-place adopt is a follow-up; the `w`-jump reports the same).
         // The click target is the info span (not the whole row) so the trailing
-        // review-loop verbs (step 6) have their own click targets alongside it.
+        // review-loop (step 6) and guardrail (step 7) verbs have their own
+        // click targets alongside it.
         let key = host_key(host_label, &session.session_id);
-        let (info_el, verbs) = match (is_local, self.conductor_row_states.get(&key).cloned()) {
+        let info_el = match (is_local, self.conductor_row_states.get(&key).cloned()) {
             (true, Some(state)) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
                     session_id: session.session_id.clone(),
                 };
-                let attach = Hoverable::new(state, move |_mouse| info)
+                Hoverable::new(state, move |_mouse| info)
                     .with_cursor(Cursor::PointingHand)
                     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                    .finish();
-                (
-                    attach,
-                    self.render_review_verbs(host_label, session, appearance),
-                )
+                    .finish()
             }
-            _ => (info, None),
+            _ => info,
         };
+        // Review verbs are local-only (they inspect the repo on this
+        // machine); guardrails are cross-host, so every live row — local and
+        // remote — gets them (step 7 design: attempt remote, never fake it).
+        let review_verbs = is_local
+            .then(|| self.render_review_verbs(host_label, session, appearance))
+            .flatten();
+        let guardrail_verbs = self.render_guardrail_verbs(host_label, session, appearance);
 
-        match verbs {
-            Some(verbs) => Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(10.0)
-                .with_child(Shrinkable::new(1.0, info_el).finish())
-                .with_child(verbs)
-                .with_main_axis_size(MainAxisSize::Max)
-                .finish(),
-            None => info_el,
+        if review_verbs.is_none() && guardrail_verbs.is_none() {
+            return info_el;
         }
+        let mut verbs_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(10.0);
+        if let Some(review_verbs) = review_verbs {
+            verbs_row = verbs_row.with_child(review_verbs);
+        }
+        if let Some(guardrail_verbs) = guardrail_verbs {
+            verbs_row = verbs_row.with_child(guardrail_verbs);
+        }
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(10.0)
+            .with_child(Shrinkable::new(1.0, info_el).finish())
+            .with_child(verbs_row.with_main_axis_size(MainAxisSize::Min).finish())
+            .with_main_axis_size(MainAxisSize::Max)
+            .finish()
     }
 
     /// The review-loop verb cluster for a **local** Conductor session row (step
@@ -1226,6 +1279,102 @@ impl CockpitPaneView {
         }
 
         Some(row.with_main_axis_size(MainAxisSize::Min).finish())
+    }
+
+    /// The guardrail verb cluster (step 7) for **every** live Conductor
+    /// session row, local and remote alike: `⏸ stop` (SIGINT, dispatched
+    /// immediately — no confirmation, mirrors Ctrl-C) and `⨯ kill` (SIGKILL,
+    /// opens the confirm dialog first — destructive). Muted, turning Critical
+    /// on hover (a danger affordance, distinct from the review cluster's
+    /// muted→accent) — see `zaplex_cockpit::conductor`'s glyph/color
+    /// vocabulary. Unlike [`Self::render_review_verbs`] this renders
+    /// regardless of `is_local`: interrupt/kill are cross-host operations
+    /// (local `libc::kill`, remote daemon `RunCommandRequest`).
+    fn render_guardrail_verbs(
+        &self,
+        host_label: &str,
+        session: &SessionSnapshot,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let critical = heat_coloru(HeatLevel::Critical);
+
+        let rk = host_key(host_label, &session.session_id);
+        let state = |verb: &str| {
+            self.conductor_guardrail_states
+                .get(&format!("{verb}\u{0}{rk}"))
+                .cloned()
+        };
+        let label = zaplex_cockpit::session_label(session);
+
+        // One hoverable verb dispatching a WorkspaceAction (muted → Critical).
+        let make =
+            |st: MouseStateHandle, text: &str, action: WorkspaceAction| -> Box<dyn Element> {
+                let text = text.to_string();
+                Hoverable::new(st, move |mouse| {
+                    let color = if mouse.is_hovered() { critical } else { muted };
+                    Self::text(text.clone(), family, body, color)
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                .finish()
+            };
+
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(10.0);
+
+        if let Some(st) = state("pause") {
+            row = row.with_child(make(
+                st,
+                "⏸ stop",
+                WorkspaceAction::StopAgent {
+                    host: host_label.to_string(),
+                    session_id: session.session_id.clone(),
+                    pid: session.pid,
+                    agent_label: label.clone(),
+                },
+            ));
+        }
+        if let Some(st) = state("kill") {
+            row = row.with_child(make(
+                st,
+                "⨯ kill",
+                WorkspaceAction::KillAgentRequest {
+                    host: host_label.to_string(),
+                    session_id: session.session_id.clone(),
+                    pid: session.pid,
+                    agent_label: label,
+                    project_name: session.project_name.clone(),
+                },
+            ));
+        }
+
+        Some(row.with_main_axis_size(MainAxisSize::Min).finish())
+    }
+
+    /// The fleet-wide "⏹ stop all" control (step 7), rendered in the Conductor
+    /// header when at least one agent is live anywhere in the inventory.
+    /// Dispatches [`WorkspaceAction::StopAllRequest`], which opens the confirm
+    /// dialog (never sends anything without confirmation — this is the
+    /// broadest, most destructive guardrail). Muted, Critical on hover.
+    fn render_conductor_stop_all(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let critical = heat_coloru(HeatLevel::Critical);
+
+        Hoverable::new(self.conductor_stop_all_state.clone(), move |mouse| {
+            let color = if mouse.is_hovered() { critical } else { muted };
+            Self::text("⏹ stop all".to_string(), family, body, color)
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::StopAllRequest))
+        .finish()
     }
 
     fn render_aggregate(

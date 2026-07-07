@@ -1,5 +1,6 @@
 mod action;
 mod active_session;
+pub mod agent_guardrail_dialog;
 pub mod bonus_grant_notification_model;
 #[cfg(target_os = "macos")]
 mod cli_install;
