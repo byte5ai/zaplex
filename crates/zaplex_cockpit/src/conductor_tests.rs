@@ -316,3 +316,36 @@ fn next_waiting_from_stale_cursor_restarts_at_first() {
     assert_eq!(got.host_label, "h1");
     assert_eq!(got.session_id, "a");
 }
+
+#[test]
+fn host_ident_keys_by_stable_identity_not_label() {
+    // Two remote daemons sharing a display label but with distinct host ids
+    // must get distinct keys — the label collision must never alias them.
+    let a = host_ident(false, Some("id-a"));
+    let b = host_ident(false, Some("id-b"));
+    assert_ne!(a, b, "same label, different host_id must not collide");
+    assert_eq!(a, "daemon:id-a");
+    assert_eq!(b, "daemon:id-b");
+
+    // The local host has a single stable key, independent of any hostname.
+    assert_eq!(host_ident(true, None), "local");
+    assert_eq!(host_ident(true, Some("ignored")), "local");
+    // Local is never confused with a remote.
+    assert_ne!(host_ident(true, None), host_ident(false, Some("id-a")));
+}
+
+#[test]
+fn host_key_scopes_session_id_by_stable_host_identity() {
+    // Same host-scoped session id on two same-label remotes stays distinct.
+    let a = host_key(false, Some("id-a"), "s1");
+    let b = host_key(false, Some("id-b"), "s1");
+    assert_ne!(a, b);
+    // Stable across calls for the same host + id (no reconcile flicker).
+    assert_eq!(a, host_key(false, Some("id-a"), "s1"));
+    // Local key is stable and distinct from any remote's.
+    assert_eq!(host_key(true, None, "s1"), "local\u{0}s1");
+    assert_ne!(
+        host_key(true, None, "s1"),
+        host_key(false, Some("id-a"), "s1")
+    );
+}

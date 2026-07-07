@@ -23,9 +23,9 @@ use warpui::{
 };
 use zaplex_cockpit::{
     fleet_is_large, fleet_session_count, format_cost, format_reset, format_tokens, heat_fill,
-    heat_pct_label_with_provenance, host_auto_collapsed, host_summary, session_glyph,
-    AccountStatus, AccountUsage, FleetTree, HeatLevel, HostNode, ProjectNode, Provider,
-    SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
+    heat_pct_label_with_provenance, host_auto_collapsed, host_ident, host_key, host_summary,
+    session_glyph, AccountStatus, AccountUsage, FleetTree, HeatLevel, HostNode, ProjectNode,
+    Provider, SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
@@ -89,55 +89,57 @@ pub struct CockpitPaneView {
     /// Non-repo cwds simply don't get the worktree action (design §3: toggle
     /// disabled, never a broken session).
     session_in_repo: HashMap<String, bool>,
-    /// Hover/click state of each Conductor session row (key = `host\0id`, since
-    /// session ids are unique only within a host). Clicking the row attaches the
-    /// agent (adopt in place for a local host). Synced against the unified
-    /// inventory on every update.
+    /// Hover/click state of each Conductor session row (key = `host_ident\0id`:
+    /// the stable host identity — never the display label — since session ids are
+    /// unique only within a host). Clicking the row attaches the agent (adopt in
+    /// place for a local host). Synced against the unified inventory on every
+    /// update.
     conductor_row_states: HashMap<String, MouseStateHandle>,
-    /// Hover state of each Conductor host collapse toggle (key = host label).
+    /// Hover state of each Conductor host collapse toggle (key = stable host
+    /// identity `host_ident`, not the display label).
     conductor_host_toggle_states: HashMap<String, MouseStateHandle>,
-    /// Hover state of each Conductor project collapse toggle (key = `host\0root`).
+    /// Hover state of each Conductor project collapse toggle (key =
+    /// `host_ident\0root`).
     conductor_project_toggle_states: HashMap<String, MouseStateHandle>,
     /// Hover state of the contextual "+" (open the Spawn-Karte pre-scoped to
     /// this host/project) on each Conductor host/project header. Keyed with a
-    /// `host:`/`proj:` prefix so host and project pluses never collide.
+    /// `host:`/`proj:` prefix over the stable host identity (`host:<host_ident>`,
+    /// `proj:<host_ident>\0root`) so host and project pluses never collide and a
+    /// shared display label never crosses two hosts.
     conductor_plus_states: HashMap<String, MouseStateHandle>,
-    /// Explicit user collapse override per host (key = host label). Absent = use
-    /// the inverse-complexity auto decision ([`host_auto_collapsed`]); present =
-    /// the user has toggled it and their choice wins until the fleet changes.
+    /// Explicit user collapse override per host (key = stable host identity
+    /// `host_ident`, not the display label). Absent = use the inverse-complexity
+    /// auto decision ([`host_auto_collapsed`]); present = the user has toggled it
+    /// and their choice wins until the fleet changes.
     collapsed_hosts: HashMap<String, bool>,
-    /// Explicit user collapse override per project (key = `host\0root`). Absent =
-    /// expanded (projects default open; collapse is opt-in per project).
+    /// Explicit user collapse override per project (key = `host_ident\0root`).
+    /// Absent = expanded (projects default open; collapse is opt-in per project).
     collapsed_projects: HashMap<String, bool>,
     /// Hover state of each Conductor session row's review-loop verbs (step 6),
-    /// keyed `"{verb}\0{host}\0{id}"` (verb ∈ review/approve/redirect/commit/pr).
-    /// One combined map (rather than five) keeps the sync/retain cheap; hover
-    /// still needs a stable handle per (verb, session) across renders.
+    /// keyed `"{verb}\0{host_ident}\0{id}"` (verb ∈
+    /// review/approve/redirect/commit/pr). One combined map (rather than five)
+    /// keeps the sync/retain cheap; hover still needs a stable handle per (verb,
+    /// session) across renders.
     conductor_review_states: HashMap<String, MouseStateHandle>,
-    /// Sessions the user marked reviewed (approve verb), keyed by `host\0id`.
+    /// Sessions the user marked reviewed (approve verb), keyed by
+    /// `host_ident\0id`.
     /// A lightweight local marker — never mutates the agent — retained across
     /// the 45s reconcile like the hover-state maps, so approving doesn't flicker.
     reviewed_sessions: std::collections::HashSet<String>,
     /// Hover state of each Conductor session row's guardrail verbs (step 7):
-    /// `⏸ stop` / `⨯ kill`, keyed `"{verb}\0{host}\0{id}"` like the review-loop
+    /// `⏸ stop` / `⨯ kill`, keyed `"{verb}\0{host_ident}\0{id}"` like the review-loop
     /// map. Unlike the review cluster, guardrails render on **every** live row
     /// — local and remote — since interrupt/kill are cross-host operations.
     conductor_guardrail_states: HashMap<String, MouseStateHandle>,
     /// Hover state of each Conductor session row's model-lever verbs (step 8):
     /// `⚙ /compact` · `⌫ /clear` · `⑂ fork` · `⑂ +worktree`, keyed
-    /// `"{verb}\0{host}\0{id}"` like the review-loop / guardrail maps. Levers are
+    /// `"{verb}\0{host_ident}\0{id}"` like the review-loop / guardrail maps. Levers are
     /// local-only (they resume/fork into a local PTY); the compact/clear pair is
     /// Claude-only (Claude Code slash commands).
     conductor_lever_states: HashMap<String, MouseStateHandle>,
     /// Hover state of the Conductor pane's single fleet-wide "Stop all"
     /// control (step 7). Not keyed — one control for the whole pane.
     conductor_stop_all_state: MouseStateHandle,
-}
-
-/// Composite key for per-`(host, id)` maps — session ids are unique only within
-/// a host, so the fleet view keys everything by host + id.
-fn host_key(host: &str, id: &str) -> String {
-    format!("{host}\u{0}{id}")
 }
 
 /// The review-loop verbs (step 6) that hang on a local Conductor session row, in
@@ -174,11 +176,12 @@ fn review_redirect_prompt(project_name: &str) -> String {
 /// they open panes, which is the workspace's job.
 #[derive(Clone, Debug)]
 pub enum CockpitPaneAction {
-    /// Fold/unfold a host node (key = host label).
+    /// Fold/unfold a host node (key = stable host identity `host_ident`, not the
+    /// display label — two remote daemons can share a label).
     ToggleHost(String),
-    /// Fold/unfold a project node (key = `host\0root`).
+    /// Fold/unfold a project node (key = `host_ident\0root`).
     ToggleProject(String),
-    /// Mark a reviewed session as reviewed (approve verb, key = `host\0id`).
+    /// Mark a reviewed session as reviewed (approve verb, key = `host_ident\0id`).
     /// A local, non-mutating marker — dims the row's review affordance so the
     /// user's eye moves on; toggles off if approved twice.
     MarkReviewed(String),
@@ -225,15 +228,16 @@ impl CockpitPaneView {
     /// fleet is large; a host that needs you never auto-folds).
     fn host_collapsed(&self, host: &HostNode, fleet_large: bool) -> bool {
         self.collapsed_hosts
-            .get(&host.host)
+            .get(&host_ident(host.is_local, host.host_id.as_deref()))
             .copied()
             .unwrap_or_else(|| host_auto_collapsed(host, fleet_large))
     }
 
     /// Effective collapse state of a project: expanded unless the user folded it.
-    fn project_collapsed(&self, host: &str, root: &str) -> bool {
+    /// Keyed by the project's stable host identity, not the display label.
+    fn project_collapsed(&self, is_local: bool, host_id: Option<&str>, root: &str) -> bool {
         self.collapsed_projects
-            .get(&host_key(host, root))
+            .get(&host_key(is_local, host_id, root))
             .copied()
             .unwrap_or(false)
     }
@@ -269,9 +273,12 @@ impl CockpitPaneView {
         }
 
         // Conductor maps: keyed off the unified cross-host inventory (which
-        // includes remote sessions the local `accounts` list never sees), by
-        // `(host, id)` / `(host, root)` / host. Retain live keys, drop the rest,
-        // and prune stale collapse overrides so a disconnected host doesn't leak.
+        // includes remote sessions the local `accounts` list never sees), by the
+        // **stable host identity** (`host_ident`) — `(host-identity, id)` for
+        // sessions/projects, bare host identity for hosts — never the display
+        // label (two remote daemons can share a label and would then alias each
+        // other's UI state). Retain live keys, drop the rest, and prune stale
+        // collapse overrides so a disconnected host doesn't leak.
         let inv = CockpitModel::as_ref(ctx).inventory();
         let live_rows: std::collections::HashSet<String> = inv
             .hosts
@@ -280,20 +287,27 @@ impl CockpitPaneView {
                 h.projects.iter().flat_map(move |p| {
                     p.sessions
                         .iter()
-                        .map(move |s| host_key(&h.host, &s.session_id))
+                        .map(move |s| host_key(h.is_local, h.host_id.as_deref(), &s.session_id))
                 })
             })
             .collect();
-        let live_hosts: std::collections::HashSet<String> =
-            inv.hosts.iter().map(|h| h.host.clone()).collect();
+        let live_hosts: std::collections::HashSet<String> = inv
+            .hosts
+            .iter()
+            .map(|h| host_ident(h.is_local, h.host_id.as_deref()))
+            .collect();
         let live_projects: std::collections::HashSet<String> = inv
             .hosts
             .iter()
-            .flat_map(|h| h.projects.iter().map(move |p| host_key(&h.host, &p.root)))
+            .flat_map(|h| {
+                h.projects
+                    .iter()
+                    .map(move |p| host_key(h.is_local, h.host_id.as_deref(), &p.root))
+            })
             .collect();
         self.conductor_row_states
             .retain(|k, _| live_rows.contains(k));
-        // Review-loop maps: keyed `"{verb}\0{host}\0{id}"`; the tail after the
+        // Review-loop maps: keyed `"{verb}\0{host_ident}\0{id}"`; the tail after the
         // first `\0` is the row's `host_key`. Retain live rows, drop the rest.
         self.conductor_review_states.retain(|k, _| {
             k.split_once('\u{0}')
@@ -328,14 +342,15 @@ impl CockpitPaneView {
         self.collapsed_projects
             .retain(|k, _| live_projects.contains(k));
         for host in &inv.hosts {
+            let hident = host_ident(host.is_local, host.host_id.as_deref());
             self.conductor_host_toggle_states
-                .entry(host.host.clone())
+                .entry(hident.clone())
                 .or_default();
             self.conductor_plus_states
-                .entry(format!("host:{}", host.host))
+                .entry(format!("host:{hident}"))
                 .or_default();
             for project in &host.projects {
-                let pkey = host_key(&host.host, &project.root);
+                let pkey = host_key(host.is_local, host.host_id.as_deref(), &project.root);
                 self.conductor_project_toggle_states
                     .entry(pkey.clone())
                     .or_default();
@@ -343,7 +358,7 @@ impl CockpitPaneView {
                     .entry(format!("proj:{pkey}"))
                     .or_default();
                 for session in &project.sessions {
-                    let rk = host_key(&host.host, &session.session_id);
+                    let rk = host_key(host.is_local, host.host_id.as_deref(), &session.session_id);
                     self.conductor_row_states.entry(rk.clone()).or_default();
                     for verb in REVIEW_VERB_KEYS {
                         self.conductor_review_states
@@ -867,6 +882,9 @@ impl CockpitPaneView {
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
         let collapsed = self.host_collapsed(host, fleet_large);
+        // Stable host identity — keys every per-host map (collapse, hover, "+")
+        // and the ToggleHost action, so a label collision never crosses hosts.
+        let hident = host_ident(is_local, host.host_id.as_deref());
 
         let chevron = if collapsed { "▸" } else { "▾" };
         let mut header = Flex::row()
@@ -891,13 +909,15 @@ impl CockpitPaneView {
         // The header content toggles collapse; the trailing "+" opens a
         // pre-scoped Spawn-Karte (its own click, kept outside the toggle area).
         let header_el: Box<dyn Element> =
-            if let Some(state) = self.conductor_host_toggle_states.get(&host.host).cloned() {
-                let host_label = host.host.clone();
+            if let Some(state) = self.conductor_host_toggle_states.get(&hident).cloned() {
+                // ToggleHost carries the stable host identity, not the label, so
+                // the collapse override lands on the right host.
+                let toggle_key = hident.clone();
                 let inner = header.with_main_axis_size(MainAxisSize::Min).finish();
                 Hoverable::new(state, move |_mouse| inner)
                     .with_cursor(Cursor::PointingHand)
                     .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(CockpitPaneAction::ToggleHost(host_label.clone()))
+                        ctx.dispatch_typed_action(CockpitPaneAction::ToggleHost(toggle_key.clone()))
                     })
                     .finish()
             } else {
@@ -907,7 +927,7 @@ impl CockpitPaneView {
         // A new agent scoped to this host (remote hosts pass their label; local
         // passes `None` so the card defaults to the local machine).
         let plus = self.render_conductor_plus(
-            &format!("host:{}", host.host),
+            &format!("host:{hident}"),
             WorkspaceAction::OpenSpawnCard {
                 // Carry the stable host id so a later same-named host scopes the
                 // launch to the *right* remote node (label alone is ambiguous).
@@ -971,8 +991,10 @@ impl CockpitPaneView {
         let body = appearance.ui_font_body();
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
-        let key = host_key(host_label, &project.root);
-        let collapsed = self.project_collapsed(host_label, &project.root);
+        // Project UI state (collapse, toggle hover, "+") keys on the stable host
+        // identity + git root, never the display label.
+        let key = host_key(is_local, host_id, &project.root);
+        let collapsed = self.project_collapsed(is_local, host_id, &project.root);
 
         let chevron = if collapsed { "▸" } else { "▾" };
         let mut header = Flex::row()
@@ -1134,7 +1156,7 @@ impl CockpitPaneView {
         // The click target is the info span (not the whole row) so the trailing
         // review-loop (step 6) and guardrail (step 7) verbs have their own
         // click targets alongside it.
-        let key = host_key(host_label, &session.session_id);
+        let key = host_key(is_local, host_id, &session.session_id);
         let info_el = match (is_local, self.conductor_row_states.get(&key).cloned()) {
             (true, Some(state)) => {
                 let action = WorkspaceAction::AttachFleetSession {
@@ -1154,14 +1176,14 @@ impl CockpitPaneView {
         // machine); guardrails are cross-host, so every live row — local and
         // remote — gets them (step 7 design: attempt remote, never fake it).
         let review_verbs = is_local
-            .then(|| self.render_review_verbs(host_label, session, appearance))
+            .then(|| self.render_review_verbs(is_local, host_id, session, appearance))
             .flatten();
         let guardrail_verbs =
             self.render_guardrail_verbs(host_label, host_id, is_local, session, appearance);
         // Model levers are local-only (they resume/fork into a local PTY);
         // compact/clear are additionally Claude-only (Claude Code slash commands).
         let lever_verbs = is_local
-            .then(|| self.render_lever_verbs(host_label, session, app, appearance))
+            .then(|| self.render_lever_verbs(is_local, host_id, session, app, appearance))
             .flatten();
 
         if review_verbs.is_none() && guardrail_verbs.is_none() && lever_verbs.is_none() {
@@ -1203,7 +1225,8 @@ impl CockpitPaneView {
     /// frame) or when the row exposes no lever at all.
     fn render_lever_verbs(
         &self,
-        host_label: &str,
+        is_local: bool,
+        host_id: Option<&str>,
         session: &SessionSnapshot,
         app: &AppContext,
         appearance: &Appearance,
@@ -1215,7 +1238,7 @@ impl CockpitPaneView {
         // Same subscription as the source session (None = default login).
         let config_dir = CockpitModel::as_ref(app).config_dir_for_session(&session.session_id);
 
-        let rk = host_key(host_label, &session.session_id);
+        let rk = host_key(is_local, host_id, &session.session_id);
         let state = |verb: &str| {
             self.conductor_lever_states
                 .get(&format!("{verb}\u{0}{rk}"))
@@ -1308,7 +1331,8 @@ impl CockpitPaneView {
     /// the daemon's `RunCommandRequest`).
     fn render_review_verbs(
         &self,
-        host_label: &str,
+        is_local: bool,
+        host_id: Option<&str>,
         session: &SessionSnapshot,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
@@ -1316,7 +1340,7 @@ impl CockpitPaneView {
         let muted = theme.sub_text_color(theme.background()).into_solid();
         let accent = theme.accent().into_solid();
 
-        let rk = host_key(host_label, &session.session_id);
+        let rk = host_key(is_local, host_id, &session.session_id);
         let state = |verb: &str| {
             self.conductor_review_states
                 .get(&format!("{verb}\u{0}{rk}"))
@@ -1411,7 +1435,7 @@ impl CockpitPaneView {
         session: &SessionSnapshot,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let rk = host_key(host_label, &session.session_id);
+        let rk = host_key(is_local, host_id, &session.session_id);
         let state = |verb: &str| {
             self.conductor_guardrail_states
                 .get(&format!("{verb}\u{0}{rk}"))
@@ -1639,20 +1663,22 @@ impl TypedActionView for CockpitPaneView {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            CockpitPaneAction::ToggleHost(host) => {
+            CockpitPaneAction::ToggleHost(host_ident_key) => {
                 // Flip relative to the *effective* state (which may be the
                 // inverse-complexity auto decision), so one click always does the
                 // visible thing regardless of whether an override exists yet.
+                // `host_ident_key` is the stable host identity (`host_ident`),
+                // not the display label, so we resolve the node by identity.
                 let model = CockpitModel::as_ref(ctx);
                 let fleet_large = fleet_is_large(model.inventory());
                 let eff = model
                     .inventory()
                     .hosts
                     .iter()
-                    .find(|h| &h.host == host)
+                    .find(|h| &host_ident(h.is_local, h.host_id.as_deref()) == host_ident_key)
                     .map(|h| self.host_collapsed(h, fleet_large))
                     .unwrap_or(false);
-                self.collapsed_hosts.insert(host.clone(), !eff);
+                self.collapsed_hosts.insert(host_ident_key.clone(), !eff);
                 ctx.notify();
             }
             CockpitPaneAction::ToggleProject(key) => {

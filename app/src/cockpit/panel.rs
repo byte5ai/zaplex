@@ -18,18 +18,13 @@ use warpui::platform::Cursor;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 use zaplex_cockpit::{
     fleet_is_large, format_cost, format_reset, format_tokens, heat_fill,
-    heat_pct_label_with_provenance, host_auto_collapsed, host_summary, session_glyph, AccountUsage,
-    FleetTree, HeatLevel, SessionSnapshot, SessionState, UsageProvenance,
+    heat_pct_label_with_provenance, host_auto_collapsed, host_key, host_summary, session_glyph,
+    AccountUsage, FleetTree, HeatLevel, SessionSnapshot, SessionState, UsageProvenance,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{ctx_pct_element, glyph_cell, heat_coloru, verb_button, VerbKind};
 use crate::WorkspaceAction;
-
-/// Composite `(host, id)` key — session ids are unique only within a host.
-fn host_key(host: &str, id: &str) -> String {
-    format!("{host}\u{0}{id}")
-}
 
 /// Max session rows shown per host in the compact sidebar before an overflow
 /// line — the sidebar is glanceable, the roomy pane is the full view.
@@ -49,11 +44,12 @@ pub enum CockpitPanelEvent {
 pub struct CockpitPanel {
     scroll_state: ClippedScrollStateHandle,
     expand_btn: MouseStateHandle,
-    /// Hover/click state per Conductor session row (key = `host\0id`), synced
-    /// against the unified inventory. Clicking a row attaches the agent.
+    /// Hover/click state per Conductor session row (key = `host_ident\0id`,
+    /// stable host identity — never the display label), synced against the
+    /// unified inventory. Clicking a row attaches the agent.
     conductor_row_states: HashMap<String, MouseStateHandle>,
     /// Hover state of each local row's compact "◈ review" verb (step 6, key =
-    /// `host\0id`). The sidebar is the glance surface, so it carries only the
+    /// `host_ident\0id`). The sidebar is the glance surface, so it carries only the
     /// review entry point; the full commit/PR cluster lives on the main pane.
     conductor_review_states: HashMap<String, MouseStateHandle>,
 }
@@ -89,7 +85,7 @@ impl CockpitPanel {
                 h.projects.iter().flat_map(move |p| {
                     p.sessions
                         .iter()
-                        .map(move |s| host_key(&h.host, &s.session_id))
+                        .map(move |s| host_key(h.is_local, h.host_id.as_deref(), &s.session_id))
                 })
             })
             .collect();
@@ -432,7 +428,7 @@ impl CockpitPanel {
 
         // Attach on click of the info span (local only); the compact "◈ review"
         // verb (step 6) sits alongside with its own click target.
-        let key = host_key(host_label, &session.session_id);
+        let key = host_key(is_local, host_id, &session.session_id);
         let (info_el, review) = match (is_local, self.conductor_row_states.get(&key).cloned()) {
             (true, Some(state)) => {
                 let action = WorkspaceAction::AttachFleetSession {

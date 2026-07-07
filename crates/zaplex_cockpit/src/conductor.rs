@@ -199,6 +199,38 @@ pub fn host_summary(host: &HostNode) -> String {
     s
 }
 
+/// Stable host-identity string for keying per-host UI state (collapse, hover,
+/// the pre-scoped "+"). `local` for this machine, `daemon:<host_id>` for a
+/// remote daemon — **never** the display label. Two remote daemons can advertise
+/// the same label (SSH alias / matching `gethostname()`), and a label key would
+/// then alias their UI state into one; `(is_local, host_id)` keeps them
+/// distinct. Mirrors the identity used by [`WaitingTarget`] / [`next_waiting`].
+pub fn host_ident(is_local: bool, host_id: Option<&str>) -> String {
+    if is_local {
+        // The local host carries no `host_id`; `is_local` alone identifies it,
+        // and its key stays stable across reconciles regardless of hostname.
+        "local".to_string()
+    } else {
+        match host_id {
+            Some(id) => format!("daemon:{id}"),
+            // A remote should always carry a stable id; if one is somehow
+            // absent, use a fixed marker rather than the label so we never
+            // reintroduce label aliasing (better one merged edge case than
+            // silently crossing two hosts' state).
+            None => "daemon:?".to_string(),
+        }
+    }
+}
+
+/// Composite `(host-identity, id)` key for per-`(host, session)` or
+/// `(host, project)` UI state. Session and project ids are unique only within a
+/// host, so they are scoped by the **stable** host identity — never the display
+/// label. Use for every seed / lookup / retain of such maps so labels can never
+/// key UI state again.
+pub fn host_key(is_local: bool, host_id: Option<&str>, id: &str) -> String {
+    format!("{}\u{0}{id}", host_ident(is_local, host_id))
+}
+
 /// A stable, host-identity-carrying pointer to one Waiting agent — the `w`-jump
 /// target and cursor. It keeps the display `host_label` for the attach dispatch,
 /// but **identity** is the stable `(is_local, host_id)` pair plus the
