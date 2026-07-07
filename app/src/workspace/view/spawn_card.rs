@@ -168,6 +168,20 @@ fn models_for(agent: CLIAgent) -> &'static [&'static str] {
 /// the Conductor (Claude has no effort CLI flag).
 const EFFORTS: &[&str] = &["low", "medium", "high"];
 
+/// Which agents are actually launchable, per install-detection in `cfg`. Pure
+/// helper (no view state) so the "neither installed" case is unit-testable:
+/// an empty result means the card must not offer a launchable agent chip and
+/// Confirm must stay disabled — there is nothing installed to run.
+fn installed_agents(cfg: &SpawnCardConfig) -> Vec<CLIAgent> {
+    [CLIAgent::Claude, CLIAgent::Codex]
+        .into_iter()
+        .filter(|agent| match agent {
+            CLIAgent::Codex => cfg.codex.installed,
+            _ => cfg.claude.installed,
+        })
+        .collect()
+}
+
 impl SpawnCard {
     pub fn new(_ctx: &mut ViewContext<Self>) -> Self {
         SpawnCard {
@@ -214,6 +228,13 @@ impl SpawnCard {
             CLIAgent::Codex => &self.cfg.codex,
             _ => &self.cfg.claude,
         }
+    }
+
+    /// `true` once at least one supported agent CLI is installed. When this is
+    /// `false` the card has nothing it could actually launch, so Confirm must
+    /// be inert (see [`SpawnCardAction::Confirm`] handling).
+    fn any_agent_installed(&self) -> bool {
+        !installed_agents(&self.cfg).is_empty()
     }
 
     /// Resolve the chosen account to a config dir for the launch. Remote hosts
@@ -409,34 +430,40 @@ impl SpawnCard {
             .with_child(Container::new(subtitle).with_margin_bottom(18.).finish());
 
         // Agent row (only installed providers).
-        let mut agent_chips = Vec::new();
-        for agent in [CLIAgent::Claude, CLIAgent::Codex] {
-            let installed = match agent {
-                CLIAgent::Codex => self.cfg.codex.installed,
-                _ => self.cfg.claude.installed,
-            };
-            if !installed {
-                continue;
-            }
-            agent_chips.push(self.chip(
-                &format!("agent-{}", agent.to_serialized_name()),
-                agent.display_name().to_string(),
-                self.agent == agent,
-                SpawnCardAction::SetAgent(agent),
+        let available = installed_agents(&self.cfg);
+        if available.is_empty() {
+            // Neither Claude nor Codex is installed: there is nothing to launch,
+            // so show a calm install prompt instead of a phantom, unlaunchable
+            // chip (Confirm is disabled below for the same reason).
+            col = col.with_child(self.row(
+                "Agent",
+                vec![Container::new(
+                    Text::new_inline(
+                        "No agent CLI installed — install Claude Code or Codex".to_string(),
+                        family,
+                        12.,
+                    )
+                    .with_color(muted)
+                    .finish(),
+                )
+                .finish()],
                 appearance,
             ));
+        } else {
+            let agent_chips: Vec<Box<dyn Element>> = available
+                .into_iter()
+                .map(|agent| {
+                    self.chip(
+                        &format!("agent-{}", agent.to_serialized_name()),
+                        agent.display_name().to_string(),
+                        self.agent == agent,
+                        SpawnCardAction::SetAgent(agent),
+                        appearance,
+                    )
+                })
+                .collect();
+            col = col.with_child(self.row("Agent", agent_chips, appearance));
         }
-        if agent_chips.is_empty() {
-            // Neither installed: still offer Claude so the card is never empty.
-            agent_chips.push(self.chip(
-                "agent-claude",
-                CLIAgent::Claude.display_name().to_string(),
-                true,
-                SpawnCardAction::SetAgent(CLIAgent::Claude),
-                appearance,
-            ));
-        }
-        col = col.with_child(self.row("Agent", agent_chips, appearance));
 
         // Model row + a live context-window readout.
         let mut model_chips: Vec<Box<dyn Element>> = models_for(self.agent)
@@ -570,14 +597,29 @@ impl SpawnCard {
             .finish(),
         );
 
-        // Confirm + cancel.
-        let confirm = self.chip(
-            "confirm",
-            format!("Launch {}", self.agent.display_name()),
-            true,
-            SpawnCardAction::Confirm,
-            appearance,
-        );
+        // Confirm + cancel. Confirm renders inert (dimmed, no click handler) when
+        // no supported agent CLI is installed — there is nothing it could launch.
+        let can_launch = self.any_agent_installed();
+        let confirm: Box<dyn Element> = if can_launch {
+            self.chip(
+                "confirm",
+                format!("Launch {}", self.agent.display_name()),
+                true,
+                SpawnCardAction::Confirm,
+                appearance,
+            )
+        } else {
+            Container::new(
+                Text::new_inline("Launch".to_string(), family, 13.)
+                    .with_color(muted)
+                    .finish(),
+            )
+            .with_horizontal_padding(10.)
+            .with_vertical_padding(5.)
+            .with_background(theme.surface_2())
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .finish()
+        };
         let cancel = self.chip(
             "cancel",
             "Cancel".to_string(),
@@ -687,14 +729,18 @@ impl TypedActionView for SpawnCard {
                 ctx.notify();
             }
             SpawnCardAction::Confirm => {
-                ctx.emit(SpawnCardEvent::Launch {
-                    agent: self.agent,
-                    config_dir: self.resolved_config_dir(),
-                    cwd: self.project.clone(),
-                    node_id: self.resolved_node_id(),
-                    model: Some(self.model.clone()),
-                    effort: Some(self.effort.clone()),
-                });
+                // Guard here too (not just in the chip's on_click), so the
+                // "enter" keybinding can't launch an uninstalled CLI either.
+                if self.any_agent_installed() {
+                    ctx.emit(SpawnCardEvent::Launch {
+                        agent: self.agent,
+                        config_dir: self.resolved_config_dir(),
+                        cwd: self.project.clone(),
+                        node_id: self.resolved_node_id(),
+                        model: Some(self.model.clone()),
+                        effort: Some(self.effort.clone()),
+                    });
+                }
             }
             SpawnCardAction::Close => {
                 ctx.emit(SpawnCardEvent::Close);
@@ -820,6 +866,60 @@ mod tests {
         assert_eq!(
             resolve_scoped_host(&hosts, None, Some("devbox")),
             HostChoice::Remote(0),
+        );
+    }
+
+    fn provider(installed: bool) -> ProviderOptions {
+        ProviderOptions {
+            installed,
+            ..Default::default()
+        }
+    }
+
+    /// Codex review regression: when neither Claude nor Codex is installed,
+    /// there must be no launchable agent — a phantom chip previously let
+    /// Confirm emit a `Launch` for a binary that isn't there.
+    #[test]
+    fn installed_agents_empty_when_none_installed() {
+        let cfg = SpawnCardConfig {
+            claude: provider(false),
+            codex: provider(false),
+            ..Default::default()
+        };
+        assert_eq!(installed_agents(&cfg), Vec::new());
+    }
+
+    /// Exactly one installed provider yields exactly that agent — the normal
+    /// single-CLI case must keep working unchanged.
+    #[test]
+    fn installed_agents_only_lists_installed_provider() {
+        let claude_only = SpawnCardConfig {
+            claude: provider(true),
+            codex: provider(false),
+            ..Default::default()
+        };
+        assert_eq!(installed_agents(&claude_only), vec![CLIAgent::Claude]);
+
+        let codex_only = SpawnCardConfig {
+            claude: provider(false),
+            codex: provider(true),
+            ..Default::default()
+        };
+        assert_eq!(installed_agents(&codex_only), vec![CLIAgent::Codex]);
+    }
+
+    /// Both installed: both agents are offered, in the stable Claude-then-Codex
+    /// order the row renders.
+    #[test]
+    fn installed_agents_lists_both_when_both_installed() {
+        let cfg = SpawnCardConfig {
+            claude: provider(true),
+            codex: provider(true),
+            ..Default::default()
+        };
+        assert_eq!(
+            installed_agents(&cfg),
+            vec![CLIAgent::Claude, CLIAgent::Codex]
         );
     }
 }

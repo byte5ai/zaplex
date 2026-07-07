@@ -20,6 +20,8 @@ use async_compat::CompatExt as _;
 use chrono::Utc;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use watcher::HomeDirectoryWatcher;
+#[cfg(test)]
+use zaplex_cockpit::HostNode;
 use zaplex_cockpit::{
     apply_oauth_usage, build_snapshot, fold_inventory, AccountOverrides, CockpitSnapshot,
     FleetTree, PricingTable, Provider, RemoteHost, SessionSnapshot,
@@ -104,7 +106,7 @@ impl CockpitModel {
             me.spawn_refresh(ctx);
         });
 
-        let model = Self {
+        let mut model = Self {
             snapshot: CockpitSnapshot {
                 accounts: Vec::new(),
                 generated_at: Utc::now(),
@@ -162,8 +164,12 @@ impl CockpitModel {
     }
 
     /// Kick off a background disk scan; applies the result on the model thread.
-    fn spawn_refresh(&self, ctx: &mut ModelContext<Self>) {
+    fn spawn_refresh(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(inputs) = self.refresh_inputs(ctx) else {
+            // Disabled (or no home dir): blank any stale state instead of
+            // silently doing nothing, so the ambient badge and Conductor UI
+            // don't hold onto a waiting-count from before the toggle.
+            self.clear_for_disabled(ctx);
             return;
         };
         let spawner = ctx.spawner();
@@ -292,6 +298,29 @@ impl CockpitModel {
         self.overrides.color_for(key)
     }
 
+    /// Blank the model's state on the enabled→disabled transition, so every
+    /// consumer of `Updated` — the ambient Dock badge (`AttentionDriver`), the
+    /// Conductor pane, and the sidebar — reflects "nothing to show" instead of
+    /// holding onto whatever snapshot/inventory existed right before the
+    /// setting flipped off. `spawn_refresh` calls this on every disabled tick
+    /// (timer + home-directory watcher), but it only actually mutates and
+    /// emits once: comparing against the *current* state (rather than tracking
+    /// a separate "was enabled" flag) means every later disabled tick is
+    /// already blank and is a silent no-op — `Updated` never spams while
+    /// disabled. Re-enabling resumes normally: the next `spawn_refresh` finds
+    /// `enabled` true again and applies a live snapshot as usual.
+    fn clear_for_disabled(&mut self, ctx: &mut ModelContext<Self>) {
+        if is_blank(&self.snapshot, &self.inventory) {
+            return; // already blank — nothing changed since the last disabled tick
+        }
+        self.snapshot = CockpitSnapshot {
+            accounts: Vec::new(),
+            generated_at: Utc::now(),
+        };
+        self.inventory = FleetTree::default();
+        ctx.emit(CockpitEvent::Updated);
+    }
+
     fn apply(
         &mut self,
         snapshot: CockpitSnapshot,
@@ -412,8 +441,64 @@ impl CockpitModel {
     }
 }
 
+/// Whether the model's public state is already the disabled/blank state (no
+/// accounts, no inventory). Pure so `clear_for_disabled`'s idempotency — the
+/// thing that keeps a disabled cockpit's repeated refresh ticks from spamming
+/// `CockpitEvent::Updated` — is unit-testable without the actor/`ModelContext`
+/// harness.
+fn is_blank(snapshot: &CockpitSnapshot, inventory: &FleetTree) -> bool {
+    snapshot.accounts.is_empty() && *inventory == FleetTree::default()
+}
+
 impl Entity for CockpitModel {
     type Event = CockpitEvent;
 }
 
 impl SingletonEntity for CockpitModel {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_snapshot() -> CockpitSnapshot {
+        CockpitSnapshot {
+            accounts: Vec::new(),
+            generated_at: Utc::now(),
+        }
+    }
+
+    /// The freshly-disabled (or never-populated) state is blank — this is the
+    /// state `clear_for_disabled` settles into, and every disabled tick after
+    /// the first must see this and stay a no-op (no `Updated` spam).
+    #[test]
+    fn default_state_is_blank() {
+        assert!(is_blank(&empty_snapshot(), &FleetTree::default()));
+    }
+
+    /// A nonzero waiting count (the exact staleness the Codex review flagged —
+    /// the badge stuck at an old count) must NOT read as blank, so
+    /// `clear_for_disabled` still clears it on the enabled→disabled
+    /// transition.
+    #[test]
+    fn nonzero_needs_me_is_not_blank() {
+        let mut inventory = FleetTree::default();
+        inventory.needs_me = 3;
+        assert!(!is_blank(&empty_snapshot(), &inventory));
+    }
+
+    /// A populated host list is not blank even if nothing happens to be
+    /// waiting right now — the Conductor pane must also clear on disable, not
+    /// just the badge count.
+    #[test]
+    fn nonempty_hosts_is_not_blank() {
+        let mut inventory = FleetTree::default();
+        inventory.hosts.push(HostNode {
+            host: "devbox".to_string(),
+            is_local: true,
+            host_id: None,
+            projects: Vec::new(),
+            needs_me: 0,
+        });
+        assert!(!is_blank(&empty_snapshot(), &inventory));
+    }
+}
