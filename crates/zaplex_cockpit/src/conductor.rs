@@ -16,6 +16,7 @@
 //! Pure — no IO, no rendering, no app types.
 
 use crate::fleet::{FleetTree, HostNode};
+use crate::format::{context_fill, model_family};
 use crate::types::{SessionSnapshot, SessionState};
 
 /// Working: the agent is busy (Active) or mid tool-run / live job (Monitor) —
@@ -36,6 +37,117 @@ pub fn session_glyph(state: SessionState) -> &'static str {
         SessionState::Waiting => GLYPH_WAITING,
         SessionState::Idle => GLYPH_IDLE,
     }
+}
+
+/// Title-case a single lowercase display token: `"high"` -> `"High"`, `""` ->
+/// `""`. ASCII-first-letter only — enough for the effort/model-family words the
+/// Conductor renders.
+fn title_case(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Human word for a session state, used in the one-line attribute summary.
+fn state_word(state: SessionState) -> &'static str {
+    match state {
+        SessionState::Waiting => "waiting",
+        SessionState::Active | SessionState::Monitor => "working",
+        SessionState::Idle => "idle",
+    }
+}
+
+/// The compact **model·effort** label for a Conductor row.
+///
+/// A known Claude family (`opus`/`sonnet`/`haiku`/`fable`) is title-cased; any
+/// other id (e.g. a Codex `gpt-5.5`) is shown verbatim. Effort — when known —
+/// is appended, title-cased, after a `·`. The honest edges:
+/// - **empty model** → `""` (nothing to show, never a placeholder), and
+/// - **unknown effort** (`None`/blank) → the model alone (never an invented
+///   effort — effort is absent from Claude transcripts entirely).
+///
+/// E.g. `("claude-opus-4-8", Some("high"))` -> `"Opus·High"`;
+/// `("claude-opus-4-8", None)` -> `"Opus"`; `("gpt-5.5", Some("high"))` ->
+/// `"gpt-5.5·High"`; `("", _)` -> `""`.
+pub fn model_effort_label(model: &str, effort: Option<&str>) -> String {
+    if model.trim().is_empty() {
+        return String::new();
+    }
+    let fam = model_family(model);
+    // `model_family` echoes the raw id when no Claude family matched; title-case
+    // only the known family words, show any other id as-is.
+    let model_disp = if ["opus", "sonnet", "haiku", "fable"].contains(&fam) {
+        title_case(fam)
+    } else {
+        fam.to_string()
+    };
+    match effort {
+        Some(e) if !e.trim().is_empty() => format!("{model_disp}·{}", title_case(e)),
+        _ => model_disp,
+    }
+}
+
+/// The always-visible per-row attributes (Step 8): the compact model·effort
+/// label, the context-window fill, and the status glyph — the pure assembly the
+/// pane and sidebar render (each field colored at the view layer). Keeping this
+/// headless lets the "unknown effort / empty model / no-context-yet" edges be
+/// unit-tested without a GPUI harness.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionAttrs {
+    /// `"Opus·High"` / `"Opus"` / `""` — see [`model_effort_label`].
+    pub model_effort: String,
+    /// Rounded context-window fill percent of the latest turn; `None` when no
+    /// context tokens are known yet (nothing to show — never a fake `0%`).
+    pub ctx_pct: Option<u32>,
+    /// Context fill fraction (0.0..) for coloring via
+    /// [`crate::format::HeatLevel::from_fraction`].
+    pub ctx_fill: f64,
+    /// The status glyph (working/waiting/idle) — see [`session_glyph`].
+    pub glyph: &'static str,
+}
+
+/// Assemble the always-visible row attributes from a session's model, effort,
+/// context tokens, and state. Context fill is derived from the model's window
+/// ([`context_fill`]) so Claude and Codex are treated identically.
+pub fn session_attrs(
+    model: &str,
+    effort: Option<&str>,
+    ctx_tokens: u64,
+    state: SessionState,
+) -> SessionAttrs {
+    let ctx_fill = context_fill(model, ctx_tokens);
+    let ctx_pct = (ctx_tokens > 0).then(|| (ctx_fill * 100.0).round() as u32);
+    SessionAttrs {
+        model_effort: model_effort_label(model, effort),
+        ctx_pct,
+        ctx_fill,
+        glyph: session_glyph(state),
+    }
+}
+
+/// The canonical one-line attribute summary — e.g. `"Opus·High · 42% ctx · ✋
+/// waiting"`. The string form of [`session_attrs`], used for tests / tooltips /
+/// accessibility; the view renders the same fields as individually-colored
+/// spans. Empty pieces (unknown model, no context yet) are omitted so the line
+/// never carries a placeholder.
+pub fn session_attr_line(
+    model: &str,
+    effort: Option<&str>,
+    ctx_tokens: u64,
+    state: SessionState,
+) -> String {
+    let attrs = session_attrs(model, effort, ctx_tokens, state);
+    let mut parts: Vec<String> = Vec::new();
+    if !attrs.model_effort.is_empty() {
+        parts.push(attrs.model_effort);
+    }
+    if let Some(pct) = attrs.ctx_pct {
+        parts.push(format!("{pct}% ctx"));
+    }
+    parts.push(format!("{} {}", attrs.glyph, state_word(state)));
+    parts.join(" · ")
 }
 
 /// Agent-sessions on a single host (across all its projects).

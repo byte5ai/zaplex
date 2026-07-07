@@ -41,6 +41,80 @@ fn host(name: &str, sessions: Vec<SessionSnapshot>) -> HostSessions {
 }
 
 #[test]
+fn model_effort_label_title_cases_known_families() {
+    assert_eq!(
+        model_effort_label("claude-opus-4-8", Some("high")),
+        "Opus·High"
+    );
+    assert_eq!(
+        model_effort_label("claude-sonnet-4-5", Some("medium")),
+        "Sonnet·Medium"
+    );
+}
+
+#[test]
+fn model_effort_label_omits_unknown_effort() {
+    // Effort is absent from Claude transcripts — never invent one.
+    assert_eq!(model_effort_label("claude-opus-4-8", None), "Opus");
+    assert_eq!(model_effort_label("claude-opus-4-8", Some("")), "Opus");
+    assert_eq!(model_effort_label("claude-opus-4-8", Some("  ")), "Opus");
+}
+
+#[test]
+fn model_effort_label_empty_model_is_empty() {
+    assert_eq!(model_effort_label("", Some("high")), "");
+    assert_eq!(model_effort_label("   ", None), "");
+}
+
+#[test]
+fn model_effort_label_shows_codex_model_verbatim() {
+    // A non-Claude id (Codex) is shown as-is; its effort still title-cases.
+    assert_eq!(model_effort_label("gpt-5.5", Some("high")), "gpt-5.5·High");
+    assert_eq!(model_effort_label("gpt-5.5", None), "gpt-5.5");
+}
+
+#[test]
+fn session_attrs_has_no_context_pct_when_zero_tokens() {
+    let a = session_attrs("claude-opus-4-8", None, 0, SessionState::Waiting);
+    assert_eq!(a.ctx_pct, None);
+    assert_eq!(a.model_effort, "Opus");
+    assert_eq!(a.glyph, GLYPH_WAITING);
+}
+
+#[test]
+fn session_attrs_context_pct_uses_model_window() {
+    // 100k of Opus' 1M window → 10%.
+    let a = session_attrs(
+        "claude-opus-4-8",
+        Some("high"),
+        100_000,
+        SessionState::Active,
+    );
+    assert_eq!(a.ctx_pct, Some(10));
+    // 136k of a Codex 272k window → 50%.
+    let c = session_attrs("gpt-5.5", None, 136_000, SessionState::Monitor);
+    assert_eq!(c.ctx_pct, Some(50));
+}
+
+#[test]
+fn session_attr_line_composes_and_omits_empty_pieces() {
+    assert_eq!(
+        session_attr_line(
+            "claude-opus-4-8",
+            Some("high"),
+            420_000,
+            SessionState::Waiting
+        ),
+        "Opus·High · 42% ctx · ✋ waiting"
+    );
+    // Unknown model + no context yet → just the state clause.
+    assert_eq!(
+        session_attr_line("", None, 0, SessionState::Active),
+        "● working"
+    );
+}
+
+#[test]
 fn glyph_vocabulary_is_working_waiting_idle() {
     assert_eq!(session_glyph(SessionState::Active), GLYPH_WORKING);
     assert_eq!(session_glyph(SessionState::Monitor), GLYPH_WORKING);

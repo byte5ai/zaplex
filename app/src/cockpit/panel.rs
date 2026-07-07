@@ -416,10 +416,21 @@ impl CockpitPanel {
                 glyph_color,
             ))
             .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish());
-        if session.ctx_tokens > 0 {
-            let frac = zaplex_cockpit::context_fill(&session.model, session.ctx_tokens);
-            let pct = (frac * 100.0).round() as u32;
-            let color = heat_coloru(HeatLevel::from_fraction(frac));
+        // Always-visible model·effort·context (step 8), compact for the sidebar:
+        // the "Opus·High" label in accent, then the colored context-fill %.
+        let effort = crate::cockpit::session_effort(session, is_local);
+        let attrs = zaplex_cockpit::session_attrs(
+            &session.model,
+            effort.as_deref(),
+            session.ctx_tokens,
+            session.state,
+        );
+        if !attrs.model_effort.is_empty() {
+            let accent = theme.accent().into_solid();
+            row = row.with_child(Self::text(attrs.model_effort, family, body, accent));
+        }
+        if let Some(pct) = attrs.ctx_pct {
+            let color = heat_coloru(HeatLevel::from_fraction(attrs.ctx_fill));
             row = row.with_child(Self::text(format!("· {pct}%"), family, body, color));
         }
         let info = row.with_main_axis_size(MainAxisSize::Max).finish();

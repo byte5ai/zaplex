@@ -41,6 +41,8 @@ cockpit-session-adopt = ▸ übernehmen
 cockpit-session-transcript = ◇ Verlauf
 cockpit-session-fork = ⑂ Fork
 cockpit-session-fork-worktree = ⑂ +Worktree
+cockpit-session-compact = ⚙ /compact
+cockpit-session-clear = ⌫ /clear
 
 # GitHub-Flows auf der freiesten Instanz
 cockpit-flow-quick-issue = ⚡ GitHub-Issue entwerfen (freieste)

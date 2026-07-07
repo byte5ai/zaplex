@@ -72,11 +72,18 @@ pub fn heat_pct_label_with_provenance(
 }
 
 /// The model's usable context window in tokens: 1M for the Opus/Sonnet 1M-beta,
-/// 200k otherwise. Turns a raw context-token count into a fill fraction.
+/// 272k for the Codex/OpenAI GPT-5 family, 200k otherwise. Turns a raw
+/// context-token count into a fill fraction.
 pub fn context_window(model: &str) -> u64 {
     let m = model.to_ascii_lowercase();
     if m.contains("opus") || m.contains("sonnet") {
         1_000_000
+    } else if m.contains("gpt") || m.contains("codex") || m.contains("o3") || m.contains("o4") {
+        // Codex agent models (GPT-5 family / o-series): 272k-token context
+        // window. The rollout transcript also carries the exact
+        // `model_context_window`, but the Conductor renders fill from the model
+        // id alone (like Claude's family defaults), so we single-source it here.
+        272_000
     } else {
         200_000
     }

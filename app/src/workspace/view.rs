@@ -4272,6 +4272,44 @@ impl Workspace {
         self.fork_agent_session_in_place(&resume_cmd, cwd, ctx);
     }
 
+    /// Run a Claude Code slash command against a discovered session
+    /// (`SlashCommandSession`, cockpit model-levers `/compact` · `/clear`).
+    ///
+    /// Cockpit sessions are external processes whose stdin zaplex does not own,
+    /// so the honest path is to **resume the same conversation** into a
+    /// zaplex-owned tab (identical to adopt) and prefill the slash command in
+    /// that live PTY's input — the human presses Enter to send it (in-the-loop,
+    /// like the review-loop verbs). The command then acts on the same session.
+    fn slash_command_session(
+        &mut self,
+        agent: CLIAgent,
+        session_id: &str,
+        cwd: &Path,
+        config_dir: Option<&Path>,
+        command: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(resume_cmd) = agent.resume_command_pinned(session_id, config_dir) else {
+            // No resume mechanism → no way to reach the session's PTY honestly;
+            // the surface stays disabled, this is the belt-and-braces guard.
+            return;
+        };
+        // Resume the session into a fresh local tab (owns the PTY) …
+        self.fork_agent_session_in_place(&resume_cmd, cwd, ctx);
+        // … then prefill the slash command, ready for the human to send.
+        let command = command.to_string();
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
+                terminal_view.update(ctx, |terminal_view, ctx| {
+                    terminal_view.input().update(ctx, |input, ctx| {
+                        input.replace_buffer_content(&command, ctx);
+                        input.focus_input_box(ctx);
+                    });
+                });
+            }
+        });
+    }
+
     /// Attach to a fleet agent identified by `(host, session_id)` from the
     /// unified Conductor inventory (`AttachFleetSession`) — the shared target of
     /// the Conductor row-click and the `w`-jump. Everything is resolved from the
@@ -21240,6 +21278,22 @@ impl TypedActionView for Workspace {
                 // surface (harmless no-op when the inbox wasn't open).
                 self.current_workspace_state.is_attention_inbox_open = false;
                 self.adopt_agent_session(*agent, session_id, cwd, config_dir.as_deref(), ctx);
+            }
+            SlashCommandSession {
+                agent,
+                session_id,
+                cwd,
+                config_dir,
+                command,
+            } => {
+                self.slash_command_session(
+                    *agent,
+                    session_id,
+                    cwd,
+                    config_dir.as_deref(),
+                    command,
+                    ctx,
+                );
             }
             AttachFleetSession { host, session_id } => {
                 self.attach_fleet_session(host, session_id, ctx);
