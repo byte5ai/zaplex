@@ -109,9 +109,6 @@ pub struct AttentionInbox {
     row_states: HashMap<String, MouseStateHandle>,
     /// Adopt data for locally-resumable sessions, keyed by session id.
     adopt_targets: HashMap<String, AdoptTarget>,
-    /// The local host's label in the inventory tree (hostname, or `"local"`),
-    /// so a row is only treated as locally-adoptable when its host matches.
-    local_label: String,
 }
 
 impl AttentionInbox {
@@ -136,7 +133,6 @@ impl AttentionInbox {
             scroll_state: ClippedScrollStateHandle::default(),
             row_states: HashMap::new(),
             adopt_targets: HashMap::new(),
-            local_label: local_host_label(),
         };
         me.sync_rows(ctx);
         me
@@ -236,6 +232,7 @@ impl AttentionInbox {
     fn render_row(
         &self,
         host: &str,
+        is_local: bool,
         project: &str,
         session: &zaplex_cockpit::SessionSnapshot,
         appearance: &Appearance,
@@ -257,8 +254,15 @@ impl AttentionInbox {
 
         let key = row_key(host, &session.session_id);
         // The adopt target (present only for locally-resumable sessions on the
-        // local host). Its absence makes the row non-clickable.
-        let adopt = (host == self.local_label)
+        // local host). Gate on the inventory's authoritative `is_local` bit, NOT
+        // a `host == local_label` comparison: a remote daemon whose display label
+        // equals the local hostname (SSH alias / matching `gethostname()`) must
+        // never resolve to a *local* adopt — its host-scoped `session_id` could
+        // collide with a genuinely-local one and adopt the wrong session/cwd. A
+        // remote row stays non-clickable (awareness only), matching the inbox's
+        // "open that host's tab to attach" behavior. Its absence makes the row
+        // non-clickable.
+        let adopt = is_local
             .then(|| self.adopt_targets.get(&session.session_id))
             .flatten()
             .cloned();
@@ -369,6 +373,7 @@ impl AttentionInbox {
                         }
                         list = list.with_child(self.render_row(
                             &host.host,
+                            host.is_local,
                             &project.name,
                             session,
                             appearance,
@@ -401,17 +406,6 @@ fn row_key(host: &str, session_id: &str) -> String {
 
 fn text_inline(s: String, family: FamilyId, size: f32, color: ColorU) -> Box<dyn Element> {
     Text::new_inline(s, family, size).with_color(color).finish()
-}
-
-/// The local host's label, matching how `CockpitModel` names it in the fold
-/// (machine hostname, or `"local"` when unavailable) so inbox rows on the local
-/// host line up with the snapshot's locally-resumable sessions.
-fn local_host_label() -> String {
-    gethostname::gethostname()
-        .into_string()
-        .ok()
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "local".to_string())
 }
 
 impl Entity for AttentionInbox {

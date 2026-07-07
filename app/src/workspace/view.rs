@@ -1122,10 +1122,13 @@ pub struct Workspace {
     /// and its open buffer reloaded, so an opened transcript follows live. Entries
     /// whose buffer is closed become harmless no-ops on refresh.
     watched_transcripts: HashMap<PathBuf, PathBuf>,
-    /// `w`-jump cursor: the `(host, session_id)` of the last Waiting agent the
-    /// Conductor jumped to, so the next press advances to the next one across the
-    /// whole fleet (cycling). `None` starts at the first waiting agent.
-    cockpit_jump_cursor: Option<(String, String)>,
+    /// `w`-jump cursor: the last Waiting agent the Conductor jumped to, so the
+    /// next press advances to the next one across the whole fleet (cycling).
+    /// Stored as the **stable** [`zaplex_cockpit::WaitingTarget`] identity
+    /// (`(is_local, host_id)` + `session_id`), never the display label, so two
+    /// remote daemons sharing a label can't collapse the cycle. `None` starts at
+    /// the first waiting agent.
+    cockpit_jump_cursor: Option<zaplex_cockpit::WaitingTarget>,
     agent_toast_stack: ViewHandle<AgentToastStack>,
     update_toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
     /// Notification center inbox (the dropdown overlay for the Inbox button in the top-right of the title bar).
@@ -4427,32 +4430,21 @@ impl Workspace {
         use crate::cockpit::CockpitModel;
 
         let cursor = self.cockpit_jump_cursor.clone();
-        let next = zaplex_cockpit::next_waiting(
-            CockpitModel::as_ref(ctx).inventory(),
-            cursor.as_ref().map(|(h, s)| (h.as_str(), s.as_str())),
-        );
+        let next =
+            zaplex_cockpit::next_waiting(CockpitModel::as_ref(ctx).inventory(), cursor.as_ref());
         match next {
-            Some((host, session_id)) => {
-                // Read the target host's explicit locality + stable id from the
-                // inventory node (not a label comparison), so a colliding remote
-                // label can't misroute the jump's attach. `next_waiting` keys by
-                // label; pick the node actually holding the waiting session so a
-                // shared label resolves to the right host's id.
-                let (is_local, host_id) = CockpitModel::as_ref(ctx)
-                    .inventory()
-                    .hosts
-                    .iter()
-                    .find(|h| {
-                        h.host == host
-                            && h.projects
-                                .iter()
-                                .flat_map(|p| &p.sessions)
-                                .any(|s| s.session_id == session_id)
-                    })
-                    .map(|h| (h.is_local, h.host_id.clone()))
-                    .unwrap_or((false, None));
-                self.cockpit_jump_cursor = Some((host.clone(), session_id.clone()));
-                self.attach_fleet_session(&host, host_id.as_deref(), &session_id, is_local, ctx);
+            Some(target) => {
+                // The target already carries the resolved stable host identity
+                // (`is_local` + `host_id`) — keyed by that, never the display
+                // label — so a colliding remote label can't misroute the attach.
+                self.cockpit_jump_cursor = Some(target.clone());
+                self.attach_fleet_session(
+                    &target.host_label,
+                    target.host_id.as_deref(),
+                    &target.session_id,
+                    target.is_local,
+                    ctx,
+                );
             }
             None => {
                 self.toast_stack.update(ctx, |toast_stack, ctx| {

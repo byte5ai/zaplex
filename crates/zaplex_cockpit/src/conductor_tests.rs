@@ -42,6 +42,18 @@ fn host(name: &str, sessions: Vec<SessionSnapshot>) -> HostSessions {
     }
 }
 
+/// A remote host with an explicit stable `host_id` — lets tests build two hosts
+/// that share a display label (and even a host-scoped session id) but differ in
+/// identity, exactly the collision the `w`-jump cursor must keep distinct.
+fn remote_host(name: &str, host_id: &str, sessions: Vec<SessionSnapshot>) -> HostSessions {
+    HostSessions {
+        host: name.into(),
+        is_local: false,
+        host_id: Some(host_id.into()),
+        sessions,
+    }
+}
+
 #[test]
 fn model_effort_label_title_cases_known_families() {
     assert_eq!(
@@ -227,7 +239,7 @@ fn next_waiting_cycles_in_tree_order() {
     let mut seen = vec![first.clone()];
     let mut cur = first.clone();
     loop {
-        let nxt = next_waiting(&tree, Some((&cur.0, &cur.1))).expect("still waiting");
+        let nxt = next_waiting(&tree, Some(&cur)).expect("still waiting");
         if nxt == first {
             break;
         }
@@ -236,6 +248,46 @@ fn next_waiting_cycles_in_tree_order() {
         cur = nxt;
     }
     assert_eq!(seen.len(), 2, "exactly the two waiting agents, once each");
+}
+
+#[test]
+fn next_waiting_keys_on_stable_host_id_not_label() {
+    // Two REMOTE daemons that advertise the SAME display label AND the SAME
+    // host-scoped session id, distinguished only by their stable `host_id`.
+    // Keying the cursor by label (or `(label, session_id)`) would alias them
+    // into one and the cycle would never reach the second — it must visit BOTH.
+    let tree = build_fleet_tree(vec![
+        remote_host(
+            "devhost",
+            "daemon-A",
+            vec![session("dup", "/p/a", SessionState::Waiting, 1)],
+        ),
+        remote_host(
+            "devhost",
+            "daemon-B",
+            vec![session("dup", "/p/b", SessionState::Waiting, 1)],
+        ),
+    ]);
+
+    let first = next_waiting(&tree, None).expect("some waiting");
+    let second = next_waiting(&tree, Some(&first)).expect("a distinct second");
+    // Same label, same session id — yet distinct targets (different host_id).
+    assert_eq!(first.host_label, "devhost");
+    assert_eq!(second.host_label, "devhost");
+    assert_eq!(first.session_id, "dup");
+    assert_eq!(second.session_id, "dup");
+    assert_ne!(
+        first.host_id, second.host_id,
+        "the two colliding-label hosts must not collapse into one"
+    );
+    assert_ne!(first, second, "the cycle visits both waiting agents");
+
+    // A third advance cycles back to the first (exactly two in the cycle).
+    let third = next_waiting(&tree, Some(&second)).expect("cycles back");
+    assert_eq!(
+        third, first,
+        "cycle length is exactly two, back to the first"
+    );
 }
 
 #[test]
@@ -254,6 +306,13 @@ fn next_waiting_from_stale_cursor_restarts_at_first() {
         vec![session("a", "/p/a", SessionState::Waiting, 1)],
     )]);
     // A cursor pointing at a session that is no longer waiting/present.
-    let got = next_waiting(&tree, Some(("h1", "gone")));
-    assert_eq!(got, Some(("h1".to_string(), "a".to_string())));
+    let stale = WaitingTarget {
+        host_label: "h1".to_string(),
+        host_id: None,
+        is_local: false,
+        session_id: "gone".to_string(),
+    };
+    let got = next_waiting(&tree, Some(&stale)).expect("restarts at first");
+    assert_eq!(got.host_label, "h1");
+    assert_eq!(got.session_id, "a");
 }
