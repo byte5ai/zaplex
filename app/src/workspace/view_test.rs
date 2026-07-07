@@ -2398,3 +2398,41 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
 
 // Deleted: test_open_ambient_agent_setup_guide_action_opens_management_view_and_is_idempotent
 // agent_management_view field along with entire agent setup guide functionality deleted in Phase 2c.
+
+/// Spawn-card host id-space reconciliation (Codex review, wrong-host-launch
+/// regression): a Conductor `+` scopes by the *daemon* `HostId`, but the spawn
+/// card resolves against SSH `node.id`s. `node_for_daemon_host_in` must invert
+/// the live daemon↔node association so the scoped launch preselects the right
+/// SSH node — even when two hosts share a display label — and must yield `None`
+/// for a daemon that no longer maps to a live node (so the caller falls back to
+/// name matching rather than silently launching on Local).
+#[cfg(all(unix, feature = "local_tty"))]
+#[test]
+fn node_for_daemon_host_in_translates_daemon_id_to_ssh_node() {
+    // Two SSH nodes share the display label "devbox" but host distinct daemons.
+    // Translating by the *daemon* id must land on the matching node, not the
+    // first same-labelled one.
+    let assocs = || {
+        vec![
+            ("node-1", "daemon-a".to_string()),
+            ("node-2", "daemon-b".to_string()),
+        ]
+    };
+
+    assert_eq!(
+        super::node_for_daemon_host_in("daemon-b", assocs()),
+        Some("node-2".to_string()),
+        "daemon-b must translate to its own SSH node, not the first same-named one",
+    );
+    assert_eq!(
+        super::node_for_daemon_host_in("daemon-a", assocs()),
+        Some("node-1".to_string()),
+    );
+
+    // An untranslatable daemon id (session since dropped) yields None, so the
+    // caller keeps the host name and resolution falls back to name — never Local.
+    assert_eq!(
+        super::node_for_daemon_host_in("daemon-gone", assocs()),
+        None
+    );
+}

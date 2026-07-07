@@ -879,6 +879,25 @@ struct RemoteSftpEdit {
     resave_pending: bool,
 }
 
+/// Pure inversion of the daemon↔node association: find the SSH `node_id` whose
+/// live daemon carries `daemon_host_id`, given `(node_id, daemon_host_id)`
+/// pairs. Split from [`WorkspaceView::node_for_daemon_host`] so the id-space
+/// translation is unit-testable without live [`RemoteServerManager`] state.
+///
+/// Same-named hosts are disambiguated correctly here: the daemon `HostId` is
+/// unique per connected host even when SSH labels collide, so matching by it
+/// (not by label) picks the right node.
+#[cfg(all(unix, feature = "local_tty"))]
+fn node_for_daemon_host_in<'a>(
+    daemon_host_id: &str,
+    assocs: impl IntoIterator<Item = (&'a str, String)>,
+) -> Option<String> {
+    assocs
+        .into_iter()
+        .find(|(_, host_id)| host_id == daemon_host_id)
+        .map(|(node_id, _)| node_id.to_string())
+}
+
 /// A unique local directory for one classic-SSH remote-edit working copy. The
 /// original filename is placed *inside* it (kept intact for the editor's
 /// language detection + tab title). Lives under the OS temp dir; leftovers are
@@ -6713,6 +6732,53 @@ impl Workspace {
         // session is not usable and we fall back rather than open a dead editor.
         manager.client_for_host(host_id)?;
         Some(host_id.clone())
+    }
+
+    /// Invert [`Self::daemon_host_for_node`]: given a daemon `HostId` (the
+    /// inventory identity the Conductor scopes a launch by), find the SSH
+    /// `node_id` whose *live* daemon carries that id.
+    ///
+    /// Two id spaces meet at the spawn-card boundary: the Conductor's Agent
+    /// inventory keys hosts by the opaque daemon `HostId`, while the spawn
+    /// card's host list (and every downstream `LaunchAgent { node_id }`) is
+    /// keyed by the SSH `node.id`. This bridges them so a remote-scoped `+`
+    /// preselects — and launches on — the right SSH node instead of silently
+    /// falling through to Local. Reuses `daemon_host_for_node`, so only nodes
+    /// with a live, client-backed daemon session match; a dropped daemon
+    /// yields `None` and the caller falls back to name matching.
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn node_for_daemon_host(&self, daemon_host_id: &str, ctx: &AppContext) -> Option<String> {
+        let assocs = self.daemon_node_sessions.keys().filter_map(|node_id| {
+            self.daemon_host_for_node(node_id, ctx)
+                .map(|h| (node_id.as_str(), h.as_str().to_string()))
+        });
+        node_for_daemon_host_in(daemon_host_id, assocs)
+    }
+
+    /// Translate a Conductor-scoped daemon `HostId` to the SSH `node_id` the
+    /// spawn card resolves against, or `None` when there is nothing to translate
+    /// (a *local* `+`, no daemon id) or the daemon can no longer be resolved to a
+    /// live SSH node. In the latter case the caller keeps the host **name** so
+    /// resolution falls back to name matching rather than silently defaulting to
+    /// Local for a clearly remote-scoped open.
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn translate_scoped_daemon_host(
+        &self,
+        daemon_host_id: Option<&str>,
+        ctx: &AppContext,
+    ) -> Option<String> {
+        self.node_for_daemon_host(daemon_host_id?, ctx)
+    }
+
+    /// On platforms without daemon connections (no `local_tty` / non-unix) there
+    /// is nothing to translate; resolution relies on the host-name fallback.
+    #[cfg(not(all(unix, feature = "local_tty")))]
+    fn translate_scoped_daemon_host(
+        &self,
+        _daemon_host_id: Option<&str>,
+        _ctx: &AppContext,
+    ) -> Option<String> {
+        None
     }
 
     /// Opens a new terminal pane in the current tab, automatically runs the `ssh ...` command,
@@ -17488,11 +17554,23 @@ impl Workspace {
                 })
                 .collect();
 
+        // Reconcile the two host id spaces at the spawn-card boundary. The
+        // Conductor scopes a `+` by the Agent-inventory's *daemon* `HostId`, but
+        // `hosts` above (and every downstream `LaunchAgent { node_id }`) is keyed
+        // by the SSH `node.id`. Translate the daemon id to the SSH node that
+        // currently hosts that daemon so `resolve_scoped_host` matches by id.
+        //
+        // If the daemon id cannot be translated to a live SSH node (e.g. the
+        // daemon dropped since the inventory was folded), `scoped_host_id` is
+        // `None` and resolution falls back to the host *name* below — it must
+        // never silently default to Local for a clearly remote-scoped open.
+        let scoped_host_id = self.translate_scoped_daemon_host(host_id.as_deref(), &*ctx);
+
         let cfg = spawn_card::SpawnCardConfig {
             claude,
             codex,
             hosts,
-            scoped_host_id: host_id,
+            scoped_host_id,
             scoped_host_name: host,
             project,
         };

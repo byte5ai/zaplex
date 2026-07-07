@@ -68,14 +68,21 @@ pub struct SpawnCardConfig {
     pub claude: ProviderOptions,
     pub codex: ProviderOptions,
     pub hosts: Vec<HostOption>,
-    /// Pre-scoped host **id** (from a Conductor host/project-header `+`); `None`
-    /// = local or unknown id. This is the authoritative scoping key: same-named
-    /// hosts are disambiguated by id, so when present it resolves the scoped
-    /// host before [`Self::scoped_host_name`] is consulted.
+    /// Pre-scoped host **id** in the same id space as [`HostOption::id`] — the
+    /// SSH `node.id`. The Conductor scopes by the Agent-inventory's *daemon*
+    /// `HostId`, so the workspace translates that to the hosting SSH node before
+    /// filling this field (see `WorkspaceView::translate_scoped_daemon_host`);
+    /// the two id spaces must not be compared directly. `None` = local, or a
+    /// remote daemon that could not be translated to a live SSH node. This is
+    /// the authoritative scoping key: same-named hosts are disambiguated by id,
+    /// so when present it resolves the scoped host before
+    /// [`Self::scoped_host_name`] is consulted.
     pub scoped_host_id: Option<String>,
     /// Pre-scoped host **name/label** (from a Conductor host/project-header `+`);
-    /// `None` = local. Only used as the resolution fallback when
-    /// [`Self::scoped_host_id`] is absent (e.g. a source without a stable id).
+    /// `None` = local. Used as the resolution fallback when
+    /// [`Self::scoped_host_id`] is absent — including the remote case where the
+    /// daemon id could not be translated to a live SSH node, so a remote-scoped
+    /// open still lands on the right-named host rather than silently on Local.
     pub scoped_host_name: Option<String>,
     /// Pre-scoped project dir (from a Conductor project-header `+` / context).
     pub project: Option<PathBuf>,
@@ -782,6 +789,37 @@ mod tests {
         assert_eq!(
             resolve_scoped_host(&hosts, Some("id-missing"), Some("devbox")),
             HostChoice::Local,
+        );
+    }
+
+    /// End-to-end contract at the spawn-card boundary (Codex review regression):
+    /// the Conductor scopes by the *daemon* `HostId`, which the workspace
+    /// translates to the SSH `node.id` before it reaches `resolve_scoped_host`.
+    ///
+    /// * A successfully translated daemon id arrives here already as the SSH
+    ///   node id, so it resolves to the matching remote node — past a same-named
+    ///   sibling (a name-only match would have picked the wrong one).
+    /// * An untranslatable daemon id arrives as `scoped_id = None` with the host
+    ///   name still set, so resolution falls back to name — a remote node, NOT
+    ///   Local.
+    #[test]
+    fn daemon_scoped_open_resolves_translated_node_and_falls_back_to_name() {
+        // `hosts` is keyed by SSH node.id; two nodes share the "devbox" label.
+        let hosts = vec![host("node-1", "devbox"), host("node-2", "devbox")];
+
+        // Translation succeeded: the workspace passes SSH node id "node-2"
+        // (translated from the second host's daemon id). Must resolve to it,
+        // not the first same-named node.
+        assert_eq!(
+            resolve_scoped_host(&hosts, Some("node-2"), Some("devbox")),
+            HostChoice::Remote(1),
+        );
+
+        // Translation failed (daemon dropped): scoped id is None but the name
+        // survives. Resolution falls back to name — a remote node, never Local.
+        assert_eq!(
+            resolve_scoped_host(&hosts, None, Some("devbox")),
+            HostChoice::Remote(0),
         );
     }
 }
