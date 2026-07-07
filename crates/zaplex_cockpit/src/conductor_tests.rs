@@ -36,6 +36,7 @@ fn session(id: &str, cwd: &str, state: SessionState, activity: i64) -> SessionSn
 fn host(name: &str, sessions: Vec<SessionSnapshot>) -> HostSessions {
     HostSessions {
         host: name.into(),
+        is_local: false,
         sessions,
     }
 }

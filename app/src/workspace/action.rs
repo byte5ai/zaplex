@@ -793,6 +793,12 @@ pub enum WorkspaceAction {
     AttachFleetSession {
         host: String,
         session_id: String,
+        /// Whether `host` is *this* machine, taken from the inventory's explicit
+        /// [`zaplex_cockpit::HostNode::is_local`] marker — never re-derived from
+        /// `host` label equality. Drives local adopt-in-place vs. the remote
+        /// path, so a remote host whose label collides with the local hostname
+        /// can't be routed to a local adopt.
+        is_local: bool,
     },
     /// The `w`-jump: cycle to the next Waiting agent across the whole fleet (the
     /// Conductor's waiting-first order) and attach it. Cursor + resolution live
@@ -809,6 +815,12 @@ pub enum WorkspaceAction {
         host: String,
         session_id: String,
         pid: u32,
+        /// Whether `host` is *this* machine, from the inventory's explicit
+        /// [`zaplex_cockpit::HostNode::is_local`] marker. Drives local
+        /// `libc::kill` vs. the daemon path — `pid` is host-local, so this
+        /// must never be re-derived from a label comparison (a colliding
+        /// remote label would send the signal to the wrong machine).
+        is_local: bool,
         /// Session row label (name — dir), for the toast.
         agent_label: String,
     },
@@ -821,6 +833,11 @@ pub enum WorkspaceAction {
         host: String,
         session_id: String,
         pid: u32,
+        /// Whether `host` is *this* machine, from the inventory's explicit
+        /// [`zaplex_cockpit::HostNode::is_local`] marker (see [`Self::StopAgent`]).
+        /// Threaded through the confirm dialog so the eventual SIGKILL routes
+        /// by locality, not by label.
+        is_local: bool,
         /// Session row label (name — dir), for the dialog's message.
         agent_label: String,
         project_name: String,

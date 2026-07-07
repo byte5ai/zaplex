@@ -274,7 +274,6 @@ impl CockpitPanel {
     fn render_conductor(
         &self,
         tree: &FleetTree,
-        local_label: &str,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         if tree.hosts.is_empty() {
@@ -310,7 +309,8 @@ impl CockpitPanel {
                 col = col.with_child(Self::text(host_summary(host), family, body, muted));
                 continue;
             }
-            let is_local = host.host == local_label;
+            // Locality from the inventory's explicit marker, not a label match.
+            let is_local = host.is_local;
             let mut host_header = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
@@ -436,6 +436,7 @@ impl CockpitPanel {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
                     session_id: session.session_id.clone(),
+                    is_local,
                 };
                 let attach = Hoverable::new(state, move |_mouse| info)
                     .with_cursor(Cursor::PointingHand)
@@ -573,8 +574,7 @@ impl View for CockpitPanel {
             // Glanceable Conductor: the unified cross-host inventory, waiting-first.
             let model = CockpitModel::as_ref(app);
             let inventory = model.inventory().clone();
-            let local_label = model.local_label().to_string();
-            if let Some(conductor) = self.render_conductor(&inventory, &local_label, appearance) {
+            if let Some(conductor) = self.render_conductor(&inventory, appearance) {
                 cards = cards.with_child(
                     Container::new(conductor)
                         .with_margin_bottom(CARD_SPACING * 2.0)

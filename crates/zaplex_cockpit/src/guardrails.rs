@@ -52,11 +52,18 @@ pub enum GuardrailTarget {
     Remote(String),
 }
 
-/// Decide which host executes a guardrail signal for `host_label` — the same
-/// rule the Conductor already uses to decide attach-in-place vs. remote
-/// (`CockpitModel::local_label`).
-pub fn guardrail_target(host_label: &str, local_label: &str) -> GuardrailTarget {
-    if host_label == local_label {
+/// Decide which host executes a guardrail signal, driven by the **explicit**
+/// local/remote marker carried through the inventory ([`crate::fleet::HostNode::is_local`]),
+/// NOT by comparing display labels.
+///
+/// PIDs are host-local: a remote daemon whose label collides with the local
+/// hostname (SSH alias, or a remote `gethostname()` matching ours) must still
+/// route over the daemon — routing it `Local` would send `SIGKILL`/`SIGINT` to
+/// a same-numbered, unrelated *local* process. So locality comes from
+/// `is_local` (set once at fold time from which contribution is this machine's),
+/// and the label is only carried along in `Remote` for the daemon lookup.
+pub fn guardrail_target(is_local: bool, host_label: &str) -> GuardrailTarget {
+    if is_local {
         GuardrailTarget::Local
     } else {
         GuardrailTarget::Remote(host_label.to_string())
