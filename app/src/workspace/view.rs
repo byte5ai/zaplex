@@ -1007,6 +1007,11 @@ pub struct Workspace {
     codex_modal: ViewHandle<CodexModal>,
     /// The Spawn-Karte: model + effort as a visible launch attribute.
     spawn_card: ViewHandle<SpawnCard>,
+    /// The review-loop git dialog (Agent-Cockpit step 6): the reused
+    /// commit / create-PR modal, opened for a Conductor session's repo so the
+    /// user commits or opens a PR on an agent's working changes without leaving
+    /// zaplex. `None` when no review commit/PR is in progress.
+    review_git_dialog: Option<ViewHandle<crate::code_review::git_dialog::GitDialog>>,
     /// The calm "Offene Punkte" attention inbox (fleet-wide waiting agents).
     attention_inbox: ViewHandle<AttentionInbox>,
     toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
@@ -3115,6 +3120,7 @@ impl Workspace {
             zap_launch_modal: zap_launch_view,
             codex_modal,
             spawn_card,
+            review_git_dialog: None,
             attention_inbox,
             lightbox_view: None,
             hoa_onboarding_flow: None,
@@ -4317,6 +4323,158 @@ impl Workspace {
             self.watched_transcripts.insert(tmp.clone(), path);
         }
         self.add_tab_for_code_file(tmp, None, ctx);
+    }
+
+    /// Open a session's **review** view (`ReviewSession`, cockpit "◈ review"
+    /// verb, step 6): read the repo's working changes off-thread (`git diff
+    /// HEAD` + untracked), render them to Markdown, write a temp file, and open
+    /// it read-only in a code/text pane — the exact mechanism
+    /// [`Self::view_transcript`] uses. An empty change set renders a calm "no
+    /// changes" state; a write failure raises a toast rather than a blank pane.
+    fn review_session(
+        &mut self,
+        project_root: &Path,
+        project_name: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let root = project_root.to_path_buf();
+        let root_str = root.to_string_lossy().into_owned();
+        let name = project_name.to_string();
+        ctx.spawn(
+            async move {
+                let branch = crate::util::git::detect_current_branch_display(&root)
+                    .await
+                    .unwrap_or_default();
+                let (diff, untracked) = crate::util::git::get_review_working_changes(&root).await;
+                (root_str, name, branch, diff, untracked)
+            },
+            |me, (root_str, name, branch, diff, untracked), ctx| {
+                let changes = zaplex_cockpit::WorkingChanges { diff, untracked };
+                // Preview the exact commit command the "commit" verb would run,
+                // with a placeholder message (github_flows ethos: show it).
+                let preview =
+                    zaplex_cockpit::git_commit_all_cmd(&root_str, "<your commit message>");
+                let markdown = zaplex_cockpit::render_review_markdown(
+                    &name,
+                    branch.trim(),
+                    &changes,
+                    &preview,
+                );
+                // Stable temp name per repo (re-reviewing overwrites, no clutter).
+                let slug: String = name
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                    .collect();
+                let tmp = std::env::temp_dir().join(format!("zaplex-review-{slug}.md"));
+                if let Err(e) = std::fs::write(&tmp, markdown) {
+                    me.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!("Could not open review: {e}")),
+                            ctx,
+                        );
+                    });
+                    return;
+                }
+                me.add_tab_for_code_file(tmp, None, ctx);
+            },
+        );
+    }
+
+    /// Open the reused git dialog for an agent's reviewed changes (cockpit review
+    /// "commit" / "PR" verbs, step 6). `is_pr` selects create-PR mode (push +
+    /// `gh pr create`) over commit mode (message editor + `git add -A && git
+    /// commit`, with the chained commit-and-PR intent when off the main branch).
+    /// Branch / upstream / base are resolved off-thread first so the dialog opens
+    /// fully configured; a non-repo or (for PR) main-branch target raises a toast
+    /// instead of opening a dialog that would only fail.
+    fn open_review_git_dialog(
+        &mut self,
+        project_root: &Path,
+        is_pr: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::code_review::git_dialog::{GitDialog, GitDialogEvent};
+        if self.review_git_dialog.is_some() {
+            return;
+        }
+        let root = project_root.to_path_buf();
+        ctx.spawn(
+            async move {
+                let branch = crate::util::git::detect_current_branch(&root)
+                    .await
+                    .unwrap_or_default();
+                let has_upstream = crate::util::git::run_git_command(
+                    &root,
+                    &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                )
+                .await
+                .is_ok();
+                let on_main = matches!(branch.trim(), "main" | "master");
+                let base = crate::util::git::detect_main_branch(&root)
+                    .await
+                    .ok()
+                    .map(|b| b.trim().to_string());
+                (root, branch, has_upstream, on_main, base)
+            },
+            move |me, (root, branch, has_upstream, on_main, base), ctx| {
+                if me.review_git_dialog.is_some() {
+                    return;
+                }
+                let toast_err = |me: &mut Self, ctx: &mut ViewContext<Self>, msg: String| {
+                    me.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(DismissibleToast::error(msg), ctx);
+                    });
+                };
+                if branch.trim().is_empty() {
+                    toast_err(
+                        me,
+                        ctx,
+                        "Not a git repository — nothing to commit.".to_string(),
+                    );
+                    return;
+                }
+                let dialog = if is_pr {
+                    if on_main {
+                        toast_err(
+                            me,
+                            ctx,
+                            format!(
+                                "On “{}” — create a feature branch before opening a PR.",
+                                branch.trim()
+                            ),
+                        );
+                        return;
+                    }
+                    let branch_name = branch.clone();
+                    ctx.add_typed_action_view(move |ctx| {
+                        GitDialog::new_for_pr(root, branch_name, base, ctx)
+                    })
+                } else {
+                    // Offer the chained "commit and create PR" intent only off the
+                    // main branch (a PR from main is invalid).
+                    let allow_create_pr = !on_main;
+                    let branch_name = branch.clone();
+                    ctx.add_typed_action_view(move |ctx| {
+                        GitDialog::new_for_commit(
+                            root,
+                            branch_name,
+                            allow_create_pr,
+                            has_upstream,
+                            ctx,
+                        )
+                    })
+                };
+                ctx.subscribe_to_view(&dialog, |me, _, event, ctx| match event {
+                    GitDialogEvent::Completed | GitDialogEvent::Cancelled => {
+                        me.review_git_dialog = None;
+                        ctx.notify();
+                    }
+                });
+                me.review_git_dialog = Some(dialog.clone());
+                ctx.focus(&dialog);
+                ctx.notify();
+            },
+        );
     }
 
     /// Re-render every watched transcript from its source `.jsonl` and reload the
@@ -20801,6 +20959,18 @@ impl TypedActionView for Workspace {
             } => {
                 self.view_transcript(session_id, config_dir, cwd, *watch, ctx);
             }
+            ReviewSession {
+                project_root,
+                project_name,
+            } => {
+                self.review_session(project_root, project_name, ctx);
+            }
+            CommitReviewChanges { project_root } => {
+                self.open_review_git_dialog(project_root, false, ctx);
+            }
+            CreateReviewPr { project_root } => {
+                self.open_review_git_dialog(project_root, true, ctx);
+            }
             OpenAttentionInbox => {
                 self.open_attention_inbox(ctx);
             }
@@ -23213,6 +23383,12 @@ impl View for Workspace {
 
         if self.current_workspace_state.is_spawn_card_open {
             stack.add_child(ChildView::new(&self.spawn_card).finish());
+        }
+
+        // The review-loop commit / PR dialog (step 6), rendered like the other
+        // modal overlays. Present only while a review commit/PR is in progress.
+        if let Some(review_git_dialog) = &self.review_git_dialog {
+            stack.add_child(ChildView::new(review_git_dialog).finish());
         }
 
         if self.current_workspace_state.is_attention_inbox_open {

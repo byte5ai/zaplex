@@ -683,6 +683,32 @@ pub enum WorkspaceAction {
         /// cockpit reconcile re-renders + reloads it. `false` = one-shot open.
         watch: bool,
     },
+    /// Open a session's **review** view (cockpit "◈ review" verb, step 6): read
+    /// the working changes of the session's repo (`git diff HEAD` + untracked),
+    /// render them to Markdown, and open them read-only in a code/text pane —
+    /// the same pane-opening mechanism [`ViewTranscript`] uses. An empty change
+    /// set opens a calm "no changes" state rather than a blank/erroring pane.
+    ReviewSession {
+        /// Git root of the reviewed session (`SessionSnapshot::project_root`).
+        project_root: PathBuf,
+        /// Human repo label, for the pane title.
+        project_name: String,
+    },
+    /// Commit an agent's reviewed working changes (cockpit review "commit" verb):
+    /// open the reused commit dialog for `project_root` (message editor + the
+    /// `git add -A && git commit` / optional chained push+PR the code-review flow
+    /// already runs). Never stages/commits without the user confirming in the
+    /// dialog.
+    CommitReviewChanges {
+        project_root: PathBuf,
+    },
+    /// Open a PR for an agent's reviewed changes (cockpit review "PR" verb):
+    /// open the reused create-PR dialog for `project_root` (push the current
+    /// branch + `gh pr create`). Requires an `origin` remote; the dialog reports
+    /// missing-remote / auth failures as a toast rather than failing silently.
+    CreateReviewPr {
+        project_root: PathBuf,
+    },
     /// Open the calm "Offene Punkte" attention inbox: the in-app, fleet-wide
     /// list of agents in [`SessionState::Waiting`], grouped waiting-first.
     /// Selecting a row jumps to that agent (reuses [`AdoptAgentSession`]). The
@@ -987,6 +1013,9 @@ impl WorkspaceAction {
             | AdoptAgentSession { .. }
             | OpenAttentionInbox
             | ViewTranscript { .. }
+            | ReviewSession { .. }
+            | CommitReviewChanges { .. }
+            | CreateReviewPr { .. }
             | LaunchAgent { .. }
             | OpenSpawnCard { .. }
             | OpenFileInEditor { .. }

@@ -20,6 +20,7 @@ pub mod oauth;
 pub mod overrides;
 pub mod pricing;
 pub mod project;
+pub mod review;
 pub mod routing;
 pub mod sessions;
 pub mod transcript;
@@ -41,6 +42,7 @@ pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
 pub use overrides::{AccountOverride, AccountOverrides};
 pub use pricing::{ModelPrice, PricingTable};
 pub use project::{resolve_project, ResolvedProject};
+pub use review::{git_commit_all_cmd, git_diff_cmd, render_review_markdown, WorkingChanges};
 pub use routing::{is_over_budget, pick_freest, rank_by_freeness, OVER_BUDGET_HEAT};
 pub use transcript::{
     format_transcript_markdown, parse_transcript, ToolCall, TranscriptTurn, TurnRole, TurnUsage,

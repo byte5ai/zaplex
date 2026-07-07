@@ -152,6 +152,39 @@ fn pr_merge_command_is_squash() {
     assert_eq!(gh_pr_merge_cmd(5, None), "gh pr merge 5 --squash");
 }
 
+#[test]
+fn pr_create_command_quotes_and_flags() {
+    // Bare: no repo, no base → gh infers both from the cwd's remote.
+    assert_eq!(
+        gh_pr_create_cmd("Add review loop", "Body text", None, None),
+        "gh pr create --title 'Add review loop' --body 'Body text'"
+    );
+    // With an explicit base + repo.
+    assert_eq!(
+        gh_pr_create_cmd("t", "b", Some("main"), Some("o/r")),
+        "gh pr create -R o/r --base main --title t --body b"
+    );
+    // A blank/whitespace base is dropped (treated as "let gh decide").
+    assert_eq!(
+        gh_pr_create_cmd("t", "b", Some("   "), None),
+        "gh pr create --title t --body b"
+    );
+}
+
+#[test]
+fn pr_create_command_is_shell_safe() {
+    // A hostile title/body with quotes and metacharacters must be passed
+    // literally — never break out of the argument.
+    let cmd = gh_pr_create_cmd("t'; rm -rf /", "$(whoami)", Some("main"), None);
+    assert_eq!(
+        cmd,
+        "gh pr create --base main --title 't'\\''; rm -rf /' --body '$(whoami)'"
+    );
+    // The dangerous fragments are always quoted, never bare.
+    assert!(!cmd.contains(" rm -rf / "));
+    assert!(cmd.contains("'$(whoami)'"));
+}
+
 // ── flow prompts ───────────────────────────────────────────────────────────
 
 #[test]
