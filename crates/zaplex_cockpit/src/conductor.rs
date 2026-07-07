@@ -199,17 +199,50 @@ pub fn host_summary(host: &HostNode) -> String {
     s
 }
 
+/// A stable, host-identity-carrying pointer to one Waiting agent — the `w`-jump
+/// target and cursor. It keeps the display `host_label` for the attach dispatch,
+/// but **identity** is the stable `(is_local, host_id)` pair plus the
+/// host-scoped `session_id`, never the label. Two remote daemons can advertise
+/// the same label (SSH alias / matching `gethostname()`) and even share a
+/// host-scoped `session_id`, yet stay distinct here because their `host_id`
+/// differs — so the jump cycle visits both and never collapses them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WaitingTarget {
+    /// Human host label (for display + the attach dispatch), not for identity.
+    pub host_label: String,
+    /// Stable per-daemon host id: `None` for the local host, `Some(daemon host
+    /// id)` for a remote. Part of the identity key.
+    pub host_id: Option<String>,
+    /// `true` iff the target lives on this machine — part of the identity key
+    /// (the local host carries no `host_id`, so `is_local` disambiguates it).
+    pub is_local: bool,
+    /// The host-scoped session id (unique only within one host).
+    pub session_id: String,
+}
+
+impl WaitingTarget {
+    /// Same waiting agent? Compared by **stable** host identity `(is_local,
+    /// host_id)` + `session_id` — never the display label, so a label collision
+    /// between two remote daemons can't alias two distinct agents into one.
+    fn same_agent(&self, host: &HostNode, session: &SessionSnapshot) -> bool {
+        host.is_local == self.is_local
+            && host.host_id == self.host_id
+            && session.session_id == self.session_id
+    }
+}
+
 /// Every Waiting agent across the fleet, in the tree's canonical order (host,
 /// then project, then session — all already waiting-first sorted). Each entry is
-/// `(host, &session)`; identity is `(host, session_id)` because session ids are
-/// unique only within a host.
-pub fn waiting_sessions(tree: &FleetTree) -> Vec<(&str, &SessionSnapshot)> {
+/// `(&host, &session)` so callers can read the host's **stable** identity
+/// (`is_local`/`host_id`) alongside its display label; session identity is
+/// host-scoped (`session_id` is unique only within a host).
+pub fn waiting_sessions(tree: &FleetTree) -> Vec<(&HostNode, &SessionSnapshot)> {
     tree.hosts
         .iter()
         .flat_map(|h| {
             h.projects
                 .iter()
-                .flat_map(move |p| p.sessions.iter().map(move |s| (h.host.as_str(), s)))
+                .flat_map(move |p| p.sessions.iter().map(move |s| (h, s)))
         })
         .filter(|(_, s)| s.state == SessionState::Waiting)
         .collect()
@@ -218,23 +251,28 @@ pub fn waiting_sessions(tree: &FleetTree) -> Vec<(&str, &SessionSnapshot)> {
 /// The next Waiting agent across the whole fleet after `current`, cycling back
 /// to the first — the `w`-jump order. `current = None`, or a `current` that is
 /// no longer waiting / no longer present, starts at the first waiting agent.
-/// Returns owned `(host, session_id)`; `None` when nothing is waiting.
-pub fn next_waiting(tree: &FleetTree, current: Option<(&str, &str)>) -> Option<(String, String)> {
+///
+/// `current` and the returned [`WaitingTarget`] key on the **stable** host
+/// identity `(is_local, host_id)` + `session_id`, never the display label: two
+/// hosts sharing a label (and even a host-scoped `session_id`) stay distinct, so
+/// the cycle visits both. `None` when nothing is waiting.
+pub fn next_waiting(tree: &FleetTree, current: Option<&WaitingTarget>) -> Option<WaitingTarget> {
     let waiting = waiting_sessions(tree);
     if waiting.is_empty() {
         return None;
     }
-    let here = current.and_then(|(h, id)| {
-        waiting
-            .iter()
-            .position(|(wh, ws)| *wh == h && ws.session_id == id)
-    });
+    let here = current.and_then(|cur| waiting.iter().position(|(h, s)| cur.same_agent(h, s)));
     let next = match here {
         Some(i) => (i + 1) % waiting.len(),
         None => 0,
     };
     let (h, s) = waiting[next];
-    Some((h.to_string(), s.session_id.clone()))
+    Some(WaitingTarget {
+        host_label: h.host.clone(),
+        host_id: h.host_id.clone(),
+        is_local: h.is_local,
+        session_id: s.session_id.clone(),
+    })
 }
 
 #[cfg(test)]
