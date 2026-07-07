@@ -4,7 +4,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use crate::proto::{
     client_message, read_file_chunk_response, resolve_path_response, run_command_response,
     server_message, write_file_chunk_response, AgentSessionInfo, AgentSessionList, ClientMessage,
-    ErrorCode, FileSystemEntryKind, InitializeResponse, ReadFileChunkResponse,
+    ErrorCode, FileSystemEntryKind, HostExecResult, InitializeResponse, ReadFileChunkResponse,
     ReadFileChunkSuccess, ResolvePathResponse, ResolvePathSuccess, RunCommandResponse,
     RunCommandSuccess, ServerMessage, SessionAttached, SessionExited, SessionInfo, SessionList,
     SessionOpened, SessionOutput, SessionSize, WriteFileChunkResponse, WriteFileChunkSuccess,
@@ -745,4 +745,32 @@ async fn list_agent_sessions_round_trip() {
     assert_eq!(resp.sessions[1].state, "idle");
     assert_eq!(resp.sessions[1].provider, "codex");
     assert!(resp.sessions[1].effort.is_empty());
+}
+
+#[tokio::test]
+async fn host_exec_round_trip() {
+    // The session-less host-command path the cross-host guardrails use: the
+    // request carries just a command string; the response carries the captured
+    // output and exit code.
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        match &msg.message {
+            Some(client_message::Message::HostExec(req)) => {
+                assert_eq!(req.command, "kill -INT 4242");
+            }
+            other => panic!("expected HostExec, got {other:?}"),
+        }
+        server_message::Message::HostExecResult(HostExecResult {
+            stdout: b"done".to_vec(),
+            stderr: Vec::new(),
+            exit_code: Some(0),
+        })
+    });
+
+    let resp = client
+        .host_exec("kill -INT 4242".to_string())
+        .await
+        .unwrap();
+    assert_eq!(resp.stdout, b"done");
+    assert!(resp.stderr.is_empty());
+    assert_eq!(resp.exit_code, Some(0));
 }

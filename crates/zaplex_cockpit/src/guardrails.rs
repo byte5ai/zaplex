@@ -150,6 +150,17 @@ pub fn no_remote_connection_toast(session_label: &str, host: &str) -> String {
     )
 }
 
+/// Toast text when the target host's daemon is too old to run a session-less
+/// host command (no `host-exec` capability) — the honest degradation instead of
+/// a misleading "could not kill" failure. Distinct from a lost connection: the
+/// host is reachable, but its daemon predates the guardrail command path.
+pub fn remote_unsupported_toast(session_label: &str, host: &str) -> String {
+    format!(
+        "\u{201c}{session_label}\u{201d} is on {host}, whose daemon is too old for remote \
+         guardrails — update the zaplex daemon on that host, then retry."
+    )
+}
+
 /// Fleet-wide stop-all summary toast, given how many signals succeeded vs.
 /// failed (including unreachable remote hosts) — always reports the outcome,
 /// never silently completes.

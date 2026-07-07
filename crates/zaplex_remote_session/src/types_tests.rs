@@ -35,6 +35,13 @@ fn supported_features_advertises_agent_inventory_on_all_platforms() {
     assert!(has_feature(&supported_features(), FEATURE_AGENT_INVENTORY));
 }
 
+#[test]
+fn supported_features_advertises_host_exec_on_all_platforms() {
+    // Session-less host-exec runs in a forked subshell (no PTY), so it is
+    // advertised regardless of platform — the cross-host guardrails depend on it.
+    assert!(has_feature(&supported_features(), FEATURE_HOST_EXEC));
+}
+
 #[cfg(not(unix))]
 #[test]
 fn supported_features_omits_session_host_on_non_unix() {

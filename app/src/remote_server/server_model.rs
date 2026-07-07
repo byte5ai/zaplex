@@ -19,11 +19,11 @@ use warp_util::file::FileId;
 use super::proto::{
     client_message, delete_file_response, run_command_response, server_message,
     write_file_response, Abort, AgentSessionList, Authenticate, ClientMessage, DeleteFile,
-    DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse, FailedFileRead, FileContextProto,
-    FileOperationError, Initialize, InitializeResponse, NavigatedToDirectory,
-    NavigatedToDirectoryResponse, ReadFileContextResponse, RunCommandError, RunCommandErrorCode,
-    RunCommandRequest, RunCommandResponse, RunCommandSuccess, ServerMessage, SessionBootstrapped,
-    WriteFile, WriteFileResponse, WriteFileSuccess,
+    DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse, FailedFileRead,
+    FileContextProto, FileOperationError, HostExec, HostExecResult, Initialize, InitializeResponse,
+    NavigatedToDirectory, NavigatedToDirectoryResponse, ReadFileContextResponse, RunCommandError,
+    RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess, ServerMessage,
+    SessionBootstrapped, WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 use zaplex_remote_session::types::supported_features;
 #[cfg(unix)]
@@ -665,6 +665,9 @@ impl ServerModel {
             Some(client_message::Message::RunCommand(req)) => {
                 self.handle_run_command(req, &request_id, conn_id, ctx)
             }
+            Some(client_message::Message::HostExec(req)) => {
+                self.handle_host_exec(req, &request_id, conn_id, ctx)
+            }
             Some(client_message::Message::NavigatedToDirectory(msg)) => {
                 self.handle_navigated_to_directory(msg, &request_id, conn_id, ctx)
             }
@@ -1070,6 +1073,95 @@ impl ServerModel {
                     server_message::Message::RunCommandResponse(RunCommandResponse {
                         result: Some(result_oneof),
                     }),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Handles `HostExec` — a **session-less** one-shot host command. Unlike
+    /// [`Self::handle_run_command`], it does not look up a per-session
+    /// `LocalCommandExecutor`; it builds an ad-hoc executor over the daemon's
+    /// default user shell (`$SHELL`, falling back to `/bin/bash`) rooted at the
+    /// daemon's home directory and runs the command there. This is the path the
+    /// Agent-Cockpit cross-host guardrails use to deliver `kill -<SIG> <pid>` to
+    /// a remote agent when the app holds a daemon connection but no bound
+    /// interactive session on that host.
+    ///
+    /// On success returns a `HandlerOutcome::Async` resolving a `HostExecResult`;
+    /// a failure to even spawn the command surfaces as a top-level
+    /// `ErrorResponse` (mirrors the other async handlers) — never a silent
+    /// no-op.
+    fn handle_host_exec(
+        &mut self,
+        req: HostExec,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        log::info!(
+            "Handling HostExec (request_id={request_id}): command={:?}",
+            req.command,
+        );
+
+        // Resolve the daemon's default user shell — no bootstrapped session
+        // required. `LocalCommandExecutor::from_name` / bare fallback mirror how
+        // `handle_open_session` picks the host shell.
+        let shell_path = std::env::var("SHELL").ok().filter(|s| !s.is_empty());
+        let shell_type = shell_path
+            .as_deref()
+            .and_then(ShellType::from_name)
+            .unwrap_or(ShellType::Bash);
+        // Root the command at the daemon's home so relative paths resolve
+        // sensibly; a guardrail `kill` is cwd-independent, but this keeps the
+        // path honest for any other session-less use.
+        let cwd = dirs::home_dir().map(|p| p.to_string_lossy().into_owned());
+        let executor = LocalCommandExecutor::new(shell_path.map(PathBuf::from), shell_type);
+
+        let command = req.command;
+        let request_id_for_response = request_id.clone();
+        let conn_id_for_response = conn_id;
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                executor
+                    .execute_local_command(
+                        &command,
+                        cwd.as_deref(),
+                        None,
+                        ExecuteCommandOptions::default(),
+                    )
+                    .await
+            },
+            move |me, result, _ctx| {
+                let message = match result {
+                    Ok(output) => {
+                        log::info!(
+                            "HostExec completed (request_id={request_id_for_response}): \
+                             exit_code={:?}, stdout_len={}, stderr_len={}",
+                            output.exit_code,
+                            output.stdout.len(),
+                            output.stderr.len(),
+                        );
+                        server_message::Message::HostExecResult(HostExecResult {
+                            stdout: output.stdout.clone(),
+                            stderr: output.stderr.clone(),
+                            exit_code: output.exit_code.map(|c| c.value()),
+                        })
+                    }
+                    Err(e) => {
+                        log::warn!("HostExec failed (request_id={request_id_for_response}): {e}");
+                        server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::Internal.into(),
+                            message: format!("Failed to execute host command: {e}"),
+                        })
+                    }
+                };
+                me.send_server_message(
+                    Some(conn_id_for_response),
+                    Some(&request_id_for_response),
+                    message,
                 );
             },
             ctx,

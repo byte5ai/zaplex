@@ -24,10 +24,17 @@ use zaplex_cockpit::{
     apply_oauth_usage, build_snapshot, fold_inventory, AccountOverrides, CockpitSnapshot,
     FleetTree, PricingTable, Provider, SessionSnapshot,
 };
+// Cross-host daemon fold is a native-only concern: the `agent_session` module
+// (and the whole remote-daemon layer it lives in) is `#[cfg(not(wasm))]`, and a
+// WASM build has no daemon connections at all. On WASM the fold degrades to the
+// local tree, so these imports — used only by the remote-fetch block below —
+// are gated to match.
+#[cfg(not(target_family = "wasm"))]
 use zaplex_remote_session::types::{has_feature, FEATURE_AGENT_INVENTORY};
 
 use crate::cockpit::oauth::{self, CachedOauth};
 use crate::cockpit::settings::CockpitSettings;
+#[cfg(not(target_family = "wasm"))]
 use crate::remote_server::agent_session::proto_to_snapshot;
 use crate::remote_server::manager::{ConnectedDaemon, RemoteServerManager};
 
@@ -208,27 +215,42 @@ impl CockpitModel {
                 // tree. A daemon that doesn't advertise `agent-inventory` — or one
                 // whose request errors — contributes nothing and never fails the
                 // whole fold (honest degradation per host).
-                let mut remotes: Vec<(String, Vec<SessionSnapshot>)> =
-                    Vec::with_capacity(inputs.daemons.len());
-                for daemon in inputs.daemons {
-                    if !has_feature(&daemon.features, FEATURE_AGENT_INVENTORY) {
-                        continue;
-                    }
-                    match daemon.client.list_agent_sessions().await {
-                        Ok(list) => {
-                            let sessions: Vec<SessionSnapshot> =
-                                list.sessions.iter().map(proto_to_snapshot).collect();
-                            remotes.push((daemon.host_label, sessions));
+                //
+                // Native only: the daemon layer (and `list_agent_sessions` /
+                // `proto_to_snapshot`) is `#[cfg(not(wasm))]`. On WASM there are
+                // no daemon connections, so `remotes` is empty and the fold below
+                // degrades to the local tree alone.
+                #[cfg(not(target_family = "wasm"))]
+                let remotes: Vec<(String, Vec<SessionSnapshot>)> = {
+                    let mut remotes = Vec::with_capacity(inputs.daemons.len());
+                    for daemon in inputs.daemons {
+                        if !has_feature(&daemon.features, FEATURE_AGENT_INVENTORY) {
+                            continue;
                         }
-                        Err(e) => {
-                            log::warn!(
-                                "cockpit fold: list_agent_sessions failed for host {:?}: {e} \
-                                 — skipping this host",
-                                daemon.host_label
-                            );
+                        match daemon.client.list_agent_sessions().await {
+                            Ok(list) => {
+                                let sessions: Vec<SessionSnapshot> =
+                                    list.sessions.iter().map(proto_to_snapshot).collect();
+                                remotes.push((daemon.host_label, sessions));
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "cockpit fold: list_agent_sessions failed for host {:?}: {e} \
+                                     — skipping this host",
+                                    daemon.host_label
+                                );
+                            }
                         }
                     }
-                }
+                    remotes
+                };
+                #[cfg(target_family = "wasm")]
+                let remotes: Vec<(String, Vec<SessionSnapshot>)> = {
+                    // No daemon connections on WASM; the captured (empty) list is
+                    // consumed here so the fold is honestly local-only.
+                    let _ = inputs.daemons;
+                    Vec::new()
+                };
                 // Local contribution: every account's live sessions, tagged with
                 // the local host label.
                 let local: Vec<SessionSnapshot> = snapshot
