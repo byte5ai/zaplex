@@ -30,9 +30,10 @@ pub mod types;
 pub mod windows;
 
 pub use conductor::{
-    fleet_is_large, fleet_session_count, host_auto_collapsed, host_session_count, host_summary,
-    model_effort_label, next_waiting, session_attr_line, session_attrs, session_glyph,
-    waiting_sessions, SessionAttrs, WaitingTarget, GLYPH_IDLE, GLYPH_WAITING, GLYPH_WORKING,
+    fleet_is_large, fleet_session_count, host_auto_collapsed, host_ident, host_key,
+    host_session_count, host_summary, model_effort_label, next_waiting, session_attr_line,
+    session_attrs, session_glyph, waiting_sessions, SessionAttrs, WaitingTarget, GLYPH_IDLE,
+    GLYPH_WAITING, GLYPH_WORKING,
 };
 pub use fleet::{
     build_fleet_tree, fold_inventory, AgentSession, FleetTree, HostNode, HostSessions, ProjectNode,
