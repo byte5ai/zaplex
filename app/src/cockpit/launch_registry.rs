@@ -98,6 +98,50 @@ pub fn lookup(agent: CLIAgent, host: Option<&str>, cwd: Option<&Path>) -> Option
     store().lock().ok()?.get(&key(agent, host, cwd)).cloned()
 }
 
+/// Migrate every record keyed by host `old_host` over to host `new_host`,
+/// preserving the `(agent, cwd)` half of each key.
+///
+/// ## Why this exists — the launch/lookup id-space bridge
+/// A remote launch keys its record by the SSH `node_id` it knows at launch. The
+/// Conductor inventory, however, keys hosts by the daemon's stable `host_id`,
+/// which is only learned once the daemon finishes its initialize handshake —
+/// often *after* the launch fired (the spawn card can target a host that has no
+/// live daemon yet). Until then the record sits under `node_id` while
+/// [`crate::cockpit::session_effort`] looks it up under `host_id`, so the effort
+/// would be dropped. When the daemon connects and its `host_id` becomes known,
+/// the workspace calls this to move the record onto the same `host_id` the
+/// inventory uses, so record coordinates == lookup coordinates from then on. The
+/// inventory only surfaces a remote session once its daemon connects, so no
+/// lookup runs against the pre-migration `node_id` key before this fires.
+///
+/// A no-op when `old_host == new_host` (an already-connected host recorded under
+/// `host_id` directly). If a `new_host` key already exists for a given
+/// `(agent, cwd)` — a re-launch after reconnect — the migrated record replaces
+/// it (the migrated one is at least as recent).
+pub fn rehost(old_host: &str, new_host: &str) {
+    if old_host == new_host {
+        return;
+    }
+    if let Ok(mut map) = store().lock() {
+        let moved: Vec<(LaunchKey, LaunchRecord)> = map
+            .keys()
+            .filter(|(_, host, _)| host.as_deref() == Some(old_host))
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(|k| {
+                map.remove(&k).map(|mut rec| {
+                    rec.host = Some(new_host.to_owned());
+                    ((k.0, Some(new_host.to_owned()), k.2), rec)
+                })
+            })
+            .collect();
+        for (new_key, rec) in moved {
+            map.insert(new_key, rec);
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "launch_registry_tests.rs"]
 mod tests;

@@ -2903,6 +2903,26 @@ impl Workspace {
             },
         );
 
+        // When a remote daemon finishes its initialize handshake, migrate any
+        // launch-effort record that was keyed by this host's SSH `node_id` (the
+        // only id known when the spawn card fired on a not-yet-connected host)
+        // over to the daemon's stable `host_id` — the identity the Conductor
+        // inventory (and `session_effort`) look it up by. See
+        // `Self::rehost_launch_records_on_connect` and `launch_registry::rehost`.
+        #[cfg(all(unix, feature = "local_tty"))]
+        ctx.subscribe_to_model(
+            &crate::remote_server::manager::RemoteServerManager::handle(ctx),
+            |me, _handle, event, _ctx| {
+                if let RemoteServerManagerEvent::SessionConnected {
+                    session_id,
+                    host_id,
+                } = event
+                {
+                    me.rehost_launch_records_on_connect(*session_id, host_id.as_str());
+                }
+            },
+        );
+
         ctx.subscribe_to_model(&WindowSettings::handle(ctx), |me, _handle, event, ctx| {
             me.handle_window_settings_changed_event(event, ctx);
         });
@@ -4801,11 +4821,15 @@ impl Workspace {
         // Agent-Inventory carries for this host — the daemon's `host_id` — so the
         // Conductor's `session_effort` lookup (keyed by the inventory node's
         // `host_id`) actually hits for a remote launch. The launcher only knows
-        // the SSH `node_id`, so resolve it to the live daemon's `host_id` here;
-        // fall back to the raw `node_id` when the host has no daemon yet (the
-        // inventory only surfaces a remote session once its daemon connects, so
-        // an unresolved key simply yields the honest "effort unknown" until
-        // then). Local launches keep `host = None` unchanged.
+        // the SSH `node_id`, so resolve it to the live daemon's `host_id` here
+        // when the host already has a live daemon. When it does not yet (the
+        // spawn card can target a host with no connection), we record under the
+        // raw `node_id` and migrate the record to the daemon's `host_id` once its
+        // handshake completes (`rehost_launch_records_on_connect`, fired from the
+        // `SessionConnected` subscription). The inventory only surfaces a remote
+        // session once its daemon connects, so no `session_effort` lookup runs
+        // against the pre-migration `node_id` key. Local launches keep
+        // `host = None` unchanged.
         let registry_host: Option<String> = match node_id {
             None => None,
             Some(node) => {
@@ -4821,10 +4845,24 @@ impl Workspace {
                 }
             }
         };
+        // Record the *resolved* launch cwd, not the raw `cwd` argument, so it
+        // equals the `session.cwd` the snapshot later reports (which
+        // `session_effort` looks up by). A default-dir launch (`cwd == None`) on
+        // the **local** host lands in `$HOME` — the local PTY starts every shell
+        // there when no start dir is given (see `local_tty::unix::spawn`) — so we
+        // key the record by `$HOME` rather than `None`, which would never match
+        // the concrete home path the transcript records. A remote default-dir
+        // launch lands in the *remote* home, which we can't resolve locally, so
+        // it stays `None` (an honest residual: its effort remains unknown).
+        let record_cwd: Option<PathBuf> = match cwd {
+            Some(dir) => Some(dir.to_path_buf()),
+            None if node_id.is_none() => dirs::home_dir(),
+            None => None,
+        };
         crate::cockpit::launch_registry::record(
             agent,
             registry_host.as_deref(),
-            cwd,
+            record_cwd.as_deref(),
             model.map(str::to_owned),
             effort.map(str::to_owned),
         );
@@ -6745,6 +6783,27 @@ impl Workspace {
                 .map(|h| (node_id.as_str(), h.as_str().to_string()))
         });
         node_for_daemon_host_in(daemon_host_id, assocs)
+    }
+
+    /// A remote daemon just finished its handshake: migrate any launch-effort
+    /// record keyed by that host's SSH `node_id` onto the daemon's stable
+    /// `host_id`. A spawn-card launch on a host with no live daemon records under
+    /// the `node_id` (the only id known then); the Conductor inventory keys the
+    /// host by `host_id`, so `session_effort` would otherwise miss. This runs
+    /// exactly when both ids are known for the first time, so record coordinates
+    /// == lookup coordinates from the moment the session can appear in the
+    /// inventory. Idempotent: an already-`host_id`-keyed record (host connected at
+    /// launch) has no `node_id` entry to move, so this is a no-op for it.
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn rehost_launch_records_on_connect(&self, session_id: SessionId, host_id: &str) {
+        if let Some(node_id) = self
+            .daemon_node_sessions
+            .iter()
+            .find(|(_, sid)| **sid == session_id)
+            .map(|(node_id, _)| node_id.clone())
+        {
+            crate::cockpit::launch_registry::rehost(&node_id, host_id);
+        }
     }
 
     /// Translate a Conductor-scoped daemon `HostId` to the SSH `node_id` the
