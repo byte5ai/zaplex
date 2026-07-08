@@ -1932,6 +1932,7 @@ keybinding-desc-terminal-scroll-up-one-line = Scroll terminal output up one line
 keybinding-desc-terminal-scroll-down-one-line = Scroll terminal output down one line
 keybinding-desc-terminal-scroll-up-one-page = Scroll terminal output up one page
 keybinding-desc-terminal-scroll-down-one-page = Scroll terminal output down one page
+keybinding-desc-terminal-open-file-manager = Toggle this pane to the file manager (rooted at the pane's directory)
 keybinding-desc-terminal-scroll-to-top-of-block = Scroll to top of selected block
 keybinding-desc-terminal-scroll-to-bottom-of-block = Scroll to bottom of selected block
 keybinding-desc-terminal-select-all-blocks = Select all blocks

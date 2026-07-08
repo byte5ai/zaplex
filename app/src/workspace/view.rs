@@ -7891,18 +7891,6 @@ impl Workspace {
             );
         }
 
-        // 4c. File manager — make the FM pane-mode discoverable from the most-visible
-        // menu (not only the pane overflow menu, where users never found it). Opens the
-        // remote FM when a host pane is focused, else the local FM rooted at $HOME.
-        menu_items.push(
-            MenuItemFields::new(crate::t!("menu-pane-open-file-manager"))
-                .with_on_select_action(WorkspaceAction::OpenLocalFileManager {
-                    start_path: dirs::home_dir().unwrap_or_default(),
-                })
-                .with_icon(icons::Icon::Folder)
-                .into_item(),
-        );
-
         // 5. Coding Agents — only those installed and with tab_menu enabled appear in the menu
         let coding_agent_count = {
             let start_len = menu_items.len();

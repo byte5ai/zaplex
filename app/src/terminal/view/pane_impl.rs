@@ -330,6 +330,10 @@ impl TerminalView {
         if let Some(sharing) = sharing_element {
             right_row.add_child(sharing);
         }
+        // FM design §7: a visible "toggle to file manager" icon on the pane header,
+        // beside the sharing/overflow/close controls. (Universal fallback = the
+        // cmd-shift-E hotkey, which also works on a lone pane with no header.)
+        right_row.add_child(self.render_open_file_manager_button(app));
         let show_close_button = self
             .focus_handle
             .as_ref()
@@ -345,7 +349,8 @@ impl TerminalView {
         );
         let icon_button_count = show_close_button as u32
             + header_ctx.has_overflow_items as u32
-            + has_sharing_element as u32;
+            + has_sharing_element as u32
+            + 1; // the always-present "toggle to file manager" button
 
         let min_width = header_edge_min_width(icon_button_count);
         (right_row.finish(), min_width)
@@ -533,6 +538,38 @@ impl TerminalView {
         .on_click(|ctx, _, _| {
             ctx.dispatch_typed_action::<PaneHeaderAction<TerminalAction, TerminalAction>>(
                 PaneHeaderAction::CustomAction(TerminalAction::CancelAmbientAgentTask),
+            );
+        })
+        .finish()
+    }
+
+    /// Render the pane-header "toggle to file manager" icon (FM design §7): flips
+    /// this terminal pane into the file manager in place, rooted at the pane's cwd.
+    /// Shown wherever the pane header renders (splits / shared sessions); the
+    /// universal affordance is the `cmd-shift-E` hotkey, which also works on a lone
+    /// pane where no header is rendered.
+    fn render_open_file_manager_button(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let ui_builder = appearance.ui_builder().clone();
+
+        icon_button_with_color(
+            appearance,
+            icons::Icon::Folder,
+            false, /* active */
+            self.open_file_manager_mouse_state.clone(),
+            blended_colors::text_sub(theme, theme.background()).into(),
+        )
+        .with_tooltip(move || {
+            ui_builder
+                .tool_tip(crate::t!("menu-pane-open-file-manager"))
+                .build()
+                .finish()
+        })
+        .build()
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action::<PaneHeaderAction<TerminalAction, TerminalAction>>(
+                PaneHeaderAction::CustomAction(TerminalAction::OpenFileManagerHere),
             );
         })
         .finish()

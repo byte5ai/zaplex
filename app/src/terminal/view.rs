@@ -2656,6 +2656,9 @@ pub struct TerminalView {
     /// Mouse state handle for the ambient agent cancel button in the pane header.
     ambient_agent_cancel_mouse_state: warpui::elements::MouseStateHandle,
 
+    /// Mouse state handle for the "toggle to file manager" button in the pane header.
+    open_file_manager_mouse_state: warpui::elements::MouseStateHandle,
+
     /// Weak handle to the [`PaneStack`] this view is part of, allowing push/pop operations.
     pane_stack: Option<WeakModelHandle<crate::pane_group::pane::PaneStack<Self>>>,
 
@@ -3953,6 +3956,7 @@ impl TerminalView {
             is_using_conversation_for_pane_header_title: false,
             ambient_agent_view_model,
             ambient_agent_cancel_mouse_state: Default::default(),
+            open_file_manager_mouse_state: Default::default(),
 
             is_pending_aws_login: false,
             manual_pty_shutdown_requested: false,
