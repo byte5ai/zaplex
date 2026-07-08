@@ -653,7 +653,7 @@ async fn byop_required_response_stream(
     log::debug!("No BYOP provider selected for Zaplex agent request");
     let error_stream = futures::stream::once(async {
         Err(Arc::new(AIApiError::Other(anyhow!(
-            "Zaplex requires a configured BYOP provider in Settings"
+            "Zaplex's in-app agent needs a model provider. Add one under Settings → Agents → Providers. (Claude Code / Codex run as their own CLI agents and don't need this.)"
         ))))
     })
     .take_until(cancellation_rx);

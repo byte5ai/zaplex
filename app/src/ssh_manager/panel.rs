@@ -2199,9 +2199,12 @@ impl SshManagerPanel {
                 Text::new_inline(
                     "⚡".to_string(),
                     appearance.ui_font_family(),
-                    appearance.ui_font_subheading(),
+                    // Quiet + smaller than the old bright-accent, subheading-sized mark,
+                    // which read as loud/noisy. A muted body-size glyph is a calm
+                    // "resilient host" indicator, not a shout.
+                    appearance.ui_font_body(),
                 )
-                .with_color(theme.accent().into_solid())
+                .with_color(theme.sub_text_color(theme.background()).into_solid())
                 .finish(),
             );
         }

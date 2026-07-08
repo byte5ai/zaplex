@@ -52,6 +52,9 @@ pub struct CockpitPanel {
     /// `host_ident\0id`). The sidebar is the glance surface, so it carries only the
     /// review entry point; the full commit/PR cluster lives on the main pane.
     conductor_review_states: HashMap<String, MouseStateHandle>,
+    /// Hover state per account card (key = account `key`). The whole card is a
+    /// click target that opens the roomy dashboard pane.
+    card_states: HashMap<String, MouseStateHandle>,
 }
 
 impl CockpitPanel {
@@ -69,6 +72,7 @@ impl CockpitPanel {
             expand_btn: MouseStateHandle::default(),
             conductor_row_states: HashMap::new(),
             conductor_review_states: HashMap::new(),
+            card_states: HashMap::new(),
         };
         me.sync_conductor_states(ctx);
         me
@@ -94,6 +98,18 @@ impl CockpitPanel {
         for key in live {
             self.conductor_row_states.entry(key.clone()).or_default();
             self.conductor_review_states.entry(key).or_default();
+        }
+        // Card hover handles, keyed by account `key` (one stable handle per card
+        // across renders); drop handles of accounts that disappeared.
+        let acct_keys: std::collections::HashSet<String> = CockpitModel::as_ref(ctx)
+            .snapshot()
+            .accounts
+            .iter()
+            .map(|a| a.account.key.clone())
+            .collect();
+        self.card_states.retain(|k, _| acct_keys.contains(k));
+        for key in acct_keys {
+            self.card_states.entry(key).or_default();
         }
     }
 
@@ -253,11 +269,23 @@ impl CockpitPanel {
             col = col.with_child(Self::text(reset_line, family, body, muted));
         }
 
-        Container::new(col.finish())
+        let card = Container::new(col.finish())
             .with_uniform_padding(CARD_PADDING)
             .with_margin_bottom(CARD_SPACING)
             .with_background(internal_colors::fg_overlay_1(theme))
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.0)))
+            .finish();
+        // The whole card is a click target → opens the roomy dashboard pane (same
+        // action as the ⤢ expand button). Previously the card looked interactive but
+        // did nothing on click.
+        let handle = self
+            .card_states
+            .get(&acct.account.key)
+            .cloned()
+            .unwrap_or_default();
+        Hoverable::new(handle, move |_mouse| card)
+            .with_cursor(warpui::platform::Cursor::PointingHand)
+            .on_click(|ctx, _, _| ctx.dispatch_typed_action(CockpitPanelAction::OpenDashboardPane))
             .finish()
     }
 
@@ -508,14 +536,16 @@ impl CockpitPanel {
     fn render_expand_button(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
+        let sub = appearance.ui_font_subheading();
         let muted = theme.sub_text_color(theme.background()).into_solid();
+        // Labeled + larger than the old bare "⤢" glyph, which nobody recognized as
+        // the entry point to the full dashboard.
         Hoverable::new(self.expand_btn.clone(), move |mouse| {
-            let mut c = Container::new(Self::text("⤢".to_string(), family, body, muted))
-                .with_padding_left(6.0)
-                .with_padding_right(6.0)
-                .with_padding_top(2.0)
-                .with_padding_bottom(2.0)
+            let mut c = Container::new(Self::text("⤢  Dashboard".to_string(), family, sub, muted))
+                .with_padding_left(8.0)
+                .with_padding_right(8.0)
+                .with_padding_top(3.0)
+                .with_padding_bottom(3.0)
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
             if mouse.is_hovered() {
                 c = c.with_background(internal_colors::fg_overlay_2(theme));

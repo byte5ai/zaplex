@@ -7939,78 +7939,11 @@ impl Workspace {
                             .filter(|a| a.account.provider == provider)
                             .collect();
                         if !accounts.is_empty() {
-                            if let Some(freest) =
-                                zaplex_cockpit::pick_freest(provider, &snapshot.accounts)
-                            {
-                                let label = format!(
-                                    "⚡ {} on freest — {} ({})",
-                                    agent.display_name(),
-                                    freest.account.label,
-                                    zaplex_cockpit::heat_pct_label(freest.heat),
-                                );
-                                menu_items.push(
-                                    MenuItemFields::new(label)
-                                        .with_on_select_action(WorkspaceAction::LaunchAgent {
-                                            agent,
-                                            config_dir: Some(freest.account.config_dir.clone()),
-                                            cwd: None,
-                                            node_id: None,
-                                            model: None,
-                                            effort: None,
-                                        })
-                                        .with_icon(icon)
-                                        .into_item(),
-                                );
-                            }
-                            // Explicit per-account choices, when the user has more than one.
-                            if accounts.len() > 1 {
-                                for a in &accounts {
-                                    let label = format!(
-                                        "{} · {} ({})",
-                                        agent.display_name(),
-                                        a.account.label,
-                                        zaplex_cockpit::heat_pct_label(a.heat),
-                                    );
-                                    menu_items.push(
-                                        MenuItemFields::new(label)
-                                            .with_on_select_action(WorkspaceAction::LaunchAgent {
-                                                agent,
-                                                config_dir: Some(a.account.config_dir.clone()),
-                                                cwd: None,
-                                                node_id: None,
-                                                model: None,
-                                                effort: None,
-                                            })
-                                            .with_icon(icon)
-                                            .into_item(),
-                                    );
-                                }
-                            }
-                            // C4-4 — remote-host launch: run this agent on a saved
-                            // SSH host (its own default account, remote home dir).
-                            let hosts = warp_ssh_manager::with_conn(|c| {
-                                Ok(warp_ssh_manager::SshRepository::list_nodes(c)?)
-                            })
-                            .unwrap_or_default();
-                            for host in hosts.iter().filter(|n| {
-                                matches!(n.kind, warp_ssh_manager::types::NodeKind::Server)
-                            }) {
-                                let label =
-                                    format!("{} @ {}", agent.display_name(), host.name);
-                                menu_items.push(
-                                    MenuItemFields::new(label)
-                                        .with_on_select_action(WorkspaceAction::LaunchAgent {
-                                            agent,
-                                            config_dir: None,
-                                            cwd: None,
-                                            node_id: Some(host.id.clone()),
-                                            model: None,
-                                            effort: None,
-                                        })
-                                        .with_icon(icon)
-                                        .into_item(),
-                                );
-                            }
+                            // Launch-target permutations (⚡ on-freest / per-account /
+                            // @host) were intentionally removed from the "+" menu: they
+                            // were the unreadable "wall". Host + account are chosen in the
+                            // explicit spawn card ("✧ Neuer Agent…") — the single app-level
+                            // launch path (concept §8, C4 §3 #1: no implicit target).
                             // C5 — GitHub instance-flows: run a task on the
                             // freest Claude instance (Quick-Issue / PR-Review /
                             // Triage). Claude-only — they drive the `gh` CLI —
