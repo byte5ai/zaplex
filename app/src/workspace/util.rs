@@ -1,6 +1,3 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 use warpui::{
     elements::MouseStateHandle, AppContext, EntityId, SingletonEntity, ViewContext, ViewHandle,
@@ -46,8 +43,6 @@ pub(super) struct WorkspaceMouseStates {
     pub(super) title_bar_search_bar: MouseStateHandle,
     /// Hover state of the titlebar attention pulse (`✋ N`, jump-to-next-waiting).
     pub(super) attention_pulse: MouseStateHandle,
-    /// Per-agent titlebar button hover states, keyed by CLIAgent serialized name.
-    pub(super) cli_agent_titlebar_button_states: RefCell<HashMap<String, MouseStateHandle>>,
     #[cfg(target_family = "wasm")]
     pub(super) warp_logo: MouseStateHandle,
 }

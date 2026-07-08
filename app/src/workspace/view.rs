@@ -7891,6 +7891,18 @@ impl Workspace {
             );
         }
 
+        // 4c. File manager — make the FM pane-mode discoverable from the most-visible
+        // menu (not only the pane overflow menu, where users never found it). Opens the
+        // remote FM when a host pane is focused, else the local FM rooted at $HOME.
+        menu_items.push(
+            MenuItemFields::new(crate::t!("menu-pane-open-file-manager"))
+                .with_on_select_action(WorkspaceAction::OpenLocalFileManager {
+                    start_path: dirs::home_dir().unwrap_or_default(),
+                })
+                .with_icon(icons::Icon::Folder)
+                .into_item(),
+        );
+
         // 5. Coding Agents — only those installed and with tab_menu enabled appear in the menu
         let coding_agent_count = {
             let start_len = menu_items.len();
@@ -7908,10 +7920,17 @@ impl Workspace {
                     continue;
                 }
                 let icon = agent.icon().unwrap_or(icons::Icon::LayoutAlt01);
-                let item = MenuItemFields::new(agent.display_name())
-                    .with_on_select_action(WorkspaceAction::AddSpecificAgentTab(agent))
-                    .with_icon(icon);
-                menu_items.push(item.into_item());
+                // Plain quick-launch is a *blind* local launch (no host/dir/account
+                // choice). With the cockpit on, app-level launches must go through the
+                // explicit spawn card above ("✧ Neuer Agent…") — concept §8, C4 §3 #1:
+                // "app-level launch has NO implicit target". Keep the plain entry only
+                // as a fallback when the cockpit is off (no spawn card is offered then).
+                if !*crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+                    let item = MenuItemFields::new(agent.display_name())
+                        .with_on_select_action(WorkspaceAction::AddSpecificAgentTab(agent))
+                        .with_icon(icon);
+                    menu_items.push(item.into_item());
+                }
 
                 // C4 — subscription-routed launch: for agents with a subscription
                 // model (Claude/Codex), add "⚡ on freest" plus a per-account entry
@@ -18724,12 +18743,10 @@ impl Workspace {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_main_axis_size(MainAxisSize::Min);
 
-            // Attention pulse (✋ N) + agent quick-launch buttons (vertical mode)
+            // Attention pulse (✋ N) — the titlebar carries an ambient attention
+            // signal only, not blind per-agent launch buttons (concept §8; C4 §4).
             if let Some(pulse) = self.render_attention_pulse(appearance, ctx) {
                 right_controls.add_child(pulse);
-            }
-            for button in self.render_cli_agent_titlebar_buttons(appearance, ctx) {
-                right_controls.add_child(button);
             }
 
             self.add_configurable_right_side_tab_bar_controls(
@@ -18871,12 +18888,10 @@ impl Workspace {
         // Placeholder to make sure the flex row expands across the entire width of the app.
         tab_bar.add_child(Shrinkable::new(0.5, Empty::new().finish()).finish());
 
-        // Attention pulse (✋ N) + agent quick-launch buttons (horizontal mode)
+        // Attention pulse (✋ N) — ambient attention signal only; agent launches go
+        // through the explicit spawn card, never blind titlebar buttons (concept §8).
         if let Some(pulse) = self.render_attention_pulse(appearance, ctx) {
             tab_bar.add_child(pulse);
-        }
-        for button in self.render_cli_agent_titlebar_buttons(appearance, ctx) {
-            tab_bar.add_child(button);
         }
 
         self.add_configurable_right_side_tab_bar_controls(
@@ -19006,79 +19021,11 @@ impl Workspace {
         )
     }
 
-    /// Renders the quick-launch buttons on the title bar for installed CLI agents.
-    /// Only shows agents whose per-agent setting marks titlebar as true.
-    fn render_cli_agent_titlebar_buttons(
-        &self,
-        appearance: &Appearance,
-        ctx: &AppContext,
-    ) -> Vec<Box<dyn Element>> {
-        let ai_settings = AISettings::as_ref(ctx);
-        let install_model = CLIAgentInstallModel::as_ref(ctx);
-        let mut buttons = Vec::new();
-
-        for agent in enum_iterator::all::<CLIAgent>() {
-            if matches!(agent, CLIAgent::Unknown) || !install_model.is_cli_agent_installed(agent) {
-                continue;
-            }
-            if !ai_settings.is_cli_agent_titlebar_enabled(agent) {
-                continue;
-            }
-
-            let agent_key = agent.to_serialized_name();
-            let mut states = self
-                .mouse_states
-                .cli_agent_titlebar_button_states
-                .borrow_mut();
-            let handle = states
-                .entry(agent_key.clone())
-                .or_insert_with(MouseStateHandle::default)
-                .clone();
-
-            let icon = agent.icon().unwrap_or(icons::Icon::LayoutAlt01);
-            let theme = appearance.theme();
-            let icon_color = theme.sub_text_color(theme.background());
-            let button = icon_button_with_color(
-                appearance,
-                icon,
-                false,
-                handle.clone(),
-                icon_color,
-            )
-            .with_hovered_styles(UiComponentStyles {
-                font_color: Some(icon_color.into()),
-                background: Some(theme.surface_2().into()),
-                ..UiComponentStyles::default()
-            })
-            .with_clicked_styles(UiComponentStyles {
-                font_color: Some(icon_color.into()),
-                background: Some(theme.background().into()),
-                ..UiComponentStyles::default()
-            })
-            // Icon shrunk to 14×14: padding increased from 4 to 5.0, button outer frame stays 24×24
-            .with_style(UiComponentStyles::default()
-                .set_padding(Coords::uniform(5.0))
-            );
-
-            let agent_name = agent.display_name().to_string();
-            let button = button
-                .with_tooltip(
-                    self.render_tab_bar_icon_button_tooltip(appearance, agent_name, None),
-                )
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::AddSpecificAgentTab(agent));
-                });
-
-            buttons.push(
-                Container::new(button.finish())
-                    .with_margin_left(TAB_BAR_ICON_PADDING)
-                    .finish(),
-            );
-        }
-
-        buttons
-    }
+    // Retired: the blind per-agent titlebar quick-launch buttons. They dispatched
+    // `AddSpecificAgentTab` → a local launch with no host/dir/account choice, which
+    // the C4 launcher design explicitly de-listed (§4) and the master concept forbids
+    // (§8: "NOT dumb Claude/Codex buttons"). The titlebar now carries only
+    // `render_attention_pulse`; app-level launches go through the explicit spawn card.
 
     /// Renders the notifications mailbox button (extracted for reuse from
     /// add_right_side_tab_bar_controls).
