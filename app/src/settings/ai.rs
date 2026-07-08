@@ -1157,7 +1157,7 @@ impl PerAgentSettings {
     /// placement — host + working dir — governs e.g. CLAUDE.md discovery and
     /// must be an explicit choice). They return as the cockpit C4 launcher
     /// ("Launch <agent> on <host> in <dir>"); until then the buttons stay
-    /// de-listed but user-enableable in Settings → AI.
+    /// de-listed but user-enableable in Settings → Agents.
     pub fn default_for(_agent: CLIAgent) -> Self {
         Self {
             toolbar: true,
