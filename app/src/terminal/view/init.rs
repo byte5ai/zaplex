@@ -175,8 +175,9 @@ pub fn init(app: &mut AppContext) {
         // File manager pane-mode (FM design §7): toggle the focused terminal pane
         // into the file manager, rooted at the pane's cwd. This is the UNIVERSAL
         // affordance — it works even on a lone (non-split) pane, where the per-pane
-        // header (and thus a header icon) is not rendered. Reverse: F10 / the FM
-        // pane's close control revert to the terminal.
+        // header (and thus a header icon) is not rendered. The SAME chord closes the
+        // FM again (handled in the SFTP browser's key handler); F10 / the FM pane's
+        // close control also revert to the terminal.
         FixedBinding::new_per_platform(
             PerPlatformKeystroke {
                 mac: "cmd-shift-E",

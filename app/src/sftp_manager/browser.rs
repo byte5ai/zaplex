@@ -3461,6 +3461,26 @@ impl View for SftpBrowserView {
         // keystroke belongs to a shortcut elsewhere; let it propagate.
         let key_handler = EventHandler::new(positioned_content).on_keydown(
             move |ctx, _app, keystroke| {
+                // FM pane-mode toggle: the same chord that opened the file manager
+                // (cmd-shift-E on mac, ctrl-alt-e elsewhere) closes it back to the
+                // terminal. Handled here, *before* the modifier guard below, since it
+                // is a modifier chord the guard would otherwise propagate away. Key is
+                // matched case-insensitively (shift may fold "e"→"E" at runtime).
+                let is_e = keystroke.key.eq_ignore_ascii_case("e");
+                let toggle_back = (is_e
+                    && keystroke.cmd
+                    && keystroke.shift
+                    && !keystroke.ctrl
+                    && !keystroke.alt)
+                    || (is_e
+                        && keystroke.ctrl
+                        && keystroke.alt
+                        && !keystroke.cmd
+                        && !keystroke.shift);
+                if toggle_back {
+                    ctx.dispatch_typed_action(SftpBrowserAction::CloseFileManager);
+                    return DispatchEventResult::StopPropagation;
+                }
                 if keystroke.ctrl || keystroke.cmd || keystroke.alt || keystroke.meta {
                     return DispatchEventResult::PropagateToParent;
                 }
