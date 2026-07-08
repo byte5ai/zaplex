@@ -137,15 +137,19 @@ pub fn init(app: &mut AppContext) {
     )]);
 
     // Attention inbox ("Offene Punkte"): the calm, on-demand list of fleet-wide
-    // waiting agents. Editable so the user can rebind; default cmd/ctrl-shift-o.
+    // waiting agents. Editable so the user can rebind; default cmd/ctrl-shift-O.
+    // NB: shift + a letter must be spelled with the uppercase letter, otherwise
+    // `Keystroke::parse` panics under debug_assertions (keymap.rs) and the
+    // binding is silently never delivered in release (the OS sends the uppercase
+    // form for shift+letter).
     app.register_editable_bindings([EditableBinding::new(
         "workspace:open_attention_inbox",
         crate::t!("keybinding-desc-workspace-open-attention-inbox"),
         WorkspaceAction::OpenAttentionInbox,
     )
     .with_context_predicate(id!("Workspace"))
-    .with_mac_key_binding("cmd-shift-o")
-    .with_linux_or_windows_key_binding("ctrl-shift-o")]);
+    .with_mac_key_binding("cmd-shift-O")
+    .with_linux_or_windows_key_binding("ctrl-shift-O")]);
     app.register_fixed_bindings([
         FixedBinding::new(
             "escape",
