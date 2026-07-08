@@ -120,7 +120,8 @@ fn build_byop_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
 /// grayed out with `DisableReason::Unavailable`, unselectable, and prompts the user to configure it in settings.
 fn placeholder_llm_info() -> LLMInfo {
     LLMInfo {
-        display_name: "No custom providers configured — add one in Settings → AI".to_owned(),
+        display_name: "No custom providers configured — add one in Settings → Agents → Providers"
+            .to_owned(),
         base_model_name: "Unconfigured".to_owned(),
         id: ai::LLMId::from("byop-placeholder"),
         reasoning_level: None,

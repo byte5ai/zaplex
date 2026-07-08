@@ -21279,16 +21279,29 @@ impl TypedActionView for Workspace {
                     self.tabs.iter().map(|t| t.pane_group.id()).collect();
                 self.ssh_tab_nodes
                     .retain(|pg_id, _| live_pg_ids.contains(pg_id));
-                let active_pg = self.active_tab_pane_group();
+                // Owned handle (not the `&ViewHandle` borrow of `self`) so it can be
+                // moved into the deferred 'static closure below.
+                let active_pg = self.active_tab_pane_group().clone();
                 let target = match self.ssh_tab_nodes.get(&active_pg.id()).cloned() {
                     Some(node_id) => crate::pane_group::FileManagerTarget::Remote { node_id },
                     None => crate::pane_group::FileManagerTarget::Local {
                         start_path: start_path.clone(),
                     },
                 };
-                active_pg.update(ctx, |pane_group, ctx| {
-                    let pane_id = pane_group.focused_pane_id(ctx);
-                    pane_group.open_file_manager_in_place(pane_id, target, ctx);
+                // Defer the in-place swap to the next foreground tick. This action is
+                // dispatched synchronously from *inside* the invoking pane's own view
+                // update — the header FM-toggle button (PaneView<TerminalView> update)
+                // and the cmd-shift-E binding routed through the focused TerminalView.
+                // Replacing + refocusing that pane while it is still borrowed panics
+                // with "circular view reference" (replace_pane -> focus_pane_by_id ->
+                // update_session_visibility re-borrows the same view). Running it after
+                // the current update returns removes the re-entrancy; harmless for the
+                // overflow-menu path (already dispatched outside any update).
+                ctx.spawn(async move {}, move |_workspace, _, ctx| {
+                    active_pg.update(ctx, |pane_group, ctx| {
+                        let pane_id = pane_group.focused_pane_id(ctx);
+                        pane_group.open_file_manager_in_place(pane_id, target, ctx);
+                    });
                 });
             }
             AddTabWithShell { shell, source } => {

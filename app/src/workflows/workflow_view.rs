@@ -2625,7 +2625,7 @@ impl WorkflowView {
             },
         ) else {
             self.display_error_toast(
-                "Autofill requires a BYOP model. Please configure a provider and model in Settings → AI."
+                "Autofill requires a BYOP model. Please configure a provider and model in Settings → Agents → Providers."
                     .to_string(),
                 ctx,
             );
