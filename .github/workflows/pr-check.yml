@@ -54,7 +54,7 @@ jobs:
       - name: cargo check (default = zaplex bin)
         # `cargo check --workspace` would pull in wasm/preview channel-gated
         # targets; check only the default oss bin + its dependency graph, matching
-        # the release_linux compile target. (Cargo.lock is gitignored, so no
-        # --locked here.)
-        run: cargo check --bin zaplex
+        # the release_linux compile target. Cargo.lock is committed, so run --locked
+        # for a deterministic graph (immune to upstream version drift).
+        run: cargo check --locked --bin zaplex
         shell: bash

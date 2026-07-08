@@ -264,9 +264,9 @@ if [[ "$BUILD" == "true" ]]; then
   echo "Building and bundling Zaplex for channel $RELEASE_CHANNEL and bundle id $BUNDLE_ID"
   if [[ "${USE_ZIGBUILD:-false}" == "true" ]]; then
     echo "Using cargo zigbuild (zig-backed cross toolchain)"
-    cargo zigbuild -p warp --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
+    cargo zigbuild --locked -p warp --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
   else
-    cargo build -p warp --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
+    cargo build --locked -p warp --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --features "$FEATURES" "${CARGO_TARGET_ARG[@]}"
   fi
   echo "Making debug copy of '$EXECUTABLE_PATH' at '$DEBUG_EXECUTABLE_PATH'"
   cp "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"

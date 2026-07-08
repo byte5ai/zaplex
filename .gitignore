@@ -3,7 +3,10 @@ app/frameworks/default/Carthage
 app/frameworks/dev/Carthage
 app/frameworks/**/*.xcframework
 /target
-/Cargo.lock
+# Cargo.lock IS committed for deterministic release builds (script/*/bundle run
+# --locked). Do NOT re-ignore it: without a committed lock, CI/DMG builds re-resolve
+# the dependency graph every run and break on upstream version drift (e.g. the
+# aws-smithy-schema 0.1.0/0.2.0 split that broke the daemon build 2026-07-08).
 /app/target
 /lib/*
 !/lib/rust-genai/
