@@ -460,11 +460,13 @@ impl CockpitPanel {
         }
         let info = row.with_main_axis_size(MainAxisSize::Max).finish();
 
-        // Attach on click of the info span (local only); the compact "◈ review"
-        // verb (step 6) sits alongside with its own click target.
+        // Attach on click of the info span — for BOTH local and remote sessions
+        // now that remote in-place adopt is wired (`attach_fleet_session` resumes
+        // a remote session on its host). The compact "◈ review" verb (step 6)
+        // stays local-only (remote review isn't wired) and sits alongside.
         let key = host_key(is_local, host_id, &session.session_id);
-        let (info_el, review) = match (is_local, self.conductor_row_states.get(&key).cloned()) {
-            (true, Some(state)) => {
+        let (info_el, review) = match self.conductor_row_states.get(&key).cloned() {
+            Some(state) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
                     host_id: host_id.map(str::to_string),
@@ -475,16 +477,20 @@ impl CockpitPanel {
                     .with_cursor(Cursor::PointingHand)
                     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
                     .finish();
-                let review = self.conductor_review_states.get(&key).cloned().map(|st| {
-                    let action = WorkspaceAction::ReviewSession {
-                        project_root: PathBuf::from(&session.project_root),
-                        project_name: session.project_name.clone(),
-                    };
-                    verb_button(st, "◈", VerbKind::Constructive, appearance, action)
-                });
+                let review = if is_local {
+                    self.conductor_review_states.get(&key).cloned().map(|st| {
+                        let action = WorkspaceAction::ReviewSession {
+                            project_root: PathBuf::from(&session.project_root),
+                            project_name: session.project_name.clone(),
+                        };
+                        verb_button(st, "◈", VerbKind::Constructive, appearance, action)
+                    })
+                } else {
+                    None
+                };
                 (attach, review)
             }
-            _ => (info, None),
+            None => (info, None),
         };
 
         match review {

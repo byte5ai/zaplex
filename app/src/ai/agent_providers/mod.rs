@@ -13,7 +13,6 @@ pub mod active_ai;
 pub mod attachment_caps;
 pub mod chat_stream;
 pub mod llm_id;
-pub mod models_dev;
 pub mod oneshot;
 pub mod openai_compatible;
 pub mod prompt_renderer;
@@ -84,8 +83,8 @@ fn build_byop_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
             } else {
                 model.name.clone()
             };
-            // Three-level priority for resolving final capabilities: user-forced tri-state chip toggle in settings →
-            // models.dev catalog inference → substring fallback.
+            // Two-level priority for resolving final capabilities: user-forced tri-state chip toggle in settings →
+            // substring heuristics.
             // This same function is used by chat_stream when deciding to insert ContentPart::Binary;
             // UI display and runtime behavior are always consistent.
             let resolved_caps =

@@ -262,6 +262,14 @@ impl SpawnCard {
         }
     }
 
+    /// Display name of the currently selected remote host (`None` when local).
+    fn remote_host_name(&self) -> Option<&str> {
+        match self.host {
+            HostChoice::Local => None,
+            HostChoice::Remote(i) => self.cfg.hosts.get(i).map(|h| h.name.as_str()),
+        }
+    }
+
     /// The [`SpawnCardEvent::Launch`] the current selection will emit on Confirm,
     /// or `None` when nothing is installed to launch (Confirm must then be inert
     /// — a phantom chip must never launch a missing binary). Kept pure (no
@@ -527,12 +535,16 @@ impl SpawnCard {
         col = col.with_child(self.row(&format!("Effort{effort_note}"), effort_chips, appearance));
 
         // Account row — freest + explicit accounts, unless a remote host owns it.
+        // On a remote host there is no local account routing: the agent runs under
+        // that host's own CLI login, so we say so explicitly (rather than letting
+        // the local "freest"/per-account choice silently apply and mislead).
         if matches!(self.host, HostChoice::Remote(_)) {
+            let host = self.remote_host_name().unwrap_or("the host");
             col = col.with_child(self.row(
                 "Account",
                 vec![Container::new(
                     Text::new_inline(
-                        "Uses the host's default account".to_string(),
+                        format!("Runs under {host}'s own CLI login (no local account routing)"),
                         family,
                         12.,
                     )
@@ -596,7 +608,15 @@ impl SpawnCard {
         // for remote hosts.
         let dir_display = self.project.as_ref().map(|p| p.display().to_string());
         if matches!(self.host, HostChoice::Remote(_)) {
-            let text = dir_display.unwrap_or_else(|| "Host's default directory".to_string());
+            let host = self.remote_host_name().unwrap_or("the host");
+            // A local folder picker cannot browse a remote filesystem, so the
+            // remote launch dir is either the pre-scoped project (when launched
+            // from a Conductor project node) or the host's home — labeled, never
+            // a silent default.
+            let text = match &dir_display {
+                Some(dir) => format!("{dir}  (on {host})"),
+                None => format!("{host} home — launch from a project node to scope a directory"),
+            };
             col = col.with_child(self.row(
                 "Directory",
                 vec![Container::new(

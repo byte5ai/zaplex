@@ -2359,16 +2359,6 @@ pub enum AISettingsPageAction {
     FetchAgentProviderModels {
         provider_id: String,
     },
-    /// Warm the models.dev catalog into the in-process cache (disk cache + refresh from network
-    /// if needed). Dispatched when the Providers subpage opens. Feeds the internal
-    /// model-capability lookups (`attachment_caps`) and the per-provider sync action; there is
-    /// no user-facing catalog browser.
-    EnsureModelsDevLoaded,
-    /// Sync existing provider's model list with models.dev (by base_url matching),
-    /// populate local entries with context_window / reasoning / tool_call / etc metadata from catalog.
-    SyncProviderModelsFromModelsDev {
-        provider_id: String,
-    },
 
     // ----- Single model entry detail panel -----
     /// Toggle expand/collapse state of a single model's detail panel.
@@ -3386,101 +3376,6 @@ impl TypedActionView for AISettingsPageView {
                     let _ = settings.agent_providers.set_value(providers, ctx);
                 });
                 ctx.notify();
-            }
-            AISettingsPageAction::EnsureModelsDevLoaded => {
-                use crate::ai::agent_providers::models_dev;
-                let had_disk = models_dev::load_from_disk();
-                if !had_disk || models_dev::is_stale() {
-                    let client = http_client::Client::new();
-                    ctx.spawn(
-                        async move { models_dev::fetch_and_cache(client).await },
-                        |view, result, ctx| match result {
-                            Ok(()) => view.rebuild_current_page(ctx),
-                            Err(e) => log::warn!("[models.dev] fetch failed: {e}"),
-                        },
-                    );
-                } else {
-                    ctx.notify();
-                }
-            }
-            AISettingsPageAction::SyncProviderModelsFromModelsDev { provider_id } => {
-                use crate::ai::agent_providers::models_dev;
-                let Some(catalog) = models_dev::cached() else {
-                    log::warn!("[models.dev] catalog not loaded, cannot sync {provider_id}");
-                    return;
-                };
-                let providers_snapshot = AISettings::as_ref(ctx).agent_providers.value().clone();
-                let Some(local) = providers_snapshot.iter().find(|p| p.id == *provider_id) else {
-                    return;
-                };
-                // Matching strategy: first try base_url exact match / contains; otherwise match name (case-insensitive) against catalog provider id or name.
-                let target_url = local.base_url.trim().trim_end_matches('/').to_lowercase();
-                let target_name = local.name.trim().to_lowercase();
-                let cat_provider = catalog.iter().find(|(_, p)| {
-                    if let Some(api) = &p.api {
-                        let api_norm = api.trim().trim_end_matches('/').to_lowercase();
-                        if !target_url.is_empty()
-                            && (api_norm == target_url
-                                || api_norm.contains(&target_url)
-                                || target_url.contains(&api_norm))
-                        {
-                            return true;
-                        }
-                    }
-                    !target_name.is_empty()
-                        && (p.name.to_lowercase() == target_name
-                            || p.id.to_lowercase() == target_name)
-                });
-                let Some((_, cat_provider)) = cat_provider else {
-                    log::warn!(
-                        "[models.dev] no matching entry in catalog (base_url={}, name={})",
-                        local.base_url,
-                        local.name
-                    );
-                    return;
-                };
-                let cat_models = cat_provider.models.clone();
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    if let Some(p) = providers.iter_mut().find(|p| p.id == *provider_id) {
-                        // Existing ids overwritten with catalog metadata; extra from catalog are appended; extra locally (user-defined) are preserved.
-                        for local_model in p.models.iter_mut() {
-                            if let Some(cat_m) = cat_models.get(&local_model.id) {
-                                let merged = models_dev::into_agent_provider_model(cat_m);
-                                local_model.context_window = merged.context_window;
-                                local_model.max_output_tokens = merged.max_output_tokens;
-                                local_model.reasoning = merged.reasoning;
-                                local_model.tool_call = merged.tool_call;
-                                if local_model.name.trim().is_empty() {
-                                    local_model.name = merged.name;
-                                }
-                                // Multimodal capability: **only fill None slots**; Some(_) is treated as user
-                                // explicitly overridden, sync doesn't touch. Thus:
-                                // - First sync (user untouched) → all filled with catalog inferred results
-                                // - User manually cycles to Some(true/false) then syncs → preservation of override
-                                // - User cycles back to None (Auto) → next sync fills again
-                                if local_model.image.is_none() {
-                                    local_model.image = merged.image;
-                                }
-                                if local_model.pdf.is_none() {
-                                    local_model.pdf = merged.pdf;
-                                }
-                                if local_model.audio.is_none() {
-                                    local_model.audio = merged.audio;
-                                }
-                            }
-                        }
-                        let existing: std::collections::HashSet<String> =
-                            p.models.iter().map(|m| m.id.clone()).collect();
-                        for cat_m in cat_models.values() {
-                            if !existing.contains(&cat_m.id) {
-                                p.models.push(models_dev::into_agent_provider_model(cat_m));
-                            }
-                        }
-                    }
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                self.rebuild_current_page(ctx);
             }
             AISettingsPageAction::ToggleAgentProviderModelExpanded {
                 provider_id,

@@ -1866,7 +1866,7 @@ fn render_permissions_speedbump(
         FormattedText::new([FormattedTextLine::Line(vec![
             FormattedTextFragment::hyperlink(
                 crate::t!("ai-block-manage-agent-permissions"),
-                "Settings > AI",
+                "Settings → Agents",
             ),
         ])]),
         font_size,

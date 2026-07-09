@@ -1652,7 +1652,7 @@ impl AgentInputFooter {
             if let Some(toggle_key) = settings.maybe_setup_first_time_voice(ctx) {
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     let toast = DismissibleToast::success(format!(
-                        "Voice input is enabled. You can also press and hold the `{}` key to activate voice input (configure in Settings > AI > Voice)",
+                        "Voice input is enabled. You can also press and hold the `{}` key to activate voice input (configure in Settings → Agents → Voice)",
                         toggle_key.display_name()
                     ));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);

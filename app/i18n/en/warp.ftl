@@ -3373,7 +3373,7 @@ auth-browser-sign-in-title = Sign in on your browser\nto continue
 auth-open-page-manually-suffix = and open the page manually.
 
 voice-try-input = Try Voice Input
-voice-input-enabled-toast = Voice input is enabled. You can also press and hold the `{ $key }` key to activate voice input (configure in Settings > AI > Voice)
+voice-input-enabled-toast = Voice input is enabled. You can also press and hold the `{ $key }` key to activate voice input (configure in Settings → Agents → Voice)
 voice-input-microphone-access-error = Failed to start voice input (you may need to enable Microphone access)
 voice-transcription-disabled-microphone = Voice transcription is disabled because Microphone access was not granted.
 voice-transcription = Voice transcription

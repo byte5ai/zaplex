@@ -121,7 +121,6 @@ struct ProviderRow {
     base_url_editor: ViewHandle<EditorView>,
     api_key_editor: ViewHandle<EditorView>,
     fetch_button_state: MouseStateHandle,
-    sync_models_dev_button_state: MouseStateHandle,
     save_button_state: MouseStateHandle,
     remove_button_state: MouseStateHandle,
     add_model_button_state: MouseStateHandle,
@@ -278,12 +277,6 @@ impl AgentProvidersWidget {
             let row = Self::build_row(provider, ctx);
             rows.insert(provider.id.clone(), row);
         }
-
-        // Warm the models.dev catalog into the in-process cache when the Providers page opens.
-        // This is a background fetch only — there is no user-facing catalog browser. It feeds
-        // the internal model-capability lookups (`attachment_caps` -> `models_dev::lookup_caps`)
-        // and the per-provider "Sync from models.dev" action.
-        ctx.dispatch_typed_action_deferred(AISettingsPageAction::EnsureModelsDevLoaded);
 
         Self {
             add_button_state: MouseStateHandle::default(),
@@ -528,7 +521,6 @@ impl AgentProvidersWidget {
             base_url_editor,
             api_key_editor,
             fetch_button_state: MouseStateHandle::default(),
-            sync_models_dev_button_state: MouseStateHandle::default(),
             save_button_state: MouseStateHandle::default(),
             remove_button_state: MouseStateHandle::default(),
             add_model_button_state: MouseStateHandle::default(),
@@ -1190,15 +1182,6 @@ impl AgentProvidersWidget {
             },
             appearance,
         );
-        let sync_models_dev_button = Self::render_card_button_preserving_draft(
-            crate::t!("settings-agent-providers-sync-models-dev"),
-            row.sync_models_dev_button_state.clone(),
-            draft_editors.clone(),
-            AISettingsPageAction::SyncProviderModelsFromModelsDev {
-                provider_id: provider.id.clone(),
-            },
-            appearance,
-        );
         let remove_button = Self::render_card_button(
             crate::t!("settings-agent-providers-remove"),
             row.remove_button_state.clone(),
@@ -1242,7 +1225,6 @@ impl AgentProvidersWidget {
                             .finish(),
                     )
                     .with_child(Container::new(fetch_button).with_margin_right(8.).finish())
-                    .with_child(sync_models_dev_button)
                     .finish(),
             )
             .with_child(
@@ -1253,7 +1235,7 @@ impl AgentProvidersWidget {
                         .with_child(remove_button)
                         .finish(),
                 )
-                // Create visible spacing from left-side primary actions (Add Model / Fetch / Sync),
+                // Create visible spacing from left-side primary actions (Add Model / Fetch),
                 // prevent both groups sticking together when card width is insufficient with SpaceBetween.
                 .with_margin_left(16.)
                 .finish(),

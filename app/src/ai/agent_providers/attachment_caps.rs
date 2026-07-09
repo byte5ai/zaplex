@@ -15,7 +15,6 @@
 //! minor upgrades in the same family" rather than "exact version enumeration", with error probability vs.
 //! maintenance cost trade-off biased toward the latter.
 
-use super::models_dev;
 use crate::settings::{AgentProviderApiType, AgentProviderModel};
 
 /// A model's supported attachment type capabilities table.
@@ -51,44 +50,27 @@ impl AttachmentCaps {
     }
 }
 
-/// Check models.dev catalog first; fall back to (api_type, model_id substring) matching on catalog miss.
+/// Resolve attachment capabilities via (api_type, model_id substring) matching.
 ///
-/// The catalog is the authoritative source for actual model capabilities (users can click
-/// "Sync from models.dev" in settings or it auto-refreshes every 24h); fallback rules ensure
-/// mainstream models work even offline or before the catalog is loaded.
+/// zaplex only ships the Claude Code / Codex CLI agents plus the manual BYOP path, so there is
+/// no external capability catalog to consult; the substring heuristics below are the sole source.
 pub fn caps_for(api_type: AgentProviderApiType, model_id: &str) -> AttachmentCaps {
-    if let Some(c) = models_dev::lookup_caps("", model_id) {
-        return AttachmentCaps {
-            images: c.vision,
-            pdf: c.pdf,
-            audio: c.audio,
-        };
-    }
     caps_for_by_substring(api_type, model_id)
 }
 
 /// Parse the final capability for a single model, **with user three-state override**.
-/// Three priority levels:
+/// Two priority levels:
 /// 1. User explicitly sets to `Some(_)` in settings → use directly, skip inference
-/// 2. `None` → infer from models.dev catalog
-/// 3. Catalog miss → substring fallback
+/// 2. `None` → infer via substring heuristics
 ///
-/// `provider_id` is used for exact provider matching in the catalog (handles aggregator
-/// providers like OpenRouter); fallback doesn't need provider_id on catalog miss.
+/// `provider_id` is unused now that there is no external catalog, but kept in the signature so
+/// callers stay stable and a future catalog could reintroduce provider-scoped matching.
 pub fn resolve_for_model(
-    provider_id: &str,
+    _provider_id: &str,
     api_type: AgentProviderApiType,
     model: &AgentProviderModel,
 ) -> AttachmentCaps {
-    let inferred = if let Some(c) = models_dev::lookup_caps(provider_id, &model.id) {
-        AttachmentCaps {
-            images: c.vision,
-            pdf: c.pdf,
-            audio: c.audio,
-        }
-    } else {
-        caps_for_by_substring(api_type, &model.id)
-    };
+    let inferred = caps_for_by_substring(api_type, &model.id);
     AttachmentCaps {
         images: model.image.unwrap_or(inferred.images),
         pdf: model.pdf.unwrap_or(inferred.pdf),
@@ -96,22 +78,17 @@ pub fn resolve_for_model(
     }
 }
 
-/// Inference result snapshot for UI (ignoring user overrides, checking only catalog/fallback).
-/// Used to display "Auto: catalog says supported" semantics in chip tooltips.
+/// Inference result snapshot for UI (ignoring user overrides, checking only the substring
+/// heuristics). Used to display "Auto: supported" semantics in chip tooltips.
+///
+/// `provider_id` is unused now that there is no external catalog, but kept in the signature so
+/// callers stay stable and a future catalog could reintroduce provider-scoped matching.
 pub fn inferred_for_model(
-    provider_id: &str,
+    _provider_id: &str,
     api_type: AgentProviderApiType,
     model_id: &str,
 ) -> AttachmentCaps {
-    if let Some(c) = models_dev::lookup_caps(provider_id, model_id) {
-        AttachmentCaps {
-            images: c.vision,
-            pdf: c.pdf,
-            audio: c.audio,
-        }
-    } else {
-        caps_for_by_substring(api_type, model_id)
-    }
+    caps_for_by_substring(api_type, model_id)
 }
 
 /// Fallback table lookup by (api_type, model_id substring).
@@ -217,7 +194,7 @@ mod tests {
 
     #[test]
     fn openai_4o_supports_image_and_pdf() {
-        // Using fallback rules: in test environment, models.dev catalog is not loaded, lookup_caps returns None.
+        // Substring heuristics are the sole capability source.
         let caps = caps_for_by_substring(AgentProviderApiType::OpenAi, "gpt-4o-2024-08-06");
         assert!(caps.images);
         assert!(caps.pdf);

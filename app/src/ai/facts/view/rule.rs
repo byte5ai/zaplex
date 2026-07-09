@@ -535,7 +535,7 @@ impl RuleView {
         let banner_prefix = crate::t!("rules-disabled-banner-prefix");
         let banner_link = crate::t!("rules-disabled-banner-link");
         let banner_suffix = crate::t!("rules-disabled-banner-suffix");
-        let mut link = FormattedTextFragment::hyperlink(banner_link, "Settings > AI");
+        let mut link = FormattedTextFragment::hyperlink(banner_link, "Settings → Agents");
         link.styles.weight = Some(CustomWeight::Bold);
 
         let formatted_text = FormattedTextElement::new(

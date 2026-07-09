@@ -329,7 +329,7 @@ impl SuggestedUnitTestsView {
             FormattedText::new([FormattedTextLine::Line(vec![
                 FormattedTextFragment::hyperlink(
                     "Manage suggested code banner settings",
-                    "Settings > AI",
+                    "Settings → Agents",
                 ),
             ])]),
             font_size,

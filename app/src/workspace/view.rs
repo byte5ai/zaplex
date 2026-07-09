@@ -4362,9 +4362,11 @@ impl Workspace {
     /// live [`CockpitModel::inventory`] so callers pass only the identity:
     /// - **local host** → adopt the session in place (resume, no fork), pinned to
     ///   the owning account's subscription when it isn't the default login.
-    /// - **remote host** → the agent lives on that host; in-place remote resume
-    ///   from the inventory isn't wired yet, so we say so honestly rather than
-    ///   opening the wrong thing.
+    /// - **remote host** → resolve the inventory host to its live SSH node and
+    ///   open a remote terminal that **resumes** the same session on that host
+    ///   (its own CLI login, the session's cwd) — the remote analogue of the
+    ///   local adopt. Falls back to an honest toast when the host has no live
+    ///   daemon connection to resume through.
     fn attach_fleet_session(
         &mut self,
         host: &str,
@@ -4422,6 +4424,15 @@ impl Workspace {
                 ctx,
             );
         } else {
+            // Remote in-place adopt: resume the same agent session on its host.
+            // Resolve the inventory host to a live SSH node, build the agent's
+            // resume command, and open a remote terminal that runs it in the
+            // session's cwd (the host's own CLI login — remote account routing is
+            // the host's, not a local config dir).
+            let agent = match provider {
+                zaplex_cockpit::Provider::Claude => CLIAgent::Claude,
+                zaplex_cockpit::Provider::Codex => CLIAgent::Codex,
+            };
             let place = if name.is_empty() {
                 Path::new(&cwd)
                     .file_name()
@@ -4430,15 +4441,61 @@ impl Workspace {
             } else {
                 name
             };
-            self.toast_stack.update(ctx, |toast_stack, ctx| {
-                toast_stack.add_ephemeral_toast(
-                    DismissibleToast::default(format!(
-                        "“{place}” is a remote agent on {host} — open that host's tab to attach \
-                         (in-place remote adopt is coming)."
-                    )),
-                    ctx,
-                );
+            // Inventory host id (daemon `HostId`) → the SSH `node_id` whose live
+            // daemon carries it. `None` when the host has no live connection.
+            let node_id: Option<String> = {
+                #[cfg(all(unix, feature = "local_tty"))]
+                {
+                    host_id.and_then(|hid| self.node_for_daemon_host(hid, &*ctx))
+                }
+                #[cfg(not(all(unix, feature = "local_tty")))]
+                {
+                    let _ = host_id;
+                    None
+                }
+            };
+            let Some(node_id) = node_id else {
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::default(format!(
+                            "“{place}” is a remote agent on {host}, which isn't connected right \
+                             now — open that host to resume it."
+                        )),
+                        ctx,
+                    );
+                });
+                return;
+            };
+            let Some(resume_cmd) = agent.resume_command_pinned(session_id, None) else {
+                // No resume mechanism for this agent → nothing honest to do.
+                return;
+            };
+            let full = format!("cd {} && {resume_cmd}", shell_words::quote(&cwd));
+            let server = warp_ssh_manager::with_conn(|conn| {
+                Ok(warp_ssh_manager::SshRepository::get_server(conn, &node_id)?)
             });
+            match server {
+                Ok(Some(mut server)) => {
+                    // Prepend the host's own startup command (if any), then resume.
+                    server.startup_command = Some(match server.startup_command {
+                        Some(existing) if !existing.trim().is_empty() => {
+                            format!("{existing}; {full}")
+                        }
+                        _ => full,
+                    });
+                    self.open_ssh_terminal(node_id, server, false, ctx);
+                }
+                _ => {
+                    self.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!(
+                                "Couldn't find host '{host}' to resume “{place}” on."
+                            )),
+                            ctx,
+                        );
+                    });
+                }
+            }
         }
     }
 
@@ -6749,6 +6806,20 @@ impl Workspace {
 
     /// Resolves an SFTP file-manager `node_id` to a live daemon `HostId`, if that
     /// host currently has a connected daemon session with a usable client. The
+    /// Reverse-lookup the SSH host `node_id` that owns a daemon `session_id`
+    /// (`daemon_node_sessions` maps node_id → session_id). Lets the file manager
+    /// resolve a remote pane's host from that pane's *own* session — per-pane —
+    /// instead of the tab-level `ssh_tab_nodes` map, so a mixed local/remote split
+    /// targets the right filesystem (Codex #1). Returns `None` for a local session
+    /// (or a daemon session predating the mapping); the caller then falls back to
+    /// the tab node, then to Local.
+    fn node_for_session(&self, session_id: SessionId) -> Option<String> {
+        self.daemon_node_sessions
+            .iter()
+            .find(|(_, sid)| **sid == session_id)
+            .map(|(node_id, _)| node_id.clone())
+    }
+
     /// SFTP file manager is keyed by `node_id`; the native remote editor needs a
     /// `HostId`, which is opaque and only known once the daemon handshake
     /// completes — hence this pull-based lookup against the live manager state.
@@ -21257,14 +21328,35 @@ impl TypedActionView for Workspace {
                 // Owned handle (not the `&ViewHandle` borrow of `self`) so it can be
                 // moved into the deferred 'static closure below.
                 let active_pg = self.active_tab_pane_group().clone();
-                let target = match self.ssh_tab_nodes.get(&active_pg.id()).cloned() {
-                    Some(node_id) => crate::pane_group::FileManagerTarget::Remote {
-                        node_id,
-                        start_path: Some(start_path.clone()),
-                    },
-                    None => crate::pane_group::FileManagerTarget::Local {
+                // Resolve the FM host context from the INVOKING (focused) pane's own
+                // session — NOT the tab (Codex #1). A local split inside an SSH tab
+                // must open the LOCAL file manager, and a remote pane must open its
+                // host's FM. Only when the pane's own session can't be resolved to a
+                // host do we fall back to the tab's recorded node (`ssh_tab_nodes`),
+                // then to Local as the safe default.
+                let active_view = active_pg.as_ref(ctx).active_session_view(ctx);
+                let pane_is_local = active_view
+                    .as_ref()
+                    .and_then(|v| v.as_ref(ctx).active_session_is_local(ctx));
+                let target = if pane_is_local == Some(true) {
+                    crate::pane_group::FileManagerTarget::Local {
                         start_path: start_path.clone(),
-                    },
+                    }
+                } else {
+                    let node_id = active_view
+                        .as_ref()
+                        .and_then(|v| v.as_ref(ctx).active_block_session_id())
+                        .and_then(|sid| self.node_for_session(sid))
+                        .or_else(|| self.ssh_tab_nodes.get(&active_pg.id()).cloned());
+                    match node_id {
+                        Some(node_id) => crate::pane_group::FileManagerTarget::Remote {
+                            node_id,
+                            start_path: Some(start_path.clone()),
+                        },
+                        None => crate::pane_group::FileManagerTarget::Local {
+                            start_path: start_path.clone(),
+                        },
+                    }
                 };
                 // Capture the targeted pane NOW (at dispatch time) — the pane focused
                 // when the action fired. Re-reading `focused_pane_id` inside the

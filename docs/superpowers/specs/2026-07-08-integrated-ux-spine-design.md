@@ -123,3 +123,37 @@ Listing the **hosts themselves** is *linear* (N hosts) and belongs in "+".
 
 **Non-goal.** No auto-generated agent×account×host permutations, ever. Hosts are listed; combinations
 are composed in the spawn card at launch time.
+
+## 6. Codex gate round 1 → fixes (this branch)
+
+The first Codex gate returned NOT GREEN with 6 items. What changed:
+
+1. **File manager is per-pane, not per-tab.** `OpenLocalFileManager` no longer decides local/remote from
+   the tab's `ssh_tab_nodes`; it reads the **invoking (focused) pane's own session** —
+   `active_session_is_local` decides local vs. remote, and a remote pane resolves its host via
+   `node_for_session` (session→node reverse-lookup), falling back to the tab node then Local. A local
+   split inside an SSH tab now opens the local FM; a remote pane opens its host's FM.
+   (`app/src/workspace/view.rs` `OpenLocalFileManager`, `node_for_session`.)
+2. **Spawn card remote semantics made explicit (labeled restriction, per Codex's sanctioned option).**
+   A native folder picker can't browse a remote filesystem, so the card states plainly that a remote
+   launch runs under *that host's own CLI login (no local account routing)* and lands in the pre-scoped
+   project dir (from a Conductor project node) or the host home — never a silent default. Local launches
+   get the full native directory picker. (`spawn_card.rs` account/Directory rows.)
+3. **`models.dev` fully removed.** The `models_dev` module is deleted; the auto-fetch (`EnsureModelsDevLoaded`)
+   and "Sync from models.dev" UI are gone; the internal caps path falls back to built-in substring
+   heuristics. Claude/Codex context windows remain hardcoded in `zaplex_cockpit::context_window`.
+4. **Stale "Settings → AI" copy replaced** everywhere (6 user-facing strings → "Settings → Agents[/Voice]").
+5. **Conductor tree + remote adopt.** The tree already leads the cockpit sidebar (above the account cards).
+   **Remote sessions are now clickable** and `attach_fleet_session` performs a real **in-place remote
+   adopt**: resolve the inventory host to its live SSH node, build the agent's resume command, and open a
+   remote terminal that resumes the same session in its cwd under the host's own login. (Local adopt
+   unchanged.) (`cockpit/panel.rs` `render_conductor_row`; `workspace/view.rs` `attach_fleet_session`.)
+6. **Usage honesty.** Headline = binding window (max of 5h/week/Opus/Sonnet sublimits); Codex accounts
+   remain estimate-only and are marked with the `~` provenance prefix; remote hosts show no fabricated
+   quota.
+7. **Verification.** `cargo check --locked -p warp` + `cargo test -p zaplex_cockpit` + the targeted
+   boot/keymap/FM/spawn-card tests are run and reported before any DMG.
+
+**Deliberate residual (labeled, not hidden):** ad-hoc *free-text* remote directory entry in the spawn
+card is not offered — a remote dir is scoped via the Conductor project node instead. This is the
+"clearly restrict and label" path Codex sanctioned, not a silent gap.
