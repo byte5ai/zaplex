@@ -42,7 +42,7 @@ fn initialize_app(app: &mut warpui::App) {
 /// The view starts in the Disconnected state (no SSH connection), which does not affect the UI state-logic tests.
 fn create_view(app: &mut warpui::App) -> (warpui::WindowId, warpui::ViewHandle<SftpBrowserView>) {
     app.add_window(WindowStyle::NotStealFocus, |ctx| {
-        SftpBrowserView::new("test-node".to_string(), ctx)
+        SftpBrowserView::new("test-node".to_string(), None, ctx)
     })
 }
 

@@ -20,7 +20,6 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::time::{Duration, SystemTime};
@@ -260,57 +259,6 @@ pub async fn fetch_and_cache(client: Client) -> Result<(), String> {
         s.loaded_at = Some(SystemTime::now());
     }
     Ok(())
-}
-
-// ── Chip row collapse/expand state (process-level, avoids widget rebuild loss) ─
-
-static CHIPS_EXPANDED: AtomicBool = AtomicBool::new(false);
-
-pub fn chips_expanded() -> bool {
-    CHIPS_EXPANDED.load(Ordering::Relaxed)
-}
-
-pub fn toggle_chips_expanded() {
-    CHIPS_EXPANDED.fetch_xor(true, Ordering::Relaxed);
-}
-
-// ── Search filter for quick chip row addition ────────────────────────────
-
-fn search_state() -> &'static RwLock<String> {
-    static S: OnceLock<RwLock<String>> = OnceLock::new();
-    S.get_or_init(|| RwLock::new(String::new()))
-}
-
-pub fn search_query() -> String {
-    search_state()
-        .read()
-        .ok()
-        .map(|s| s.clone())
-        .unwrap_or_default()
-}
-
-pub fn set_search_query(q: String) {
-    if let Ok(mut s) = search_state().write() {
-        *s = q;
-    }
-}
-
-/// Filter catalog by current search query, case-insensitive substring matching on
-/// provider.name and provider.id. Empty query returns all entries in order.
-/// Returns owned Vec so UI can take/iter.
-pub fn filter_catalog(catalog: &Catalog, query: &str) -> Vec<(String, Provider)> {
-    let q = query.trim().to_lowercase();
-    if q.is_empty() {
-        return catalog
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-    }
-    catalog
-        .iter()
-        .filter(|(id, p)| id.to_lowercase().contains(&q) || p.name.to_lowercase().contains(&q))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
 }
 
 /// Convert a models.dev Model to a local settings AgentProviderModel.

@@ -23,6 +23,8 @@ fn account(key: &str) -> AccountUsage {
         reset_week: None,
         heat: 0.0,
         heat_week: 0.0,
+        heat_opus: None,
+        heat_sonnet: None,
         sessions: Vec::new(),
         status: AccountStatus::Live,
         provenance: UsageProvenance::Real,

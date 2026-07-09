@@ -2359,23 +2359,16 @@ pub enum AISettingsPageAction {
     FetchAgentProviderModels {
         provider_id: String,
     },
-    /// Trigger one models.dev directory load (disk cache + refresh from network if needed). Triggered when Providers subpage opens.
+    /// Warm the models.dev catalog into the in-process cache (disk cache + refresh from network
+    /// if needed). Dispatched when the Providers subpage opens. Feeds the internal
+    /// model-capability lookups (`attachment_caps`) and the per-provider sync action; there is
+    /// no user-facing catalog browser.
     EnsureModelsDevLoaded,
-    /// Force refresh models.dev directory (ignore TTL). Triggered by "Refresh" button.
-    RefreshModelsDev,
-    /// Create a new provider from models.dev directory: prefill name/base_url/all models (including context).
-    AddProviderFromModelsDev {
-        catalog_provider_id: String,
-    },
     /// Sync existing provider's model list with models.dev (by base_url matching),
     /// populate local entries with context_window / reasoning / tool_call / etc metadata from catalog.
     SyncProviderModelsFromModelsDev {
         provider_id: String,
     },
-    /// Collapse/expand "Quick add" chip row.
-    ToggleModelsDevChipsExpanded,
-    /// Set search query for "Quick add" chip row (substring filtering provider name/id).
-    SetModelsDevSearchQuery(String),
 
     // ----- Single model entry detail panel -----
     /// Toggle expand/collapse state of a single model's detail panel.
@@ -3410,50 +3403,6 @@ impl TypedActionView for AISettingsPageView {
                     ctx.notify();
                 }
             }
-            AISettingsPageAction::RefreshModelsDev => {
-                use crate::ai::agent_providers::models_dev;
-                let client = http_client::Client::new();
-                ctx.spawn(
-                    async move { models_dev::fetch_and_cache(client).await },
-                    |view, result, ctx| match result {
-                        Ok(()) => view.rebuild_current_page(ctx),
-                        Err(e) => log::warn!("[models.dev] refresh failed: {e}"),
-                    },
-                );
-            }
-            AISettingsPageAction::AddProviderFromModelsDev {
-                catalog_provider_id,
-            } => {
-                use crate::ai::agent_providers::models_dev;
-                let Some(catalog) = models_dev::cached() else {
-                    log::warn!("[models.dev] catalog not yet loaded, cannot add {catalog_provider_id}");
-                    return;
-                };
-                let Some(cat_provider) = catalog.get(catalog_provider_id) else {
-                    log::warn!("[models.dev] no provider id in catalog: {catalog_provider_id}");
-                    return;
-                };
-                let mut new_provider = crate::settings::AgentProvider::new_empty();
-                new_provider.name = if cat_provider.name.is_empty() {
-                    catalog_provider_id.clone()
-                } else {
-                    cat_provider.name.clone()
-                };
-                if let Some(api) = &cat_provider.api {
-                    new_provider.base_url = api.clone();
-                }
-                new_provider.models = cat_provider
-                    .models
-                    .values()
-                    .map(models_dev::into_agent_provider_model)
-                    .collect();
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut providers = settings.agent_providers.value().clone();
-                    providers.push(new_provider);
-                    let _ = settings.agent_providers.set_value(providers, ctx);
-                });
-                self.rebuild_current_page(ctx);
-            }
             AISettingsPageAction::SyncProviderModelsFromModelsDev { provider_id } => {
                 use crate::ai::agent_providers::models_dev;
                 let Some(catalog) = models_dev::cached() else {
@@ -3532,16 +3481,6 @@ impl TypedActionView for AISettingsPageView {
                     let _ = settings.agent_providers.set_value(providers, ctx);
                 });
                 self.rebuild_current_page(ctx);
-            }
-            AISettingsPageAction::ToggleModelsDevChipsExpanded => {
-                use crate::ai::agent_providers::models_dev;
-                models_dev::toggle_chips_expanded();
-                ctx.notify();
-            }
-            AISettingsPageAction::SetModelsDevSearchQuery(q) => {
-                use crate::ai::agent_providers::models_dev;
-                models_dev::set_search_query(q.clone());
-                ctx.notify();
             }
             AISettingsPageAction::ToggleAgentProviderModelExpanded {
                 provider_id,

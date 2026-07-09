@@ -77,3 +77,49 @@ rest, it does not count as done.
 - Claude **and** Codex verified (master §5.6).
 - Anti-foreign-body: cockpit sessions ARE zaplex panes; launch opens a native pane; the fleet IS
   the daemon (native-integration §1).
+
+## 5. Host reachability: "register once, pick everywhere"
+
+**Problem.** WARP had no host registry, so the only way to "remember" a host was to bake its
+connection into a user-authored *launch config* — that's why WARP users hand-built their dropdown
+entries. zaplex is different: an SSH host is already a **first-class registered object** (SSH-manager
+sidebar) and a node in the object tree (§1). Copying WARP's per-host launch-config model on top of
+that registry means the user enters a host **twice** (sidebar *and* dropdown) — double data-entry,
+bad UX. Removing the old auto-permutation "wall" without a replacement made hosts *unreachable* from
+"+" — a regression.
+
+**Principle.** The registry is the **single source of truth** for hosts. Every launch surface —
+the "+" menu, the spawn card, the object tree — **reads** from it. A host is *entered once* and
+*picked everywhere*. Multiple access points to the same registered object are good UX; a second
+data-entry is not.
+
+**Wall vs. list — the distinction that matters.** The removed clutter was the *combinatorial
+cross-product* (every agent × every account × every host) rendered as flat rows — that stays gone.
+Listing the **hosts themselves** is *linear* (N hosts) and belongs in "+".
+
+**Decisions.**
+1. **"+" menu reads the registry.** A `Hosts` group lists each registered host (linear). Clicking a
+   host opens a **terminal** on it (same action as clicking it in the sidebar — a plain connect to an
+   explicitly chosen host is not a "blind agent launch", so §2's no-blind-launch rule is not
+   violated). Launching an **agent** on a host is done via the spawn card ("Neuer Agent…"), whose
+   host picker already reads the same registry — so no per-host submenu is needed and the old
+   per-host launch *permutations* do not return to the menu; only the hosts themselves (a linear
+   list) do. *(Built: `unified_new_session_menu_items` emits one `OpenSshTerminal` item per
+   registered `NodeKind::Server`; the spawn card's host row lists the same nodes.)*
+2. **Launch/tab configs are for layouts, not hosts.** A saved config captures a *layout / command
+   combo*; where it targets a host it stores a **reference** to the registry node (`node_id`), never
+   duplicated connection data. This requires making `LeafContents::SshServer` capturable
+   (`app/src/launch_configs/launch_config.rs:162` currently returns `Err(())` → must serialize a
+   host-reference pane). "Save this session as an entry…" then produces a reusable entry that points
+   at the registry.
+3. **Spawn card + tree "+" scope from the registry.** The spawn card's host picker (§2, item #2) and
+   any pane/tree `＋` resolve their host list from the same registry; pre-scoping just pre-selects a
+   node.
+
+**Increment (Build A/B boundary).**
+- A: "+" menu lists registered hosts (`⏎` terminal); spawn-card host picker reads the registry.
+- B: launch-config host-*reference* capture (`launch_config.rs:162`) + "Save this session as entry…";
+  tree `＋` host-scoping.
+
+**Non-goal.** No auto-generated agent×account×host permutations, ever. Hosts are listed; combinations
+are composed in the spawn card at launch time.

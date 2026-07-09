@@ -137,6 +137,10 @@ fn apply_marks_matching_claude_accounts_real_and_leaves_the_rest_estimated() {
         matched.reset5h,
         Some(Utc.with_ymd_and_hms(2026, 7, 3, 18, 0, 0).unwrap())
     );
+    // The 7-day per-model sublimits are carried onto the account (Codex #6),
+    // not dropped — they are often the binding constraint on Max plans.
+    assert_eq!(matched.heat_opus, Some(0.12));
+    assert_eq!(matched.heat_sonnet, Some(0.55));
 
     // Unmatched Claude account and the Codex account keep the estimate.
     assert_eq!(snapshot.accounts[1].provenance, UsageProvenance::Estimate);
@@ -182,4 +186,44 @@ fn apply_never_touches_token_or_cost_totals() {
     assert_eq!(after.today, before.today);
     assert_eq!(after.week, before.week);
     assert_eq!(after.sessions, before.sessions);
+}
+
+#[test]
+fn binding_window_surfaces_a_full_opus_sublimit_over_a_calm_5h() {
+    // The exact case Codex #6 was filed for: a calm 5h (71%) while the Opus
+    // weekly sublimit sits at 91%. The headline must be the Opus limit — the
+    // window the user actually hits first — not the 5h that reads "fine".
+    let mut snapshot = snapshot_with(vec![account(
+        Provider::Claude,
+        "claude:default",
+        "/home/u/.claude",
+    )]);
+    let real = parse_oauth_usage(
+        r#"{ "five_hour": { "utilization": 0.71 },
+             "seven_day": { "utilization": 0.40 },
+             "seven_day_opus": { "utilization": 0.91 } }"#,
+    )
+    .unwrap();
+    let by_dir: HashMap<PathBuf, _> = [(PathBuf::from("/home/u/.claude"), real)].into();
+    apply_oauth_usage(&mut snapshot, &by_dir);
+
+    let (frac, label) = crate::binding_window(&snapshot.accounts[0]);
+    assert!((frac - 0.91).abs() < 1e-9, "binding window is the Opus sublimit");
+    assert_eq!(label, "opus");
+}
+
+#[test]
+fn binding_window_prefers_week_over_5h_when_week_is_fuller() {
+    // With no sublimits (estimate-style), the binding window degrades to the
+    // fuller of 5h vs. week.
+    let mut snapshot = snapshot_with(vec![account(
+        Provider::Claude,
+        "claude:default",
+        "/home/u/.claude",
+    )]);
+    snapshot.accounts[0].heat = 0.30;
+    snapshot.accounts[0].heat_week = 0.80;
+    let (frac, label) = crate::binding_window(&snapshot.accounts[0]);
+    assert!((frac - 0.80).abs() < 1e-9);
+    assert_eq!(label, "wk");
 }

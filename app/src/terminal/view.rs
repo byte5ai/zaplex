@@ -6289,6 +6289,20 @@ impl TerminalView {
         }
     }
 
+    /// The active session's cwd for the file manager: the validated local path for a
+    /// local session, or the shell-reported cwd (a remote path, no local is_dir check)
+    /// for a remote session. Feeds the cwd-faithful FM toggle.
+    pub fn active_session_cwd<C: ModelAsRef>(&self, ctx: &C) -> Option<std::path::PathBuf> {
+        if self.active_session_is_local(ctx) == Some(true) {
+            self.active_session_path_if_local(ctx)
+        } else {
+            self.active_block_metadata
+                .as_ref()
+                .and_then(BlockMetadata::current_working_directory)
+                .map(std::path::PathBuf::from)
+        }
+    }
+
     pub fn input(&self) -> &ViewHandle<Input> {
         &self.input
     }
@@ -23720,12 +23734,10 @@ impl TypedActionView for TerminalView {
             }
             ToggleMaximizePane => ctx.emit(Event::Pane(PaneEvent::ToggleMaximized)),
             OpenFileManagerHere => {
-                // Local sessions root the FM at the shell's cwd; otherwise $HOME.
-                let start_path = self
-                    .pwd_if_local(ctx)
-                    .map(std::path::PathBuf::from)
-                    .or_else(dirs::home_dir)
-                    .unwrap_or_else(|| std::path::PathBuf::from("/"));
+                // Root the FM at the active session's cwd — the validated local
+                // path for a local session, or the remote shell's reported cwd for
+                // a remote session — falling back to $HOME then `/`.
+                let start_path = file_manager_start_path(self.active_session_cwd(ctx));
                 ctx.dispatch_typed_action(&crate::workspace::WorkspaceAction::OpenLocalFileManager {
                     start_path,
                 });
@@ -25575,6 +25587,19 @@ fn maybe_wrap_terminal_element_in_scrollable(
         }
         (false, false) => element.finish(),
     }
+}
+
+/// Resolve the directory the file manager opens at for
+/// [`TerminalAction::OpenFileManagerHere`]: the active session's cwd when known
+/// (the validated local path for a local session, or the remote shell's reported
+/// cwd for a remote one), else `$HOME`, else `/`. Extracted as a pure function so
+/// the cwd-as-start-path contract can be unit-tested without a live session.
+pub(crate) fn file_manager_start_path(
+    active_session_cwd: Option<std::path::PathBuf>,
+) -> std::path::PathBuf {
+    active_session_cwd
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("/"))
 }
 
 /// Returns `true` when the Rich Input chip is present in the user's CLI agent

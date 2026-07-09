@@ -201,6 +201,38 @@ fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     workspace
 }
 
+/// Boot / keymap smoke test — closes the gap that let a malformed keybinding
+/// (`cmd-shift-o` instead of `cmd-shift-O`) pass `cargo check` yet panic at
+/// startup during binding registration, leaving the app unopenable. The merge
+/// gate is a Linux `cargo check`, which compiles the code but never *runs* the
+/// registration path, so it cannot catch this "does it even open" class.
+///
+/// This exercises the real registration path:
+///   * `initialize_app` runs `workspace::init` (where the regression lived), and
+///   * `terminal::init` runs the terminal + terminal-view binding registration.
+///
+/// Under debug assertions `Keystroke::parse` panics on a malformed binding
+/// string, and — thanks to the cross-platform validation in `warpui::keymap`
+/// (`validate_off_platform_binding`) — that check fires for *both* platform
+/// variants of every per-platform binding even on this (Linux) CI host, not just
+/// the variant this OS uses. Building a workspace window then covers the rest of
+/// the "does it open" path. Reaching the end without panicking proves every
+/// registered binding (mac and linux/windows) parses and that a window opens.
+#[test]
+fn test_boot_registers_all_keybindings_without_panicking() {
+    App::test((), |mut app| async move {
+        // Runs `workspace::init` (registers the workspace keybindings, incl. the
+        // attention-inbox `cmd-shift-O` binding that regressed).
+        initialize_app(&mut app);
+        // Runs `terminal::init` -> `terminal::view::init` (the terminal keybindings,
+        // including per-platform `PerPlatformKeystroke` / `with_mac_key_binding`
+        // bindings). Pure binding registration — no extra singletons required.
+        app.update(crate::terminal::init);
+        // The full "does it even open" path: build a workspace window.
+        let _workspace = mock_workspace(&mut app);
+    });
+}
+
 fn restored_workspace(
     app: &mut App,
     window_snapshot: crate::app_state::WindowSnapshot,

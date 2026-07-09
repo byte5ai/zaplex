@@ -708,8 +708,17 @@ impl CockpitPaneView {
             .with_spacing(CARD_SPACING)
             .with_child(header.finish())
             .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance))
-            .with_child(self.heat_bar("wk", acct.heat_week, acct.provenance, appearance))
-            .with_child(matrix);
+            .with_child(self.heat_bar("wk", acct.heat_week, acct.provenance, appearance));
+        // 7-day per-model sublimits (Max plans) when the endpoint reports them —
+        // often the binding constraint, so the dashboard shows them explicitly
+        // next to 5h/wk (Codex #6).
+        if let Some(opus) = acct.heat_opus {
+            col = col.with_child(self.heat_bar("opus", opus, acct.provenance, appearance));
+        }
+        if let Some(sonnet) = acct.heat_sonnet {
+            col = col.with_child(self.heat_bar("sonnet", sonnet, acct.provenance, appearance));
+        }
+        col = col.with_child(matrix);
         // Live sessions (C3a), waiting-first (the spine pre-sorts): the
         // dashboard's job is surfacing what needs YOU.
         for session in acct.sessions.iter().take(4) {

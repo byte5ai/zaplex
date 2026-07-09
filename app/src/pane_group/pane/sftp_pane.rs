@@ -25,11 +25,17 @@ pub struct SftpPane {
 }
 
 impl SftpPane {
-    /// Creates a new SFTP browser pane
-    pub fn new<V: View>(node_id: String, ctx: &mut ViewContext<V>) -> Self {
+    /// Creates a new SFTP browser pane, rooted at `start_path` (the remote
+    /// shell's cwd) when known, else the host root `/`.
+    pub fn new<V: View>(
+        node_id: String,
+        start_path: Option<std::path::PathBuf>,
+        ctx: &mut ViewContext<V>,
+    ) -> Self {
         let id_for_view = node_id.clone();
-        let browser_view =
-            ctx.add_typed_action_view(move |ctx| SftpBrowserView::new(id_for_view.clone(), ctx));
+        let browser_view = ctx.add_typed_action_view(move |ctx| {
+            SftpBrowserView::new(id_for_view.clone(), start_path, ctx)
+        });
         let pane_configuration = browser_view.as_ref(ctx).pane_configuration();
         let pane_view = ctx.add_typed_action_view(|ctx| {
             let pane_id = PaneId::from_sftp_pane_ctx(ctx);

@@ -255,7 +255,13 @@ impl CockpitPanel {
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(CARD_SPACING)
             .with_child(header.finish())
-            .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance))
+            // Headline = the *binding* window (fullest of 5h / week / Opus /
+            // Sonnet sublimits), not always 5h — otherwise a busy weekly/Opus
+            // limit reads as a calm 5h and the card under-reports (Codex #6).
+            .with_child({
+                let (frac, label) = zaplex_cockpit::binding_window(acct);
+                self.heat_bar(label, frac, acct.provenance, appearance)
+            })
             .with_child(Self::text(cost_line, family, body, muted));
         if let Some(session_line) = session_line {
             let color = if waiting > 0 {

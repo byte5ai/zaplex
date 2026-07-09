@@ -41,7 +41,7 @@ fn create_view(
     app: &mut warpui::App,
 ) -> (warpui::WindowId, warpui::ViewHandle<SftpBrowserView>) {
     app.add_window(WindowStyle::NotStealFocus, |ctx| {
-        SftpBrowserView::new("test-node".to_string(), ctx)
+        SftpBrowserView::new("test-node".to_string(), None, ctx)
     })
 }
 
@@ -2126,7 +2126,7 @@ fn create_view_with_node(
     node_id: &str,
 ) -> (warpui::WindowId, warpui::ViewHandle<SftpBrowserView>) {
     app.add_window(WindowStyle::NotStealFocus, |ctx| {
-        SftpBrowserView::new(node_id.to_string(), ctx)
+        SftpBrowserView::new(node_id.to_string(), None, ctx)
     })
 }
 

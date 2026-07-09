@@ -709,8 +709,12 @@ pub struct DraggedBorder {
 pub enum FileManagerTarget {
     /// The machine zaplex runs on, rooted at `start_path` (the session cwd).
     Local { start_path: std::path::PathBuf },
-    /// An SSH host (browsed over its SFTP connection), by `ssh_servers.node_id`.
-    Remote { node_id: String },
+    /// An SSH host (browsed over its SFTP connection), by `ssh_servers.node_id`,
+    /// rooted at `start_path` (the remote shell's cwd) when known, else `/`.
+    Remote {
+        node_id: String,
+        start_path: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Debug, Default, Clone)]
@@ -4052,8 +4056,11 @@ impl PaneGroup {
                 let pane = SftpPane::new_local(start_path, ctx);
                 self.replace_pane(pane_id, pane, /* is_temporary */ true, ctx);
             }
-            FileManagerTarget::Remote { node_id } => {
-                let pane = SftpPane::new(node_id, ctx);
+            FileManagerTarget::Remote {
+                node_id,
+                start_path,
+            } => {
+                let pane = SftpPane::new(node_id, start_path, ctx);
                 self.replace_pane(pane_id, pane, /* is_temporary */ true, ctx);
             }
         }

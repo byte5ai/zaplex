@@ -6444,7 +6444,8 @@ impl Workspace {
     pub fn open_sftp_pane(&mut self, node_id: String, ctx: &mut ViewContext<Self>) {
         use crate::pane_group::pane::sftp_pane::SftpPane;
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            let pane = SftpPane::new(node_id, ctx);
+            // SSH-manager "SFTP Browse": browse the host from its root.
+            let pane = SftpPane::new(node_id, None, ctx);
             let smart_split_direction =
                 pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
             pane_group.add_pane_with_direction(
@@ -7986,6 +7987,47 @@ impl Workspace {
             }
             menu_items.len() - start_len
         };
+
+        // 5b. Registered SSH hosts — one entry per host, opening a terminal on
+        // it. "Register once, pick everywhere" (design §5): the list is read
+        // from the SSH registry, never re-entered here. Launching an *agent* on
+        // a host goes through the spawn card ("Neuer Agent…"), which reads the
+        // same registry — so a host is entered once and reachable everywhere,
+        // with no second data-entry (the old per-host launch permutations that
+        // cluttered this menu are gone; the hosts themselves — a linear list —
+        // stay).
+        {
+            let host_servers: Vec<(String, String, warp_ssh_manager::SshServerInfo)> =
+                warp_ssh_manager::with_conn(|c| {
+                    let mut out = Vec::new();
+                    for node in warp_ssh_manager::SshRepository::list_nodes(c)? {
+                        if !matches!(node.kind, warp_ssh_manager::types::NodeKind::Server) {
+                            continue;
+                        }
+                        if let Some(server) =
+                            warp_ssh_manager::SshRepository::get_server(c, &node.id)?
+                        {
+                            out.push((node.id, node.name, server));
+                        }
+                    }
+                    Ok(out)
+                })
+                .unwrap_or_default();
+            if !host_servers.is_empty() {
+                menu_items.push(MenuItem::Separator);
+                for (node_id, name, server) in host_servers {
+                    menu_items.push(
+                        MenuItemFields::new(name)
+                            .with_on_select_action(WorkspaceAction::OpenSshTerminal {
+                                node_id,
+                                server,
+                            })
+                            .with_icon(icons::Icon::Key)
+                            .into_item(),
+                    );
+                }
+            }
+        }
 
         // 6. Separator — only shown when there are coding agents and Docker is enabled
         // The TabConfigs section adds its own separator in step 8, so no need to duplicate it here
@@ -21216,11 +21258,19 @@ impl TypedActionView for Workspace {
                 // moved into the deferred 'static closure below.
                 let active_pg = self.active_tab_pane_group().clone();
                 let target = match self.ssh_tab_nodes.get(&active_pg.id()).cloned() {
-                    Some(node_id) => crate::pane_group::FileManagerTarget::Remote { node_id },
+                    Some(node_id) => crate::pane_group::FileManagerTarget::Remote {
+                        node_id,
+                        start_path: Some(start_path.clone()),
+                    },
                     None => crate::pane_group::FileManagerTarget::Local {
                         start_path: start_path.clone(),
                     },
                 };
+                // Capture the targeted pane NOW (at dispatch time) — the pane focused
+                // when the action fired. Re-reading `focused_pane_id` inside the
+                // deferred closure would toggle whatever happens to be focused at the
+                // later tick, which can differ if focus moved in between.
+                let target_pane_id = active_pg.as_ref(ctx).focused_pane_id(ctx);
                 // Defer the in-place swap to the next foreground tick. This action is
                 // dispatched synchronously from *inside* the invoking pane's own view
                 // update — the header FM-toggle button (PaneView<TerminalView> update)
@@ -21232,8 +21282,7 @@ impl TypedActionView for Workspace {
                 // overflow-menu path (already dispatched outside any update).
                 ctx.spawn(async move {}, move |_workspace, _, ctx| {
                     active_pg.update(ctx, |pane_group, ctx| {
-                        let pane_id = pane_group.focused_pane_id(ctx);
-                        pane_group.open_file_manager_in_place(pane_id, target, ctx);
+                        pane_group.open_file_manager_in_place(target_pane_id, target, ctx);
                     });
                 });
             }

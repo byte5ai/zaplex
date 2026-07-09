@@ -104,6 +104,8 @@ mod tests {
             reset_week: None,
             heat,
             heat_week: heat,
+            heat_opus: None,
+            heat_sonnet: None,
             sessions: Vec::new(),
             status,
             provenance,

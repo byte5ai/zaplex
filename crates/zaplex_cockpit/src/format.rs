@@ -71,6 +71,32 @@ pub fn heat_pct_label_with_provenance(
     }
 }
 
+/// The **binding** rate-limit window for an account — the fullest one, i.e. the
+/// limit the user actually hits first — as `(fraction, short label)`.
+///
+/// A Max plan enforces several windows at once (rolling 5h, rolling 7-day, and
+/// per-model 7-day sublimits). The headline number should be whichever is
+/// closest to its cap, or the card under-reports how constrained the account
+/// really is (e.g. showing a calm 5h `71%` while the Opus weekly sits at `91%`).
+/// Real OAuth accounts include the Opus/Sonnet sublimits; estimates only know
+/// 5h vs. week (the sublimits are `None`), so they degrade to `max(5h, week)`.
+pub fn binding_window(acct: &crate::types::AccountUsage) -> (f64, &'static str) {
+    let mut binding = (acct.heat, "5h");
+    let mut consider = |frac: f64, label: &'static str| {
+        if frac > binding.0 {
+            binding = (frac, label);
+        }
+    };
+    consider(acct.heat_week, "wk");
+    if let Some(opus) = acct.heat_opus {
+        consider(opus, "opus");
+    }
+    if let Some(sonnet) = acct.heat_sonnet {
+        consider(sonnet, "sonnet");
+    }
+    binding
+}
+
 /// The model's usable context window in tokens: 1M for the Opus/Sonnet 1M-beta,
 /// 272k for the Codex/OpenAI GPT-5 family, 200k otherwise. Turns a raw
 /// context-token count into a fill fraction.

@@ -391,8 +391,13 @@ pub struct SftpBrowserView {
 }
 
 impl SftpBrowserView {
-    /// Create a new SFTP browser view
-    pub fn new(node_id: String, ctx: &mut ViewContext<Self>) -> Self {
+    /// Create a new SFTP browser view, opened at `start_path` (the remote
+    /// shell's cwd) when known, else the host root `/`.
+    pub fn new(
+        node_id: String,
+        start_path: Option<PathBuf>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("File Manager"));
         let rename_editor = make_editor("Enter new name", ctx);
         let new_folder_editor = make_editor("Folder name", ctx);
@@ -405,10 +410,10 @@ impl SftpBrowserView {
             connection: ConnectionState::Disconnected,
             _session: None,
             sftp: None,
-            current_path: PathBuf::from("/"),
+            current_path: start_path.clone().unwrap_or_else(|| PathBuf::from("/")),
             entries: Vec::new(),
             selected: HashSet::new(),
-            path_history: vec![PathBuf::from("/")],
+            path_history: vec![start_path.unwrap_or_else(|| PathBuf::from("/"))],
             history_index: 0,
             transfers: Vec::new(),
             next_transfer_id: 1,
@@ -524,7 +529,9 @@ impl SftpBrowserView {
         // Construct via `new` with an empty node id, then replace the (never
         // started for an empty id) connection with the local backend. The
         // guard in `connect_to_server` skips empty node ids.
-        let mut me = Self::new(String::new(), ctx);
+        // `None` start_path: `new_local` sets `current_path`/`path_history` from
+        // its own `start_path` below, so `new`'s value would be overwritten.
+        let mut me = Self::new(String::new(), None, ctx);
         me.pane_configuration = ctx.add_model(|_ctx| {
             PaneConfiguration::new(crate::t!("sftp-local-file-manager-title"))
         });

@@ -27,6 +27,7 @@ use warpui::elements::{
 };
 use warpui::fonts::Weight;
 use warpui::keymap::FixedBinding;
+use warpui::platform::file_picker::{FilePickerConfiguration, FilePickerError};
 use warpui::platform::Cursor;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
@@ -259,6 +260,22 @@ impl SpawnCard {
             HostChoice::Local => None,
             HostChoice::Remote(i) => self.cfg.hosts.get(i).map(|h| h.id.clone()),
         }
+    }
+
+    /// The [`SpawnCardEvent::Launch`] the current selection will emit on Confirm,
+    /// or `None` when nothing is installed to launch (Confirm must then be inert
+    /// — a phantom chip must never launch a missing binary). Kept pure (no
+    /// `ViewContext`) so the confirm payload — the model/effort/account/host/
+    /// project the launch actually carries — is unit-testable.
+    fn launch_payload(&self) -> Option<SpawnCardEvent> {
+        self.any_agent_installed().then(|| SpawnCardEvent::Launch {
+            agent: self.agent,
+            config_dir: self.resolved_config_dir(),
+            cwd: self.project.clone(),
+            node_id: self.resolved_node_id(),
+            model: Some(self.model.clone()),
+            effort: Some(self.effort.clone()),
+        })
     }
 
     fn chip_handle(&self, id: &str) -> MouseStateHandle {
@@ -571,20 +588,44 @@ impl SpawnCard {
         }
         col = col.with_child(self.row("Host", host_chips, appearance));
 
-        // Project (read-only display of the launch dir).
-        let project_str = self
-            .project
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "Default directory".to_string());
-        col = col.with_child(self.row(
-            "Project",
-            vec![Container::new(
-                Text::new_inline(project_str, family, 12.).with_color(main).finish(),
-            )
-            .finish()],
-            appearance,
-        ));
+        // Directory row — the launch dir as an *explicit* choice (Codex #2), not
+        // a blind default. Local: a native folder picker, plus a reset to the
+        // home default once a dir is chosen. Remote: the path lives on the host,
+        // which a local picker cannot browse, so it shows the pre-scoped dir or
+        // the host's default — the same read-only treatment the account row gets
+        // for remote hosts.
+        let dir_display = self.project.as_ref().map(|p| p.display().to_string());
+        if matches!(self.host, HostChoice::Remote(_)) {
+            let text = dir_display.unwrap_or_else(|| "Host's default directory".to_string());
+            col = col.with_child(self.row(
+                "Directory",
+                vec![Container::new(
+                    Text::new_inline(text, family, 12.).with_color(muted).finish(),
+                )
+                .finish()],
+                appearance,
+            ));
+        } else {
+            let mut dir_chips = vec![self.chip(
+                "dir-pick",
+                dir_display
+                    .clone()
+                    .unwrap_or_else(|| "Choose folder…".to_string()),
+                dir_display.is_some(),
+                SpawnCardAction::OpenDirectoryPicker,
+                appearance,
+            )];
+            if dir_display.is_some() {
+                dir_chips.push(self.chip(
+                    "dir-default",
+                    "Default (home)".to_string(),
+                    false,
+                    SpawnCardAction::ClearDirectory,
+                    appearance,
+                ));
+            }
+            col = col.with_child(self.row("Directory", dir_chips, appearance));
+        }
 
         // Summary line.
         col = col.with_child(
@@ -728,18 +769,42 @@ impl TypedActionView for SpawnCard {
                 self.host = HostChoice::Remote(*i);
                 ctx.notify();
             }
+            SpawnCardAction::OpenDirectoryPicker => {
+                // Same pattern as the session-config modal: the picker callback
+                // dispatches a typed action carrying the chosen path back to this
+                // view, which sets `project` in `DirectorySelected` below.
+                ctx.open_file_picker(
+                    |result, ctx| {
+                        if let Some(path_result) =
+                            result.map(|paths| paths.into_iter().next()).transpose()
+                        {
+                            ctx.dispatch_typed_action(&SpawnCardAction::DirectorySelected(
+                                path_result,
+                            ));
+                        }
+                    },
+                    FilePickerConfiguration::new().folders_only(),
+                );
+            }
+            SpawnCardAction::DirectorySelected(result) => match result {
+                Ok(path) => {
+                    self.project = Some(PathBuf::from(path));
+                    ctx.notify();
+                }
+                Err(err) => {
+                    log::warn!("Spawn card directory picker error: {err}");
+                }
+            },
+            SpawnCardAction::ClearDirectory => {
+                self.project = None;
+                ctx.notify();
+            }
             SpawnCardAction::Confirm => {
                 // Guard here too (not just in the chip's on_click), so the
-                // "enter" keybinding can't launch an uninstalled CLI either.
-                if self.any_agent_installed() {
-                    ctx.emit(SpawnCardEvent::Launch {
-                        agent: self.agent,
-                        config_dir: self.resolved_config_dir(),
-                        cwd: self.project.clone(),
-                        node_id: self.resolved_node_id(),
-                        model: Some(self.model.clone()),
-                        effort: Some(self.effort.clone()),
-                    });
+                // "enter" keybinding can't launch an uninstalled CLI either:
+                // `launch_payload` is `None` when nothing is installed.
+                if let Some(launch) = self.launch_payload() {
+                    ctx.emit(launch);
                 }
             }
             SpawnCardAction::Close => {
@@ -771,6 +836,12 @@ pub enum SpawnCardAction {
     SetAccount(usize),
     SetHostLocal,
     SetHost(usize),
+    /// Open the native folder picker to choose the launch directory (local host).
+    OpenDirectoryPicker,
+    /// Result delivered from the folder picker (dispatched from its callback).
+    DirectorySelected(Result<String, FilePickerError>),
+    /// Reset the launch directory to the default (agent's home / cwd).
+    ClearDirectory,
     Confirm,
     Close,
 }
@@ -921,5 +992,108 @@ mod tests {
             installed_agents(&cfg),
             vec![CLIAgent::Claude, CLIAgent::Codex]
         );
+    }
+
+    /// Confirm emits a `Launch` that carries the current selection verbatim: the
+    /// chosen agent, model, effort and project cwd, and — for a local launch —
+    /// the resolved account config dir with no remote node. Positive counterpart
+    /// to the "nothing installed ⇒ no launch" guard.
+    #[test]
+    fn confirm_payload_carries_local_selection() {
+        let card = SpawnCard {
+            cfg: SpawnCardConfig {
+                claude: provider(true),
+                ..Default::default()
+            },
+            agent: CLIAgent::Claude,
+            model: "sonnet".to_string(),
+            effort: "low".to_string(),
+            account: AccountChoice::Freest,
+            host: HostChoice::Local,
+            project: Some(PathBuf::from("/home/dev/projects/zaplex")),
+            chip_states: Default::default(),
+        };
+
+        match card
+            .launch_payload()
+            .expect("an installed agent must yield a Launch on Confirm")
+        {
+            SpawnCardEvent::Launch {
+                agent,
+                config_dir,
+                cwd,
+                node_id,
+                model,
+                effort,
+            } => {
+                assert_eq!(agent, CLIAgent::Claude);
+                assert_eq!(model.as_deref(), Some("sonnet"));
+                assert_eq!(effort.as_deref(), Some("low"));
+                assert_eq!(cwd, Some(PathBuf::from("/home/dev/projects/zaplex")));
+                assert_eq!(node_id, None, "a local launch has no remote node");
+                // Freest with no configured freest_dir means the default login.
+                assert_eq!(config_dir, None);
+            }
+            SpawnCardEvent::Close => panic!("Confirm must emit Launch, not Close"),
+        }
+    }
+
+    /// A remote-scoped launch routes to the selected host's stable node id and,
+    /// because account config dirs are local paths, carries no config dir.
+    #[test]
+    fn confirm_payload_routes_remote_launch_to_node_id() {
+        let card = SpawnCard {
+            cfg: SpawnCardConfig {
+                claude: provider(true),
+                hosts: vec![host("node-7", "devbox")],
+                ..Default::default()
+            },
+            agent: CLIAgent::Claude,
+            model: "opus".to_string(),
+            effort: "high".to_string(),
+            account: AccountChoice::Freest,
+            host: HostChoice::Remote(0),
+            project: None,
+            chip_states: Default::default(),
+        };
+
+        match card
+            .launch_payload()
+            .expect("an installed agent must yield a Launch on Confirm")
+        {
+            SpawnCardEvent::Launch {
+                node_id,
+                config_dir,
+                ..
+            } => {
+                assert_eq!(node_id.as_deref(), Some("node-7"));
+                assert_eq!(
+                    config_dir, None,
+                    "remote launches use the host's own account"
+                );
+            }
+            SpawnCardEvent::Close => panic!("Confirm must emit Launch, not Close"),
+        }
+    }
+
+    /// Confirm is inert when nothing is installed — no phantom launch of a
+    /// missing binary (the guard the pane's Confirm relies on).
+    #[test]
+    fn confirm_payload_none_when_nothing_installed() {
+        let card = SpawnCard {
+            cfg: SpawnCardConfig {
+                claude: provider(false),
+                codex: provider(false),
+                ..Default::default()
+            },
+            agent: CLIAgent::Claude,
+            model: "opus".to_string(),
+            effort: "high".to_string(),
+            account: AccountChoice::Freest,
+            host: HostChoice::Local,
+            project: None,
+            chip_states: Default::default(),
+        };
+        assert!(card.launch_payload().is_none());
     }
 }
