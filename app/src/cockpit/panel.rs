@@ -25,8 +25,10 @@ use zaplex_cockpit::{
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    ctx_pct_element, glyph_cell, heat_coloru, verb_button, verb_button_colored, VerbKind,
+    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button, verb_button, VerbKind,
+    GLYPH_COL_WIDTH,
 };
+use crate::ui_components::icons;
 use crate::WorkspaceAction;
 
 /// Max session rows shown per host in the compact sidebar before an overflow
@@ -457,11 +459,11 @@ impl CockpitPanel {
                     let action = WorkspaceAction::ManageSshHost {
                         node_id: node_id.clone(),
                     };
-                    header_row = header_row.with_child(verb_button(
+                    header_row = header_row.with_child(icon_verb_button(
                         manage_state,
-                        "⋯",
-                        VerbKind::Constructive,
-                        appearance,
+                        icons::Icon::DotsHorizontal,
+                        theme.sub_text_color(theme.background()),
+                        theme.accent(),
                         action,
                     ));
                 }
@@ -521,15 +523,34 @@ impl CockpitPanel {
                 );
             }
         }
-        // "＋ Add host" root — folds the SSH-manager add function onto the spine
-        // (design §10). Creates a blank registered host and opens its editor.
-        col = col.with_child(verb_button(
-            self.add_host_btn.clone(),
-            crate::t!("cockpit-conductor-add-host").to_string(),
-            VerbKind::Constructive,
-            appearance,
-            WorkspaceAction::AddSshHost,
-        ));
+        // "Add host" root — folds the SSH-manager add function onto the spine
+        // (design §10). A Plus icon + label (#107), muted at rest / accent on
+        // hover; creates a blank registered host and opens its editor.
+        let add_label = crate::t!("cockpit-conductor-add-host").to_string();
+        let add_rest = theme.sub_text_color(theme.background());
+        let add_accent = theme.accent();
+        let add_host = Hoverable::new(self.add_host_btn.clone(), move |mouse| {
+            let color = if mouse.is_hovered() { add_accent } else { add_rest };
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(6.0)
+                .with_child(
+                    ConstrainedBox::new(icons::Icon::Plus.to_warpui_icon(color).finish())
+                        .with_width(GLYPH_COL_WIDTH)
+                        .with_height(GLYPH_COL_WIDTH)
+                        .finish(),
+                )
+                .with_child(
+                    Text::new_inline(add_label.clone(), family, body)
+                        .with_color(color.into_solid())
+                        .finish(),
+                )
+                .finish()
+        })
+        .with_cursor(warpui::platform::Cursor::PointingHand)
+        .on_click(move |ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::AddSshHost))
+        .finish();
+        col = col.with_child(add_host);
         Some(col.finish())
     }
 
@@ -661,10 +682,9 @@ impl CockpitPanel {
         trailing.with_main_axis_size(MainAxisSize::Max).finish()
     }
 
-    /// The ★ favorite toggle for a Conductor tree node (design §10). Filled +
-    /// accent when favorited (hover → muted, hinting un-star); outline + muted
-    /// when not (hover → accent, hinting star). Reuses the verb-button idiom so
-    /// it reads as an inline verb, not a heavy button.
+    /// The ★ favorite toggle for a Conductor tree node (design §10), rendered in
+    /// the real icon font (#107). Favorited rests in the accent (hover → muted,
+    /// hinting un-star); not-favorited rests muted (hover → accent, hinting star).
     fn star_button(
         state: MouseStateHandle,
         is_fav: bool,
@@ -672,14 +692,14 @@ impl CockpitPanel {
         action: WorkspaceAction,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let accent = theme.accent().into_solid();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-        let (label, rest, hover) = if is_fav {
-            ("★", accent, muted)
+        let accent = theme.accent();
+        let muted = theme.sub_text_color(theme.background());
+        let (rest, hover) = if is_fav {
+            (accent, muted)
         } else {
-            ("☆", muted, accent)
+            (muted, accent)
         };
-        verb_button_colored(state, label, rest, hover, appearance, action)
+        icon_verb_button(state, icons::Icon::Stars, rest, hover, action)
     }
 
     fn render_header(
