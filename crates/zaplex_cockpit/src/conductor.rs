@@ -238,6 +238,20 @@ pub fn host_key(is_local: bool, host_id: Option<&str>, id: &str) -> String {
     format!("{}\u{0}{id}", host_ident(is_local, host_id))
 }
 
+/// Inverse of [`host_key`]: split a key back into `(host_ident, id)`. The
+/// `host_ident` is `"local"` for the local host or `"daemon:<id>"` for a remote.
+/// Used to route a host-scoped favorite: a `"local"` key always launches locally
+/// (durable), a remote key resolves against the live inventory. Returns `None`
+/// for a string that is not a `host_key` (no separator).
+pub fn split_host_key(key: &str) -> Option<(&str, &str)> {
+    key.split_once('\u{0}')
+}
+
+/// Whether a [`host_key`] targets the local host.
+pub fn host_key_is_local(key: &str) -> bool {
+    matches!(split_host_key(key), Some(("local", _)))
+}
+
 /// A stable, host-identity-carrying pointer to one Waiting agent — the `w`-jump
 /// target and cursor. It keeps the display `host_label` for the attach dispatch,
 /// but **identity** is the stable `(is_local, host_id)` pair plus the

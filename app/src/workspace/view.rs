@@ -7895,12 +7895,18 @@ impl Workspace {
         let mut seen_projects = std::collections::HashSet::new();
         for host in &inventory.hosts {
             for project in &host.projects {
-                if !seen_projects.insert(project.root.clone()) {
+                // Host-scope the project favorite by host_key: a project path is
+                // unique only within a host, so /home/me/proj on local and on
+                // devhost are distinct favorites (and a remote project scopes to
+                // its host, never launching on the wrong machine).
+                let key =
+                    zaplex_cockpit::host_key(host.is_local, host.host_id.as_deref(), &project.root);
+                if !seen_projects.insert(key.clone()) {
                     continue;
                 }
                 if favorites
                     .iter()
-                    .any(|f| f.same_target(FavoriteKind::Project, &project.root))
+                    .any(|f| f.same_target(FavoriteKind::Project, &key))
                 {
                     continue;
                 }
@@ -7908,7 +7914,7 @@ impl Workspace {
                     MenuItemFields::new(project.name.clone())
                         .with_on_select_action(WorkspaceAction::ToggleFavorite {
                             kind: FavoriteKind::Project,
-                            target: project.root.clone(),
+                            target: key,
                             label: project.name.clone(),
                         })
                         .with_icon(icons::Icon::Folder)
@@ -7984,16 +7990,44 @@ impl Workspace {
                     .into_item(),
                 None => self.stale_favorite_item(fav),
             },
-            // Project → open the spawn card scoped to that directory. A project
-            // pointer is durable (a path), so it is not stale-checked here.
-            FavoriteKind::Project => MenuItemFields::new(fav.display_label().to_string())
-                .with_on_select_action(WorkspaceAction::OpenSpawnCard {
-                    host_id: None,
-                    host: None,
-                    project: Some(std::path::PathBuf::from(&fav.target)),
-                })
-                .with_icon(icons::Icon::Folder)
-                .into_item(),
+            // Project → open the spawn card scoped to the project's host + dir.
+            // The target is a host_key. A LOCAL project is durable (local is
+            // always reachable) and launches locally with the path. A REMOTE
+            // project resolves against the live inventory to scope to its host —
+            // or greys out as stale if that host is gone, so it never launches on
+            // the wrong machine.
+            FavoriteKind::Project => {
+                if let Some(("local", path)) = zaplex_cockpit::split_host_key(&fav.target) {
+                    return MenuItemFields::new(fav.display_label().to_string())
+                        .with_on_select_action(WorkspaceAction::OpenSpawnCard {
+                            host_id: None,
+                            host: None,
+                            project: Some(std::path::PathBuf::from(path)),
+                        })
+                        .with_icon(icons::Icon::Folder)
+                        .into_item();
+                }
+                let resolved = inventory.hosts.iter().find_map(|h| {
+                    h.projects.iter().find_map(|p| {
+                        (zaplex_cockpit::host_key(h.is_local, h.host_id.as_deref(), &p.root)
+                            == fav.target)
+                            .then(|| (h.host.clone(), h.host_id.clone(), p.root.clone()))
+                    })
+                });
+                match resolved {
+                    Some((host, host_id, root)) => {
+                        MenuItemFields::new(fav.display_label().to_string())
+                            .with_on_select_action(WorkspaceAction::OpenSpawnCard {
+                                host_id,
+                                host: Some(host),
+                                project: Some(std::path::PathBuf::from(root)),
+                            })
+                            .with_icon(icons::Icon::Folder)
+                            .into_item()
+                    }
+                    None => self.stale_favorite_item(fav),
+                }
+            }
             // Session → attach, resolving host identity from the live inventory by
             // the host-scoped `host_key` (the favorite target), so the raw
             // session id is never matched across hosts.
