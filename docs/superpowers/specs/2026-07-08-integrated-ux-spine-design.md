@@ -221,3 +221,32 @@ object-tree, while it leads the cockpit sidebar/pane and its rows are actionable
 spine (replacing/leading the whole left panel as the organizing Host ▸ Project ▸ Session ▸ Agent view) is
 a larger UX redesign beyond the tree-detail tweaks approved so far — flagged for an explicit product call
 rather than silently scoped in.
+
+## 9. Codex gate round 4 → fixes (user chose "build the full spine")
+
+Round 4 rejected the §8 remote-launch **downgrade** (the empty host list broke the Conductor's
+remote-scoped `+`, which silently fell back to local) and demanded the full launcher. Reversed and
+completed:
+
+1. **Full remote spawn-launcher.** The §8 downgrade is undone — `open_spawn_card` again reads the real SSH
+   registry for its host list, and the spawn card now has a **remote directory text input**
+   (`EditorView::single_line`, since a native picker can't browse a remote FS): local hosts keep the
+   native folder picker, remote hosts type the path. The launch reads the editor at Confirm and carries
+   it as the remote cwd; the "Launching:" summary reflects the typed path live. So a Conductor
+   remote-scoped `+` (host + project) now resolves the host and launches remotely with a selectable
+   directory — the `agent · host · directory · account` contract holds for remote too.
+   (`spawn_card.rs`, `workspace/view.rs open_spawn_card`.)
+2. **Every agent entrypoint routes through the spawn card (cockpit on).** The `AddAgentTab` action handler
+   now opens the spawn card, which covers the menu, the `new-agent-tab` keybinding (`workspace/mod.rs`),
+   and the `NewAgentConversation` URI (`uri/mod.rs`); the left-panel `NewConversationInNewTab` event is
+   routed the same way. Cockpit off → the legacy in-app agent tab (fallback). No blind agent entrypoint
+   remains under the cockpit vision.
+3. **Comment debt.** The FM-toggle-icon doc comment now matches `should_render_header` always returning
+   true (the icon shows on every pane). (`terminal/view/pane_impl.rs`.)
+
+**Still open — Conductor as THE visible app spine (Codex concept item #3, user opted to build it).** The
+Conductor already leads the toolbelt (`compute_left_panel_views` puts Cockpit first) and the object-tree
+leads the cockpit panel with actionable local+remote rows. Making it the *sole* organizing grammar —
+folding the other left-panel surfaces (SSH hosts, conversations) into the Host ▸ Project ▸ Session ▸ Agent
+tree so it is the app's primary navigation — is the remaining large redesign, being planned with an
+explicit target before build.

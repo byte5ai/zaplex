@@ -539,9 +539,9 @@ impl TerminalView {
 
     /// Render the pane-header "toggle to file manager" icon (FM design §7): flips
     /// this terminal pane into the file manager in place, rooted at the pane's cwd.
-    /// Shown wherever the pane header renders (splits / shared sessions); the
-    /// universal affordance is the `cmd-shift-E` hotkey, which also works on a lone
-    /// pane where no header is rendered.
+    /// The pane header now always renders (`should_render_header` returns true even
+    /// for a lone pane), so this icon is available on every terminal pane; the
+    /// `cmd-shift-E` hotkey is the equivalent keyboard affordance.
     fn render_open_file_manager_button(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();

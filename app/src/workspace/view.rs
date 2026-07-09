@@ -6358,7 +6358,14 @@ impl Workspace {
                 }
             }
             LeftPanelEvent::NewConversationInNewTab => {
-                self.add_terminal_tab_with_new_agent_view(ctx);
+                // Left-panel "new conversation" is an agent entrypoint too: route it
+                // through the spawn card under the cockpit vision (one launch
+                // grammar), falling back to the legacy in-app agent tab when off.
+                if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+                    self.open_spawn_card(None, None, None, None, ctx);
+                } else {
+                    self.add_terminal_tab_with_new_agent_view(ctx);
+                }
             }
             LeftPanelEvent::ShowDeleteConfirmationDialog {
                 conversation_id,
@@ -17622,16 +17629,21 @@ impl Workspace {
         let codex =
             self.spawn_card_provider_options(zaplex_cockpit::Provider::Codex, codex_installed, ctx);
 
-        // Spawn-card launches are LOCAL for this build (Codex-sanctioned downgrade
-        // of remote launch): a native folder picker cannot browse a remote
-        // filesystem, so rather than ship a half-selectable remote directory we
-        // scope the card to local launches — the directory is fully selectable and
-        // "dir is steering" holds. Remote agent work stays reachable two other
-        // ways: adopting an existing remote session from the Conductor (in-place
-        // remote adopt), or opening a remote terminal from the "+" menu (host list)
-        // and starting the agent there. Remote spawn-launch returns once the card
-        // has a real remote directory input (tracked as a follow-up).
-        let hosts: Vec<spawn_card::HostOption> = Vec::new();
+        // The card reads the SSH registry for its host list ("register once, pick
+        // everywhere"). Remote launches are fully supported: the host is picked
+        // here and the remote directory is entered in the card's remote-dir field
+        // (a native folder picker can't browse a remote FS, so remote uses a text
+        // input — see spawn_card.rs).
+        let hosts =
+            warp_ssh_manager::with_conn(|c| Ok(warp_ssh_manager::SshRepository::list_nodes(c)?))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|n| matches!(n.kind, warp_ssh_manager::types::NodeKind::Server))
+                .map(|n| spawn_card::HostOption {
+                    id: n.id.clone(),
+                    name: n.name.clone(),
+                })
+                .collect();
 
         // Reconcile the two host id spaces at the spawn-card boundary. The
         // Conductor scopes a `+` by the Agent-inventory's *daemon* `HostId`, but
@@ -17671,7 +17683,8 @@ impl Workspace {
             project,
             prompt,
         };
-        self.spawn_card.update(ctx, |card, _| card.configure(cfg));
+        self.spawn_card
+            .update(ctx, |card, ctx| card.configure(cfg, ctx));
 
         self.current_workspace_state.close_all_modals();
         self.current_workspace_state.is_spawn_card_open = true;
@@ -21393,7 +21406,19 @@ impl TypedActionView for Workspace {
                 self.add_tab_with_shell(shell.clone(), *source, ctx)
             }
             AddGetStartedTab => self.add_get_started_tab(ctx),
-            AddAgentTab => self.add_terminal_tab_with_new_agent_view(ctx),
+            AddAgentTab => {
+                // Cockpit vision: the in-app agent is not a separate launch
+                // grammar — every "new agent" goes through the one explicit spawn
+                // card. Because the menu entry, the `new-agent-tab` keybinding
+                // (workspace/mod.rs) and the `NewAgentConversation` URI (uri/mod.rs)
+                // all dispatch this action, routing it here covers every entrypoint
+                // uniformly. Cockpit off → the legacy in-app agent tab (fallback).
+                if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+                    self.open_spawn_card(None, None, None, None, ctx);
+                } else {
+                    self.add_terminal_tab_with_new_agent_view(ctx);
+                }
+            }
             AddSpecificAgentTab(agent) => self.add_tab_with_specific_agent(*agent, ctx),
             AddDockerSandboxTab => self.add_docker_sandbox_tab(ctx),
             StartAgentOnboardingTutorial(tutorial) => {
