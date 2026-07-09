@@ -74,6 +74,11 @@ use warpui::AddSingletonModel;
 use warpui::{platform::WindowStyle, App, ViewHandle};
 
 fn initialize_app(app: &mut App) {
+    // Load the bundled localization so `t!` returns real strings (not keys) —
+    // mirrors prod (`lib.rs` `i18n::init`). Force English so the label-based menu
+    // tests are locale-deterministic. Without it `t!` returns raw fluent keys and
+    // the UI logs "called before init()".
+    crate::i18n::init(Some("en"));
     initialize_settings_for_tests(app);
 
     // Add the necessary singleton models to the App
@@ -114,6 +119,11 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(AgentConversationsModel::new);
+    // Must precede `LLMPreferences::new` (which subscribes to it) and
+    // `workspace::init` (which materializes command-palette binding descriptions
+    // that read it). Without it the whole workspace-view test class — and the
+    // boot/open smoke gate below — panic headless.
+    app.add_singleton_model(crate::ai::agent_providers::AgentProviderSecrets::new);
     app.add_singleton_model(LLMPreferences::new);
     app.add_singleton_model(|_| SettingsPaneManager::new());
     app.add_singleton_model(|_| AIFactManager::new());
@@ -181,6 +191,20 @@ fn initialize_app(app: &mut App) {
     // because `SkillWatcher::new` subscribes to all of them.
     app.add_singleton_model(SkillManager::new);
 
+    // The cockpit spine leads the left panel, so building a workspace window
+    // constructs the CockpitPanel — which reads these. CockpitModel subscribes to
+    // HomeDirectoryWatcher (already registered above) and AttentionDriver to
+    // CockpitModel, so the order matters. CLIAgentInstallModel is read by the
+    // new-session menu + agent surfaces.
+    app.add_singleton_model(crate::terminal::cli_agent::CLIAgentInstallModel::new);
+    app.add_singleton_model(crate::settings::network_secrets::ProxyCredentials::new);
+    app.add_singleton_model(crate::settings::CloudSyncTokenStore::new);
+    // FileModel before GlobalBufferModel (whose `new` reads it), mirroring prod.
+    app.add_singleton_model(warp_files::FileModel::new);
+    app.add_singleton_model(crate::code::global_buffer_model::GlobalBufferModel::new);
+    app.add_singleton_model(crate::cockpit::CockpitModel::new);
+    app.add_singleton_model(crate::cockpit::AttentionDriver::new);
+
     // Make sure to initialize the keybindings so that they are available for subviews
     app.update(workspace::init);
 }
@@ -220,16 +244,14 @@ fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
 /// the "does it open" path. Reaching the end without panicking proves every
 /// registered binding (mac and linux/windows) parses and that a window opens.
 ///
-/// `#[ignore]`d: building a workspace needs the full app singleton graph, which
-/// the `App::test` unit harness does not register — `workspace::init` eagerly
-/// materializes command-palette binding descriptions that read singletons like
-/// `AgentProviderSecrets`, so it panics headless. This is the same environment
-/// limitation the other workspace-view tests share; run it with `--ignored` on a
-/// full app harness. The cmd-shift-o keymap-crash class it targets is gated
-/// headless — and in CI — by the `warpui_core::keymap` `validate_off_platform_binding`
-/// tests (they panic on a malformed mac binding on any platform).
+/// No longer `#[ignore]`d (#104): `initialize_app` now registers the full
+/// singleton graph the construction path reads (`AgentProviderSecrets`,
+/// `LanguageSettings`, `CockpitSettings`, `NetworkSettings`, `CloudSyncSettings`,
+/// the cockpit + code/file singletons, …), so building a workspace headless no
+/// longer panics. This is now a real boot/open smoke gate: it runs the binding
+/// registration path *and* constructs a window, catching both the keymap-crash
+/// class and "does the UI wiring survive construction".
 #[test]
-#[ignore = "needs full app singleton graph (App::test harness limitation); keymap-crash class is gated by the warpui_core::keymap tests"]
 fn test_boot_registers_all_keybindings_without_panicking() {
     App::test((), |mut app| async move {
         // `initialize_app` runs `workspace::init` — where the `cmd-shift-o`
@@ -2327,17 +2349,23 @@ fn test_unified_new_session_menu_uses_new_worktree_config_label_and_order() {
 
             assert!(!labels.iter().any(|label| label == "Worktree in"));
 
-            let separator_index = labels
+            // Anchor on the worktree-config entry itself rather than "the first
+            // separator": the menu now has earlier separators (the agent section
+            // and the Favorites section), so a first-separator heuristic is wrong.
+            // The contract under test is that "New worktree config" opens its own
+            // section (preceded by a separator) and is immediately followed by
+            // "New tab config".
+            let worktree_index = labels
                 .iter()
-                .position(|label| label == "---")
-                .expect("expected a separator in the new-session menu");
-
+                .position(|label| label == "New worktree config")
+                .expect("expected 'New worktree config' in the new-session menu");
             assert_eq!(
-                labels.get(separator_index + 1),
-                Some(&"New worktree config".to_string())
+                labels.get(worktree_index - 1),
+                Some(&"---".to_string()),
+                "worktree config should open its own separated section"
             );
             assert_eq!(
-                labels.get(separator_index + 2),
+                labels.get(worktree_index + 1),
                 Some(&"New tab config".to_string())
             );
         });

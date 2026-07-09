@@ -101,14 +101,17 @@ jobs:
           test_keystroke_invalid_no_shift_uppercase
         shell: bash
 
-      # Focused app-crate unit tests for the FM-toggle and spawn-card launch
-      # payload. Targeted by name so only these run — the app crate's full test
-      # suite has known harness/env-dependent failures unrelated to this gate.
-      # (The `test_boot_registers_all_keybindings_without_panicking` window-open
-      # smoke test is `#[ignore]`d — it needs the full app singleton graph the
-      # unit-test harness can't provide; the keymap-crash class it targets is
-      # covered by the warpui_core::keymap validation step above.)
-      - name: cargo test (FM toggle + spawn-card focused unit tests)
+      # Focused app-crate unit tests: the FM-toggle + spawn-card launch payload,
+      # plus the real boot/open smoke gate. Targeted by name so only these run —
+      # the app crate's full test suite has known harness/env-dependent failures
+      # unrelated to this gate.
+      #
+      # `test_boot_registers_all_keybindings_without_panicking` is the boot/open
+      # smoke gate (#104): the app-test harness now registers the full singleton
+      # graph, so it constructs a workspace window headless and runs the binding
+      # registration path — catching both the keymap-crash class and "does the UI
+      # wiring survive construction", the thing `cargo check` cannot.
+      - name: cargo test (FM toggle + spawn-card + boot/open smoke gate)
         run: >
           cargo test --locked -p warp --lib --
           file_manager_start_path_uses_session_cwd
@@ -116,4 +119,5 @@ jobs:
           confirm_payload_carries_local_selection
           confirm_payload_routes_remote_launch_to_node_id
           confirm_payload_none_when_nothing_installed
+          test_boot_registers_all_keybindings_without_panicking
         shell: bash

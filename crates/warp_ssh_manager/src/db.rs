@@ -43,8 +43,23 @@ fn open() -> Result<SqliteConnection> {
 }
 
 /// Execute closure within lock. Opens connection lazily on first call; reuses on subsequent calls.
+///
+/// A failed open (most importantly: the DB path was never initialized — e.g. a
+/// headless test harness, or a boot ordering bug) is **returned as an error**,
+/// not a panic. Registry reads (`list_nodes`, `get_server`) already default
+/// gracefully to "no registered hosts" on `Err`, so the app degrades instead of
+/// crashing during construction.
 pub fn with_conn<R>(f: impl FnOnce(&mut SqliteConnection) -> Result<R>) -> Result<R> {
-    let mtx = CONN.get_or_init(|| Mutex::new(open().expect("warp_ssh_manager db open")));
+    if CONN.get().is_none() {
+        // Racing initializers each open a connection; only the first `set` wins
+        // (WAL makes concurrent opens on the same file safe) and the loser's
+        // connection is dropped. `open()?` propagates instead of panicking.
+        let conn = open()?;
+        let _ = CONN.set(Mutex::new(conn));
+    }
+    let mtx = CONN
+        .get()
+        .ok_or_else(|| anyhow!("warp_ssh_manager::db: connection unavailable"))?;
     let mut guard = mtx
         .lock()
         .map_err(|_| anyhow!("warp_ssh_manager db mutex poisoned"))?;
