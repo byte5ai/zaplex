@@ -15,6 +15,7 @@ pub mod claude;
 pub mod codex;
 pub mod codex_sessions;
 pub mod conductor;
+pub mod favorites;
 pub mod fleet;
 pub mod format;
 pub mod guardrails;
@@ -35,6 +36,7 @@ pub use conductor::{
     session_attrs, session_glyph, waiting_sessions, SessionAttrs, WaitingTarget, GLYPH_IDLE,
     GLYPH_WAITING, GLYPH_WORKING,
 };
+pub use favorites::{Favorite, FavoriteKind, Favorites};
 pub use fleet::{
     build_fleet_tree, fold_inventory, merge_registered_hosts, AgentSession, FleetTree, HostNode,
     HostSessions, ProjectNode,
