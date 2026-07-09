@@ -39,6 +39,10 @@ const CARD_PADDING: f32 = 8.0;
 const CARD_SPACING: f32 = 4.0;
 const HEAT_BAR_WIDTH: f32 = 90.0;
 const HEAT_BAR_HEIGHT: f32 = 6.0;
+/// Fixed width of a Conductor row's right metric column (model·effort + ctx%),
+/// so the metric right-aligns into a stable column and nothing jumps as the
+/// label/effort width varies row-to-row (#108).
+const METRIC_COL_WIDTH: f32 = 120.0;
 
 /// Events the sidebar emits toward the workspace (via the left panel).
 pub enum CockpitPanelEvent {
@@ -480,18 +484,41 @@ impl CockpitPanel {
                         break 'host;
                     }
                     shown += 1;
-                    col = col.with_child(
-                        Container::new(self.render_conductor_row(
-                            &host.host,
-                            host.host_id.as_deref(),
-                            &project.name,
-                            session,
-                            is_local,
-                            favorites,
-                            appearance,
-                        ))
-                        .with_padding_left(10.0)
+                    // Indent rail (#108): a faint full-height hairline marks the
+                    // host→session nesting so rows read as a tree, not a flat list.
+                    let mut rail_color = muted;
+                    rail_color.a = 48;
+                    let rail = Container::new(
+                        ConstrainedBox::new(
+                            Rect::new().with_background_color(rail_color).finish(),
+                        )
+                        .with_width(1.0)
                         .finish(),
+                    )
+                    .with_margin_left(4.0)
+                    .with_margin_right(5.0)
+                    .finish();
+                    col = col.with_child(
+                        Flex::row()
+                            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                            .with_main_axis_size(MainAxisSize::Max)
+                            .with_child(rail)
+                            .with_child(
+                                Shrinkable::new(
+                                    1.0,
+                                    self.render_conductor_row(
+                                        &host.host,
+                                        host.host_id.as_deref(),
+                                        &project.name,
+                                        session,
+                                        is_local,
+                                        favorites,
+                                        appearance,
+                                    ),
+                                )
+                                .finish(),
+                            )
+                            .finish(),
                     );
                 }
             }
@@ -602,8 +629,9 @@ impl CockpitPanel {
                 appearance,
             ))
             .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish());
-        // Always-visible model·effort·context (step 8), compact for the sidebar:
-        // the "Opus·High" label in accent, then the colored context-fill %.
+        // Fixed-width right metric column (#108): the "Opus·High" label + colored
+        // context-fill % live in a fixed, right-aligned column so the metric never
+        // jumps as the label/effort width changes across rows.
         let effort = crate::cockpit::session_effort(session, is_local, host_id);
         let attrs = zaplex_cockpit::session_attrs(
             &session.model,
@@ -611,13 +639,22 @@ impl CockpitPanel {
             session.ctx_tokens,
             session.state,
         );
+        let mut metric = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_spacing(6.0);
         if !attrs.model_effort.is_empty() {
             let accent = theme.accent().into_solid();
-            row = row.with_child(Self::text(attrs.model_effort, family, body, accent));
+            metric = metric.with_child(Self::text(attrs.model_effort, family, body, accent));
         }
         if let Some(pct) = attrs.ctx_pct {
-            row = row.with_child(ctx_pct_element(pct, attrs.ctx_fill, false, appearance));
+            metric = metric.with_child(ctx_pct_element(pct, attrs.ctx_fill, false, appearance));
         }
+        row = row.with_child(
+            ConstrainedBox::new(metric.with_main_axis_size(MainAxisSize::Max).finish())
+                .with_width(METRIC_COL_WIDTH)
+                .finish(),
+        );
         let info = row.with_main_axis_size(MainAxisSize::Max).finish();
 
         // Attach on click of the info span — for BOTH local and remote sessions
