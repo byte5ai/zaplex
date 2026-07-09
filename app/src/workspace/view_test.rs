@@ -99,6 +99,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| ChangelogModel::new(Arc::new(http_client::Client::new())));
     app.add_singleton_model(|_| GitHubAuthNotifier::new());
     app.add_singleton_model(|_| crate::ssh_manager::SshTreeChangedNotifier::new());
+    app.add_singleton_model(crate::cockpit::favorites::FavoritesStore::new);
     app.add_singleton_model(|_ctx| SyncedInputState::mock());
     app.add_singleton_model(|_| ResizableData::default());
     app.add_singleton_model(LocalWorkflows::new);

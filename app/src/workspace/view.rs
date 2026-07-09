@@ -7783,6 +7783,231 @@ impl Workspace {
     /// tab bar chevron and the vertical tab bar `+` button.
     ///
     /// Order: Terminal → User tab configs → separator → Agent → Coding Agents → separator → Docker → Worktree config → New tab config → separator → Reopen closed session.
+    /// The **Favorites** section of the "+" dropdown (design §10): the
+    /// user-curated list plus a flat "add to favorites" picker of tree objects
+    /// (hosts / projects) not yet favorited. This *replaces* the old auto
+    /// host-list — a favorite duplicates nothing ("register once, pick
+    /// everywhere") and is the definitive answer to "SSH hosts in the dropdown"
+    /// (favorite a host, no regression). Curation also happens via the ★ on a
+    /// Conductor tree node in the sidebar.
+    fn favorites_menu_items(&self, ctx: &mut ViewContext<Self>) -> Vec<MenuItem<WorkspaceAction>> {
+        use zaplex_cockpit::FavoriteKind;
+
+        // Registered hosts (node_id -> label), read once from the SSH registry —
+        // used to resolve host favorites and to populate the add picker.
+        let host_nodes: Vec<(String, String)> = warp_ssh_manager::with_conn(|c| {
+            let mut out = Vec::new();
+            for node in warp_ssh_manager::SshRepository::list_nodes(c)? {
+                if matches!(node.kind, warp_ssh_manager::types::NodeKind::Server) {
+                    out.push((node.id, node.name));
+                }
+            }
+            Ok(out)
+        })
+        .unwrap_or_default();
+
+        // Live inventory (owned clone) for session resolution + addable projects.
+        let inventory = crate::cockpit::CockpitModel::as_ref(ctx).inventory().clone();
+        let tab_configs = if FeatureFlag::TabConfigs.is_enabled() {
+            WarpConfig::as_ref(ctx).tab_configs().to_vec()
+        } else {
+            Vec::new()
+        };
+        let favorites = crate::cockpit::favorites::FavoritesStore::handle(ctx)
+            .as_ref(ctx)
+            .items()
+            .to_vec();
+
+        // Freest Claude account (config dir) for any GitHub-flow favorites —
+        // resolved once here (needs ctx), reused for every flow row.
+        let flow_config_dir = {
+            let snapshot = crate::cockpit::CockpitModel::as_ref(ctx).snapshot();
+            zaplex_cockpit::pick_freest(zaplex_cockpit::Provider::Claude, &snapshot.accounts)
+                .map(|f| f.account.config_dir.clone())
+        };
+
+        let mut items = vec![MenuItem::Separator];
+        items.push(MenuItem::Header {
+            fields: MenuItemFields::new(crate::t!("workspace-favorites-header")),
+            clickable: false,
+            right_side_fields: None,
+        });
+
+        if favorites.is_empty() {
+            items.push(
+                MenuItemFields::new(crate::t!("workspace-favorites-empty"))
+                    .with_disabled(true)
+                    .into_item(),
+            );
+        }
+        for fav in &favorites {
+            items.push(self.favorite_menu_item(
+                fav,
+                &host_nodes,
+                &inventory,
+                &tab_configs,
+                flow_config_dir.as_deref(),
+            ));
+        }
+
+        // Add-to-favorites picker: durable tree objects (hosts + distinct
+        // projects) not yet favorited. Sessions are curated via the sidebar ★
+        // (they are transient, so they stay out of this flat picker).
+        let mut addable: Vec<MenuItem<WorkspaceAction>> = Vec::new();
+        for (node_id, name) in &host_nodes {
+            if favorites.iter().any(|f| f.same_target(FavoriteKind::Host, node_id)) {
+                continue;
+            }
+            addable.push(
+                MenuItemFields::new(name.clone())
+                    .with_on_select_action(WorkspaceAction::ToggleFavorite {
+                        kind: FavoriteKind::Host,
+                        target: node_id.clone(),
+                        label: name.clone(),
+                    })
+                    .with_icon(icons::Icon::Key)
+                    .into_item(),
+            );
+        }
+        let mut seen_projects = std::collections::HashSet::new();
+        for host in &inventory.hosts {
+            for project in &host.projects {
+                if !seen_projects.insert(project.root.clone()) {
+                    continue;
+                }
+                if favorites
+                    .iter()
+                    .any(|f| f.same_target(FavoriteKind::Project, &project.root))
+                {
+                    continue;
+                }
+                addable.push(
+                    MenuItemFields::new(project.name.clone())
+                        .with_on_select_action(WorkspaceAction::ToggleFavorite {
+                            kind: FavoriteKind::Project,
+                            target: project.root.clone(),
+                            label: project.name.clone(),
+                        })
+                        .with_icon(icons::Icon::Folder)
+                        .into_item(),
+                );
+            }
+        }
+        if !addable.is_empty() {
+            items.push(MenuItem::Header {
+                fields: MenuItemFields::new(crate::t!("workspace-favorites-add-header")),
+                clickable: false,
+                right_side_fields: None,
+            });
+            items.extend(addable);
+        }
+
+        items
+    }
+
+    /// Resolve one curated favorite to its dropdown row: the object's default
+    /// action when the target still resolves, else a one-click "remove" row
+    /// (staleness is tolerated by design — the target is resolved lazily here).
+    fn favorite_menu_item(
+        &self,
+        fav: &zaplex_cockpit::Favorite,
+        host_nodes: &[(String, String)],
+        inventory: &zaplex_cockpit::FleetTree,
+        tab_configs: &[crate::tab_configs::TabConfig],
+        flow_config_dir: Option<&std::path::Path>,
+    ) -> MenuItem<WorkspaceAction> {
+        use zaplex_cockpit::FavoriteKind;
+        match fav.kind {
+            // Host → open a terminal on it (same as clicking it in the tree).
+            FavoriteKind::Host => match host_nodes.iter().find(|(id, _)| id == &fav.target) {
+                Some((node_id, name)) => MenuItemFields::new(name.clone())
+                    .with_on_select_action(WorkspaceAction::OpenSshTerminalByNode {
+                        node_id: node_id.clone(),
+                    })
+                    .with_icon(icons::Icon::Key)
+                    .into_item(),
+                None => self.stale_favorite_item(fav),
+            },
+            // Project → open the spawn card scoped to that directory. A project
+            // pointer is durable (a path), so it is not stale-checked here.
+            FavoriteKind::Project => MenuItemFields::new(fav.display_label().to_string())
+                .with_on_select_action(WorkspaceAction::OpenSpawnCard {
+                    host_id: None,
+                    host: None,
+                    project: Some(std::path::PathBuf::from(&fav.target)),
+                })
+                .with_icon(icons::Icon::Folder)
+                .into_item(),
+            // Session → attach, resolving host identity from the live inventory.
+            FavoriteKind::Session => {
+                let resolved = inventory.hosts.iter().find_map(|h| {
+                    h.projects
+                        .iter()
+                        .flat_map(|p| p.sessions.iter())
+                        .any(|s| s.session_id == fav.target)
+                        .then(|| (h.host.clone(), h.host_id.clone(), h.is_local))
+                });
+                match resolved {
+                    Some((host, host_id, is_local)) => {
+                        MenuItemFields::new(fav.display_label().to_string())
+                            .with_on_select_action(WorkspaceAction::AttachFleetSession {
+                                host,
+                                host_id,
+                                session_id: fav.target.clone(),
+                                is_local,
+                            })
+                            .with_icon(icons::Icon::Terminal)
+                            .into_item()
+                    }
+                    None => self.stale_favorite_item(fav),
+                }
+            }
+            // Launch → run the saved tab config, resolved by its stable name.
+            FavoriteKind::Launch => match tab_configs.iter().find(|c| c.name == fav.target) {
+                Some(config) => MenuItemFields::new(config.name.clone())
+                    .with_on_select_action(WorkspaceAction::SelectTabConfig(config.clone()))
+                    .with_icon(icons::Icon::LayoutAlt01)
+                    .into_item(),
+                None => self.stale_favorite_item(fav),
+            },
+            // GitHub instance-flow → run the flow's task on the freest Claude
+            // account (prompt prefilled for the human to review, #102). The
+            // freest config_dir is resolved once by the caller (needs ctx).
+            FavoriteKind::GithubFlow => {
+                match crate::cockpit::github_flows::prompt_for_flow_key(&fav.target) {
+                    Some(prompt) => MenuItemFields::new(fav.display_label().to_string())
+                        .with_on_select_action(WorkspaceAction::AskAgentRouted {
+                            prompt,
+                            config_dir: flow_config_dir.map(|p| p.to_path_buf()),
+                        })
+                        .with_icon(icons::Icon::Lightning)
+                        .into_item(),
+                    None => self.stale_favorite_item(fav),
+                }
+            }
+        }
+    }
+
+    /// A stale favorite row (its target vanished from the tree): greyed label +
+    /// a one-click remove. In a menu the cleanest "one-click remove" is to make
+    /// the row itself forget the favorite on click.
+    fn stale_favorite_item(
+        &self,
+        fav: &zaplex_cockpit::Favorite,
+    ) -> MenuItem<WorkspaceAction> {
+        MenuItemFields::new(format!(
+            "{} — {}",
+            fav.display_label(),
+            crate::t!("workspace-favorite-unavailable")
+        ))
+        .with_on_select_action(WorkspaceAction::RemoveFavorite {
+            kind: fav.kind,
+            target: fav.target.clone(),
+        })
+        .with_icon(icons::Icon::AlertTriangle)
+        .into_item()
+    }
+
     fn unified_new_session_menu_items(
         &self,
         ctx: &mut ViewContext<Self>,
@@ -7965,113 +8190,22 @@ impl Workspace {
                     menu_items.push(item.into_item());
                 }
 
-                // C4 — subscription-routed launch: for agents with a subscription
-                // model (Claude/Codex), add "⚡ on freest" plus a per-account entry
-                // so a new agent starts on a chosen (or the least-loaded) account,
-                // pinned via its config dir (billing on the subscription, not an
-                // API key). Only when the cockpit is enabled and accounts exist.
-                let provider = match agent {
-                    CLIAgent::Claude => Some(zaplex_cockpit::Provider::Claude),
-                    CLIAgent::Codex => Some(zaplex_cockpit::Provider::Codex),
-                    _ => None,
-                };
-                if let Some(provider) = provider {
-                    if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
-                        let snapshot = crate::cockpit::CockpitModel::as_ref(ctx).snapshot();
-                        let accounts: Vec<_> = snapshot
-                            .accounts
-                            .iter()
-                            .filter(|a| a.account.provider == provider)
-                            .collect();
-                        if !accounts.is_empty() {
-                            // Launch-target permutations (⚡ on-freest / per-account /
-                            // @host) were intentionally removed from the "+" menu: they
-                            // were the unreadable "wall". Host + account are chosen in the
-                            // explicit spawn card ("✧ Neuer Agent…") — the single app-level
-                            // launch path (concept §8, C4 §3 #1: no implicit target).
-                            // C5 — GitHub instance-flows: run a task on the
-                            // freest Claude instance (Quick-Issue / PR-Review /
-                            // Triage). Claude-only — they drive the `gh` CLI —
-                            // and human-in-the-loop (prompt prefilled, not sent).
-                            if agent == CLIAgent::Claude {
-                                let flow_dir =
-                                    zaplex_cockpit::pick_freest(provider, &snapshot.accounts)
-                                        .map(|f| f.account.config_dir.clone());
-                                let flows = [
-                                    (
-                                        crate::t!("cockpit-flow-quick-issue").to_string(),
-                                        crate::cockpit::github_flows::quick_issue_prompt(),
-                                    ),
-                                    (
-                                        crate::t!("cockpit-flow-pr-review").to_string(),
-                                        crate::cockpit::github_flows::pr_review_prompt(),
-                                    ),
-                                    (
-                                        crate::t!("cockpit-flow-triage").to_string(),
-                                        crate::cockpit::github_flows::triage_prompt(),
-                                    ),
-                                ];
-                                for (label, prompt) in flows {
-                                    menu_items.push(
-                                        MenuItemFields::new(label)
-                                            .with_on_select_action(
-                                                WorkspaceAction::AskAgentRouted {
-                                                    prompt,
-                                                    config_dir: flow_dir.clone(),
-                                                },
-                                            )
-                                            .with_icon(icon)
-                                            .into_item(),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
+                // Launch-target permutations (⚡ on-freest / per-account / @host)
+                // and the GitHub instance-flows have left the fixed "+" menu: the
+                // permutations were the unreadable "wall" (host + account are
+                // chosen in the spawn card — the single app-level launch path,
+                // concept §8/C4), and the generic flows referred to no concrete
+                // repo/PR. The flows are now favoritable / command-palette actions
+                // (design §10, #102); hosts are reached via favorites (below).
             }
             menu_items.len() - start_len
         };
 
-        // 5b. Registered SSH hosts — one entry per host, opening a terminal on
-        // it. "Register once, pick everywhere" (design §5): the list is read
-        // from the SSH registry, never re-entered here. Launching an *agent* on
-        // a host goes through the spawn card ("Neuer Agent…"), which reads the
-        // same registry — so a host is entered once and reachable everywhere,
-        // with no second data-entry (the old per-host launch permutations that
-        // cluttered this menu are gone; the hosts themselves — a linear list —
-        // stay).
-        {
-            let host_servers: Vec<(String, String, warp_ssh_manager::SshServerInfo)> =
-                warp_ssh_manager::with_conn(|c| {
-                    let mut out = Vec::new();
-                    for node in warp_ssh_manager::SshRepository::list_nodes(c)? {
-                        if !matches!(node.kind, warp_ssh_manager::types::NodeKind::Server) {
-                            continue;
-                        }
-                        if let Some(server) =
-                            warp_ssh_manager::SshRepository::get_server(c, &node.id)?
-                        {
-                            out.push((node.id, node.name, server));
-                        }
-                    }
-                    Ok(out)
-                })
-                .unwrap_or_default();
-            if !host_servers.is_empty() {
-                menu_items.push(MenuItem::Separator);
-                for (node_id, name, server) in host_servers {
-                    menu_items.push(
-                        MenuItemFields::new(name)
-                            .with_on_select_action(WorkspaceAction::OpenSshTerminal {
-                                node_id,
-                                server,
-                            })
-                            .with_icon(icons::Icon::Key)
-                            .into_item(),
-                    );
-                }
-            }
-        }
+        // 5b. Favorites (design §10): the curated favorites list + an add picker,
+        // replacing the old auto host-list. A favorite duplicates nothing
+        // ("register once, pick everywhere") and is the definitive answer to "SSH
+        // hosts in the dropdown" — favorite a host, no regression.
+        menu_items.extend(self.favorites_menu_items(ctx));
 
         // 6. Separator — only shown when there are coding agents and Docker is enabled
         // The TabConfigs section adds its own separator in step 8, so no need to duplicate it here
@@ -21363,6 +21497,27 @@ impl TypedActionView for Workspace {
                         });
                     }
                 }
+            }
+            ToggleFavorite {
+                kind,
+                target,
+                label,
+            } => {
+                // ★ on a tree node / an add-favorite picker item: add if absent,
+                // remove if present. The store persists + broadcasts Changed.
+                let fav =
+                    zaplex_cockpit::Favorite::new(*kind, target.clone(), label.clone());
+                crate::cockpit::favorites::FavoritesStore::handle(ctx)
+                    .update(ctx, |store, ctx| {
+                        store.toggle(fav, ctx);
+                    });
+            }
+            RemoveFavorite { kind, target } => {
+                // One-click remove of a stale favorite whose target has vanished.
+                crate::cockpit::favorites::FavoritesStore::handle(ctx)
+                    .update(ctx, |store, ctx| {
+                        store.remove(*kind, target, ctx);
+                    });
             }
             OpenLocalFileManager { start_path } => {
                 // FM pane-mode: swap the invoking (focused) pane in place for a

@@ -76,6 +76,7 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(BlocklistAIPermissions::new);
     app.add_singleton_model(UndoCloseStack::new);
+    app.add_singleton_model(crate::cockpit::favorites::FavoritesStore::new);
 
     app.add_singleton_model(AIRequestUsageModel::new_for_test);
     app.add_singleton_model(|_| KeybindingChangedNotifier::new());

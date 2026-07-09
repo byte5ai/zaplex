@@ -248,6 +248,46 @@ pub fn triage_prompt() -> String {
         .to_string()
 }
 
+// ── Flow identity (favorites + command palette, #102) ───────────────────────
+//
+// The flows are no longer fixed rows in the "+" dropdown; they are addressable
+// by a stable key so they can be favorited and offered from the command palette,
+// context-scoped to the current repo. These keys are the single source of truth
+// the dropdown / favorites / palette all agree on.
+
+/// Stable key for the Quick-Issue flow.
+pub const FLOW_QUICK_ISSUE: &str = "quick_issue";
+/// Stable key for the PR-Review flow.
+pub const FLOW_PR_REVIEW: &str = "pr_review";
+/// Stable key for the Issue-Triage flow.
+pub const FLOW_TRIAGE: &str = "triage";
+
+/// All GitHub instance-flow keys, in display order.
+pub fn flow_keys() -> [&'static str; 3] {
+    [FLOW_QUICK_ISSUE, FLOW_PR_REVIEW, FLOW_TRIAGE]
+}
+
+/// The task prompt for a flow key, or `None` for an unknown key (e.g. a stale
+/// favorite pointing at a removed flow).
+pub fn prompt_for_flow_key(key: &str) -> Option<String> {
+    match key {
+        FLOW_QUICK_ISSUE => Some(quick_issue_prompt()),
+        FLOW_PR_REVIEW => Some(pr_review_prompt()),
+        FLOW_TRIAGE => Some(triage_prompt()),
+        _ => None,
+    }
+}
+
+/// The i18n label key for a flow key (menu / palette / favorite rendering).
+pub fn label_key_for_flow(key: &str) -> Option<&'static str> {
+    match key {
+        FLOW_QUICK_ISSUE => Some("cockpit-flow-quick-issue"),
+        FLOW_PR_REVIEW => Some("cockpit-flow-pr-review"),
+        FLOW_TRIAGE => Some("cockpit-flow-triage"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 #[path = "github_flows_tests.rs"]
 mod tests;

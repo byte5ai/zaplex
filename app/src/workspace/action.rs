@@ -154,6 +154,20 @@ pub enum WorkspaceAction {
     OpenSshTerminalByNode {
         node_id: String,
     },
+    /// Toggle a curated favorite (design §10): the ★ affordance on a Conductor
+    /// tree node, and the add-favorite picker. Adds the typed tree-object pointer
+    /// if absent, removes it if present. `label` is presentation-only.
+    ToggleFavorite {
+        kind: zaplex_cockpit::FavoriteKind,
+        target: String,
+        label: String,
+    },
+    /// Remove a curated favorite by `(kind, target)` — the one-click remove on a
+    /// stale dropdown entry whose target has vanished from the tree.
+    RemoveFavorite {
+        kind: zaplex_cockpit::FavoriteKind,
+        target: String,
+    },
     /// Open the local file-manager pane (FM pane-mode P1) rooted at `start_path`.
     OpenLocalFileManager {
         start_path: std::path::PathBuf,
@@ -1154,6 +1168,8 @@ impl WorkspaceAction {
             DismissWaylandCrashRecoveryBannerAndOpenLink => false,
             #[cfg(target_family = "wasm")]
             OpenLinkOnDesktop(_) => false,
+            // Favorites live in their own persisted store, not in app state.
+            ToggleFavorite { .. } | RemoveFavorite { .. } => false,
             // actions that are related to updating user settings or
             // managing some ui elements (like closing/opening modals)
             // that don't reflect on actual workspace and don't need to

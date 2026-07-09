@@ -19,11 +19,14 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 use zaplex_cockpit::{
     fleet_is_large, format_cost, format_reset, format_tokens, heat_fill,
     heat_pct_label_with_provenance, host_auto_collapsed, host_key, host_summary, session_glyph,
-    AccountUsage, FleetTree, HeatLevel, SessionSnapshot, SessionState, UsageProvenance,
+    AccountUsage, Favorite, FavoriteKind, FleetTree, HeatLevel, SessionSnapshot, SessionState,
+    UsageProvenance,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
-use crate::cockpit::style::{ctx_pct_element, glyph_cell, heat_coloru, verb_button, VerbKind};
+use crate::cockpit::style::{
+    ctx_pct_element, glyph_cell, heat_coloru, verb_button, verb_button_colored, VerbKind,
+};
 use crate::WorkspaceAction;
 
 /// Max session rows shown per host in the compact sidebar before an overflow
@@ -59,6 +62,11 @@ pub struct CockpitPanel {
     /// `node_id`. Clicking a registered host row (with no live agent) opens a
     /// terminal on that host.
     conductor_host_states: HashMap<String, MouseStateHandle>,
+    /// Hover/click state per host ★ (favorite toggle), keyed by registry
+    /// `node_id`. The ★ curates a host favorite (design §10).
+    conductor_host_star_states: HashMap<String, MouseStateHandle>,
+    /// Hover/click state per session ★ (favorite toggle), keyed by `host_key`.
+    conductor_row_star_states: HashMap<String, MouseStateHandle>,
 }
 
 impl CockpitPanel {
@@ -71,6 +79,11 @@ impl CockpitPanel {
                 ctx.notify();
             }
         });
+        // Re-render when favorites change so the ★ fill state updates at once.
+        ctx.subscribe_to_model(
+            &crate::cockpit::favorites::FavoritesStore::handle(ctx),
+            |_, _, _, ctx| ctx.notify(),
+        );
         let mut me = Self {
             scroll_state: ClippedScrollStateHandle::default(),
             expand_btn: MouseStateHandle::default(),
@@ -78,6 +91,8 @@ impl CockpitPanel {
             conductor_review_states: HashMap::new(),
             card_states: HashMap::new(),
             conductor_host_states: HashMap::new(),
+            conductor_host_star_states: HashMap::new(),
+            conductor_row_star_states: HashMap::new(),
         };
         me.sync_conductor_states(ctx);
         me
@@ -100,9 +115,11 @@ impl CockpitPanel {
             .collect();
         self.conductor_row_states.retain(|k, _| live.contains(k));
         self.conductor_review_states.retain(|k, _| live.contains(k));
+        self.conductor_row_star_states.retain(|k, _| live.contains(k));
         for key in live {
             self.conductor_row_states.entry(key.clone()).or_default();
-            self.conductor_review_states.entry(key).or_default();
+            self.conductor_review_states.entry(key.clone()).or_default();
+            self.conductor_row_star_states.entry(key).or_default();
         }
         // Card hover handles, keyed by account `key` (one stable handle per card
         // across renders); drop handles of accounts that disappeared.
@@ -125,8 +142,11 @@ impl CockpitPanel {
             .collect();
         self.conductor_host_states
             .retain(|k, _| host_nodes.contains(k));
+        self.conductor_host_star_states
+            .retain(|k, _| host_nodes.contains(k));
         for key in host_nodes {
-            self.conductor_host_states.entry(key).or_default();
+            self.conductor_host_states.entry(key.clone()).or_default();
+            self.conductor_host_star_states.entry(key).or_default();
         }
     }
 
@@ -321,6 +341,7 @@ impl CockpitPanel {
     fn render_conductor(
         &self,
         tree: &FleetTree,
+        favorites: &[Favorite],
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         if tree.hosts.is_empty() {
@@ -358,7 +379,10 @@ impl CockpitPanel {
             }
             // Locality from the inventory's explicit marker, not a label match.
             let is_local = host.is_local;
-            let mut host_header = Flex::row()
+            // Label + needs-me badge = the terminal click target (registered
+            // hosts); the ★ favorite toggle sits *beside* it, not inside, so the
+            // two clicks never collide.
+            let mut label_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
                 .with_child(
@@ -366,25 +390,25 @@ impl CockpitPanel {
                         .finish(),
                 );
             if host.needs_me > 0 {
-                host_header = host_header.with_child(Self::text(
+                label_row = label_row.with_child(Self::text(
                     format!("● {}", host.needs_me),
                     family,
                     body,
                     heat_coloru(HeatLevel::Critical),
                 ));
             }
-            let header_el = host_header.with_main_axis_size(MainAxisSize::Max).finish();
+            let label_el = label_row.with_main_axis_size(MainAxisSize::Max).finish();
             // A registered host (no live agent, re-added by the registry merge)
             // becomes a click target that opens a terminal on it — the spine's
-            // host-row action. Live-only hosts keep their plain header.
-            let header_el: Box<dyn Element> = match host.registry_node_id.clone() {
+            // host-row action. Live-only hosts keep their plain label.
+            let label_el: Box<dyn Element> = match host.registry_node_id.clone() {
                 Some(node_id) => {
                     let handle = self
                         .conductor_host_states
                         .get(&node_id)
                         .cloned()
                         .unwrap_or_default();
-                    Hoverable::new(handle, move |_mouse| header_el)
+                    Hoverable::new(handle, move |_mouse| label_el)
                         .with_cursor(warpui::platform::Cursor::PointingHand)
                         .on_click(move |ctx, _, _| {
                             ctx.dispatch_typed_action(WorkspaceAction::OpenSshTerminalByNode {
@@ -393,9 +417,29 @@ impl CockpitPanel {
                         })
                         .finish()
                 }
-                None => header_el,
+                None => label_el,
             };
-            col = col.with_child(header_el);
+            // Compose the header: clickable label (flex) + a ★ favorite toggle for
+            // registered hosts (a host favorite points at the registry node_id).
+            let mut header_row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(6.0)
+                .with_child(Shrinkable::new(1.0, label_el).finish());
+            if let Some(node_id) = host.registry_node_id.clone() {
+                if let Some(star_state) = self.conductor_host_star_states.get(&node_id).cloned() {
+                    let is_fav = favorites
+                        .iter()
+                        .any(|f| f.same_target(FavoriteKind::Host, &node_id));
+                    let action = WorkspaceAction::ToggleFavorite {
+                        kind: FavoriteKind::Host,
+                        target: node_id,
+                        label: host.host.clone(),
+                    };
+                    header_row = header_row
+                        .with_child(Self::star_button(star_state, is_fav, appearance, action));
+                }
+            }
+            col = col.with_child(header_row.with_main_axis_size(MainAxisSize::Max).finish());
 
             // Sessions across the host's projects, already waiting-first per
             // project (projects are needs-me-first). Capped for glanceability.
@@ -414,6 +458,7 @@ impl CockpitPanel {
                             &project.name,
                             session,
                             is_local,
+                            favorites,
                             appearance,
                         ))
                         .with_padding_left(10.0)
@@ -462,6 +507,7 @@ impl CockpitPanel {
         project_name: &str,
         session: &SessionSnapshot,
         is_local: bool,
+        favorites: &[Favorite],
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -486,6 +532,9 @@ impl CockpitPanel {
         } else {
             dir
         };
+        // A readable label for a session favorite (the row label is consumed by
+        // the info span below, so clone it before that).
+        let fav_label = label.clone();
 
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -547,16 +596,54 @@ impl CockpitPanel {
             None => (info, None),
         };
 
-        match review {
-            Some(review) => Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(8.0)
-                .with_child(Shrinkable::new(1.0, info_el).finish())
-                .with_child(review)
-                .with_main_axis_size(MainAxisSize::Max)
-                .finish(),
-            None => info_el,
+        // ★ favorite toggle for this session (design §10), beside the review verb.
+        let star = self.conductor_row_star_states.get(&key).cloned().map(|st| {
+            let is_fav = favorites
+                .iter()
+                .any(|f| f.same_target(FavoriteKind::Session, &session.session_id));
+            let action = WorkspaceAction::ToggleFavorite {
+                kind: FavoriteKind::Session,
+                target: session.session_id.clone(),
+                label: fav_label,
+            };
+            Self::star_button(st, is_fav, appearance, action)
+        });
+
+        if review.is_none() && star.is_none() {
+            return info_el;
         }
+        let mut trailing = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(8.0)
+            .with_child(Shrinkable::new(1.0, info_el).finish());
+        if let Some(review) = review {
+            trailing = trailing.with_child(review);
+        }
+        if let Some(star) = star {
+            trailing = trailing.with_child(star);
+        }
+        trailing.with_main_axis_size(MainAxisSize::Max).finish()
+    }
+
+    /// The ★ favorite toggle for a Conductor tree node (design §10). Filled +
+    /// accent when favorited (hover → muted, hinting un-star); outline + muted
+    /// when not (hover → accent, hinting star). Reuses the verb-button idiom so
+    /// it reads as an inline verb, not a heavy button.
+    fn star_button(
+        state: MouseStateHandle,
+        is_fav: bool,
+        appearance: &Appearance,
+        action: WorkspaceAction,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let accent = theme.accent().into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let (label, rest, hover) = if is_fav {
+            ("★", accent, muted)
+        } else {
+            ("☆", muted, accent)
+        };
+        verb_button_colored(state, label, rest, hover, appearance, action)
     }
 
     fn render_header(
@@ -669,7 +756,12 @@ impl View for CockpitPanel {
             // Glanceable Conductor: the unified cross-host inventory, waiting-first.
             let model = CockpitModel::as_ref(app);
             let inventory = model.inventory().clone();
-            if let Some(conductor) = self.render_conductor(&inventory, appearance) {
+            // Favorites drive the ★ fill state on host + session rows (design §10).
+            let favorites = crate::cockpit::favorites::FavoritesStore::handle(app)
+                .as_ref(app)
+                .items()
+                .to_vec();
+            if let Some(conductor) = self.render_conductor(&inventory, &favorites, appearance) {
                 cards = cards.with_child(
                     Container::new(conductor)
                         .with_margin_bottom(CARD_SPACING * 2.0)
