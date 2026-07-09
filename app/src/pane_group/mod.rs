@@ -1364,6 +1364,18 @@ impl PaneGroup {
                     focus,
                 )
             }
+            PaneTemplateType::SshHost { node_id } => {
+                // Restore a registered-SSH-host reference (#103): re-open the
+                // host's editor pane from its node_id. An SSH editor pane has no
+                // terminal session, so it never claims the leftmost-session slot
+                // or the session-centric initial focus (both require a
+                // `TerminalPaneId`); a mixed layout's terminal claims those.
+                let pane =
+                    crate::pane_group::pane::ssh_server_pane::SshServerPane::new(node_id, ctx);
+                let pane_id = pane.id();
+                pane_contents.insert(pane_id, Box::new(pane));
+                (None, PaneData::new(pane_id), InitialFocus::default())
+            }
         }
     }
 

@@ -394,3 +394,52 @@ fn test_config_with_active_tab_being_filtered() {
     let template = LaunchConfig::from_snapshot("Test".into(), &state);
     assert_eq!(template.windows[0].active_tab_index, None)
 }
+
+#[test]
+fn test_config_captures_ssh_host_reference() {
+    // A registered SSH host pane is captured as a host *reference* (node_id
+    // only), not dropped and not carrying connection data (#103).
+    let state = single_tab_snapshot(PaneNodeSnapshot::Leaf(LeafSnapshot {
+        is_focused: true,
+        custom_vertical_tabs_title: None,
+        contents: LeafContents::SshServer {
+            node_id: "node-devhost".into(),
+        },
+    }));
+
+    let template = LaunchConfig::from_snapshot("Test".into(), &state);
+    assert_eq!(
+        template.windows[0].tabs[0].layout,
+        PaneTemplateType::SshHost {
+            node_id: "node-devhost".into(),
+        },
+    );
+}
+
+#[test]
+fn test_ssh_host_reference_serde_round_trips_and_does_not_collide() {
+    // The untagged SshHost variant survives a YAML round-trip and does not
+    // shadow (or get shadowed by) the PaneTemplate variant.
+    let host = PaneTemplateType::SshHost {
+        node_id: "node-1".into(),
+    };
+    let yaml = serde_yaml::to_string(&host).unwrap();
+    assert_eq!(
+        serde_yaml::from_str::<PaneTemplateType>(&yaml).unwrap(),
+        host
+    );
+
+    // A `{node_id}` blob resolves to SshHost, a `{cwd,…}` blob to PaneTemplate.
+    let template = PaneTemplateType::PaneTemplate {
+        cwd: PathBuf::from("/tmp"),
+        commands: vec![],
+        is_focused: None,
+        pane_mode: PaneMode::Terminal,
+        shell: None,
+    };
+    let template_yaml = serde_yaml::to_string(&template).unwrap();
+    assert_eq!(
+        serde_yaml::from_str::<PaneTemplateType>(&template_yaml).unwrap(),
+        template
+    );
+}
