@@ -55,7 +55,14 @@ pub fn heat_fill(fraction: f64) -> f64 {
 }
 
 /// Rounded percent label (not clamped): 0.62 -> "62%", 1.3 -> "130%".
-pub fn heat_pct_label(fraction: f64) -> String {
+///
+/// INTERNAL — this carries **no provenance marker**. Never render a quota/usage
+/// figure through this directly: an estimate (Codex has no OAuth quota endpoint,
+/// so its usage is always a transcript estimate) would then read as a real
+/// number. Always use [`heat_pct_label_with_provenance`] at render sites so
+/// estimates keep their `~`. Kept `pub(crate)` (not exported) so the app can't
+/// reach the un-marked variant (#106).
+pub(crate) fn heat_pct_label(fraction: f64) -> String {
     format!("{}%", (fraction * 100.0).round() as i64)
 }
 

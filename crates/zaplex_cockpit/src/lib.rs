@@ -44,7 +44,7 @@ pub use fleet::{
 };
 pub use format::{
     binding_window, context_fill, context_window, format_cost, format_reset, format_tokens,
-    heat_fill, heat_pct_label, heat_pct_label_with_provenance, model_family, HeatLevel,
+    heat_fill, heat_pct_label_with_provenance, model_family, HeatLevel,
 };
 pub use guardrails::{
     failed_toast, guardrail_target, kill_confirm_message, no_remote_connection_toast,
