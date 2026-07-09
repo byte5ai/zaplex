@@ -7893,6 +7893,27 @@ impl Workspace {
                 );
             }
         }
+        // GitHub instance-flows (#102): favoritable here, since they no longer
+        // sit as fixed dropdown rows. Each not-yet-favorited flow can be added.
+        for key in crate::cockpit::github_flows::flow_keys() {
+            if favorites
+                .iter()
+                .any(|f| f.same_target(FavoriteKind::GithubFlow, key))
+            {
+                continue;
+            }
+            let label = Self::flow_label(key);
+            addable.push(
+                MenuItemFields::new(label.clone())
+                    .with_on_select_action(WorkspaceAction::ToggleFavorite {
+                        kind: FavoriteKind::GithubFlow,
+                        target: key.to_string(),
+                        label,
+                    })
+                    .with_icon(icons::Icon::Lightning)
+                    .into_item(),
+            );
+        }
         if !addable.is_empty() {
             items.push(MenuItem::Header {
                 fields: MenuItemFields::new(crate::t!("workspace-favorites-add-header")),
@@ -7903,6 +7924,18 @@ impl Workspace {
         }
 
         items
+    }
+
+    /// Localized display label for a GitHub instance-flow key. `t!` needs a
+    /// literal key, so this maps the runtime flow key to the literal i18n call.
+    fn flow_label(key: &str) -> String {
+        use crate::cockpit::github_flows as gf;
+        match key {
+            gf::FLOW_QUICK_ISSUE => crate::t!("cockpit-flow-quick-issue").to_string(),
+            gf::FLOW_PR_REVIEW => crate::t!("cockpit-flow-pr-review").to_string(),
+            gf::FLOW_TRIAGE => crate::t!("cockpit-flow-triage").to_string(),
+            other => other.to_string(),
+        }
     }
 
     /// Resolve one curated favorite to its dropdown row: the object's default
@@ -7972,16 +8005,21 @@ impl Workspace {
             },
             // GitHub instance-flow → run the flow's task on the freest Claude
             // account (prompt prefilled for the human to review, #102). The
-            // freest config_dir is resolved once by the caller (needs ctx).
+            // freest config_dir is resolved once by the caller (needs ctx). The
+            // label is re-read from i18n each render (not the persisted one), so
+            // a flow's display text stays current.
             FavoriteKind::GithubFlow => {
                 match crate::cockpit::github_flows::prompt_for_flow_key(&fav.target) {
-                    Some(prompt) => MenuItemFields::new(fav.display_label().to_string())
-                        .with_on_select_action(WorkspaceAction::AskAgentRouted {
-                            prompt,
-                            config_dir: flow_config_dir.map(|p| p.to_path_buf()),
-                        })
-                        .with_icon(icons::Icon::Lightning)
-                        .into_item(),
+                    Some(prompt) => {
+                        let label = Self::flow_label(&fav.target);
+                        MenuItemFields::new(label)
+                            .with_on_select_action(WorkspaceAction::AskAgentRouted {
+                                prompt,
+                                config_dir: flow_config_dir.map(|p| p.to_path_buf()),
+                            })
+                            .with_icon(icons::Icon::Lightning)
+                            .into_item()
+                    }
                     None => self.stale_favorite_item(fav),
                 }
             }
