@@ -402,6 +402,9 @@ pub struct SftpBrowserView {
     pick_mode: bool,
     /// Hover state for the pick bar's "Use this folder" button.
     pick_btn: MouseStateHandle,
+    /// Set once a directory was actually picked, so `close()` doesn't also fire
+    /// the cancel (which re-shows the card) after a successful pick (#105).
+    pick_resolved: bool,
 }
 
 impl SftpBrowserView {
@@ -472,6 +475,7 @@ impl SftpBrowserView {
             next_dir_move_batch_id: 1,
             pick_mode: false,
             pick_btn: MouseStateHandle::default(),
+            pick_resolved: false,
         };
 
         // Subscribe to rename editor events
@@ -3337,6 +3341,7 @@ impl TypedActionView for SftpBrowserView {
             SftpBrowserAction::MoveToOtherPane => self.copy_or_move_to_other_pane(true, ctx),
             SftpBrowserAction::PickCurrentDir => {
                 // Return the browsed directory to the spawn card and close (#105).
+                self.pick_resolved = true;
                 ctx.dispatch_typed_action(&crate::WorkspaceAction::RemoteSpawnDirPicked {
                     path: self.current_path.clone(),
                 });
@@ -3708,6 +3713,13 @@ impl BackingView for SftpBrowserView {
         self.connection = ConnectionState::Disconnected;
         // Stop advertising this pane as a copy/move target.
         self.deregister_from_registry(ctx);
+        // Pick mode closed without a pick (cancel / pane-close): re-show the
+        // hidden spawn card so its selections aren't stranded (#105). Covers every
+        // teardown path (F10, pane-X, dismiss) since they all route through
+        // `close()`; skipped after a successful pick (`pick_resolved`).
+        if self.pick_mode && !self.pick_resolved {
+            ctx.dispatch_typed_action(&crate::WorkspaceAction::RemoteSpawnDirPickCanceled);
+        }
         ctx.emit(PaneEvent::Close);
     }
 

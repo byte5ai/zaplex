@@ -691,13 +691,16 @@ impl CockpitPanel {
         };
 
         // ★ favorite toggle for this session (design §10), beside the review verb.
+        // The favorite target is the host-scoped `host_key` (not the bare
+        // session id): session ids are unique only within a host, so two daemons
+        // could share one and a bare id would attach to the wrong host.
         let star = self.conductor_row_star_states.get(&key).cloned().map(|st| {
             let is_fav = favorites
                 .iter()
-                .any(|f| f.same_target(FavoriteKind::Session, &session.session_id));
+                .any(|f| f.same_target(FavoriteKind::Session, &key));
             let action = WorkspaceAction::ToggleFavorite {
                 kind: FavoriteKind::Session,
-                target: session.session_id.clone(),
+                target: key.clone(),
                 label: fav_label,
             };
             Self::star_button(st, is_fav, appearance, action)
@@ -819,63 +822,73 @@ impl View for CockpitPanel {
         let muted = theme.sub_text_color(theme.background()).into_solid();
 
         let snapshot = CockpitModel::as_ref(app).snapshot().clone();
+        let inventory = CockpitModel::as_ref(app).inventory().clone();
+        // Favorites drive the ★ fill state on host + session rows (design §10).
+        let favorites = crate::cockpit::favorites::FavoritesStore::handle(app)
+            .as_ref(app)
+            .items()
+            .to_vec();
 
-        let body_el: Box<dyn Element> = if snapshot.accounts.is_empty() {
-            Container::new(Self::text(
-                crate::t!("workspace-left-panel-cockpit-empty"),
-                family,
-                body,
-                muted,
-            ))
-            .with_uniform_padding(CARD_PADDING)
-            .finish()
-        } else {
+        let mut cards = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Min);
+
+        // Account header (usage/cost) — only when there are AI accounts.
+        if !snapshot.accounts.is_empty() {
             let cost5h: f64 = snapshot.accounts.iter().map(|a| a.block5h.cost_usd).sum();
             let cost_wk: f64 = snapshot.accounts.iter().map(|a| a.week.cost_usd).sum();
+            cards = cards.with_child(
+                Container::new(self.render_header(
+                    snapshot.accounts.len(),
+                    cost5h,
+                    cost_wk,
+                    appearance,
+                ))
+                .with_margin_bottom(CARD_SPACING * 2.0)
+                .finish(),
+            );
+        }
 
-            let mut cards = Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_main_axis_size(MainAxisSize::Min)
-                .with_child(
-                    Container::new(self.render_header(
-                        snapshot.accounts.len(),
-                        cost5h,
-                        cost_wk,
-                        appearance,
-                    ))
+        // The Conductor spine LEADS the panel (design §10) and is rendered
+        // whenever the inventory has hosts — crucially even with **no** AI
+        // account, so registered SSH hosts still appear as tree roots (#100).
+        if let Some(conductor) = self.render_conductor(&inventory, &favorites, appearance) {
+            cards = cards.with_child(
+                Container::new(conductor)
                     .with_margin_bottom(CARD_SPACING * 2.0)
                     .finish(),
-                );
-            // Glanceable Conductor: the unified cross-host inventory, waiting-first.
-            let model = CockpitModel::as_ref(app);
-            let inventory = model.inventory().clone();
-            // Favorites drive the ★ fill state on host + session rows (design §10).
-            let favorites = crate::cockpit::favorites::FavoritesStore::handle(app)
-                .as_ref(app)
-                .items()
-                .to_vec();
-            if let Some(conductor) = self.render_conductor(&inventory, &favorites, appearance) {
-                cards = cards.with_child(
-                    Container::new(conductor)
-                        .with_margin_bottom(CARD_SPACING * 2.0)
-                        .finish(),
-                );
-            }
+            );
+        }
+
+        // Account cards, or the empty-accounts hint (as a section under the
+        // spine, not the whole panel — hosts stay visible without an account).
+        if snapshot.accounts.is_empty() {
+            cards = cards.with_child(
+                Container::new(Self::text(
+                    crate::t!("workspace-left-panel-cockpit-empty"),
+                    family,
+                    body,
+                    muted,
+                ))
+                .with_uniform_padding(CARD_PADDING)
+                .finish(),
+            );
+        } else {
             for acct in &snapshot.accounts {
                 cards = cards.with_child(self.render_card(acct, appearance));
             }
+        }
 
-            ClippedScrollable::vertical(
-                self.scroll_state.clone(),
-                cards.finish(),
-                ScrollbarWidth::Auto,
-                theme.disabled_text_color(theme.background()).into(),
-                theme.main_text_color(theme.background()).into(),
-                ElementFill::None,
-            )
-            .with_overlayed_scrollbar()
-            .finish()
-        };
+        let body_el = ClippedScrollable::vertical(
+            self.scroll_state.clone(),
+            cards.finish(),
+            ScrollbarWidth::Auto,
+            theme.disabled_text_color(theme.background()).into(),
+            theme.main_text_color(theme.background()).into(),
+            ElementFill::None,
+        )
+        .with_overlayed_scrollbar()
+        .finish();
 
         Container::new(body_el)
             .with_uniform_padding(CARD_PADDING)

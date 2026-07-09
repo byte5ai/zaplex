@@ -214,15 +214,26 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
 /// Merge registered SSH hosts into the tree as roots so the Conductor is the
 /// FULL host navigator — every registered host appears even with no live agent.
 /// `registered` is `(node_id, display_name)` pairs from the SSH registry
-/// (`NodeKind::Server`). A host already present — a connected host, shown via its
-/// live sessions — is left untouched (dedup by display label). Registry-only
-/// hosts are appended (they carry `needs_me: 0`, so they naturally sort after the
-/// active hosts) with `registry_node_id` set so a host row can act (open a
-/// terminal / scope a launch / manage) via the registry. `needs_me` totals are
-/// unchanged (appended hosts contribute zero).
+/// (`NodeKind::Server`). Two cases, both keyed by display label (the only bridge
+/// between the SSH registry and a live daemon host, which is namespaced by its
+/// daemon `HostId`, not the registry `node_id`):
+///
+/// - A host already present — a connected host, shown via its live sessions —
+///   keeps its sessions/`needs_me` but is **back-filled** with its registry
+///   `node_id` so a registered host that happens to have live agents can still be
+///   opened / favorited / managed as a host (it would otherwise carry
+///   `registry_node_id: None` and lose those host-row actions).
+/// - A registry-only host is appended (it carries `needs_me: 0`, so it naturally
+///   sorts after the active hosts) with `registry_node_id` set.
+///
+/// `needs_me` totals are unchanged (appended hosts contribute zero).
 pub fn merge_registered_hosts(tree: &mut FleetTree, registered: &[(String, String)]) {
     for (node_id, name) in registered {
-        if tree.hosts.iter().any(|h| &h.host == name) {
+        if let Some(existing) = tree.hosts.iter_mut().find(|h| &h.host == name) {
+            // Give the live host its registry identity so host-row actions work.
+            if existing.registry_node_id.is_none() {
+                existing.registry_node_id = Some(node_id.clone());
+            }
             continue;
         }
         tree.hosts.push(HostNode {

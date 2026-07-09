@@ -7994,22 +7994,34 @@ impl Workspace {
                 })
                 .with_icon(icons::Icon::Folder)
                 .into_item(),
-            // Session → attach, resolving host identity from the live inventory.
+            // Session → attach, resolving host identity from the live inventory by
+            // the host-scoped `host_key` (the favorite target), so the raw
+            // session id is never matched across hosts.
             FavoriteKind::Session => {
                 let resolved = inventory.hosts.iter().find_map(|h| {
-                    h.projects
-                        .iter()
-                        .flat_map(|p| p.sessions.iter())
-                        .any(|s| s.session_id == fav.target)
-                        .then(|| (h.host.clone(), h.host_id.clone(), h.is_local))
+                    h.projects.iter().flat_map(|p| p.sessions.iter()).find_map(|s| {
+                        (zaplex_cockpit::host_key(
+                            h.is_local,
+                            h.host_id.as_deref(),
+                            &s.session_id,
+                        ) == fav.target)
+                            .then(|| {
+                                (
+                                    h.host.clone(),
+                                    h.host_id.clone(),
+                                    s.session_id.clone(),
+                                    h.is_local,
+                                )
+                            })
+                    })
                 });
                 match resolved {
-                    Some((host, host_id, is_local)) => {
+                    Some((host, host_id, session_id, is_local)) => {
                         MenuItemFields::new(fav.display_label().to_string())
                             .with_on_select_action(WorkspaceAction::AttachFleetSession {
                                 host,
                                 host_id,
-                                session_id: fav.target.clone(),
+                                session_id,
                                 is_local,
                             })
                             .with_icon(icons::Icon::Terminal)
@@ -21624,6 +21636,13 @@ impl TypedActionView for Workspace {
                 let path = path.clone();
                 self.spawn_card
                     .update(ctx, |card, ctx| card.set_remote_dir(&path, ctx));
+                self.current_workspace_state.is_spawn_card_open = true;
+                ctx.focus(&self.spawn_card);
+                ctx.notify();
+            }
+            RemoteSpawnDirPickCanceled => {
+                // The picker closed without a pick: re-show the hidden card
+                // unchanged so its selections aren't stranded (#105).
                 self.current_workspace_state.is_spawn_card_open = true;
                 ctx.focus(&self.spawn_card);
                 ctx.notify();

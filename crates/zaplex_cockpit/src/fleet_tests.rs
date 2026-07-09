@@ -409,7 +409,12 @@ fn merge_registered_adds_agentless_hosts_and_dedups_by_label() {
     assert_eq!(tree.hosts.len(), 2, "agenthost added, devhost not duplicated");
     let dev = tree.hosts.iter().find(|h| h.host == "devhost").unwrap();
     assert_eq!(dev.projects.len(), 1, "the connected host keeps its sessions");
-    assert_eq!(dev.registry_node_id, None, "session-derived host has no registry id here");
+    assert_eq!(
+        dev.registry_node_id.as_deref(),
+        Some("node-dev"),
+        "a live registered host is back-filled with its registry id so host-row \
+         actions (open/manage/star) work"
+    );
     let agent = tree.hosts.iter().find(|h| h.host == "agenthost").unwrap();
     assert!(agent.projects.is_empty(), "a registry-only host has no sessions");
     assert_eq!(agent.registry_node_id.as_deref(), Some("node-agent"));

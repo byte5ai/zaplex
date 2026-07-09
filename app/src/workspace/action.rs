@@ -183,6 +183,10 @@ pub enum WorkspaceAction {
     RemoteSpawnDirPicked {
         path: std::path::PathBuf,
     },
+    /// The SFTP directory picker was closed without a pick (cancel / pane close):
+    /// re-show the hidden spawn card unchanged so its selections aren't stranded
+    /// (#105).
+    RemoteSpawnDirPickCanceled,
     /// Open the local file-manager pane (FM pane-mode P1) rooted at `start_path`.
     OpenLocalFileManager {
         start_path: std::path::PathBuf,
@@ -1188,8 +1192,8 @@ impl WorkspaceAction {
             // Managing/adding a host opens an editor pane; the registry itself is
             // persisted separately (SQLite), so this isn't app-state either.
             ManageSshHost { .. } | AddSshHost => false,
-            // Fills a transient modal field; not persisted app state.
-            RemoteSpawnDirPicked { .. } => false,
+            // Fills a transient modal field / re-shows a modal; not app state.
+            RemoteSpawnDirPicked { .. } | RemoteSpawnDirPickCanceled => false,
             // actions that are related to updating user settings or
             // managing some ui elements (like closing/opening modals)
             // that don't reflect on actual workspace and don't need to
