@@ -19,13 +19,20 @@ use crate::fleet::{FleetTree, HostNode};
 use crate::format::{context_fill, model_family};
 use crate::types::{SessionSnapshot, SessionState};
 
+// Premium status dots: one uniform shape, meaning is carried by COLOR (the
+// renderers color each glyph by state — green working · amber waiting · faint
+// idle), not by an emoji. This keeps the Conductor calm and consistent instead
+// of dropping a coloured emoji hand into an otherwise monochrome premium UI.
 /// Working: the agent is busy (Active) or mid tool-run / live job (Monitor) —
-/// hands off.
+/// hands off. A filled dot (rendered green).
 pub const GLYPH_WORKING: &str = "●";
 /// Waiting: the agent handed control back — **this** is the attention state.
-pub const GLYPH_WAITING: &str = "✋";
-/// Idle: a resumable session with no live turn in flight.
-pub const GLYPH_IDLE: &str = "◦";
+/// A filled dot rendered in the amber attention colour (the colour is what makes
+/// it read as "needs you", so it stands out without an emoji).
+pub const GLYPH_WAITING: &str = "●";
+/// Idle: a resumable session with no live turn in flight. A hollow ring (reads as
+/// "not active") in the faint colour.
+pub const GLYPH_IDLE: &str = "○";
 
 /// The one consistent status glyph for a session, used identically on every
 /// Conductor surface (pane, sidebar, and — later — the ambient bit). Active and

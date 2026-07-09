@@ -722,11 +722,14 @@ impl CockpitPaneView {
         // Live sessions (C3a), waiting-first (the spine pre-sorts): the
         // dashboard's job is surfacing what needs YOU.
         for session in acct.sessions.iter().take(4) {
+            // Premium status dots — meaning by colour, not emoji (see conductor.rs
+            // GLYPH_* ). Amber dot = waiting/attention, green = working, hollow =
+            // idle. Consistent with `session_glyph`.
             let (glyph, color) = match session.state {
-                SessionState::Waiting => ("✋", heat_coloru(HeatLevel::Critical)),
+                SessionState::Waiting => ("●", heat_coloru(HeatLevel::Critical)),
                 SessionState::Active => ("●", heat_coloru(HeatLevel::Ok)),
                 SessionState::Monitor => ("◌", muted),
-                SessionState::Idle => ("◦", muted),
+                SessionState::Idle => ("○", muted),
             };
             let dir = std::path::Path::new(&session.cwd)
                 .file_name()
