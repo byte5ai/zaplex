@@ -908,7 +908,7 @@ impl CockpitPaneView {
             );
         if host.needs_me > 0 {
             header = header.with_child(Self::text(
-                format!("✋ {}", host.needs_me),
+                format!("● {}", host.needs_me),
                 family,
                 body,
                 heat_coloru(HeatLevel::Critical),
@@ -1015,7 +1015,7 @@ impl CockpitPaneView {
             .with_child(Self::text(chevron.to_string(), family, body, muted));
         if project.needs_me > 0 {
             header = header.with_child(Self::text(
-                format!("✋ {}", project.needs_me),
+                format!("● {}", project.needs_me),
                 family,
                 body,
                 heat_coloru(HeatLevel::Critical),

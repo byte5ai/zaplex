@@ -36,7 +36,8 @@ pub use conductor::{
     GLYPH_WAITING, GLYPH_WORKING,
 };
 pub use fleet::{
-    build_fleet_tree, fold_inventory, AgentSession, FleetTree, HostNode, HostSessions, ProjectNode,
+    build_fleet_tree, fold_inventory, merge_registered_hosts, AgentSession, FleetTree, HostNode,
+    HostSessions, ProjectNode,
     RemoteHost,
 };
 pub use format::{

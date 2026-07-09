@@ -390,3 +390,30 @@ fn empty_hosts_are_dropped_and_empty_fleet_is_zero() {
     assert!(empty.hosts.is_empty());
     assert_eq!(empty.needs_me, 0);
 }
+
+#[test]
+fn merge_registered_adds_agentless_hosts_and_dedups_by_label() {
+    // A tree with one session-backed host ("devhost").
+    let mut tree = build_fleet_tree(vec![host(
+        "devhost",
+        vec![session("a", "/p/x", SessionState::Active, 10)],
+    )]);
+    // Registry: devhost (already present, connected) + agenthost (registered, no
+    // live agent — build_fleet_tree would have dropped it).
+    let registered = vec![
+        ("node-dev".to_string(), "devhost".to_string()),
+        ("node-agent".to_string(), "agenthost".to_string()),
+    ];
+    merge_registered_hosts(&mut tree, &registered);
+
+    assert_eq!(tree.hosts.len(), 2, "agenthost added, devhost not duplicated");
+    let dev = tree.hosts.iter().find(|h| h.host == "devhost").unwrap();
+    assert_eq!(dev.projects.len(), 1, "the connected host keeps its sessions");
+    assert_eq!(dev.registry_node_id, None, "session-derived host has no registry id here");
+    let agent = tree.hosts.iter().find(|h| h.host == "agenthost").unwrap();
+    assert!(agent.projects.is_empty(), "a registry-only host has no sessions");
+    assert_eq!(agent.registry_node_id.as_deref(), Some("node-agent"));
+    assert!(!agent.is_local);
+    assert_eq!(agent.needs_me, 0);
+    assert_eq!(tree.needs_me, 0, "an agentless host adds no needs-me");
+}

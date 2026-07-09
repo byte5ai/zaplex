@@ -232,7 +232,7 @@ impl CockpitPanel {
                 parts.push(format!("● {active} active"));
             }
             if waiting > 0 {
-                parts.push(format!("✋ {waiting} waiting"));
+                parts.push(format!("● {waiting} waiting"));
             }
             let monitor = acct.sessions.len() - active - waiting;
             if monitor > 0 {
@@ -350,7 +350,7 @@ impl CockpitPanel {
                 );
             if host.needs_me > 0 {
                 host_header = host_header.with_child(Self::text(
-                    format!("✋ {}", host.needs_me),
+                    format!("● {}", host.needs_me),
                     family,
                     body,
                     heat_coloru(HeatLevel::Critical),
@@ -386,6 +386,21 @@ impl CockpitPanel {
                 col = col.with_child(
                     Container::new(Self::text(
                         format!("… {} more", total - shown),
+                        family,
+                        body,
+                        muted,
+                    ))
+                    .with_padding_left(10.0)
+                    .finish(),
+                );
+            } else if total == 0 {
+                // A registered host with no live agent — shown as a spine root so
+                // it stays navigable/launchable, with a calm hint that it is idle
+                // (build_fleet_tree drops agentless hosts; the registry merge
+                // re-adds them, see CockpitModel).
+                col = col.with_child(
+                    Container::new(Self::text(
+                        "no agents".to_string(),
                         family,
                         body,
                         muted,
