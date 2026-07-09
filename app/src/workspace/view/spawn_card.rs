@@ -99,6 +99,11 @@ pub struct SpawnCardConfig {
     /// instance-flows) route through the card carrying this, so every launch goes
     /// through the one explicit launch grammar instead of a blind one-click.
     pub prompt: Option<String>,
+    /// Explicit agent the opener requested (e.g. "Fix with Codex", the per-agent
+    /// menu action). Preselects the agent in the card so the user's intent is not
+    /// silently changed to the default; ignored if that agent isn't installed.
+    /// `None` = use the card's own default (Claude if installed, else Codex).
+    pub default_agent: Option<CLIAgent>,
 }
 
 /// Which account the launch pins to.
@@ -215,10 +220,15 @@ fn remote_cwd_from_input(host: HostChoice, raw: &str) -> Option<PathBuf> {
         return None;
     }
     let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
+    // Only an ABSOLUTE path is used (the field is labeled "absolute path"): a
+    // relative entry would `cd` relative to whatever the remote shell's startup
+    // directory happens to be — unpredictable — so a non-absolute (or blank)
+    // entry falls back to the host home (`None`) rather than launching into a
+    // random directory (Codex: validate remote dir input).
+    if trimmed.starts_with('/') {
         Some(PathBuf::from(trimmed))
+    } else {
+        None
     }
 }
 
@@ -273,12 +283,24 @@ impl SpawnCard {
     /// Takes a `ViewContext` because a remote-scoped open may prefill the
     /// remote-dir editor buffer (touching an editor view needs ctx).
     pub fn configure(&mut self, cfg: SpawnCardConfig, ctx: &mut ViewContext<Self>) {
-        // Default agent: Claude if available, else Codex, else Claude.
-        self.agent = if cfg.claude.installed || !cfg.codex.installed {
-            CLIAgent::Claude
-        } else {
-            CLIAgent::Codex
-        };
+        // Agent: honor an explicit requested agent (contextual "Fix with <agent>"
+        // / per-agent action) when it is one of the supported CLIs and installed,
+        // so the opener's intent isn't silently changed. Otherwise fall back to
+        // Claude if available, else Codex.
+        let requested = cfg
+            .default_agent
+            .filter(|a| matches!(a, CLIAgent::Claude | CLIAgent::Codex))
+            .filter(|a| match a {
+                CLIAgent::Codex => cfg.codex.installed,
+                _ => cfg.claude.installed,
+            });
+        self.agent = requested.unwrap_or({
+            if cfg.claude.installed || !cfg.codex.installed {
+                CLIAgent::Claude
+            } else {
+                CLIAgent::Codex
+            }
+        });
         self.model = models_for(self.agent)
             .first()
             .copied()
@@ -293,18 +315,24 @@ impl SpawnCard {
             cfg.scoped_host_id.as_deref(),
             cfg.scoped_host_name.as_deref(),
         );
-        self.project = cfg.project.clone();
+        // `self.project` is the LOCAL launch dir (native folder picker). For a
+        // remote-scoped open the pre-scoped dir is a REMOTE path, which belongs in
+        // the remote-dir editor (seeded below), NOT here — otherwise switching the
+        // host to Local would launch locally into a remote-only path (Codex: host
+        // switch dir leakage). So keep the local project empty for a remote host.
+        self.project = match self.host {
+            HostChoice::Local => cfg.project.clone(),
+            HostChoice::Remote(_) => None,
+        };
         self.prompt = cfg.prompt.clone();
         self.cfg = cfg;
 
-        // Prefill the remote-dir input. A remote-scoped `+` that carries a
-        // project dir (from a Conductor project node) seeds the field so the
-        // common case is a single confirm; every other open (local, or remote
-        // without a project) resets it to empty (blank = host home). Reset on
-        // every open so a stale path from a previous open can't leak into the
-        // next launch.
+        // Prefill the remote-dir input from the pre-scoped project (a Conductor
+        // remote project node) so the common case is a single confirm; every other
+        // open (local, or remote without a project) resets it to empty (blank =
+        // host home). Reset on every open so a stale path can't leak across opens.
         if let Some(editor) = self.remote_dir_editor.clone() {
-            let prefill = match (self.host, &self.project) {
+            let prefill = match (self.host, &self.cfg.project) {
                 (HostChoice::Remote(_), Some(dir)) => dir.display().to_string(),
                 _ => String::new(),
             };
@@ -1313,6 +1341,10 @@ mod tests {
             remote_cwd_from_input(remote, "  /srv/app  "),
             Some(PathBuf::from("/srv/app")),
         );
+        // A relative entry is NOT used verbatim (it would cd relative to the
+        // remote shell's startup dir); it falls back to the host home.
+        assert_eq!(remote_cwd_from_input(remote, "srv/app"), None);
+        assert_eq!(remote_cwd_from_input(remote, "../x"), None);
         // A local host never uses the typed field, regardless of input.
         assert_eq!(remote_cwd_from_input(HostChoice::Local, "/srv/app"), None);
     }

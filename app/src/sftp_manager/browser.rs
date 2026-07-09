@@ -786,6 +786,9 @@ impl SftpBrowserView {
         });
         self.path_history = vec![self.current_path.clone()];
         self.history_index = 0;
+        // A freshly connected listing starts with the cursor at the top (MC);
+        // `refresh_dir` will additionally clamp it into range once entries land.
+        self.cursor = 0;
         self.connection = ConnectionState::Connected;
         self.sftp = Some(backend);
         self.refresh_dir(ctx);
@@ -2950,6 +2953,13 @@ impl TypedActionView for SftpBrowserView {
             }
             SftpBrowserAction::SelectEntry(index) => {
                 let index = *index;
+                // A mouse click also moves the MC keyboard cursor onto the
+                // clicked row (the accent bar), so the click highlight and the
+                // keyboard cursor never disagree. `cursor` indexes the *visible*
+                // (filtered) list, so translate the entry index into that space.
+                if let Some(pos) = self.visible_indices().iter().position(|&i| i == index) {
+                    self.cursor = pos;
+                }
                 self.selected.clear();
                 self.selected.insert(index);
                 ctx.notify();
@@ -3182,7 +3192,16 @@ impl TypedActionView for SftpBrowserView {
                 self.go_up(ctx);
             }
             SftpBrowserAction::DeleteSelected => {
-                if let Some(&index) = self.selected.iter().next() {
+                // Prefer the multi-selection; fall back to the row under the MC
+                // cursor so a keyboard-only user (who never pressed Space) can
+                // still delete the highlighted row. Mirrors `operation_sources`.
+                let index = self
+                    .selected
+                    .iter()
+                    .next()
+                    .copied()
+                    .or_else(|| self.cursor_entry_index());
+                if let Some(index) = index {
                     self.delete_selected(index, ctx);
                 }
             }

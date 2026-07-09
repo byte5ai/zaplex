@@ -1766,7 +1766,9 @@ fn test_keyboard_create_folder() {
     });
 }
 
-/// Verifies that DeleteSelected is handled safely when there is no selection
+/// Verifies that with no multi-selection, DeleteSelected (F8) falls back to the
+/// row under the MC keyboard cursor — the classic file-manager behaviour where
+/// the highlighted row is always the operation target.
 #[test]
 fn test_keyboard_shortcuts_without_selection() {
     warpui::App::test((), |mut app| async move {
@@ -1775,7 +1777,7 @@ fn test_keyboard_shortcuts_without_selection() {
             ("file.txt", b"x"),
         ]);
 
-        // No selection
+        // No multi-selection; the cursor sits on the first (only) row.
         view.update(&mut app, |v, ctx| {
             v.selected.clear();
             ctx.notify();
@@ -1786,11 +1788,17 @@ fn test_keyboard_shortcuts_without_selection() {
         });
 
         view.read(&app, |v, _| {
-            assert!(
-                v.dialog.is_none(),
-                "DeleteSelected should not open dialog when there is no selection"
-            );
-            assert_eq!(v.entries.len(), 1, "entries should not be deleted");
+            match &v.dialog {
+                Some(Dialog::DeleteConfirm { paths, .. }) => {
+                    assert_eq!(
+                        paths.len(),
+                        1,
+                        "DeleteSelected should target the single row under the cursor"
+                    );
+                }
+                _ => panic!("DeleteSelected should open the delete confirmation for the cursor row"),
+            }
+            assert_eq!(v.entries.len(), 1, "entries are not removed until the dialog is confirmed");
         });
     });
 }

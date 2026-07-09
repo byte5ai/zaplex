@@ -4191,14 +4191,14 @@ impl Workspace {
     /// installed agent; else the first installed one (picker = follow-up per
     /// design §3); none installed → an actionable toast instead of a silent
     /// fallback to the retired in-app agent mode.
-    fn ask_agent(&mut self, prompt: String, _agent: Option<CLIAgent>, ctx: &mut ViewContext<Self>) {
+    fn ask_agent(&mut self, prompt: String, agent: Option<CLIAgent>, ctx: &mut ViewContext<Self>) {
         // Route through the one explicit launch grammar: open the spawn card with
-        // the task prompt. Agent/model/host/dir/account are chosen there (already
-        // restricted to the supported Claude/Codex), then the card launches and
-        // prefills the prompt — no blind one-click, and no accidental launch of an
-        // unsupported agent. The card also handles the "nothing installed" case
-        // (inert Confirm with an install hint) instead of a toast.
-        self.open_spawn_card(None, None, None, Some(prompt), ctx);
+        // the task prompt AND the requested agent preselected (so "Fix with Codex"
+        // opens on Codex, not silently on the default). The card is restricted to
+        // the supported Claude/Codex, launches, and prefills the prompt — no blind
+        // one-click. The card also handles the "nothing installed" case (inert
+        // Confirm with an install hint) instead of a toast.
+        self.open_spawn_card(None, None, None, Some(prompt), agent, ctx);
     }
 
     /// Like [`Self::ask_agent`] but launches Claude **routed to a subscription**
@@ -4214,8 +4214,8 @@ impl Workspace {
         // Route through the spawn card too. The card recomputes the freest account
         // at open time (the same "on the freest instance" intent as the old direct
         // path) and prefills the task prompt — one explicit launch grammar for
-        // every launch, no blind one-click.
-        self.open_spawn_card(None, None, None, Some(prompt), ctx);
+        // every launch, no blind one-click. Routed flows are Claude (they drive gh).
+        self.open_spawn_card(None, None, None, Some(prompt), Some(CLIAgent::Claude), ctx);
     }
 
     /// Creates a new default terminal tab, then runs the startup command of the specified CLI agent.
@@ -6362,7 +6362,7 @@ impl Workspace {
                 // through the spawn card under the cockpit vision (one launch
                 // grammar), falling back to the legacy in-app agent tab when off.
                 if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
-                    self.open_spawn_card(None, None, None, None, ctx);
+                    self.open_spawn_card(None, None, None, None, None, ctx);
                 } else {
                     self.add_terminal_tab_with_new_agent_view(ctx);
                 }
@@ -17613,6 +17613,7 @@ impl Workspace {
         host: Option<String>,
         project: Option<PathBuf>,
         prompt: Option<String>,
+        default_agent: Option<CLIAgent>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::terminal::cli_agent::CLIAgentInstallModel;
@@ -17682,6 +17683,7 @@ impl Workspace {
             scoped_host_name: host,
             project,
             prompt,
+            default_agent,
         };
         self.spawn_card
             .update(ctx, |card, ctx| card.configure(cfg, ctx));
@@ -21414,12 +21416,21 @@ impl TypedActionView for Workspace {
                 // all dispatch this action, routing it here covers every entrypoint
                 // uniformly. Cockpit off → the legacy in-app agent tab (fallback).
                 if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
-                    self.open_spawn_card(None, None, None, None, ctx);
+                    self.open_spawn_card(None, None, None, None, None, ctx);
                 } else {
                     self.add_terminal_tab_with_new_agent_view(ctx);
                 }
             }
-            AddSpecificAgentTab(agent) => self.add_tab_with_specific_agent(*agent, ctx),
+            AddSpecificAgentTab(agent) => {
+                // Route through the spawn card (agent preselected) under the cockpit
+                // vision, like every other agent entrypoint — no blind local launch
+                // at the action boundary (a legacy/stale caller can't bypass it).
+                if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+                    self.open_spawn_card(None, None, None, None, Some(*agent), ctx);
+                } else {
+                    self.add_tab_with_specific_agent(*agent, ctx);
+                }
+            }
             AddDockerSandboxTab => self.add_docker_sandbox_tab(ctx),
             StartAgentOnboardingTutorial(tutorial) => {
                 self.start_agent_onboarding_tutorial(tutorial.clone(), ctx)
@@ -21728,7 +21739,7 @@ impl TypedActionView for Workspace {
                 host,
                 project,
             } => {
-                self.open_spawn_card(host_id.clone(), host.clone(), project.clone(), None, ctx);
+                self.open_spawn_card(host_id.clone(), host.clone(), project.clone(), None, None, ctx);
             }
             OpenFileInEditor { node_id, path } => {
                 if node_id.is_empty() {

@@ -250,3 +250,30 @@ leads the cockpit panel with actionable local+remote rows. Making it the *sole* 
 folding the other left-panel surfaces (SSH hosts, conversations) into the Host ▸ Project ▸ Session ▸ Agent
 tree so it is the app's primary navigation — is the remaining large redesign, being planned with an
 explicit target before build.
+
+## 10. Approved build target — Sidebar spine + Favorites + FM select bar (user-approved via mockup)
+
+The user approved (visual mockup) this model, to build now (polish later):
+
+- **Sidebar = the full spine.** The left panel leads with the Conductor object-tree as the primary
+  navigation (not one toolbelt tab among many): **Hosts are the tree roots** (the SSH-manager function —
+  add/edit/Tailscale — moves onto the host nodes via a `⋯`/manage affordance and a `＋ Add host` root),
+  under them **Projects ▸ Sessions/Agents**. Account/usage compact rows; Files/Chats/Skills stay reachable
+  as secondary tools. Row visual (best-in-class, MC/VS-Code/Linear-style): **fixed right metric column**
+  (ctx bar + tabular %, nothing jumps), **status = a color dot only** (green working · amber waiting ·
+  faint idle — no status words), **indent rails**, weight/color hierarchy, sans labels + mono only for the
+  percent.
+- **Dropdown = Favorites (curated).** The "+" menu is *not* an auto host list; it holds user-curated
+  **favorites** — typed pointers to tree objects (Host · Project · Session · saved Launch). Click = the
+  object's default action (host→terminal / project→scoped spawn card / session→attach). Curated two ways:
+  **★ on a tree node** (sidebar) or **"＋ Add favorite…"** in the dropdown (a tree picker). This is WARP's
+  user-owned-entries model done right, and the definitive answer to "SSH hosts in the dropdown" (favorite a
+  host — no regression) and "register once, pick everywhere" (a favorite duplicates nothing). Persistence:
+  a small ordered store of stable node keys; a stale favorite (target gone) greys out + one-click remove.
+  The generic GitHub instance-flows leave the fixed dropdown (they become favoritable / palette actions).
+- **File manager select bar (must-have).** The SFTP/file-manager browser gets a **classic MC / Norton
+  Commander select bar**: a highlighted current row moved by keyboard (↑/↓, Home/End, PageUp/Down) and set
+  by mouse click; Enter/→ activates it; the file-op hotkeys act on the selected row.
+
+Touch points: `workspace/view/left_panel.rs`, `cockpit/panel.rs`, a new favorites store/module,
+`workspace/view.rs` (the "+" menu), `sftp_manager/browser.rs` (select bar).
