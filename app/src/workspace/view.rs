@@ -21341,6 +21341,29 @@ impl TypedActionView for Workspace {
             OpenSshTerminal { node_id, server } => {
                 self.open_ssh_terminal(node_id.clone(), server.clone(), false, ctx);
             }
+            OpenSshTerminalByNode { node_id } => {
+                // Resolve the registry server info from the node id, then open a
+                // terminal on it — dispatched by the Conductor spine when a
+                // registered host row (no live agent) is clicked.
+                let server = warp_ssh_manager::with_conn(|conn| {
+                    Ok(warp_ssh_manager::SshRepository::get_server(conn, node_id)?)
+                });
+                match server {
+                    Ok(Some(server)) => {
+                        self.open_ssh_terminal(node_id.clone(), server, false, ctx)
+                    }
+                    _ => {
+                        self.toast_stack.update(ctx, |view, ctx| {
+                            view.add_ephemeral_toast(
+                                DismissibleToast::error(format!(
+                                    "Couldn't find host '{node_id}' to open a terminal on."
+                                )),
+                                ctx,
+                            );
+                        });
+                    }
+                }
+            }
             OpenLocalFileManager { start_path } => {
                 // FM pane-mode: swap the invoking (focused) pane in place for a
                 // file manager. Pane-scoped context: on a tab that belongs to an

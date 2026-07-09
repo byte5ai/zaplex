@@ -55,6 +55,10 @@ pub struct CockpitPanel {
     /// Hover state per account card (key = account `key`). The whole card is a
     /// click target that opens the roomy dashboard pane.
     card_states: HashMap<String, MouseStateHandle>,
+    /// Hover/click state per registered-host spine row, keyed by its registry
+    /// `node_id`. Clicking a registered host row (with no live agent) opens a
+    /// terminal on that host.
+    conductor_host_states: HashMap<String, MouseStateHandle>,
 }
 
 impl CockpitPanel {
@@ -73,6 +77,7 @@ impl CockpitPanel {
             conductor_row_states: HashMap::new(),
             conductor_review_states: HashMap::new(),
             card_states: HashMap::new(),
+            conductor_host_states: HashMap::new(),
         };
         me.sync_conductor_states(ctx);
         me
@@ -110,6 +115,18 @@ impl CockpitPanel {
         self.card_states.retain(|k, _| acct_keys.contains(k));
         for key in acct_keys {
             self.card_states.entry(key).or_default();
+        }
+        // Registered-host row handles, keyed by registry `node_id` (one stable
+        // handle per clickable host header); drop handles of hosts that vanished.
+        let host_nodes: std::collections::HashSet<String> = inv
+            .hosts
+            .iter()
+            .filter_map(|h| h.registry_node_id.clone())
+            .collect();
+        self.conductor_host_states
+            .retain(|k, _| host_nodes.contains(k));
+        for key in host_nodes {
+            self.conductor_host_states.entry(key).or_default();
         }
     }
 
@@ -356,7 +373,29 @@ impl CockpitPanel {
                     heat_coloru(HeatLevel::Critical),
                 ));
             }
-            col = col.with_child(host_header.with_main_axis_size(MainAxisSize::Max).finish());
+            let header_el = host_header.with_main_axis_size(MainAxisSize::Max).finish();
+            // A registered host (no live agent, re-added by the registry merge)
+            // becomes a click target that opens a terminal on it — the spine's
+            // host-row action. Live-only hosts keep their plain header.
+            let header_el: Box<dyn Element> = match host.registry_node_id.clone() {
+                Some(node_id) => {
+                    let handle = self
+                        .conductor_host_states
+                        .get(&node_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    Hoverable::new(handle, move |_mouse| header_el)
+                        .with_cursor(warpui::platform::Cursor::PointingHand)
+                        .on_click(move |ctx, _, _| {
+                            ctx.dispatch_typed_action(WorkspaceAction::OpenSshTerminalByNode {
+                                node_id: node_id.clone(),
+                            })
+                        })
+                        .finish()
+                }
+                None => header_el,
+            };
+            col = col.with_child(header_el);
 
             // Sessions across the host's projects, already waiting-first per
             // project (projects are needs-me-first). Capped for glanceability.

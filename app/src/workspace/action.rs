@@ -147,6 +147,13 @@ pub enum WorkspaceAction {
         node_id: String,
         server: warp_ssh_manager::SshServerInfo,
     },
+    /// Open a terminal on a registered SSH host given only its `node_id` — the
+    /// handler resolves the `SshServerInfo` from the registry. Dispatched by the
+    /// Conductor spine when a registered host row (with no live agent) is clicked,
+    /// so the caller need not carry the server info.
+    OpenSshTerminalByNode {
+        node_id: String,
+    },
     /// Open the local file-manager pane (FM pane-mode P1) rooted at `start_path`.
     OpenLocalFileManager {
         start_path: std::path::PathBuf,
@@ -920,6 +927,7 @@ impl WorkspaceAction {
             | AddDefaultTab
             | AddTerminalTab { .. }
             | OpenSshTerminal { .. }
+            | OpenSshTerminalByNode { .. }
             | OpenLocalFileManager { .. }
             | ToggleSshManager
             | ToggleSkillManager
