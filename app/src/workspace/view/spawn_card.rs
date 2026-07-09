@@ -87,6 +87,11 @@ pub struct SpawnCardConfig {
     pub scoped_host_name: Option<String>,
     /// Pre-scoped project dir (from a Conductor project-header `+` / context).
     pub project: Option<PathBuf>,
+    /// Optional task prompt to prefill into the launched agent's input — the
+    /// contextual "run this task with an agent" flows (Fix-with-agent, the GitHub
+    /// instance-flows) route through the card carrying this, so every launch goes
+    /// through the one explicit launch grammar instead of a blind one-click.
+    pub prompt: Option<String>,
 }
 
 /// Which account the launch pins to.
@@ -151,6 +156,9 @@ pub struct SpawnCard {
     account: AccountChoice,
     host: HostChoice,
     project: Option<PathBuf>,
+    /// Task prompt to prefill into the launched agent after start (contextual
+    /// flows); `None` for a plain "new agent" open.
+    prompt: Option<String>,
     chip_states: std::cell::RefCell<std::collections::HashMap<String, MouseStateHandle>>,
 }
 
@@ -193,6 +201,7 @@ impl SpawnCard {
             account: AccountChoice::Freest,
             host: HostChoice::Local,
             project: None,
+            prompt: None,
             chip_states: Default::default(),
         }
     }
@@ -221,6 +230,7 @@ impl SpawnCard {
             cfg.scoped_host_name.as_deref(),
         );
         self.project = cfg.project.clone();
+        self.prompt = cfg.prompt.clone();
         self.cfg = cfg;
     }
 
@@ -283,6 +293,7 @@ impl SpawnCard {
             node_id: self.resolved_node_id(),
             model: Some(self.model.clone()),
             effort: Some(self.effort.clone()),
+            prompt: self.prompt.clone(),
         })
     }
 
@@ -848,6 +859,9 @@ pub enum SpawnCardEvent {
         node_id: Option<String>,
         model: Option<String>,
         effort: Option<String>,
+        /// Task prompt to prefill into the launched agent's input, if this launch
+        /// came from a contextual "run this task" flow.
+        prompt: Option<String>,
     },
 }
 
@@ -1035,6 +1049,7 @@ mod tests {
             account: AccountChoice::Freest,
             host: HostChoice::Local,
             project: Some(PathBuf::from("/home/dev/projects/zaplex")),
+            prompt: None,
             chip_states: Default::default(),
         };
 
@@ -1049,6 +1064,7 @@ mod tests {
                 node_id,
                 model,
                 effort,
+                ..
             } => {
                 assert_eq!(agent, CLIAgent::Claude);
                 assert_eq!(model.as_deref(), Some("sonnet"));
@@ -1078,6 +1094,7 @@ mod tests {
             account: AccountChoice::Freest,
             host: HostChoice::Remote(0),
             project: None,
+            prompt: None,
             chip_states: Default::default(),
         };
 
@@ -1116,6 +1133,7 @@ mod tests {
             account: AccountChoice::Freest,
             host: HostChoice::Local,
             project: None,
+            prompt: None,
             chip_states: Default::default(),
         };
         assert!(card.launch_payload().is_none());

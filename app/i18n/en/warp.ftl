@@ -1202,7 +1202,7 @@ settings-color-picker-add-directory-color = Add directory color
 # ---- settings_file_footer.rs ----
 settings-footer-open-file = Open settings file
 settings-footer-alert-open-file = Open file
-ask-agent-none-installed = No coding agent found. Install one (Claude Code, Codex, Gemini, …) and it will appear here.
+ask-agent-none-installed = No coding agent found. Install one (Claude Code or Codex) and it will appear here.
 settings-footer-alert-fix-with-agent = Fix with { $agent }
 settings-footer-alert-fix-with-oz = Fix with AI
 
@@ -3314,7 +3314,7 @@ onboarding-theme-title = Choose a theme
 onboarding-theme-subtitle = Click or use arrow keys to select, Enter to confirm.
 onboarding-theme-sync-with-os = Sync light/dark theme with OS
 onboarding-third-party-title = Customize third party agents
-onboarding-third-party-subtitle = Select defaults for using agents like Claude Code, Codex, and Gemini.
+onboarding-third-party-subtitle = Select defaults for using agents like Claude Code and Codex.
 onboarding-third-party-cli-toolbar = CLI agent toolbar
 onboarding-third-party-notifications = Notifications
 onboarding-customize-title = Customize your Zaplex

@@ -1,12 +1,15 @@
-# PR validation pipeline — cargo check + a targeted boot/keymap smoke test.
+# PR validation pipeline — cargo check + targeted keymap-validation unit tests.
 #
 # Division of labour with zap_release.yml:
 # - This workflow: runs a Linux cargo check on every PR (compile feedback), plus
-#   a targeted `cargo test` that actually *runs* the keybinding-registration
-#   path. `cargo check` compiles the code but never executes registration, so it
-#   cannot catch the "does it even open" class — e.g. a malformed keybinding like
-#   `cmd-shift-o` (must be `cmd-shift-O`) that compiles yet panics at startup and
-#   leaves the app unopenable. The keymap_smoke_test job closes that gap.
+#   a targeted `cargo test` that parse-validates every registered keybinding on
+#   BOTH platform variants. `cargo check` compiles the code but never parses the
+#   binding strings, so it cannot catch a malformed keybinding like `cmd-shift-o`
+#   (must be `cmd-shift-O`) that compiles yet panics during registration. The
+#   keymap-validation tests catch exactly that class. (A full window-open "does it
+#   even open" test needs the app's live singleton graph, which the unit-test
+#   harness cannot provide, so it is `#[ignore]`d rather than run here — see
+#   `test_boot_registers_all_keybindings_without_panicking`.)
 # - zap_release.yml: runs the full three-platform packaging (~3h) only on
 #   tag push / manual dispatch.
 #
@@ -64,7 +67,7 @@ jobs:
         shell: bash
 
   keymap_smoke_test:
-    name: keymap + boot smoke test (Linux x86_64)
+    name: keymap validation (Linux x86_64)
     # Runs in parallel with cargo_check so it does not delay compile feedback.
     # Same runner as cargo_check for consistent glibc/deps.
     runs-on: ubuntu-22.04

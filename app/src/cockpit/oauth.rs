@@ -52,7 +52,7 @@ fn read_access_token(config_dir: &Path, default_config_dir: &Path) -> Option<Str
     }
     #[cfg(target_os = "macos")]
     if config_dir == default_config_dir {
-        let output = std::process::Command::new("security")
+        let output = command::blocking::Command::new("security")
             .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
             .output()
             .ok()?;

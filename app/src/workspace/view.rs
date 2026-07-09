@@ -4191,36 +4191,14 @@ impl Workspace {
     /// installed agent; else the first installed one (picker = follow-up per
     /// design §3); none installed → an actionable toast instead of a silent
     /// fallback to the retired in-app agent mode.
-    fn ask_agent(&mut self, prompt: String, agent: Option<CLIAgent>, ctx: &mut ViewContext<Self>) {
-        let install_model = CLIAgentInstallModel::as_ref(ctx);
-        let installed: Vec<CLIAgent> = enum_iterator::all::<CLIAgent>()
-            .filter(|a| !matches!(a, CLIAgent::Unknown))
-            .filter(|a| install_model.is_cli_agent_installed(*a))
-            .collect();
-        let resolved = agent
-            .filter(|a| installed.contains(a))
-            .or_else(|| installed.first().copied());
-        let Some(agent) = resolved else {
-            self.toast_stack.update(ctx, |stack, ctx| {
-                stack.add_persistent_toast(
-                    DismissibleToast::error(crate::t!("ask-agent-none-installed").to_string()),
-                    ctx,
-                );
-            });
-            return;
-        };
-
-        self.add_tab_with_specific_agent(agent, ctx);
-        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
-                terminal_view.update(ctx, |terminal_view, ctx| {
-                    terminal_view.input().update(ctx, |input, ctx| {
-                        input.replace_buffer_content(&prompt, ctx);
-                        input.focus_input_box(ctx);
-                    });
-                });
-            }
-        });
+    fn ask_agent(&mut self, prompt: String, _agent: Option<CLIAgent>, ctx: &mut ViewContext<Self>) {
+        // Route through the one explicit launch grammar: open the spawn card with
+        // the task prompt. Agent/model/host/dir/account are chosen there (already
+        // restricted to the supported Claude/Codex), then the card launches and
+        // prefills the prompt — no blind one-click, and no accidental launch of an
+        // unsupported agent. The card also handles the "nothing installed" case
+        // (inert Confirm with an install hint) instead of a toast.
+        self.open_spawn_card(None, None, None, Some(prompt), ctx);
     }
 
     /// Like [`Self::ask_agent`] but launches Claude **routed to a subscription**
@@ -4230,30 +4208,14 @@ impl Workspace {
     fn ask_agent_routed(
         &mut self,
         prompt: String,
-        config_dir: Option<&Path>,
+        _config_dir: Option<&Path>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let launch = CLIAgent::Claude.launch_command_routed(config_dir);
-        self.add_terminal_tab(false, ctx);
-        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            if let Some(terminal_view) = pane_group.active_session_view(ctx) {
-                terminal_view.update(ctx, |view, ctx| {
-                    view.execute_command_or_set_pending(&launch, ctx);
-                });
-            }
-        });
-        // Prefill the task prompt in the input box for review (not auto-sent) —
-        // the human stays in the loop, exactly like `ask_agent`.
-        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
-                terminal_view.update(ctx, |terminal_view, ctx| {
-                    terminal_view.input().update(ctx, |input, ctx| {
-                        input.replace_buffer_content(&prompt, ctx);
-                        input.focus_input_box(ctx);
-                    });
-                });
-            }
-        });
+        // Route through the spawn card too. The card recomputes the freest account
+        // at open time (the same "on the freest instance" intent as the old direct
+        // path) and prefills the task prompt — one explicit launch grammar for
+        // every launch, no blind one-click.
+        self.open_spawn_card(None, None, None, Some(prompt), ctx);
     }
 
     /// Creates a new default terminal tab, then runs the startup command of the specified CLI agent.
@@ -17643,6 +17605,7 @@ impl Workspace {
         host_id: Option<String>,
         host: Option<String>,
         project: Option<PathBuf>,
+        prompt: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::terminal::cli_agent::CLIAgentInstallModel;
@@ -17659,16 +17622,16 @@ impl Workspace {
         let codex =
             self.spawn_card_provider_options(zaplex_cockpit::Provider::Codex, codex_installed, ctx);
 
-        let hosts =
-            warp_ssh_manager::with_conn(|c| Ok(warp_ssh_manager::SshRepository::list_nodes(c)?))
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|n| matches!(n.kind, warp_ssh_manager::types::NodeKind::Server))
-                .map(|n| spawn_card::HostOption {
-                    id: n.id.clone(),
-                    name: n.name.clone(),
-                })
-                .collect();
+        // Spawn-card launches are LOCAL for this build (Codex-sanctioned downgrade
+        // of remote launch): a native folder picker cannot browse a remote
+        // filesystem, so rather than ship a half-selectable remote directory we
+        // scope the card to local launches — the directory is fully selectable and
+        // "dir is steering" holds. Remote agent work stays reachable two other
+        // ways: adopting an existing remote session from the Conductor (in-place
+        // remote adopt), or opening a remote terminal from the "+" menu (host list)
+        // and starting the agent there. Remote spawn-launch returns once the card
+        // has a real remote directory input (tracked as a follow-up).
+        let hosts: Vec<spawn_card::HostOption> = Vec::new();
 
         // Reconcile the two host id spaces at the spawn-card boundary. The
         // Conductor scopes a `+` by the Agent-inventory's *daemon* `HostId`, but
@@ -17706,6 +17669,7 @@ impl Workspace {
             scoped_host_id,
             scoped_host_name: host,
             project,
+            prompt,
         };
         self.spawn_card.update(ctx, |card, _| card.configure(cfg));
 
@@ -17731,6 +17695,7 @@ impl Workspace {
                 node_id,
                 model,
                 effort,
+                prompt,
             } => {
                 self.current_workspace_state.is_spawn_card_open = false;
                 self.launch_routed_agent(
@@ -17742,6 +17707,23 @@ impl Workspace {
                     effort.as_deref(),
                     ctx,
                 );
+                // Contextual "run this task" flows carry a prompt: prefill it into
+                // the just-launched agent's input for the human to review and send
+                // (never auto-sent) — the same in-the-loop behavior the old direct
+                // ask_agent path had, now unified through the spawn card.
+                if let Some(prompt) = prompt {
+                    let prompt = prompt.clone();
+                    self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                        if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
+                            terminal_view.update(ctx, |terminal_view, ctx| {
+                                terminal_view.input().update(ctx, |input, ctx| {
+                                    input.replace_buffer_content(&prompt, ctx);
+                                    input.focus_input_box(ctx);
+                                });
+                            });
+                        }
+                    });
+                }
                 ctx.notify();
             }
         }
@@ -21721,7 +21703,7 @@ impl TypedActionView for Workspace {
                 host,
                 project,
             } => {
-                self.open_spawn_card(host_id.clone(), host.clone(), project.clone(), ctx);
+                self.open_spawn_card(host_id.clone(), host.clone(), project.clone(), None, ctx);
             }
             OpenFileInEditor { node_id, path } => {
                 if node_id.is_empty() {

@@ -184,3 +184,40 @@ Round 2 returned NOT GREEN with deeper, more precise items; each is now addresse
 6. **models.dev copy removed from shipped UI.** The Providers settings description no longer promotes a
    150-provider / OpenAI-compatible / Gemini / Ollama catalog; it states Claude Code / Codex run as their
    own CLIs (no setup) and "+ Add provider" is an optional manual path. (`i18n/en/warp.ftl`.)
+
+## 8. Codex gate round 3 → fixes
+
+Round 3 returned NOT GREEN with 5 items; each is now addressed:
+
+1. **No blind CLI-agent launch — everything routes through the spawn card.** The contextual task flows
+   (`ask_agent` / `ask_agent_routed`, i.e. Fix-with-agent, `FixSettingsWithOz`, and the GitHub
+   instance-flows) no longer resolve over *all* installed agents (which included Gemini/Amp/… and could
+   launch one blindly). They now open the **spawn card** carrying the task prompt; the card is restricted
+   to the supported Claude/Codex, and on launch it prefills the prompt into the new agent's input for the
+   human to review and send. One explicit launch grammar, no one-click blind launch. (`workspace/view.rs`,
+   `spawn_card.rs` `prompt`.)
+2. **Remote spawn-launch downgraded out of scope (labeled), directory fully selectable.** A native folder
+   picker cannot browse a remote filesystem, so — rather than ship a half-selectable remote directory —
+   the spawn card launches **locally** for this build (`open_spawn_card` supplies an empty host list). The
+   local directory is fully selectable (native picker) and always shown, so "dir is steering" holds.
+   Remote agent work stays reachable: **adopt** an existing remote session from the Conductor (in-place
+   remote adopt), or open a **remote terminal** from the "+" menu's host list and start the agent there.
+   Remote spawn-launch returns once the card has a real remote directory input (follow-up).
+3. **Honest CI naming.** The workflow job is renamed to "keymap validation"; the header no longer claims a
+   "boot smoke"/"does it even open" gate. The keymap-crash class is gated by the `warpui_core::keymap`
+   parse-validation tests; the window-open boot test is `#[ignore]`d (documented). (`pr-check.yml`.)
+4. **Gemini/Ollama scope copy cleaned.** `ask-agent-none-installed` and `onboarding-third-party-subtitle`
+   drop Gemini; no Ollama promotion remains. (`i18n/en/warp.ftl`.) The `AgentProviderApiType` protocol
+   identifiers (Gemini/Ollama/OpenAI/DeepSeek) are internal wire-protocol values for the *optional* manual
+   BYOP endpoint — not scope promotion — and are left intact (narrowing them would break protocol support
+   and the persistence round-trip, and would be arbitrary across the other protocols).
+5. **OAuth keychain read goes through the command wrapper.** `cockpit/oauth.rs` uses
+   `command::blocking::Command` (a drop-in for `std::process::Command`, the repo's child-process rule)
+   instead of `std::process::Command` for the macOS `security` keychain read; token hygiene unchanged.
+
+**Open concept item (not in the numbered gate, needs a product decision):** Codex notes the Conductor
+object-tree, while it leads the cockpit sidebar/pane and its rows are actionable (local + remote), is
+"still one cockpit surface, not yet THE visible app spine." Promoting it to the app's primary navigation
+spine (replacing/leading the whole left panel as the organizing Host ▸ Project ▸ Session ▸ Agent view) is
+a larger UX redesign beyond the tree-detail tweaks approved so far — flagged for an explicit product call
+rather than silently scoped in.
