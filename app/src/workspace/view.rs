@@ -7873,85 +7873,10 @@ impl Workspace {
             ));
         }
 
-        // Add-to-favorites picker: durable tree objects (hosts + distinct
-        // projects) not yet favorited. Sessions are curated via the sidebar ★
-        // (they are transient, so they stay out of this flat picker).
-        let mut addable: Vec<MenuItem<WorkspaceAction>> = Vec::new();
-        for (node_id, name) in &host_nodes {
-            if favorites.iter().any(|f| f.same_target(FavoriteKind::Host, node_id)) {
-                continue;
-            }
-            addable.push(
-                MenuItemFields::new(name.clone())
-                    .with_on_select_action(WorkspaceAction::ToggleFavorite {
-                        kind: FavoriteKind::Host,
-                        target: node_id.clone(),
-                        label: name.clone(),
-                    })
-                    .with_icon(icons::Icon::Key)
-                    .into_item(),
-            );
-        }
-        let mut seen_projects = std::collections::HashSet::new();
-        for host in &inventory.hosts {
-            for project in &host.projects {
-                // Host-scope the project favorite by host_key: a project path is
-                // unique only within a host, so /home/me/proj on local and on
-                // devhost are distinct favorites (and a remote project scopes to
-                // its host, never launching on the wrong machine).
-                let key =
-                    zaplex_cockpit::host_key(host.is_local, host.host_id.as_deref(), &project.root);
-                if !seen_projects.insert(key.clone()) {
-                    continue;
-                }
-                if favorites
-                    .iter()
-                    .any(|f| f.same_target(FavoriteKind::Project, &key))
-                {
-                    continue;
-                }
-                addable.push(
-                    MenuItemFields::new(project.name.clone())
-                        .with_on_select_action(WorkspaceAction::ToggleFavorite {
-                            kind: FavoriteKind::Project,
-                            target: key,
-                            label: project.name.clone(),
-                        })
-                        .with_icon(icons::Icon::Folder)
-                        .into_item(),
-                );
-            }
-        }
-        // GitHub instance-flows (#102): favoritable here, since they no longer
-        // sit as fixed dropdown rows. Each not-yet-favorited flow can be added.
-        for key in crate::cockpit::github_flows::flow_keys() {
-            if favorites
-                .iter()
-                .any(|f| f.same_target(FavoriteKind::GithubFlow, key))
-            {
-                continue;
-            }
-            let label = Self::flow_label(key);
-            addable.push(
-                MenuItemFields::new(label.clone())
-                    .with_on_select_action(WorkspaceAction::ToggleFavorite {
-                        kind: FavoriteKind::GithubFlow,
-                        target: key.to_string(),
-                        label,
-                    })
-                    .with_icon(icons::Icon::Lightning)
-                    .into_item(),
-            );
-        }
-        if !addable.is_empty() {
-            items.push(MenuItem::Header {
-                fields: MenuItemFields::new(crate::t!("workspace-favorites-add-header")),
-                clickable: false,
-                right_side_fields: None,
-            });
-            items.extend(addable);
-        }
-
+        // No auto-generated "add" list here — that was exactly the clutter this
+        // dropdown replaced. Favorites are curated ONLY via the ★ on a tree node
+        // in the sidebar (the empty-state hint above points there); the dropdown
+        // shows nothing but the user's curated favorites.
         items
     }
 
