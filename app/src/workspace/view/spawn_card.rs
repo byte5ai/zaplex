@@ -415,19 +415,23 @@ impl SpawnCard {
                 .map(|h| h.name.clone())
                 .unwrap_or_else(|| "remote".to_string()),
         };
-        let mut s = format!(
-            "{} · {} · {} · {} · {} · {}",
+        // Directory is always part of the summary — a first-class launch
+        // attribute, never omitted (Codex gate: "dir is steering"). An unset dir
+        // reads as the explicit default rather than silently vanishing.
+        let dir = match &self.project {
+            Some(dir) => dir.display().to_string(),
+            None => "default (home)".to_string(),
+        };
+        format!(
+            "{} · {} · {} · {} · {} · {} · {}",
             self.agent.display_name(),
             self.model,
             Self::cap(&self.effort),
             Self::context_label(&self.model),
             account,
             host,
-        );
-        if let Some(dir) = &self.project {
-            s.push_str(&format!(" · {}", dir.display()));
-        }
-        s
+            dir,
+        )
     }
 
     fn render_card(&self, app: &AppContext) -> Box<dyn Element> {

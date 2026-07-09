@@ -297,6 +297,11 @@ pub struct SftpBrowserView {
     pub(crate) path_history: Vec<PathBuf>,
     /// Current position in the history
     pub(crate) history_index: usize,
+    /// The directory the caller asked us to open at. The FM pane-mode toggle
+    /// hands us the terminal's cwd (e.g. `/srv/app`); the plain "SFTP Browse"
+    /// entry passes `None`. Retained so the async `connect_to_server` finalize
+    /// can honor it instead of overwriting `current_path` with the remote home.
+    requested_start_path: Option<PathBuf>,
     // ---- Transfers ----
     /// List of transfer tasks
     pub(crate) transfers: Vec<TransferTask>,
@@ -413,8 +418,11 @@ impl SftpBrowserView {
             current_path: start_path.clone().unwrap_or_else(|| PathBuf::from("/")),
             entries: Vec::new(),
             selected: HashSet::new(),
-            path_history: vec![start_path.unwrap_or_else(|| PathBuf::from("/"))],
+            path_history: vec![start_path.clone().unwrap_or_else(|| PathBuf::from("/"))],
             history_index: 0,
+            // Retain the caller's request so the async connect finalize can land
+            // on it (`connect_to_server` runs after construction). Moved last.
+            requested_start_path: start_path,
             transfers: Vec::new(),
             next_transfer_id: 1,
             dialog: None,
@@ -702,18 +710,12 @@ impl SftpBrowserView {
                                 match session.sftp() {
                                     Ok(sftp) => {
                                         let backend = Arc::new(LiveSftpBackend::new(sftp)) as Arc<dyn SftpBackend>;
-                                        // Resolve the user's home directory
-                                        if let Ok(home) = backend.realpath(std::path::Path::new(".")) {
-                                            me.current_path = normalize_remote_path(&home);
-                                        } else {
-                                            me.current_path = PathBuf::from("/");
-                                        }
-                                        me.path_history = vec![me.current_path.clone()];
-                                        me.history_index = 0;
-                                        me.connection = ConnectionState::Connected;
                                         me._session = Some(session);
-                                        me.sftp = Some(backend);
-                                        me.refresh_dir(ctx);
+                                        // Land on the caller's requested `start_path`
+                                        // (the FM pane-mode toggle's cwd) when given;
+                                        // the plain "SFTP Browse" (`None`) falls back
+                                        // to the remote home, then `/`.
+                                        me.apply_connected_backend(backend, ctx);
                                     }
                                     Err(e) => {
                                         me.connection =
@@ -746,6 +748,47 @@ impl SftpBrowserView {
                 ctx.notify();
             }
         }
+    }
+
+    /// Decide which directory the browser opens once the SFTP connection is
+    /// live. An explicit, non-root `requested_start_path` — the FM pane-mode
+    /// toggle handing us the terminal's cwd (e.g. `/srv/app`) — is honored so
+    /// the file manager opens where the shell is, and `resolve_home` is never
+    /// consulted. Otherwise (the plain "SFTP Browse" entry passes `None`, or a
+    /// bare `/`) fall back to the remote home (`realpath(".")`, resolved lazily
+    /// by `resolve_home`), then `/`. Pure so the choice is unit-testable.
+    fn initial_connect_path(
+        requested_start_path: &Option<PathBuf>,
+        resolve_home: impl FnOnce() -> Option<PathBuf>,
+    ) -> PathBuf {
+        match requested_start_path {
+            Some(p) if p.as_path() != Path::new("/") => p.clone(),
+            _ => resolve_home().unwrap_or_else(|| PathBuf::from("/")),
+        }
+    }
+
+    /// Finalize a freshly-established SFTP connection: pick the initial directory
+    /// (honoring a caller-provided `start_path`, else the remote home), install
+    /// the backend, and list that directory. Split out of `connect_to_server`'s
+    /// async callback so the path-selection + initial-listing behavior is
+    /// unit-testable with a mock backend (the live session handling stays in the
+    /// callback). Honoring `start_path` also skips the `realpath(".")` round-trip.
+    pub(crate) fn apply_connected_backend(
+        &mut self,
+        backend: Arc<dyn SftpBackend>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.current_path = Self::initial_connect_path(&self.requested_start_path, || {
+            backend
+                .realpath(Path::new("."))
+                .ok()
+                .map(|home| normalize_remote_path(&home))
+        });
+        self.path_history = vec![self.current_path.clone()];
+        self.history_index = 0;
+        self.connection = ConnectionState::Connected;
+        self.sftp = Some(backend);
+        self.refresh_dir(ctx);
     }
 
     /// Run a blocking operation and invoke the callback with the result
@@ -3772,6 +3815,53 @@ mod tests {
             build_upload_remote_path(&current, "/etc/passwd"),
             Some(PathBuf::from("/home/user/passwd"))
         );
+    }
+
+    // ============================================================
+    // initial_connect_path tests (the connect finalize's directory choice)
+    // ============================================================
+
+    /// An explicit, non-root `start_path` (the FM pane-mode toggle's cwd) is
+    /// honored verbatim, and the remote home is never resolved.
+    #[test]
+    fn test_initial_connect_path_honors_explicit_start_path() {
+        let requested = Some(PathBuf::from("/srv/app"));
+        let mut home_consulted = false;
+        let result = SftpBrowserView::initial_connect_path(&requested, || {
+            home_consulted = true;
+            Some(PathBuf::from("/home/user"))
+        });
+        assert_eq!(result, PathBuf::from("/srv/app"));
+        assert!(
+            !home_consulted,
+            "the remote home must not be resolved when an explicit start_path is honored"
+        );
+    }
+
+    /// The plain "SFTP Browse" entry (`None`) falls back to the remote home.
+    #[test]
+    fn test_initial_connect_path_none_uses_home() {
+        let result =
+            SftpBrowserView::initial_connect_path(&None, || Some(PathBuf::from("/home/user")));
+        assert_eq!(result, PathBuf::from("/home/user"));
+    }
+
+    /// A bare `/` start_path is treated like the plain entry: fall back to home.
+    #[test]
+    fn test_initial_connect_path_root_uses_home() {
+        let requested = Some(PathBuf::from("/"));
+        let result = SftpBrowserView::initial_connect_path(&requested, || {
+            Some(PathBuf::from("/home/user"))
+        });
+        assert_eq!(result, PathBuf::from("/home/user"));
+    }
+
+    /// When the home cannot be resolved (`realpath(".")` failed) and no
+    /// start_path was given, fall back to `/` — the pre-existing behavior.
+    #[test]
+    fn test_initial_connect_path_none_no_home_uses_root() {
+        let result = SftpBrowserView::initial_connect_path(&None, || None);
+        assert_eq!(result, PathBuf::from("/"));
     }
 
     // ============================================================

@@ -7936,8 +7936,12 @@ impl Workspace {
             menu_items.push(MenuItem::Separator);
         }
 
-        // 4. Agent (if AI enabled)
-        if is_any_ai_enabled {
+        // 4. Agent — the in-app (Warp) AI agent. With the cockpit on, the explicit
+        // spawn card (4b, "Neuer Agent…") is the single app-level launch grammar,
+        // so this legacy parallel entry is hidden in that (production) mode and
+        // kept only as a fallback when the cockpit is off (Codex gate: no parallel
+        // launch grammar next to the spawn card).
+        if is_any_ai_enabled && !*crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
             let mut agent_item = MenuItemFields::new(crate::t!("workspace-new-session-agent"))
                 .with_on_select_action(WorkspaceAction::AddAgentTab)
                 .with_icon(icons::Icon::LayoutAlt01);
@@ -17605,14 +17609,22 @@ impl Workspace {
             opts.accounts.push(spawn_card::AccountOption {
                 label: a.account.label.clone(),
                 config_dir: a.account.config_dir.clone(),
-                heat_label: zaplex_cockpit::heat_pct_label(a.heat),
+                // Binding-window heat + provenance ("~" for estimates), so a chip
+                // never reads calm while a weekly/Opus sublimit is the real cap.
+                heat_label: zaplex_cockpit::heat_pct_label_with_provenance(
+                    zaplex_cockpit::binding_window(a).0,
+                    a.provenance,
+                ),
             });
         }
         if let Some(f) = zaplex_cockpit::pick_freest(provider, &snapshot.accounts) {
             opts.freest_label = Some(format!(
                 "{} ({})",
                 f.account.label,
-                zaplex_cockpit::heat_pct_label(f.heat)
+                zaplex_cockpit::heat_pct_label_with_provenance(
+                    zaplex_cockpit::binding_window(f).0,
+                    f.provenance,
+                )
             ));
             // Only a non-default account needs a config-dir pin; the default
             // login is the API-key-scrubbed fallback (`None`).
@@ -17669,6 +17681,23 @@ impl Workspace {
         // `None` and resolution falls back to the host *name* below — it must
         // never silently default to Local for a clearly remote-scoped open.
         let scoped_host_id = self.translate_scoped_daemon_host(host_id.as_deref(), &*ctx);
+
+        // Prefill the launch directory from the invoking (active) pane's cwd for a
+        // plain, unscoped "+" open — "directory is steering", so a global launch
+        // lands in the visible working dir rather than an implicit home (Codex
+        // gate). Only for a *local, unscoped* open: a host-scoped open carries its
+        // own project, and a remote pane's cwd wouldn't apply to the Local-default
+        // card (hence `active_session_path_if_local`, which is `None` off-local).
+        let project = project.or_else(|| {
+            if host.is_none() && host_id.is_none() {
+                self.active_tab_pane_group()
+                    .as_ref(ctx)
+                    .active_session_view(ctx)
+                    .and_then(|v| v.as_ref(ctx).active_session_path_if_local(ctx))
+            } else {
+                None
+            }
+        });
 
         let cfg = spawn_card::SpawnCardConfig {
             claude,

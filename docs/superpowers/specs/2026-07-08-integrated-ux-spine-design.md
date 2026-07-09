@@ -151,9 +151,36 @@ The first Codex gate returned NOT GREEN with 6 items. What changed:
 6. **Usage honesty.** Headline = binding window (max of 5h/week/Opus/Sonnet sublimits); Codex accounts
    remain estimate-only and are marked with the `~` provenance prefix; remote hosts show no fabricated
    quota.
-7. **Verification.** `cargo check --locked -p warp` + `cargo test -p zaplex_cockpit` + the targeted
-   boot/keymap/FM/spawn-card tests are run and reported before any DMG.
+7. **Verification (what actually gates).** CI's `keymap_smoke_test` job runs the `warpui_core::keymap`
+   cross-platform validation tests (the cmd-shift-o gate) plus the app-crate FM-toggle + spawn-card
+   confirm-payload unit tests. The window-open boot smoke test is `#[ignore]`d — it needs the full app
+   singleton graph the `App::test` unit harness can't provide (shared with the other view tests) — and is
+   NOT a CI gate. Broader verification (`cargo check --locked -p warp`, `cargo test -p zaplex_cockpit`) is
+   run locally and reported per change, not enforced in CI.
 
 **Deliberate residual (labeled, not hidden):** ad-hoc *free-text* remote directory entry in the spawn
 card is not offered — a remote dir is scoped via the Conductor project node instead. This is the
 "clearly restrict and label" path Codex sanctioned, not a silent gap.
+
+## 7. Codex gate round 2 → fixes
+
+Round 2 returned NOT GREEN with deeper, more precise items; each is now addressed:
+
+1. **Remote FM cwd honored on connect.** `SftpBrowserView`'s `start_path` was clobbered by
+   `connect_to_server` (`realpath(".")`/`/`); the connect path now lands at the caller-provided
+   `start_path`, falling back to home/root only for the plain, unscoped "SFTP Browse". A test exercises
+   the connect-time initial directory. (`sftp_manager/browser.rs`.)
+2. **Dashboard pane remote rows attach too.** The roomy cockpit pane mirrors the sidebar fix: remote
+   Conductor rows now dispatch `AttachFleetSession` (remote in-place adopt); the review verb stays local.
+   (`cockpit/pane.rs`.)
+3. **No parallel launch grammar.** The legacy in-app `Agent` (`AddAgentTab`) entry is hidden when the
+   cockpit is on; the spawn card is the single app-level launch path. (`workspace/view.rs` menu.)
+4. **Directory is steering.** A plain "+" spawn-card open prefills the launch directory from the active
+   local pane's cwd (not an implicit home), and the card summary always shows the directory (explicit
+   "default (home)" when unset). (`workspace/view.rs` `open_spawn_card`; `spawn_card.rs` summary.)
+5. **Freest + labels use the binding window + provenance.** `pick_freest` / `is_over_budget` rank on the
+   fullest of 5h / week / Opus / Sonnet, not 5h alone; the spawn-card account and freest labels show the
+   binding-window percent with the `~` estimate marker. (`zaplex_cockpit/routing.rs`, `workspace/view.rs`.)
+6. **models.dev copy removed from shipped UI.** The Providers settings description no longer promotes a
+   150-provider / OpenAI-compatible / Gemini / Ollama catalog; it states Claude Code / Codex run as their
+   own CLIs (no setup) and "+ Add provider" is an optional manual path. (`i18n/en/warp.ftl`.)

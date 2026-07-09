@@ -1095,9 +1095,9 @@ impl CockpitPaneView {
     /// One Conductor session row: `<glyph> <name — dir> <model> · <ctx%>`, using
     /// the shared glyph vocabulary and the model-family/colored-context% styling.
     /// The whole row is the **attach** affordance — clicking it adopts the agent
-    /// in place (local host) via [`WorkspaceAction::AttachFleetSession`], the same
-    /// path the `w`-jump uses. Step 8's per-session levers (`/compact`, `/clear`,
-    /// fork) hang as trailing children on this row.
+    /// in place (local or remote host) via [`WorkspaceAction::AttachFleetSession`],
+    /// the same path the `w`-jump uses. Step 8's per-session levers (`/compact`,
+    /// `/clear`, fork) hang as trailing children on this row.
     fn render_conductor_session(
         &self,
         host_label: &str,
@@ -1159,15 +1159,15 @@ impl CockpitPaneView {
         }
         let info = row.with_main_axis_size(MainAxisSize::Max).finish();
 
-        // Local sessions attach in place on click of the info span; remote
-        // sessions live on their host, so the row is informational (honest —
-        // remote in-place adopt is a follow-up; the `w`-jump reports the same).
-        // The click target is the info span (not the whole row) so the trailing
-        // review-loop (step 6) and guardrail (step 7) verbs have their own
-        // click targets alongside it.
+        // Attach on click of the info span — for BOTH local and remote sessions
+        // now that remote in-place adopt is wired (`attach_fleet_session` resumes
+        // a remote session on its host, the same path the `w`-jump uses). The
+        // click target is the info span (not the whole row) so the trailing
+        // review-loop (step 6) and guardrail (step 7) verbs keep their own click
+        // targets alongside it.
         let key = host_key(is_local, host_id, &session.session_id);
-        let info_el = match (is_local, self.conductor_row_states.get(&key).cloned()) {
-            (true, Some(state)) => {
+        let info_el = match self.conductor_row_states.get(&key).cloned() {
+            Some(state) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
                     host_id: host_id.map(str::to_string),
@@ -1179,7 +1179,7 @@ impl CockpitPaneView {
                     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
                     .finish()
             }
-            _ => info,
+            None => info,
         };
         // Review verbs are local-only (they inspect the repo on this
         // machine); guardrails are cross-host, so every live row — local and
