@@ -342,6 +342,19 @@ impl SpawnCard {
         }
     }
 
+    /// Fill the remote-directory field from a directory chosen in the SFTP
+    /// browser pick flow (#105). The card's other selections are untouched (it is
+    /// a persistent view — hidden, not rebuilt, during the browse).
+    pub fn set_remote_dir(&mut self, path: &std::path::Path, ctx: &mut ViewContext<Self>) {
+        if let Some(editor) = self.remote_dir_editor.clone() {
+            let text = path.display().to_string();
+            editor.update(ctx, |ed, ctx| {
+                ed.set_buffer_text_with_base_buffer(&text, ctx);
+            });
+            ctx.notify();
+        }
+    }
+
     fn provider_options(&self) -> &ProviderOptions {
         match self.agent {
             CLIAgent::Codex => &self.cfg.codex,
@@ -600,8 +613,8 @@ impl SpawnCard {
                 .finish(),
             )
             // Card inner width = MODAL_WIDTH minus the 24px uniform padding each
-            // side, so the input spans the card without overflowing it.
-            .with_width(MODAL_WIDTH - 48.)
+            // side, less room for the trailing "Browse…" chip (#105).
+            .with_width(MODAL_WIDTH - 48. - 104.)
             .finish(),
         )
     }
@@ -799,7 +812,17 @@ impl SpawnCard {
                 )
                 .finish()
             });
-            col = col.with_child(self.row(&label, vec![input], appearance));
+            // "Browse…" opens the host's SFTP browser in pick mode (#105) — a
+            // native folder picker can't reach a remote FS, so the visual browser
+            // (with its MC-style select bar) fills the gap next to the text field.
+            let browse = self.chip(
+                "dir-browse",
+                "Browse…".to_string(),
+                false,
+                SpawnCardAction::BrowseRemoteDir,
+                appearance,
+            );
+            col = col.with_child(self.row(&label, vec![input, browse], appearance));
         } else {
             let mut dir_chips = vec![self.chip(
                 "dir-pick",
@@ -994,6 +1017,19 @@ impl TypedActionView for SpawnCard {
                 self.project = None;
                 ctx.notify();
             }
+            SpawnCardAction::BrowseRemoteDir => {
+                // Hand off to the workspace: open the host's SFTP browser in pick
+                // mode, seeded at the currently-typed absolute path if any. The
+                // card is hidden meanwhile (its selections persist) and the chosen
+                // dir returns via `WorkspaceAction::RemoteSpawnDirPicked` (#105).
+                if let Some(node_id) = self.resolved_node_id() {
+                    let start_path = self.remote_dir_editor.as_ref().and_then(|editor| {
+                        let raw = editor.as_ref(ctx).buffer_text(ctx);
+                        remote_cwd_from_input(self.host, &raw)
+                    });
+                    ctx.emit(SpawnCardEvent::BrowseRemoteDir { node_id, start_path });
+                }
+            }
             SpawnCardAction::Confirm => {
                 // Guard here too (not just in the chip's on_click), so the
                 // "enter" keybinding can't launch an uninstalled CLI either:
@@ -1028,6 +1064,14 @@ impl TypedActionView for SpawnCard {
 #[derive(Clone, Debug)]
 pub enum SpawnCardEvent {
     Close,
+    /// "Browse…" on the remote directory row: the workspace opens the host's
+    /// SFTP browser in pick mode and returns the chosen dir via
+    /// `WorkspaceAction::RemoteSpawnDirPicked` (#105). `start_path` is the
+    /// currently-typed path (if absolute) so the browser opens there.
+    BrowseRemoteDir {
+        node_id: String,
+        start_path: Option<PathBuf>,
+    },
     Launch {
         agent: CLIAgent,
         config_dir: Option<PathBuf>,
@@ -1056,6 +1100,8 @@ pub enum SpawnCardAction {
     DirectorySelected(Result<String, FilePickerError>),
     /// Reset the launch directory to the default (agent's home / cwd).
     ClearDirectory,
+    /// Open the remote host's SFTP browser to pick the launch directory (#105).
+    BrowseRemoteDir,
     Confirm,
     Close,
 }
@@ -1254,7 +1300,7 @@ mod tests {
                 // Freest with no configured freest_dir means the default login.
                 assert_eq!(config_dir, None);
             }
-            SpawnCardEvent::Close => panic!("Confirm must emit Launch, not Close"),
+            _ => panic!("Confirm must emit Launch"),
         }
     }
 
@@ -1297,7 +1343,7 @@ mod tests {
                     "remote launches use the host's own account"
                 );
             }
-            SpawnCardEvent::Close => panic!("Confirm must emit Launch, not Close"),
+            _ => panic!("Confirm must emit Launch"),
         }
     }
 

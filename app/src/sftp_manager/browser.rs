@@ -167,6 +167,9 @@ pub enum SftpBrowserAction {
     EnterCursorDir,
     /// Toggle the row under the cursor in the multi-selection (Space).
     ToggleSelectCursor,
+    /// Pick-mode only (#105): return the current directory to the spawn card via
+    /// `WorkspaceAction::RemoteSpawnDirPicked` and close the picker.
+    PickCurrentDir,
     /// Rename the row under the cursor (F6 in the single-pane case).
     RenameCursor,
     /// Copy the selection to another file-manager pane (F5) — cross-pane
@@ -393,6 +396,12 @@ pub struct SftpBrowserView {
     pending_dir_move_cleanups: Vec<PendingDirMoveCleanup>,
     /// Monotonic id handed to each cross-connection directory-move batch.
     next_dir_move_batch_id: u64,
+    /// When true this browser was opened as a directory *picker* (the spawn
+    /// card's "Browse…", #105): a pick bar's "Use this folder" returns
+    /// `current_path` via `WorkspaceAction::RemoteSpawnDirPicked` and closes.
+    pick_mode: bool,
+    /// Hover state for the pick bar's "Use this folder" button.
+    pick_btn: MouseStateHandle,
 }
 
 impl SftpBrowserView {
@@ -461,6 +470,8 @@ impl SftpBrowserView {
             pending_uploads: Vec::new(),
             pending_dir_move_cleanups: Vec::new(),
             next_dir_move_batch_id: 1,
+            pick_mode: false,
+            pick_btn: MouseStateHandle::default(),
         };
 
         // Subscribe to rename editor events
@@ -527,6 +538,14 @@ impl SftpBrowserView {
         me.connect_to_server(ctx);
 
         me
+    }
+
+    /// Mark this browser as a directory *picker* opened from the spawn card's
+    /// "Browse…" (#105): it shows a pick bar whose "Use this folder" returns the
+    /// current directory and closes.
+    pub fn with_pick_mode(mut self) -> Self {
+        self.pick_mode = true;
+        self
     }
 
     /// Create a file-manager view over the **local** filesystem (FM pane-mode P1:
@@ -2269,6 +2288,51 @@ impl SftpBrowserView {
         render_centered_status(icon, &msg, 12.0, appearance)
     }
 
+    /// The pick-mode banner (#105): the current directory + a "Use this folder"
+    /// button that returns it to the spawn card and closes the picker.
+    fn render_pick_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let size = appearance.ui_font_size();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let accent_color = theme.accent().into_solid();
+        let rest_bg = theme.surface_2();
+        let hover_bg = theme.surface_3();
+
+        let label = Text::new_inline(
+            format!("Pick a launch directory — {}", self.current_path.display()),
+            family,
+            size,
+        )
+        .with_color(main)
+        .finish();
+
+        let btn = Hoverable::new(self.pick_btn.clone(), move |mouse| {
+            let bg = if mouse.is_hovered() { hover_bg } else { rest_bg };
+            Container::new(
+                Text::new_inline("Use this folder".to_string(), family, size)
+                    .with_color(accent_color)
+                    .finish(),
+            )
+            .with_horizontal_padding(12.0)
+            .with_vertical_padding(6.0)
+            .with_background(bg)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.0)))
+            .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| ctx.dispatch_typed_action(SftpBrowserAction::PickCurrentDir))
+        .finish();
+
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_spacing(8.0)
+            .with_child(Shrinkable::new(1.0, label).finish())
+            .with_child(btn)
+            .finish()
+    }
+
     /// Render the MC-style function-key bar footer. Each cell shows `F<n>` in
     /// the accent colour followed by its caption, and clicking it dispatches
     /// the same action as the physical function key.
@@ -3271,6 +3335,13 @@ impl TypedActionView for SftpBrowserView {
             SftpBrowserAction::RenameCursor => self.rename_cursor(ctx),
             SftpBrowserAction::CopyToOtherPane => self.copy_or_move_to_other_pane(false, ctx),
             SftpBrowserAction::MoveToOtherPane => self.copy_or_move_to_other_pane(true, ctx),
+            SftpBrowserAction::PickCurrentDir => {
+                // Return the browsed directory to the spawn card and close (#105).
+                ctx.dispatch_typed_action(&crate::WorkspaceAction::RemoteSpawnDirPicked {
+                    path: self.current_path.clone(),
+                });
+                ctx.emit(PaneEvent::Close);
+            }
             SftpBrowserAction::CloseFileManager => {
                 // Reverts the pane to its underlying terminal (temporary-replacement seam).
                 ctx.emit(PaneEvent::Close);
@@ -3385,6 +3456,17 @@ impl View for SftpBrowserView {
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Max);
+
+        // Pick-mode banner (#105): a prominent "use this folder" action on top.
+        if self.pick_mode {
+            col.add_child(
+                Container::new(self.render_pick_bar(appearance))
+                    .with_padding_left(PANEL_PADDING)
+                    .with_padding_right(PANEL_PADDING)
+                    .with_padding_top(PANEL_PADDING)
+                    .finish(),
+            );
+        }
 
         // 2. Breadcrumb
         col.add_child(

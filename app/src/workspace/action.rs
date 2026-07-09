@@ -177,6 +177,12 @@ pub enum WorkspaceAction {
     /// Create a blank registered SSH host and open its editor — the Conductor
     /// spine's "＋ Add host" root (same path as the SSH-manager's "New server").
     AddSshHost,
+    /// A remote directory was picked in the SFTP browser (opened in pick mode from
+    /// the spawn card's "Browse…"): fill the spawn card's remote-dir field with
+    /// `path`, re-show the card, and close the picker (#105).
+    RemoteSpawnDirPicked {
+        path: std::path::PathBuf,
+    },
     /// Open the local file-manager pane (FM pane-mode P1) rooted at `start_path`.
     OpenLocalFileManager {
         start_path: std::path::PathBuf,
@@ -1182,6 +1188,8 @@ impl WorkspaceAction {
             // Managing/adding a host opens an editor pane; the registry itself is
             // persisted separately (SQLite), so this isn't app-state either.
             ManageSshHost { .. } | AddSshHost => false,
+            // Fills a transient modal field; not persisted app state.
+            RemoteSpawnDirPicked { .. } => false,
             // actions that are related to updating user settings or
             // managing some ui elements (like closing/opening modals)
             // that don't reflect on actual workspace and don't need to

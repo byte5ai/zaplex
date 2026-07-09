@@ -6483,6 +6483,29 @@ impl Workspace {
         });
     }
 
+    /// Open the host's SFTP browser in **pick mode** for the spawn card's
+    /// "Browse…" (#105): the browser shows a "Use this folder" pick bar that
+    /// returns the chosen dir via `RemoteSpawnDirPicked`, seeded at `start_path`.
+    pub fn open_sftp_pane_for_pick(
+        &mut self,
+        node_id: String,
+        start_path: Option<PathBuf>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::pane_group::pane::sftp_pane::SftpPane;
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            let pane = SftpPane::new_for_pick(node_id, start_path, ctx);
+            let smart_split_direction =
+                pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
+            pane_group.add_pane_with_direction(
+                smart_split_direction,
+                pane,
+                true, /* focus_new_pane */
+                ctx,
+            );
+        });
+    }
+
     /// After clicking a file in the remote file tree, opens it using the buffer-sync protocol.
     ///
     /// Remote files and local files both go through [`Self::open_code`] / `CodePane` / `CodeView`:
@@ -17875,6 +17898,14 @@ impl Workspace {
                 self.focus_active_tab(ctx);
                 ctx.notify();
             }
+            SpawnCardEvent::BrowseRemoteDir { node_id, start_path } => {
+                // Hide the card (its selections persist — it is a persistent view,
+                // not rebuilt) and open the host's SFTP browser in pick mode; the
+                // chosen dir returns via RemoteSpawnDirPicked (#105).
+                self.current_workspace_state.is_spawn_card_open = false;
+                self.open_sftp_pane_for_pick(node_id.clone(), start_path.clone(), ctx);
+                ctx.notify();
+            }
             SpawnCardEvent::Launch {
                 agent,
                 config_dir,
@@ -21586,6 +21617,16 @@ impl TypedActionView for Workspace {
                         });
                     }
                 }
+            }
+            RemoteSpawnDirPicked { path } => {
+                // The SFTP picker returned a directory: fill the card's remote-dir
+                // field and re-show the (still-configured, persistent) card (#105).
+                let path = path.clone();
+                self.spawn_card
+                    .update(ctx, |card, ctx| card.set_remote_dir(&path, ctx));
+                self.current_workspace_state.is_spawn_card_open = true;
+                ctx.focus(&self.spawn_card);
+                ctx.notify();
             }
             OpenLocalFileManager { start_path } => {
                 // FM pane-mode: swap the invoking (focused) pane in place for a
