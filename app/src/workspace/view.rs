@@ -21557,6 +21557,36 @@ impl TypedActionView for Workspace {
                         store.remove(*kind, target, ctx);
                     });
             }
+            ManageSshHost { node_id } => {
+                // Spine "⋯ manage": open the SSH-manager editor for this host.
+                self.open_ssh_server(node_id.clone(), ctx);
+            }
+            AddSshHost => {
+                // Spine "＋ Add host": create a blank registered host (same path as
+                // the SSH-manager's "New server"), open its editor, and broadcast
+                // the registry change so the SSH-manager panel + spine refresh.
+                match crate::ssh_manager::panel::create_blank_host() {
+                    Ok(node_id) => {
+                        self.open_ssh_server(node_id, ctx);
+                        crate::ssh_manager::SshTreeChangedNotifier::handle(ctx).update(
+                            ctx,
+                            |_, ctx| {
+                                ctx.emit(
+                                    crate::ssh_manager::notifier::SshTreeChangedEvent::TreeChanged,
+                                );
+                            },
+                        );
+                    }
+                    Err(err) => {
+                        self.toast_stack.update(ctx, |view, ctx| {
+                            view.add_ephemeral_toast(
+                                DismissibleToast::error(format!("Couldn't add host: {err}")),
+                                ctx,
+                            );
+                        });
+                    }
+                }
+            }
             OpenLocalFileManager { start_path } => {
                 // FM pane-mode: swap the invoking (focused) pane in place for a
                 // file manager. Pane-scoped context: on a tab that belongs to an

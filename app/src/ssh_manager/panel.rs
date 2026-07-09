@@ -2682,6 +2682,19 @@ fn list_server_hosts() -> Vec<String> {
     })
 }
 
+/// Create a blank registered SSH host at the top level (the "New server" path)
+/// and return its `node_id`. Shared by this panel's add button and the Conductor
+/// spine's "＋ Add host" (design §10 folds host add/edit onto the spine). The
+/// caller opens the editor + broadcasts the tree change.
+pub(crate) fn create_blank_host() -> anyhow::Result<String> {
+    warp_ssh_manager::with_conn(|c| {
+        let name = unique_name(c, None, "New server")?;
+        let info = SshServerInfo::new_default(String::new());
+        let node = SshRepository::create_server(c, None, &name, &info)?;
+        Ok(node.id)
+    })
+}
+
 fn unique_name(
     conn: &mut diesel::sqlite::SqliteConnection,
     parent: Option<&str>,

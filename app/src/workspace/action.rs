@@ -168,6 +168,15 @@ pub enum WorkspaceAction {
         kind: zaplex_cockpit::FavoriteKind,
         target: String,
     },
+    /// Open the SSH-manager editor for a registered host, given its `node_id` —
+    /// the Conductor spine's per-host "⋯ manage" affordance (design §10 folds the
+    /// SSH-manager add/edit function onto the host nodes).
+    ManageSshHost {
+        node_id: String,
+    },
+    /// Create a blank registered SSH host and open its editor — the Conductor
+    /// spine's "＋ Add host" root (same path as the SSH-manager's "New server").
+    AddSshHost,
     /// Open the local file-manager pane (FM pane-mode P1) rooted at `start_path`.
     OpenLocalFileManager {
         start_path: std::path::PathBuf,
@@ -1170,6 +1179,9 @@ impl WorkspaceAction {
             OpenLinkOnDesktop(_) => false,
             // Favorites live in their own persisted store, not in app state.
             ToggleFavorite { .. } | RemoveFavorite { .. } => false,
+            // Managing/adding a host opens an editor pane; the registry itself is
+            // persisted separately (SQLite), so this isn't app-state either.
+            ManageSshHost { .. } | AddSshHost => false,
             // actions that are related to updating user settings or
             // managing some ui elements (like closing/opening modals)
             // that don't reflect on actual workspace and don't need to

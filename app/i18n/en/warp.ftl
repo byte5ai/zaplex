@@ -3701,6 +3701,7 @@ cockpit-flow-pr-review = ⚡ Review a PR (freest)
 cockpit-flow-triage = ⚡ Triage an issue (freest)
 cockpit-spawn-card-new-agent = ✧ New agent…
 cockpit-conductor-title = By project — what needs you
+cockpit-conductor-add-host = ＋ Add host
 workspace-favorites-header = Favorites
 workspace-favorites-empty = No favorites yet — ★ a host or project in the sidebar
 workspace-favorites-add-header = Add to favorites

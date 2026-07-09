@@ -65,8 +65,14 @@ pub struct CockpitPanel {
     /// Hover/click state per host ★ (favorite toggle), keyed by registry
     /// `node_id`. The ★ curates a host favorite (design §10).
     conductor_host_star_states: HashMap<String, MouseStateHandle>,
+    /// Hover/click state per host "⋯ manage" affordance, keyed by registry
+    /// `node_id`. Opens the SSH-manager editor for the host (design §10 folds
+    /// the SSH-manager add/edit function onto the host nodes).
+    conductor_host_manage_states: HashMap<String, MouseStateHandle>,
     /// Hover/click state per session ★ (favorite toggle), keyed by `host_key`.
     conductor_row_star_states: HashMap<String, MouseStateHandle>,
+    /// Hover state for the spine's "＋ Add host" root.
+    add_host_btn: MouseStateHandle,
 }
 
 impl CockpitPanel {
@@ -92,7 +98,9 @@ impl CockpitPanel {
             card_states: HashMap::new(),
             conductor_host_states: HashMap::new(),
             conductor_host_star_states: HashMap::new(),
+            conductor_host_manage_states: HashMap::new(),
             conductor_row_star_states: HashMap::new(),
+            add_host_btn: MouseStateHandle::default(),
         };
         me.sync_conductor_states(ctx);
         me
@@ -144,9 +152,12 @@ impl CockpitPanel {
             .retain(|k, _| host_nodes.contains(k));
         self.conductor_host_star_states
             .retain(|k, _| host_nodes.contains(k));
+        self.conductor_host_manage_states
+            .retain(|k, _| host_nodes.contains(k));
         for key in host_nodes {
             self.conductor_host_states.entry(key.clone()).or_default();
-            self.conductor_host_star_states.entry(key).or_default();
+            self.conductor_host_star_states.entry(key.clone()).or_default();
+            self.conductor_host_manage_states.entry(key).or_default();
         }
     }
 
@@ -432,11 +443,27 @@ impl CockpitPanel {
                         .any(|f| f.same_target(FavoriteKind::Host, &node_id));
                     let action = WorkspaceAction::ToggleFavorite {
                         kind: FavoriteKind::Host,
-                        target: node_id,
+                        target: node_id.clone(),
                         label: host.host.clone(),
                     };
                     header_row = header_row
                         .with_child(Self::star_button(star_state, is_fav, appearance, action));
+                }
+                // ⋯ manage: open the SSH-manager editor for this host (design §10
+                // folds host add/edit onto the spine's host nodes).
+                if let Some(manage_state) =
+                    self.conductor_host_manage_states.get(&node_id).cloned()
+                {
+                    let action = WorkspaceAction::ManageSshHost {
+                        node_id: node_id.clone(),
+                    };
+                    header_row = header_row.with_child(verb_button(
+                        manage_state,
+                        "⋯",
+                        VerbKind::Constructive,
+                        appearance,
+                        action,
+                    ));
                 }
             }
             col = col.with_child(header_row.with_main_axis_size(MainAxisSize::Max).finish());
@@ -494,6 +521,15 @@ impl CockpitPanel {
                 );
             }
         }
+        // "＋ Add host" root — folds the SSH-manager add function onto the spine
+        // (design §10). Creates a blank registered host and opens its editor.
+        col = col.with_child(verb_button(
+            self.add_host_btn.clone(),
+            crate::t!("cockpit-conductor-add-host").to_string(),
+            VerbKind::Constructive,
+            appearance,
+            WorkspaceAction::AddSshHost,
+        ));
         Some(col.finish())
     }
 
