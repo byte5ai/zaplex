@@ -899,13 +899,19 @@ impl CockpitPaneView {
         let hident = host_ident(is_local, host.host_id.as_deref());
 
         let chevron = if collapsed { "▸" } else { "▾" };
+        // The header is a `MainAxisSize::Min` flex wrapped in a Hoverable and added
+        // as a NON-flex child of the `Max` header_bar row below — the parent row
+        // measures it at an infinite main-axis width during its intrinsic-size
+        // pass, so a flexible (`Shrinkable`) child here trips warpui's flex
+        // assertion (elements/flex: flexible child under an infinite constraint)
+        // and aborts. Keep every child non-flexible so the header sizes to its
+        // content (finite) instead. The label truncation the Shrinkable gave up is
+        // fine — host names are short and the header_bar's own spacer fills the row.
         let mut header = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0)
             .with_child(Self::text(chevron.to_string(), family, body, muted))
-            .with_child(
-                Shrinkable::new(1.0, Self::text(host.host.clone(), family, body, main)).finish(),
-            );
+            .with_child(Self::text(host.host.clone(), family, body, main));
         if host.needs_me > 0 {
             header = header.with_child(Self::text(
                 format!("● {}", host.needs_me),
@@ -1021,10 +1027,13 @@ impl CockpitPaneView {
                 heat_coloru(HeatLevel::Critical),
             ));
         }
+        // Non-flexible children only: this header is a `Min` flex added (via a
+        // Hoverable) as a NON-flex child of the `Max` header_bar row, which
+        // measures it at an infinite width in its intrinsic-size pass — a
+        // `Shrinkable` here would abort under that infinite constraint (see the
+        // host header for the full rationale).
         header = header
-            .with_child(
-                Shrinkable::new(1.0, Self::text(project.name.clone(), family, body, main)).finish(),
-            )
+            .with_child(Self::text(project.name.clone(), family, body, main))
             .with_child(Self::text(
                 format!(
                     "{} session{}",
