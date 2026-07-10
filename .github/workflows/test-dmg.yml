@@ -55,7 +55,10 @@ jobs:
   # `zaplex` inside `zap-linux-x86_64.tar.gz`, see setup.rs tarball_basename()).
   build_remote_server:
     name: Build bundled remote-server (Linux musl x86_64)
-    runs-on: ubuntu-22.04
+    # Fast large runner (16 vCPU / 64 GB) — this is a static **musl** build, so the
+    # glibc-consistency reason the client jobs pin `ubuntu-22.04` does not apply
+    # here; the org set `ubuntu-latest-xl` up precisely to speed up heavy builds.
+    runs-on: ubuntu-latest-xl
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
