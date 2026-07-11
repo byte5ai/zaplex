@@ -119,7 +119,7 @@ fn session_attr_line_composes_and_omits_empty_pieces() {
             420_000,
             SessionState::Waiting
         ),
-        "Opus·High · 42% ctx · ✋ waiting"
+        "Opus·High · 42% ctx · ● waiting"
     );
     // Unknown model + no context yet → just the state clause.
     assert_eq!(

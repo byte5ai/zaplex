@@ -4823,3 +4823,23 @@ fn onekey_empty_candidates_with_empty_query_returns_empty_ordered() {
     let result = filter_and_sort_onekey_candidates(candidates.iter().copied(), "");
     assert_eq!(rows_indices(result), Vec::<usize>::new());
 }
+
+/// `OpenFileManagerHere` roots the file manager at the active session's cwd:
+/// when a cwd is known it is used verbatim as the `OpenLocalFileManager`
+/// `start_path`. This pins the "open FM here == the session's directory"
+/// contract that the pane action relies on.
+#[test]
+fn file_manager_start_path_uses_session_cwd() {
+    let cwd = std::path::PathBuf::from("/home/dev/projects/zaplex");
+    assert_eq!(file_manager_start_path(Some(cwd.clone())), cwd);
+}
+
+/// With no session cwd the FM must never fall back to the session directory
+/// (there is none); it resolves to `$HOME` when available, otherwise `/`. Either
+/// way the result is an absolute path and not empty.
+#[test]
+fn file_manager_start_path_falls_back_when_no_cwd() {
+    let start = file_manager_start_path(None);
+    assert_eq!(start, dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/")));
+    assert!(start.is_absolute());
+}

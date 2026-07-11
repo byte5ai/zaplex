@@ -492,6 +492,26 @@ pub struct PerPlatformKeystroke {
     pub linux_and_windows: &'static str,
 }
 
+/// Validate that every whitespace-separated key in `binding` parses as a
+/// [`Keystroke`], panicking (under debug assertions, via [`Keystroke::parse`])
+/// on a malformed one.
+///
+/// This exists to validate the *off-platform* variant of a per-platform binding
+/// — e.g. the Mac binding while the app is running on Linux. Because
+/// [`OperatingSystem::get`] is resolved at compile time, the off-platform string
+/// is otherwise never parsed on this OS, so a malformed binding such as
+/// `cmd-shift-o` (which must be `cmd-shift-O`, since the OS delivers shift+letter
+/// as the uppercase form) would slip past a Linux `cargo check`/test yet panic at
+/// startup on a Mac. Running this on both variants means tests and dev builds on
+/// *any* platform catch that class of regression. Mirrors the parsing done by
+/// [`EditableBinding::with_key_binding`] / [`FixedBinding::new`].
+#[cfg(debug_assertions)]
+fn validate_off_platform_binding(binding: &str) {
+    for key in binding.split_whitespace() {
+        Keystroke::parse(key).expect("Invalid keystroke");
+    }
+}
+
 impl FixedBinding {
     /// Constructs a new [`FixedBinding`] with separate bindings for mac and non-mac platforms.
     pub fn new_per_platform(
@@ -499,6 +519,18 @@ impl FixedBinding {
         action: impl Action,
         context_predicate: ContextPredicate,
     ) -> Self {
+        // Validate the variant this OS will NOT use so a malformed off-platform
+        // binding is still caught by tests / dev builds on any platform. The
+        // selected variant is validated by `Self::new` below.
+        #[cfg(debug_assertions)]
+        {
+            let off_platform = if OperatingSystem::get().is_mac() {
+                keystroke.linux_and_windows
+            } else {
+                keystroke.mac
+            };
+            validate_off_platform_binding(off_platform);
+        }
         let keystroke = if OperatingSystem::get().is_mac() {
             keystroke.mac
         } else {
@@ -692,6 +724,13 @@ impl EditableBinding {
         if OperatingSystem::get() == OperatingSystem::Mac {
             self.with_key_binding(binding)
         } else {
+            // Not this OS's binding, so the trigger stays unset — but still
+            // validate the string so a malformed Mac-only binding is caught on
+            // any platform, not only on a Mac (see `validate_off_platform_binding`).
+            #[cfg(debug_assertions)]
+            {
+                validate_off_platform_binding(binding.as_ref());
+            }
             self
         }
     }
@@ -708,6 +747,12 @@ impl EditableBinding {
         ) {
             self.with_key_binding(binding)
         } else {
+            // Symmetric to `with_mac_key_binding`: validate the linux/windows
+            // binding string even on Mac so a malformed one is caught everywhere.
+            #[cfg(debug_assertions)]
+            {
+                validate_off_platform_binding(binding.as_ref());
+            }
             self
         }
     }

@@ -469,7 +469,7 @@ if [[ "$ARTIFACT" == "app" ]]; then
           echo "Building $ADDITIONAL_TARGET to include in universal binary"
 
           pushd app > /dev/null
-          cargo build --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --target "$ADDITIONAL_TARGET" --features "$FEATURES"
+          cargo build --locked --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --target "$ADDITIONAL_TARGET" --features "$FEATURES"
           popd > /dev/null
       else
           echo "Skipping build of $ADDITIONAL_TARGET due to --skip-build flag"
@@ -586,7 +586,7 @@ elif [[ "$ARTIFACT" == "cli" ]]; then
     export "INFO_PLIST_PATH=$(realpath "$ZAPLEX_PLIST_PATH")"
     pushd app > /dev/null
     echo "Building $DEFAULT_TARGET for channel $RELEASE_CHANNEL with profile $CARGO_PROFILE"
-    cargo build --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
+    cargo build --locked --profile "$CARGO_PROFILE" --bin "$ZAPLEX_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
     popd > /dev/null
   else
     echo "Skipping binary build due to --skip-build flag"

@@ -127,6 +127,9 @@ pub fn build_account_usage(
         reset_week,
         heat,
         heat_week,
+        // Estimates have no sublimit signal — only real OAuth reports these.
+        heat_opus: None,
+        heat_sonnet: None,
         sessions: Vec::new(),
         status: crate::types::AccountStatus::Offline,
         provenance: crate::types::UsageProvenance::Estimate,

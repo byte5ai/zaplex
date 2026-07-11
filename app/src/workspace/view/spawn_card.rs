@@ -27,10 +27,18 @@ use warpui::elements::{
 };
 use warpui::fonts::Weight;
 use warpui::keymap::FixedBinding;
+use warpui::platform::file_picker::{FilePickerConfiguration, FilePickerError};
 use warpui::platform::Cursor;
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
 
 use crate::cockpit::style::{modal_scrim, MODAL_RADIUS};
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
+};
 use crate::terminal::CLIAgent;
 
 const MODAL_WIDTH: f32 = 480.;
@@ -86,6 +94,16 @@ pub struct SpawnCardConfig {
     pub scoped_host_name: Option<String>,
     /// Pre-scoped project dir (from a Conductor project-header `+` / context).
     pub project: Option<PathBuf>,
+    /// Optional task prompt to prefill into the launched agent's input — the
+    /// contextual "run this task with an agent" flows (Fix-with-agent, the GitHub
+    /// instance-flows) route through the card carrying this, so every launch goes
+    /// through the one explicit launch grammar instead of a blind one-click.
+    pub prompt: Option<String>,
+    /// Explicit agent the opener requested (e.g. "Fix with Codex", the per-agent
+    /// menu action). Preselects the agent in the card so the user's intent is not
+    /// silently changed to the default; ignored if that agent isn't installed.
+    /// `None` = use the card's own default (Claude if installed, else Codex).
+    pub default_agent: Option<CLIAgent>,
 }
 
 /// Which account the launch pins to.
@@ -150,6 +168,16 @@ pub struct SpawnCard {
     account: AccountChoice,
     host: HostChoice,
     project: Option<PathBuf>,
+    /// Task prompt to prefill into the launched agent after start (contextual
+    /// flows); `None` for a plain "new agent" open.
+    prompt: Option<String>,
+    /// Single-line text input for the remote launch directory. Remote hosts need
+    /// a *selectable* directory (Codex gate), but a native folder picker — used
+    /// for local launches — cannot browse a remote filesystem, so remote hosts
+    /// type the absolute path here. `Option` so the pure unit tests can build
+    /// `SpawnCard` literals without a `ViewContext` (set to `None`); the real
+    /// [`Self::new`] always builds it (`Some`).
+    remote_dir_editor: Option<ViewHandle<EditorView>>,
     chip_states: std::cell::RefCell<std::collections::HashMap<String, MouseStateHandle>>,
 }
 
@@ -182,8 +210,59 @@ fn installed_agents(cfg: &SpawnCardConfig) -> Vec<CLIAgent> {
         .collect()
 }
 
+/// Map the remote-dir text input to a launch cwd. Only remote hosts use the
+/// typed field (a native folder picker can't browse a remote filesystem); a
+/// blank field means "the host's home directory" (`None`). Local hosts never
+/// use it, so they map to `None` too. Pure + ctx-free so the trim/blank→None
+/// mapping is unit-testable without an editor view.
+fn remote_cwd_from_input(host: HostChoice, raw: &str) -> Option<PathBuf> {
+    if !matches!(host, HostChoice::Remote(_)) {
+        return None;
+    }
+    let trimmed = raw.trim();
+    // Only an ABSOLUTE path is used (the field is labeled "absolute path"): a
+    // relative entry would `cd` relative to whatever the remote shell's startup
+    // directory happens to be — unpredictable — so a non-absolute (or blank)
+    // entry falls back to the host home (`None`) rather than launching into a
+    // random directory (Codex: validate remote dir input).
+    if trimmed.starts_with('/') {
+        Some(PathBuf::from(trimmed))
+    } else {
+        None
+    }
+}
+
 impl SpawnCard {
-    pub fn new(_ctx: &mut ViewContext<Self>) -> Self {
+    pub fn new(ctx: &mut ViewContext<Self>) -> Self {
+        // The remote-dir input. Built here where a `ViewContext` is available;
+        // the pure unit tests construct `SpawnCard` literals with
+        // `remote_dir_editor: None`, which is why the field is an `Option`.
+        let remote_dir_editor = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let options = SingleLineEditorOptions {
+                text: TextOptions::ui_text(Some(13.), appearance),
+                propagate_and_no_op_vertical_navigation_keys:
+                    PropagateAndNoOpNavigationKeys::Always,
+                ..Default::default()
+            };
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text(
+                "remote directory (absolute path) — blank = host home",
+                ctx,
+            );
+            editor
+        });
+
+        // Re-render the card as the user edits the remote dir, so the
+        // "Launching: …" summary line stays truthful to the typed path (the
+        // child editor's own edits notify *itself*, not this parent view —
+        // mirrors the drive enum dialog, which notifies on editor edits).
+        ctx.subscribe_to_view(&remote_dir_editor, |_, _, event, ctx| {
+            if matches!(event, EditorEvent::Edited(_)) {
+                ctx.notify();
+            }
+        });
+
         SpawnCard {
             cfg: SpawnCardConfig::default(),
             agent: CLIAgent::Claude,
@@ -192,19 +271,36 @@ impl SpawnCard {
             account: AccountChoice::Freest,
             host: HostChoice::Local,
             project: None,
+            prompt: None,
+            remote_dir_editor: Some(remote_dir_editor),
             chip_states: Default::default(),
         }
     }
 
     /// (Re)initialize the card from a fresh config + optional pre-scoping. Picks
     /// smart defaults so the common case is a single confirm.
-    pub fn configure(&mut self, cfg: SpawnCardConfig) {
-        // Default agent: Claude if available, else Codex, else Claude.
-        self.agent = if cfg.claude.installed || !cfg.codex.installed {
-            CLIAgent::Claude
-        } else {
-            CLIAgent::Codex
-        };
+    ///
+    /// Takes a `ViewContext` because a remote-scoped open may prefill the
+    /// remote-dir editor buffer (touching an editor view needs ctx).
+    pub fn configure(&mut self, cfg: SpawnCardConfig, ctx: &mut ViewContext<Self>) {
+        // Agent: honor an explicit requested agent (contextual "Fix with <agent>"
+        // / per-agent action) when it is one of the supported CLIs and installed,
+        // so the opener's intent isn't silently changed. Otherwise fall back to
+        // Claude if available, else Codex.
+        let requested = cfg
+            .default_agent
+            .filter(|a| matches!(a, CLIAgent::Claude | CLIAgent::Codex))
+            .filter(|a| match a {
+                CLIAgent::Codex => cfg.codex.installed,
+                _ => cfg.claude.installed,
+            });
+        self.agent = requested.unwrap_or({
+            if cfg.claude.installed || !cfg.codex.installed {
+                CLIAgent::Claude
+            } else {
+                CLIAgent::Codex
+            }
+        });
         self.model = models_for(self.agent)
             .first()
             .copied()
@@ -219,8 +315,44 @@ impl SpawnCard {
             cfg.scoped_host_id.as_deref(),
             cfg.scoped_host_name.as_deref(),
         );
-        self.project = cfg.project.clone();
+        // `self.project` is the LOCAL launch dir (native folder picker). For a
+        // remote-scoped open the pre-scoped dir is a REMOTE path, which belongs in
+        // the remote-dir editor (seeded below), NOT here — otherwise switching the
+        // host to Local would launch locally into a remote-only path (Codex: host
+        // switch dir leakage). So keep the local project empty for a remote host.
+        self.project = match self.host {
+            HostChoice::Local => cfg.project.clone(),
+            HostChoice::Remote(_) => None,
+        };
+        self.prompt = cfg.prompt.clone();
         self.cfg = cfg;
+
+        // Prefill the remote-dir input from the pre-scoped project (a Conductor
+        // remote project node) so the common case is a single confirm; every other
+        // open (local, or remote without a project) resets it to empty (blank =
+        // host home). Reset on every open so a stale path can't leak across opens.
+        if let Some(editor) = self.remote_dir_editor.clone() {
+            let prefill = match (self.host, &self.cfg.project) {
+                (HostChoice::Remote(_), Some(dir)) => dir.display().to_string(),
+                _ => String::new(),
+            };
+            editor.update(ctx, |ed, ctx| {
+                ed.set_buffer_text_with_base_buffer(&prefill, ctx);
+            });
+        }
+    }
+
+    /// Fill the remote-directory field from a directory chosen in the SFTP
+    /// browser pick flow (#105). The card's other selections are untouched (it is
+    /// a persistent view — hidden, not rebuilt, during the browse).
+    pub fn set_remote_dir(&mut self, path: &std::path::Path, ctx: &mut ViewContext<Self>) {
+        if let Some(editor) = self.remote_dir_editor.clone() {
+            let text = path.display().to_string();
+            editor.update(ctx, |ed, ctx| {
+                ed.set_buffer_text_with_base_buffer(&text, ctx);
+            });
+            ctx.notify();
+        }
     }
 
     fn provider_options(&self) -> &ProviderOptions {
@@ -259,6 +391,31 @@ impl SpawnCard {
             HostChoice::Local => None,
             HostChoice::Remote(i) => self.cfg.hosts.get(i).map(|h| h.id.clone()),
         }
+    }
+
+    /// Display name of the currently selected remote host (`None` when local).
+    fn remote_host_name(&self) -> Option<&str> {
+        match self.host {
+            HostChoice::Local => None,
+            HostChoice::Remote(i) => self.cfg.hosts.get(i).map(|h| h.name.as_str()),
+        }
+    }
+
+    /// The [`SpawnCardEvent::Launch`] the current selection will emit on Confirm,
+    /// or `None` when nothing is installed to launch (Confirm must then be inert
+    /// — a phantom chip must never launch a missing binary). Kept pure (no
+    /// `ViewContext`) so the confirm payload — the model/effort/account/host/
+    /// project the launch actually carries — is unit-testable.
+    fn launch_payload(&self) -> Option<SpawnCardEvent> {
+        self.any_agent_installed().then(|| SpawnCardEvent::Launch {
+            agent: self.agent,
+            config_dir: self.resolved_config_dir(),
+            cwd: self.project.clone(),
+            node_id: self.resolved_node_id(),
+            model: Some(self.model.clone()),
+            effort: Some(self.effort.clone()),
+            prompt: self.prompt.clone(),
+        })
     }
 
     fn chip_handle(&self, id: &str) -> MouseStateHandle {
@@ -368,7 +525,12 @@ impl SpawnCard {
 
     /// The full launch summary, e.g.
     /// `Claude Code · opus · High · 1M ctx · freest · local`.
-    fn summary(&self) -> String {
+    ///
+    /// Takes `app` so the remote-host branch can reflect the *typed* remote dir
+    /// (read from the editor buffer) — the "Launching: …" line must be the truth
+    /// of what will start, and remote dir is steering. Local still reads
+    /// `self.project` (the folder-picker result), unchanged.
+    fn summary(&self, app: &AppContext) -> String {
         let account = match self.host {
             HostChoice::Remote(_) => "host account".to_string(),
             HostChoice::Local => match self.account {
@@ -390,19 +552,71 @@ impl SpawnCard {
                 .map(|h| h.name.clone())
                 .unwrap_or_else(|| "remote".to_string()),
         };
-        let mut s = format!(
-            "{} · {} · {} · {} · {} · {}",
+        // Directory is always part of the summary — a first-class launch
+        // attribute, never omitted (Codex gate: "dir is steering"). An unset dir
+        // reads as the explicit default rather than silently vanishing. For a
+        // remote host the dir is the *typed* input (read live from the editor so
+        // the preview matches what Confirm will launch); local uses the
+        // folder-picker result in `self.project`.
+        let dir = if matches!(self.host, HostChoice::Remote(_)) {
+            let raw = self
+                .remote_dir_editor
+                .as_ref()
+                .map(|e| e.as_ref(app).buffer_text(app))
+                .unwrap_or_default();
+            match remote_cwd_from_input(self.host, &raw) {
+                Some(path) => path.display().to_string(),
+                None => format!("{} home", self.remote_host_name().unwrap_or("host")),
+            }
+        } else {
+            match &self.project {
+                Some(dir) => dir.display().to_string(),
+                None => "default (home)".to_string(),
+            }
+        };
+        format!(
+            "{} · {} · {} · {} · {} · {} · {}",
             self.agent.display_name(),
             self.model,
             Self::cap(&self.effort),
             Self::context_label(&self.model),
             account,
             host,
-        );
-        if let Some(dir) = &self.project {
-            s.push_str(&format!(" · {}", dir.display()));
-        }
-        s
+            dir,
+        )
+    }
+
+    /// The remote launch dir as an editable single-line text input. A native
+    /// folder picker can't browse a remote filesystem, so remote hosts type the
+    /// absolute path here (blank = the host's home dir). Mirrors the drive
+    /// enum-dialog's `render_name_editor` element construction — a bordered
+    /// container wrapping the editor's `text_input`. Returns `None` only when no
+    /// editor was built (the ctx-free unit-test path where it is `None`).
+    fn render_remote_dir_input(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+        let editor = self.remote_dir_editor.as_ref()?;
+        let theme = appearance.theme();
+        Some(
+            ConstrainedBox::new(
+                Container::new(
+                    appearance
+                        .ui_builder()
+                        .text_input(editor.clone())
+                        .with_style(UiComponentStyles::default())
+                        .build()
+                        .finish(),
+                )
+                .with_horizontal_padding(10.)
+                .with_vertical_padding(6.)
+                .with_background(theme.surface_2())
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+                .with_border(Border::all(1.).with_border_fill(theme.outline()))
+                .finish(),
+            )
+            // Card inner width = MODAL_WIDTH minus the 24px uniform padding each
+            // side, less room for the trailing "Browse…" chip (#105).
+            .with_width(MODAL_WIDTH - 48. - 104.)
+            .finish(),
+        )
     }
 
     fn render_card(&self, app: &AppContext) -> Box<dyn Element> {
@@ -510,12 +724,16 @@ impl SpawnCard {
         col = col.with_child(self.row(&format!("Effort{effort_note}"), effort_chips, appearance));
 
         // Account row — freest + explicit accounts, unless a remote host owns it.
+        // On a remote host there is no local account routing: the agent runs under
+        // that host's own CLI login, so we say so explicitly (rather than letting
+        // the local "freest"/per-account choice silently apply and mislead).
         if matches!(self.host, HostChoice::Remote(_)) {
+            let host = self.remote_host_name().unwrap_or("the host");
             col = col.with_child(self.row(
                 "Account",
                 vec![Container::new(
                     Text::new_inline(
-                        "Uses the host's default account".to_string(),
+                        format!("Runs under {host}'s own CLI login (no local account routing)"),
                         family,
                         12.,
                     )
@@ -571,25 +789,66 @@ impl SpawnCard {
         }
         col = col.with_child(self.row("Host", host_chips, appearance));
 
-        // Project (read-only display of the launch dir).
-        let project_str = self
-            .project
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "Default directory".to_string());
-        col = col.with_child(self.row(
-            "Project",
-            vec![Container::new(
-                Text::new_inline(project_str, family, 12.).with_color(main).finish(),
-            )
-            .finish()],
-            appearance,
-        ));
+        // Directory row — the launch dir as an *explicit* choice (Codex #2), not
+        // a blind default. Local: a native folder picker, plus a reset to the
+        // home default once a dir is chosen. Remote: the path lives on the host,
+        // which a local picker cannot browse, so the user types it into a
+        // single-line text input (prefilled from a project-scoped `+`, blank =
+        // host home).
+        let dir_display = self.project.as_ref().map(|p| p.display().to_string());
+        if matches!(self.host, HostChoice::Remote(_)) {
+            let host = self.remote_host_name().unwrap_or("the host");
+            // A local folder picker cannot browse a remote filesystem, so the
+            // remote launch dir is a typed text input (an absolute path on the
+            // host; blank = the host's home). The row heading names the host so
+            // it is unambiguous which filesystem the path targets.
+            let label = format!("Directory (on {host})");
+            let input = self.render_remote_dir_input(appearance).unwrap_or_else(|| {
+                // Fallback for the (unit-test-only) case where no editor exists.
+                Container::new(
+                    Text::new_inline(format!("{host} home"), family, 12.)
+                        .with_color(muted)
+                        .finish(),
+                )
+                .finish()
+            });
+            // "Browse…" opens the host's SFTP browser in pick mode (#105) — a
+            // native folder picker can't reach a remote FS, so the visual browser
+            // (with its MC-style select bar) fills the gap next to the text field.
+            let browse = self.chip(
+                "dir-browse",
+                "Browse…".to_string(),
+                false,
+                SpawnCardAction::BrowseRemoteDir,
+                appearance,
+            );
+            col = col.with_child(self.row(&label, vec![input, browse], appearance));
+        } else {
+            let mut dir_chips = vec![self.chip(
+                "dir-pick",
+                dir_display
+                    .clone()
+                    .unwrap_or_else(|| "Choose folder…".to_string()),
+                dir_display.is_some(),
+                SpawnCardAction::OpenDirectoryPicker,
+                appearance,
+            )];
+            if dir_display.is_some() {
+                dir_chips.push(self.chip(
+                    "dir-default",
+                    "Default (home)".to_string(),
+                    false,
+                    SpawnCardAction::ClearDirectory,
+                    appearance,
+                ));
+            }
+            col = col.with_child(self.row("Directory", dir_chips, appearance));
+        }
 
         // Summary line.
         col = col.with_child(
             Container::new(
-                Text::new_inline(format!("Launching: {}", self.summary()), family, 12.)
+                Text::new_inline(format!("Launching: {}", self.summary(app)), family, 12.)
                     .with_color(muted)
                     .finish(),
             )
@@ -728,18 +987,71 @@ impl TypedActionView for SpawnCard {
                 self.host = HostChoice::Remote(*i);
                 ctx.notify();
             }
+            SpawnCardAction::OpenDirectoryPicker => {
+                // Same pattern as the session-config modal: the picker callback
+                // dispatches a typed action carrying the chosen path back to this
+                // view, which sets `project` in `DirectorySelected` below.
+                ctx.open_file_picker(
+                    |result, ctx| {
+                        if let Some(path_result) =
+                            result.map(|paths| paths.into_iter().next()).transpose()
+                        {
+                            ctx.dispatch_typed_action(&SpawnCardAction::DirectorySelected(
+                                path_result,
+                            ));
+                        }
+                    },
+                    FilePickerConfiguration::new().folders_only(),
+                );
+            }
+            SpawnCardAction::DirectorySelected(result) => match result {
+                Ok(path) => {
+                    self.project = Some(PathBuf::from(path));
+                    ctx.notify();
+                }
+                Err(err) => {
+                    log::warn!("Spawn card directory picker error: {err}");
+                }
+            },
+            SpawnCardAction::ClearDirectory => {
+                self.project = None;
+                ctx.notify();
+            }
+            SpawnCardAction::BrowseRemoteDir => {
+                // Hand off to the workspace: open the host's SFTP browser in pick
+                // mode, seeded at the currently-typed absolute path if any. The
+                // card is hidden meanwhile (its selections persist) and the chosen
+                // dir returns via `WorkspaceAction::RemoteSpawnDirPicked` (#105).
+                if let Some(node_id) = self.resolved_node_id() {
+                    let start_path = self.remote_dir_editor.as_ref().and_then(|editor| {
+                        let raw = editor.as_ref(ctx).buffer_text(ctx);
+                        remote_cwd_from_input(self.host, &raw)
+                    });
+                    ctx.emit(SpawnCardEvent::BrowseRemoteDir { node_id, start_path });
+                }
+            }
             SpawnCardAction::Confirm => {
                 // Guard here too (not just in the chip's on_click), so the
-                // "enter" keybinding can't launch an uninstalled CLI either.
-                if self.any_agent_installed() {
-                    ctx.emit(SpawnCardEvent::Launch {
-                        agent: self.agent,
-                        config_dir: self.resolved_config_dir(),
-                        cwd: self.project.clone(),
-                        node_id: self.resolved_node_id(),
-                        model: Some(self.model.clone()),
-                        effort: Some(self.effort.clone()),
-                    });
+                // "enter" keybinding can't launch an uninstalled CLI either:
+                // `launch_payload` is `None` when nothing is installed.
+                if let Some(mut launch) = self.launch_payload() {
+                    // Split by design: `launch_payload` stays pure/ctx-free (so
+                    // the agent/model/effort/node_id/account/local-cwd it carries
+                    // is unit-tested directly), but the remote launch dir lives
+                    // in an editor buffer that can only be read with a
+                    // `ViewContext`. So for a remote host we read the typed path
+                    // *here* and override the payload's `cwd` — a blank field
+                    // falls back to the host's home (`None`). Local launches keep
+                    // the picker-derived cwd from `launch_payload` untouched.
+                    if matches!(self.host, HostChoice::Remote(_)) {
+                        if let Some(editor) = &self.remote_dir_editor {
+                            let raw = editor.as_ref(ctx).buffer_text(ctx);
+                            if let SpawnCardEvent::Launch { cwd, .. } = &mut launch {
+                                *cwd = remote_cwd_from_input(self.host, &raw);
+                            }
+                        }
+                    }
+                    ctx.emit(launch);
                 }
             }
             SpawnCardAction::Close => {
@@ -752,6 +1064,14 @@ impl TypedActionView for SpawnCard {
 #[derive(Clone, Debug)]
 pub enum SpawnCardEvent {
     Close,
+    /// "Browse…" on the remote directory row: the workspace opens the host's
+    /// SFTP browser in pick mode and returns the chosen dir via
+    /// `WorkspaceAction::RemoteSpawnDirPicked` (#105). `start_path` is the
+    /// currently-typed path (if absolute) so the browser opens there.
+    BrowseRemoteDir {
+        node_id: String,
+        start_path: Option<PathBuf>,
+    },
     Launch {
         agent: CLIAgent,
         config_dir: Option<PathBuf>,
@@ -759,6 +1079,9 @@ pub enum SpawnCardEvent {
         node_id: Option<String>,
         model: Option<String>,
         effort: Option<String>,
+        /// Task prompt to prefill into the launched agent's input, if this launch
+        /// came from a contextual "run this task" flow.
+        prompt: Option<String>,
     },
 }
 
@@ -771,6 +1094,14 @@ pub enum SpawnCardAction {
     SetAccount(usize),
     SetHostLocal,
     SetHost(usize),
+    /// Open the native folder picker to choose the launch directory (local host).
+    OpenDirectoryPicker,
+    /// Result delivered from the folder picker (dispatched from its callback).
+    DirectorySelected(Result<String, FilePickerError>),
+    /// Reset the launch directory to the default (agent's home / cwd).
+    ClearDirectory,
+    /// Open the remote host's SFTP browser to pick the launch directory (#105).
+    BrowseRemoteDir,
     Confirm,
     Close,
 }
@@ -921,5 +1252,146 @@ mod tests {
             installed_agents(&cfg),
             vec![CLIAgent::Claude, CLIAgent::Codex]
         );
+    }
+
+    /// Confirm emits a `Launch` that carries the current selection verbatim: the
+    /// chosen agent, model, effort and project cwd, and — for a local launch —
+    /// the resolved account config dir with no remote node. Positive counterpart
+    /// to the "nothing installed ⇒ no launch" guard.
+    #[test]
+    fn confirm_payload_carries_local_selection() {
+        let card = SpawnCard {
+            cfg: SpawnCardConfig {
+                claude: provider(true),
+                ..Default::default()
+            },
+            agent: CLIAgent::Claude,
+            model: "sonnet".to_string(),
+            effort: "low".to_string(),
+            account: AccountChoice::Freest,
+            host: HostChoice::Local,
+            project: Some(PathBuf::from("/home/dev/projects/zaplex")),
+            prompt: None,
+            // The pure tests build the card without a `ViewContext`, so there is
+            // no editor view to construct — remote-dir prefill/read is exercised
+            // at the Confirm site, not here.
+            remote_dir_editor: None,
+            chip_states: Default::default(),
+        };
+
+        match card
+            .launch_payload()
+            .expect("an installed agent must yield a Launch on Confirm")
+        {
+            SpawnCardEvent::Launch {
+                agent,
+                config_dir,
+                cwd,
+                node_id,
+                model,
+                effort,
+                ..
+            } => {
+                assert_eq!(agent, CLIAgent::Claude);
+                assert_eq!(model.as_deref(), Some("sonnet"));
+                assert_eq!(effort.as_deref(), Some("low"));
+                assert_eq!(cwd, Some(PathBuf::from("/home/dev/projects/zaplex")));
+                assert_eq!(node_id, None, "a local launch has no remote node");
+                // Freest with no configured freest_dir means the default login.
+                assert_eq!(config_dir, None);
+            }
+            _ => panic!("Confirm must emit Launch"),
+        }
+    }
+
+    /// A remote-scoped launch routes to the selected host's stable node id and,
+    /// because account config dirs are local paths, carries no config dir.
+    #[test]
+    fn confirm_payload_routes_remote_launch_to_node_id() {
+        let card = SpawnCard {
+            cfg: SpawnCardConfig {
+                claude: provider(true),
+                hosts: vec![host("node-7", "devbox")],
+                ..Default::default()
+            },
+            agent: CLIAgent::Claude,
+            model: "opus".to_string(),
+            effort: "high".to_string(),
+            account: AccountChoice::Freest,
+            host: HostChoice::Remote(0),
+            project: None,
+            prompt: None,
+            // The pure tests build the card without a `ViewContext`, so there is
+            // no editor view to construct — remote-dir prefill/read is exercised
+            // at the Confirm site, not here.
+            remote_dir_editor: None,
+            chip_states: Default::default(),
+        };
+
+        match card
+            .launch_payload()
+            .expect("an installed agent must yield a Launch on Confirm")
+        {
+            SpawnCardEvent::Launch {
+                node_id,
+                config_dir,
+                ..
+            } => {
+                assert_eq!(node_id.as_deref(), Some("node-7"));
+                assert_eq!(
+                    config_dir, None,
+                    "remote launches use the host's own account"
+                );
+            }
+            _ => panic!("Confirm must emit Launch"),
+        }
+    }
+
+    /// Confirm is inert when nothing is installed — no phantom launch of a
+    /// missing binary (the guard the pane's Confirm relies on).
+    #[test]
+    fn confirm_payload_none_when_nothing_installed() {
+        let card = SpawnCard {
+            cfg: SpawnCardConfig {
+                claude: provider(false),
+                codex: provider(false),
+                ..Default::default()
+            },
+            agent: CLIAgent::Claude,
+            model: "opus".to_string(),
+            effort: "high".to_string(),
+            account: AccountChoice::Freest,
+            host: HostChoice::Local,
+            project: None,
+            prompt: None,
+            // The pure tests build the card without a `ViewContext`, so there is
+            // no editor view to construct — remote-dir prefill/read is exercised
+            // at the Confirm site, not here.
+            remote_dir_editor: None,
+            chip_states: Default::default(),
+        };
+        assert!(card.launch_payload().is_none());
+    }
+
+    /// The remote-dir text input maps to the launch cwd: a blank field means the
+    /// host's home (`None`); a typed absolute path becomes the cwd, trimmed so
+    /// stray whitespace never produces a bogus path. A local host never uses the
+    /// typed field. Pure — no editor/ctx needed (the Confirm site reads the
+    /// editor into `raw` and delegates the mapping here).
+    #[test]
+    fn remote_cwd_from_input_maps_blank_and_path() {
+        let remote = HostChoice::Remote(0);
+        assert_eq!(remote_cwd_from_input(remote, ""), None);
+        assert_eq!(remote_cwd_from_input(remote, "   "), None);
+        assert_eq!(
+            remote_cwd_from_input(remote, "  /srv/app  "),
+            Some(PathBuf::from("/srv/app")),
+        );
+        // A relative entry is NOT used verbatim (it would cd relative to the
+        // remote shell's startup dir); it falls back to the host home.
+        assert_eq!(remote_cwd_from_input(remote, "srv/app"), None);
+        assert_eq!(remote_cwd_from_input(remote, "../x"), None);
+        // A local host never uses the typed field, regardless of input.
+        assert_eq!(remote_cwd_from_input(HostChoice::Local, "/srv/app"), None);
     }
 }

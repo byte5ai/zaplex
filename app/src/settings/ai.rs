@@ -868,7 +868,7 @@ pub struct AgentProviderModel {
     pub name: String,
     pub id: String,
 
-    /// Context window (tokens). Source: filled in by the user or auto-populated from models.dev.
+    /// Context window (tokens). Source: filled in by the user or fetched from the provider's `/models` endpoint.
     /// 0 means unknown — chat_stream degrades to performing no proactive truncation, leaving it entirely to the upstream service to error out.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub context_window: u32,
@@ -883,17 +883,17 @@ pub struct AgentProviderModel {
 
     /// Whether function/tool calling is supported.
     /// Defaults to `true` — when upgrading old configs and when the user manually adds a new model, tools should not be disabled by default;
-    /// models that do not support tool calling get an explicit false populated from models.dev data.
+    /// models that do not support tool calling can be given an explicit `false` by the user.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub tool_call: bool,
 
     // ----- Multimodal attachment capability, three-state semantics:
-    // - `None` (toml field omitted) = Auto: inferred at runtime via models.dev catalog → substring fallback
+    // - `None` (toml field omitted) = Auto: inferred at runtime via substring heuristics (see `attachment_caps`)
     // - `Some(true)` = Force-On: user forces it on, bypassing inference
     // - `Some(false)` = Force-Off: user forces it off
     //
-    // The field is deliberately named `image` rather than `vision`, corresponding literally to
-    // models.dev `modalities.input: ["image"]`, with the narrowest unambiguous meaning (avoiding users assuming vision = image+pdf+...).
+    // The field is deliberately named `image` rather than `vision`, with the narrowest unambiguous
+    // meaning of "accepts image/* input" (avoiding users assuming vision = image+pdf+...).
     /// Whether image input (image/* MIME) is supported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<bool>,
@@ -1157,7 +1157,7 @@ impl PerAgentSettings {
     /// placement — host + working dir — governs e.g. CLAUDE.md discovery and
     /// must be an explicit choice). They return as the cockpit C4 launcher
     /// ("Launch <agent> on <host> in <dir>"); until then the buttons stay
-    /// de-listed but user-enableable in Settings → AI.
+    /// de-listed but user-enableable in Settings → Agents.
     pub fn default_for(_agent: CLIAgent) -> Self {
         Self {
             toolbar: true,

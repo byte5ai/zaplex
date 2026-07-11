@@ -167,6 +167,9 @@ pub enum SftpBrowserAction {
     EnterCursorDir,
     /// Toggle the row under the cursor in the multi-selection (Space).
     ToggleSelectCursor,
+    /// Pick-mode only (#105): return the current directory to the spawn card via
+    /// `WorkspaceAction::RemoteSpawnDirPicked` and close the picker.
+    PickCurrentDir,
     /// Rename the row under the cursor (F6 in the single-pane case).
     RenameCursor,
     /// Copy the selection to another file-manager pane (F5) — cross-pane
@@ -297,6 +300,11 @@ pub struct SftpBrowserView {
     pub(crate) path_history: Vec<PathBuf>,
     /// Current position in the history
     pub(crate) history_index: usize,
+    /// The directory the caller asked us to open at. The FM pane-mode toggle
+    /// hands us the terminal's cwd (e.g. `/srv/app`); the plain "SFTP Browse"
+    /// entry passes `None`. Retained so the async `connect_to_server` finalize
+    /// can honor it instead of overwriting `current_path` with the remote home.
+    requested_start_path: Option<PathBuf>,
     // ---- Transfers ----
     /// List of transfer tasks
     pub(crate) transfers: Vec<TransferTask>,
@@ -388,11 +396,25 @@ pub struct SftpBrowserView {
     pending_dir_move_cleanups: Vec<PendingDirMoveCleanup>,
     /// Monotonic id handed to each cross-connection directory-move batch.
     next_dir_move_batch_id: u64,
+    /// When true this browser was opened as a directory *picker* (the spawn
+    /// card's "Browse…", #105): a pick bar's "Use this folder" returns
+    /// `current_path` via `WorkspaceAction::RemoteSpawnDirPicked` and closes.
+    pick_mode: bool,
+    /// Hover state for the pick bar's "Use this folder" button.
+    pick_btn: MouseStateHandle,
+    /// Set once a directory was actually picked, so `close()` doesn't also fire
+    /// the cancel (which re-shows the card) after a successful pick (#105).
+    pick_resolved: bool,
 }
 
 impl SftpBrowserView {
-    /// Create a new SFTP browser view
-    pub fn new(node_id: String, ctx: &mut ViewContext<Self>) -> Self {
+    /// Create a new SFTP browser view, opened at `start_path` (the remote
+    /// shell's cwd) when known, else the host root `/`.
+    pub fn new(
+        node_id: String,
+        start_path: Option<PathBuf>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("File Manager"));
         let rename_editor = make_editor("Enter new name", ctx);
         let new_folder_editor = make_editor("Folder name", ctx);
@@ -405,11 +427,14 @@ impl SftpBrowserView {
             connection: ConnectionState::Disconnected,
             _session: None,
             sftp: None,
-            current_path: PathBuf::from("/"),
+            current_path: start_path.clone().unwrap_or_else(|| PathBuf::from("/")),
             entries: Vec::new(),
             selected: HashSet::new(),
-            path_history: vec![PathBuf::from("/")],
+            path_history: vec![start_path.clone().unwrap_or_else(|| PathBuf::from("/"))],
             history_index: 0,
+            // Retain the caller's request so the async connect finalize can land
+            // on it (`connect_to_server` runs after construction). Moved last.
+            requested_start_path: start_path,
             transfers: Vec::new(),
             next_transfer_id: 1,
             dialog: None,
@@ -448,6 +473,9 @@ impl SftpBrowserView {
             pending_uploads: Vec::new(),
             pending_dir_move_cleanups: Vec::new(),
             next_dir_move_batch_id: 1,
+            pick_mode: false,
+            pick_btn: MouseStateHandle::default(),
+            pick_resolved: false,
         };
 
         // Subscribe to rename editor events
@@ -516,6 +544,14 @@ impl SftpBrowserView {
         me
     }
 
+    /// Mark this browser as a directory *picker* opened from the spawn card's
+    /// "Browse…" (#105): it shows a pick bar whose "Use this folder" returns the
+    /// current directory and closes.
+    pub fn with_pick_mode(mut self) -> Self {
+        self.pick_mode = true;
+        self
+    }
+
     /// Create a file-manager view over the **local** filesystem (FM pane-mode P1:
     /// the same browser UI, backed by the local-FS backend instead of SFTP —
     /// no connection involved). `start_path` is typically the invoking terminal
@@ -524,7 +560,9 @@ impl SftpBrowserView {
         // Construct via `new` with an empty node id, then replace the (never
         // started for an empty id) connection with the local backend. The
         // guard in `connect_to_server` skips empty node ids.
-        let mut me = Self::new(String::new(), ctx);
+        // `None` start_path: `new_local` sets `current_path`/`path_history` from
+        // its own `start_path` below, so `new`'s value would be overwritten.
+        let mut me = Self::new(String::new(), None, ctx);
         me.pane_configuration = ctx.add_model(|_ctx| {
             PaneConfiguration::new(crate::t!("sftp-local-file-manager-title"))
         });
@@ -695,18 +733,12 @@ impl SftpBrowserView {
                                 match session.sftp() {
                                     Ok(sftp) => {
                                         let backend = Arc::new(LiveSftpBackend::new(sftp)) as Arc<dyn SftpBackend>;
-                                        // Resolve the user's home directory
-                                        if let Ok(home) = backend.realpath(std::path::Path::new(".")) {
-                                            me.current_path = normalize_remote_path(&home);
-                                        } else {
-                                            me.current_path = PathBuf::from("/");
-                                        }
-                                        me.path_history = vec![me.current_path.clone()];
-                                        me.history_index = 0;
-                                        me.connection = ConnectionState::Connected;
                                         me._session = Some(session);
-                                        me.sftp = Some(backend);
-                                        me.refresh_dir(ctx);
+                                        // Land on the caller's requested `start_path`
+                                        // (the FM pane-mode toggle's cwd) when given;
+                                        // the plain "SFTP Browse" (`None`) falls back
+                                        // to the remote home, then `/`.
+                                        me.apply_connected_backend(backend, ctx);
                                     }
                                     Err(e) => {
                                         me.connection =
@@ -739,6 +771,50 @@ impl SftpBrowserView {
                 ctx.notify();
             }
         }
+    }
+
+    /// Decide which directory the browser opens once the SFTP connection is
+    /// live. An explicit, non-root `requested_start_path` — the FM pane-mode
+    /// toggle handing us the terminal's cwd (e.g. `/srv/app`) — is honored so
+    /// the file manager opens where the shell is, and `resolve_home` is never
+    /// consulted. Otherwise (the plain "SFTP Browse" entry passes `None`, or a
+    /// bare `/`) fall back to the remote home (`realpath(".")`, resolved lazily
+    /// by `resolve_home`), then `/`. Pure so the choice is unit-testable.
+    fn initial_connect_path(
+        requested_start_path: &Option<PathBuf>,
+        resolve_home: impl FnOnce() -> Option<PathBuf>,
+    ) -> PathBuf {
+        match requested_start_path {
+            Some(p) if p.as_path() != Path::new("/") => p.clone(),
+            _ => resolve_home().unwrap_or_else(|| PathBuf::from("/")),
+        }
+    }
+
+    /// Finalize a freshly-established SFTP connection: pick the initial directory
+    /// (honoring a caller-provided `start_path`, else the remote home), install
+    /// the backend, and list that directory. Split out of `connect_to_server`'s
+    /// async callback so the path-selection + initial-listing behavior is
+    /// unit-testable with a mock backend (the live session handling stays in the
+    /// callback). Honoring `start_path` also skips the `realpath(".")` round-trip.
+    pub(crate) fn apply_connected_backend(
+        &mut self,
+        backend: Arc<dyn SftpBackend>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.current_path = Self::initial_connect_path(&self.requested_start_path, || {
+            backend
+                .realpath(Path::new("."))
+                .ok()
+                .map(|home| normalize_remote_path(&home))
+        });
+        self.path_history = vec![self.current_path.clone()];
+        self.history_index = 0;
+        // A freshly connected listing starts with the cursor at the top (MC);
+        // `refresh_dir` will additionally clamp it into range once entries land.
+        self.cursor = 0;
+        self.connection = ConnectionState::Connected;
+        self.sftp = Some(backend);
+        self.refresh_dir(ctx);
     }
 
     /// Run a blocking operation and invoke the callback with the result
@@ -2216,6 +2292,51 @@ impl SftpBrowserView {
         render_centered_status(icon, &msg, 12.0, appearance)
     }
 
+    /// The pick-mode banner (#105): the current directory + a "Use this folder"
+    /// button that returns it to the spawn card and closes the picker.
+    fn render_pick_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let size = appearance.ui_font_size();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let accent_color = theme.accent().into_solid();
+        let rest_bg = theme.surface_2();
+        let hover_bg = theme.surface_3();
+
+        let label = Text::new_inline(
+            format!("Pick a launch directory — {}", self.current_path.display()),
+            family,
+            size,
+        )
+        .with_color(main)
+        .finish();
+
+        let btn = Hoverable::new(self.pick_btn.clone(), move |mouse| {
+            let bg = if mouse.is_hovered() { hover_bg } else { rest_bg };
+            Container::new(
+                Text::new_inline("Use this folder".to_string(), family, size)
+                    .with_color(accent_color)
+                    .finish(),
+            )
+            .with_horizontal_padding(12.0)
+            .with_vertical_padding(6.0)
+            .with_background(bg)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.0)))
+            .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| ctx.dispatch_typed_action(SftpBrowserAction::PickCurrentDir))
+        .finish();
+
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_spacing(8.0)
+            .with_child(Shrinkable::new(1.0, label).finish())
+            .with_child(btn)
+            .finish()
+    }
+
     /// Render the MC-style function-key bar footer. Each cell shows `F<n>` in
     /// the accent colour followed by its caption, and clicking it dispatches
     /// the same action as the physical function key.
@@ -2900,6 +3021,13 @@ impl TypedActionView for SftpBrowserView {
             }
             SftpBrowserAction::SelectEntry(index) => {
                 let index = *index;
+                // A mouse click also moves the MC keyboard cursor onto the
+                // clicked row (the accent bar), so the click highlight and the
+                // keyboard cursor never disagree. `cursor` indexes the *visible*
+                // (filtered) list, so translate the entry index into that space.
+                if let Some(pos) = self.visible_indices().iter().position(|&i| i == index) {
+                    self.cursor = pos;
+                }
                 self.selected.clear();
                 self.selected.insert(index);
                 ctx.notify();
@@ -3132,7 +3260,16 @@ impl TypedActionView for SftpBrowserView {
                 self.go_up(ctx);
             }
             SftpBrowserAction::DeleteSelected => {
-                if let Some(&index) = self.selected.iter().next() {
+                // Prefer the multi-selection; fall back to the row under the MC
+                // cursor so a keyboard-only user (who never pressed Space) can
+                // still delete the highlighted row. Mirrors `operation_sources`.
+                let index = self
+                    .selected
+                    .iter()
+                    .next()
+                    .copied()
+                    .or_else(|| self.cursor_entry_index());
+                if let Some(index) = index {
                     self.delete_selected(index, ctx);
                 }
             }
@@ -3202,6 +3339,14 @@ impl TypedActionView for SftpBrowserView {
             SftpBrowserAction::RenameCursor => self.rename_cursor(ctx),
             SftpBrowserAction::CopyToOtherPane => self.copy_or_move_to_other_pane(false, ctx),
             SftpBrowserAction::MoveToOtherPane => self.copy_or_move_to_other_pane(true, ctx),
+            SftpBrowserAction::PickCurrentDir => {
+                // Return the browsed directory to the spawn card and close (#105).
+                self.pick_resolved = true;
+                ctx.dispatch_typed_action(&crate::WorkspaceAction::RemoteSpawnDirPicked {
+                    path: self.current_path.clone(),
+                });
+                ctx.emit(PaneEvent::Close);
+            }
             SftpBrowserAction::CloseFileManager => {
                 // Reverts the pane to its underlying terminal (temporary-replacement seam).
                 ctx.emit(PaneEvent::Close);
@@ -3316,6 +3461,17 @@ impl View for SftpBrowserView {
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Max);
+
+        // Pick-mode banner (#105): a prominent "use this folder" action on top.
+        if self.pick_mode {
+            col.add_child(
+                Container::new(self.render_pick_bar(appearance))
+                    .with_padding_left(PANEL_PADDING)
+                    .with_padding_right(PANEL_PADDING)
+                    .with_padding_top(PANEL_PADDING)
+                    .finish(),
+            );
+        }
 
         // 2. Breadcrumb
         col.add_child(
@@ -3461,6 +3617,26 @@ impl View for SftpBrowserView {
         // keystroke belongs to a shortcut elsewhere; let it propagate.
         let key_handler = EventHandler::new(positioned_content).on_keydown(
             move |ctx, _app, keystroke| {
+                // FM pane-mode toggle: the same chord that opened the file manager
+                // (cmd-shift-E on mac, ctrl-alt-e elsewhere) closes it back to the
+                // terminal. Handled here, *before* the modifier guard below, since it
+                // is a modifier chord the guard would otherwise propagate away. Key is
+                // matched case-insensitively (shift may fold "e"→"E" at runtime).
+                let is_e = keystroke.key.eq_ignore_ascii_case("e");
+                let toggle_back = (is_e
+                    && keystroke.cmd
+                    && keystroke.shift
+                    && !keystroke.ctrl
+                    && !keystroke.alt)
+                    || (is_e
+                        && keystroke.ctrl
+                        && keystroke.alt
+                        && !keystroke.cmd
+                        && !keystroke.shift);
+                if toggle_back {
+                    ctx.dispatch_typed_action(SftpBrowserAction::CloseFileManager);
+                    return DispatchEventResult::StopPropagation;
+                }
                 if keystroke.ctrl || keystroke.cmd || keystroke.alt || keystroke.meta {
                     return DispatchEventResult::PropagateToParent;
                 }
@@ -3537,6 +3713,13 @@ impl BackingView for SftpBrowserView {
         self.connection = ConnectionState::Disconnected;
         // Stop advertising this pane as a copy/move target.
         self.deregister_from_registry(ctx);
+        // Pick mode closed without a pick (cancel / pane-close): re-show the
+        // hidden spawn card so its selections aren't stranded (#105). Covers every
+        // teardown path (F10, pane-X, dismiss) since they all route through
+        // `close()`; skipped after a successful pick (`pick_resolved`).
+        if self.pick_mode && !self.pick_resolved {
+            ctx.dispatch_typed_action(&crate::WorkspaceAction::RemoteSpawnDirPickCanceled);
+        }
         ctx.emit(PaneEvent::Close);
     }
 
@@ -3745,6 +3928,53 @@ mod tests {
             build_upload_remote_path(&current, "/etc/passwd"),
             Some(PathBuf::from("/home/user/passwd"))
         );
+    }
+
+    // ============================================================
+    // initial_connect_path tests (the connect finalize's directory choice)
+    // ============================================================
+
+    /// An explicit, non-root `start_path` (the FM pane-mode toggle's cwd) is
+    /// honored verbatim, and the remote home is never resolved.
+    #[test]
+    fn test_initial_connect_path_honors_explicit_start_path() {
+        let requested = Some(PathBuf::from("/srv/app"));
+        let mut home_consulted = false;
+        let result = SftpBrowserView::initial_connect_path(&requested, || {
+            home_consulted = true;
+            Some(PathBuf::from("/home/user"))
+        });
+        assert_eq!(result, PathBuf::from("/srv/app"));
+        assert!(
+            !home_consulted,
+            "the remote home must not be resolved when an explicit start_path is honored"
+        );
+    }
+
+    /// The plain "SFTP Browse" entry (`None`) falls back to the remote home.
+    #[test]
+    fn test_initial_connect_path_none_uses_home() {
+        let result =
+            SftpBrowserView::initial_connect_path(&None, || Some(PathBuf::from("/home/user")));
+        assert_eq!(result, PathBuf::from("/home/user"));
+    }
+
+    /// A bare `/` start_path is treated like the plain entry: fall back to home.
+    #[test]
+    fn test_initial_connect_path_root_uses_home() {
+        let requested = Some(PathBuf::from("/"));
+        let result = SftpBrowserView::initial_connect_path(&requested, || {
+            Some(PathBuf::from("/home/user"))
+        });
+        assert_eq!(result, PathBuf::from("/home/user"));
+    }
+
+    /// When the home cannot be resolved (`realpath(".")` failed) and no
+    /// start_path was given, fall back to `/` — the pre-existing behavior.
+    #[test]
+    fn test_initial_connect_path_none_no_home_uses_root() {
+        let result = SftpBrowserView::initial_connect_path(&None, || None);
+        assert_eq!(result, PathBuf::from("/"));
     }
 
     // ============================================================

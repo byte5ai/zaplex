@@ -69,6 +69,9 @@ pub fn initialize_settings_for_tests_with_mode(
     InputModeSettings::register(app);
     InputSettings::register(app);
     KeysSettings::register(app);
+    // Read by localized UI (t! init) + workspace-view construction; without it
+    // the workspace-view tests and the boot/open smoke gate panic headless.
+    crate::settings::language::LanguageSettings::register(app);
     LigatureSettings::register(app);
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -87,6 +90,16 @@ pub fn initialize_settings_for_tests_with_mode(
     });
     SessionSettings::register(app);
     SshSettings::register(app);
+    // The cockpit spine + new-session menu read `CockpitSettings.enabled`.
+    crate::cockpit::settings::CockpitSettings::register(app);
+    // Settings groups the workspace boot/open path reads that the test harness
+    // previously omitted (parity with settings/init.rs), so the workspace-view
+    // tests and the boot/open smoke gate can construct a window headless.
+    crate::settings::network::NetworkSettings::register(app);
+    crate::settings::AutoupdateSettings::register(app);
+    crate::settings::WarpDrivePrivacySettings::register(app);
+    crate::settings::app_installation_detection::UserAppInstallDetectionSettings::register(app);
+    crate::settings::cloud_sync::CloudSyncSettings::register(app);
     TabSettings::register(app);
     TerminalSettings::register(app);
     PaneSettings::register(app);

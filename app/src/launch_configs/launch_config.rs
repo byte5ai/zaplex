@@ -110,6 +110,14 @@ pub enum PaneTemplateType {
         split_direction: SplitDirection,
         panes: Vec<PaneTemplateType>,
     },
+    /// A reference to a registered SSH host by its registry `node_id` — no
+    /// duplicated connection data (design §5 item 2, #103). Captured from an
+    /// `SshServer` editor pane; restored by re-opening that host's editor pane.
+    /// Declared last so untagged deserialization tries the richer variants first
+    /// (a `{node_id}` blob matches only here; a `{cwd,…}` blob never matches).
+    SshHost {
+        node_id: String,
+    },
 }
 
 impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
@@ -145,6 +153,10 @@ impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
                     shell: None,
                 }),
                 // Currently, notebook panes cannot be saved in launch configurations.
+                // A registered SSH host: capture a host *reference* (node_id
+                // only), never duplicated connection data (#103). Restored by
+                // re-opening the host's editor pane.
+                LeafContents::SshServer { node_id } => Ok(Self::SshHost { node_id }),
                 LeafContents::Notebook(_)
                 | LeafContents::Image { .. }
                 | LeafContents::EnvVarCollection(_)
@@ -159,7 +171,6 @@ impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
                 | LeafContents::Cockpit
                 | LeafContents::AIDocument(_)
                 // Zaplex Wave 7-3: `EnvironmentManagement` arm physically removed along with ambient-agent UI subsystem.
-                | LeafContents::SshServer { .. }
                 | LeafContents::Sftp { .. }
                 | LeafContents::AmbientAgent(_) => {
                     // TODO: Handle AIDocument in launch config

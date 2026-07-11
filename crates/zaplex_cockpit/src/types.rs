@@ -188,6 +188,15 @@ pub struct AccountUsage {
     /// `week.work / budget_week` — the slower weekly budget's heat; same
     /// semantics as `heat` (may exceed 1.0).
     pub heat_week: f64,
+    /// 7-day **Opus** sublimit utilization (Max plans), same fraction scale as
+    /// `heat`. `Some` only for real OAuth accounts whose plan reports it — often
+    /// the binding constraint for Opus-heavy users; `None` for estimates.
+    #[serde(default)]
+    pub heat_opus: Option<f64>,
+    /// 7-day **Sonnet** sublimit utilization, same scale as `heat`. `Some` only
+    /// for real OAuth accounts whose plan reports it; `None` otherwise.
+    #[serde(default)]
+    pub heat_sonnet: Option<f64>,
     /// Live sessions (Claude Code registry), waiting-first. Empty for
     /// providers without a session registry (Codex, for now).
     pub sessions: Vec<SessionSnapshot>,

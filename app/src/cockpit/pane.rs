@@ -708,16 +708,28 @@ impl CockpitPaneView {
             .with_spacing(CARD_SPACING)
             .with_child(header.finish())
             .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance))
-            .with_child(self.heat_bar("wk", acct.heat_week, acct.provenance, appearance))
-            .with_child(matrix);
+            .with_child(self.heat_bar("wk", acct.heat_week, acct.provenance, appearance));
+        // 7-day per-model sublimits (Max plans) when the endpoint reports them —
+        // often the binding constraint, so the dashboard shows them explicitly
+        // next to 5h/wk (Codex #6).
+        if let Some(opus) = acct.heat_opus {
+            col = col.with_child(self.heat_bar("opus", opus, acct.provenance, appearance));
+        }
+        if let Some(sonnet) = acct.heat_sonnet {
+            col = col.with_child(self.heat_bar("sonnet", sonnet, acct.provenance, appearance));
+        }
+        col = col.with_child(matrix);
         // Live sessions (C3a), waiting-first (the spine pre-sorts): the
         // dashboard's job is surfacing what needs YOU.
         for session in acct.sessions.iter().take(4) {
+            // Premium status dots — meaning by colour, not emoji (see conductor.rs
+            // GLYPH_* ). Amber dot = waiting/attention, green = working, hollow =
+            // idle. Consistent with `session_glyph`.
             let (glyph, color) = match session.state {
-                SessionState::Waiting => ("✋", heat_coloru(HeatLevel::Critical)),
+                SessionState::Waiting => ("●", heat_coloru(HeatLevel::Critical)),
                 SessionState::Active => ("●", heat_coloru(HeatLevel::Ok)),
                 SessionState::Monitor => ("◌", muted),
-                SessionState::Idle => ("◦", muted),
+                SessionState::Idle => ("○", muted),
             };
             let dir = std::path::Path::new(&session.cwd)
                 .file_name()
@@ -887,16 +899,22 @@ impl CockpitPaneView {
         let hident = host_ident(is_local, host.host_id.as_deref());
 
         let chevron = if collapsed { "▸" } else { "▾" };
+        // The header is a `MainAxisSize::Min` flex wrapped in a Hoverable and added
+        // as a NON-flex child of the `Max` header_bar row below — the parent row
+        // measures it at an infinite main-axis width during its intrinsic-size
+        // pass, so a flexible (`Shrinkable`) child here trips warpui's flex
+        // assertion (elements/flex: flexible child under an infinite constraint)
+        // and aborts. Keep every child non-flexible so the header sizes to its
+        // content (finite) instead. The label truncation the Shrinkable gave up is
+        // fine — host names are short and the header_bar's own spacer fills the row.
         let mut header = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0)
             .with_child(Self::text(chevron.to_string(), family, body, muted))
-            .with_child(
-                Shrinkable::new(1.0, Self::text(host.host.clone(), family, body, main)).finish(),
-            );
+            .with_child(Self::text(host.host.clone(), family, body, main));
         if host.needs_me > 0 {
             header = header.with_child(Self::text(
-                format!("✋ {}", host.needs_me),
+                format!("● {}", host.needs_me),
                 family,
                 body,
                 heat_coloru(HeatLevel::Critical),
@@ -1003,16 +1021,19 @@ impl CockpitPaneView {
             .with_child(Self::text(chevron.to_string(), family, body, muted));
         if project.needs_me > 0 {
             header = header.with_child(Self::text(
-                format!("✋ {}", project.needs_me),
+                format!("● {}", project.needs_me),
                 family,
                 body,
                 heat_coloru(HeatLevel::Critical),
             ));
         }
+        // Non-flexible children only: this header is a `Min` flex added (via a
+        // Hoverable) as a NON-flex child of the `Max` header_bar row, which
+        // measures it at an infinite width in its intrinsic-size pass — a
+        // `Shrinkable` here would abort under that infinite constraint (see the
+        // host header for the full rationale).
         header = header
-            .with_child(
-                Shrinkable::new(1.0, Self::text(project.name.clone(), family, body, main)).finish(),
-            )
+            .with_child(Self::text(project.name.clone(), family, body, main))
             .with_child(Self::text(
                 format!(
                     "{} session{}",
@@ -1086,9 +1107,9 @@ impl CockpitPaneView {
     /// One Conductor session row: `<glyph> <name — dir> <model> · <ctx%>`, using
     /// the shared glyph vocabulary and the model-family/colored-context% styling.
     /// The whole row is the **attach** affordance — clicking it adopts the agent
-    /// in place (local host) via [`WorkspaceAction::AttachFleetSession`], the same
-    /// path the `w`-jump uses. Step 8's per-session levers (`/compact`, `/clear`,
-    /// fork) hang as trailing children on this row.
+    /// in place (local or remote host) via [`WorkspaceAction::AttachFleetSession`],
+    /// the same path the `w`-jump uses. Step 8's per-session levers (`/compact`,
+    /// `/clear`, fork) hang as trailing children on this row.
     fn render_conductor_session(
         &self,
         host_label: &str,
@@ -1150,15 +1171,15 @@ impl CockpitPaneView {
         }
         let info = row.with_main_axis_size(MainAxisSize::Max).finish();
 
-        // Local sessions attach in place on click of the info span; remote
-        // sessions live on their host, so the row is informational (honest —
-        // remote in-place adopt is a follow-up; the `w`-jump reports the same).
-        // The click target is the info span (not the whole row) so the trailing
-        // review-loop (step 6) and guardrail (step 7) verbs have their own
-        // click targets alongside it.
+        // Attach on click of the info span — for BOTH local and remote sessions
+        // now that remote in-place adopt is wired (`attach_fleet_session` resumes
+        // a remote session on its host, the same path the `w`-jump uses). The
+        // click target is the info span (not the whole row) so the trailing
+        // review-loop (step 6) and guardrail (step 7) verbs keep their own click
+        // targets alongside it.
         let key = host_key(is_local, host_id, &session.session_id);
-        let info_el = match (is_local, self.conductor_row_states.get(&key).cloned()) {
-            (true, Some(state)) => {
+        let info_el = match self.conductor_row_states.get(&key).cloned() {
+            Some(state) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
                     host_id: host_id.map(str::to_string),
@@ -1170,7 +1191,7 @@ impl CockpitPaneView {
                     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
                     .finish()
             }
-            _ => info,
+            None => info,
         };
         // Review verbs are local-only (they inspect the repo on this
         // machine); guardrails are cross-host, so every live row — local and

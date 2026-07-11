@@ -18,9 +18,9 @@ use crate::types::{AccountStatus, AccountUsage, Provider, UsageProvenance};
 pub const OVER_BUDGET_HEAT: f64 = 1.0;
 
 /// Pick the freest account of `provider` to launch onto. Ranking, best first:
-/// 1. **under budget** (5h `heat` < [`OVER_BUDGET_HEAT`]) before over-budget,
+/// 1. **under budget** (binding-window heat < [`OVER_BUDGET_HEAT`]) before over-budget,
 /// 2. **not actively working** before working,
-/// 3. **lower 5h heat**,
+/// 3. **lower binding-window heat** (fullest of 5h / week / Opus / Sonnet),
 /// 4. **real** usage before local **estimate** (more trustworthy).
 ///
 /// Returns `None` only when no account for `provider` exists. The returned
@@ -45,9 +45,19 @@ pub fn rank_by_freeness(provider: Provider, accounts: &[AccountUsage]) -> Vec<&A
     ranked
 }
 
-/// Whether an account is at or over its 5h budget (the caller's warn signal).
+/// Whether an account is at or over its **binding** budget (the caller's warn
+/// signal) — the fullest of its 5h / week / Opus / Sonnet windows, not just 5h,
+/// so an account with a calm 5h but a maxed weekly/Opus sublimit still counts.
 pub fn is_over_budget(usage: &AccountUsage) -> bool {
-    usage.heat >= OVER_BUDGET_HEAT
+    binding_heat(usage) >= OVER_BUDGET_HEAT
+}
+
+/// The account's binding-window utilization — the fullest of 5h / week / Opus /
+/// Sonnet — i.e. the fraction that actually gates a launch. Ranking on 5h alone
+/// would pick an account that is calm short-term but already at its weekly/Opus
+/// cap (Codex gate).
+fn binding_heat(u: &AccountUsage) -> f64 {
+    crate::binding_window(u).0
 }
 
 /// Total ordering used by both [`pick_freest`] and [`rank_by_freeness`]. Lower =
@@ -60,8 +70,12 @@ fn cmp_freeness(a: &AccountUsage, b: &AccountUsage) -> Ordering {
         .cmp(&is_over_budget(b))
         // 2. not-working before working
         .then_with(|| working(a).cmp(&working(b)))
-        // 3. lower heat first
-        .then_with(|| a.heat.partial_cmp(&b.heat).unwrap_or(Ordering::Equal))
+        // 3. lower binding-window heat first (fullest of 5h / week / Opus / Sonnet)
+        .then_with(|| {
+            binding_heat(a)
+                .partial_cmp(&binding_heat(b))
+                .unwrap_or(Ordering::Equal)
+        })
         // 4. real before estimate
         .then_with(|| prov_rank(a.provenance).cmp(&prov_rank(b.provenance)))
 }
@@ -104,6 +118,8 @@ mod tests {
             reset_week: None,
             heat,
             heat_week: heat,
+            heat_opus: None,
+            heat_sonnet: None,
             sessions: Vec::new(),
             status,
             provenance,
@@ -119,6 +135,22 @@ mod tests {
         let accts = vec![claude("claude:a", 0.6), claude("claude:default", 0.2), claude("claude:b", 0.9)];
         let pick = pick_freest(Provider::Claude, &accts).expect("a claude account");
         assert_eq!(pick.account.key, "claude:default", "the least-loaded is freest");
+    }
+
+    #[test]
+    fn ranks_by_binding_window_not_5h_alone() {
+        // `a` has a calm 5h (0.20) but a nearly-full Opus weekly sublimit (0.95);
+        // `b` has a busier 5h (0.60) with room overall. The launch must pick `b` —
+        // the binding window, not the 5h, is what actually gates a launch (Codex).
+        let mut a = claude("claude:a", 0.20);
+        a.heat_opus = Some(0.95);
+        let b = claude("claude:b", 0.60);
+        let accts = vec![a, b];
+        let pick = pick_freest(Provider::Claude, &accts).expect("a claude account");
+        assert_eq!(
+            pick.account.key, "claude:b",
+            "freest ranks on the fullest window (Opus sublimit), not 5h alone"
+        );
     }
 
     #[test]

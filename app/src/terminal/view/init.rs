@@ -172,6 +172,21 @@ pub fn init(app: &mut AppContext) {
             id!("Terminal") & !id!("IMEOpen") & !id!("EditorFocused"),
         )
         .with_command_description(crate::t!("keybinding-desc-terminal-scroll-down-one-page")),
+        // File manager pane-mode (FM design §7): toggle the focused terminal pane
+        // into the file manager, rooted at the pane's cwd. This is the UNIVERSAL
+        // affordance — it works even on a lone (non-split) pane, where the per-pane
+        // header (and thus a header icon) is not rendered. The SAME chord closes the
+        // FM again (handled in the SFTP browser's key handler); F10 / the FM pane's
+        // close control also revert to the terminal.
+        FixedBinding::new_per_platform(
+            PerPlatformKeystroke {
+                mac: "cmd-shift-E",
+                linux_and_windows: "ctrl-alt-e",
+            },
+            TerminalAction::OpenFileManagerHere,
+            id!("Terminal") & !id!("IMEOpen"),
+        )
+        .with_command_description(crate::t!("keybinding-desc-terminal-open-file-manager")),
         // Resume conversation keybinding
         FixedBinding::new_per_platform(
             PerPlatformKeystroke {

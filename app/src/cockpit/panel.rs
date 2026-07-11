@@ -19,11 +19,16 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 use zaplex_cockpit::{
     fleet_is_large, format_cost, format_reset, format_tokens, heat_fill,
     heat_pct_label_with_provenance, host_auto_collapsed, host_key, host_summary, session_glyph,
-    AccountUsage, FleetTree, HeatLevel, SessionSnapshot, SessionState, UsageProvenance,
+    AccountUsage, Favorite, FavoriteKind, FleetTree, HeatLevel, SessionSnapshot, SessionState,
+    UsageProvenance,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
-use crate::cockpit::style::{ctx_pct_element, glyph_cell, heat_coloru, verb_button, VerbKind};
+use crate::cockpit::style::{
+    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button, verb_button, VerbKind,
+    GLYPH_COL_WIDTH,
+};
+use crate::ui_components::icons;
 use crate::WorkspaceAction;
 
 /// Max session rows shown per host in the compact sidebar before an overflow
@@ -52,6 +57,24 @@ pub struct CockpitPanel {
     /// `host_ident\0id`). The sidebar is the glance surface, so it carries only the
     /// review entry point; the full commit/PR cluster lives on the main pane.
     conductor_review_states: HashMap<String, MouseStateHandle>,
+    /// Hover state per account card (key = account `key`). The whole card is a
+    /// click target that opens the roomy dashboard pane.
+    card_states: HashMap<String, MouseStateHandle>,
+    /// Hover/click state per registered-host spine row, keyed by its registry
+    /// `node_id`. Clicking a registered host row (with no live agent) opens a
+    /// terminal on that host.
+    conductor_host_states: HashMap<String, MouseStateHandle>,
+    /// Hover/click state per host ★ (favorite toggle), keyed by registry
+    /// `node_id`. The ★ curates a host favorite (design §10).
+    conductor_host_star_states: HashMap<String, MouseStateHandle>,
+    /// Hover/click state per host "⋯ manage" affordance, keyed by registry
+    /// `node_id`. Opens the SSH-manager editor for the host (design §10 folds
+    /// the SSH-manager add/edit function onto the host nodes).
+    conductor_host_manage_states: HashMap<String, MouseStateHandle>,
+    /// Hover/click state per session ★ (favorite toggle), keyed by `host_key`.
+    conductor_row_star_states: HashMap<String, MouseStateHandle>,
+    /// Hover state for the spine's "＋ Add host" root.
+    add_host_btn: MouseStateHandle,
 }
 
 impl CockpitPanel {
@@ -64,11 +87,22 @@ impl CockpitPanel {
                 ctx.notify();
             }
         });
+        // Re-render when favorites change so the ★ fill state updates at once.
+        ctx.subscribe_to_model(
+            &crate::cockpit::favorites::FavoritesStore::handle(ctx),
+            |_, _, _, ctx| ctx.notify(),
+        );
         let mut me = Self {
             scroll_state: ClippedScrollStateHandle::default(),
             expand_btn: MouseStateHandle::default(),
             conductor_row_states: HashMap::new(),
             conductor_review_states: HashMap::new(),
+            card_states: HashMap::new(),
+            conductor_host_states: HashMap::new(),
+            conductor_host_star_states: HashMap::new(),
+            conductor_host_manage_states: HashMap::new(),
+            conductor_row_star_states: HashMap::new(),
+            add_host_btn: MouseStateHandle::default(),
         };
         me.sync_conductor_states(ctx);
         me
@@ -91,9 +125,41 @@ impl CockpitPanel {
             .collect();
         self.conductor_row_states.retain(|k, _| live.contains(k));
         self.conductor_review_states.retain(|k, _| live.contains(k));
+        self.conductor_row_star_states.retain(|k, _| live.contains(k));
         for key in live {
             self.conductor_row_states.entry(key.clone()).or_default();
-            self.conductor_review_states.entry(key).or_default();
+            self.conductor_review_states.entry(key.clone()).or_default();
+            self.conductor_row_star_states.entry(key).or_default();
+        }
+        // Card hover handles, keyed by account `key` (one stable handle per card
+        // across renders); drop handles of accounts that disappeared.
+        let acct_keys: std::collections::HashSet<String> = CockpitModel::as_ref(ctx)
+            .snapshot()
+            .accounts
+            .iter()
+            .map(|a| a.account.key.clone())
+            .collect();
+        self.card_states.retain(|k, _| acct_keys.contains(k));
+        for key in acct_keys {
+            self.card_states.entry(key).or_default();
+        }
+        // Registered-host row handles, keyed by registry `node_id` (one stable
+        // handle per clickable host header); drop handles of hosts that vanished.
+        let host_nodes: std::collections::HashSet<String> = inv
+            .hosts
+            .iter()
+            .filter_map(|h| h.registry_node_id.clone())
+            .collect();
+        self.conductor_host_states
+            .retain(|k, _| host_nodes.contains(k));
+        self.conductor_host_star_states
+            .retain(|k, _| host_nodes.contains(k));
+        self.conductor_host_manage_states
+            .retain(|k, _| host_nodes.contains(k));
+        for key in host_nodes {
+            self.conductor_host_states.entry(key.clone()).or_default();
+            self.conductor_host_star_states.entry(key.clone()).or_default();
+            self.conductor_host_manage_states.entry(key).or_default();
         }
     }
 
@@ -216,7 +282,7 @@ impl CockpitPanel {
                 parts.push(format!("● {active} active"));
             }
             if waiting > 0 {
-                parts.push(format!("✋ {waiting} waiting"));
+                parts.push(format!("● {waiting} waiting"));
             }
             let monitor = acct.sessions.len() - active - waiting;
             if monitor > 0 {
@@ -239,7 +305,13 @@ impl CockpitPanel {
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(CARD_SPACING)
             .with_child(header.finish())
-            .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance))
+            // Headline = the *binding* window (fullest of 5h / week / Opus /
+            // Sonnet sublimits), not always 5h — otherwise a busy weekly/Opus
+            // limit reads as a calm 5h and the card under-reports (Codex #6).
+            .with_child({
+                let (frac, label) = zaplex_cockpit::binding_window(acct);
+                self.heat_bar(label, frac, acct.provenance, appearance)
+            })
             .with_child(Self::text(cost_line, family, body, muted));
         if let Some(session_line) = session_line {
             let color = if waiting > 0 {
@@ -253,11 +325,23 @@ impl CockpitPanel {
             col = col.with_child(Self::text(reset_line, family, body, muted));
         }
 
-        Container::new(col.finish())
+        let card = Container::new(col.finish())
             .with_uniform_padding(CARD_PADDING)
             .with_margin_bottom(CARD_SPACING)
             .with_background(internal_colors::fg_overlay_1(theme))
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.0)))
+            .finish();
+        // The whole card is a click target → opens the roomy dashboard pane (same
+        // action as the ⤢ expand button). Previously the card looked interactive but
+        // did nothing on click.
+        let handle = self
+            .card_states
+            .get(&acct.account.key)
+            .cloned()
+            .unwrap_or_default();
+        Hoverable::new(handle, move |_mouse| card)
+            .with_cursor(warpui::platform::Cursor::PointingHand)
+            .on_click(|ctx, _, _| ctx.dispatch_typed_action(CockpitPanelAction::OpenDashboardPane))
             .finish()
     }
 
@@ -270,6 +354,7 @@ impl CockpitPanel {
     fn render_conductor(
         &self,
         tree: &FleetTree,
+        favorites: &[Favorite],
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         if tree.hosts.is_empty() {
@@ -307,7 +392,10 @@ impl CockpitPanel {
             }
             // Locality from the inventory's explicit marker, not a label match.
             let is_local = host.is_local;
-            let mut host_header = Flex::row()
+            // Label + needs-me badge = the terminal click target (registered
+            // hosts); the ★ favorite toggle sits *beside* it, not inside, so the
+            // two clicks never collide.
+            let mut label_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
                 .with_child(
@@ -315,14 +403,72 @@ impl CockpitPanel {
                         .finish(),
                 );
             if host.needs_me > 0 {
-                host_header = host_header.with_child(Self::text(
-                    format!("✋ {}", host.needs_me),
+                label_row = label_row.with_child(Self::text(
+                    format!("● {}", host.needs_me),
                     family,
                     body,
                     heat_coloru(HeatLevel::Critical),
                 ));
             }
-            col = col.with_child(host_header.with_main_axis_size(MainAxisSize::Max).finish());
+            let label_el = label_row.with_main_axis_size(MainAxisSize::Max).finish();
+            // A registered host (no live agent, re-added by the registry merge)
+            // becomes a click target that opens a terminal on it — the spine's
+            // host-row action. Live-only hosts keep their plain label.
+            let label_el: Box<dyn Element> = match host.registry_node_id.clone() {
+                Some(node_id) => {
+                    let handle = self
+                        .conductor_host_states
+                        .get(&node_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    Hoverable::new(handle, move |_mouse| label_el)
+                        .with_cursor(warpui::platform::Cursor::PointingHand)
+                        .on_click(move |ctx, _, _| {
+                            ctx.dispatch_typed_action(WorkspaceAction::OpenSshTerminalByNode {
+                                node_id: node_id.clone(),
+                            })
+                        })
+                        .finish()
+                }
+                None => label_el,
+            };
+            // Compose the header: clickable label (flex) + a ★ favorite toggle for
+            // registered hosts (a host favorite points at the registry node_id).
+            let mut header_row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(6.0)
+                .with_child(Shrinkable::new(1.0, label_el).finish());
+            if let Some(node_id) = host.registry_node_id.clone() {
+                if let Some(star_state) = self.conductor_host_star_states.get(&node_id).cloned() {
+                    let is_fav = favorites
+                        .iter()
+                        .any(|f| f.same_target(FavoriteKind::Host, &node_id));
+                    let action = WorkspaceAction::ToggleFavorite {
+                        kind: FavoriteKind::Host,
+                        target: node_id.clone(),
+                        label: host.host.clone(),
+                    };
+                    header_row = header_row
+                        .with_child(Self::star_button(star_state, is_fav, appearance, action));
+                }
+                // ⋯ manage: open the SSH-manager editor for this host (design §10
+                // folds host add/edit onto the spine's host nodes).
+                if let Some(manage_state) =
+                    self.conductor_host_manage_states.get(&node_id).cloned()
+                {
+                    let action = WorkspaceAction::ManageSshHost {
+                        node_id: node_id.clone(),
+                    };
+                    header_row = header_row.with_child(icon_verb_button(
+                        manage_state,
+                        icons::Icon::DotsHorizontal,
+                        theme.sub_text_color(theme.background()),
+                        theme.accent(),
+                        action,
+                    ));
+                }
+            }
+            col = col.with_child(header_row.with_main_axis_size(MainAxisSize::Max).finish());
 
             // Sessions across the host's projects, already waiting-first per
             // project (projects are needs-me-first). Capped for glanceability.
@@ -341,6 +487,7 @@ impl CockpitPanel {
                             &project.name,
                             session,
                             is_local,
+                            favorites,
                             appearance,
                         ))
                         .with_padding_left(10.0)
@@ -359,8 +506,51 @@ impl CockpitPanel {
                     .with_padding_left(10.0)
                     .finish(),
                 );
+            } else if total == 0 {
+                // A registered host with no live agent — shown as a spine root so
+                // it stays navigable/launchable, with a calm hint that it is idle
+                // (build_fleet_tree drops agentless hosts; the registry merge
+                // re-adds them, see CockpitModel).
+                col = col.with_child(
+                    Container::new(Self::text(
+                        "no agents".to_string(),
+                        family,
+                        body,
+                        muted,
+                    ))
+                    .with_padding_left(10.0)
+                    .finish(),
+                );
             }
         }
+        // "Add host" root — folds the SSH-manager add function onto the spine
+        // (design §10). A Plus icon + label (#107), muted at rest / accent on
+        // hover; creates a blank registered host and opens its editor.
+        let add_label = crate::t!("cockpit-conductor-add-host").to_string();
+        let add_rest = theme.sub_text_color(theme.background());
+        let add_accent = theme.accent();
+        let add_host = Hoverable::new(self.add_host_btn.clone(), move |mouse| {
+            let color = if mouse.is_hovered() { add_accent } else { add_rest };
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(6.0)
+                .with_child(
+                    ConstrainedBox::new(icons::Icon::Plus.to_warpui_icon(color).finish())
+                        .with_width(GLYPH_COL_WIDTH)
+                        .with_height(GLYPH_COL_WIDTH)
+                        .finish(),
+                )
+                .with_child(
+                    Text::new_inline(add_label.clone(), family, body)
+                        .with_color(color.into_solid())
+                        .finish(),
+                )
+                .finish()
+        })
+        .with_cursor(warpui::platform::Cursor::PointingHand)
+        .on_click(move |ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::AddSshHost))
+        .finish();
+        col = col.with_child(add_host);
         Some(col.finish())
     }
 
@@ -374,6 +564,7 @@ impl CockpitPanel {
         project_name: &str,
         session: &SessionSnapshot,
         is_local: bool,
+        favorites: &[Favorite],
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -398,6 +589,9 @@ impl CockpitPanel {
         } else {
             dir
         };
+        // A readable label for a session favorite (the row label is consumed by
+        // the info span below, so clone it before that).
+        let fav_label = label.clone();
 
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -426,11 +620,13 @@ impl CockpitPanel {
         }
         let info = row.with_main_axis_size(MainAxisSize::Max).finish();
 
-        // Attach on click of the info span (local only); the compact "◈ review"
-        // verb (step 6) sits alongside with its own click target.
+        // Attach on click of the info span — for BOTH local and remote sessions
+        // now that remote in-place adopt is wired (`attach_fleet_session` resumes
+        // a remote session on its host). The compact "◈ review" verb (step 6)
+        // stays local-only (remote review isn't wired) and sits alongside.
         let key = host_key(is_local, host_id, &session.session_id);
-        let (info_el, review) = match (is_local, self.conductor_row_states.get(&key).cloned()) {
-            (true, Some(state)) => {
+        let (info_el, review) = match self.conductor_row_states.get(&key).cloned() {
+            Some(state) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
                     host_id: host_id.map(str::to_string),
@@ -441,28 +637,72 @@ impl CockpitPanel {
                     .with_cursor(Cursor::PointingHand)
                     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
                     .finish();
-                let review = self.conductor_review_states.get(&key).cloned().map(|st| {
-                    let action = WorkspaceAction::ReviewSession {
-                        project_root: PathBuf::from(&session.project_root),
-                        project_name: session.project_name.clone(),
-                    };
-                    verb_button(st, "◈", VerbKind::Constructive, appearance, action)
-                });
+                let review = if is_local {
+                    self.conductor_review_states.get(&key).cloned().map(|st| {
+                        let action = WorkspaceAction::ReviewSession {
+                            project_root: PathBuf::from(&session.project_root),
+                            project_name: session.project_name.clone(),
+                        };
+                        verb_button(st, "◈", VerbKind::Constructive, appearance, action)
+                    })
+                } else {
+                    None
+                };
                 (attach, review)
             }
-            _ => (info, None),
+            None => (info, None),
         };
 
-        match review {
-            Some(review) => Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(8.0)
-                .with_child(Shrinkable::new(1.0, info_el).finish())
-                .with_child(review)
-                .with_main_axis_size(MainAxisSize::Max)
-                .finish(),
-            None => info_el,
+        // ★ favorite toggle for this session (design §10), beside the review verb.
+        // The favorite target is the host-scoped `host_key` (not the bare
+        // session id): session ids are unique only within a host, so two daemons
+        // could share one and a bare id would attach to the wrong host.
+        let star = self.conductor_row_star_states.get(&key).cloned().map(|st| {
+            let is_fav = favorites
+                .iter()
+                .any(|f| f.same_target(FavoriteKind::Session, &key));
+            let action = WorkspaceAction::ToggleFavorite {
+                kind: FavoriteKind::Session,
+                target: key.clone(),
+                label: fav_label,
+            };
+            Self::star_button(st, is_fav, appearance, action)
+        });
+
+        if review.is_none() && star.is_none() {
+            return info_el;
         }
+        let mut trailing = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(8.0)
+            .with_child(Shrinkable::new(1.0, info_el).finish());
+        if let Some(review) = review {
+            trailing = trailing.with_child(review);
+        }
+        if let Some(star) = star {
+            trailing = trailing.with_child(star);
+        }
+        trailing.with_main_axis_size(MainAxisSize::Max).finish()
+    }
+
+    /// The ★ favorite toggle for a Conductor tree node (design §10), rendered in
+    /// the real icon font (#107). Favorited rests in the accent (hover → muted,
+    /// hinting un-star); not-favorited rests muted (hover → accent, hinting star).
+    fn star_button(
+        state: MouseStateHandle,
+        is_fav: bool,
+        appearance: &Appearance,
+        action: WorkspaceAction,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let accent = theme.accent();
+        let muted = theme.sub_text_color(theme.background());
+        let (rest, hover) = if is_fav {
+            (accent, muted)
+        } else {
+            (muted, accent)
+        };
+        icon_verb_button(state, icons::Icon::Stars, rest, hover, action)
     }
 
     fn render_header(
@@ -508,14 +748,16 @@ impl CockpitPanel {
     fn render_expand_button(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
+        let sub = appearance.ui_font_subheading();
         let muted = theme.sub_text_color(theme.background()).into_solid();
+        // Labeled + larger than the old bare "⤢" glyph, which nobody recognized as
+        // the entry point to the full dashboard.
         Hoverable::new(self.expand_btn.clone(), move |mouse| {
-            let mut c = Container::new(Self::text("⤢".to_string(), family, body, muted))
-                .with_padding_left(6.0)
-                .with_padding_right(6.0)
-                .with_padding_top(2.0)
-                .with_padding_bottom(2.0)
+            let mut c = Container::new(Self::text("⤢  Dashboard".to_string(), family, sub, muted))
+                .with_padding_left(8.0)
+                .with_padding_right(8.0)
+                .with_padding_top(3.0)
+                .with_padding_bottom(3.0)
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
             if mouse.is_hovered() {
                 c = c.with_background(internal_colors::fg_overlay_2(theme));
@@ -543,58 +785,73 @@ impl View for CockpitPanel {
         let muted = theme.sub_text_color(theme.background()).into_solid();
 
         let snapshot = CockpitModel::as_ref(app).snapshot().clone();
+        let inventory = CockpitModel::as_ref(app).inventory().clone();
+        // Favorites drive the ★ fill state on host + session rows (design §10).
+        let favorites = crate::cockpit::favorites::FavoritesStore::handle(app)
+            .as_ref(app)
+            .items()
+            .to_vec();
 
-        let body_el: Box<dyn Element> = if snapshot.accounts.is_empty() {
-            Container::new(Self::text(
-                crate::t!("workspace-left-panel-cockpit-empty"),
-                family,
-                body,
-                muted,
-            ))
-            .with_uniform_padding(CARD_PADDING)
-            .finish()
-        } else {
+        let mut cards = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Min);
+
+        // Account header (usage/cost) — only when there are AI accounts.
+        if !snapshot.accounts.is_empty() {
             let cost5h: f64 = snapshot.accounts.iter().map(|a| a.block5h.cost_usd).sum();
             let cost_wk: f64 = snapshot.accounts.iter().map(|a| a.week.cost_usd).sum();
+            cards = cards.with_child(
+                Container::new(self.render_header(
+                    snapshot.accounts.len(),
+                    cost5h,
+                    cost_wk,
+                    appearance,
+                ))
+                .with_margin_bottom(CARD_SPACING * 2.0)
+                .finish(),
+            );
+        }
 
-            let mut cards = Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_main_axis_size(MainAxisSize::Min)
-                .with_child(
-                    Container::new(self.render_header(
-                        snapshot.accounts.len(),
-                        cost5h,
-                        cost_wk,
-                        appearance,
-                    ))
+        // The Conductor spine LEADS the panel (design §10) and is rendered
+        // whenever the inventory has hosts — crucially even with **no** AI
+        // account, so registered SSH hosts still appear as tree roots (#100).
+        if let Some(conductor) = self.render_conductor(&inventory, &favorites, appearance) {
+            cards = cards.with_child(
+                Container::new(conductor)
                     .with_margin_bottom(CARD_SPACING * 2.0)
                     .finish(),
-                );
-            // Glanceable Conductor: the unified cross-host inventory, waiting-first.
-            let model = CockpitModel::as_ref(app);
-            let inventory = model.inventory().clone();
-            if let Some(conductor) = self.render_conductor(&inventory, appearance) {
-                cards = cards.with_child(
-                    Container::new(conductor)
-                        .with_margin_bottom(CARD_SPACING * 2.0)
-                        .finish(),
-                );
-            }
+            );
+        }
+
+        // Account cards, or the empty-accounts hint (as a section under the
+        // spine, not the whole panel — hosts stay visible without an account).
+        if snapshot.accounts.is_empty() {
+            cards = cards.with_child(
+                Container::new(Self::text(
+                    crate::t!("workspace-left-panel-cockpit-empty"),
+                    family,
+                    body,
+                    muted,
+                ))
+                .with_uniform_padding(CARD_PADDING)
+                .finish(),
+            );
+        } else {
             for acct in &snapshot.accounts {
                 cards = cards.with_child(self.render_card(acct, appearance));
             }
+        }
 
-            ClippedScrollable::vertical(
-                self.scroll_state.clone(),
-                cards.finish(),
-                ScrollbarWidth::Auto,
-                theme.disabled_text_color(theme.background()).into(),
-                theme.main_text_color(theme.background()).into(),
-                ElementFill::None,
-            )
-            .with_overlayed_scrollbar()
-            .finish()
-        };
+        let body_el = ClippedScrollable::vertical(
+            self.scroll_state.clone(),
+            cards.finish(),
+            ScrollbarWidth::Auto,
+            theme.disabled_text_color(theme.background()).into(),
+            theme.main_text_color(theme.background()).into(),
+            ElementFill::None,
+        )
+        .with_overlayed_scrollbar()
+        .finish();
 
         Container::new(body_el)
             .with_uniform_padding(CARD_PADDING)

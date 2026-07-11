@@ -117,6 +117,8 @@ pub fn apply_oauth_usage(
         };
         acct.heat = real.five_hour.fraction;
         acct.heat_week = real.seven_day.fraction;
+        acct.heat_opus = real.opus_fraction;
+        acct.heat_sonnet = real.sonnet_fraction;
         if real.five_hour.resets_at.is_some() {
             acct.reset5h = real.five_hour.resets_at;
         }

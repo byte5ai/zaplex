@@ -45,10 +45,15 @@ cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
 
 # GitHub-Flows auf der freiesten Instanz
-cockpit-flow-quick-issue = ⚡ GitHub-Issue entwerfen (freieste)
-cockpit-flow-pr-review = ⚡ PR reviewen (freieste)
-cockpit-flow-triage = ⚡ Issue triagieren (freieste)
-cockpit-spawn-card-new-agent = ✧ Neuer Agent…
+cockpit-flow-quick-issue = GitHub-Issue entwerfen (freieste)
+cockpit-flow-pr-review = PR reviewen (freieste)
+cockpit-flow-triage = Issue triagieren (freieste)
+cockpit-spawn-card-new-agent = Neuer Agent…
+cockpit-conductor-add-host = Host hinzufügen
+workspace-favorites-header = Favoriten
+workspace-favorites-empty = Noch keine Favoriten — ★ einen Host oder ein Projekt in der Seitenleiste
+workspace-favorites-add-header = Zu Favoriten hinzufügen
+workspace-favorite-unavailable = nicht verfügbar — zum Entfernen klicken
 
 # ── SSH-Hosts (linkes Panel) ─────────────────────────────────────────────────
 workspace-left-panel-ssh-manager-tree-empty = Noch keine SSH-Server. Klicke 📁 für einen Ordner, + für einen Server.

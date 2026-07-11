@@ -92,6 +92,13 @@ pub struct HostNode {
     /// alias / matching hostname) route to their own machine, never to each
     /// other's. The label is kept for display only.
     pub host_id: Option<String>,
+    /// The SSH-registry `node.id` for this host, when it maps to a registered
+    /// SSH host. Set for registry-only hosts merged into the tree (so the
+    /// Conductor is the full host navigator — every registered host is a root,
+    /// even with no live agent) and lets a host row act (open a terminal / scope
+    /// a launch / manage) via the registry. `None` for the local host and for a
+    /// daemon host not backed by a registry entry.
+    pub registry_node_id: Option<String>,
     /// Sum of the projects' needs-me counts.
     pub needs_me: usize,
     pub projects: Vec<ProjectNode>,
@@ -161,6 +168,10 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
                 host: h.host,
                 is_local: h.is_local,
                 host_id: h.host_id,
+                // Session-derived hosts don't carry a registry id here; the app
+                // layer sets it (and merges registry-only hosts) — see
+                // `CockpitModel` inventory merge.
+                registry_node_id: None,
                 needs_me,
                 projects,
             }
@@ -200,6 +211,42 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
 ///
 /// Pure — no IO, no remote calls. The live fetch that produces `remotes` lives
 /// in the app's `CockpitModel`.
+/// Merge registered SSH hosts into the tree as roots so the Conductor is the
+/// FULL host navigator — every registered host appears even with no live agent.
+/// `registered` is `(node_id, display_name)` pairs from the SSH registry
+/// (`NodeKind::Server`). Two cases, both keyed by display label (the only bridge
+/// between the SSH registry and a live daemon host, which is namespaced by its
+/// daemon `HostId`, not the registry `node_id`):
+///
+/// - A host already present — a connected host, shown via its live sessions —
+///   keeps its sessions/`needs_me` but is **back-filled** with its registry
+///   `node_id` so a registered host that happens to have live agents can still be
+///   opened / favorited / managed as a host (it would otherwise carry
+///   `registry_node_id: None` and lose those host-row actions).
+/// - A registry-only host is appended (it carries `needs_me: 0`, so it naturally
+///   sorts after the active hosts) with `registry_node_id` set.
+///
+/// `needs_me` totals are unchanged (appended hosts contribute zero).
+pub fn merge_registered_hosts(tree: &mut FleetTree, registered: &[(String, String)]) {
+    for (node_id, name) in registered {
+        if let Some(existing) = tree.hosts.iter_mut().find(|h| &h.host == name) {
+            // Give the live host its registry identity so host-row actions work.
+            if existing.registry_node_id.is_none() {
+                existing.registry_node_id = Some(node_id.clone());
+            }
+            continue;
+        }
+        tree.hosts.push(HostNode {
+            host: name.clone(),
+            is_local: false,
+            host_id: None,
+            registry_node_id: Some(node_id.clone()),
+            needs_me: 0,
+            projects: Vec::new(),
+        });
+    }
+}
+
 pub fn fold_inventory(
     local_label: impl Into<String>,
     local: Vec<SessionSnapshot>,

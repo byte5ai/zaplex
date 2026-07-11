@@ -2199,9 +2199,12 @@ impl SshManagerPanel {
                 Text::new_inline(
                     "⚡".to_string(),
                     appearance.ui_font_family(),
-                    appearance.ui_font_subheading(),
+                    // Quiet + smaller than the old bright-accent, subheading-sized mark,
+                    // which read as loud/noisy. A muted body-size glyph is a calm
+                    // "resilient host" indicator, not a shout.
+                    appearance.ui_font_body(),
                 )
-                .with_color(theme.accent().into_solid())
+                .with_color(theme.sub_text_color(theme.background()).into_solid())
                 .finish(),
             );
         }
@@ -2676,6 +2679,19 @@ fn list_server_hosts() -> Vec<String> {
     .unwrap_or_else(|e| {
         log::warn!("ssh_manager: failed to list server hosts for candidates: {e:?}");
         Vec::new()
+    })
+}
+
+/// Create a blank registered SSH host at the top level (the "New server" path)
+/// and return its `node_id`. Shared by this panel's add button and the Conductor
+/// spine's "＋ Add host" (design §10 folds host add/edit onto the spine). The
+/// caller opens the editor + broadcasts the tree change.
+pub(crate) fn create_blank_host() -> anyhow::Result<String> {
+    warp_ssh_manager::with_conn(|c| {
+        let name = unique_name(c, None, "New server")?;
+        let info = SshServerInfo::new_default(String::new());
+        let node = SshRepository::create_server(c, None, &name, &info)?;
+        Ok(node.id)
     })
 }
 

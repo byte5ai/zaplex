@@ -21,10 +21,13 @@
 
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::Fill;
 use warpui::elements::{ConstrainedBox, Element, Hoverable, MouseStateHandle, Rect, Text};
 use warpui::platform::Cursor;
 use warpui::Action;
 use zaplex_cockpit::HeatLevel;
+
+use crate::ui_components::icons;
 
 /// Fixed width of the leading status-glyph cell on a session row, so labels
 /// align into a clean column regardless of glyph metrics (`●` vs `✋` vs `◦`).
@@ -115,6 +118,29 @@ pub fn verb_button_colored<A: Action + Clone>(
         let color = if mouse.is_hovered() { hover } else { rest };
         Text::new_inline(label, family, size)
             .with_color(color)
+            .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+    .finish()
+}
+
+/// An **icon-font** verb button (premium icon pass, #107): a monochrome
+/// `icons::Icon` in place of a text glyph, resting in `rest` and taking `hover`
+/// on hover. Same interaction contract as [`verb_button`]; sized to the shared
+/// glyph column so it aligns with the status dots.
+pub fn icon_verb_button<A: Action + Clone>(
+    state: MouseStateHandle,
+    icon: icons::Icon,
+    rest: Fill,
+    hover: Fill,
+    action: A,
+) -> Box<dyn Element> {
+    Hoverable::new(state, move |mouse| {
+        let color = if mouse.is_hovered() { hover } else { rest };
+        ConstrainedBox::new(icon.to_warpui_icon(color).finish())
+            .with_width(GLYPH_COL_WIDTH)
+            .with_height(GLYPH_COL_WIDTH)
             .finish()
     })
     .with_cursor(Cursor::PointingHand)

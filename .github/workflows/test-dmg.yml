@@ -55,12 +55,30 @@ jobs:
   # `zaplex` inside `zap-linux-x86_64.tar.gz`, see setup.rs tarball_basename()).
   build_remote_server:
     name: Build bundled remote-server (Linux musl x86_64)
-    runs-on: ubuntu-22.04
+    # Fast large runner (16 vCPU / 64 GB) — this is a static **musl** build, so the
+    # glibc-consistency reason the client jobs pin `ubuntu-22.04` does not apply
+    # here; the org set `ubuntu-latest-xl` up precisely to speed up heavy builds.
+    runs-on: ubuntu-latest-xl
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      # Build the daemon ONCE and reuse it. `crates/remote_server` does NOT depend
+      # on the client GUI (`app/**`), so UI-only iterations leave its compile inputs
+      # unchanged → this cache hits and the whole ~30-40min build below is skipped
+      # (only the tarball is restored + re-uploaded). Keyed by the daemon's inputs
+      # (Cargo.lock + every workspace crate + toolchain + the bundle script) and the
+      # release tag (baked into the binary): a change to any of them rebuilds and
+      # re-caches, so it never serves a stale daemon.
+      - name: Restore cached remote-server tarball
+        id: daemon_cache
+        uses: actions/cache@v4
+        with:
+          path: zap-linux-x86_64.tar.gz
+          key: remote-server-musl-x86_64-${{ inputs.dmg_tag }}-${{ hashFiles('Cargo.lock', 'crates/**', 'rust-toolchain.toml', 'script/bundle') }}
+
       - name: Free up disk space
+        if: steps.daemon_cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
@@ -68,12 +86,14 @@ jobs:
           df -h /
 
       - uses: ./.github/actions/prepare_environment
+        if: steps.daemon_cache.outputs.cache-hit != 'true'
         with:
           target_os: linux
           is_self_hosted: false
           install_release_deps: true
 
       - name: Install zig + cargo-zigbuild for static musl build
+        if: steps.daemon_cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           rustup target add x86_64-unknown-linux-musl
@@ -89,6 +109,7 @@ jobs:
         shell: bash
 
       - name: Build remote-server CLI (static musl via zigbuild)
+        if: steps.daemon_cache.outputs.cache-hit != 'true'
         id: bundle_cli
         run: |
           script/bundle --channel "$CHANNEL" --arch x86_64 --artifact cli --packages none \
@@ -101,6 +122,7 @@ jobs:
           PKG_CONFIG_ALLOW_CROSS: 1
 
       - name: Pack tarball in the release-asset layout
+        if: steps.daemon_cache.outputs.cache-hit != 'true'
         # The staged-install script extracts the tarball and looks for the binary
         # under the client channel's `binary_name()` (= `zaplex` for oss), see
         # crates/remote_server/src/install_remote_server.sh.

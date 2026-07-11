@@ -4192,35 +4192,13 @@ impl Workspace {
     /// design §3); none installed → an actionable toast instead of a silent
     /// fallback to the retired in-app agent mode.
     fn ask_agent(&mut self, prompt: String, agent: Option<CLIAgent>, ctx: &mut ViewContext<Self>) {
-        let install_model = CLIAgentInstallModel::as_ref(ctx);
-        let installed: Vec<CLIAgent> = enum_iterator::all::<CLIAgent>()
-            .filter(|a| !matches!(a, CLIAgent::Unknown))
-            .filter(|a| install_model.is_cli_agent_installed(*a))
-            .collect();
-        let resolved = agent
-            .filter(|a| installed.contains(a))
-            .or_else(|| installed.first().copied());
-        let Some(agent) = resolved else {
-            self.toast_stack.update(ctx, |stack, ctx| {
-                stack.add_persistent_toast(
-                    DismissibleToast::error(crate::t!("ask-agent-none-installed").to_string()),
-                    ctx,
-                );
-            });
-            return;
-        };
-
-        self.add_tab_with_specific_agent(agent, ctx);
-        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
-                terminal_view.update(ctx, |terminal_view, ctx| {
-                    terminal_view.input().update(ctx, |input, ctx| {
-                        input.replace_buffer_content(&prompt, ctx);
-                        input.focus_input_box(ctx);
-                    });
-                });
-            }
-        });
+        // Route through the one explicit launch grammar: open the spawn card with
+        // the task prompt AND the requested agent preselected (so "Fix with Codex"
+        // opens on Codex, not silently on the default). The card is restricted to
+        // the supported Claude/Codex, launches, and prefills the prompt — no blind
+        // one-click. The card also handles the "nothing installed" case (inert
+        // Confirm with an install hint) instead of a toast.
+        self.open_spawn_card(None, None, None, Some(prompt), agent, ctx);
     }
 
     /// Like [`Self::ask_agent`] but launches Claude **routed to a subscription**
@@ -4230,30 +4208,14 @@ impl Workspace {
     fn ask_agent_routed(
         &mut self,
         prompt: String,
-        config_dir: Option<&Path>,
+        _config_dir: Option<&Path>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let launch = CLIAgent::Claude.launch_command_routed(config_dir);
-        self.add_terminal_tab(false, ctx);
-        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            if let Some(terminal_view) = pane_group.active_session_view(ctx) {
-                terminal_view.update(ctx, |view, ctx| {
-                    view.execute_command_or_set_pending(&launch, ctx);
-                });
-            }
-        });
-        // Prefill the task prompt in the input box for review (not auto-sent) —
-        // the human stays in the loop, exactly like `ask_agent`.
-        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
-                terminal_view.update(ctx, |terminal_view, ctx| {
-                    terminal_view.input().update(ctx, |input, ctx| {
-                        input.replace_buffer_content(&prompt, ctx);
-                        input.focus_input_box(ctx);
-                    });
-                });
-            }
-        });
+        // Route through the spawn card too. The card recomputes the freest account
+        // at open time (the same "on the freest instance" intent as the old direct
+        // path) and prefills the task prompt — one explicit launch grammar for
+        // every launch, no blind one-click. Routed flows are Claude (they drive gh).
+        self.open_spawn_card(None, None, None, Some(prompt), Some(CLIAgent::Claude), ctx);
     }
 
     /// Creates a new default terminal tab, then runs the startup command of the specified CLI agent.
@@ -4362,9 +4324,11 @@ impl Workspace {
     /// live [`CockpitModel::inventory`] so callers pass only the identity:
     /// - **local host** → adopt the session in place (resume, no fork), pinned to
     ///   the owning account's subscription when it isn't the default login.
-    /// - **remote host** → the agent lives on that host; in-place remote resume
-    ///   from the inventory isn't wired yet, so we say so honestly rather than
-    ///   opening the wrong thing.
+    /// - **remote host** → resolve the inventory host to its live SSH node and
+    ///   open a remote terminal that **resumes** the same session on that host
+    ///   (its own CLI login, the session's cwd) — the remote analogue of the
+    ///   local adopt. Falls back to an honest toast when the host has no live
+    ///   daemon connection to resume through.
     fn attach_fleet_session(
         &mut self,
         host: &str,
@@ -4422,6 +4386,15 @@ impl Workspace {
                 ctx,
             );
         } else {
+            // Remote in-place adopt: resume the same agent session on its host.
+            // Resolve the inventory host to a live SSH node, build the agent's
+            // resume command, and open a remote terminal that runs it in the
+            // session's cwd (the host's own CLI login — remote account routing is
+            // the host's, not a local config dir).
+            let agent = match provider {
+                zaplex_cockpit::Provider::Claude => CLIAgent::Claude,
+                zaplex_cockpit::Provider::Codex => CLIAgent::Codex,
+            };
             let place = if name.is_empty() {
                 Path::new(&cwd)
                     .file_name()
@@ -4430,15 +4403,61 @@ impl Workspace {
             } else {
                 name
             };
-            self.toast_stack.update(ctx, |toast_stack, ctx| {
-                toast_stack.add_ephemeral_toast(
-                    DismissibleToast::default(format!(
-                        "“{place}” is a remote agent on {host} — open that host's tab to attach \
-                         (in-place remote adopt is coming)."
-                    )),
-                    ctx,
-                );
+            // Inventory host id (daemon `HostId`) → the SSH `node_id` whose live
+            // daemon carries it. `None` when the host has no live connection.
+            let node_id: Option<String> = {
+                #[cfg(all(unix, feature = "local_tty"))]
+                {
+                    host_id.and_then(|hid| self.node_for_daemon_host(hid, &*ctx))
+                }
+                #[cfg(not(all(unix, feature = "local_tty")))]
+                {
+                    let _ = host_id;
+                    None
+                }
+            };
+            let Some(node_id) = node_id else {
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::default(format!(
+                            "“{place}” is a remote agent on {host}, which isn't connected right \
+                             now — open that host to resume it."
+                        )),
+                        ctx,
+                    );
+                });
+                return;
+            };
+            let Some(resume_cmd) = agent.resume_command_pinned(session_id, None) else {
+                // No resume mechanism for this agent → nothing honest to do.
+                return;
+            };
+            let full = format!("cd {} && {resume_cmd}", shell_words::quote(&cwd));
+            let server = warp_ssh_manager::with_conn(|conn| {
+                Ok(warp_ssh_manager::SshRepository::get_server(conn, &node_id)?)
             });
+            match server {
+                Ok(Some(mut server)) => {
+                    // Prepend the host's own startup command (if any), then resume.
+                    server.startup_command = Some(match server.startup_command {
+                        Some(existing) if !existing.trim().is_empty() => {
+                            format!("{existing}; {full}")
+                        }
+                        _ => full,
+                    });
+                    self.open_ssh_terminal(node_id, server, false, ctx);
+                }
+                _ => {
+                    self.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!(
+                                "Couldn't find host '{host}' to resume “{place}” on."
+                            )),
+                            ctx,
+                        );
+                    });
+                }
+            }
         }
     }
 
@@ -6339,7 +6358,14 @@ impl Workspace {
                 }
             }
             LeftPanelEvent::NewConversationInNewTab => {
-                self.add_terminal_tab_with_new_agent_view(ctx);
+                // Left-panel "new conversation" is an agent entrypoint too: route it
+                // through the spawn card under the cockpit vision (one launch
+                // grammar), falling back to the legacy in-app agent tab when off.
+                if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+                    self.open_spawn_card(None, None, None, None, None, ctx);
+                } else {
+                    self.add_terminal_tab_with_new_agent_view(ctx);
+                }
             }
             LeftPanelEvent::ShowDeleteConfirmationDialog {
                 conversation_id,
@@ -6444,7 +6470,31 @@ impl Workspace {
     pub fn open_sftp_pane(&mut self, node_id: String, ctx: &mut ViewContext<Self>) {
         use crate::pane_group::pane::sftp_pane::SftpPane;
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            let pane = SftpPane::new(node_id, ctx);
+            // SSH-manager "SFTP Browse": browse the host from its root.
+            let pane = SftpPane::new(node_id, None, ctx);
+            let smart_split_direction =
+                pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
+            pane_group.add_pane_with_direction(
+                smart_split_direction,
+                pane,
+                true, /* focus_new_pane */
+                ctx,
+            );
+        });
+    }
+
+    /// Open the host's SFTP browser in **pick mode** for the spawn card's
+    /// "Browse…" (#105): the browser shows a "Use this folder" pick bar that
+    /// returns the chosen dir via `RemoteSpawnDirPicked`, seeded at `start_path`.
+    pub fn open_sftp_pane_for_pick(
+        &mut self,
+        node_id: String,
+        start_path: Option<PathBuf>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::pane_group::pane::sftp_pane::SftpPane;
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            let pane = SftpPane::new_for_pick(node_id, start_path, ctx);
             let smart_split_direction =
                 pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
             pane_group.add_pane_with_direction(
@@ -6748,6 +6798,20 @@ impl Workspace {
 
     /// Resolves an SFTP file-manager `node_id` to a live daemon `HostId`, if that
     /// host currently has a connected daemon session with a usable client. The
+    /// Reverse-lookup the SSH host `node_id` that owns a daemon `session_id`
+    /// (`daemon_node_sessions` maps node_id → session_id). Lets the file manager
+    /// resolve a remote pane's host from that pane's *own* session — per-pane —
+    /// instead of the tab-level `ssh_tab_nodes` map, so a mixed local/remote split
+    /// targets the right filesystem (Codex #1). Returns `None` for a local session
+    /// (or a daemon session predating the mapping); the caller then falls back to
+    /// the tab node, then to Local.
+    fn node_for_session(&self, session_id: SessionId) -> Option<String> {
+        self.daemon_node_sessions
+            .iter()
+            .find(|(_, sid)| **sid == session_id)
+            .map(|(node_id, _)| node_id.clone())
+    }
+
     /// SFTP file manager is keyed by `node_id`; the native remote editor needs a
     /// `HostId`, which is opaque and only known once the daemon handshake
     /// completes — hence this pull-based lookup against the live manager state.
@@ -7742,6 +7806,240 @@ impl Workspace {
     /// tab bar chevron and the vertical tab bar `+` button.
     ///
     /// Order: Terminal → User tab configs → separator → Agent → Coding Agents → separator → Docker → Worktree config → New tab config → separator → Reopen closed session.
+    /// The **Favorites** section of the "+" dropdown (design §10): the
+    /// user-curated list plus a flat "add to favorites" picker of tree objects
+    /// (hosts / projects) not yet favorited. This *replaces* the old auto
+    /// host-list — a favorite duplicates nothing ("register once, pick
+    /// everywhere") and is the definitive answer to "SSH hosts in the dropdown"
+    /// (favorite a host, no regression). Curation also happens via the ★ on a
+    /// Conductor tree node in the sidebar.
+    fn favorites_menu_items(&self, ctx: &mut ViewContext<Self>) -> Vec<MenuItem<WorkspaceAction>> {
+        use zaplex_cockpit::FavoriteKind;
+
+        // Registered hosts (node_id -> label), read once from the SSH registry —
+        // used to resolve host favorites and to populate the add picker.
+        let host_nodes: Vec<(String, String)> = warp_ssh_manager::with_conn(|c| {
+            let mut out = Vec::new();
+            for node in warp_ssh_manager::SshRepository::list_nodes(c)? {
+                if matches!(node.kind, warp_ssh_manager::types::NodeKind::Server) {
+                    out.push((node.id, node.name));
+                }
+            }
+            Ok(out)
+        })
+        .unwrap_or_default();
+
+        // Live inventory (owned clone) for session resolution + addable projects.
+        let inventory = crate::cockpit::CockpitModel::as_ref(ctx).inventory().clone();
+        let tab_configs = if FeatureFlag::TabConfigs.is_enabled() {
+            WarpConfig::as_ref(ctx).tab_configs().to_vec()
+        } else {
+            Vec::new()
+        };
+        let favorites = crate::cockpit::favorites::FavoritesStore::handle(ctx)
+            .as_ref(ctx)
+            .items()
+            .to_vec();
+
+        // Freest Claude account (config dir) for any GitHub-flow favorites —
+        // resolved once here (needs ctx), reused for every flow row.
+        let flow_config_dir = {
+            let snapshot = crate::cockpit::CockpitModel::as_ref(ctx).snapshot();
+            zaplex_cockpit::pick_freest(zaplex_cockpit::Provider::Claude, &snapshot.accounts)
+                .map(|f| f.account.config_dir.clone())
+        };
+
+        let mut items = vec![MenuItem::Separator];
+        items.push(MenuItem::Header {
+            fields: MenuItemFields::new(crate::t!("workspace-favorites-header")),
+            clickable: false,
+            right_side_fields: None,
+        });
+
+        if favorites.is_empty() {
+            items.push(
+                MenuItemFields::new(crate::t!("workspace-favorites-empty"))
+                    .with_disabled(true)
+                    .into_item(),
+            );
+        }
+        for fav in &favorites {
+            items.push(self.favorite_menu_item(
+                fav,
+                &host_nodes,
+                &inventory,
+                &tab_configs,
+                flow_config_dir.as_deref(),
+            ));
+        }
+
+        // No auto-generated "add" list here — that was exactly the clutter this
+        // dropdown replaced. Favorites are curated ONLY via the ★ on a tree node
+        // in the sidebar (the empty-state hint above points there); the dropdown
+        // shows nothing but the user's curated favorites.
+        items
+    }
+
+    /// Localized display label for a GitHub instance-flow key. `t!` needs a
+    /// literal key, so this maps the runtime flow key to the literal i18n call.
+    fn flow_label(key: &str) -> String {
+        use crate::cockpit::github_flows as gf;
+        match key {
+            gf::FLOW_QUICK_ISSUE => crate::t!("cockpit-flow-quick-issue").to_string(),
+            gf::FLOW_PR_REVIEW => crate::t!("cockpit-flow-pr-review").to_string(),
+            gf::FLOW_TRIAGE => crate::t!("cockpit-flow-triage").to_string(),
+            other => other.to_string(),
+        }
+    }
+
+    /// Resolve one curated favorite to its dropdown row: the object's default
+    /// action when the target still resolves, else a one-click "remove" row
+    /// (staleness is tolerated by design — the target is resolved lazily here).
+    fn favorite_menu_item(
+        &self,
+        fav: &zaplex_cockpit::Favorite,
+        host_nodes: &[(String, String)],
+        inventory: &zaplex_cockpit::FleetTree,
+        tab_configs: &[crate::tab_configs::TabConfig],
+        flow_config_dir: Option<&std::path::Path>,
+    ) -> MenuItem<WorkspaceAction> {
+        use zaplex_cockpit::FavoriteKind;
+        match fav.kind {
+            // Host → open a terminal on it (same as clicking it in the tree).
+            FavoriteKind::Host => match host_nodes.iter().find(|(id, _)| id == &fav.target) {
+                Some((node_id, name)) => MenuItemFields::new(name.clone())
+                    .with_on_select_action(WorkspaceAction::OpenSshTerminalByNode {
+                        node_id: node_id.clone(),
+                    })
+                    .with_icon(icons::Icon::Key)
+                    .into_item(),
+                None => self.stale_favorite_item(fav),
+            },
+            // Project → open the spawn card scoped to the project's host + dir.
+            // The target is a host_key. A LOCAL project is durable (local is
+            // always reachable) and launches locally with the path. A REMOTE
+            // project resolves against the live inventory to scope to its host —
+            // or greys out as stale if that host is gone, so it never launches on
+            // the wrong machine.
+            FavoriteKind::Project => {
+                if let Some(("local", path)) = zaplex_cockpit::split_host_key(&fav.target) {
+                    return MenuItemFields::new(fav.display_label().to_string())
+                        .with_on_select_action(WorkspaceAction::OpenSpawnCard {
+                            host_id: None,
+                            host: None,
+                            project: Some(std::path::PathBuf::from(path)),
+                        })
+                        .with_icon(icons::Icon::Folder)
+                        .into_item();
+                }
+                let resolved = inventory.hosts.iter().find_map(|h| {
+                    h.projects.iter().find_map(|p| {
+                        (zaplex_cockpit::host_key(h.is_local, h.host_id.as_deref(), &p.root)
+                            == fav.target)
+                            .then(|| (h.host.clone(), h.host_id.clone(), p.root.clone()))
+                    })
+                });
+                match resolved {
+                    Some((host, host_id, root)) => {
+                        MenuItemFields::new(fav.display_label().to_string())
+                            .with_on_select_action(WorkspaceAction::OpenSpawnCard {
+                                host_id,
+                                host: Some(host),
+                                project: Some(std::path::PathBuf::from(root)),
+                            })
+                            .with_icon(icons::Icon::Folder)
+                            .into_item()
+                    }
+                    None => self.stale_favorite_item(fav),
+                }
+            }
+            // Session → attach, resolving host identity from the live inventory by
+            // the host-scoped `host_key` (the favorite target), so the raw
+            // session id is never matched across hosts.
+            FavoriteKind::Session => {
+                let resolved = inventory.hosts.iter().find_map(|h| {
+                    h.projects.iter().flat_map(|p| p.sessions.iter()).find_map(|s| {
+                        (zaplex_cockpit::host_key(
+                            h.is_local,
+                            h.host_id.as_deref(),
+                            &s.session_id,
+                        ) == fav.target)
+                            .then(|| {
+                                (
+                                    h.host.clone(),
+                                    h.host_id.clone(),
+                                    s.session_id.clone(),
+                                    h.is_local,
+                                )
+                            })
+                    })
+                });
+                match resolved {
+                    Some((host, host_id, session_id, is_local)) => {
+                        MenuItemFields::new(fav.display_label().to_string())
+                            .with_on_select_action(WorkspaceAction::AttachFleetSession {
+                                host,
+                                host_id,
+                                session_id,
+                                is_local,
+                            })
+                            .with_icon(icons::Icon::Terminal)
+                            .into_item()
+                    }
+                    None => self.stale_favorite_item(fav),
+                }
+            }
+            // Launch → run the saved tab config, resolved by its stable name.
+            FavoriteKind::Launch => match tab_configs.iter().find(|c| c.name == fav.target) {
+                Some(config) => MenuItemFields::new(config.name.clone())
+                    .with_on_select_action(WorkspaceAction::SelectTabConfig(config.clone()))
+                    .with_icon(icons::Icon::LayoutAlt01)
+                    .into_item(),
+                None => self.stale_favorite_item(fav),
+            },
+            // GitHub instance-flow → run the flow's task on the freest Claude
+            // account (prompt prefilled for the human to review, #102). The
+            // freest config_dir is resolved once by the caller (needs ctx). The
+            // label is re-read from i18n each render (not the persisted one), so
+            // a flow's display text stays current.
+            FavoriteKind::GithubFlow => {
+                match crate::cockpit::github_flows::prompt_for_flow_key(&fav.target) {
+                    Some(prompt) => {
+                        let label = Self::flow_label(&fav.target);
+                        MenuItemFields::new(label)
+                            .with_on_select_action(WorkspaceAction::AskAgentRouted {
+                                prompt,
+                                config_dir: flow_config_dir.map(|p| p.to_path_buf()),
+                            })
+                            .with_icon(icons::Icon::Lightning)
+                            .into_item()
+                    }
+                    None => self.stale_favorite_item(fav),
+                }
+            }
+        }
+    }
+
+    /// A stale favorite row (its target vanished from the tree): greyed label +
+    /// a one-click remove. In a menu the cleanest "one-click remove" is to make
+    /// the row itself forget the favorite on click.
+    fn stale_favorite_item(
+        &self,
+        fav: &zaplex_cockpit::Favorite,
+    ) -> MenuItem<WorkspaceAction> {
+        MenuItemFields::new(format!(
+            "{} — {}",
+            fav.display_label(),
+            crate::t!("workspace-favorite-unavailable")
+        ))
+        .with_on_select_action(WorkspaceAction::RemoveFavorite {
+            kind: fav.kind,
+            target: fav.target.clone(),
+        })
+        .with_icon(icons::Icon::AlertTriangle)
+        .into_item()
+    }
+
     fn unified_new_session_menu_items(
         &self,
         ctx: &mut ViewContext<Self>,
@@ -7864,8 +8162,12 @@ impl Workspace {
             menu_items.push(MenuItem::Separator);
         }
 
-        // 4. Agent (if AI enabled)
-        if is_any_ai_enabled {
+        // 4. Agent — the in-app (Warp) AI agent. With the cockpit on, the explicit
+        // spawn card (4b, "Neuer Agent…") is the single app-level launch grammar,
+        // so this legacy parallel entry is hidden in that (production) mode and
+        // kept only as a fallback when the cockpit is off (Codex gate: no parallel
+        // launch grammar next to the spawn card).
+        if is_any_ai_enabled && !*crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
             let mut agent_item = MenuItemFields::new(crate::t!("workspace-new-session-agent"))
                 .with_on_select_action(WorkspaceAction::AddAgentTab)
                 .with_icon(icons::Icon::LayoutAlt01);
@@ -7908,144 +8210,34 @@ impl Workspace {
                     continue;
                 }
                 let icon = agent.icon().unwrap_or(icons::Icon::LayoutAlt01);
-                let item = MenuItemFields::new(agent.display_name())
-                    .with_on_select_action(WorkspaceAction::AddSpecificAgentTab(agent))
-                    .with_icon(icon);
-                menu_items.push(item.into_item());
-
-                // C4 — subscription-routed launch: for agents with a subscription
-                // model (Claude/Codex), add "⚡ on freest" plus a per-account entry
-                // so a new agent starts on a chosen (or the least-loaded) account,
-                // pinned via its config dir (billing on the subscription, not an
-                // API key). Only when the cockpit is enabled and accounts exist.
-                let provider = match agent {
-                    CLIAgent::Claude => Some(zaplex_cockpit::Provider::Claude),
-                    CLIAgent::Codex => Some(zaplex_cockpit::Provider::Codex),
-                    _ => None,
-                };
-                if let Some(provider) = provider {
-                    if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
-                        let snapshot = crate::cockpit::CockpitModel::as_ref(ctx).snapshot();
-                        let accounts: Vec<_> = snapshot
-                            .accounts
-                            .iter()
-                            .filter(|a| a.account.provider == provider)
-                            .collect();
-                        if !accounts.is_empty() {
-                            if let Some(freest) =
-                                zaplex_cockpit::pick_freest(provider, &snapshot.accounts)
-                            {
-                                let label = format!(
-                                    "⚡ {} on freest — {} ({})",
-                                    agent.display_name(),
-                                    freest.account.label,
-                                    zaplex_cockpit::heat_pct_label(freest.heat),
-                                );
-                                menu_items.push(
-                                    MenuItemFields::new(label)
-                                        .with_on_select_action(WorkspaceAction::LaunchAgent {
-                                            agent,
-                                            config_dir: Some(freest.account.config_dir.clone()),
-                                            cwd: None,
-                                            node_id: None,
-                                            model: None,
-                                            effort: None,
-                                        })
-                                        .with_icon(icon)
-                                        .into_item(),
-                                );
-                            }
-                            // Explicit per-account choices, when the user has more than one.
-                            if accounts.len() > 1 {
-                                for a in &accounts {
-                                    let label = format!(
-                                        "{} · {} ({})",
-                                        agent.display_name(),
-                                        a.account.label,
-                                        zaplex_cockpit::heat_pct_label(a.heat),
-                                    );
-                                    menu_items.push(
-                                        MenuItemFields::new(label)
-                                            .with_on_select_action(WorkspaceAction::LaunchAgent {
-                                                agent,
-                                                config_dir: Some(a.account.config_dir.clone()),
-                                                cwd: None,
-                                                node_id: None,
-                                                model: None,
-                                                effort: None,
-                                            })
-                                            .with_icon(icon)
-                                            .into_item(),
-                                    );
-                                }
-                            }
-                            // C4-4 — remote-host launch: run this agent on a saved
-                            // SSH host (its own default account, remote home dir).
-                            let hosts = warp_ssh_manager::with_conn(|c| {
-                                Ok(warp_ssh_manager::SshRepository::list_nodes(c)?)
-                            })
-                            .unwrap_or_default();
-                            for host in hosts.iter().filter(|n| {
-                                matches!(n.kind, warp_ssh_manager::types::NodeKind::Server)
-                            }) {
-                                let label =
-                                    format!("{} @ {}", agent.display_name(), host.name);
-                                menu_items.push(
-                                    MenuItemFields::new(label)
-                                        .with_on_select_action(WorkspaceAction::LaunchAgent {
-                                            agent,
-                                            config_dir: None,
-                                            cwd: None,
-                                            node_id: Some(host.id.clone()),
-                                            model: None,
-                                            effort: None,
-                                        })
-                                        .with_icon(icon)
-                                        .into_item(),
-                                );
-                            }
-                            // C5 — GitHub instance-flows: run a task on the
-                            // freest Claude instance (Quick-Issue / PR-Review /
-                            // Triage). Claude-only — they drive the `gh` CLI —
-                            // and human-in-the-loop (prompt prefilled, not sent).
-                            if agent == CLIAgent::Claude {
-                                let flow_dir =
-                                    zaplex_cockpit::pick_freest(provider, &snapshot.accounts)
-                                        .map(|f| f.account.config_dir.clone());
-                                let flows = [
-                                    (
-                                        crate::t!("cockpit-flow-quick-issue").to_string(),
-                                        crate::cockpit::github_flows::quick_issue_prompt(),
-                                    ),
-                                    (
-                                        crate::t!("cockpit-flow-pr-review").to_string(),
-                                        crate::cockpit::github_flows::pr_review_prompt(),
-                                    ),
-                                    (
-                                        crate::t!("cockpit-flow-triage").to_string(),
-                                        crate::cockpit::github_flows::triage_prompt(),
-                                    ),
-                                ];
-                                for (label, prompt) in flows {
-                                    menu_items.push(
-                                        MenuItemFields::new(label)
-                                            .with_on_select_action(
-                                                WorkspaceAction::AskAgentRouted {
-                                                    prompt,
-                                                    config_dir: flow_dir.clone(),
-                                                },
-                                            )
-                                            .with_icon(icon)
-                                            .into_item(),
-                                    );
-                                }
-                            }
-                        }
-                    }
+                // Plain quick-launch is a *blind* local launch (no host/dir/account
+                // choice). With the cockpit on, app-level launches must go through the
+                // explicit spawn card above ("✧ Neuer Agent…") — concept §8, C4 §3 #1:
+                // "app-level launch has NO implicit target". Keep the plain entry only
+                // as a fallback when the cockpit is off (no spawn card is offered then).
+                if !*crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+                    let item = MenuItemFields::new(agent.display_name())
+                        .with_on_select_action(WorkspaceAction::AddSpecificAgentTab(agent))
+                        .with_icon(icon);
+                    menu_items.push(item.into_item());
                 }
+
+                // Launch-target permutations (⚡ on-freest / per-account / @host)
+                // and the GitHub instance-flows have left the fixed "+" menu: the
+                // permutations were the unreadable "wall" (host + account are
+                // chosen in the spawn card — the single app-level launch path,
+                // concept §8/C4), and the generic flows referred to no concrete
+                // repo/PR. The flows are now favoritable / command-palette actions
+                // (design §10, #102); hosts are reached via favorites (below).
             }
             menu_items.len() - start_len
         };
+
+        // 5b. Favorites (design §10): the curated favorites list + an add picker,
+        // replacing the old auto host-list. A favorite duplicates nothing
+        // ("register once, pick everywhere") and is the definitive answer to "SSH
+        // hosts in the dropdown" — favorite a host, no regression.
+        menu_items.extend(self.favorites_menu_items(ctx));
 
         // 6. Separator — only shown when there are coding agents and Docker is enabled
         // The TabConfigs section adds its own separator in step 8, so no need to duplicate it here
@@ -17552,14 +17744,22 @@ impl Workspace {
             opts.accounts.push(spawn_card::AccountOption {
                 label: a.account.label.clone(),
                 config_dir: a.account.config_dir.clone(),
-                heat_label: zaplex_cockpit::heat_pct_label(a.heat),
+                // Binding-window heat + provenance ("~" for estimates), so a chip
+                // never reads calm while a weekly/Opus sublimit is the real cap.
+                heat_label: zaplex_cockpit::heat_pct_label_with_provenance(
+                    zaplex_cockpit::binding_window(a).0,
+                    a.provenance,
+                ),
             });
         }
         if let Some(f) = zaplex_cockpit::pick_freest(provider, &snapshot.accounts) {
             opts.freest_label = Some(format!(
                 "{} ({})",
                 f.account.label,
-                zaplex_cockpit::heat_pct_label(f.heat)
+                zaplex_cockpit::heat_pct_label_with_provenance(
+                    zaplex_cockpit::binding_window(f).0,
+                    f.provenance,
+                )
             ));
             // Only a non-default account needs a config-dir pin; the default
             // login is the API-key-scrubbed fallback (`None`).
@@ -17578,6 +17778,8 @@ impl Workspace {
         host_id: Option<String>,
         host: Option<String>,
         project: Option<PathBuf>,
+        prompt: Option<String>,
+        default_agent: Option<CLIAgent>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::terminal::cli_agent::CLIAgentInstallModel;
@@ -17594,6 +17796,11 @@ impl Workspace {
         let codex =
             self.spawn_card_provider_options(zaplex_cockpit::Provider::Codex, codex_installed, ctx);
 
+        // The card reads the SSH registry for its host list ("register once, pick
+        // everywhere"). Remote launches are fully supported: the host is picked
+        // here and the remote directory is entered in the card's remote-dir field
+        // (a native folder picker can't browse a remote FS, so remote uses a text
+        // input — see spawn_card.rs).
         let hosts =
             warp_ssh_manager::with_conn(|c| Ok(warp_ssh_manager::SshRepository::list_nodes(c)?))
                 .unwrap_or_default()
@@ -17617,6 +17824,23 @@ impl Workspace {
         // never silently default to Local for a clearly remote-scoped open.
         let scoped_host_id = self.translate_scoped_daemon_host(host_id.as_deref(), &*ctx);
 
+        // Prefill the launch directory from the invoking (active) pane's cwd for a
+        // plain, unscoped "+" open — "directory is steering", so a global launch
+        // lands in the visible working dir rather than an implicit home (Codex
+        // gate). Only for a *local, unscoped* open: a host-scoped open carries its
+        // own project, and a remote pane's cwd wouldn't apply to the Local-default
+        // card (hence `active_session_path_if_local`, which is `None` off-local).
+        let project = project.or_else(|| {
+            if host.is_none() && host_id.is_none() {
+                self.active_tab_pane_group()
+                    .as_ref(ctx)
+                    .active_session_view(ctx)
+                    .and_then(|v| v.as_ref(ctx).active_session_path_if_local(ctx))
+            } else {
+                None
+            }
+        });
+
         let cfg = spawn_card::SpawnCardConfig {
             claude,
             codex,
@@ -17624,8 +17848,11 @@ impl Workspace {
             scoped_host_id,
             scoped_host_name: host,
             project,
+            prompt,
+            default_agent,
         };
-        self.spawn_card.update(ctx, |card, _| card.configure(cfg));
+        self.spawn_card
+            .update(ctx, |card, ctx| card.configure(cfg, ctx));
 
         self.current_workspace_state.close_all_modals();
         self.current_workspace_state.is_spawn_card_open = true;
@@ -17642,6 +17869,14 @@ impl Workspace {
                 self.focus_active_tab(ctx);
                 ctx.notify();
             }
+            SpawnCardEvent::BrowseRemoteDir { node_id, start_path } => {
+                // Hide the card (its selections persist — it is a persistent view,
+                // not rebuilt) and open the host's SFTP browser in pick mode; the
+                // chosen dir returns via RemoteSpawnDirPicked (#105).
+                self.current_workspace_state.is_spawn_card_open = false;
+                self.open_sftp_pane_for_pick(node_id.clone(), start_path.clone(), ctx);
+                ctx.notify();
+            }
             SpawnCardEvent::Launch {
                 agent,
                 config_dir,
@@ -17649,6 +17884,7 @@ impl Workspace {
                 node_id,
                 model,
                 effort,
+                prompt,
             } => {
                 self.current_workspace_state.is_spawn_card_open = false;
                 self.launch_routed_agent(
@@ -17660,6 +17896,23 @@ impl Workspace {
                     effort.as_deref(),
                     ctx,
                 );
+                // Contextual "run this task" flows carry a prompt: prefill it into
+                // the just-launched agent's input for the human to review and send
+                // (never auto-sent) — the same in-the-loop behavior the old direct
+                // ask_agent path had, now unified through the spawn card.
+                if let Some(prompt) = prompt {
+                    let prompt = prompt.clone();
+                    self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                        if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
+                            terminal_view.update(ctx, |terminal_view, ctx| {
+                                terminal_view.input().update(ctx, |input, ctx| {
+                                    input.replace_buffer_content(&prompt, ctx);
+                                    input.focus_input_box(ctx);
+                                });
+                            });
+                        }
+                    });
+                }
                 ctx.notify();
             }
         }
@@ -18724,12 +18977,10 @@ impl Workspace {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_main_axis_size(MainAxisSize::Min);
 
-            // Attention pulse (✋ N) + agent quick-launch buttons (vertical mode)
+            // Attention pulse (✋ N) — the titlebar carries an ambient attention
+            // signal only, not blind per-agent launch buttons (concept §8; C4 §4).
             if let Some(pulse) = self.render_attention_pulse(appearance, ctx) {
                 right_controls.add_child(pulse);
-            }
-            for button in self.render_cli_agent_titlebar_buttons(appearance, ctx) {
-                right_controls.add_child(button);
             }
 
             self.add_configurable_right_side_tab_bar_controls(
@@ -18871,12 +19122,10 @@ impl Workspace {
         // Placeholder to make sure the flex row expands across the entire width of the app.
         tab_bar.add_child(Shrinkable::new(0.5, Empty::new().finish()).finish());
 
-        // Attention pulse (✋ N) + agent quick-launch buttons (horizontal mode)
+        // Attention pulse (✋ N) — ambient attention signal only; agent launches go
+        // through the explicit spawn card, never blind titlebar buttons (concept §8).
         if let Some(pulse) = self.render_attention_pulse(appearance, ctx) {
             tab_bar.add_child(pulse);
-        }
-        for button in self.render_cli_agent_titlebar_buttons(appearance, ctx) {
-            tab_bar.add_child(button);
         }
 
         self.add_configurable_right_side_tab_bar_controls(
@@ -19006,79 +19255,11 @@ impl Workspace {
         )
     }
 
-    /// Renders the quick-launch buttons on the title bar for installed CLI agents.
-    /// Only shows agents whose per-agent setting marks titlebar as true.
-    fn render_cli_agent_titlebar_buttons(
-        &self,
-        appearance: &Appearance,
-        ctx: &AppContext,
-    ) -> Vec<Box<dyn Element>> {
-        let ai_settings = AISettings::as_ref(ctx);
-        let install_model = CLIAgentInstallModel::as_ref(ctx);
-        let mut buttons = Vec::new();
-
-        for agent in enum_iterator::all::<CLIAgent>() {
-            if matches!(agent, CLIAgent::Unknown) || !install_model.is_cli_agent_installed(agent) {
-                continue;
-            }
-            if !ai_settings.is_cli_agent_titlebar_enabled(agent) {
-                continue;
-            }
-
-            let agent_key = agent.to_serialized_name();
-            let mut states = self
-                .mouse_states
-                .cli_agent_titlebar_button_states
-                .borrow_mut();
-            let handle = states
-                .entry(agent_key.clone())
-                .or_insert_with(MouseStateHandle::default)
-                .clone();
-
-            let icon = agent.icon().unwrap_or(icons::Icon::LayoutAlt01);
-            let theme = appearance.theme();
-            let icon_color = theme.sub_text_color(theme.background());
-            let button = icon_button_with_color(
-                appearance,
-                icon,
-                false,
-                handle.clone(),
-                icon_color,
-            )
-            .with_hovered_styles(UiComponentStyles {
-                font_color: Some(icon_color.into()),
-                background: Some(theme.surface_2().into()),
-                ..UiComponentStyles::default()
-            })
-            .with_clicked_styles(UiComponentStyles {
-                font_color: Some(icon_color.into()),
-                background: Some(theme.background().into()),
-                ..UiComponentStyles::default()
-            })
-            // Icon shrunk to 14×14: padding increased from 4 to 5.0, button outer frame stays 24×24
-            .with_style(UiComponentStyles::default()
-                .set_padding(Coords::uniform(5.0))
-            );
-
-            let agent_name = agent.display_name().to_string();
-            let button = button
-                .with_tooltip(
-                    self.render_tab_bar_icon_button_tooltip(appearance, agent_name, None),
-                )
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::AddSpecificAgentTab(agent));
-                });
-
-            buttons.push(
-                Container::new(button.finish())
-                    .with_margin_left(TAB_BAR_ICON_PADDING)
-                    .finish(),
-            );
-        }
-
-        buttons
-    }
+    // Retired: the blind per-agent titlebar quick-launch buttons. They dispatched
+    // `AddSpecificAgentTab` → a local launch with no host/dir/account choice, which
+    // the C4 launcher design explicitly de-listed (§4) and the master concept forbids
+    // (§8: "NOT dumb Claude/Codex buttons"). The titlebar now carries only
+    // `render_attention_pulse`; app-level launches go through the explicit spawn card.
 
     /// Renders the notifications mailbox button (extracted for reuse from
     /// add_right_side_tab_bar_controls).
@@ -21334,6 +21515,97 @@ impl TypedActionView for Workspace {
             OpenSshTerminal { node_id, server } => {
                 self.open_ssh_terminal(node_id.clone(), server.clone(), false, ctx);
             }
+            OpenSshTerminalByNode { node_id } => {
+                // Resolve the registry server info from the node id, then open a
+                // terminal on it — dispatched by the Conductor spine when a
+                // registered host row (no live agent) is clicked.
+                let server = warp_ssh_manager::with_conn(|conn| {
+                    Ok(warp_ssh_manager::SshRepository::get_server(conn, node_id)?)
+                });
+                match server {
+                    Ok(Some(server)) => {
+                        self.open_ssh_terminal(node_id.clone(), server, false, ctx)
+                    }
+                    _ => {
+                        self.toast_stack.update(ctx, |view, ctx| {
+                            view.add_ephemeral_toast(
+                                DismissibleToast::error(format!(
+                                    "Couldn't find host '{node_id}' to open a terminal on."
+                                )),
+                                ctx,
+                            );
+                        });
+                    }
+                }
+            }
+            ToggleFavorite {
+                kind,
+                target,
+                label,
+            } => {
+                // ★ on a tree node / an add-favorite picker item: add if absent,
+                // remove if present. The store persists + broadcasts Changed.
+                let fav =
+                    zaplex_cockpit::Favorite::new(*kind, target.clone(), label.clone());
+                crate::cockpit::favorites::FavoritesStore::handle(ctx)
+                    .update(ctx, |store, ctx| {
+                        store.toggle(fav, ctx);
+                    });
+            }
+            RemoveFavorite { kind, target } => {
+                // One-click remove of a stale favorite whose target has vanished.
+                crate::cockpit::favorites::FavoritesStore::handle(ctx)
+                    .update(ctx, |store, ctx| {
+                        store.remove(*kind, target, ctx);
+                    });
+            }
+            ManageSshHost { node_id } => {
+                // Spine "⋯ manage": open the SSH-manager editor for this host.
+                self.open_ssh_server(node_id.clone(), ctx);
+            }
+            AddSshHost => {
+                // Spine "＋ Add host": create a blank registered host (same path as
+                // the SSH-manager's "New server"), open its editor, and broadcast
+                // the registry change so the SSH-manager panel + spine refresh.
+                match crate::ssh_manager::panel::create_blank_host() {
+                    Ok(node_id) => {
+                        self.open_ssh_server(node_id, ctx);
+                        crate::ssh_manager::SshTreeChangedNotifier::handle(ctx).update(
+                            ctx,
+                            |_, ctx| {
+                                ctx.emit(
+                                    crate::ssh_manager::notifier::SshTreeChangedEvent::TreeChanged,
+                                );
+                            },
+                        );
+                    }
+                    Err(err) => {
+                        self.toast_stack.update(ctx, |view, ctx| {
+                            view.add_ephemeral_toast(
+                                DismissibleToast::error(format!("Couldn't add host: {err}")),
+                                ctx,
+                            );
+                        });
+                    }
+                }
+            }
+            RemoteSpawnDirPicked { path } => {
+                // The SFTP picker returned a directory: fill the card's remote-dir
+                // field and re-show the (still-configured, persistent) card (#105).
+                let path = path.clone();
+                self.spawn_card
+                    .update(ctx, |card, ctx| card.set_remote_dir(&path, ctx));
+                self.current_workspace_state.is_spawn_card_open = true;
+                ctx.focus(&self.spawn_card);
+                ctx.notify();
+            }
+            RemoteSpawnDirPickCanceled => {
+                // The picker closed without a pick: re-show the hidden card
+                // unchanged so its selections aren't stranded (#105).
+                self.current_workspace_state.is_spawn_card_open = true;
+                ctx.focus(&self.spawn_card);
+                ctx.notify();
+            }
             OpenLocalFileManager { start_path } => {
                 // FM pane-mode: swap the invoking (focused) pane in place for a
                 // file manager. Pane-scoped context: on a tab that belongs to an
@@ -21344,24 +21616,86 @@ impl TypedActionView for Workspace {
                     self.tabs.iter().map(|t| t.pane_group.id()).collect();
                 self.ssh_tab_nodes
                     .retain(|pg_id, _| live_pg_ids.contains(pg_id));
-                let active_pg = self.active_tab_pane_group();
-                let target = match self.ssh_tab_nodes.get(&active_pg.id()).cloned() {
-                    Some(node_id) => crate::pane_group::FileManagerTarget::Remote { node_id },
-                    None => crate::pane_group::FileManagerTarget::Local {
+                // Owned handle (not the `&ViewHandle` borrow of `self`) so it can be
+                // moved into the deferred 'static closure below.
+                let active_pg = self.active_tab_pane_group().clone();
+                // Resolve the FM host context from the INVOKING (focused) pane's own
+                // session — NOT the tab (Codex #1). A local split inside an SSH tab
+                // must open the LOCAL file manager, and a remote pane must open its
+                // host's FM. Only when the pane's own session can't be resolved to a
+                // host do we fall back to the tab's recorded node (`ssh_tab_nodes`),
+                // then to Local as the safe default.
+                let active_view = active_pg.as_ref(ctx).active_session_view(ctx);
+                let pane_is_local = active_view
+                    .as_ref()
+                    .and_then(|v| v.as_ref(ctx).active_session_is_local(ctx));
+                let target = if pane_is_local == Some(true) {
+                    crate::pane_group::FileManagerTarget::Local {
                         start_path: start_path.clone(),
-                    },
+                    }
+                } else {
+                    let node_id = active_view
+                        .as_ref()
+                        .and_then(|v| v.as_ref(ctx).active_block_session_id())
+                        .and_then(|sid| self.node_for_session(sid))
+                        .or_else(|| self.ssh_tab_nodes.get(&active_pg.id()).cloned());
+                    match node_id {
+                        Some(node_id) => crate::pane_group::FileManagerTarget::Remote {
+                            node_id,
+                            start_path: Some(start_path.clone()),
+                        },
+                        None => crate::pane_group::FileManagerTarget::Local {
+                            start_path: start_path.clone(),
+                        },
+                    }
                 };
-                active_pg.update(ctx, |pane_group, ctx| {
-                    let pane_id = pane_group.focused_pane_id(ctx);
-                    pane_group.open_file_manager_in_place(pane_id, target, ctx);
+                // Capture the targeted pane NOW (at dispatch time) — the pane focused
+                // when the action fired. Re-reading `focused_pane_id` inside the
+                // deferred closure would toggle whatever happens to be focused at the
+                // later tick, which can differ if focus moved in between.
+                let target_pane_id = active_pg.as_ref(ctx).focused_pane_id(ctx);
+                // Defer the in-place swap to the next foreground tick. This action is
+                // dispatched synchronously from *inside* the invoking pane's own view
+                // update — the header FM-toggle button (PaneView<TerminalView> update)
+                // and the cmd-shift-E binding routed through the focused TerminalView.
+                // Replacing + refocusing that pane while it is still borrowed panics
+                // with "circular view reference" (replace_pane -> focus_pane_by_id ->
+                // update_session_visibility re-borrows the same view). Running it after
+                // the current update returns removes the re-entrancy; harmless for the
+                // overflow-menu path (already dispatched outside any update).
+                ctx.spawn(async move {}, move |_workspace, _, ctx| {
+                    active_pg.update(ctx, |pane_group, ctx| {
+                        pane_group.open_file_manager_in_place(target_pane_id, target, ctx);
+                    });
                 });
             }
             AddTabWithShell { shell, source } => {
                 self.add_tab_with_shell(shell.clone(), *source, ctx)
             }
             AddGetStartedTab => self.add_get_started_tab(ctx),
-            AddAgentTab => self.add_terminal_tab_with_new_agent_view(ctx),
-            AddSpecificAgentTab(agent) => self.add_tab_with_specific_agent(*agent, ctx),
+            AddAgentTab => {
+                // Cockpit vision: the in-app agent is not a separate launch
+                // grammar — every "new agent" goes through the one explicit spawn
+                // card. Because the menu entry, the `new-agent-tab` keybinding
+                // (workspace/mod.rs) and the `NewAgentConversation` URI (uri/mod.rs)
+                // all dispatch this action, routing it here covers every entrypoint
+                // uniformly. Cockpit off → the legacy in-app agent tab (fallback).
+                if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+                    self.open_spawn_card(None, None, None, None, None, ctx);
+                } else {
+                    self.add_terminal_tab_with_new_agent_view(ctx);
+                }
+            }
+            AddSpecificAgentTab(agent) => {
+                // Route through the spawn card (agent preselected) under the cockpit
+                // vision, like every other agent entrypoint — no blind local launch
+                // at the action boundary (a legacy/stale caller can't bypass it).
+                if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
+                    self.open_spawn_card(None, None, None, None, Some(*agent), ctx);
+                } else {
+                    self.add_tab_with_specific_agent(*agent, ctx);
+                }
+            }
             AddDockerSandboxTab => self.add_docker_sandbox_tab(ctx),
             StartAgentOnboardingTutorial(tutorial) => {
                 self.start_agent_onboarding_tutorial(tutorial.clone(), ctx)
@@ -21670,7 +22004,7 @@ impl TypedActionView for Workspace {
                 host,
                 project,
             } => {
-                self.open_spawn_card(host_id.clone(), host.clone(), project.clone(), ctx);
+                self.open_spawn_card(host_id.clone(), host.clone(), project.clone(), None, None, ctx);
             }
             OpenFileInEditor { node_id, path } => {
                 if node_id.is_empty() {

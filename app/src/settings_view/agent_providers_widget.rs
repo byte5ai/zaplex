@@ -59,7 +59,7 @@ const MODEL_ROW_GAP: f32 = 6.0;
 
 std::thread_local! {
     /// {provider_id => Set<model_index>} Currently expanded model entries.
-    /// Discarded when the settings page closes, behaves like the AtomicBool in `models_dev::chips_expanded()`.
+    /// Process-local, discarded when the settings page closes; not persisted.
     static EXPANDED_MODELS: RefCell<HashMap<String, HashSet<usize>>> = RefCell::new(HashMap::new());
 }
 
@@ -121,7 +121,6 @@ struct ProviderRow {
     base_url_editor: ViewHandle<EditorView>,
     api_key_editor: ViewHandle<EditorView>,
     fetch_button_state: MouseStateHandle,
-    sync_models_dev_button_state: MouseStateHandle,
     save_button_state: MouseStateHandle,
     remove_button_state: MouseStateHandle,
     add_model_button_state: MouseStateHandle,
@@ -267,12 +266,6 @@ impl ProviderDraftEditors {
 /// Custom Agent Provider settings widget.
 pub(super) struct AgentProvidersWidget {
     add_button_state: MouseStateHandle,
-    refresh_catalog_button_state: MouseStateHandle,
-    expand_chips_button_state: MouseStateHandle,
-    /// Search box for the quick-add chip row.
-    search_editor: ViewHandle<EditorView>,
-    /// One button state per catalog provider id — used for the chip row.
-    quick_add_button_states: RefCell<HashMap<String, MouseStateHandle>>,
     rows: RefCell<HashMap<String, ProviderRow>>,
 }
 
@@ -285,39 +278,8 @@ impl AgentProvidersWidget {
             rows.insert(provider.id.clone(), row);
         }
 
-        // Trigger catalog load on page entry (disk cache + network if needed).
-        ctx.dispatch_typed_action_deferred(AISettingsPageAction::EnsureModelsDevLoaded);
-
-        // ---- Search box ----
-        let initial_query = crate::ai::agent_providers::models_dev::search_query();
-        let search_editor = ctx.add_typed_action_view(move |ctx| {
-            let appearance = Appearance::handle(ctx).as_ref(ctx);
-            let options = single_line_editor_options(appearance, false);
-            let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text(
-                crate::t!("settings-agent-providers-search-placeholder"),
-                ctx,
-            );
-            if !initial_query.is_empty() {
-                editor.set_buffer_text(&initial_query, ctx);
-            }
-            editor
-        });
-        ctx.subscribe_to_view(&search_editor, move |_, editor, event, ctx| {
-            if matches!(event, EditorEvent::Edited(_)) {
-                let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                ctx.dispatch_typed_action_deferred(AISettingsPageAction::SetModelsDevSearchQuery(
-                    buffer_text,
-                ));
-            }
-        });
-
         Self {
             add_button_state: MouseStateHandle::default(),
-            refresh_catalog_button_state: MouseStateHandle::default(),
-            expand_chips_button_state: MouseStateHandle::default(),
-            search_editor,
-            quick_add_button_states: RefCell::new(HashMap::new()),
             rows: RefCell::new(rows),
         }
     }
@@ -559,7 +521,6 @@ impl AgentProvidersWidget {
             base_url_editor,
             api_key_editor,
             fetch_button_state: MouseStateHandle::default(),
-            sync_models_dev_button_state: MouseStateHandle::default(),
             save_button_state: MouseStateHandle::default(),
             remove_button_state: MouseStateHandle::default(),
             add_model_button_state: MouseStateHandle::default(),
@@ -1221,15 +1182,6 @@ impl AgentProvidersWidget {
             },
             appearance,
         );
-        let sync_models_dev_button = Self::render_card_button_preserving_draft(
-            crate::t!("settings-agent-providers-sync-models-dev"),
-            row.sync_models_dev_button_state.clone(),
-            draft_editors.clone(),
-            AISettingsPageAction::SyncProviderModelsFromModelsDev {
-                provider_id: provider.id.clone(),
-            },
-            appearance,
-        );
         let remove_button = Self::render_card_button(
             crate::t!("settings-agent-providers-remove"),
             row.remove_button_state.clone(),
@@ -1273,7 +1225,6 @@ impl AgentProvidersWidget {
                             .finish(),
                     )
                     .with_child(Container::new(fetch_button).with_margin_right(8.).finish())
-                    .with_child(sync_models_dev_button)
                     .finish(),
             )
             .with_child(
@@ -1284,7 +1235,7 @@ impl AgentProvidersWidget {
                         .with_child(remove_button)
                         .finish(),
                 )
-                // Create visible spacing from left-side primary actions (Add Model / Fetch / Sync),
+                // Create visible spacing from left-side primary actions (Add Model / Fetch),
                 // prevent both groups sticking together when card width is insufficient with SpaceBetween.
                 .with_margin_left(16.)
                 .finish(),
@@ -1412,183 +1363,6 @@ fn field_block(
         .finish()
 }
 
-impl AgentProvidersWidget {
-    /// Render the "Quick-add known providers from models.dev" section:
-    /// - Title + "Refresh Catalog" button
-    /// - Row of chips (each corresponds to a catalog provider id), click to create local provider and pre-fill models
-    /// - Shows "Loading..." while catalog is loading
-    fn render_models_dev_section(
-        &self,
-        appearance: &Appearance,
-        _app: &AppContext,
-    ) -> Box<dyn Element> {
-        use crate::ai::agent_providers::models_dev;
-
-        let label_color = appearance.theme().active_ui_text_color();
-        let dim_color = appearance.theme().disabled_ui_text_color();
-
-        let title = Text::new(
-            crate::t!("settings-agent-providers-quick-add-title"),
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(label_color.into())
-        .finish();
-
-        let refresh_button = Self::render_card_button(
-            crate::t!("settings-agent-providers-refresh-catalog"),
-            self.refresh_catalog_button_state.clone(),
-            AISettingsPageAction::RefreshModelsDev,
-            appearance,
-        );
-
-        let search_box = Container::new(ChildView::new(&self.search_editor).finish())
-            .with_margin_left(8.)
-            .with_margin_right(8.)
-            .finish();
-
-        let header_row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(title)
-            .with_child(Expanded::new(1., search_box).finish())
-            .with_child(refresh_button)
-            .finish();
-
-        let mut body = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        body.add_child(header_row);
-
-        // Show first N when collapsed (enough for ~1 line — actual wrapping handled by Wrap layout).
-        const COLLAPSED_LIMIT: usize = 8;
-        let expanded = models_dev::chips_expanded();
-
-        match models_dev::cached() {
-            None => {
-                body.add_child(
-                    Container::new(
-                        Text::new(
-                            crate::t!("settings-agent-providers-loading-catalog"),
-                            appearance.ui_font_family(),
-                            appearance.ui_font_size(),
-                        )
-                        .with_color(dim_color.into())
-                        .finish(),
-                    )
-                    .with_margin_top(4.)
-                    .finish(),
-                );
-            }
-            Some(catalog) if catalog.is_empty() => {
-                body.add_child(
-                    Container::new(
-                        Text::new(
-                            crate::t!("settings-agent-providers-catalog-empty"),
-                            appearance.ui_font_family(),
-                            appearance.ui_font_size(),
-                        )
-                        .with_color(dim_color.into())
-                        .finish(),
-                    )
-                    .with_margin_top(4.)
-                    .finish(),
-                );
-            }
-            Some(catalog) => {
-                // Filter by search query; empty query → all entries in order.
-                let query = models_dev::search_query();
-                let filtered = models_dev::filter_catalog(&catalog, &query);
-                let total = filtered.len();
-                let has_query = !query.trim().is_empty();
-                // When search is active, always expand all matches, no collapsing (otherwise results ≤ collapse limit would be hidden).
-                let visible_count = if expanded || has_query {
-                    total
-                } else {
-                    COLLAPSED_LIMIT.min(total)
-                };
-
-                let mut wrap = Wrap::row()
-                    .with_spacing(6.)
-                    .with_run_spacing(6.)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center);
-                {
-                    let mut states = self.quick_add_button_states.borrow_mut();
-                    for (cat_id, cat_provider) in filtered.iter().take(visible_count) {
-                        let label = if cat_provider.name.is_empty() {
-                            cat_id.clone()
-                        } else {
-                            cat_provider.name.clone()
-                        };
-                        let state = states.entry(cat_id.clone()).or_default().clone();
-                        let model_count = cat_provider.models.len();
-                        let display_label = format!("+ {label} ({model_count})");
-                        let chip = Self::render_card_button(
-                            display_label,
-                            state,
-                            AISettingsPageAction::AddProviderFromModelsDev {
-                                catalog_provider_id: cat_id.clone(),
-                            },
-                            appearance,
-                        );
-                        wrap = wrap.with_child(chip);
-                    }
-                }
-                body.add_child(Container::new(wrap.finish()).with_margin_top(4.).finish());
-
-                if has_query && total == 0 {
-                    body.add_child(
-                        Container::new(
-                            Text::new(
-                                crate::t!(
-                                    "settings-agent-providers-no-match",
-                                    query = query.as_str()
-                                ),
-                                appearance.ui_font_family(),
-                                appearance.ui_font_size(),
-                            )
-                            .with_color(dim_color.into())
-                            .finish(),
-                        )
-                        .with_margin_top(4.)
-                        .finish(),
-                    );
-                }
-
-                // Expand/collapse button (shown only when no search active AND catalog has more than collapse limit).
-                if !has_query && total > COLLAPSED_LIMIT {
-                    let toggle_label = if expanded {
-                        crate::t!("settings-agent-providers-collapse")
-                    } else {
-                        let count: i64 = (total - COLLAPSED_LIMIT) as i64;
-                        crate::t!("settings-agent-providers-expand-remaining", count = count)
-                    };
-                    let toggle_button = Self::render_card_button(
-                        toggle_label,
-                        self.expand_chips_button_state.clone(),
-                        AISettingsPageAction::ToggleModelsDevChipsExpanded,
-                        appearance,
-                    );
-                    body.add_child(
-                        Container::new(
-                            Flex::row()
-                                .with_main_axis_alignment(MainAxisAlignment::Start)
-                                .with_child(toggle_button)
-                                .finish(),
-                        )
-                        .with_margin_top(6.)
-                        .finish(),
-                    );
-                }
-            }
-        }
-
-        Container::new(body.finish())
-            .with_background(appearance.theme().surface_1())
-            .with_uniform_padding(10.)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
-            .with_margin_bottom(10.)
-            .finish()
-    }
-}
-
 impl SettingsWidget for AgentProvidersWidget {
     type View = AISettingsPageView;
 
@@ -1652,9 +1426,6 @@ impl SettingsWidget for AgentProvidersWidget {
         .finish();
 
         let mut column = Flex::column().with_child(header).with_child(description);
-
-        // ---- Quick-add chip row from models.dev ----
-        column.add_child(self.render_models_dev_section(appearance, app));
 
         if providers.is_empty() {
             let empty = Container::new(

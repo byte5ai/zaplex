@@ -55,7 +55,14 @@ pub fn heat_fill(fraction: f64) -> f64 {
 }
 
 /// Rounded percent label (not clamped): 0.62 -> "62%", 1.3 -> "130%".
-pub fn heat_pct_label(fraction: f64) -> String {
+///
+/// INTERNAL — this carries **no provenance marker**. Never render a quota/usage
+/// figure through this directly: an estimate (Codex has no OAuth quota endpoint,
+/// so its usage is always a transcript estimate) would then read as a real
+/// number. Always use [`heat_pct_label_with_provenance`] at render sites so
+/// estimates keep their `~`. Kept `pub(crate)` (not exported) so the app can't
+/// reach the un-marked variant (#106).
+pub(crate) fn heat_pct_label(fraction: f64) -> String {
     format!("{}%", (fraction * 100.0).round() as i64)
 }
 
@@ -69,6 +76,32 @@ pub fn heat_pct_label_with_provenance(
         crate::types::UsageProvenance::Real => heat_pct_label(fraction),
         crate::types::UsageProvenance::Estimate => format!("~{}", heat_pct_label(fraction)),
     }
+}
+
+/// The **binding** rate-limit window for an account — the fullest one, i.e. the
+/// limit the user actually hits first — as `(fraction, short label)`.
+///
+/// A Max plan enforces several windows at once (rolling 5h, rolling 7-day, and
+/// per-model 7-day sublimits). The headline number should be whichever is
+/// closest to its cap, or the card under-reports how constrained the account
+/// really is (e.g. showing a calm 5h `71%` while the Opus weekly sits at `91%`).
+/// Real OAuth accounts include the Opus/Sonnet sublimits; estimates only know
+/// 5h vs. week (the sublimits are `None`), so they degrade to `max(5h, week)`.
+pub fn binding_window(acct: &crate::types::AccountUsage) -> (f64, &'static str) {
+    let mut binding = (acct.heat, "5h");
+    let mut consider = |frac: f64, label: &'static str| {
+        if frac > binding.0 {
+            binding = (frac, label);
+        }
+    };
+    consider(acct.heat_week, "wk");
+    if let Some(opus) = acct.heat_opus {
+        consider(opus, "opus");
+    }
+    if let Some(sonnet) = acct.heat_sonnet {
+        consider(sonnet, "sonnet");
+    }
+    binding
 }
 
 /// The model's usable context window in tokens: 1M for the Opus/Sonnet 1M-beta,

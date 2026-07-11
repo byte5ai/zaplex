@@ -274,7 +274,23 @@ impl CockpitModel {
                     .flat_map(|a| a.sessions.iter().cloned())
                     .collect();
                 let local_label = inputs.local_label.clone();
-                let inventory = fold_inventory(inputs.local_label, local, remotes);
+                let mut inventory = fold_inventory(inputs.local_label, local, remotes);
+
+                // Merge the SSH registry so the Conductor is the FULL host
+                // navigator: every registered SSH host is a root, even with no
+                // live agent (`build_fleet_tree` drops agentless hosts, so re-add
+                // them here). Dedup by display label — a connected host is already
+                // present via its sessions. A failed registry read degrades to no
+                // merge, never a crash.
+                let registered: Vec<(String, String)> = warp_ssh_manager::with_conn(|c| {
+                    Ok(warp_ssh_manager::SshRepository::list_nodes(c)?)
+                })
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|n| matches!(n.kind, warp_ssh_manager::types::NodeKind::Server))
+                .map(|n| (n.id, n.name))
+                .collect();
+                zaplex_cockpit::merge_registered_hosts(&mut inventory, &registered);
 
                 let _ = spawner
                     .spawn(move |me, ctx| {
@@ -518,6 +534,7 @@ mod tests {
             host: "devbox".to_string(),
             is_local: true,
             host_id: None,
+            registry_node_id: None,
             projects: Vec::new(),
             needs_me: 0,
         });
@@ -548,6 +565,7 @@ mod tests {
             host: label.into(),
             is_local: false,
             host_id: Some(host_id.into()),
+            registry_node_id: None,
             projects: vec![zaplex_cockpit::ProjectNode {
                 root: "/w".into(),
                 name: "proj".into(),

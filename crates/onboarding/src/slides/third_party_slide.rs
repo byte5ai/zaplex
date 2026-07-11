@@ -152,7 +152,7 @@ impl ThirdPartySlide {
         let subtitle = FormattedTextElement::from_str(
             localized(
                 "onboarding-third-party-subtitle",
-                "Select defaults for using agents like Claude Code, Codex, and Gemini.",
+                "Select defaults for using agents like Claude Code and Codex.",
             ),
             appearance.ui_font_family(),
             16.,

@@ -161,6 +161,7 @@ pub fn render_context_menu(state: &ContextMenuState, appearance: &Appearance) ->
             | SftpBrowserAction::ActivateCursor
             | SftpBrowserAction::EnterCursorDir
             | SftpBrowserAction::ToggleSelectCursor
+            | SftpBrowserAction::PickCurrentDir
             | SftpBrowserAction::RenameCursor
             | SftpBrowserAction::CopyToOtherPane
             | SftpBrowserAction::MoveToOtherPane
@@ -306,7 +307,7 @@ mod tests {
 
             let (_, view) = app.add_window(
                 warpui::platform::WindowStyle::NotStealFocus,
-                |ctx| crate::sftp_manager::browser::SftpBrowserView::new("test-node".to_string(), ctx),
+                |ctx| crate::sftp_manager::browser::SftpBrowserView::new("test-node".to_string(), None, ctx),
             );
 
             // Trigger right-click menu

@@ -1,8 +1,15 @@
-# PR validation pipeline — runs cargo check only, no packaging.
+# PR validation pipeline — cargo check + targeted keymap-validation unit tests.
 #
 # Division of labour with zap_release.yml:
-# - This workflow: runs a Linux cargo check on every PR, giving compile
-#   feedback within a few minutes.
+# - This workflow: runs a Linux cargo check on every PR (compile feedback), plus
+#   a targeted `cargo test` that parse-validates every registered keybinding on
+#   BOTH platform variants. `cargo check` compiles the code but never parses the
+#   binding strings, so it cannot catch a malformed keybinding like `cmd-shift-o`
+#   (must be `cmd-shift-O`) that compiles yet panics during registration. The
+#   keymap-validation tests catch exactly that class. (A full window-open "does it
+#   even open" test needs the app's live singleton graph, which the unit-test
+#   harness cannot provide, so it is `#[ignore]`d rather than run here — see
+#   `test_boot_registers_all_keybindings_without_panicking`.)
 # - zap_release.yml: runs the full three-platform packaging (~3h) only on
 #   tag push / manual dispatch.
 #
@@ -54,7 +61,63 @@ jobs:
       - name: cargo check (default = zaplex bin)
         # `cargo check --workspace` would pull in wasm/preview channel-gated
         # targets; check only the default oss bin + its dependency graph, matching
-        # the release_linux compile target. (Cargo.lock is gitignored, so no
-        # --locked here.)
-        run: cargo check --bin zaplex
+        # the release_linux compile target. Cargo.lock is committed, so run --locked
+        # for a deterministic graph (immune to upstream version drift).
+        run: cargo check --locked --bin zaplex
+        shell: bash
+
+  keymap_smoke_test:
+    name: keymap validation (Linux x86_64)
+    # Runs in parallel with cargo_check so it does not delay compile feedback.
+    # Same runner as cargo_check for consistent glibc/deps.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          install_release_deps: false
+
+      - name: Ensure rust target is installed
+        run: rustup target add x86_64-unknown-linux-gnu
+        shell: bash
+
+      # Fast mechanism check (small crate, seconds to compile): proves that a
+      # malformed platform-specific keybinding is rejected on ANY OS — including
+      # this Linux runner — not only on the platform that actually uses it.
+      # `OperatingSystem::get()` is resolved at compile time, so without the
+      # cross-platform validation in warpui_core::keymap a bad Mac binding
+      # (`cmd-shift-o`) would slip past a Linux run entirely.
+      - name: cargo test (keymap cross-platform validation)
+        run: >
+          cargo test --locked -p warpui_core --lib --
+          test_mac_only_binding_validated_on_all_platforms
+          test_valid_mac_only_binding_ok_on_all_platforms
+          test_per_platform_off_platform_binding_validated
+          test_keystroke_invalid_shift_lowercase
+          test_keystroke_invalid_no_shift_uppercase
+        shell: bash
+
+      # Focused app-crate unit tests: the FM-toggle + spawn-card launch payload,
+      # plus the real boot/open smoke gate. Targeted by name so only these run —
+      # the app crate's full test suite has known harness/env-dependent failures
+      # unrelated to this gate.
+      #
+      # `test_boot_registers_all_keybindings_without_panicking` is the boot/open
+      # smoke gate (#104): the app-test harness now registers the full singleton
+      # graph, so it constructs a workspace window headless and runs the binding
+      # registration path — catching both the keymap-crash class and "does the UI
+      # wiring survive construction", the thing `cargo check` cannot.
+      - name: cargo test (FM toggle + spawn-card + boot/open smoke gate)
+        run: >
+          cargo test --locked -p warp --lib --
+          file_manager_start_path_uses_session_cwd
+          file_manager_start_path_falls_back_when_no_cwd
+          confirm_payload_carries_local_selection
+          confirm_payload_routes_remote_launch_to_node_id
+          confirm_payload_none_when_nothing_installed
+          test_boot_registers_all_keybindings_without_panicking
         shell: bash

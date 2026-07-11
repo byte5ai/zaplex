@@ -147,6 +147,46 @@ pub enum WorkspaceAction {
         node_id: String,
         server: warp_ssh_manager::SshServerInfo,
     },
+    /// Open a terminal on a registered SSH host given only its `node_id` — the
+    /// handler resolves the `SshServerInfo` from the registry. Dispatched by the
+    /// Conductor spine when a registered host row (with no live agent) is clicked,
+    /// so the caller need not carry the server info.
+    OpenSshTerminalByNode {
+        node_id: String,
+    },
+    /// Toggle a curated favorite (design §10): the ★ affordance on a Conductor
+    /// tree node, and the add-favorite picker. Adds the typed tree-object pointer
+    /// if absent, removes it if present. `label` is presentation-only.
+    ToggleFavorite {
+        kind: zaplex_cockpit::FavoriteKind,
+        target: String,
+        label: String,
+    },
+    /// Remove a curated favorite by `(kind, target)` — the one-click remove on a
+    /// stale dropdown entry whose target has vanished from the tree.
+    RemoveFavorite {
+        kind: zaplex_cockpit::FavoriteKind,
+        target: String,
+    },
+    /// Open the SSH-manager editor for a registered host, given its `node_id` —
+    /// the Conductor spine's per-host "⋯ manage" affordance (design §10 folds the
+    /// SSH-manager add/edit function onto the host nodes).
+    ManageSshHost {
+        node_id: String,
+    },
+    /// Create a blank registered SSH host and open its editor — the Conductor
+    /// spine's "＋ Add host" root (same path as the SSH-manager's "New server").
+    AddSshHost,
+    /// A remote directory was picked in the SFTP browser (opened in pick mode from
+    /// the spawn card's "Browse…"): fill the spawn card's remote-dir field with
+    /// `path`, re-show the card, and close the picker (#105).
+    RemoteSpawnDirPicked {
+        path: std::path::PathBuf,
+    },
+    /// The SFTP directory picker was closed without a pick (cancel / pane close):
+    /// re-show the hidden spawn card unchanged so its selections aren't stranded
+    /// (#105).
+    RemoteSpawnDirPickCanceled,
     /// Open the local file-manager pane (FM pane-mode P1) rooted at `start_path`.
     OpenLocalFileManager {
         start_path: std::path::PathBuf,
@@ -920,6 +960,7 @@ impl WorkspaceAction {
             | AddDefaultTab
             | AddTerminalTab { .. }
             | OpenSshTerminal { .. }
+            | OpenSshTerminalByNode { .. }
             | OpenLocalFileManager { .. }
             | ToggleSshManager
             | ToggleSkillManager
@@ -1146,6 +1187,13 @@ impl WorkspaceAction {
             DismissWaylandCrashRecoveryBannerAndOpenLink => false,
             #[cfg(target_family = "wasm")]
             OpenLinkOnDesktop(_) => false,
+            // Favorites live in their own persisted store, not in app state.
+            ToggleFavorite { .. } | RemoveFavorite { .. } => false,
+            // Managing/adding a host opens an editor pane; the registry itself is
+            // persisted separately (SQLite), so this isn't app-state either.
+            ManageSshHost { .. } | AddSshHost => false,
+            // Fills a transient modal field / re-shows a modal; not app state.
+            RemoteSpawnDirPicked { .. } | RemoteSpawnDirPickCanceled => false,
             // actions that are related to updating user settings or
             // managing some ui elements (like closing/opening modals)
             // that don't reflect on actual workspace and don't need to

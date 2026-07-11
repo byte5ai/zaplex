@@ -24,7 +24,8 @@
 use super::consts::COMPACTION_BUFFER;
 use super::CompactionConfig;
 
-/// Model token limits—sourced from models.dev metadata or BYOP provider config.
+/// Model token limits—sourced from BYOP provider config (user-entered or fetched from the
+/// provider's `/models` endpoint).
 #[derive(Debug, Clone, Copy)]
 pub struct ModelLimit {
     /// Overall context window

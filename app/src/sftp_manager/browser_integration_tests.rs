@@ -41,7 +41,7 @@ fn create_view(
     app: &mut warpui::App,
 ) -> (warpui::WindowId, warpui::ViewHandle<SftpBrowserView>) {
     app.add_window(WindowStyle::NotStealFocus, |ctx| {
-        SftpBrowserView::new("test-node".to_string(), ctx)
+        SftpBrowserView::new("test-node".to_string(), None, ctx)
     })
 }
 
@@ -81,6 +81,104 @@ fn create_connected_view(
     });
 
     (win_id, view, temp_dir)
+}
+
+// ============================================================
+// Connect finalize honors the caller-provided start_path
+// ============================================================
+
+/// Regression: a remote terminal in `/srv/app` must toggle the file manager to
+/// `/srv/app`, not the host home/root. The async connect finalize
+/// (`apply_connected_backend`) is exercised directly with a mock SFTP backend,
+/// since the full `connect_to_server` needs a live SSH server. This covers the
+/// real connect path — not just `file_manager_start_path` — asserting that the
+/// requested cwd survives connect (backend home resolution is bypassed).
+#[test]
+fn test_connect_finalize_honors_explicit_start_path() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        // Mock remote filesystem: /srv/app exists and holds a file so the
+        // initial listing of the requested cwd succeeds. The backend root maps
+        // to remote "/", so realpath(".") would resolve to "/" (the "home"
+        // fallback) — proving current_path came from start_path, not the home.
+        let temp_dir = create_temp_dir_with_files(&[("srv/app/hello.txt", b"hi")]);
+        let backend = Arc::new(InMemorySftpBackend::new(temp_dir.path().to_path_buf()))
+            as Arc<dyn SftpBackend>;
+
+        // Construct with an explicit start_path (the FM pane-mode toggle path).
+        let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            SftpBrowserView::new(
+                "test-node".to_string(),
+                Some(PathBuf::from("/srv/app")),
+                ctx,
+            )
+        });
+
+        view.update(&mut app, |v, ctx| {
+            v.apply_connected_backend(backend, ctx);
+        });
+
+        let (current_path, path_history, history_index, has_hello) = view.read(&app, |v, _| {
+            (
+                v.current_path.clone(),
+                v.path_history.clone(),
+                v.history_index,
+                v.entries.iter().any(|e| e.name == "hello.txt"),
+            )
+        });
+
+        // Landed at the requested cwd, NOT the remote home/root.
+        assert_eq!(current_path, PathBuf::from("/srv/app"));
+        // History is consistent: exactly the start_path, no dangling home entry.
+        assert_eq!(path_history, vec![PathBuf::from("/srv/app")]);
+        assert_eq!(history_index, 0);
+        // The initial listing targeted /srv/app (its file is visible).
+        assert!(
+            has_hello,
+            "the initial listing should target the requested start_path"
+        );
+    });
+}
+
+/// The plain "SFTP Browse" entry (`None` start_path) preserves the pre-existing
+/// behavior: connect finalize falls back to the remote home (`realpath(".")`).
+/// The expected home is computed from the same backend so the assertion holds
+/// regardless of how the temp dir canonicalizes on the host.
+#[test]
+fn test_connect_finalize_none_falls_back_to_home() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let temp_dir = create_temp_dir_with_files(&[("readme.txt", b"hi")]);
+        let raw_backend = InMemorySftpBackend::new(temp_dir.path().to_path_buf());
+        // The home the finalize falls back to, resolved exactly as the code does.
+        let expected_home = super::sftp_ops::normalize_remote_path(
+            &raw_backend
+                .realpath(std::path::Path::new("."))
+                .expect("realpath(\".\") should resolve for the in-memory backend"),
+        );
+        let backend = Arc::new(raw_backend) as Arc<dyn SftpBackend>;
+
+        let (_, view) = create_view(&mut app); // constructed with `None`
+
+        view.update(&mut app, |v, ctx| {
+            v.apply_connected_backend(backend, ctx);
+        });
+
+        let (current_path, path_history, history_index) = view.read(&app, |v, _| {
+            (
+                v.current_path.clone(),
+                v.path_history.clone(),
+                v.history_index,
+            )
+        });
+
+        // Fell back to the remote home, NOT some caller start_path.
+        assert_eq!(current_path, expected_home);
+        assert_eq!(path_history, vec![expected_home]);
+        assert_eq!(history_index, 0);
+    });
 }
 
 /// Creates a Connected view with a subdirectory structure
@@ -1668,7 +1766,9 @@ fn test_keyboard_create_folder() {
     });
 }
 
-/// Verifies that DeleteSelected is handled safely when there is no selection
+/// Verifies that with no multi-selection, DeleteSelected (F8) falls back to the
+/// row under the MC keyboard cursor — the classic file-manager behaviour where
+/// the highlighted row is always the operation target.
 #[test]
 fn test_keyboard_shortcuts_without_selection() {
     warpui::App::test((), |mut app| async move {
@@ -1677,7 +1777,7 @@ fn test_keyboard_shortcuts_without_selection() {
             ("file.txt", b"x"),
         ]);
 
-        // No selection
+        // No multi-selection; the cursor sits on the first (only) row.
         view.update(&mut app, |v, ctx| {
             v.selected.clear();
             ctx.notify();
@@ -1688,11 +1788,17 @@ fn test_keyboard_shortcuts_without_selection() {
         });
 
         view.read(&app, |v, _| {
-            assert!(
-                v.dialog.is_none(),
-                "DeleteSelected should not open dialog when there is no selection"
-            );
-            assert_eq!(v.entries.len(), 1, "entries should not be deleted");
+            match &v.dialog {
+                Some(Dialog::DeleteConfirm { paths, .. }) => {
+                    assert_eq!(
+                        paths.len(),
+                        1,
+                        "DeleteSelected should target the single row under the cursor"
+                    );
+                }
+                _ => panic!("DeleteSelected should open the delete confirmation for the cursor row"),
+            }
+            assert_eq!(v.entries.len(), 1, "entries are not removed until the dialog is confirmed");
         });
     });
 }
@@ -2126,7 +2232,7 @@ fn create_view_with_node(
     node_id: &str,
 ) -> (warpui::WindowId, warpui::ViewHandle<SftpBrowserView>) {
     app.add_window(WindowStyle::NotStealFocus, |ctx| {
-        SftpBrowserView::new(node_id.to_string(), ctx)
+        SftpBrowserView::new(node_id.to_string(), None, ctx)
     })
 }
 
