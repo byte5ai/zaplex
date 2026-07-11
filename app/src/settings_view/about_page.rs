@@ -140,15 +140,27 @@ impl SettingsWidget for AboutPageWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
 
-        // Always use pure icon logo; brand name presented as standalone "Zaplex" text, no longer
-        // dependent on svg containing "warp" text.
-        let image_path = "bundled/svg/warp-logo-light.svg";
+        // Show the zaplex splash artwork (the same image used as the macOS DMG
+        // installer background, `app/assets/resources/mac/zaplex_install_image.png`,
+        // embedded via the `assets` rust-embed root) so the About page doubles as
+        // the brand splash. Brand name stays as standalone "Zaplex" text below.
+        let image_path = "resources/mac/zaplex_install_image.png";
 
         // GIT_RELEASE_TAG injected → display tag; otherwise enter Dev mode.
         let version = ChannelState::app_version().unwrap_or("Dev");
 
+        // Append the build-unique commit id (build.rs → ZAPLEX_GIT_SHA) so a given
+        // install maps to an exact commit — the tag alone is reused across test
+        // builds, which made it impossible to tell which build was running.
+        let git_sha = env!("ZAPLEX_GIT_SHA");
+        let version_display = if git_sha.is_empty() || git_sha == "unknown" {
+            version.to_string()
+        } else {
+            format!("{version} · {git_sha}")
+        };
+
         let version_text = ui_builder
-            .span(version.to_string())
+            .span(version_display)
             .with_soft_wrap()
             .build()
             .with_margin_top(16.)
@@ -183,8 +195,8 @@ impl SettingsWidget for AboutPageWidget {
                     )
                     .finish(),
                 )
-                .with_max_height(100.)
-                .with_max_width(350.)
+                .with_max_height(280.)
+                .with_max_width(392.)
                 .finish(),
             )
             .with_child(
@@ -353,7 +365,7 @@ impl AboutPageWidget {
                 let url = github::cached_release()
                     .map(|r| r.html_url)
                     .unwrap_or_else(|| {
-                        "https://github.com/zerx-lab/warp/releases/latest".to_owned()
+                        "https://github.com/byte5ai/zaplex/releases/latest".to_owned()
                     });
                 (text, UpdateAction::OpenReleasePage(url))
             }

@@ -26,6 +26,28 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_FAMILY");
 
+    // Build-unique commit id, shown in the About page so an install can be matched
+    // to an exact commit — the release tag alone is reused across test builds.
+    // Prefer the CI-provided SHA; fall back to a local git query; else "unknown".
+    println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    let git_sha = env::var("GITHUB_SHA")
+        .ok()
+        .map(|s| s.chars().take(8).collect::<String>())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::process::Command::new("git")
+                .args(["rev-parse", "--short=8", "HEAD"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=ZAPLEX_GIT_SHA={git_sha}");
+
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;
     let target_family = env::var("CARGO_CFG_TARGET_FAMILY")?;
     let target_env = env::var("CARGO_CFG_TARGET_ENV")?;
