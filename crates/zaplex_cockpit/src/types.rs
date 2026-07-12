@@ -140,6 +140,19 @@ pub struct SessionSnapshot {
     pub project_root: String,
     /// Human repo label — origin-url basename, else the root's dir basename.
     pub project_name: String,
+    /// Git branch checked out in this session's working tree (`.git/HEAD` →
+    /// `refs/heads/<branch>`), e.g. `main`, `rc/master-plan`. `None` when
+    /// detached, unknown, or not a repo. The **primary session-identity
+    /// signal** (redesign §2.2): it disambiguates several parallel agents on
+    /// one repo, which the model alone cannot.
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// Linked-worktree name when `cwd` sits in a git worktree distinct from the
+    /// main checkout (the `worktrees/<name>` leaf of the gitdir), e.g.
+    /// `rc-master-plan`. `None` for the primary worktree / non-repo. Pairs with
+    /// `branch` to identify a session (redesign §2.2).
+    #[serde(default)]
+    pub worktree: Option<String>,
     pub last_activity: DateTime<Utc>,
     pub pid: u32,
 }

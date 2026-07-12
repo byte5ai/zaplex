@@ -4,7 +4,8 @@ use super::*;
 use std::fs;
 use std::path::Path;
 
-/// Write a minimal `.git/config` with the given origin url under `dir`.
+/// Write a minimal `.git/config` with the given origin url under `dir`, plus a
+/// `HEAD` on `main` (so branch resolution has something to read).
 fn init_repo_with_origin(dir: &Path, url: &str) {
     let git = dir.join(".git");
     fs::create_dir_all(&git).unwrap();
@@ -13,6 +14,7 @@ fn init_repo_with_origin(dir: &Path, url: &str) {
         format!("[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]\n\turl = {url}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n"),
     )
     .unwrap();
+    fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
 }
 
 #[test]
@@ -26,6 +28,8 @@ fn nested_cwd_in_repo_names_from_origin_url() {
     let p = resolve_project(&nested);
     assert_eq!(p.root, repo.to_string_lossy());
     assert_eq!(p.name, "zaplex", "name comes from the origin url basename");
+    assert_eq!(p.branch.as_deref(), Some("main"), "branch from .git/HEAD");
+    assert_eq!(p.worktree, None, "a primary checkout has no linked-worktree name");
 }
 
 #[test]
@@ -86,6 +90,9 @@ fn dot_git_file_worktree_is_treated_as_a_root() {
     fs::create_dir_all(&wt_gitdir).unwrap();
     // `commondir` points back to the shared git dir (relative to the gitdir).
     fs::write(wt_gitdir.join("commondir"), "../..\n").unwrap();
+    // The worktree's OWN HEAD lives in its per-worktree gitdir (not the shared
+    // common dir) — so two worktrees of one repo report distinct branches.
+    fs::write(wt_gitdir.join("HEAD"), "ref: refs/heads/feature-x\n").unwrap();
     fs::write(
         worktree.join(".git"),
         format!("gitdir: {}\n", wt_gitdir.to_string_lossy()),
@@ -97,6 +104,35 @@ fn dot_git_file_worktree_is_treated_as_a_root() {
     let p = resolve_project(&nested);
     assert_eq!(p.root, worktree.to_string_lossy(), "worktree is the root");
     assert_eq!(p.name, "zaplex", "origin resolved via the shared commondir");
+    assert_eq!(
+        p.branch.as_deref(),
+        Some("feature-x"),
+        "branch from the per-worktree HEAD, not the common dir"
+    );
+    assert_eq!(
+        p.worktree.as_deref(),
+        Some("wt-feature"),
+        "linked-worktree name is the gitdir leaf under worktrees/"
+    );
+}
+
+#[test]
+fn detached_head_has_no_branch() {
+    // A detached HEAD holds a raw sha, not a `ref:` — branch resolves to None
+    // (never a fabricated branch), while the repo still resolves normally.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("detached");
+    init_repo_with_origin(&repo, "git@github.com:x/detached.git");
+    fs::write(
+        repo.join(".git").join("HEAD"),
+        "9fceb02d0ae598e95dc970b74767f19372d61af8\n",
+    )
+    .unwrap();
+
+    let p = resolve_project(&repo);
+    assert_eq!(p.name, "detached");
+    assert_eq!(p.branch, None, "detached HEAD → no branch");
+    assert_eq!(p.worktree, None);
 }
 
 #[test]

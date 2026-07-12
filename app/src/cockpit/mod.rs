@@ -88,6 +88,8 @@ mod session_effort_tests {
             ctx_tokens: 0,
             project_root: cwd.into(),
             project_name: String::new(),
+            branch: None,
+            worktree: None,
             last_activity: Utc::now(),
             pid: 0,
         }

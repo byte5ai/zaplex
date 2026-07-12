@@ -223,6 +223,8 @@ pub fn live_sessions(codex_home: &Path, now: DateTime<Utc>) -> Vec<SessionSnapsh
             ctx_tokens: info.ctx_tokens,
             project_root: project.root,
             project_name: project.name,
+            branch: project.branch,
+            worktree: project.worktree,
             last_activity,
             // Codex records no pid — guardrail signalling can't target it.
             pid: 0,

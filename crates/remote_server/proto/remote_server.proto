@@ -761,6 +761,11 @@ message AgentSessionInfo {
   string project_name = 10;
   uint64 last_activity_epoch_millis = 11;
   uint32 pid = 12;
+  // Session identity for the redesigned sidebar (§2.2). Empty string = unknown
+  // (maps back to Option::None), so an older daemon that omits these still
+  // decodes cleanly.
+  string worktree = 13;
+  string branch = 14;
 }
 
 // Daemon → client: result of ListAgentSessions.

@@ -553,6 +553,8 @@ mod tests {
             ctx_tokens: 0,
             project_root: "/w".into(),
             project_name: "proj".into(),
+            branch: None,
+            worktree: None,
             last_activity: Utc::now(),
             pid: 0,
         }

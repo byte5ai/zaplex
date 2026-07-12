@@ -38,6 +38,8 @@ fn session_in(
         ctx_tokens: 0,
         project_root: root.into(),
         project_name: name,
+        branch: None,
+        worktree: None,
         last_activity: at(activity),
         pid: 0,
     }

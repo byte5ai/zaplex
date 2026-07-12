@@ -19,6 +19,14 @@ pub struct ResolvedProject {
     /// Human repo label: the `origin` remote's basename when parseable, else
     /// the root directory's basename.
     pub name: String,
+    /// Current git branch at `root` (`.git/HEAD` → `refs/heads/<branch>`), or
+    /// `None` when detached / unknown / not a repo. The session's primary
+    /// identity signal in the redesigned sidebar (§2.2).
+    pub branch: Option<String>,
+    /// Linked-worktree name when `root` is a git worktree distinct from the
+    /// main checkout (`.git` *file* → `worktrees/<name>`), else `None` (the
+    /// primary worktree or a non-repo dir).
+    pub worktree: Option<String>,
 }
 
 /// Resolve `cwd` to its enclosing project (git root + repo label).
@@ -32,7 +40,66 @@ pub fn resolve_project(cwd: &Path) -> ResolvedProject {
     let root_path = git_root(cwd).unwrap_or(cwd);
     let root = normalize(root_path);
     let name = origin_repo_name(root_path).unwrap_or_else(|| basename(&root));
-    ResolvedProject { root, name }
+    let (branch, worktree) = resolve_worktree_identity(root_path);
+    ResolvedProject {
+        root,
+        name,
+        branch,
+        worktree,
+    }
+}
+
+/// Resolve `(branch, worktree)` for a working-tree root by reading Git plumbing
+/// files directly (no subprocess, matching this module's filesystem-only
+/// contract): the branch from the (per-worktree) `HEAD`, and the linked-worktree
+/// name from a `.git` *file*'s `gitdir: …/worktrees/<name>`.
+///
+/// A primary checkout (`.git` is a directory) has a branch but no linked-worktree
+/// name; a linked worktree (`.git` is a file) has both, read from its own gitdir
+/// under `worktrees/<name>` — **not** the shared common dir, so two worktrees of
+/// one repo report their own distinct branch.
+fn resolve_worktree_identity(root: &Path) -> (Option<String>, Option<String>) {
+    let dot_git = root.join(".git");
+    let Ok(meta) = std::fs::metadata(&dot_git) else {
+        return (None, None);
+    };
+    if meta.is_dir() {
+        // Primary worktree: HEAD lives directly under `.git`; no linked name.
+        return (head_branch(&dot_git), None);
+    }
+    // Linked worktree: `.git` is a file `gitdir: <path>/worktrees/<name>`.
+    let Ok(contents) = std::fs::read_to_string(&dot_git) else {
+        return (None, None);
+    };
+    let Some(gitdir) = contents
+        .lines()
+        .find_map(|l| l.strip_prefix("gitdir:"))
+        .map(str::trim)
+    else {
+        return (None, None);
+    };
+    let gitdir_path = Path::new(gitdir);
+    let gitdir_abs = if gitdir_path.is_absolute() {
+        gitdir_path.to_path_buf()
+    } else {
+        root.join(gitdir_path)
+    };
+    let branch = head_branch(&gitdir_abs);
+    // The worktree's own name is the leaf of its per-worktree gitdir.
+    let worktree = gitdir_abs
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string);
+    (branch, worktree)
+}
+
+/// The current branch from a git dir's `HEAD` (`ref: refs/heads/<branch>`), or
+/// `None` when detached (HEAD holds a raw sha) or the file is unreadable.
+fn head_branch(git_dir: &Path) -> Option<String> {
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    head.trim()
+        .strip_prefix("ref: refs/heads/")
+        .map(str::to_string)
 }
 
 /// First ancestor of `cwd` (inclusive) containing a `.git` entry, if any.

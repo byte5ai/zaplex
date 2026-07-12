@@ -14,6 +14,8 @@ fn session(name: &str, cwd: &str, pid: u32) -> SessionSnapshot {
         ctx_tokens: 0,
         project_root: cwd.to_string(),
         project_name: "proj".to_string(),
+        branch: None,
+        worktree: None,
         last_activity: Utc::now(),
         pid,
     }

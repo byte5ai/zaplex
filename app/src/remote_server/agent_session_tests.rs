@@ -15,6 +15,10 @@ fn sample(state: SessionState, provider: Provider, effort: Option<String>) -> Se
         ctx_tokens: 123_456,
         project_root: "/home/me/proj".to_string(),
         project_name: "proj".to_string(),
+        // Present values so the proto round-trip exercises the new identity
+        // fields (Some → wire string → Some).
+        branch: Some("rc/master-plan".to_string()),
+        worktree: Some("wt-rc".to_string()),
         // Millisecond-precise so the epoch-millis round-trip is exact.
         last_activity: Utc
             .timestamp_millis_opt(1_720_000_000_123)

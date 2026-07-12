@@ -283,6 +283,8 @@ pub fn live_sessions(config_dir: &Path, now: DateTime<Utc>) -> Vec<SessionSnapsh
                 ctx_tokens: tail.ctx_tokens,
                 project_root: project.root,
                 project_name: project.name,
+                branch: project.branch,
+                worktree: project.worktree,
                 last_activity,
                 pid: r.pid,
             }

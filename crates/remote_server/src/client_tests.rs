@@ -710,6 +710,8 @@ async fn list_agent_sessions_round_trip() {
                     ctx_tokens: 42_000,
                     project_root: "/home/me/proj".to_string(),
                     project_name: "proj".to_string(),
+                    worktree: "wt-feature".to_string(),
+                    branch: "feature-work".to_string(),
                     last_activity_epoch_millis: 1_720_000_000_123,
                     pid: 4242,
                 },
@@ -725,6 +727,10 @@ async fn list_agent_sessions_round_trip() {
                     ctx_tokens: 0,
                     project_root: "/home/me/other".to_string(),
                     project_name: "other".to_string(),
+                    // Empty = honestly-unknown identity (primary worktree /
+                    // detached / non-repo).
+                    worktree: String::new(),
+                    branch: String::new(),
                     last_activity_epoch_millis: 0,
                     pid: 0,
                 },

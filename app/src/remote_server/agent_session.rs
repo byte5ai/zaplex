@@ -9,7 +9,9 @@
 //! The `state`/`provider` enums travel as lowercase strings so the wire stays
 //! forward-compatible: an unknown future `state` folds to [`SessionState::Idle`]
 //! (never "needs me"), and an unknown `provider` folds to [`Provider::Claude`].
-//! An empty `effort` string round-trips to `None` (honestly unknown).
+//! An empty `effort` / `worktree` / `branch` string round-trips to `None`
+//! (honestly unknown), so an older daemon that omits the identity fields still
+//! decodes cleanly.
 
 use chrono::{TimeZone, Utc};
 use zaplex_cockpit::types::{Provider, SessionSnapshot, SessionState};
@@ -61,6 +63,9 @@ pub fn snapshot_to_proto(s: &SessionSnapshot) -> AgentSessionInfo {
         ctx_tokens: s.ctx_tokens,
         project_root: s.project_root.clone(),
         project_name: s.project_name.clone(),
+        // Empty string encodes "honestly unknown" (None), like `effort`.
+        worktree: s.worktree.clone().unwrap_or_default(),
+        branch: s.branch.clone().unwrap_or_default(),
         last_activity_epoch_millis: s.last_activity.timestamp_millis() as u64,
         pid: s.pid,
     }
@@ -89,6 +94,9 @@ pub fn proto_to_snapshot(p: &AgentSessionInfo) -> SessionSnapshot {
         ctx_tokens: p.ctx_tokens,
         project_root: p.project_root.clone(),
         project_name: p.project_name.clone(),
+        // Empty string ⇒ None (honestly unknown), symmetric with `effort`.
+        worktree: (!p.worktree.is_empty()).then(|| p.worktree.clone()),
+        branch: (!p.branch.is_empty()).then(|| p.branch.clone()),
         last_activity,
         pid: p.pid,
     }
