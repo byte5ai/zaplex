@@ -108,19 +108,21 @@ attention-inbox remote-row affordance with the sidebar (same object, same gramma
   Spawn-Karte, attention inbox, session_config, new_worktree, params headers + enum
   shell; aligned generic `Modal<T>` tokens. Reviewed read-only by codex + grok (no
   blockers; both should-fix items applied). Branch `rc/master-plan`, all commits green.
-- [~] WS2 i18n (rule+guard, primary German, bulk tail) — PARTIAL, the two highest-value
-  primary surfaces done (each fully German, committed green): the **migrated dialogs**
-  (session_config / new_worktree / spawn_card placeholder, I2) and the **cockpit sidebar
-  runtime strings** (`panel.rs`, I1 — the always-visible metric copy). Also filled two
-  DE gaps that fell back to English (`session-config-get-warping`,
-  `workspace-left-panel-ssh-manager-connecting` / I4). REMAINING (documented, coherent to
-  stop here — each surface is either fully German or cleanly untouched): `git_dialog/*`
-  (~30 strings, I2/#6), `ai_page.rs` (4 — needs mixed handling: the command-palette
-  `SettingActionPairDescriptions` pairs, a paragraph, a label), `native_modal.rs` (1),
-  `cockpit/settings.rs` descriptions (7, I5 — these are `&'static str` inside the
-  `define_settings_group!` macro; translating them needs the settings framework to
-  support i18n descriptions, a framework change to scope separately), the literal-guard
-  (WS2 step 1). EN 3233 vs DE ~350 keys; the deep inherited-Warp tail stays post-RC.
+- [~] WS2 i18n (rule+guard, primary German, bulk tail) — the primary user-facing surfaces
+  are DONE (each fully German, committed green): migrated **dialogs** (session_config /
+  new_worktree / spawn_card placeholder, I2), **cockpit sidebar** runtime strings
+  (`panel.rs`, I1), **native_modal** + **ai_page** strings, and the **git dialog**
+  (`git_dialog/*` commit/push/publish/PR — errors, titles, labels, buttons, toasts, file
+  plural; I2/#6). Filled the two DE-fallback gaps (`session-config-get-warping`,
+  `workspace-left-panel-ssh-manager-connecting` / I4). Added the **literal guard**
+  (`scripts/check-i18n-literals.sh`, WS2 step 1). REMAINING, each with a concrete reason:
+  (a) `cockpit/settings.rs` descriptions (7, I5) — `&'static str` in the settings *schema*
+  (`crates/settings/src/schema.rs:18`) + macro takes a `literal`; genuinely blocked on a
+  settings-framework i18n change, scope separately; (b) 5 git-dialog strings behind
+  `&'static str` APIs (transient set_loading labels Committing/Publishing/Pushing/Creating
+  + the confirm-tooltip) — need `set_loading`/`confirm_tooltip` signature changes, small
+  follow-up; (c) the deep inherited-Warp long tail — post-RC bulk pass per §2. EN ~3260 /
+  DE ~410 keys now.
 - [x] WS3 icon pass — `⚡ ◈ ◇ ⑂` → `icons::*` (Eye/History/GitBranch/Lightning) via the
   new `icon_word_verb` helper; stripped glyphs from `warp.ftl` (en+de) + doc comments.
   Status vocab `● ✋ ◦` kept. Acceptance `rg '⚡|◈|◇|⑂' app/src` → 0. codex-reviewed, green.
