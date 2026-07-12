@@ -648,30 +648,9 @@ impl SpawnCard {
             .with_color(muted)
             .finish();
 
-        // Explicit ✕ close in the top-right corner — the obvious, standard way to
-        // dismiss the dialog with the mouse (Cancel and Escape still work too).
-        let close_btn = Hoverable::new(self.chip_handle("__spawn_card_close"), move |mouse| {
-            let color = if mouse.is_hovered() { main } else { muted };
-            crate::ui_components::icons::Icon::X.to_warpui_icon(color).finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(|ctx, _, _| ctx.dispatch_typed_action(SpawnCardAction::Close))
-        .finish();
-        let header = ConstrainedBox::new(
-            Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(title)
-                .with_child(close_btn)
-                .finish(),
-        )
-        .with_width(MODAL_WIDTH - 48.)
-        .finish();
-
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(Container::new(header).with_margin_bottom(4.).finish())
+            .with_child(Container::new(title).with_margin_bottom(4.).finish())
             .with_child(Container::new(subtitle).with_margin_bottom(18.).finish());
 
         // Agent row (only installed providers).
@@ -941,15 +920,8 @@ impl View for SpawnCard {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        let card_body = ConstrainedBox::new(self.render_card(app))
+        let card = ConstrainedBox::new(self.render_card(app))
             .with_width(MODAL_WIDTH)
-            .finish();
-
-        // Wrap the card so ANY click on it (including empty padding between chips)
-        // counts as "handled by a child" — the backdrop below then defers and does
-        // NOT dismiss. Without this, clicking the card's padding would close it.
-        let card = Hoverable::new(self.chip_handle("__spawn_card_body"), move |_| card_body)
-            .on_click(|_, _, _| {})
             .finish();
 
         let mut stack = Stack::new();
@@ -963,7 +935,7 @@ impl View for SpawnCard {
             ),
         );
 
-        let veil = Container::new(
+        Container::new(
             Align::new(
                 Flex::column()
                     .with_main_axis_size(MainAxisSize::Max)
@@ -974,16 +946,7 @@ impl View for SpawnCard {
         )
         // The one cockpit modal scrim — identical veil behind card and inbox.
         .with_background_color(modal_scrim())
-        .finish();
-
-        // Click-outside-to-dismiss: clicking the backdrop closes the card, the
-        // mouse equivalent of Escape/Cancel. `with_defer_events_to_children` makes
-        // this fire ONLY when the click was not already handled by the card body
-        // above, so clicks on the card never dismiss it.
-        Hoverable::new(self.chip_handle("__spawn_card_backdrop"), move |_| veil)
-            .on_click(|ctx, _, _| ctx.dispatch_typed_action(SpawnCardAction::Close))
-            .with_defer_events_to_children()
-            .finish()
+        .finish()
     }
 }
 
