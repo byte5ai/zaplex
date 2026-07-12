@@ -4,9 +4,9 @@ use warpui::{
     elements::{
         Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element,
         Fill as ElementFill, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, Padding,
-        ParentElement, Radius, Shrinkable, Text,
+        ParentElement, Radius, Text,
     },
-    fonts::{Properties, Weight},
+    fonts::Weight,
     keymap::FixedBinding,
     platform::Cursor,
     ui_components::{
@@ -27,8 +27,6 @@ pub fn init(app: &mut AppContext) {
     )]);
 }
 
-use warp_core::ui::theme::color::internal_colors;
-
 use crate::{
     appearance::Appearance,
     editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions},
@@ -37,6 +35,7 @@ use crate::{
         branch_picker::BranchPicker,
         repo_picker::{RepoPicker, RepoPickerEvent},
     },
+    ui_components::modal_frame,
 };
 
 /// Gap between sections in the modal body (repo picker, branch picker, checkbox).
@@ -64,9 +63,6 @@ const FOOTER_BUTTON_HORIZONTAL_PADDING: f32 = 12.;
 const FOOTER_BUTTON_GAP: f32 = 8.;
 /// Corner radius for footer buttons (Figma: rounded-4).
 const FOOTER_BUTTON_RADIUS: Radius = Radius::Pixels(4.);
-/// Size of the ESC keyboard shortcut badge (Figma: 14px tall, 10px font).
-const ESC_BADGE_HEIGHT: f32 = 14.;
-const ESC_BADGE_CORNER_RADIUS: Radius = Radius::Pixels(3.);
 /// Size of the close (X) icon in the header.
 const CLOSE_ICON_SIZE: f32 = 14.;
 /// Font size for inline validation error messages.
@@ -319,40 +315,9 @@ impl View for NewWorktreeModal {
             && !is_valid_worktree_branch_name(&worktree_name_text);
         let can_submit = has_repo && has_branch && worktree_name_valid;
 
-        // ── Header (custom — Modal wrapper has no title) ────────────────
+        // ── Header (the one shared modal header: title · close ✕) ────────
         let header = {
-            let title = Text::new_inline(
-                "New worktree".to_string(),
-                appearance.ui_font_family(),
-                appearance.ui_font_heading_3(),
-            )
-            .with_color(theme.active_ui_text_color().into())
-            .with_style(Properties::default().weight(Weight::Bold))
-            .finish();
-
-            // ESC keyboard shortcut badge (matches Figma keyboardBase component)
-            let esc_badge = {
-                let badge_bg = internal_colors::neutral_2(theme);
-                let badge_text = Text::new_inline(
-                    "ESC".to_string(),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_overline(),
-                )
-                .with_color(theme.foreground().into())
-                .finish();
-
-                Container::new(
-                    ConstrainedBox::new(badge_text)
-                        .with_height(ESC_BADGE_HEIGHT)
-                        .finish(),
-                )
-                .with_horizontal_padding(2.)
-                .with_background(badge_bg)
-                .with_corner_radius(CornerRadius::with_all(ESC_BADGE_CORNER_RADIUS))
-                .finish()
-            };
-
-            // X close icon
+            // X close icon — dispatches the wrapping Modal's Close action.
             let close_icon = ConstrainedBox::new(
                 warp_core::ui::Icon::X
                     .to_warpui_icon(theme.sub_text_color(theme.background()))
@@ -362,16 +327,9 @@ impl View for NewWorktreeModal {
             .with_height(CLOSE_ICON_SIZE)
             .finish();
 
-            let close_button = Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(2.)
-                .with_child(close_icon)
-                .with_child(esc_badge)
-                .finish();
-
-            let close_hoverable = warpui::elements::Hoverable::new(
+            let close = warpui::elements::Hoverable::new(
                 self.close_button_mouse_state.clone(),
-                move |_state| close_button,
+                move |_state| close_icon,
             )
             .on_click(|ctx, _, _| {
                 ctx.dispatch_typed_action(ModalAction::Close);
@@ -379,15 +337,12 @@ impl View for NewWorktreeModal {
             .with_cursor(Cursor::PointingHand)
             .finish();
 
-            Container::new(
-                Flex::row()
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(Shrinkable::new(1., title).finish())
-                    .with_child(close_hoverable)
-                    .finish(),
-            )
+            Container::new(modal_frame::modal_header(
+                "New worktree",
+                None,
+                close,
+                appearance,
+            ))
             .with_padding(
                 Padding::uniform(0.)
                     .with_top(HEADER_PADDING_TOP)

@@ -941,8 +941,13 @@ impl View for EnumCreationDialog {
                         )
                         .finish(),
                 )
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-                .with_border(Border::all(2.).with_border_fill(appearance.theme().surface_2()))
+                // Shared modal geometry (one radius, one hairline border) — the
+                // enum shell sits inside the workflow modal's blur veil, so it
+                // aligns the card tokens without its own scrim/shadow.
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                    crate::ui_components::modal_frame::MODAL_RADIUS,
+                )))
+                .with_border(Border::all(1.).with_border_fill(appearance.theme().surface_2()))
                 .with_background(appearance.theme().surface_1())
                 .finish(),
             )
