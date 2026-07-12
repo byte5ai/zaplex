@@ -66,6 +66,12 @@ cockpit-flow-triage = Issue triagieren (freieste)
 cockpit-spawn-card-new-agent = Neuer Agent…
 cockpit-conductor-add-host = Host hinzufügen
 cockpit-host-no-agents = keine Agents
+cockpit-conductor-rest-show-both = { $running } laufend · { $idle } ruhend — zeigen
+cockpit-conductor-rest-show-running = { $running } laufend — zeigen
+cockpit-conductor-rest-show-idle = { $idle } ruhend — zeigen
+cockpit-conductor-rest-hide-both = { $running } laufend · { $idle } ruhend — verbergen
+cockpit-conductor-rest-hide-running = { $running } laufend — verbergen
+cockpit-conductor-rest-hide-idle = { $idle } ruhend — verbergen
 
 # Spawn-Card („Neuer Agent")
 cockpit-spawn-card-title = Neuer Agent

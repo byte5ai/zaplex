@@ -28,7 +28,7 @@ use warpui::elements::{
 };
 use warpui::platform::Cursor;
 use warpui::Action;
-use zaplex_cockpit::{HeatLevel, SessionState};
+use zaplex_cockpit::{HeatLevel, Provider, SessionState};
 
 use crate::ui_components::icons;
 
@@ -155,6 +155,19 @@ pub fn contrast_ratio(a: ColorU, b: ColorU) -> f64 {
     let (la, lb) = (relative_luminance(a), relative_luminance(b));
     let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
     (hi + 0.05) / (lo + 0.05)
+}
+
+/// The leading **provider icon** for a session / account row (spec §2.3, §2.5:
+/// the provider icon leads). The icon font carries no brand marks, so this maps
+/// each provider to the closest distinct monochrome glyph — a generic assistant
+/// for Claude, the code glyph for Codex — enough to tell the two apart at a
+/// glance without a fabricated logo. Rendered muted (it identifies, it doesn't
+/// shout).
+pub fn provider_icon(provider: Provider) -> icons::Icon {
+    match provider {
+        Provider::Claude => icons::Icon::AiAssistant,
+        Provider::Codex => icons::Icon::Code2,
+    }
 }
 
 /// The status-dot color for a session state on the given surface (spec §2.3:

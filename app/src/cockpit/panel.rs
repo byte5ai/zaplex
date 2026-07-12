@@ -18,21 +18,18 @@ use warpui::platform::Cursor;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 use zaplex_cockpit::{
     fleet_is_large, format_cost, format_reset, format_tokens, heat_fill,
-    heat_pct_label_with_provenance, host_auto_collapsed, host_key, host_summary, session_glyph,
-    AccountUsage, Favorite, FavoriteKind, FleetTree, HeatLevel, SessionSnapshot, SessionState,
-    UsageProvenance,
+    heat_pct_label_with_provenance, host_auto_collapsed, host_ident, host_key, host_summary,
+    session_glyph, AccountUsage, Favorite, FavoriteKind, FleetTree, HeatLevel, HostNode,
+    SessionSnapshot, SessionState, UsageProvenance,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button, GLYPH_COL_WIDTH,
+    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button, provider_icon, status_dot_coloru,
+    zone_card, GLYPH_COL_WIDTH, METRIC_COL_WIDTH,
 };
 use crate::ui_components::icons;
 use crate::WorkspaceAction;
-
-/// Max session rows shown per host in the compact sidebar before an overflow
-/// line — the sidebar is glanceable, the roomy pane is the full view.
-const SIDEBAR_MAX_ROWS_PER_HOST: usize = 6;
 
 const CARD_PADDING: f32 = 8.0;
 const CARD_SPACING: f32 = 4.0;
@@ -74,6 +71,41 @@ pub struct CockpitPanel {
     conductor_row_star_states: HashMap<String, MouseStateHandle>,
     /// Hover state for the spine's "＋ Add host" root.
     add_host_btn: MouseStateHandle,
+    /// Hover state of each host's "N running · M idle — show" density toggle
+    /// (D1+C2, key = stable host identity `host_ident`). Waiting rows are always
+    /// shown; the calm running/idle rows fold behind this summary until clicked.
+    conductor_host_rest_states: HashMap<String, MouseStateHandle>,
+    /// Which hosts have their non-waiting (running/idle) rows expanded, keyed by
+    /// stable host identity `host_ident`. Absent / `false` = folded behind the
+    /// summary (the calm default); `true` = the user expanded them. Retained
+    /// across the 45s reconcile like the hover maps, so expanding doesn't flicker.
+    expanded_host_rest: HashMap<String, bool>,
+}
+
+/// The branch-first label that identifies a session in the redesigned sidebar
+/// (spec §2.2): the session's own registry name if it has one, else its git
+/// branch, else its linked-worktree name, else the project + cwd basename. The
+/// **model is never** the identity — several parallel Opus agents differ by
+/// worktree/branch, not model.
+fn session_identity_label(session: &SessionSnapshot, project_name: &str) -> String {
+    if !session.name.is_empty() {
+        return session.name.clone();
+    }
+    if let Some(branch) = session.branch.as_deref().filter(|b| !b.is_empty()) {
+        return branch.to_string();
+    }
+    if let Some(worktree) = session.worktree.as_deref().filter(|w| !w.is_empty()) {
+        return worktree.to_string();
+    }
+    let dir = Path::new(&session.cwd)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| session.cwd.clone());
+    if !project_name.is_empty() {
+        format!("{project_name} — {dir}")
+    } else {
+        dir
+    }
 }
 
 impl CockpitPanel {
@@ -102,6 +134,8 @@ impl CockpitPanel {
             conductor_host_manage_states: HashMap::new(),
             conductor_row_star_states: HashMap::new(),
             add_host_btn: MouseStateHandle::default(),
+            conductor_host_rest_states: HashMap::new(),
+            expanded_host_rest: HashMap::new(),
         };
         me.sync_conductor_states(ctx);
         me
@@ -159,6 +193,21 @@ impl CockpitPanel {
             self.conductor_host_states.entry(key.clone()).or_default();
             self.conductor_host_star_states.entry(key.clone()).or_default();
             self.conductor_host_manage_states.entry(key).or_default();
+        }
+        // Per-host density-toggle handles + expand overrides, keyed by the
+        // stable host identity (never the label — two remote daemons can share
+        // one). Drop hosts that vanished so the maps don't grow unbounded.
+        let host_idents: std::collections::HashSet<String> = inv
+            .hosts
+            .iter()
+            .map(|h| host_ident(h.is_local, h.host_id.as_deref()))
+            .collect();
+        self.conductor_host_rest_states
+            .retain(|k, _| host_idents.contains(k));
+        self.expanded_host_rest
+            .retain(|k, _| host_idents.contains(k));
+        for ident in host_idents {
+            self.conductor_host_rest_states.entry(ident).or_default();
         }
     }
 
@@ -349,11 +398,14 @@ impl CockpitPanel {
     }
 
     /// The glanceable **Conductor** for the sidebar: the unified cross-host
-    /// inventory in condensed form, waiting-first, collapsing under scale (calm
-    /// hosts fold to a one-line [`host_summary`] when the fleet is large). Rows
-    /// are clickable — a local session attaches on click via
+    /// inventory as a flat Hosts zone, waiting-first, collapsing under scale two
+    /// ways — a calm host in a large fleet folds to a one-line [`host_summary`]
+    /// (inverse-complexity), and within an open host the calm running/idle rows
+    /// fold behind a per-host summary (D1+C2) while waiting rows always show.
+    /// Each session is one fixed line whose right metric column never shifts.
+    /// Rows are clickable — a session attaches on click via
     /// [`WorkspaceAction::AttachFleetSession`], the same path as the roomy pane
-    /// and the `w`-jump. `None` when the fleet has no live sessions.
+    /// and the `w`-jump. `None` when the inventory has no hosts.
     fn render_conductor(
         &self,
         tree: &FleetTree,
@@ -395,6 +447,8 @@ impl CockpitPanel {
             }
             // Locality from the inventory's explicit marker, not a label match.
             let is_local = host.is_local;
+            // Stable host identity keys the density-fold state (never the label).
+            let ident = host_ident(is_local, host.host_id.as_deref());
             // Label + needs-me badge = the terminal click target (registered
             // hosts); the ★ favorite toggle sits *beside* it, not inside, so the
             // two clicks never collide.
@@ -435,11 +489,14 @@ impl CockpitPanel {
                 }
                 None => label_el,
             };
-            // Compose the header: clickable label (flex) + a ★ favorite toggle for
-            // registered hosts (a host favorite points at the registry node_id).
+            // Compose the header: a leading worst-child status dot (the host
+            // reads amber when any child is waiting, without opening it — spec §3
+            // worst-child inheritance), then the clickable label (flex), then a
+            // ★ favorite toggle for registered hosts (points at the node_id).
             let mut header_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
+                .with_child(Self::host_status_dot(host, appearance))
                 .with_child(Shrinkable::new(1.0, label_el).finish());
             if let Some(node_id) = host.registry_node_id.clone() {
                 if let Some(star_state) = self.conductor_host_star_states.get(&node_id).cloned() {
@@ -473,43 +530,67 @@ impl CockpitPanel {
             }
             col = col.with_child(header_row.with_main_axis_size(MainAxisSize::Max).finish());
 
-            // Sessions across the host's projects, already waiting-first per
-            // project (projects are needs-me-first). Capped for glanceability.
-            let mut shown = 0usize;
-            let total: usize = host.projects.iter().map(|p| p.sessions.len()).sum();
-            'host: for project in &host.projects {
+            // Sessions (D1+C2 density): waiting rows are ALWAYS shown — they are
+            // the attention signal — while the calm running/idle rows fold behind
+            // a one-line summary until the user opens it. Sessions are already
+            // waiting-first within each needs-me-first project, so the waiting
+            // rows lead naturally.
+            let mut waiting: Vec<(&str, &SessionSnapshot)> = Vec::new();
+            let mut rest: Vec<(&str, &SessionSnapshot)> = Vec::new();
+            for project in &host.projects {
                 for session in &project.sessions {
-                    if shown >= SIDEBAR_MAX_ROWS_PER_HOST {
-                        break 'host;
+                    if session.state == SessionState::Waiting {
+                        waiting.push((project.name.as_str(), session));
+                    } else {
+                        rest.push((project.name.as_str(), session));
                     }
-                    shown += 1;
-                    col = col.with_child(
-                        Container::new(self.render_conductor_row(
-                            &host.host,
-                            host.host_id.as_deref(),
-                            &project.name,
-                            session,
-                            is_local,
-                            favorites,
-                            appearance,
-                        ))
-                        .with_padding_left(10.0)
-                        .finish(),
-                    );
                 }
             }
-            if total > shown {
+            for (pname, session) in &waiting {
                 col = col.with_child(
-                    Container::new(Self::text(
-                        format!("… {} more", total - shown),
-                        family,
-                        body,
-                        muted,
+                    Container::new(self.render_conductor_row(
+                        &host.host,
+                        host.host_id.as_deref(),
+                        pname,
+                        session,
+                        is_local,
+                        favorites,
+                        appearance,
                     ))
                     .with_padding_left(10.0)
                     .finish(),
                 );
-            } else if total == 0 {
+            }
+            if !rest.is_empty() {
+                let expanded = self.expanded_host_rest.get(&ident).copied().unwrap_or(false);
+                if expanded {
+                    for (pname, session) in &rest {
+                        col = col.with_child(
+                            Container::new(self.render_conductor_row(
+                                &host.host,
+                                host.host_id.as_deref(),
+                                pname,
+                                session,
+                                is_local,
+                                favorites,
+                                appearance,
+                            ))
+                            .with_padding_left(10.0)
+                            .finish(),
+                        );
+                    }
+                }
+                let running = rest
+                    .iter()
+                    .filter(|(_, s)| matches!(s.state, SessionState::Active | SessionState::Monitor))
+                    .count();
+                let idle = rest.len() - running;
+                col = col.with_child(
+                    Container::new(self.render_rest_toggle(&ident, running, idle, expanded, appearance))
+                        .with_padding_left(10.0)
+                        .finish(),
+                );
+            } else if host.projects.is_empty() {
                 // A registered host with no live agent — shown as a spine root so
                 // it stays navigable/launchable, with a calm hint that it is idle
                 // (build_fleet_tree drops agentless hosts; the registry merge
@@ -557,9 +638,12 @@ impl CockpitPanel {
         Some(col.finish())
     }
 
-    /// One compact Conductor row: `<glyph> <project/name> · <ctx%>`. Local
-    /// sessions attach on click; remote sessions are informational (their agent
-    /// lives on the host — honest, matching the pane and the `w`-jump).
+    /// One fixed Conductor line: `Dot · Branch · [Provider Model ctx%]` with the
+    /// metric cluster in a **fixed-width right column** so it never shifts as the
+    /// branch label grows (spec §2.3). Status is the leading colour dot only.
+    /// The whole line attaches on click (local + remote); the ★ favourite and
+    /// local review verb trail after the metric column, so they never push the
+    /// metrics around. Hover recolors, never re-lays-out (spec §2.7).
     fn render_conductor_row(
         &self,
         host_label: &str,
@@ -574,61 +658,29 @@ impl CockpitPanel {
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
         let main = theme.main_text_color(theme.background()).into_solid();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
 
-        let glyph_color = match session.state {
-            SessionState::Waiting => heat_coloru(HeatLevel::Critical),
-            SessionState::Active | SessionState::Monitor => heat_coloru(HeatLevel::Ok),
-            SessionState::Idle => muted,
-        };
-        let dir = Path::new(&session.cwd)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| session.cwd.clone());
-        let label = if !session.name.is_empty() {
-            session.name.clone()
-        } else if !project_name.is_empty() {
-            format!("{project_name} — {dir}")
-        } else {
-            dir
-        };
-        // A readable label for a session favorite (the row label is consumed by
-        // the info span below, so clone it before that).
+        // Identity = branch / worktree, never the model (spec §2.2).
+        let label = session_identity_label(session, project_name);
         let fav_label = label.clone();
 
-        let mut row = Flex::row()
+        // The glance line: colour dot · branch (flex) · fixed metric column.
+        let glance = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0)
             .with_child(glyph_cell(
                 session_glyph(session.state),
-                glyph_color,
+                status_dot_coloru(session.state, appearance),
                 appearance,
             ))
-            .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish());
-        // Always-visible model·effort·context (step 8), compact for the sidebar:
-        // the "Opus·High" label in accent, then the colored context-fill %.
-        let effort = crate::cockpit::session_effort(session, is_local, host_id);
-        let attrs = zaplex_cockpit::session_attrs(
-            &session.model,
-            effort.as_deref(),
-            session.ctx_tokens,
-            session.state,
-        );
-        if !attrs.model_effort.is_empty() {
-            let accent = theme.accent().into_solid();
-            row = row.with_child(Self::text(attrs.model_effort, family, body, accent));
-        }
-        if let Some(pct) = attrs.ctx_pct {
-            row = row.with_child(ctx_pct_element(pct, attrs.ctx_fill, false, appearance));
-        }
-        let info = row.with_main_axis_size(MainAxisSize::Max).finish();
+            .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish())
+            .with_child(self.metric_column(session, is_local, host_id, appearance))
+            .with_main_axis_size(MainAxisSize::Max)
+            .finish();
 
-        // Attach on click of the info span — for BOTH local and remote sessions
-        // now that remote in-place adopt is wired (`attach_fleet_session` resumes
-        // a remote session on its host). The compact "review" verb (step 6)
-        // stays local-only (remote review isn't wired) and sits alongside.
+        // The whole glance line attaches on click — BOTH local and remote (remote
+        // in-place adopt is wired via `attach_fleet_session`).
         let key = host_key(is_local, host_id, &session.session_id);
-        let (info_el, review) = match self.conductor_row_states.get(&key).cloned() {
+        let glance_el = match self.conductor_row_states.get(&key).cloned() {
             Some(state) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
@@ -636,40 +688,35 @@ impl CockpitPanel {
                     session_id: session.session_id.clone(),
                     is_local,
                 };
-                let attach = Hoverable::new(state, move |_mouse| info)
+                Hoverable::new(state, move |_mouse| glance)
                     .with_cursor(Cursor::PointingHand)
                     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                    .finish();
-                let review = if is_local {
-                    self.conductor_review_states.get(&key).cloned().map(|st| {
-                        let action = WorkspaceAction::ReviewSession {
-                            project_root: PathBuf::from(&session.project_root),
-                            project_name: session.project_name.clone(),
-                        };
-                        // Icon-pass (#107): the review verb is now the Eye icon,
-                        // matching the adjacent favorite ★ icon on this row
-                        // (previously a lone text glyph beside an icon).
-                        let theme = appearance.theme();
-                        icon_verb_button(
-                            st,
-                            icons::Icon::Eye,
-                            theme.sub_text_color(theme.background()),
-                            theme.accent(),
-                            action,
-                        )
-                    })
-                } else {
-                    None
-                };
-                (attach, review)
+                    .finish()
             }
-            None => (info, None),
+            None => glance,
         };
 
-        // ★ favorite toggle for this session (design §10), beside the review verb.
-        // The favorite target is the host-scoped `host_key` (not the bare
-        // session id): session ids are unique only within a host, so two daemons
-        // could share one and a bare id would attach to the wrong host.
+        // Trailing curation/review affordances (always present, colour-only
+        // hover): the local review verb (Eye) + the ★ favourite (design §10).
+        // The favourite target is the host-scoped `host_key` — session ids are
+        // unique only within a host, so a bare id could favourite the wrong host.
+        let review = is_local
+            .then(|| {
+                self.conductor_review_states.get(&key).cloned().map(|st| {
+                    let action = WorkspaceAction::ReviewSession {
+                        project_root: PathBuf::from(&session.project_root),
+                        project_name: session.project_name.clone(),
+                    };
+                    icon_verb_button(
+                        st,
+                        icons::Icon::Eye,
+                        theme.sub_text_color(theme.background()),
+                        theme.accent(),
+                        action,
+                    )
+                })
+            })
+            .flatten();
         let star = self.conductor_row_star_states.get(&key).cloned().map(|st| {
             let is_fav = favorites
                 .iter()
@@ -683,12 +730,12 @@ impl CockpitPanel {
         });
 
         if review.is_none() && star.is_none() {
-            return info_el;
+            return glance_el;
         }
         let mut trailing = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(8.0)
-            .with_child(Shrinkable::new(1.0, info_el).finish());
+            .with_child(Shrinkable::new(1.0, glance_el).finish());
         if let Some(review) = review {
             trailing = trailing.with_child(review);
         }
@@ -696,6 +743,131 @@ impl CockpitPanel {
             trailing = trailing.with_child(star);
         }
         trailing.with_main_axis_size(MainAxisSize::Max).finish()
+    }
+
+    /// The fixed-width **right metric column** of a session line:
+    /// `[provider-icon] Model·effort ctx%`, right-aligned inside a constant-width
+    /// box so the metrics never move horizontally as the branch label changes
+    /// (spec §2.3 — the horizontal-jump defect the owner vetoed). The provider
+    /// icon leads (spec §2.3), muted; model rests in accent; ctx% is heat-colored.
+    fn metric_column(
+        &self,
+        session: &SessionSnapshot,
+        is_local: bool,
+        host_id: Option<&str>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let accent = theme.accent().into_solid();
+        let muted = theme.sub_text_color(theme.background());
+
+        let effort = crate::cockpit::session_effort(session, is_local, host_id);
+        let attrs = zaplex_cockpit::session_attrs(
+            &session.model,
+            effort.as_deref(),
+            session.ctx_tokens,
+            session.state,
+        );
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_spacing(5.0)
+            .with_child(
+                ConstrainedBox::new(
+                    provider_icon(session.provider)
+                        .to_warpui_icon(muted)
+                        .finish(),
+                )
+                .with_width(GLYPH_COL_WIDTH)
+                .with_height(GLYPH_COL_WIDTH)
+                .finish(),
+            );
+        if !attrs.model_effort.is_empty() {
+            row = row.with_child(Self::text(attrs.model_effort, family, body, accent));
+        }
+        if let Some(pct) = attrs.ctx_pct {
+            row = row.with_child(ctx_pct_element(pct, attrs.ctx_fill, false, appearance));
+        }
+        ConstrainedBox::new(row.with_main_axis_size(MainAxisSize::Max).finish())
+            .with_width(METRIC_COL_WIDTH)
+            .finish()
+    }
+
+    /// The leading worst-child status dot for a host header: waiting if any child
+    /// waits (the whole host reads amber), else working if any child works, else
+    /// idle — so attention bubbles up without opening the host (spec §3).
+    fn host_status_dot(host: &HostNode, appearance: &Appearance) -> Box<dyn Element> {
+        let state = if host.needs_me > 0 {
+            SessionState::Waiting
+        } else if host
+            .projects
+            .iter()
+            .flat_map(|p| &p.sessions)
+            .any(|s| matches!(s.state, SessionState::Active | SessionState::Monitor))
+        {
+            SessionState::Active
+        } else {
+            SessionState::Idle
+        };
+        glyph_cell(
+            session_glyph(state),
+            status_dot_coloru(state, appearance),
+            appearance,
+        )
+    }
+
+    /// The per-host density toggle (D1+C2): a calm one-line summary of the folded
+    /// running/idle rows that expands/collapses them on click. Muted at rest,
+    /// accent on hover (colour only — the list doesn't jump).
+    fn render_rest_toggle(
+        &self,
+        ident: &str,
+        running: usize,
+        idle: usize,
+        expanded: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let theme = appearance.theme();
+        let rest = theme.sub_text_color(theme.background());
+        let accent = theme.accent();
+        // Pick the message by which parts are non-zero so the summary never
+        // reads a hollow "· 0 idle" (Idle sessions aren't surfaced yet, so idle
+        // is usually 0). `rest` is never empty here, so at least one part is > 0.
+        let r = running as i64;
+        let i = idle as i64;
+        let label = match (running > 0, idle > 0, expanded) {
+            (true, true, false) => {
+                crate::t!("cockpit-conductor-rest-show-both", running = r, idle = i)
+            }
+            (true, false, false) => crate::t!("cockpit-conductor-rest-show-running", running = r),
+            (false, _, false) => crate::t!("cockpit-conductor-rest-show-idle", idle = i),
+            (true, true, true) => {
+                crate::t!("cockpit-conductor-rest-hide-both", running = r, idle = i)
+            }
+            (true, false, true) => crate::t!("cockpit-conductor-rest-hide-running", running = r),
+            (false, _, true) => crate::t!("cockpit-conductor-rest-hide-idle", idle = i),
+        };
+        let handle = self
+            .conductor_host_rest_states
+            .get(ident)
+            .cloned()
+            .unwrap_or_default();
+        let ident_owned = ident.to_string();
+        Hoverable::new(handle, move |mouse| {
+            let color = if mouse.is_hovered() { accent } else { rest };
+            Text::new_inline(label.clone(), family, body)
+                .with_color(color.into_solid())
+                .finish()
+        })
+        .with_cursor(warpui::platform::Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(CockpitPanelAction::ToggleHostRest(ident_owned.clone()))
+        })
+        .finish()
     }
 
     /// The ★ favorite toggle for a Conductor tree node (design §10), rendered in
@@ -809,35 +981,23 @@ impl View for CockpitPanel {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min);
 
-        // Account header (usage/cost) — only when there are AI accounts.
-        if !snapshot.accounts.is_empty() {
-            let cost5h: f64 = snapshot.accounts.iter().map(|a| a.block5h.cost_usd).sum();
-            let cost_wk: f64 = snapshot.accounts.iter().map(|a| a.week.cost_usd).sum();
-            cards = cards.with_child(
-                Container::new(self.render_header(
-                    snapshot.accounts.len(),
-                    cost5h,
-                    cost_wk,
-                    appearance,
-                ))
-                .with_margin_bottom(CARD_SPACING * 2.0)
-                .finish(),
-            );
-        }
-
-        // The Conductor spine LEADS the panel (design §10) and is rendered
-        // whenever the inventory has hosts — crucially even with **no** AI
-        // account, so registered SSH hosts still appear as tree roots (#100).
+        // ── Hosts zone-card (leads, spec §2.1) — the object tree, rendered
+        // whenever the inventory has hosts, crucially even with **no** AI
+        // account so registered SSH hosts still appear as roots (#100). One flat
+        // `surface_1` card, no heavy chrome.
         if let Some(conductor) = self.render_conductor(&inventory, &favorites, appearance) {
             cards = cards.with_child(
-                Container::new(conductor)
+                zone_card(conductor, appearance)
+                    .with_uniform_padding(CARD_PADDING)
                     .with_margin_bottom(CARD_SPACING * 2.0)
                     .finish(),
             );
         }
 
-        // Account cards, or the empty-accounts hint (as a section under the
-        // spine, not the whole panel — hosts stay visible without an account).
+        // ── AI-Accounts section (below the hosts). The account header (fleet
+        // usage) leads it, then one card per account; S4 folds this into its own
+        // zone-card. Empty accounts show a calm hint (as a section under the
+        // hosts, not the whole panel — hosts stay visible without an account).
         if snapshot.accounts.is_empty() {
             cards = cards.with_child(
                 Container::new(Self::text(
@@ -850,6 +1010,18 @@ impl View for CockpitPanel {
                 .finish(),
             );
         } else {
+            let cost5h: f64 = snapshot.accounts.iter().map(|a| a.block5h.cost_usd).sum();
+            let cost_wk: f64 = snapshot.accounts.iter().map(|a| a.week.cost_usd).sum();
+            cards = cards.with_child(
+                Container::new(self.render_header(
+                    snapshot.accounts.len(),
+                    cost5h,
+                    cost_wk,
+                    appearance,
+                ))
+                .with_margin_bottom(CARD_SPACING * 2.0)
+                .finish(),
+            );
             for acct in &snapshot.accounts {
                 cards = cards.with_child(self.render_card(acct, appearance));
             }
@@ -877,9 +1049,13 @@ impl Entity for CockpitPanel {
 }
 
 /// Sidebar actions (routed back into the view by the action system).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum CockpitPanelAction {
     OpenDashboardPane,
+    /// Fold/unfold a host's calm (running/idle) rows in the density view
+    /// (D1+C2), keyed by stable host identity `host_ident`. Waiting rows are
+    /// unaffected — they always stay visible.
+    ToggleHostRest(String),
 }
 
 impl TypedActionView for CockpitPanel {
@@ -889,6 +1065,11 @@ impl TypedActionView for CockpitPanel {
         match action {
             CockpitPanelAction::OpenDashboardPane => {
                 ctx.emit(CockpitPanelEvent::OpenDashboardPane);
+            }
+            CockpitPanelAction::ToggleHostRest(ident) => {
+                let cur = self.expanded_host_rest.get(ident).copied().unwrap_or(false);
+                self.expanded_host_rest.insert(ident.clone(), !cur);
+                ctx.notify();
             }
         }
     }

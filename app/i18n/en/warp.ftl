@@ -3773,6 +3773,12 @@ cockpit-spawn-card-new-agent = New agent…
 cockpit-conductor-title = By project — what needs you
 cockpit-conductor-add-host = Add host
 cockpit-host-no-agents = no agents
+cockpit-conductor-rest-show-both = { $running } running · { $idle } idle — show
+cockpit-conductor-rest-show-running = { $running } running — show
+cockpit-conductor-rest-show-idle = { $idle } idle — show
+cockpit-conductor-rest-hide-both = { $running } running · { $idle } idle — hide
+cockpit-conductor-rest-hide-running = { $running } running — hide
+cockpit-conductor-rest-hide-idle = { $idle } idle — hide
 
 # Spawn card ("New Agent")
 cockpit-spawn-card-title = New agent
