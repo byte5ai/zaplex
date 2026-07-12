@@ -340,6 +340,17 @@ impl SpawnCard {
                 ed.set_buffer_text_with_base_buffer(&prefill, ctx);
             });
         }
+
+        // Invalidate THIS view so the freshly-applied config actually repaints.
+        // Mutating a child view via `ViewHandle::update` does not mark it dirty —
+        // `open_spawn_card` only notifies the WorkspaceView, not the card — so
+        // without this the card kept showing its first cached render built from
+        // `SpawnCardConfig::default()` (both providers `installed=false`), i.e. a
+        // permanent, false "No agent CLI installed" no matter what detection found.
+        // Every interactive mutation in `handle_action` already notifies; this was
+        // the one entry point (external configure) that didn't. (Root cause found
+        // independently by codex + grok.)
+        ctx.notify();
     }
 
     /// Fill the remote-directory field from a directory chosen in the SFTP
