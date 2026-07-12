@@ -251,7 +251,7 @@ impl SpawnCard {
             };
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text(
-                "remote directory (absolute path) — blank = host home",
+                crate::t!("cockpit-spawn-card-remote-dir-placeholder"),
                 ctx,
             );
             editor

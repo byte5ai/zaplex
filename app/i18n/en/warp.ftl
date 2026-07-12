@@ -346,6 +346,18 @@ zap-launch-auto-model-description = We've added a new auto model that picks the 
 hoa-see-whats-new = See what's new
 hoa-finish = Finish
 session-config-get-warping = Get Zapping
+# Tab-config / new-worktree modals (WS2: strings that used to be hard literals)
+session-config-modal-title = Create your first tab config
+session-config-modal-subtitle-with-type = Set up a reusable starting point for your tabs. Pick a repo, choose a session type, and optionally attach a worktree. Use it whenever you want to open a new tab with this setup.
+session-config-modal-subtitle-no-type = Set up a reusable starting point for your tabs. Pick a repo, optionally attach a worktree, and use it whenever you want to open a new tab with this setup.
+new-worktree-title = New worktree
+new-worktree-select-repo = Select repository
+new-worktree-select-branch = Select branch
+new-worktree-autogenerate = Autogenerate worktree branch name
+new-worktree-name-label = Worktree branch name
+new-worktree-name-placeholder = my-feature-branch
+new-worktree-invalid-name = Name can only contain letters, numbers, hyphens, and underscores
+cockpit-spawn-card-remote-dir-placeholder = remote directory (absolute path) — blank = host home
 uri-custom-uri-invalid = Custom URI is invalid.
 context-node-install-nvm = Install nvm
 context-node-install-node = nvm install node

@@ -378,3 +378,20 @@ vertical-tabs-setting-pr-link-requires-gh = Erfordert eine installierte und auth
 vertical-tabs-setting-pr-link = PR-Link
 vertical-tabs-setting-diff-stats = Diff-Statistik
 vertical-tabs-setting-show-details-on-hover = Details beim Überfahren anzeigen
+
+# ── WS2: deutsche Werte für primäre Flächen (bisher harte Literale / EN-Fallback) ──
+# Tab-Config- / New-Worktree-Modals
+session-config-get-warping = Los geht's
+session-config-modal-title = Erstelle deine erste Tab-Konfiguration
+session-config-modal-subtitle-with-type = Richte einen wiederverwendbaren Startpunkt für deine Tabs ein. Wähle ein Repo, einen Session-Typ und optional einen Worktree. Nutze es, wann immer du einen neuen Tab mit diesem Setup öffnen willst.
+session-config-modal-subtitle-no-type = Richte einen wiederverwendbaren Startpunkt für deine Tabs ein. Wähle ein Repo und optional einen Worktree, und nutze es, wann immer du einen neuen Tab mit diesem Setup öffnen willst.
+new-worktree-title = Neuer Worktree
+new-worktree-select-repo = Repository wählen
+new-worktree-select-branch = Branch wählen
+new-worktree-autogenerate = Worktree-Branchname automatisch erzeugen
+new-worktree-name-label = Worktree-Branchname
+new-worktree-name-placeholder = mein-feature-branch
+new-worktree-invalid-name = Name darf nur Buchstaben, Zahlen, Bindestriche und Unterstriche enthalten
+cockpit-spawn-card-remote-dir-placeholder = Remote-Verzeichnis (absoluter Pfad) — leer = Home des Hosts
+# Fehlender DE-Key (EN-Fallback): SSH-Manager „connecting…"
+workspace-left-panel-ssh-manager-connecting = verbinde…

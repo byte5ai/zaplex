@@ -161,20 +161,16 @@ impl SessionConfigModal {
 
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let subtitle_text = if self.show_session_type_row {
-            "Set up a reusable starting point for your tabs. \
-             Pick a repo, choose a session type, and optionally attach a worktree. \
-             Use it whenever you want to open a new tab with this setup."
+            crate::t!("session-config-modal-subtitle-with-type")
         } else {
-            "Set up a reusable starting point for your tabs. \
-             Pick a repo, optionally attach a worktree, and \
-             use it whenever you want to open a new tab with this setup."
+            crate::t!("session-config-modal-subtitle-no-type")
         };
 
         // The one shared modal header (title · subtitle · close ✕). The ✕ now
         // lives in the header row rather than a separately-positioned overlay.
         modal_frame::modal_header(
-            "Create your first tab config",
-            Some(subtitle_text.to_string()),
+            crate::t!("session-config-modal-title"),
+            Some(subtitle_text),
             ChildView::new(&self.close_button).finish(),
             appearance,
         )
