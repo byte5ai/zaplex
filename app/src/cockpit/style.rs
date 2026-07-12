@@ -41,14 +41,12 @@ pub const VERB_SPACING: f32 = 8.0;
 /// wider than the in-cluster spacing so content and controls stay distinct.
 pub const INFO_VERBS_GAP: f32 = 12.0;
 
-/// Corner radius shared by the cockpit's modal cards (Spawn-Karte, inbox).
-pub const MODAL_RADIUS: f32 = 10.0;
-
-/// The one modal scrim behind cockpit modals — a calm dark veil, identical for
-/// the Spawn-Karte and the attention inbox (they previously differed).
-pub fn modal_scrim() -> ColorU {
-    ColorU::new(18, 18, 18, 128)
-}
+// The modal corner radius and scrim are now owned by the app-wide modal
+// contract in [`crate::ui_components::modal_frame`] — the single source shared by
+// cockpit modals, `Modal<T>` and `Dialog` alike. Re-exported here so the
+// cockpit's existing `cockpit::style::{MODAL_RADIUS, modal_scrim}` consumers keep
+// working unchanged.
+pub use crate::ui_components::modal_frame::{modal_scrim, MODAL_RADIUS};
 
 /// Heat band → display color (`ColorU` form of the reference palette in
 /// `zaplex_cockpit::HeatLevel::hex`). The single source for every heat-colored

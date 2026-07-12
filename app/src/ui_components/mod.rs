@@ -11,6 +11,7 @@ pub(crate) mod dialog;
 pub(crate) mod icon_with_status;
 pub(crate) mod item_highlight;
 pub(crate) mod menu_button;
+pub(crate) mod modal_frame;
 pub(crate) mod red_notification_dot;
 pub(crate) mod render_file_search_row;
 pub mod spinner;
