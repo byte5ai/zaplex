@@ -48,7 +48,6 @@ const CONTENT_HORIZONTAL_PADDING: f32 = 24.;
 const HEADER_PADDING_TOP: f32 = 24.;
 /// Header bottom padding (Figma: pb-12).
 const HEADER_PADDING_BOTTOM: f32 = 12.;
-/// Header title font size (Figma: 16px bold).
 /// Bottom padding of the form area above the footer.
 const BODY_BOTTOM_PADDING: f32 = 16.;
 /// Vertical padding of the footer bar.

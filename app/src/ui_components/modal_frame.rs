@@ -117,8 +117,11 @@ pub fn modal_header(
                 .finish(),
         );
     if let Some(sub) = subtitle {
+        // `Text::new` (soft-wrapping) rather than `new_inline`: subtitles can be a
+        // full sentence (e.g. the session-config intro) and must wrap beside the
+        // ✕ instead of clipping.
         text_col.add_child(
-            Text::new_inline(sub, family, MODAL_SUBTITLE_SIZE)
+            Text::new(sub, family, MODAL_SUBTITLE_SIZE)
                 .with_color(muted)
                 .finish(),
         );
@@ -160,12 +163,18 @@ pub fn modal_overlay<A: Action + Clone + 'static>(
     dismiss_on_click: Option<A>,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let mut inner = card;
-    if let Some(action) = dismiss_on_click {
-        inner = Dismiss::new(inner)
+    // Always wrap the card in a `Dismiss` that blocks interaction with the
+    // workspace behind the modal (a stray backdrop click must never reach a
+    // control underneath the open modal). Whether that click also *dismisses* is
+    // the policy knob: read-only modals dispatch their close action; modals with
+    // unsaved input absorb the click and do nothing.
+    let dismiss = Dismiss::new(card).prevent_interaction_with_other_elements();
+    let inner = match dismiss_on_click {
+        Some(action) => dismiss
             .on_dismiss(move |ctx, _app| ctx.dispatch_typed_action(action.clone()))
-            .finish();
-    }
+            .finish(),
+        None => dismiss.on_dismiss(|_ctx, _app| {}).finish(),
+    };
 
     // Stack so the card can read its bounds (keeps it clear of the window's
     // traffic lights), then center it and lay the scrim behind everything.

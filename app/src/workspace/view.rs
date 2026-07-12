@@ -2003,8 +2003,8 @@ impl Workspace {
         });
         let modal = ctx.add_typed_action_view(|ctx| {
             // We intentionally pass `None` for the title so the Modal renders
-            // no built-in header — the body view renders its own header to
-            // match the Figma mock exactly (bold title + X close + ESC badge).
+            // no built-in header — the body view renders its own header via the
+            // shared `modal_frame::modal_header` (title + ✕ close).
             Modal::new(None, body, ctx)
                 .with_modal_style(UiComponentStyles {
                     width: Some(460.),
