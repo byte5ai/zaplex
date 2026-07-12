@@ -108,8 +108,26 @@ attention-inbox remote-row affordance with the sidebar (same object, same gramma
   Spawn-Karte, attention inbox, session_config, new_worktree, params headers + enum
   shell; aligned generic `Modal<T>` tokens. Reviewed read-only by codex + grok (no
   blockers; both should-fix items applied). Branch `rc/master-plan`, all commits green.
-- [ ] WS2 i18n (rule+guard, primary German, bulk tail)
-- [ ] WS3 icon pass
-- [ ] WS4 sidebar redesign
-- [ ] WS5 nonfunctional/unsafe removal
+- [ ] WS2 i18n (rule+guard, primary German, bulk tail) — NOT STARTED. Full worklist
+  scoped (primary-surface literals in `cockpit/panel.rs`, `cockpit/settings.rs`, the
+  migrated dialogs, `git_dialog/*`, `ai_page.rs`, `native_modal.rs`; missing DE key
+  `workspace-left-panel-ssh-manager-connecting`; EN 3233 vs DE 333 keys). Deferred
+  intentionally rather than half-done (a partly-translated locale is more incoherent
+  than a cleanly-scoped not-yet-started one).
+- [x] WS3 icon pass — `⚡ ◈ ◇ ⑂` → `icons::*` (Eye/History/GitBranch/Lightning) via the
+  new `icon_word_verb` helper; stripped glyphs from `warp.ftl` (en+de) + doc comments.
+  Status vocab `● ✋ ◦` kept. Acceptance `rg '⚡|◈|◇|⑂' app/src` → 0. codex-reviewed, green.
+- [ ] WS4 sidebar redesign — NOT STARTED. Blocked on two things: (a) the lost
+  `2026-07-11-cockpit-sidebar-redesign.md` spec must be re-established in the tree
+  (WS4's opening step), and (b) per the owner's standing rule, a UI/UX redesign of this
+  size needs the design concept + explicit approval **before** code. Recommend: re-draft
+  the spec, get sign-off, then build.
+- [~] WS5 nonfunctional/unsafe removal — PARTIAL. Fixed the one Class-A **safety** item:
+  the reachable `unimplemented!()` panic in `cockpit/pane.rs` → no-op. The remaining
+  items are non-crashing and need runtime verification to fix safely (better done against
+  the RC DMG): MCP Delete/Logs/Run are log-only *defensive* arms whose button visibility
+  is status-derived (gating needs runtime confirmation of what's actually offered per
+  item type); the attention-inbox remote-row ↔ sidebar reconcile is feature wiring; the
+  cockpit-off blind `AddSpecificAgentTab` (C4) is an intentional, documented fallback
+  (Class B).
 - [ ] Verification: one RC DMG, devhost acceptance
