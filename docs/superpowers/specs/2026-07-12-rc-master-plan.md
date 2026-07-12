@@ -103,7 +103,11 @@ attention-inbox remote-row affordance with the sidebar (same object, same gramma
 - Runtime-accepted on a single RC DMG (About shows the RC build id).
 
 ## 6. Progress ledger
-- [ ] WS1 modal contract + migrations
+- [x] WS1 modal contract + migrations — `ui_components/modal_frame.rs` (one scrim /
+  radius 10 / width band / padding / header / close ✕ / dismiss policy); migrated
+  Spawn-Karte, attention inbox, session_config, new_worktree, params headers + enum
+  shell; aligned generic `Modal<T>` tokens. Reviewed read-only by codex + grok (no
+  blockers; both should-fix items applied). Branch `rc/master-plan`, all commits green.
 - [ ] WS2 i18n (rule+guard, primary German, bulk tail)
 - [ ] WS3 icon pass
 - [ ] WS4 sidebar redesign
