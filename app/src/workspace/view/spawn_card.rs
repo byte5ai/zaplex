@@ -543,25 +543,25 @@ impl SpawnCard {
     /// `self.project` (the folder-picker result), unchanged.
     fn summary(&self, app: &AppContext) -> String {
         let account = match self.host {
-            HostChoice::Remote(_) => "host account".to_string(),
+            HostChoice::Remote(_) => crate::t!("cockpit-spawn-card-sum-host-account"),
             HostChoice::Local => match self.account {
-                AccountChoice::Freest => "freest".to_string(),
+                AccountChoice::Freest => crate::t!("cockpit-spawn-card-sum-freest"),
                 AccountChoice::Specific(i) => self
                     .provider_options()
                     .accounts
                     .get(i)
                     .map(|a| a.label.clone())
-                    .unwrap_or_else(|| "freest".to_string()),
+                    .unwrap_or_else(|| crate::t!("cockpit-spawn-card-sum-freest")),
             },
         };
         let host = match self.host {
-            HostChoice::Local => "local".to_string(),
+            HostChoice::Local => crate::t!("cockpit-spawn-card-sum-local"),
             HostChoice::Remote(i) => self
                 .cfg
                 .hosts
                 .get(i)
                 .map(|h| h.name.clone())
-                .unwrap_or_else(|| "remote".to_string()),
+                .unwrap_or_else(|| crate::t!("cockpit-spawn-card-sum-remote")),
         };
         // Directory is always part of the summary — a first-class launch
         // attribute, never omitted (Codex gate: "dir is steering"). An unset dir
@@ -577,12 +577,15 @@ impl SpawnCard {
                 .unwrap_or_default();
             match remote_cwd_from_input(self.host, &raw) {
                 Some(path) => path.display().to_string(),
-                None => format!("{} home", self.remote_host_name().unwrap_or("host")),
+                None => crate::t!(
+                    "cockpit-spawn-card-sum-host-home",
+                    host = self.remote_host_name().unwrap_or("host")
+                ),
             }
         } else {
             match &self.project {
                 Some(dir) => dir.display().to_string(),
-                None => "default (home)".to_string(),
+                None => crate::t!("cockpit-spawn-card-sum-default"),
             }
         };
         format!(
@@ -637,21 +640,38 @@ impl SpawnCard {
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
 
-        let title = FormattedTextElement::from_str("New Agent", family, 20.)
+        let title = FormattedTextElement::from_str(crate::t_static!("cockpit-spawn-card-title"), family, 20.)
             .with_color(main)
             .with_weight(Weight::Bold)
             .finish();
-        let subtitle = Text::new_inline(
-            "Pick exactly what starts — model and thinking-effort are the launch.",
-            family,
-            12.,
+        let subtitle = Text::new_inline(crate::t!("cockpit-spawn-card-subtitle"), family, 12.)
+            .with_color(muted)
+            .finish();
+
+        // Explicit ✕ close in the top-right corner — the obvious, standard way to
+        // dismiss the dialog with the mouse (Cancel and Escape still work too).
+        let close_btn = Hoverable::new(self.chip_handle("__spawn_card_close"), move |mouse| {
+            let color = if mouse.is_hovered() { main } else { muted };
+            crate::ui_components::icons::Icon::X.to_warpui_icon(color).finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(SpawnCardAction::Close))
+        .finish();
+        let header = ConstrainedBox::new(
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(title)
+                .with_child(close_btn)
+                .finish(),
         )
-        .with_color(muted)
+        .with_width(MODAL_WIDTH - 48.)
         .finish();
 
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(Container::new(title).with_margin_bottom(4.).finish())
+            .with_child(Container::new(header).with_margin_bottom(4.).finish())
             .with_child(Container::new(subtitle).with_margin_bottom(18.).finish());
 
         // Agent row (only installed providers).
@@ -661,15 +681,11 @@ impl SpawnCard {
             // so show a calm install prompt instead of a phantom, unlaunchable
             // chip (Confirm is disabled below for the same reason).
             col = col.with_child(self.row(
-                "Agent",
+                &crate::t!("cockpit-spawn-card-agent"),
                 vec![Container::new(
-                    Text::new_inline(
-                        "No agent CLI installed — install Claude Code or Codex".to_string(),
-                        family,
-                        12.,
-                    )
-                    .with_color(muted)
-                    .finish(),
+                    Text::new_inline(crate::t!("cockpit-spawn-card-no-cli"), family, 12.)
+                        .with_color(muted)
+                        .finish(),
                 )
                 .finish()],
                 appearance,
@@ -687,7 +703,7 @@ impl SpawnCard {
                     )
                 })
                 .collect();
-            col = col.with_child(self.row("Agent", agent_chips, appearance));
+            col = col.with_child(self.row(&crate::t!("cockpit-spawn-card-agent"), agent_chips, appearance));
         }
 
         // Model row + a live context-window readout.
@@ -712,13 +728,13 @@ impl SpawnCard {
             .with_margin_left(8.)
             .finish(),
         );
-        col = col.with_child(self.row("Model", model_chips, appearance));
+        col = col.with_child(self.row(&crate::t!("cockpit-spawn-card-model"), model_chips, appearance));
 
         // Effort row.
-        let effort_note = if matches!(self.agent, CLIAgent::Claude) {
-            " (tracked)"
+        let effort_label = if matches!(self.agent, CLIAgent::Claude) {
+            crate::t!("cockpit-spawn-card-effort-tracked")
         } else {
-            ""
+            crate::t!("cockpit-spawn-card-effort")
         };
         let effort_chips: Vec<Box<dyn Element>> = EFFORTS
             .iter()
@@ -732,7 +748,7 @@ impl SpawnCard {
                 )
             })
             .collect();
-        col = col.with_child(self.row(&format!("Effort{effort_note}"), effort_chips, appearance));
+        col = col.with_child(self.row(&effort_label, effort_chips, appearance));
 
         // Account row — freest + explicit accounts, unless a remote host owns it.
         // On a remote host there is no local account routing: the agent runs under
@@ -741,10 +757,10 @@ impl SpawnCard {
         if matches!(self.host, HostChoice::Remote(_)) {
             let host = self.remote_host_name().unwrap_or("the host");
             col = col.with_child(self.row(
-                "Account",
+                &crate::t!("cockpit-spawn-card-account"),
                 vec![Container::new(
                     Text::new_inline(
-                        format!("Runs under {host}'s own CLI login (no local account routing)"),
+                        crate::t!("cockpit-spawn-card-remote-login", host = host),
                         family,
                         12.,
                     )
@@ -760,8 +776,8 @@ impl SpawnCard {
             let freest_label = opts
                 .freest_label
                 .clone()
-                .map(|l| format!("⚡ Freest — {l}"))
-                .unwrap_or_else(|| "⚡ Freest".to_string());
+                .map(|l| crate::t!("cockpit-spawn-card-freest-named", label = l))
+                .unwrap_or_else(|| crate::t!("cockpit-spawn-card-freest"));
             acct_chips.push(self.chip(
                 "acct-freest",
                 freest_label,
@@ -778,13 +794,13 @@ impl SpawnCard {
                     appearance,
                 ));
             }
-            col = col.with_child(self.row("Account", acct_chips, appearance));
+            col = col.with_child(self.row(&crate::t!("cockpit-spawn-card-account"), acct_chips, appearance));
         }
 
         // Host row — local + connected SSH hosts.
         let mut host_chips = vec![self.chip(
             "host-local",
-            "Local".to_string(),
+            crate::t!("cockpit-spawn-card-host-local"),
             self.host == HostChoice::Local,
             SpawnCardAction::SetHostLocal,
             appearance,
@@ -798,7 +814,7 @@ impl SpawnCard {
                 appearance,
             ));
         }
-        col = col.with_child(self.row("Host", host_chips, appearance));
+        col = col.with_child(self.row(&crate::t!("cockpit-spawn-card-host"), host_chips, appearance));
 
         // Directory row — the launch dir as an *explicit* choice (Codex #2), not
         // a blind default. Local: a native folder picker, plus a reset to the
@@ -813,11 +829,11 @@ impl SpawnCard {
             // remote launch dir is a typed text input (an absolute path on the
             // host; blank = the host's home). The row heading names the host so
             // it is unambiguous which filesystem the path targets.
-            let label = format!("Directory (on {host})");
+            let label = crate::t!("cockpit-spawn-card-directory-on", host = host);
             let input = self.render_remote_dir_input(appearance).unwrap_or_else(|| {
                 // Fallback for the (unit-test-only) case where no editor exists.
                 Container::new(
-                    Text::new_inline(format!("{host} home"), family, 12.)
+                    Text::new_inline(crate::t!("cockpit-spawn-card-dir-host-home", host = host), family, 12.)
                         .with_color(muted)
                         .finish(),
                 )
@@ -828,7 +844,7 @@ impl SpawnCard {
             // (with its MC-style select bar) fills the gap next to the text field.
             let browse = self.chip(
                 "dir-browse",
-                "Browse…".to_string(),
+                crate::t!("cockpit-spawn-card-browse"),
                 false,
                 SpawnCardAction::BrowseRemoteDir,
                 appearance,
@@ -839,7 +855,7 @@ impl SpawnCard {
                 "dir-pick",
                 dir_display
                     .clone()
-                    .unwrap_or_else(|| "Choose folder…".to_string()),
+                    .unwrap_or_else(|| crate::t!("cockpit-spawn-card-choose-folder")),
                 dir_display.is_some(),
                 SpawnCardAction::OpenDirectoryPicker,
                 appearance,
@@ -847,19 +863,19 @@ impl SpawnCard {
             if dir_display.is_some() {
                 dir_chips.push(self.chip(
                     "dir-default",
-                    "Default (home)".to_string(),
+                    crate::t!("cockpit-spawn-card-dir-default"),
                     false,
                     SpawnCardAction::ClearDirectory,
                     appearance,
                 ));
             }
-            col = col.with_child(self.row("Directory", dir_chips, appearance));
+            col = col.with_child(self.row(&crate::t!("cockpit-spawn-card-directory"), dir_chips, appearance));
         }
 
         // Summary line.
         col = col.with_child(
             Container::new(
-                Text::new_inline(format!("Launching: {}", self.summary(app)), family, 12.)
+                Text::new_inline(crate::t!("cockpit-spawn-card-launching", summary = self.summary(app)), family, 12.)
                     .with_color(muted)
                     .finish(),
             )
@@ -873,14 +889,14 @@ impl SpawnCard {
         let confirm: Box<dyn Element> = if can_launch {
             self.chip(
                 "confirm",
-                format!("Launch {}", self.agent.display_name()),
+                crate::t!("cockpit-spawn-card-launch", agent = self.agent.display_name()),
                 true,
                 SpawnCardAction::Confirm,
                 appearance,
             )
         } else {
             Container::new(
-                Text::new_inline("Launch".to_string(), family, 13.)
+                Text::new_inline(crate::t!("cockpit-spawn-card-launch-plain"), family, 13.)
                     .with_color(muted)
                     .finish(),
             )
@@ -892,7 +908,7 @@ impl SpawnCard {
         };
         let cancel = self.chip(
             "cancel",
-            "Cancel".to_string(),
+            crate::t!("cockpit-spawn-card-cancel"),
             false,
             SpawnCardAction::Close,
             appearance,
@@ -925,8 +941,15 @@ impl View for SpawnCard {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        let card = ConstrainedBox::new(self.render_card(app))
+        let card_body = ConstrainedBox::new(self.render_card(app))
             .with_width(MODAL_WIDTH)
+            .finish();
+
+        // Wrap the card so ANY click on it (including empty padding between chips)
+        // counts as "handled by a child" — the backdrop below then defers and does
+        // NOT dismiss. Without this, clicking the card's padding would close it.
+        let card = Hoverable::new(self.chip_handle("__spawn_card_body"), move |_| card_body)
+            .on_click(|_, _, _| {})
             .finish();
 
         let mut stack = Stack::new();
@@ -940,7 +963,7 @@ impl View for SpawnCard {
             ),
         );
 
-        Container::new(
+        let veil = Container::new(
             Align::new(
                 Flex::column()
                     .with_main_axis_size(MainAxisSize::Max)
@@ -951,7 +974,16 @@ impl View for SpawnCard {
         )
         // The one cockpit modal scrim — identical veil behind card and inbox.
         .with_background_color(modal_scrim())
-        .finish()
+        .finish();
+
+        // Click-outside-to-dismiss: clicking the backdrop closes the card, the
+        // mouse equivalent of Escape/Cancel. `with_defer_events_to_children` makes
+        // this fire ONLY when the click was not already handled by the card body
+        // above, so clicks on the card never dismiss it.
+        Hoverable::new(self.chip_handle("__spawn_card_backdrop"), move |_| veil)
+            .on_click(|ctx, _, _| ctx.dispatch_typed_action(SpawnCardAction::Close))
+            .with_defer_events_to_children()
+            .finish()
     }
 }
 

@@ -513,7 +513,7 @@ impl CockpitPanel {
                 // re-adds them, see CockpitModel).
                 col = col.with_child(
                     Container::new(Self::text(
-                        "no agents".to_string(),
+                        crate::t!("cockpit-host-no-agents"),
                         family,
                         body,
                         muted,
