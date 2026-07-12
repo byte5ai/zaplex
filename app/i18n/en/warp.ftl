@@ -366,6 +366,41 @@ settings-ai-use-agent-footer-show = Show "Use Agent" footer
 settings-ai-use-agent-footer-hide = Hide "Use Agent" footer
 settings-ai-resets-at = Resets { $time }
 settings-ai-context-window-label = Context window (tokens)
+# Git dialog (commit / push / publish / PR) — WS2
+git-dialog-error-nothing-to-commit = No changes to commit.
+git-dialog-error-identity = Git identity not configured. Set user.name and user.email.
+git-dialog-error-non-fast-forward = Remote has new changes — pull before pushing.
+git-dialog-error-no-remote = No remote configured for this branch.
+git-dialog-error-auth = Authentication failed. Check your Git credentials.
+git-dialog-error-network = Network error. Check your connection.
+git-dialog-error-repo-not-found = Remote repository not found.
+git-dialog-error-gh-missing = GitHub CLI (gh) not installed. See https://cli.github.com/.
+git-dialog-error-gh-unauth = GitHub CLI not authenticated. Run `gh auth login`.
+git-dialog-error-generic = Git operation failed.
+git-dialog-title-commit = Commit your changes
+git-dialog-title-publish = Publish branch
+git-dialog-title-push = Push changes
+git-dialog-title-create-pr = Create pull request
+git-dialog-branch-label = Branch
+git-dialog-changes-label = Changes
+git-dialog-file-count = { $count ->
+        [one] { $count } file
+       *[other] { $count } files
+    }
+git-dialog-committing = Committing…
+git-dialog-commit-and-push = Commit and push
+git-dialog-commit-and-publish = Commit and publish
+git-dialog-enter-commit-message = Enter a commit message
+git-dialog-toast-committed = Changes successfully committed.
+git-dialog-toast-committed-pushed = Changes committed and pushed.
+git-dialog-include-unstaged = Include unstaged
+git-dialog-creating = Creating…
+git-dialog-default-branch = default branch
+git-dialog-publishing = Publishing…
+git-dialog-pushing = Pushing…
+git-dialog-toast-published = Branch successfully published.
+git-dialog-toast-pushed = Changes successfully pushed.
+git-dialog-included-commits = Included commits
 uri-custom-uri-invalid = Custom URI is invalid.
 context-node-install-nvm = Install nvm
 context-node-install-node = nvm install node

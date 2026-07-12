@@ -416,5 +416,40 @@ settings-ai-use-agent-footer-show = „Use Agent"-Leiste anzeigen
 settings-ai-use-agent-footer-hide = „Use Agent"-Leiste ausblenden
 settings-ai-resets-at = Zurücksetzung { $time }
 settings-ai-context-window-label = Kontextfenster (Tokens)
+# Git-Dialog (Commit / Push / Veröffentlichen / PR) — WS2
+git-dialog-error-nothing-to-commit = Keine Änderungen zum Committen.
+git-dialog-error-identity = Git-Identität nicht konfiguriert. Setze user.name und user.email.
+git-dialog-error-non-fast-forward = Remote hat neue Änderungen — erst pullen, dann pushen.
+git-dialog-error-no-remote = Kein Remote für diesen Branch konfiguriert.
+git-dialog-error-auth = Authentifizierung fehlgeschlagen. Prüfe deine Git-Zugangsdaten.
+git-dialog-error-network = Netzwerkfehler. Prüfe deine Verbindung.
+git-dialog-error-repo-not-found = Remote-Repository nicht gefunden.
+git-dialog-error-gh-missing = GitHub-CLI (gh) nicht installiert. Siehe https://cli.github.com/.
+git-dialog-error-gh-unauth = GitHub-CLI nicht authentifiziert. Führe `gh auth login` aus.
+git-dialog-error-generic = Git-Operation fehlgeschlagen.
+git-dialog-title-commit = Änderungen committen
+git-dialog-title-publish = Branch veröffentlichen
+git-dialog-title-push = Änderungen pushen
+git-dialog-title-create-pr = Pull Request erstellen
+git-dialog-branch-label = Branch
+git-dialog-changes-label = Änderungen
+git-dialog-file-count = { $count ->
+        [one] { $count } Datei
+       *[other] { $count } Dateien
+    }
+git-dialog-committing = Committe…
+git-dialog-commit-and-push = Committen und pushen
+git-dialog-commit-and-publish = Committen und veröffentlichen
+git-dialog-enter-commit-message = Commit-Nachricht eingeben
+git-dialog-toast-committed = Änderungen erfolgreich committet.
+git-dialog-toast-committed-pushed = Änderungen committet und gepusht.
+git-dialog-include-unstaged = Ungestagte einbeziehen
+git-dialog-creating = Erstelle…
+git-dialog-default-branch = Default-Branch
+git-dialog-publishing = Veröffentliche…
+git-dialog-pushing = Pushe…
+git-dialog-toast-published = Branch erfolgreich veröffentlicht.
+git-dialog-toast-pushed = Änderungen erfolgreich gepusht.
+git-dialog-included-commits = Enthaltene Commits
 # Fehlender DE-Key (EN-Fallback): SSH-Manager „connecting…"
 workspace-left-panel-ssh-manager-connecting = verbinde…

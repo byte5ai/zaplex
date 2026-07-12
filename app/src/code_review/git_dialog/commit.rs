@@ -95,9 +95,9 @@ pub(super) fn new_state(
     // whether or not the branch already has an upstream — but the label
     // and icon flip to communicate the user-visible difference.
     let (push_label, push_icon) = if has_upstream {
-        ("Commit and push", Icon::ArrowUp)
+        (crate::t!("git-dialog-commit-and-push"), Icon::ArrowUp)
     } else {
-        ("Commit and publish", Icon::UploadCloud)
+        (crate::t!("git-dialog-commit-and-publish"), Icon::UploadCloud)
     };
     // If AI autogen is on, the dialog opens with "Generating\u{2026}" and a
     // background request fills the editor when it resolves. Otherwise, we
@@ -312,10 +312,10 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
         move |_me, result, ctx| {
             match result {
                 Ok(CommitOutcome::Committed) => {
-                    show_toast("Changes successfully committed.", ctx);
+                    show_toast(crate::t!("git-dialog-toast-committed"), ctx);
                 }
                 Ok(CommitOutcome::Pushed) => {
-                    show_toast("Changes committed and pushed.", ctx);
+                    show_toast(crate::t!("git-dialog-toast-committed-pushed"), ctx);
                 }
                 Ok(CommitOutcome::PrCreated(pr)) => {
                     show_pr_created_toast(&pr, ctx);
@@ -432,7 +432,7 @@ fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<d
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
 
     let changes_label = Text::new(
-        "Changes",
+        crate::t!("git-dialog-changes-label"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -440,7 +440,7 @@ fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<d
     .finish();
 
     let include_label = Text::new(
-        "Include unstaged",
+        crate::t!("git-dialog-include-unstaged"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
