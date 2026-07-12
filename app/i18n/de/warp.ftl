@@ -67,6 +67,7 @@ cockpit-flow-pr-review = PR reviewen (freieste)
 cockpit-flow-triage = Issue triagieren (freieste)
 cockpit-spawn-card-new-agent = Neuer Agent…
 cockpit-conductor-add-host = Host hinzufügen
+cockpit-conductor-empty = Noch keine Agents oder Hosts
 cockpit-host-no-agents = keine Agents
 cockpit-conductor-rest-show-both = { $running } laufend · { $idle } ruhend — zeigen
 cockpit-conductor-rest-show-running = { $running } laufend — zeigen

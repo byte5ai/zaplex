@@ -3774,6 +3774,7 @@ cockpit-flow-triage = Triage an issue (freest)
 cockpit-spawn-card-new-agent = New agent…
 cockpit-conductor-title = By project — what needs you
 cockpit-conductor-add-host = Add host
+cockpit-conductor-empty = No agents or hosts yet
 cockpit-host-no-agents = no agents
 cockpit-conductor-rest-show-both = { $running } running · { $idle } idle — show
 cockpit-conductor-rest-show-running = { $running } running — show

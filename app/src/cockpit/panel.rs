@@ -417,16 +417,15 @@ impl CockpitPanel {
     /// Each session is one fixed line whose right metric column never shifts.
     /// Rows are clickable — a session attaches on click via
     /// [`WorkspaceAction::AttachFleetSession`], the same path as the roomy pane
-    /// and the `w`-jump. `None` when the inventory has no hosts.
+    /// and the `w`-jump. Always `Some`: an empty inventory still renders the
+    /// Hosts card (a calm empty-state hint + the "+ Add host" root), so the
+    /// surface guides a fresh user instead of vanishing.
     fn render_conductor(
         &self,
         tree: &FleetTree,
         favorites: &[Favorite],
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        if tree.hosts.is_empty() {
-            return None;
-        }
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
@@ -454,7 +453,15 @@ impl CockpitPanel {
         for host in &tree.hosts {
             // Inverse-complexity: a calm host in a large fleet folds to one line.
             if host_auto_collapsed(host, fleet_large) {
-                col = col.with_child(Self::text(host_summary(host), family, body, muted));
+                // L2 (supaterm): the loudest colour survives every collapse level
+                // — a folded host that needs you still reads amber, so attention
+                // is never hidden by the fold.
+                let color = if host.needs_me > 0 {
+                    status_dot_coloru(SessionState::Waiting, appearance)
+                } else {
+                    muted
+                };
+                col = col.with_child(Self::text(host_summary(host), family, body, color));
                 continue;
             }
             // Locality from the inventory's explicit marker, not a label match.
@@ -618,6 +625,21 @@ impl CockpitPanel {
                     .finish(),
                 );
             }
+        }
+        // Empty state (S6): a fresh sidebar with no live agents and no registered
+        // hosts still shows the Hosts card — a calm hint above the always-present
+        // "+ Add host" root, so the surface guides the user instead of vanishing.
+        if tree.hosts.is_empty() {
+            col = col.with_child(
+                Container::new(Self::text(
+                    crate::t!("cockpit-conductor-empty"),
+                    family,
+                    body,
+                    muted,
+                ))
+                .with_padding_left(10.0)
+                .finish(),
+            );
         }
         // "Add host" root — folds the SSH-manager add function onto the spine
         // (design §10). A Plus icon + label (#107), muted at rest / accent on
