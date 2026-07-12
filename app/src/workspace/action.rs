@@ -731,7 +731,7 @@ pub enum WorkspaceAction {
         /// The literal slash command to prefill (e.g. `/compact`, `/clear`).
         command: String,
     },
-    /// Open a session's conversation transcript (cockpit "◇ log" verb): reads the
+    /// Open a session's conversation transcript (cockpit "log" verb): reads the
     /// session's `.jsonl`, renders it to Markdown, and opens it read-only in a
     /// code/text pane. No regression vs claudeplex/-desktop's transcript view.
     ViewTranscript {
@@ -745,7 +745,7 @@ pub enum WorkspaceAction {
         /// cockpit reconcile re-renders + reloads it. `false` = one-shot open.
         watch: bool,
     },
-    /// Open a session's **review** view (cockpit "◈ review" verb, step 6): read
+    /// Open a session's **review** view (cockpit "review" verb, step 6): read
     /// the working changes of the session's repo (`git diff HEAD` + untracked),
     /// render them to Markdown, and open them read-only in a code/text pane —
     /// the same pane-opening mechanism [`ViewTranscript`] uses. An empty change

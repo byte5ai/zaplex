@@ -61,7 +61,7 @@ pub struct DaemonSessionRequest {
     /// the daemon is already installed.
     pub install_progress_rx: Option<Receiver<String>>,
     /// Human-readable host label (the SSH host name), for in-tab status lines
-    /// ("⚡ persistent session on <host>", reconnect notices).
+    /// ("persistent session on <host>", reconnect notices).
     pub host_label: String,
 }
 

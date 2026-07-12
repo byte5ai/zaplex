@@ -22,7 +22,10 @@
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
-use warpui::elements::{ConstrainedBox, Element, Hoverable, MouseStateHandle, Rect, Text};
+use warpui::elements::{
+    ConstrainedBox, CrossAxisAlignment, Element, Flex, Hoverable, MouseStateHandle, ParentElement,
+    Rect, Text,
+};
 use warpui::platform::Cursor;
 use warpui::Action;
 use zaplex_cockpit::HeatLevel;
@@ -137,6 +140,52 @@ pub fn icon_verb_button<A: Action + Clone>(
         ConstrainedBox::new(icon.to_warpui_icon(color).finish())
             .with_width(GLYPH_COL_WIDTH)
             .with_height(GLYPH_COL_WIDTH)
+            .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+    .finish()
+}
+
+/// An **icon-font** verb with a trailing word — the icon-pass form of a labeled
+/// text verb like the old `review` / `fork` / `log` (#107 icon pass).
+/// A monochrome [`icons::Icon`] followed by `label`, both muted at rest and
+/// `kind`-colored on hover, dispatching `action` on click. Same interaction
+/// contract as [`verb_button`]; the icon sits in the shared glyph column so it
+/// aligns with status dots and the icon-only verbs.
+pub fn icon_word_verb<A: Action + Clone>(
+    state: MouseStateHandle,
+    icon: icons::Icon,
+    label: impl Into<String>,
+    kind: VerbKind,
+    appearance: &Appearance,
+    action: A,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let rest = theme.sub_text_color(theme.background()).into_solid();
+    let hover = match kind {
+        VerbKind::Constructive => theme.accent().into_solid(),
+        VerbKind::Destructive => attention_coloru(),
+    };
+    let family = appearance.ui_font_family();
+    let size = appearance.ui_font_body();
+    let label = label.into();
+    Hoverable::new(state, move |mouse| {
+        let color = if mouse.is_hovered() { hover } else { rest };
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(4.0)
+            .with_child(
+                ConstrainedBox::new(icon.to_warpui_icon(Fill::Solid(color)).finish())
+                    .with_width(GLYPH_COL_WIDTH)
+                    .with_height(GLYPH_COL_WIDTH)
+                    .finish(),
+            )
+            .with_child(
+                Text::new_inline(label.clone(), family, size)
+                    .with_color(color)
+                    .finish(),
+            )
             .finish()
     })
     .with_cursor(Cursor::PointingHand)

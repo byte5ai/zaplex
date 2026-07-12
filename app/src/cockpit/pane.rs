@@ -30,9 +30,10 @@ use zaplex_cockpit::{
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    cluster_divider, ctx_pct_element, glyph_cell, heat_coloru, verb_button, verb_button_colored,
-    VerbKind, INFO_VERBS_GAP, VERB_SPACING,
+    cluster_divider, ctx_pct_element, glyph_cell, heat_coloru, icon_word_verb, verb_button,
+    verb_button_colored, VerbKind, INFO_VERBS_GAP, VERB_SPACING,
 };
+use crate::ui_components::icons;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
@@ -73,16 +74,16 @@ pub struct CockpitPaneView {
     scroll_state: ClippedScrollStateHandle,
     pane_configuration: ModelHandle<PaneConfiguration>,
     focus_handle: Option<PaneFocusHandle>,
-    /// Hover state of each session row's "⑂ fork" action (key = session_id).
+    /// Hover state of each session row's "fork" action (key = session_id).
     /// Synced against the snapshot on every cockpit update so handles persist
     /// across renders (hover needs a stable handle).
     session_fork_states: HashMap<String, MouseStateHandle>,
-    /// Hover state of each session row's "⑂ fork in worktree" action.
+    /// Hover state of each session row's "fork in worktree" action.
     session_forkwt_states: HashMap<String, MouseStateHandle>,
     /// Hover state of each session row's "▸ adopt" action (resume-in-place):
     /// pull an idle CLI session discovered by the cockpit into a live pane.
     session_adopt_states: HashMap<String, MouseStateHandle>,
-    /// Hover state of each session row's "◇ log" action (open transcript).
+    /// Hover state of each session row's "log" action (open transcript).
     session_transcript_states: HashMap<String, MouseStateHandle>,
     /// Whether a session's cwd sits inside a git repo (key = session_id) —
     /// precomputed on cockpit updates so render never touches the filesystem.
@@ -132,7 +133,7 @@ pub struct CockpitPaneView {
     /// — local and remote — since interrupt/kill are cross-host operations.
     conductor_guardrail_states: HashMap<String, MouseStateHandle>,
     /// Hover state of each Conductor session row's model-lever verbs (step 8):
-    /// `⚙ /compact` · `⌫ /clear` · `⑂ fork` · `⑂ +worktree`, keyed
+    /// `⚙ /compact` · `⌫ /clear` · `fork` · `+worktree`, keyed
     /// `"{verb}\0{host_ident}\0{id}"` like the review-loop / guardrail maps. Levers are
     /// local-only (they resume/fork into a local PTY); the compact/clear pair is
     /// Claude-only (Claude Code slash commands).
@@ -380,7 +381,7 @@ impl CockpitPaneView {
         }
     }
 
-    /// One session-row fork action ("⑂ fork" / "⑂ +worktree"): muted, accent
+    /// One session-row fork action ("fork" / "+worktree"): muted, accent
     /// on hover, dispatches [`WorkspaceAction::ForkAgentSession`]. `None` when
     /// the provider has no fork mechanism, or — for the worktree variant —
     /// when the session's cwd is not inside a git repo: disabled-by-absence,
@@ -428,8 +429,9 @@ impl CockpitPaneView {
             config_dir: (!acct.account.is_default).then(|| acct.account.config_dir.clone()),
             into_worktree,
         };
-        Some(verb_button(
+        Some(icon_word_verb(
             state,
+            icons::Icon::GitBranch,
             label.to_string(),
             VerbKind::Constructive,
             appearance,
@@ -474,7 +476,7 @@ impl CockpitPaneView {
         ))
     }
 
-    /// One session-row "◇ log" action: open the session's conversation
+    /// One session-row "log" action: open the session's conversation
     /// transcript in a code/text pane (no regression vs claudeplex's transcript
     /// view). Claude-only — transcripts live under a Claude account's
     /// `projects/…/<id>.jsonl`; Codex has no equivalent here, so it gets no
@@ -501,8 +503,9 @@ impl CockpitPaneView {
             // reconcile (claudeplex-desktop watch parity).
             watch: true,
         };
-        Some(verb_button(
+        Some(icon_word_verb(
             state,
+            icons::Icon::History,
             crate::t!("cockpit-session-transcript").to_string(),
             VerbKind::Constructive,
             appearance,
@@ -1236,7 +1239,7 @@ impl CockpitPaneView {
     }
 
     /// The model-lever cluster on a **local** Conductor session row (step 8):
-    /// `⚙ /compact · ⌫ /clear · ⑂ fork · ⑂ +worktree`. Compact/clear resume the
+    /// `⚙ /compact · ⌫ /clear · fork · +worktree`. Compact/clear resume the
     /// same conversation into a local tab and prefill the Claude Code slash
     /// command ([`WorkspaceAction::SlashCommandSession`]) — Claude-only; fork /
     /// +worktree branch the conversation ([`WorkspaceAction::ForkAgentSession`])
@@ -1318,7 +1321,14 @@ impl CockpitPaneView {
                 into_worktree,
             };
             if let Some(st) = state("fork") {
-                row = row.with_child(make(st, &crate::t!("cockpit-session-fork"), fork(false)));
+                row = row.with_child(icon_word_verb(
+                    st,
+                    icons::Icon::GitBranch,
+                    crate::t!("cockpit-session-fork").to_string(),
+                    VerbKind::Constructive,
+                    appearance,
+                    fork(false),
+                ));
                 any = true;
             }
             let in_repo = self
@@ -1328,9 +1338,12 @@ impl CockpitPaneView {
                 .unwrap_or(false);
             if in_repo {
                 if let Some(st) = state("forkwt") {
-                    row = row.with_child(make(
+                    row = row.with_child(icon_word_verb(
                         st,
-                        &crate::t!("cockpit-session-fork-worktree"),
+                        icons::Icon::GitBranch,
+                        crate::t!("cockpit-session-fork-worktree").to_string(),
+                        VerbKind::Constructive,
+                        appearance,
                         fork(true),
                     ));
                     any = true;
@@ -1342,7 +1355,7 @@ impl CockpitPaneView {
     }
 
     /// The review-loop verb cluster for a **local** Conductor session row (step
-    /// 6): `◈ review · ✓ approve · ↻ redirect · ⎙ commit · ⬈ PR`. Each verb is
+    /// 6): `review · ✓ approve · ↻ redirect · ⎙ commit · ⬈ PR`. Each verb is
     /// muted, accent on hover, and dispatches its action — review / redirect /
     /// commit / PR to the workspace ([`WorkspaceAction`]); approve to this pane
     /// ([`CockpitPaneAction::MarkReviewed`], a local non-mutating marker that
@@ -1382,9 +1395,12 @@ impl CockpitPaneView {
             .with_spacing(VERB_SPACING);
 
         if let Some(st) = state("review") {
-            row = row.with_child(make(
+            row = row.with_child(icon_word_verb(
                 st,
-                "◈ review",
+                icons::Icon::Eye,
+                "review",
+                VerbKind::Constructive,
+                appearance,
                 WorkspaceAction::ReviewSession {
                     project_root: project_root.clone(),
                     project_name: project_name.clone(),

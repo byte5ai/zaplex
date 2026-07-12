@@ -38,9 +38,9 @@ cockpit-conductor-title = Nach Projekt — was dich braucht
 
 # Session-Zeilen-Aktionen im Cockpit
 cockpit-session-adopt = ▸ übernehmen
-cockpit-session-transcript = ◇ Verlauf
-cockpit-session-fork = ⑂ Fork
-cockpit-session-fork-worktree = ⑂ +Worktree
+cockpit-session-transcript = Verlauf
+cockpit-session-fork = Fork
+cockpit-session-fork-worktree = +Worktree
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
 
@@ -62,8 +62,8 @@ cockpit-spawn-card-effort = Aufwand
 cockpit-spawn-card-effort-tracked = Aufwand (getrackt)
 cockpit-spawn-card-account = Account
 cockpit-spawn-card-remote-login = Läuft unter dem eigenen CLI-Login von { $host } (kein lokales Account-Routing)
-cockpit-spawn-card-freest = ⚡ Freest
-cockpit-spawn-card-freest-named = ⚡ Freest — { $label }
+cockpit-spawn-card-freest = Freest
+cockpit-spawn-card-freest-named = Freest — { $label }
 cockpit-spawn-card-host = Host
 cockpit-spawn-card-host-local = Lokal
 cockpit-spawn-card-directory = Verzeichnis
@@ -88,7 +88,7 @@ workspace-favorites-add-header = Zu Favoriten hinzufügen
 workspace-favorite-unavailable = nicht verfügbar — zum Entfernen klicken
 
 # ── SSH-Hosts (linkes Panel) ─────────────────────────────────────────────────
-workspace-left-panel-ssh-manager-tree-empty = Noch keine SSH-Server. Klicke 📁 für einen Ordner, + für einen Server.
+workspace-left-panel-ssh-manager-tree-empty = Noch keine SSH-Server. Nutze den Ordner-Button für einen Ordner, + für einen Server.
 workspace-left-panel-ssh-manager-add-blank = Leeren Server anlegen
 workspace-left-panel-ssh-manager-discover-tailscale = Tailscale-Hosts entdecken
 

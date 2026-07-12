@@ -4496,7 +4496,7 @@ impl Workspace {
         }
     }
 
-    /// Open a session's conversation transcript (`ViewTranscript`, cockpit "◇ log"
+    /// Open a session's conversation transcript (`ViewTranscript`, cockpit "log"
     /// verb): resolve its `.jsonl`, render it to Markdown, write a temp file, and
     /// open it in a code/text pane. Honest on failure — a missing/unreadable
     /// transcript raises a toast rather than opening a blank pane.
@@ -4544,7 +4544,7 @@ impl Workspace {
         self.add_tab_for_code_file(tmp, None, ctx);
     }
 
-    /// Open a session's **review** view (`ReviewSession`, cockpit "◈ review"
+    /// Open a session's **review** view (`ReviewSession`, cockpit "review"
     /// verb, step 6): read the repo's working changes off-thread (`git diff
     /// HEAD` + untracked), render them to Markdown, write a temp file, and open
     /// it read-only in a code/text pane — the exact mechanism
@@ -8222,7 +8222,7 @@ impl Workspace {
                     menu_items.push(item.into_item());
                 }
 
-                // Launch-target permutations (⚡ on-freest / per-account / @host)
+                // Launch-target permutations (on-freest / per-account / @host)
                 // and the GitHub instance-flows have left the fixed "+" menu: the
                 // permutations were the unreadable "wall" (host + account are
                 // chosen in the spawn card — the single app-level launch path,

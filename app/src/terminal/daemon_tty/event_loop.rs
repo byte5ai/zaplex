@@ -69,9 +69,9 @@ pub(super) struct EventLoop {
     /// Byte offset just past the last `SessionOutput` byte we've rendered. Sent
     /// as `last_seq` on re-attach so the daemon replays only what we missed.
     last_seq: u64,
-    /// Human-readable host label for in-tab status lines ("⚡ … on <host>").
+    /// Human-readable host label for in-tab status lines ("… on <host>").
     host_label: String,
-    /// Whether the one-time "⚡ Zaplexify active" welcome has been shown, so an
+    /// Whether the one-time "Zaplexify active" welcome has been shown, so an
     /// adopt's first attach welcomes while later re-attaches announce the
     /// reconnect instead.
     welcomed: bool,
@@ -537,10 +537,10 @@ impl EventLoop {
         self.process_pty_bytes(line.as_bytes());
     }
 
-    /// The Zaplexify signature line — bold cyan with the ⚡ mark. Used for the
-    /// persistent-session welcome and the reconnect/re-attach payoff moments.
+    /// The Zaplexify signature line — bold cyan. Used for the persistent-session
+    /// welcome and the reconnect/re-attach payoff moments.
     fn write_zaplexify(&mut self, text: &str) {
-        let line = format!("\r\n\x1b[1;36m⚡ {text}\x1b[0m\r\n");
+        let line = format!("\r\n\x1b[1;36m{text}\x1b[0m\r\n");
         self.process_pty_bytes(line.as_bytes());
     }
 

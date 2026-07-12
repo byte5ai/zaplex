@@ -25,8 +25,7 @@ use zaplex_cockpit::{
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button, verb_button, VerbKind,
-    GLYPH_COL_WIDTH,
+    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button, GLYPH_COL_WIDTH,
 };
 use crate::ui_components::icons;
 use crate::WorkspaceAction;
@@ -53,7 +52,7 @@ pub struct CockpitPanel {
     /// stable host identity — never the display label), synced against the
     /// unified inventory. Clicking a row attaches the agent.
     conductor_row_states: HashMap<String, MouseStateHandle>,
-    /// Hover state of each local row's compact "◈ review" verb (step 6, key =
+    /// Hover state of each local row's compact "review" verb (step 6, key =
     /// `host_ident\0id`). The sidebar is the glance surface, so it carries only the
     /// review entry point; the full commit/PR cluster lives on the main pane.
     conductor_review_states: HashMap<String, MouseStateHandle>,
@@ -622,7 +621,7 @@ impl CockpitPanel {
 
         // Attach on click of the info span — for BOTH local and remote sessions
         // now that remote in-place adopt is wired (`attach_fleet_session` resumes
-        // a remote session on its host). The compact "◈ review" verb (step 6)
+        // a remote session on its host). The compact "review" verb (step 6)
         // stays local-only (remote review isn't wired) and sits alongside.
         let key = host_key(is_local, host_id, &session.session_id);
         let (info_el, review) = match self.conductor_row_states.get(&key).cloned() {
@@ -643,7 +642,17 @@ impl CockpitPanel {
                             project_root: PathBuf::from(&session.project_root),
                             project_name: session.project_name.clone(),
                         };
-                        verb_button(st, "◈", VerbKind::Constructive, appearance, action)
+                        // Icon-pass (#107): the review verb is now the Eye icon,
+                        // matching the adjacent favorite ★ icon on this row
+                        // (previously a lone text glyph beside an icon).
+                        let theme = appearance.theme();
+                        icon_verb_button(
+                            st,
+                            icons::Icon::Eye,
+                            theme.sub_text_color(theme.background()),
+                            theme.accent(),
+                            action,
+                        )
                     })
                 } else {
                     None

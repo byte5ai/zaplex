@@ -245,7 +245,7 @@ pub struct SshManagerPanel {
     /// (the preflight itself is bounded), so a stray entry can't stick.
     connecting: std::collections::HashSet<String>,
     /// Server node_ids whose host has session resilience (Zaplexify persistent
-    /// sessions) enabled — rendered with the ⚡ mark. Refreshed with the tree.
+    /// sessions) enabled — rendered with the mark. Refreshed with the tree.
     resilient_hosts: std::collections::HashSet<String>,
     /// Last fetch error per server node_id (shown inline under the host).
     sessions_error: HashMap<String, String>,
@@ -327,7 +327,7 @@ impl SshManagerPanel {
                         self.rename_state = None;
                     }
                 }
-                // Refresh which hosts have Zaplexify persistence enabled (⚡ mark).
+                // Refresh which hosts have Zaplexify persistence enabled (mark).
                 let server_ids: Vec<String> = self
                     .nodes
                     .iter()
@@ -2192,19 +2192,19 @@ impl SshManagerPanel {
             .with_child(chevron_el)
             .with_child(icon_el)
             .with_child(label_or_editor);
-        // ⚡ mark: this host opens as a Zaplexify persistent session (survives
-        // disconnects). The mark is the at-a-glance signal in the host list.
+        // Lightning mark: this host opens as a Zaplexify persistent session
+        // (survives disconnects). The icon-font mark (#107) is the at-a-glance
+        // signal in the host list — quiet, muted, body-sized, not a shout.
         if self.resilient_hosts.contains(&node.id) {
+            let mark_size = appearance.ui_font_body();
             row_flex = row_flex.with_child(
-                Text::new_inline(
-                    "⚡".to_string(),
-                    appearance.ui_font_family(),
-                    // Quiet + smaller than the old bright-accent, subheading-sized mark,
-                    // which read as loud/noisy. A muted body-size glyph is a calm
-                    // "resilient host" indicator, not a shout.
-                    appearance.ui_font_body(),
+                warpui::elements::ConstrainedBox::new(
+                    crate::ui_components::icons::Icon::Lightning
+                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .finish(),
                 )
-                .with_color(theme.sub_text_color(theme.background()).into_solid())
+                .with_width(mark_size)
+                .with_height(mark_size)
                 .finish(),
             );
         }
