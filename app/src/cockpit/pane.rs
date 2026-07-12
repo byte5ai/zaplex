@@ -1743,7 +1743,11 @@ impl BackingView for CockpitPaneView {
         _action: &Self::PaneHeaderOverflowMenuAction,
         _ctx: &mut ViewContext<Self>,
     ) {
-        unimplemented!()
+        // The cockpit pane exposes no overflow-menu actions
+        // (`PaneHeaderOverflowMenuAction = ()`), so this handler is never
+        // meaningfully dispatched. A no-op — never a panic — is the safe floor
+        // if the framework ever routes a header overflow here (RC: no reachable
+        // `unimplemented!()`).
     }
 
     fn close(&mut self, ctx: &mut ViewContext<Self>) {
