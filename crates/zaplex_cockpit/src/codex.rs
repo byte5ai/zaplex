@@ -83,7 +83,11 @@ pub fn discover_accounts(codex_home: &Path) -> Vec<Account> {
         email,
         org: None,
         role: None,
-        plan_tier: auth_mode, // best-effort until plan claim is confirmed (§10)
+        // Provider ≠ plan (WS4 S2): `auth_mode` ("chatgpt" / "apikey") is *how* you
+        // authenticate, not a subscription plan. Leaking it into `plan_tier` made
+        // the sidebar render "Codex · chatgpt" (provider in the plan slot). Codex
+        // exposes no plan claim yet, so the plan is honestly unknown (`None`).
+        plan_tier: None,
         is_default: true,
     }]
 }

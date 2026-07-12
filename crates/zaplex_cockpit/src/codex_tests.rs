@@ -31,7 +31,8 @@ fn discovers_account_and_reads_email_from_id_token_without_storing_tokens() {
     assert_eq!(a.key, "codex:default");
     assert_eq!(a.email.as_deref(), Some("c@example.com"));
     assert_eq!(a.label, "c@example.com");
-    assert_eq!(a.plan_tier.as_deref(), Some("chatgpt")); // auth_mode, best-effort
+    // Provider ≠ plan (WS4 S2): auth_mode is not a plan tier; Codex exposes no plan.
+    assert_eq!(a.plan_tier, None);
     assert!(a.is_default);
 }
 
