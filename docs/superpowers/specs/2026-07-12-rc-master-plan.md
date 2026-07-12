@@ -126,12 +126,16 @@ attention-inbox remote-row affordance with the sidebar (same object, same gramma
 - [x] WS3 icon pass — `⚡ ◈ ◇ ⑂` → `icons::*` (Eye/History/GitBranch/Lightning) via the
   new `icon_word_verb` helper; stripped glyphs from `warp.ftl` (en+de) + doc comments.
   Status vocab `● ✋ ◦` kept. Acceptance `rg '⚡|◈|◇|⑂' app/src` → 0. codex-reviewed, green.
-- [~] WS4 sidebar redesign — SPEC RE-ESTABLISHED, awaiting sign-off. The lost
-  `2026-07-11-cockpit-sidebar-redesign.md` is back in the tree (reconstructed faithfully
-  from the converged B2/B3/B4/D1+C2 decisions + §12 supaterm learnings; notes what WS1–3
-  already did). **No code lands until the owner approves the spec** (standing UI/UX
-  concept-first rule). On approval: implement S1–S7 on this branch, green per step,
-  codex/grok review, fold into the one RC DMG.
+- [~] WS4 sidebar redesign — SPEC APPROVED (owner signed off), build in progress.
+  Spec `2026-07-11-cockpit-sidebar-redesign.md` is in the tree. **S2 data-model half
+  landed:** Codex `provider≠plan` fix (plan_tier no longer = auth_mode 'chatgpt' → None;
+  test updated), green. REMAINING = the large sidebar RENDER rebuild: S1 (tokens — L1
+  contrast-tested semantic palette generalizing `heat_coloru`), S2b (snapshot exposes
+  worktree/branch, not just cwd), S3 (two flat zone-cards / Hosts tree with a FIXED right
+  metric column), S4 (Accounts card, 5h+week meters, provider≠plan two-slot render),
+  S5 (click→detail in dashboard pane), S6 (polish). This is a several-hundred-line
+  `cockpit/panel.rs` rebuild that can only be visually verified on the RC DMG; do it with
+  adequate context headroom, green per step, codex/grok review, then the one RC DMG.
 - [~] WS5 nonfunctional/unsafe removal — PARTIAL. Fixed the one Class-A **safety** item:
   the reachable `unimplemented!()` panic in `cockpit/pane.rs` → no-op. The remaining
   items are non-crashing and need runtime verification to fix safely (better done against
