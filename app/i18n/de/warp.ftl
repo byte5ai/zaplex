@@ -412,9 +412,9 @@ cockpit-spawn-card-remote-dir-placeholder = Remote-Verzeichnis (absoluter Pfad) 
 native-modal-dont-show-again = Nicht mehr anzeigen.
 settings-ai-agent-tips-show = Agent-Tipps anzeigen
 settings-ai-agent-tips-hide = Agent-Tipps ausblenden
-settings-ai-use-agent-footer-show = „Use Agent"-Leiste anzeigen
-settings-ai-use-agent-footer-hide = „Use Agent"-Leiste ausblenden
-settings-ai-resets-at = Zurücksetzung { $time }
+settings-ai-use-agent-footer-show = „Use Agent“-Leiste anzeigen
+settings-ai-use-agent-footer-hide = „Use Agent“-Leiste ausblenden
+settings-ai-resets-at = Zurücksetzung: { $time }
 settings-ai-context-window-label = Kontextfenster (Tokens)
 # Git-Dialog (Commit / Push / Veröffentlichen / PR) — WS2
 git-dialog-error-nothing-to-commit = Keine Änderungen zum Committen.
