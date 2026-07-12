@@ -22,11 +22,11 @@ use std::path::PathBuf;
 use pathfinder_color::ColorU;
 use warp_core::ui::theme::{phenomenon::PhenomenonStyle, Fill};
 use warpui::elements::{
-    Align, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
+    ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Text,
 };
-use warpui::fonts::{FamilyId, Properties, Weight};
+use warpui::fonts::FamilyId;
 use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
 use warpui::{
@@ -36,13 +36,12 @@ use zaplex_cockpit::{Provider, SessionState};
 
 use crate::appearance::Appearance;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
-use crate::cockpit::style::{attention_coloru, glyph_cell, modal_scrim, MODAL_RADIUS};
+use crate::cockpit::style::{attention_coloru, glyph_cell};
 use crate::terminal::cli_agent::CLIAgent;
-use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
+use crate::ui_components::modal_frame;
+use crate::view_components::action_button::ActionButton;
 use crate::WorkspaceAction;
 
-const MODAL_WIDTH: f32 = 460.;
 const MODAL_MAX_LIST_HEIGHT: f32 = 420.;
 
 pub fn init(app: &mut AppContext) {
@@ -63,27 +62,6 @@ pub enum AttentionInboxAction {
 #[derive(Clone, Debug)]
 pub enum AttentionInboxEvent {
     Close,
-}
-
-struct CloseButtonTheme;
-
-impl ActionButtonTheme for CloseButtonTheme {
-    fn background(&self, hovered: bool, _appearance: &Appearance) -> Option<Fill> {
-        if hovered {
-            Some(Fill::Solid(PhenomenonStyle::modal_close_button_hover()))
-        } else {
-            None
-        }
-    }
-
-    fn text_color(
-        &self,
-        _hovered: bool,
-        _background: Option<Fill>,
-        _appearance: &Appearance,
-    ) -> ColorU {
-        PhenomenonStyle::modal_close_button_text()
-    }
 }
 
 /// Everything needed to reuse the existing "open = focus" adopt verb for one
@@ -121,12 +99,8 @@ impl AttentionInbox {
             }
         });
 
-        let close_button = ctx.add_view(|_ctx| {
-            ActionButton::new("", CloseButtonTheme)
-                .with_icon(Icon::X)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| ctx.dispatch_typed_action(AttentionInboxAction::Close))
-        });
+        let close_button =
+            ctx.add_view(|_ctx| modal_frame::close_button(AttentionInboxAction::Close));
 
         let mut me = Self {
             close_button,
@@ -194,37 +168,17 @@ impl AttentionInbox {
     }
 
     fn render_header(&self, waiting: usize, appearance: &Appearance) -> Box<dyn Element> {
-        let family = appearance.ui_font_family();
-
-        let title = Text::new(crate::t!("cockpit-attention-inbox-title"), family, 16.)
-            .with_color(PhenomenonStyle::modal_title_text())
-            .with_style(Properties::default().weight(Weight::Semibold))
-            .finish();
-
-        let subtitle = Text::new_inline(
-            crate::t!("cockpit-attention-inbox-count", count = (waiting as i64)),
-            family,
-            13.,
+        // The one shared modal header (title · count · close ✕) — identical
+        // grammar to the Spawn-Karte and every migrated dialog.
+        modal_frame::modal_header(
+            crate::t!("cockpit-attention-inbox-title"),
+            Some(crate::t!(
+                "cockpit-attention-inbox-count",
+                count = (waiting as i64)
+            )),
+            warpui::elements::ChildView::new(&self.close_button).finish(),
+            appearance,
         )
-        .with_color(PhenomenonStyle::modal_feature_description_text())
-        .finish();
-
-        let text_col = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_spacing(2.)
-            .with_child(title)
-            .with_child(subtitle)
-            .finish();
-
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_child(Shrinkable::new(1.0, text_col).finish())
-            .with_child(
-                Container::new(warpui::elements::ChildView::new(&self.close_button).finish())
-                    .finish(),
-            )
-            .finish()
     }
 
     /// One waiting-agent row. Clickable (jumps via adopt) when the session is
@@ -425,32 +379,22 @@ impl View for AttentionInbox {
         let appearance = Appearance::as_ref(app);
         let waiting = CockpitModel::as_ref(app).needs_me();
 
-        let card = ConstrainedBox::new(
-            Container::new(
-                Flex::column()
-                    .with_main_axis_size(MainAxisSize::Min)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                    .with_child(self.render_header(waiting, appearance))
-                    .with_child(
-                        Container::new(self.render_body(app, appearance))
-                            .with_margin_top(12.)
-                            .finish(),
-                    )
+        let content = Flex::column()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(self.render_header(waiting, appearance))
+            .with_child(
+                Container::new(self.render_body(app, appearance))
+                    .with_margin_top(12.)
                     .finish(),
             )
-            .with_horizontal_padding(20.)
-            .with_vertical_padding(20.)
-            .with_background(Fill::Solid(PhenomenonStyle::modal_background()))
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(MODAL_RADIUS)))
-            .finish(),
-        )
-        .with_width(MODAL_WIDTH)
-        .finish();
+            .finish();
 
-        // The one cockpit modal scrim — identical veil behind inbox and card.
-        Container::new(Align::new(card).finish())
-            .with_background_color(modal_scrim())
-            .finish()
+        // The one shared modal card + scrim. The inbox is read-only (a list you
+        // clear), so a click on the scrim dismisses it — the unified backdrop
+        // policy for modals that hold no unsaved input.
+        let card = modal_frame::modal_card(content, modal_frame::MODAL_WIDTH_WIDE, appearance);
+        modal_frame::modal_overlay(card, Some(AttentionInboxAction::Close), app)
     }
 }
 

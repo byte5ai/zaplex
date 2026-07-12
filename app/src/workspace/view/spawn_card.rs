@@ -18,14 +18,11 @@
 use std::path::PathBuf;
 
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
-    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
-    Element, Flex, FormattedTextElement, Hoverable, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex, Hoverable,
+    MouseStateHandle, ParentElement, Radius, Text,
 };
-use warpui::fonts::Weight;
 use warpui::keymap::FixedBinding;
 use warpui::platform::file_picker::{FilePickerConfiguration, FilePickerError};
 use warpui::platform::Cursor;
@@ -34,7 +31,8 @@ use warpui::{
     AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::cockpit::style::{modal_scrim, MODAL_RADIUS};
+use crate::ui_components::modal_frame;
+use crate::view_components::action_button::ActionButton;
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
     TextOptions,
@@ -179,6 +177,12 @@ pub struct SpawnCard {
     /// [`Self::new`] always builds it (`Some`).
     remote_dir_editor: Option<ViewHandle<EditorView>>,
     chip_states: std::cell::RefCell<std::collections::HashMap<String, MouseStateHandle>>,
+    /// The shared modal close ✕ (top-right), built via [`modal_frame::close_button`]
+    /// so the Spawn-Karte carries the same corner ✕ as every other modal.
+    /// `Option` for the same reason as `remote_dir_editor`: the pure unit tests
+    /// build `SpawnCard` literals without a `ViewContext` (`None`); the real
+    /// [`Self::new`] always builds it (`Some`).
+    close_button: Option<ViewHandle<ActionButton>>,
 }
 
 /// The models offered per agent (curated, high-signal — not an exhaustive list).
@@ -263,6 +267,9 @@ impl SpawnCard {
             }
         });
 
+        let close_button =
+            ctx.add_view(|_ctx| modal_frame::close_button(SpawnCardAction::Close));
+
         SpawnCard {
             cfg: SpawnCardConfig::default(),
             agent: CLIAgent::Claude,
@@ -274,6 +281,7 @@ impl SpawnCard {
             prompt: None,
             remote_dir_editor: Some(remote_dir_editor),
             chip_states: Default::default(),
+            close_button: Some(close_button),
         }
     }
 
@@ -637,21 +645,24 @@ impl SpawnCard {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
-        let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
 
-        let title = FormattedTextElement::from_str(crate::t_static!("cockpit-spawn-card-title"), family, 20.)
-            .with_color(main)
-            .with_weight(Weight::Bold)
-            .finish();
-        let subtitle = Text::new_inline(crate::t!("cockpit-spawn-card-subtitle"), family, 12.)
-            .with_color(muted)
-            .finish();
+        // The one shared modal header (title · subtitle · close ✕) — identical
+        // grammar to the attention inbox and every migrated dialog.
+        let close = match self.close_button.as_ref() {
+            Some(view) => warpui::elements::ChildView::new(view).finish(),
+            None => Container::new(Flex::row().finish()).finish(),
+        };
+        let header = modal_frame::modal_header(
+            crate::t!("cockpit-spawn-card-title"),
+            Some(crate::t!("cockpit-spawn-card-subtitle")),
+            close,
+            appearance,
+        );
 
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(Container::new(title).with_margin_bottom(4.).finish())
-            .with_child(Container::new(subtitle).with_margin_bottom(18.).finish());
+            .with_child(Container::new(header).with_margin_bottom(18.).finish());
 
         // Agent row (only installed providers).
         let available = installed_agents(&self.cfg);
@@ -900,13 +911,10 @@ impl SpawnCard {
                 .finish(),
         );
 
-        Container::new(col.finish())
-            .with_uniform_padding(24.)
-            .with_background(theme.background())
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(MODAL_RADIUS)))
-            .with_border(Border::all(1.).with_border_fill(theme.outline()))
-            .with_drop_shadow(DropShadow::default())
-            .finish()
+        // The card chrome (padding · background · radius · border · shadow) is
+        // supplied by the shared [`modal_frame::modal_card`] in `render`; here we
+        // return just the inner column.
+        col.finish()
     }
 }
 
@@ -920,33 +928,13 @@ impl View for SpawnCard {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        let card = ConstrainedBox::new(self.render_card(app))
-            .with_width(MODAL_WIDTH)
-            .finish();
-
-        let mut stack = Stack::new();
-        stack.add_positioned_child(
-            card,
-            OffsetPositioning::offset_from_parent(
-                vec2f(0., 0.),
-                ParentOffsetBounds::WindowByPosition,
-                ParentAnchor::Center,
-                warpui::elements::ChildAnchor::Center,
-            ),
-        );
-
-        Container::new(
-            Align::new(
-                Flex::column()
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_child(stack.finish())
-                    .finish(),
-            )
-            .finish(),
-        )
-        // The one cockpit modal scrim — identical veil behind card and inbox.
-        .with_background_color(modal_scrim())
-        .finish()
+        let appearance = Appearance::as_ref(app);
+        // The one shared modal card + scrim. The Spawn-Karte holds unsaved launch
+        // config, so a stray backdrop click must never discard it — no
+        // click-outside dismiss (Esc / Cancel / ✕ close it); this is the "modals
+        // with unsaved input" arm of the unified dismiss policy.
+        let card = modal_frame::modal_card(self.render_card(app), MODAL_WIDTH, appearance);
+        modal_frame::modal_overlay(card, None::<SpawnCardAction>, app)
     }
 }
 
@@ -1283,6 +1271,7 @@ mod tests {
             // at the Confirm site, not here.
             remote_dir_editor: None,
             chip_states: Default::default(),
+            close_button: None,
         };
 
         match card
@@ -1332,6 +1321,7 @@ mod tests {
             // at the Confirm site, not here.
             remote_dir_editor: None,
             chip_states: Default::default(),
+            close_button: None,
         };
 
         match card
@@ -1375,6 +1365,7 @@ mod tests {
             // at the Confirm site, not here.
             remote_dir_editor: None,
             chip_states: Default::default(),
+            close_button: None,
         };
         assert!(card.launch_payload().is_none());
     }
