@@ -9,8 +9,11 @@ use anyhow::{Context as _, Result};
 use lazy_static::lazy_static;
 use serde::Deserialize;
 
-const REPO_OWNER: &str = "zerx-lab";
-const REPO_NAME: &str = "warp";
+// zaplex self-updates from its OWN releases (byte5ai/zaplex), NOT the upstream
+// fork it was built from. Pointing this at zerx-lab/warp made every installed
+// zaplex build silently revert to upstream Warp on the next launch.
+const REPO_OWNER: &str = "byte5ai";
+const REPO_NAME: &str = "zaplex";
 
 // GitHub requires User-Agent; explicit API version declaration avoids future default drift.
 const USER_AGENT: &str = "Zap-Autoupdate";

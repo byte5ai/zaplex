@@ -299,6 +299,9 @@ use warpui::{AppContext, SingletonEntity, WindowId};
 #[folder = "assets"]
 #[include = "bundled/**"] // Should be kept in sync with BUNDLED_ASSETS_DIR.
 #[include = "async/**"] // Should be kept in sync with ASYNC_ASSETS_DIR.
+// Splash artwork reused on the About page (same asset as the macOS DMG installer
+// background); `include` is an allowlist, so this file must be named explicitly.
+#[include = "resources/mac/zaplex_install_image.png"]
 #[cfg_attr(target_family = "wasm", exclude = "async/**")]
 // Excludes take precedence.
 // Standalone CLI builds (the `oz` tarball) are headless and never render the

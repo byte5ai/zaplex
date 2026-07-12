@@ -786,12 +786,25 @@ impl CLIAgentInstallModel {
     }
 
     fn on_scan_complete(&mut self, results: HashMap<CLIAgent, bool>, ctx: &mut ModelContext<Self>) {
+        let any_installed = results.values().any(|&v| v);
+        log::info!(
+            "cli-agent scan complete: any_installed={any_installed}, results={results:?}"
+        );
         self.cache = Some(results.clone());
 
-        // Auto-sync to per-agent settings
-        crate::settings::AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            settings.sync_per_agent_from_scan(&results, ctx);
-        });
+        // Auto-sync to per-agent settings — but never *prune* per-agent settings
+        // from a scan that found nothing. An all-false first scan is far more
+        // likely a transient/env fluke than the truth, and pruning on it would
+        // hide a genuinely-installed agent (S0 hardening).
+        if any_installed {
+            crate::settings::AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings.sync_per_agent_from_scan(&results, ctx);
+            });
+        } else {
+            log::warn!(
+                "cli-agent scan found no agents installed; skipping per-agent settings prune"
+            );
+        }
 
         ctx.emit(CLIAgentInstallEvent::ScanComplete);
     }
@@ -821,19 +834,33 @@ impl Entity for CLIAgentInstallModel {
 
 impl SingletonEntity for CLIAgentInstallModel {}
 
-/// Synchronous PATH search detecting if all agents are installed. For internal use in `ctx.spawn` async task only.
+/// Synchronous filesystem search detecting which agents are installed. Cheap
+/// (a handful of `is_file` probes) — safe to call directly on the main thread as
+/// a fallback when the async cache is not yet populated (see `open_spawn_card`).
 #[cfg(unix)]
-fn scan_cli_agent_installations() -> HashMap<CLIAgent, bool> {
+pub(crate) fn scan_cli_agent_installations() -> HashMap<CLIAgent, bool> {
     let search_dirs = cli_agent_search_dirs().collect::<Vec<_>>();
-    enum_iterator::all::<CLIAgent>()
+    let map: HashMap<CLIAgent, bool> = enum_iterator::all::<CLIAgent>()
         .filter(|a| !matches!(a, CLIAgent::Unknown))
         .map(|a| (a, cli_agent_is_on_path_with_dirs(a, &search_dirs)))
-        .collect()
+        .collect();
+    // Diagnostic: makes it unambiguous whether the scan runs, what it searched,
+    // and what it concluded for the two first-class agents — so a false
+    // "not installed" can be traced to either a missing dir or a failed probe.
+    log::info!(
+        "cli-agent scan: {} search dirs; claude={} codex={}; dirs={:?}",
+        search_dirs.len(),
+        map.get(&CLIAgent::Claude).copied().unwrap_or(false),
+        map.get(&CLIAgent::Codex).copied().unwrap_or(false),
+        search_dirs,
+    );
+    map
 }
 
-/// Synchronous PATH search detecting if all agents are installed. For internal use in `ctx.spawn` async task only.
+/// Synchronous PATH search detecting which agents are installed. Safe to call
+/// directly as a fallback when the async cache is not yet populated.
 #[cfg(windows)]
-fn scan_cli_agent_installations() -> HashMap<CLIAgent, bool> {
+pub(crate) fn scan_cli_agent_installations() -> HashMap<CLIAgent, bool> {
     enum_iterator::all::<CLIAgent>()
         .filter(|a| !matches!(a, CLIAgent::Unknown))
         .map(|a| (a, cli_agent_is_on_path(a)))

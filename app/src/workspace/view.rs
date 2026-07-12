@@ -17782,11 +17782,18 @@ impl Workspace {
         default_agent: Option<CLIAgent>,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::terminal::cli_agent::CLIAgentInstallModel;
-
-        let install = CLIAgentInstallModel::as_ref(ctx);
-        let claude_installed = install.is_cli_agent_installed(CLIAgent::Claude);
-        let codex_installed = install.is_cli_agent_installed(CLIAgent::Codex);
+        // S0 fix: install status is populated by an async startup scan cached in
+        // CLIAgentInstallModel; reading that cache here raced (cache=None → false)
+        // and the card never recovered, so it falsely claimed "No agent CLI
+        // installed" even with the CLIs present. The scan is only a handful of
+        // `is_file` probes, so run it synchronously here — authoritative, with no
+        // cache/timing dependency.
+        let scan = crate::terminal::cli_agent::scan_cli_agent_installations();
+        let claude_installed = scan.get(&CLIAgent::Claude).copied().unwrap_or(false);
+        let codex_installed = scan.get(&CLIAgent::Codex).copied().unwrap_or(false);
+        log::info!(
+            "spawn-card: synchronous CLI scan → claude={claude_installed} codex={codex_installed}"
+        );
 
         let claude = self.spawn_card_provider_options(
             zaplex_cockpit::Provider::Claude,
