@@ -73,6 +73,11 @@ pub struct CockpitModel {
     /// is *this* machine, so its sessions can be adopted in place (a remote
     /// host's sessions resume on that host, not locally).
     local_label: String,
+    /// The account the user has selected in the sidebar (its `account.key`), so
+    /// the dashboard pane shows that account as the detail focus and the sidebar
+    /// carries a stable highlight (WS4 S5: click → selection → detail in the
+    /// pane). `None` = nothing selected. Cleared when the account disappears.
+    selected_account: Option<String>,
 }
 
 /// Inputs captured on the model thread, moved into the off-thread build.
@@ -116,6 +121,7 @@ impl CockpitModel {
             oauth_cache: HashMap::new(),
             overrides: AccountOverrides::default(),
             local_label: "local".to_string(),
+            selected_account: None,
         };
         model.spawn_refresh(ctx);
         model.start_reconcile_timer(ctx);
@@ -125,6 +131,28 @@ impl CockpitModel {
     /// The latest snapshot (empty until the first background scan completes).
     pub fn snapshot(&self) -> &CockpitSnapshot {
         &self.snapshot
+    }
+
+    /// The account key the user has selected in the sidebar, if any (WS4 S5).
+    pub fn selected_account(&self) -> Option<&str> {
+        self.selected_account.as_deref()
+    }
+
+    /// Select an account for detail-in-pane (WS4 S5): stores its `account.key`
+    /// and emits [`CockpitEvent::Updated`] so the sidebar highlight and the pane
+    /// focus both refresh. Selecting the already-selected account toggles it off
+    /// (clears the selection), so a second click de-selects. No-op if nothing
+    /// actually changed.
+    pub fn select_account(&mut self, key: String, ctx: &mut ModelContext<Self>) {
+        let next = if self.selected_account.as_deref() == Some(key.as_str()) {
+            None
+        } else {
+            Some(key)
+        };
+        if next != self.selected_account {
+            self.selected_account = next;
+            ctx.emit(CockpitEvent::Updated);
+        }
     }
 
     /// Gather the inputs for a build, or `None` if the cockpit is disabled or the home
@@ -326,7 +354,7 @@ impl CockpitModel {
     /// disabled. Re-enabling resumes normally: the next `spawn_refresh` finds
     /// `enabled` true again and applies a live snapshot as usual.
     fn clear_for_disabled(&mut self, ctx: &mut ModelContext<Self>) {
-        if is_blank(&self.snapshot, &self.inventory) {
+        if is_blank(&self.snapshot, &self.inventory) && self.selected_account.is_none() {
             return; // already blank — nothing changed since the last disabled tick
         }
         self.snapshot = CockpitSnapshot {
@@ -334,6 +362,7 @@ impl CockpitModel {
             generated_at: Utc::now(),
         };
         self.inventory = FleetTree::default();
+        self.selected_account = None;
         ctx.emit(CockpitEvent::Updated);
     }
 
@@ -357,6 +386,13 @@ impl CockpitModel {
         self.oauth_cache = oauth_cache;
         self.overrides = overrides;
         self.local_label = local_label;
+        // Drop a selection whose account no longer exists, so the highlight never
+        // points at a vanished card.
+        if let Some(sel) = &self.selected_account {
+            if !self.snapshot.accounts.iter().any(|a| &a.account.key == sel) {
+                self.selected_account = None;
+            }
+        }
         ctx.emit(CockpitEvent::Updated);
         if !became_waiting.is_empty() {
             ctx.emit(CockpitEvent::SessionsBecameWaiting(became_waiting));

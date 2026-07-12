@@ -619,6 +619,7 @@ impl CockpitPaneView {
         &self,
         acct: &AccountUsage,
         override_color: Option<ColorU>,
+        is_selected: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -791,10 +792,18 @@ impl CockpitPaneView {
             col = col.with_child(Self::text(reset_line, family, body, muted));
         }
 
+        // A selected account (chosen in the sidebar, WS4 S5) is the detail focus:
+        // a stronger surface marks it so the user's eye lands on the card they
+        // clicked. Background only — no border, so nothing reflows.
+        let card_bg = if is_selected {
+            internal_colors::fg_overlay_2(theme)
+        } else {
+            internal_colors::fg_overlay_1(theme)
+        };
         Container::new(col.finish())
             .with_uniform_padding(CARD_PADDING)
             .with_margin_bottom(CARD_SPACING)
-            .with_background(internal_colors::fg_overlay_1(theme))
+            .with_background(card_bg)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.0)))
             .finish()
     }
@@ -1650,13 +1659,17 @@ impl View for CockpitPaneView {
                         .finish(),
                 );
             }
+            let selected = CockpitModel::as_ref(app)
+                .selected_account()
+                .map(str::to_string);
             for acct in &snapshot.accounts {
                 // Per-account override color (instances.json), resolved from the
                 // model and parsed from its hex string.
                 let override_color = CockpitModel::as_ref(app)
                     .override_color(&acct.account.key)
                     .and_then(parse_hex_color);
-                col = col.with_child(self.render_card(acct, override_color, appearance));
+                let is_selected = selected.as_deref() == Some(acct.account.key.as_str());
+                col = col.with_child(self.render_card(acct, override_color, is_selected, appearance));
             }
             // C3b: explain the ~ marker whenever any bar shows an estimate
             // (real numbers stay unmarked — no chrome for the good case).

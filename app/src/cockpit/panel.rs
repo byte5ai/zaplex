@@ -17,10 +17,9 @@ use warpui::elements::{
 use warpui::platform::Cursor;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 use zaplex_cockpit::{
-    fleet_is_large, format_cost, format_reset, format_tokens, heat_fill,
-    heat_pct_label_with_provenance, host_auto_collapsed, host_ident, host_key, host_summary,
-    session_glyph, AccountUsage, Favorite, FavoriteKind, FleetTree, HeatLevel, HostNode,
-    SessionSnapshot, SessionState, UsageProvenance,
+    fleet_is_large, format_cost, format_tokens, heat_fill, heat_pct_label_with_provenance,
+    host_auto_collapsed, host_ident, host_key, host_summary, session_glyph, AccountUsage, Favorite,
+    FavoriteKind, FleetTree, HeatLevel, HostNode, SessionSnapshot, SessionState, UsageProvenance,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
@@ -271,14 +270,18 @@ impl CockpitPanel {
             .finish()
     }
 
-    fn render_card(&self, acct: &AccountUsage, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_card(
+        &self,
+        acct: &AccountUsage,
+        is_selected: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
         let sub = appearance.ui_font_subheading();
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
-        let now = chrono::Utc::now();
 
         // Header: the provider icon leads (spec §2.5), then the account label
         // (email/org — which account, not which plan).
@@ -352,19 +355,6 @@ impl CockpitPanel {
             parts.join(" · ")
         });
 
-        let reset_5h = format_reset(acct.reset5h, now);
-        let reset_wk = format_reset(acct.reset_week, now);
-        let reset_line = match (reset_5h.is_empty(), reset_wk.is_empty()) {
-            (true, true) => None,
-            (false, true) => Some(crate::t!("cockpit-card-reset-5h", reset = reset_5h)),
-            (true, false) => Some(crate::t!("cockpit-card-reset-week", reset = reset_wk)),
-            (false, false) => Some(crate::t!(
-                "cockpit-card-reset-both",
-                reset5h = reset_5h,
-                resetwk = reset_wk
-            )),
-        };
-
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
@@ -385,32 +375,37 @@ impl CockpitPanel {
             };
             col = col.with_child(Self::text(session_line, family, body, color));
         }
-        if let Some(reset_line) = reset_line {
-            col = col.with_child(Self::text(reset_line, family, body, muted));
-        }
+        // (Reset countdowns intentionally live only in the dashboard pane now —
+        // WS4 S5: the sidebar stays a glance surface, the pane carries detail.)
 
         // A flat account block inside the AI-Accounts zone-card — no per-card
         // container chrome (emphasis via content + spacing, spec §2.1). The whole
-        // block is a click target that opens the roomy dashboard pane; hover adds
-        // a subtle fill only (colour, never layout — spec §2.7).
+        // block selects the account → opens the pane focused on it (WS4 S5).
+        // A selected block carries a stable fill; hover adds a subtle fill —
+        // colour only, never layout (spec §2.7).
         let col_el = col.finish();
         let handle = self
             .card_states
             .get(&acct.account.key)
             .cloned()
             .unwrap_or_default();
+        let key = acct.account.key.clone();
         Hoverable::new(handle, move |mouse| {
             let mut c = Container::new(col_el)
                 .with_uniform_padding(CARD_PADDING)
                 .with_margin_bottom(CARD_SPACING)
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.0)));
-            if mouse.is_hovered() {
+            if is_selected {
+                c = c.with_background(internal_colors::fg_overlay_2(theme));
+            } else if mouse.is_hovered() {
                 c = c.with_background(internal_colors::fg_overlay_1(theme));
             }
             c.finish()
         })
         .with_cursor(warpui::platform::Cursor::PointingHand)
-        .on_click(|ctx, _, _| ctx.dispatch_typed_action(CockpitPanelAction::OpenDashboardPane))
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(CockpitPanelAction::SelectAccount(key.clone()))
+        })
         .finish()
     }
 
@@ -1030,6 +1025,9 @@ impl View for CockpitPanel {
         } else {
             let fleet_today: f64 = snapshot.accounts.iter().map(|a| a.today.cost_usd).sum();
             let fleet_week: f64 = snapshot.accounts.iter().map(|a| a.week.cost_usd).sum();
+            let selected = CockpitModel::as_ref(app)
+                .selected_account()
+                .map(str::to_string);
             let mut accounts = Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .with_main_axis_size(MainAxisSize::Min)
@@ -1044,7 +1042,8 @@ impl View for CockpitPanel {
                     .finish(),
                 );
             for acct in &snapshot.accounts {
-                accounts = accounts.with_child(self.render_card(acct, appearance));
+                let is_selected = selected.as_deref() == Some(acct.account.key.as_str());
+                accounts = accounts.with_child(self.render_card(acct, is_selected, appearance));
             }
             cards = cards.with_child(
                 zone_card(accounts.finish(), appearance)
@@ -1082,6 +1081,10 @@ pub enum CockpitPanelAction {
     /// (D1+C2), keyed by stable host identity `host_ident`. Waiting rows are
     /// unaffected — they always stay visible.
     ToggleHostRest(String),
+    /// Select an account (its `account.key`) → open the dashboard pane focused
+    /// on it and carry a stable highlight in the sidebar (WS4 S5). A second
+    /// click on the selected account de-selects it.
+    SelectAccount(String),
 }
 
 impl TypedActionView for CockpitPanel {
@@ -1096,6 +1099,14 @@ impl TypedActionView for CockpitPanel {
                 let cur = self.expanded_host_rest.get(ident).copied().unwrap_or(false);
                 self.expanded_host_rest.insert(ident.clone(), !cur);
                 ctx.notify();
+            }
+            CockpitPanelAction::SelectAccount(key) => {
+                // Store the selection on the shared model (so the pane reacts),
+                // then open the dashboard pane. The model emits Updated, which
+                // re-renders both the sidebar highlight and the pane focus.
+                let key = key.clone();
+                CockpitModel::handle(ctx).update(ctx, |model, ctx| model.select_account(key, ctx));
+                ctx.emit(CockpitPanelEvent::OpenDashboardPane);
             }
         }
     }
