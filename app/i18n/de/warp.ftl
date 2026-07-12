@@ -41,6 +41,21 @@ cockpit-session-adopt = ▸ übernehmen
 cockpit-session-transcript = Verlauf
 cockpit-session-fork = Fork
 cockpit-session-fork-worktree = +Worktree
+# Cockpit-Sidebar Runtime-Strings (WS2)
+cockpit-card-cost-line = heute { $cost } · { $tokens }
+cockpit-card-sessions-active = ● { $count } aktiv
+cockpit-card-sessions-waiting = ● { $count } wartend
+cockpit-card-sessions-running = ◌ { $count } laufend
+cockpit-card-reset-5h = 5h ↻ { $reset }
+cockpit-card-reset-week = Wo ↻ { $reset }
+cockpit-card-reset-both = 5h ↻ { $reset5h } · Wo ↻ { $resetwk }
+cockpit-conductor-needs-me-badge = ● { $count }
+cockpit-header-account-count = { $count } { $count ->
+        [one] Konto
+       *[other] Konten
+    }
+cockpit-header-cost-summary = { $cost5h } 5h · { $costwk } Wo
+cockpit-header-dashboard-button = ⤢  Dashboard
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
 

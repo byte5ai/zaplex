@@ -2789,6 +2789,21 @@ cockpit-session-adopt = ▸ adopt
 cockpit-session-transcript = log
 cockpit-session-fork = fork
 cockpit-session-fork-worktree = +worktree
+# Cockpit sidebar runtime strings (WS2: were hard-coded English format! literals)
+cockpit-card-cost-line = today { $cost } · { $tokens }
+cockpit-card-sessions-active = ● { $count } active
+cockpit-card-sessions-waiting = ● { $count } waiting
+cockpit-card-sessions-running = ◌ { $count } running
+cockpit-card-reset-5h = 5h ↻ { $reset }
+cockpit-card-reset-week = wk ↻ { $reset }
+cockpit-card-reset-both = 5h ↻ { $reset5h } · wk ↻ { $resetwk }
+cockpit-conductor-needs-me-badge = ● { $count }
+cockpit-header-account-count = { $count } { $count ->
+        [one] account
+       *[other] accounts
+    }
+cockpit-header-cost-summary = { $cost5h } 5h · { $costwk } wk
+cockpit-header-dashboard-button = ⤢  Dashboard
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
 workspace-left-panel-cockpit-empty = No Claude or Codex accounts found.

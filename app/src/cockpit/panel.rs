@@ -257,10 +257,10 @@ impl CockpitPanel {
             );
         }
 
-        let cost_line = format!(
-            "today {} · {}",
-            format_cost(acct.today.cost_usd),
-            format_tokens(acct.today.total)
+        let cost_line = crate::t!(
+            "cockpit-card-cost-line",
+            cost = format_cost(acct.today.cost_usd),
+            tokens = format_tokens(acct.today.total)
         );
 
         // Live-session status (C3a): waiting sessions are THE signal — they
@@ -278,14 +278,14 @@ impl CockpitPanel {
         let session_line = (!acct.sessions.is_empty()).then(|| {
             let mut parts = Vec::new();
             if active > 0 {
-                parts.push(format!("● {active} active"));
+                parts.push(crate::t!("cockpit-card-sessions-active", count = (active as i64)));
             }
             if waiting > 0 {
-                parts.push(format!("● {waiting} waiting"));
+                parts.push(crate::t!("cockpit-card-sessions-waiting", count = (waiting as i64)));
             }
             let monitor = acct.sessions.len() - active - waiting;
             if monitor > 0 {
-                parts.push(format!("◌ {monitor} running"));
+                parts.push(crate::t!("cockpit-card-sessions-running", count = (monitor as i64)));
             }
             parts.join(" · ")
         });
@@ -294,9 +294,13 @@ impl CockpitPanel {
         let reset_wk = format_reset(acct.reset_week, now);
         let reset_line = match (reset_5h.is_empty(), reset_wk.is_empty()) {
             (true, true) => None,
-            (false, true) => Some(format!("5h ↻ {reset_5h}")),
-            (true, false) => Some(format!("wk ↻ {reset_wk}")),
-            (false, false) => Some(format!("5h ↻ {reset_5h} · wk ↻ {reset_wk}")),
+            (false, true) => Some(crate::t!("cockpit-card-reset-5h", reset = reset_5h)),
+            (true, false) => Some(crate::t!("cockpit-card-reset-week", reset = reset_wk)),
+            (false, false) => Some(crate::t!(
+                "cockpit-card-reset-both",
+                reset5h = reset_5h,
+                resetwk = reset_wk
+            )),
         };
 
         let mut col = Flex::column()
@@ -403,7 +407,7 @@ impl CockpitPanel {
                 );
             if host.needs_me > 0 {
                 label_row = label_row.with_child(Self::text(
-                    format!("● {}", host.needs_me),
+                    crate::t!("cockpit-conductor-needs-me-badge", count = (host.needs_me as i64)),
                     family,
                     body,
                     heat_coloru(HeatLevel::Critical),
@@ -733,17 +737,17 @@ impl CockpitPanel {
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_child(Self::text(
-                format!(
-                    "{} account{}",
-                    snapshot_len,
-                    if snapshot_len == 1 { "" } else { "s" }
-                ),
+                crate::t!("cockpit-header-account-count", count = (snapshot_len as i64)),
                 family,
                 sub,
                 main,
             ))
             .with_child(Self::text(
-                format!("{} 5h · {} wk", format_cost(cost5h), format_cost(cost_wk)),
+                crate::t!(
+                    "cockpit-header-cost-summary",
+                    cost5h = format_cost(cost5h),
+                    costwk = format_cost(cost_wk)
+                ),
                 family,
                 body,
                 muted,
@@ -762,7 +766,7 @@ impl CockpitPanel {
         // Labeled + larger than the old bare "⤢" glyph, which nobody recognized as
         // the entry point to the full dashboard.
         Hoverable::new(self.expand_btn.clone(), move |mouse| {
-            let mut c = Container::new(Self::text("⤢  Dashboard".to_string(), family, sub, muted))
+            let mut c = Container::new(Self::text(crate::t!("cockpit-header-dashboard-button"), family, sub, muted))
                 .with_padding_left(8.0)
                 .with_padding_right(8.0)
                 .with_padding_top(3.0)
