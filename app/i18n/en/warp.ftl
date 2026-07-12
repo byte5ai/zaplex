@@ -358,6 +358,14 @@ new-worktree-name-label = Worktree branch name
 new-worktree-name-placeholder = my-feature-branch
 new-worktree-invalid-name = Name can only contain letters, numbers, hyphens, and underscores
 cockpit-spawn-card-remote-dir-placeholder = remote directory (absolute path) — blank = host home
+# Native modal + AI settings page (WS2)
+native-modal-dont-show-again = Don't show again.
+settings-ai-agent-tips-show = Show agent tips
+settings-ai-agent-tips-hide = Hide agent tips
+settings-ai-use-agent-footer-show = Show "Use Agent" footer
+settings-ai-use-agent-footer-hide = Hide "Use Agent" footer
+settings-ai-resets-at = Resets { $time }
+settings-ai-context-window-label = Context window (tokens)
 uri-custom-uri-invalid = Custom URI is invalid.
 context-node-install-nvm = Install nvm
 context-node-install-node = nvm install node

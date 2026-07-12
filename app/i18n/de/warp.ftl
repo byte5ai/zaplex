@@ -408,5 +408,13 @@ new-worktree-name-label = Worktree-Branchname
 new-worktree-name-placeholder = mein-feature-branch
 new-worktree-invalid-name = Name darf nur Buchstaben, Zahlen, Bindestriche und Unterstriche enthalten
 cockpit-spawn-card-remote-dir-placeholder = Remote-Verzeichnis (absoluter Pfad) — leer = Home des Hosts
+# Native-Modal + KI-Einstellungsseite (WS2)
+native-modal-dont-show-again = Nicht mehr anzeigen.
+settings-ai-agent-tips-show = Agent-Tipps anzeigen
+settings-ai-agent-tips-hide = Agent-Tipps ausblenden
+settings-ai-use-agent-footer-show = „Use Agent"-Leiste anzeigen
+settings-ai-use-agent-footer-hide = „Use Agent"-Leiste ausblenden
+settings-ai-resets-at = Zurücksetzung { $time }
+settings-ai-context-window-label = Kontextfenster (Tokens)
 # Fehlender DE-Key (EN-Fallback): SSH-Manager „connecting…"
 workspace-left-panel-ssh-manager-connecting = verbinde…

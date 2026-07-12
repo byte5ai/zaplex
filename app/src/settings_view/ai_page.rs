@@ -234,7 +234,10 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
         vec![ToggleSettingActionPair::custom(
-            SettingActionPairDescriptions::new("Show agent tips", "Hide agent tips"),
+            SettingActionPairDescriptions::new(
+                &crate::t!("settings-ai-agent-tips-show"),
+                &crate::t!("settings-ai-agent-tips-hide"),
+            ),
             builder(SettingsAction::AI(
                 AISettingsPageAction::ToggleShowAgentTips,
             )),
@@ -301,8 +304,8 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
         vec![ToggleSettingActionPair::custom(
             SettingActionPairDescriptions::new(
-                "Show \"Use Agent\" footer",
-                "Hide \"Use Agent\" footer",
+                &crate::t!("settings-ai-use-agent-footer-show"),
+                &crate::t!("settings-ai-use-agent-footer-hide"),
             ),
             builder(SettingsAction::AI(
                 AISettingsPageAction::ToggleUseAgentToolbar,
@@ -3883,7 +3886,7 @@ impl SettingsWidget for UsageWidget {
                 .with_child(
                     appearance
                         .ui_builder()
-                        .paragraph(format!("Resets {formatted_next_refresh_time}"))
+                        .paragraph(crate::t!("settings-ai-resets-at", time = formatted_next_refresh_time))
                         .with_style(UiComponentStyles {
                             font_color: Some(blended_colors::text_sub(
                                 appearance.theme(),
@@ -4375,7 +4378,7 @@ impl AgentsWidget {
         let max = cw.max;
 
         let label = Container::new(render_body_item_label::<AISettingsPageAction>(
-            "Context window (tokens)".to_string(),
+            crate::t!("settings-ai-context-window-label"),
             None,
             None,
             LocalOnlyIconState::Hidden,
