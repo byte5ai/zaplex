@@ -614,7 +614,7 @@ impl GitDialog {
 
     /// Disables cancel/confirm/close and swaps the confirm label while the
     /// async op is running.
-    fn set_loading(&mut self, loading_label: &'static str, ctx: &mut ViewContext<Self>) {
+    fn set_loading(&mut self, loading_label: String, ctx: &mut ViewContext<Self>) {
         self.loading = true;
         self.confirm_button.update(ctx, |b, ctx| {
             b.set_label(loading_label, ctx);

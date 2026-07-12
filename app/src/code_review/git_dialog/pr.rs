@@ -47,8 +47,8 @@ pub(super) fn confirm_icon_for() -> Icon {
     Icon::Github
 }
 
-fn loading_label_for() -> &'static str {
-    "Creating\u{2026}"
+fn loading_label_for() -> String {
+    crate::t!("git-dialog-loading-create-pr")
 }
 
 /// PR mode has no prerequisites beyond a branch with commits; confirm is

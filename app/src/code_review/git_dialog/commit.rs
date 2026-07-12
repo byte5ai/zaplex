@@ -61,9 +61,6 @@ pub enum CommitSubAction {
 }
 
 const EDITOR_MIN_HEIGHT: f32 = 72.;
-/// Loading-state label while the commit / chain runs. Static because the shared
-/// button API currently stores borrowed labels.
-const LOADING_LABEL: &str = "Committing\u{2026}";
 pub struct CommitState {
     intent: CommitIntent,
     include_unstaged: bool,
@@ -222,9 +219,9 @@ pub(super) fn is_ready_to_confirm(state: &CommitState, app: &AppContext) -> bool
 
 /// Returns a tooltip to show on the disabled Confirm button when the
 /// user needs to take action, or `None` when no tooltip is needed.
-pub(super) fn confirm_tooltip(state: &CommitState, app: &AppContext) -> Option<&'static str> {
+pub(super) fn confirm_tooltip(state: &CommitState, app: &AppContext) -> Option<String> {
     if !state.file_changes.is_empty() && commit_message(state, app).is_none() {
-        Some("Enter a commit message")
+        Some(crate::t!("git-dialog-commit-need-message"))
     } else {
         None
     }
@@ -281,7 +278,7 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
     let repo_path = me.repo_path().clone();
     let branch_name = me.branch_name().to_string();
 
-    me.set_loading(LOADING_LABEL, ctx);
+    me.set_loading(crate::t!("git-dialog-loading-commit"), ctx);
 
     // Lock the commit message editor while the async op is in flight.
     message_editor.update(ctx, |editor, ctx| {

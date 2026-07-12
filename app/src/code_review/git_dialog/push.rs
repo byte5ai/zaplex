@@ -75,11 +75,11 @@ pub(super) fn confirm_icon(publish: bool) -> Icon {
     }
 }
 
-fn loading_label(publish: bool) -> &'static str {
+fn loading_label(publish: bool) -> String {
     if publish {
-        "Publishing…"
+        crate::t!("git-dialog-loading-publish")
     } else {
-        "Pushing…"
+        crate::t!("git-dialog-loading-push")
     }
 }
 
