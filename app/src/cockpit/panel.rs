@@ -25,8 +25,8 @@ use zaplex_cockpit::{
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button, provider_icon, status_dot_coloru,
-    zone_card, GLYPH_COL_WIDTH, METRIC_COL_WIDTH,
+    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button, provider_icon, provider_label,
+    status_dot_coloru, zone_card, GLYPH_COL_WIDTH, METRIC_COL_WIDTH,
 };
 use crate::ui_components::icons;
 use crate::WorkspaceAction;
@@ -278,14 +278,24 @@ impl CockpitPanel {
         let sub = appearance.ui_font_subheading();
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
-        let accent = theme.accent().into_solid();
         let now = chrono::Utc::now();
 
-        // Header: label (bold-ish subheading) + optional plan badge.
-        let mut header = Flex::row()
+        // Header: the provider icon leads (spec §2.5), then the account label
+        // (email/org — which account, not which plan).
+        let header = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(6.0)
+            .with_child(
+                ConstrainedBox::new(
+                    provider_icon(acct.account.provider)
+                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .finish(),
+                )
+                .with_width(GLYPH_COL_WIDTH)
+                .with_height(GLYPH_COL_WIDTH)
+                .finish(),
+            )
             .with_child(
                 Shrinkable::new(
                     1.0,
@@ -293,18 +303,21 @@ impl CockpitPanel {
                 )
                 .finish(),
             );
-        if let Some(plan) = &acct.account.plan_tier {
-            header = header.with_child(
-                Container::new(Self::text(plan.clone(), family, body, accent))
-                    .with_padding_left(6.0)
-                    .with_padding_right(6.0)
-                    .with_padding_top(1.0)
-                    .with_padding_bottom(1.0)
-                    .with_background(internal_colors::fg_overlay_1(theme))
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                    .finish(),
-            );
-        }
+
+        // Provider · Plan as two fixed slots (spec §2.4) — a dash fills the plan
+        // slot when the plan is unknown, so the slot is always present and the
+        // plan never silently reads as the provider. The Codex `plan_tier` leak
+        // (provider name bleeding into the plan) was fixed in the data model (S2).
+        let plan = acct
+            .account
+            .plan_tier
+            .clone()
+            .unwrap_or_else(|| crate::t!("cockpit-card-plan-none"));
+        let provider_plan = crate::t!(
+            "cockpit-card-provider-plan",
+            provider = provider_label(acct.account.provider),
+            plan = plan
+        );
 
         let cost_line = crate::t!(
             "cockpit-card-cost-line",
@@ -357,13 +370,12 @@ impl CockpitPanel {
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(CARD_SPACING)
             .with_child(header.finish())
-            // Headline = the *binding* window (fullest of 5h / week / Opus /
-            // Sonnet sublimits), not always 5h — otherwise a busy weekly/Opus
-            // limit reads as a calm 5h and the card under-reports (Codex #6).
-            .with_child({
-                let (frac, label) = zaplex_cockpit::binding_window(acct);
-                self.heat_bar(label, frac, acct.provenance, appearance)
-            })
+            .with_child(Self::text(provider_plan, family, body, muted))
+            // BOTH meters, not just the binding window (spec §2.5): the rolling
+            // 5h block and the 7-day week, each heat-colored, so the user sees
+            // both limits at a glance instead of one merged headline.
+            .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance))
+            .with_child(self.heat_bar("wk", acct.heat_week, acct.provenance, appearance))
             .with_child(Self::text(cost_line, family, body, muted));
         if let Some(session_line) = session_line {
             let color = if waiting > 0 {
@@ -377,24 +389,29 @@ impl CockpitPanel {
             col = col.with_child(Self::text(reset_line, family, body, muted));
         }
 
-        let card = Container::new(col.finish())
-            .with_uniform_padding(CARD_PADDING)
-            .with_margin_bottom(CARD_SPACING)
-            .with_background(internal_colors::fg_overlay_1(theme))
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.0)))
-            .finish();
-        // The whole card is a click target → opens the roomy dashboard pane (same
-        // action as the ⤢ expand button). Previously the card looked interactive but
-        // did nothing on click.
+        // A flat account block inside the AI-Accounts zone-card — no per-card
+        // container chrome (emphasis via content + spacing, spec §2.1). The whole
+        // block is a click target that opens the roomy dashboard pane; hover adds
+        // a subtle fill only (colour, never layout — spec §2.7).
+        let col_el = col.finish();
         let handle = self
             .card_states
             .get(&acct.account.key)
             .cloned()
             .unwrap_or_default();
-        Hoverable::new(handle, move |_mouse| card)
-            .with_cursor(warpui::platform::Cursor::PointingHand)
-            .on_click(|ctx, _, _| ctx.dispatch_typed_action(CockpitPanelAction::OpenDashboardPane))
-            .finish()
+        Hoverable::new(handle, move |mouse| {
+            let mut c = Container::new(col_el)
+                .with_uniform_padding(CARD_PADDING)
+                .with_margin_bottom(CARD_SPACING)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.0)));
+            if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_1(theme));
+            }
+            c.finish()
+        })
+        .with_cursor(warpui::platform::Cursor::PointingHand)
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(CockpitPanelAction::OpenDashboardPane))
+        .finish()
     }
 
     /// The glanceable **Conductor** for the sidebar: the unified cross-host
@@ -893,8 +910,8 @@ impl CockpitPanel {
     fn render_header(
         &self,
         snapshot_len: usize,
-        cost5h: f64,
-        cost_wk: f64,
+        fleet_today: f64,
+        fleet_week: f64,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -914,11 +931,12 @@ impl CockpitPanel {
                 sub,
                 main,
             ))
+            // Fleet total = today · week (spec §2.5), the sum across accounts.
             .with_child(Self::text(
                 crate::t!(
                     "cockpit-header-cost-summary",
-                    cost5h = format_cost(cost5h),
-                    costwk = format_cost(cost_wk)
+                    today = format_cost(fleet_today),
+                    week = format_cost(fleet_week)
                 ),
                 family,
                 body,
@@ -994,10 +1012,10 @@ impl View for CockpitPanel {
             );
         }
 
-        // ── AI-Accounts section (below the hosts). The account header (fleet
-        // usage) leads it, then one card per account; S4 folds this into its own
-        // zone-card. Empty accounts show a calm hint (as a section under the
-        // hosts, not the whole panel — hosts stay visible without an account).
+        // ── AI-Accounts zone-card (below the hosts, spec §2.1). One flat card
+        // holding the fleet-usage header + one flat block per account. Empty
+        // accounts show a calm hint instead (a section under the hosts, not the
+        // whole panel — hosts stay visible without an account).
         if snapshot.accounts.is_empty() {
             cards = cards.with_child(
                 Container::new(Self::text(
@@ -1010,21 +1028,29 @@ impl View for CockpitPanel {
                 .finish(),
             );
         } else {
-            let cost5h: f64 = snapshot.accounts.iter().map(|a| a.block5h.cost_usd).sum();
-            let cost_wk: f64 = snapshot.accounts.iter().map(|a| a.week.cost_usd).sum();
-            cards = cards.with_child(
-                Container::new(self.render_header(
-                    snapshot.accounts.len(),
-                    cost5h,
-                    cost_wk,
-                    appearance,
-                ))
-                .with_margin_bottom(CARD_SPACING * 2.0)
-                .finish(),
-            );
+            let fleet_today: f64 = snapshot.accounts.iter().map(|a| a.today.cost_usd).sum();
+            let fleet_week: f64 = snapshot.accounts.iter().map(|a| a.week.cost_usd).sum();
+            let mut accounts = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_child(
+                    Container::new(self.render_header(
+                        snapshot.accounts.len(),
+                        fleet_today,
+                        fleet_week,
+                        appearance,
+                    ))
+                    .with_margin_bottom(CARD_SPACING * 2.0)
+                    .finish(),
+                );
             for acct in &snapshot.accounts {
-                cards = cards.with_child(self.render_card(acct, appearance));
+                accounts = accounts.with_child(self.render_card(acct, appearance));
             }
+            cards = cards.with_child(
+                zone_card(accounts.finish(), appearance)
+                    .with_uniform_padding(CARD_PADDING)
+                    .finish(),
+            );
         }
 
         let body_el = ClippedScrollable::vertical(

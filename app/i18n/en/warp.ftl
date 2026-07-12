@@ -2834,6 +2834,8 @@ cockpit-session-fork = fork
 cockpit-session-fork-worktree = +worktree
 # Cockpit sidebar runtime strings (WS2: were hard-coded English format! literals)
 cockpit-card-cost-line = today { $cost } · { $tokens }
+cockpit-card-provider-plan = { $provider } · { $plan }
+cockpit-card-plan-none = —
 cockpit-card-sessions-active = ● { $count } active
 cockpit-card-sessions-waiting = ● { $count } waiting
 cockpit-card-sessions-running = ◌ { $count } running
@@ -2845,7 +2847,7 @@ cockpit-header-account-count = { $count } { $count ->
         [one] account
        *[other] accounts
     }
-cockpit-header-cost-summary = { $cost5h } 5h · { $costwk } wk
+cockpit-header-cost-summary = today { $today } · { $week } wk
 cockpit-header-dashboard-button = ⤢  Dashboard
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear

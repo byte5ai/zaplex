@@ -170,6 +170,15 @@ pub fn provider_icon(provider: Provider) -> icons::Icon {
     }
 }
 
+/// The human provider name for the Provider slot of an account card (spec §2.4:
+/// Provider and Plan are two separate slots). A proper noun, not translated.
+pub fn provider_label(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Claude => "Claude",
+        Provider::Codex => "Codex",
+    }
+}
+
 /// The status-dot color for a session state on the given surface (spec §2.3:
 /// status is carried by **color**, not a chrome glyph). Waiting is the one
 /// attention band (amber), working rests in the calm "ok" green, idle fades to
