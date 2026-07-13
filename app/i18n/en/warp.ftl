@@ -2853,7 +2853,8 @@ cockpit-header-account-count = { $count } { $count ->
        *[other] accounts
     }
 cockpit-header-cost-summary = today { $today } · { $week } wk
-cockpit-header-dashboard-button = ⤢  Dashboard
+cockpit-header-today-total = today { $today }
+cockpit-header-dashboard-button = Dashboard
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
 workspace-left-panel-cockpit-empty = No Claude or Codex accounts found.
@@ -3777,9 +3778,13 @@ cockpit-flow-quick-issue = Draft GitHub issue (freest)
 cockpit-flow-pr-review = Review a PR (freest)
 cockpit-flow-triage = Triage an issue (freest)
 cockpit-spawn-card-new-agent = New agent…
-cockpit-conductor-title = By project — what needs you
+cockpit-conductor-title = Hosts
 cockpit-conductor-add-host = Add host
 cockpit-conductor-empty = No agents or hosts yet
+cockpit-tt-favorite-add = Add to favorites
+cockpit-tt-favorite-remove = Remove from favorites
+cockpit-tt-manage-host = Manage host
+cockpit-tt-review = Review changes
 cockpit-host-no-agents = no agents
 cockpit-conductor-rest-show-both = { $running } running · { $idle } idle — show
 cockpit-conductor-rest-show-running = { $running } running — show

@@ -23,10 +23,13 @@ use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
-    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex, Hoverable,
-    MouseStateHandle, ParentElement, Radius, Rect, Text,
+    Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex,
+    Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
+    Radius, Rect, Stack, Text,
 };
+use warpui::geometry::vector::vec2f;
 use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
 use warpui::Action;
 use zaplex_cockpit::{HeatLevel, Provider, SessionState};
 
@@ -272,6 +275,49 @@ pub fn icon_verb_button<A: Action + Clone>(
             .with_width(GLYPH_COL_WIDTH)
             .with_height(GLYPH_COL_WIDTH)
             .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+    .finish()
+}
+
+/// An icon verb button ([`icon_verb_button`]) **with a hover tooltip** — every
+/// icon-only affordance on the cockpit surfaces should carry one so the meaning
+/// is discoverable (a bare clickable glyph without a label is not). The tooltip
+/// floats above the icon on hover only (respects the hover rule — it's an
+/// overlay, it doesn't re-lay-out the row).
+pub fn icon_verb_button_tooltip<A: Action + Clone>(
+    state: MouseStateHandle,
+    icon: icons::Icon,
+    rest: Fill,
+    hover: Fill,
+    tooltip: impl Into<String>,
+    appearance: &Appearance,
+    action: A,
+) -> Box<dyn Element> {
+    let builder = appearance.ui_builder();
+    let tooltip = tooltip.into();
+    Hoverable::new(state, move |mouse| {
+        let color = if mouse.is_hovered() { hover } else { rest };
+        let icon_el = ConstrainedBox::new(icon.to_warpui_icon(color).finish())
+            .with_width(GLYPH_COL_WIDTH)
+            .with_height(GLYPH_COL_WIDTH)
+            .finish();
+        if !mouse.is_hovered() {
+            return icon_el;
+        }
+        let mut stack = Stack::new();
+        stack.add_child(icon_el);
+        stack.add_positioned_overlay_child(
+            builder.tool_tip(tooltip.clone()).build().finish(),
+            OffsetPositioning::offset_from_parent(
+                vec2f(0.0, -6.0),
+                ParentOffsetBounds::Unbounded,
+                ParentAnchor::TopMiddle,
+                ChildAnchor::BottomMiddle,
+            ),
+        );
+        stack.finish()
     })
     .with_cursor(Cursor::PointingHand)
     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))

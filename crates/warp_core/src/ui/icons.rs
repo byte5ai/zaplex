@@ -132,6 +132,10 @@ pub enum Icon {
     InlineCode,
     Strikethrough,
     Stars,
+    /// Single 5-point star outline — the conventional "not favorited" mark.
+    Star,
+    /// Single filled 5-point star — the conventional "favorited" mark.
+    StarFilled,
     AgentMode,
     AmbientAgentMode,
     Github,
@@ -443,6 +447,8 @@ impl From<Icon> for &'static str {
             Icon::InlineCode => "bundled/svg/edit-code.svg",
             Icon::Strikethrough => "bundled/svg/edit-strikethrough.svg",
             Icon::Stars => "bundled/svg/stars-01.svg",
+            Icon::Star => "bundled/svg/star.svg",
+            Icon::StarFilled => "bundled/svg/star-filled.svg",
             Icon::AgentMode => "bundled/svg/agentmode.svg",
             Icon::AmbientAgentMode => "bundled/svg/ambient-agent-mode.svg",
             Icon::Github => "bundled/svg/github.svg",

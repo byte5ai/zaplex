@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
 use warpui::elements::{
     ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment,
@@ -24,8 +25,8 @@ use zaplex_cockpit::{
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button, provider_icon, provider_label,
-    status_dot_coloru, zone_card, GLYPH_COL_WIDTH, METRIC_COL_WIDTH,
+    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button_tooltip, provider_icon,
+    provider_label, status_dot_coloru, zone_card, GLYPH_COL_WIDTH, METRIC_COL_WIDTH,
 };
 use crate::ui_components::icons;
 use crate::WorkspaceAction;
@@ -538,11 +539,13 @@ impl CockpitPanel {
                     let action = WorkspaceAction::ManageSshHost {
                         node_id: node_id.clone(),
                     };
-                    header_row = header_row.with_child(icon_verb_button(
+                    header_row = header_row.with_child(icon_verb_button_tooltip(
                         manage_state,
                         icons::Icon::DotsHorizontal,
                         theme.sub_text_color(theme.background()),
                         theme.accent(),
+                        crate::t!("cockpit-tt-manage-host"),
+                        appearance,
                         action,
                     ));
                 }
@@ -741,11 +744,13 @@ impl CockpitPanel {
                         project_root: PathBuf::from(&session.project_root),
                         project_name: session.project_name.clone(),
                     };
-                    icon_verb_button(
+                    icon_verb_button_tooltip(
                         st,
                         icons::Icon::Eye,
                         theme.sub_text_color(theme.background()),
                         theme.accent(),
+                        crate::t!("cockpit-tt-review"),
+                        appearance,
                         action,
                     )
                 })
@@ -904,9 +909,10 @@ impl CockpitPanel {
         .finish()
     }
 
-    /// The ★ favorite toggle for a Conductor tree node (design §10), rendered in
-    /// the real icon font (#107). Favorited rests in the accent (hover → muted,
-    /// hinting un-star); not-favorited rests muted (hover → accent, hinting star).
+    /// The favorite toggle for a Conductor tree node (design §10) — the
+    /// conventional star: a **filled gold star** when favorited (hover dims to
+    /// hint un-star), a **hollow outline star** otherwise (hover → gold to hint
+    /// add). A tooltip names the action, since a bare star is otherwise ambiguous.
     fn star_button(
         state: MouseStateHandle,
         is_fav: bool,
@@ -914,21 +920,35 @@ impl CockpitPanel {
         action: WorkspaceAction,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let accent = theme.accent();
+        let gold = Fill::Solid(theme.ui_yellow_color());
         let muted = theme.sub_text_color(theme.background());
-        let (rest, hover) = if is_fav {
-            (accent, muted)
+        let (icon, rest, hover, tooltip) = if is_fav {
+            (
+                icons::Icon::StarFilled,
+                gold,
+                muted,
+                crate::t!("cockpit-tt-favorite-remove"),
+            )
         } else {
-            (muted, accent)
+            (
+                icons::Icon::Star,
+                muted,
+                gold,
+                crate::t!("cockpit-tt-favorite-add"),
+            )
         };
-        icon_verb_button(state, icons::Icon::Stars, rest, hover, action)
+        icon_verb_button_tooltip(state, icon, rest, hover, tooltip, appearance, action)
     }
 
+    /// The AI-Accounts zone-card header — deliberately spare so it never
+    /// overflows the narrow rail (the old count · today · week · button line
+    /// clipped): the section title (with count) on the left, today's fleet spend
+    /// on the right, and a compact dashboard icon. The week total lives in the
+    /// pane aggregate and on each account card, so it is not repeated here.
     fn render_header(
         &self,
         snapshot_len: usize,
         fleet_today: f64,
-        fleet_week: f64,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -941,20 +961,23 @@ impl CockpitPanel {
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_spacing(8.0)
+            // The title flexes/truncates first, so the number + icon on the right
+            // are never the thing that gets clipped.
+            .with_child(
+                Shrinkable::new(
+                    1.0,
+                    Self::text(
+                        crate::t!("cockpit-header-account-count", count = (snapshot_len as i64)),
+                        family,
+                        sub,
+                        main,
+                    ),
+                )
+                .finish(),
+            )
             .with_child(Self::text(
-                crate::t!("cockpit-header-account-count", count = (snapshot_len as i64)),
-                family,
-                sub,
-                main,
-            ))
-            // Fleet total = today · week (spec §2.5), the sum across accounts.
-            .with_child(Self::text(
-                crate::t!(
-                    "cockpit-header-cost-summary",
-                    today = format_cost(fleet_today),
-                    week = format_cost(fleet_week)
-                ),
+                crate::t!("cockpit-header-today-total", today = format_cost(fleet_today)),
                 family,
                 body,
                 muted,
@@ -963,32 +986,20 @@ impl CockpitPanel {
             .finish()
     }
 
-    /// "Open dashboard" affordance: expands the compact sidebar into the roomy
-    /// main-area cockpit pane (C2b).
+    /// "Open dashboard" affordance: a compact icon (tooltip-labelled) that opens
+    /// the roomy main-area cockpit pane (C2b). Icon-only keeps the header line
+    /// from overflowing the narrow rail.
     fn render_expand_button(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let sub = appearance.ui_font_subheading();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-        // Labeled + larger than the old bare "⤢" glyph, which nobody recognized as
-        // the entry point to the full dashboard.
-        Hoverable::new(self.expand_btn.clone(), move |mouse| {
-            let mut c = Container::new(Self::text(crate::t!("cockpit-header-dashboard-button"), family, sub, muted))
-                .with_padding_left(8.0)
-                .with_padding_right(8.0)
-                .with_padding_top(3.0)
-                .with_padding_bottom(3.0)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
-            if mouse.is_hovered() {
-                c = c.with_background(internal_colors::fg_overlay_2(theme));
-            }
-            c.finish()
-        })
-        .with_cursor(warpui::platform::Cursor::PointingHand)
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(CockpitPanelAction::OpenDashboardPane);
-        })
-        .finish()
+        icon_verb_button_tooltip(
+            self.expand_btn.clone(),
+            icons::Icon::Maximize,
+            theme.sub_text_color(theme.background()),
+            theme.accent(),
+            crate::t!("cockpit-header-dashboard-button"),
+            appearance,
+            CockpitPanelAction::OpenDashboardPane,
+        )
     }
 }
 
@@ -1046,7 +1057,6 @@ impl View for CockpitPanel {
             );
         } else {
             let fleet_today: f64 = snapshot.accounts.iter().map(|a| a.today.cost_usd).sum();
-            let fleet_week: f64 = snapshot.accounts.iter().map(|a| a.week.cost_usd).sum();
             let selected = CockpitModel::as_ref(app)
                 .selected_account()
                 .map(str::to_string);
@@ -1057,7 +1067,6 @@ impl View for CockpitPanel {
                     Container::new(self.render_header(
                         snapshot.accounts.len(),
                         fleet_today,
-                        fleet_week,
                         appearance,
                     ))
                     .with_margin_bottom(CARD_SPACING * 2.0)

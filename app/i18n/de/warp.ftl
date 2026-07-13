@@ -34,7 +34,7 @@ cockpit-attention-inbox-count = { $count ->
    *[other] { $count } Agents warten auf dich
 }
 cockpit-attention-inbox-empty = Alles erledigt — nichts wartet auf dich.
-cockpit-conductor-title = Nach Projekt — was dich braucht
+cockpit-conductor-title = Hosts
 
 # Session-Zeilen-Aktionen im Cockpit
 cockpit-session-adopt = ▸ übernehmen
@@ -57,7 +57,8 @@ cockpit-header-account-count = { $count } { $count ->
        *[other] Konten
     }
 cockpit-header-cost-summary = heute { $today } · { $week } Wo
-cockpit-header-dashboard-button = ⤢  Dashboard
+cockpit-header-today-total = heute { $today }
+cockpit-header-dashboard-button = Dashboard
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
 
@@ -68,6 +69,10 @@ cockpit-flow-triage = Issue triagieren (freieste)
 cockpit-spawn-card-new-agent = Neuer Agent…
 cockpit-conductor-add-host = Host hinzufügen
 cockpit-conductor-empty = Noch keine Agents oder Hosts
+cockpit-tt-favorite-add = Zu Favoriten
+cockpit-tt-favorite-remove = Aus Favoriten entfernen
+cockpit-tt-manage-host = Host verwalten
+cockpit-tt-review = Änderungen prüfen
 cockpit-host-no-agents = keine Agents
 cockpit-conductor-rest-show-both = { $running } laufend · { $idle } ruhend — zeigen
 cockpit-conductor-rest-show-running = { $running } laufend — zeigen
