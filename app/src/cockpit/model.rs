@@ -591,6 +591,7 @@ mod tests {
             project_name: "proj".into(),
             branch: None,
             worktree: None,
+            config_dir: None,
             last_activity: Utc::now(),
             pid: 0,
         }

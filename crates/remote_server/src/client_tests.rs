@@ -712,6 +712,7 @@ async fn list_agent_sessions_round_trip() {
                     project_name: "proj".to_string(),
                     worktree: "wt-feature".to_string(),
                     branch: "feature-work".to_string(),
+                    config_dir: "/home/me/.codex-work".to_string(),
                     last_activity_epoch_millis: 1_720_000_000_123,
                     pid: 4242,
                 },
@@ -731,6 +732,7 @@ async fn list_agent_sessions_round_trip() {
                     // detached / non-repo).
                     worktree: String::new(),
                     branch: String::new(),
+                    config_dir: String::new(),
                     last_activity_epoch_millis: 0,
                     pid: 0,
                 },

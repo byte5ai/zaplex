@@ -94,7 +94,16 @@ pub fn build_snapshot(
 
     for account in claude::discover_accounts(home, claude_config_dir_env) {
         let entries = claude::usage_for_account(&account, since);
-        let live = sessions::live_sessions(&account.config_dir, now);
+        // Non-default accounts carry their config dir so a remote resume can pin
+        // the right subscription (`CLAUDE_CONFIG_DIR`); the default needs no pin.
+        let cfg = account.config_dir_pin();
+        let live: Vec<SessionSnapshot> = sessions::live_sessions(&account.config_dir, now)
+            .into_iter()
+            .map(|mut s| {
+                s.config_dir = cfg.clone();
+                s
+            })
+            .collect();
         // Explicit user budgets win; otherwise estimate from the plan tier so
         // Enterprise/Team accounts aren't shown falsely maxed.
         let (plan_5h, plan_week) = windows::plan_budgets(account.plan_tier.as_deref());
@@ -122,7 +131,14 @@ pub fn build_snapshot(
         // Codex live agent-sessions (Step 8 parity): transcript-inferred, no
         // registry/pid (see `codex_sessions`). Attached so they flow into the
         // unified Agent-Inventory exactly like Claude's.
-        let live = codex_sessions::live_sessions(&account.config_dir, now);
+        let cfg = account.config_dir_pin();
+        let live: Vec<SessionSnapshot> = codex_sessions::live_sessions(&account.config_dir, now)
+            .into_iter()
+            .map(|mut s| {
+                s.config_dir = cfg.clone();
+                s
+            })
+            .collect();
         let usage = build_account_usage(account, entries, now, b5h, bwk, pricing);
         accounts.push(windows::with_sessions(usage, live));
     }

@@ -4361,14 +4361,14 @@ impl Workspace {
             .flat_map(|h| &h.projects)
             .flat_map(|p| &p.sessions)
             .find(|s| s.session_id == session_id)
-            .map(|s| (s.provider, s.cwd.clone(), s.name.clone()));
+            .map(|s| (s.provider, s.cwd.clone(), s.name.clone(), s.config_dir.clone()));
         let config_dir = if is_local {
             model.config_dir_for_session(session_id)
         } else {
             None
         };
 
-        let Some((provider, cwd, name)) = resolved else {
+        let Some((provider, cwd, name, session_config_dir)) = resolved else {
             // The inventory moved on (session ended between render and click).
             return;
         };
@@ -4428,7 +4428,16 @@ impl Workspace {
                 });
                 return;
             };
-            let Some(resume_cmd) = agent.resume_command_pinned(session_id, None) else {
+            // Pin the session's account on the resume so a plexed remote agent
+            // (a non-default CODEX_HOME / CLAUDE_CONFIG_DIR on the host) is found
+            // — the daemon reported the host-side config dir with the session.
+            // Without this, `codex resume <id>` ran under the host's *default*
+            // login and silently found nothing (the reported dead pane). The path
+            // is the host's; it's replayed verbatim inside the daemon's
+            // `startup_command`, so it must not be canonicalized against the local
+            // filesystem.
+            let pinned_dir = session_config_dir.as_deref().map(Path::new);
+            let Some(resume_cmd) = agent.resume_command_pinned(session_id, pinned_dir) else {
                 // No resume mechanism for this agent → nothing honest to do.
                 return;
             };

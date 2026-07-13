@@ -16,6 +16,7 @@ fn session(name: &str, cwd: &str, pid: u32) -> SessionSnapshot {
         project_name: "proj".to_string(),
         branch: None,
         worktree: None,
+        config_dir: None,
         last_activity: Utc::now(),
         pid,
     }

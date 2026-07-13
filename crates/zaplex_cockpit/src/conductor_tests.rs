@@ -30,6 +30,7 @@ fn session(id: &str, cwd: &str, state: SessionState, activity: i64) -> SessionSn
         project_name: name,
         branch: None,
         worktree: None,
+        config_dir: None,
         last_activity: at(activity),
         pid: 0,
     }

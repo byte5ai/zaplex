@@ -19,6 +19,7 @@ fn sample(state: SessionState, provider: Provider, effort: Option<String>) -> Se
         // fields (Some → wire string → Some).
         branch: Some("rc/master-plan".to_string()),
         worktree: Some("wt-rc".to_string()),
+        config_dir: Some("/home/me/.codex-work".to_string()),
         // Millisecond-precise so the epoch-millis round-trip is exact.
         last_activity: Utc
             .timestamp_millis_opt(1_720_000_000_123)

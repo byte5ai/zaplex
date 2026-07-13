@@ -285,6 +285,8 @@ pub fn live_sessions(config_dir: &Path, now: DateTime<Utc>) -> Vec<SessionSnapsh
                 project_name: project.name,
                 branch: project.branch,
                 worktree: project.worktree,
+                // Set by the snapshot builder from the owning account (per pin).
+                config_dir: None,
                 last_activity,
                 pid: r.pid,
             }

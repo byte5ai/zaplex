@@ -225,6 +225,8 @@ pub fn live_sessions(codex_home: &Path, now: DateTime<Utc>) -> Vec<SessionSnapsh
             project_name: project.name,
             branch: project.branch,
             worktree: project.worktree,
+            // Set by the snapshot builder from the owning account (per pin).
+            config_dir: None,
             last_activity,
             // Codex records no pid — guardrail signalling can't target it.
             pid: 0,

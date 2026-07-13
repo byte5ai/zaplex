@@ -766,6 +766,10 @@ message AgentSessionInfo {
   // decodes cleanly.
   string worktree = 13;
   string branch = 14;
+  // The session account's provider config dir ON THE HOST (a plexed CODEX_HOME /
+  // CLAUDE_CONFIG_DIR), so the client can pin the right subscription when it asks
+  // the daemon to resume the session. Empty = default account (no pin).
+  string config_dir = 15;
 }
 
 // Daemon → client: result of ListAgentSessions.

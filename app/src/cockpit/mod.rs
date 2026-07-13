@@ -90,6 +90,7 @@ mod session_effort_tests {
             project_name: String::new(),
             branch: None,
             worktree: None,
+            config_dir: None,
             last_activity: Utc::now(),
             pid: 0,
         }

@@ -47,6 +47,17 @@ pub struct Account {
     pub is_default: bool,
 }
 
+impl Account {
+    /// The config dir to **pin** when resuming/forking a session under this
+    /// account (`CODEX_HOME` / `CLAUDE_CONFIG_DIR`), or `None` for the default
+    /// account (which needs no pin). Single source so the local snapshot builder
+    /// and the remote daemon stamp [`SessionSnapshot::config_dir`] identically —
+    /// otherwise a remote resume can't route to a plexed subscription.
+    pub fn config_dir_pin(&self) -> Option<String> {
+        (!self.is_default).then(|| self.config_dir.to_string_lossy().into_owned())
+    }
+}
+
 /// One usage record extracted from a transcript line (one assistant turn/message).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageEntry {
@@ -153,6 +164,14 @@ pub struct SessionSnapshot {
     /// `branch` to identify a session (redesign §2.2).
     #[serde(default)]
     pub worktree: Option<String>,
+    /// The provider config directory this session's account lives under
+    /// (`~/.codex` / a plexed `CODEX_HOME`, `~/.claude` / `CLAUDE_CONFIG_DIR`).
+    /// Carried so a **remote** resume can pin the right subscription — over the
+    /// wire this is the *host's* path, replayed verbatim in the daemon's
+    /// `startup_command`. `None` for the default account (no pin needed) or when
+    /// the producer didn't record it.
+    #[serde(default)]
+    pub config_dir: Option<String>,
     pub last_activity: DateTime<Utc>,
     pub pid: u32,
 }

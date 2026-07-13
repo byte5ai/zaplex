@@ -40,6 +40,7 @@ fn session_in(
         project_name: name,
         branch: None,
         worktree: None,
+        config_dir: None,
         last_activity: at(activity),
         pid: 0,
     }
