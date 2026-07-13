@@ -6423,6 +6423,22 @@ impl Workspace {
     pub fn open_cockpit_pane(&mut self, ctx: &mut ViewContext<Self>) {
         use crate::pane_group::pane::cockpit_pane::CockpitPane;
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            // The Cockpit dashboard is a singleton per tab: every account click and
+            // the sidebar's ⤢ button dispatch OpenDashboardPane, so without dedup
+            // each one spawned another identical Cockpit pane. If one already
+            // exists, just focus it (the selection highlight already tracks the
+            // clicked account).
+            // `visible_pane_ids` excludes panes hidden-for-close, so we never match
+            // a stale pane that `focus_pane_by_id` can't focus (which would `return`
+            // and open nothing — review).
+            let existing = pane_group
+                .visible_pane_ids()
+                .into_iter()
+                .find(|id| pane_group.downcast_pane_by_id::<CockpitPane>(*id).is_some());
+            if let Some(id) = existing {
+                pane_group.focus_pane_by_id(id, ctx);
+                return;
+            }
             let pane = CockpitPane::new(ctx);
             let smart_split_direction =
                 pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
@@ -6435,12 +6451,25 @@ impl Workspace {
         });
     }
 
-    /// Opens an edit pane for the given SSH node in the central area. MVP implementation:
-    /// **always opens a new pane** (no dedup / find_pane yet); starting in Phase 2 a manager
-    /// singleton will do dedup + focus switching.
+    /// Opens an edit pane for the given SSH node in the central area. Deduped per
+    /// host: if an editor for the same `node_id` already exists in this tab, it is
+    /// focused instead of splitting a duplicate (repeated ⋯-manage clicks used to
+    /// stack identical editors).
     pub fn open_ssh_server(&mut self, node_id: String, ctx: &mut ViewContext<Self>) {
         use crate::pane_group::pane::ssh_server_pane::SshServerPane;
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            let existing = pane_group
+                .visible_pane_ids()
+                .into_iter()
+                .find(|id| {
+                    pane_group
+                        .downcast_pane_by_id::<SshServerPane>(*id)
+                        .is_some_and(|p| p.node_id() == node_id.as_str())
+                });
+            if let Some(id) = existing {
+                pane_group.focus_pane_by_id(id, ctx);
+                return;
+            }
             let pane = SshServerPane::new(node_id, ctx);
             let smart_split_direction =
                 pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
@@ -21635,51 +21664,66 @@ impl TypedActionView for Workspace {
                 // Owned handle (not the `&ViewHandle` borrow of `self`) so it can be
                 // moved into the deferred 'static closure below.
                 let active_pg = self.active_tab_pane_group().clone();
-                // Resolve the FM host context from the INVOKING (focused) pane's own
-                // session — NOT the tab (Codex #1). A local split inside an SSH tab
-                // must open the LOCAL file manager, and a remote pane must open its
-                // host's FM. Only when the pane's own session can't be resolved to a
-                // host do we fall back to the tab's recorded node (`ssh_tab_nodes`),
-                // then to Local as the safe default.
-                let active_view = active_pg.as_ref(ctx).active_session_view(ctx);
-                let pane_is_local = active_view
-                    .as_ref()
-                    .and_then(|v| v.as_ref(ctx).active_session_is_local(ctx));
-                let target = if pane_is_local == Some(true) {
-                    crate::pane_group::FileManagerTarget::Local {
-                        start_path: start_path.clone(),
-                    }
-                } else {
-                    let node_id = active_view
-                        .as_ref()
-                        .and_then(|v| v.as_ref(ctx).active_block_session_id())
-                        .and_then(|sid| self.node_for_session(sid))
-                        .or_else(|| self.ssh_tab_nodes.get(&active_pg.id()).cloned());
-                    match node_id {
-                        Some(node_id) => crate::pane_group::FileManagerTarget::Remote {
-                            node_id,
-                            start_path: Some(start_path.clone()),
-                        },
-                        None => crate::pane_group::FileManagerTarget::Local {
-                            start_path: start_path.clone(),
-                        },
-                    }
-                };
                 // Capture the targeted pane NOW (at dispatch time) — the pane focused
                 // when the action fired. Re-reading `focused_pane_id` inside the
                 // deferred closure would toggle whatever happens to be focused at the
-                // later tick, which can differ if focus moved in between.
+                // later tick, which can differ if focus moved in between. (This reads
+                // the pane-group's focus state, not the invoking view, so it's safe to
+                // call synchronously.)
                 let target_pane_id = active_pg.as_ref(ctx).focused_pane_id(ctx);
-                // Defer the in-place swap to the next foreground tick. This action is
-                // dispatched synchronously from *inside* the invoking pane's own view
-                // update — the header FM-toggle button (PaneView<TerminalView> update)
-                // and the cmd-shift-E binding routed through the focused TerminalView.
-                // Replacing + refocusing that pane while it is still borrowed panics
-                // with "circular view reference" (replace_pane -> focus_pane_by_id ->
-                // update_session_visibility re-borrows the same view). Running it after
-                // the current update returns removes the re-entrancy; harmless for the
-                // overflow-menu path (already dispatched outside any update).
-                ctx.spawn(async move {}, move |_workspace, _, ctx| {
+                let start_path = start_path.clone();
+                // Defer EVERYTHING that touches the invoking pane's view — BOTH the
+                // host-context resolution AND the in-place swap. This action fires
+                // synchronously from *inside* the invoking pane's own view update (the
+                // header FM-toggle button — a `PaneView<TerminalView>` update — and the
+                // cmd-shift-E binding routed through the focused `TerminalView`). The
+                // context resolution borrows that same `PaneView<TerminalView>`
+                // (`active_session_view(...).as_ref()`), and the swap re-borrows it
+                // (`replace_pane` → `focus_pane_by_id` → `update_session_visibility`) —
+                // both panic with "circular view reference" while it is still checked
+                // out. Running it all after the current update returns removes the
+                // re-entrancy. (An earlier version deferred only the swap but resolved
+                // the context synchronously, and still crashed on the FM-on-SSH-pane
+                // click — that's this fix.)
+                ctx.spawn(async move {}, move |workspace, _, ctx| {
+                    // Resolve the FM host context from the INVOKING (focused) pane's own
+                    // session — NOT the tab (Codex #1). A local split inside an SSH tab
+                    // opens the LOCAL file manager; a remote pane opens its host's FM.
+                    // Fall back to the tab's recorded node, then Local as the safe
+                    // default. Safe to borrow the view here: the invoking update has
+                    // returned, so the pane view is no longer checked out.
+                    //
+                    // Resolve from the CAPTURED `target_pane_id`, not the *current*
+                    // active session — focus may have moved to another terminal
+                    // before this deferred tick, and the swap targets that captured
+                    // pane, so the host context must come from the same pane (review).
+                    let active_view = active_pg
+                        .as_ref(ctx)
+                        .downcast_pane_by_id::<crate::pane_group::TerminalPane>(target_pane_id)
+                        .map(|tp| tp.terminal_view(ctx));
+                    let pane_is_local = active_view
+                        .as_ref()
+                        .and_then(|v| v.as_ref(ctx).active_session_is_local(ctx));
+                    let target = if pane_is_local == Some(true) {
+                        crate::pane_group::FileManagerTarget::Local {
+                            start_path: start_path.clone(),
+                        }
+                    } else {
+                        let node_id = active_view
+                            .as_ref()
+                            .and_then(|v| v.as_ref(ctx).active_block_session_id())
+                            .and_then(|sid| workspace.node_for_session(sid))
+                            .or_else(|| workspace.ssh_tab_nodes.get(&active_pg.id()).cloned());
+                        match node_id {
+                            Some(node_id) => crate::pane_group::FileManagerTarget::Remote {
+                                node_id,
+                                start_path: Some(start_path.clone()),
+                            },
+                            None => crate::pane_group::FileManagerTarget::Local {
+                                start_path: start_path.clone(),
+                            },
+                        }
+                    };
                     active_pg.update(ctx, |pane_group, ctx| {
                         pane_group.open_file_manager_in_place(target_pane_id, target, ctx);
                     });
