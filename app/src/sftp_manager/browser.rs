@@ -3449,13 +3449,24 @@ impl View for SftpBrowserView {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
-        // 1. When not connected, show the connection state
+        // 1. When not connected, show the connection state.
+        //
+        // NB: the view root is wrapped in a `Container`, never returned as a bare
+        // `Flex(MainAxisSize::Max)`. `PaneView` mounts every child view as a
+        // `Shrinkable` flex child, so a bare `Flex(Max)` root is measured with an
+        // infinite main axis and trips the flex assert → SIGABRT (the crash hit
+        // when opening the file manager on an SSH pane, which lands here first in
+        // the "Connecting…" state). The tight `Container` wrapper is the same
+        // remedy `CodeView` uses.
         if !matches!(self.connection, ConnectionState::Connected) {
-            return Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_child(self.render_connection_state(appearance))
-                .finish();
+            return Container::new(
+                Flex::column()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_child(self.render_connection_state(appearance))
+                    .finish(),
+            )
+            .finish();
         }
 
         let mut col = Flex::column()
@@ -3524,7 +3535,11 @@ impl View for SftpBrowserView {
         col.add_child(self.render_function_bar(appearance));
 
         // 7. Transfer panel (floating at the bottom)
-        let mut main_content = col.finish();
+        // Wrap the `Flex(Max)` body in a tight `Container` before it becomes the
+        // view root (same reason as the not-connected branch above): the pane
+        // mounts this as a `Shrinkable` flex child, and a bare `Flex(Max)` root
+        // would be measured with an infinite main axis and crash.
+        let mut main_content = Container::new(col.finish()).finish();
 
         // 8. Transfer panel floating layer
         if !self.transfers.is_empty() && !self.transfer_panel_hidden {
