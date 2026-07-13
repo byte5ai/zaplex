@@ -4,7 +4,7 @@
 //! native-integration design doc). The roomy full dashboard is the main-area pane (C2b).
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
@@ -49,10 +49,6 @@ pub struct CockpitPanel {
     /// stable host identity — never the display label), synced against the
     /// unified inventory. Clicking a row attaches the agent.
     conductor_row_states: HashMap<String, MouseStateHandle>,
-    /// Hover state of each local row's compact "review" verb (step 6, key =
-    /// `host_ident\0id`). The sidebar is the glance surface, so it carries only the
-    /// review entry point; the full commit/PR cluster lives on the main pane.
-    conductor_review_states: HashMap<String, MouseStateHandle>,
     /// Hover state per account card (key = account `key`). The whole card is a
     /// click target that opens the roomy dashboard pane.
     card_states: HashMap<String, MouseStateHandle>,
@@ -127,7 +123,6 @@ impl CockpitPanel {
             scroll_state: ClippedScrollStateHandle::default(),
             expand_btn: MouseStateHandle::default(),
             conductor_row_states: HashMap::new(),
-            conductor_review_states: HashMap::new(),
             card_states: HashMap::new(),
             conductor_host_states: HashMap::new(),
             conductor_host_star_states: HashMap::new(),
@@ -157,11 +152,9 @@ impl CockpitPanel {
             })
             .collect();
         self.conductor_row_states.retain(|k, _| live.contains(k));
-        self.conductor_review_states.retain(|k, _| live.contains(k));
         self.conductor_row_star_states.retain(|k, _| live.contains(k));
         for key in live {
             self.conductor_row_states.entry(key.clone()).or_default();
-            self.conductor_review_states.entry(key.clone()).or_default();
             self.conductor_row_star_states.entry(key).or_default();
         }
         // Card hover handles, keyed by account `key` (one stable handle per card
@@ -733,29 +726,10 @@ impl CockpitPanel {
             None => glance,
         };
 
-        // Trailing curation/review affordances (always present, colour-only
-        // hover): the local review verb (Eye) + the ★ favourite (design §10).
-        // The favourite target is the host-scoped `host_key` — session ids are
-        // unique only within a host, so a bare id could favourite the wrong host.
-        let review = is_local
-            .then(|| {
-                self.conductor_review_states.get(&key).cloned().map(|st| {
-                    let action = WorkspaceAction::ReviewSession {
-                        project_root: PathBuf::from(&session.project_root),
-                        project_name: session.project_name.clone(),
-                    };
-                    icon_verb_button_tooltip(
-                        st,
-                        icons::Icon::Eye,
-                        theme.sub_text_color(theme.background()),
-                        theme.accent(),
-                        crate::t!("cockpit-tt-review"),
-                        appearance,
-                        action,
-                    )
-                })
-            })
-            .flatten();
+        // The one trailing affordance: the ★ favourite (design §10). Review + the
+        // model levers are a pane concern — keeping them off the glance rows is
+        // what makes the list read as a calm column. The favourite target is the
+        // host-scoped `host_key` (session ids are unique only within a host).
         let star = self.conductor_row_star_states.get(&key).cloned().map(|st| {
             let is_fav = favorites
                 .iter()
@@ -768,20 +742,16 @@ impl CockpitPanel {
             Self::star_button(st, is_fav, appearance, action)
         });
 
-        if review.is_none() && star.is_none() {
+        let Some(star) = star else {
             return glance_el;
-        }
-        let mut trailing = Flex::row()
+        };
+        Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(8.0)
-            .with_child(Shrinkable::new(1.0, glance_el).finish());
-        if let Some(review) = review {
-            trailing = trailing.with_child(review);
-        }
-        if let Some(star) = star {
-            trailing = trailing.with_child(star);
-        }
-        trailing.with_main_axis_size(MainAxisSize::Max).finish()
+            .with_child(Shrinkable::new(1.0, glance_el).finish())
+            .with_child(star)
+            .with_main_axis_size(MainAxisSize::Max)
+            .finish()
     }
 
     /// The fixed-width **right metric column** of a session line:
@@ -797,9 +767,6 @@ impl CockpitPanel {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let accent = theme.accent().into_solid();
         let muted = theme.sub_text_color(theme.background());
 
         let effort = crate::cockpit::session_effort(session, is_local, host_id);
@@ -809,10 +776,13 @@ impl CockpitPanel {
             session.ctx_tokens,
             session.state,
         );
+        // Glance surface: only the provider mark + context fill. Model·effort is
+        // detail — it lives in the dashboard pane, not on every sidebar row (it
+        // overflowed the column and made the list read as noise).
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::End)
-            .with_spacing(5.0)
+            .with_spacing(4.0)
             .with_child(
                 ConstrainedBox::new(
                     provider_icon(session.provider)
@@ -823,9 +793,6 @@ impl CockpitPanel {
                 .with_height(GLYPH_COL_WIDTH)
                 .finish(),
             );
-        if !attrs.model_effort.is_empty() {
-            row = row.with_child(Self::text(attrs.model_effort, family, body, accent));
-        }
         if let Some(pct) = attrs.ctx_pct {
             row = row.with_child(ctx_pct_element(pct, attrs.ctx_fill, false, appearance));
         }
@@ -922,6 +889,10 @@ impl CockpitPanel {
         let theme = appearance.theme();
         let gold = Fill::Solid(theme.ui_yellow_color());
         let muted = theme.sub_text_color(theme.background());
+        // A not-yet-favourited star recedes (very faint) so the rows stay calm;
+        // it brightens to gold on hover, hinting the add. A favourited star is
+        // always the full gold.
+        let faint = theme.sub_text_color(theme.background()).with_opacity(38);
         let (icon, rest, hover, tooltip) = if is_fav {
             (
                 icons::Icon::StarFilled,
@@ -932,7 +903,7 @@ impl CockpitPanel {
         } else {
             (
                 icons::Icon::Star,
-                muted,
+                faint,
                 gold,
                 crate::t!("cockpit-tt-favorite-add"),
             )

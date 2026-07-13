@@ -55,11 +55,11 @@ pub const CARD_RADIUS: f32 = 12.0;
 /// Hairline zone-card border width (spec §2.1: `0.5px border`, no shadow).
 pub const CARD_BORDER: f32 = 0.5;
 
-/// Fixed width of a session row's right-hand **metric column**
-/// (`Model · ctx% · State`), so the metrics never shift horizontally as the
-/// branch label grows or shrinks (spec §2.3: a fixed metric column, no
-/// horizontal jump — the defect the owner called out on the vetoed build).
-pub const METRIC_COL_WIDTH: f32 = 128.0;
+/// Fixed width of a session row's right-hand **metric column** (provider icon +
+/// ctx%), so the metrics align into a clean column across rows and never shift
+/// as the branch label grows or shrinks (spec §2.3). Narrow because it no longer
+/// carries the model — that overflowed and broke the alignment.
+pub const METRIC_COL_WIDTH: f32 = 58.0;
 
 /// A flat sidebar **zone-card**: `surface_1`, a hairline border, radius 12 and
 /// **no** shadow (spec §2.1). Emphasis comes from content + spacing, never from
