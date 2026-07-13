@@ -258,13 +258,13 @@ fi
 # https://blog.smittytone.net/2021/01/19/how-tools-try-to-own-markdown/
 
 echo "Updating plist with permissions descriptions"
-plutil -insert NSAppleEventsUsageDescription -string "A program in Warp wants to use AppleScript." "$ZAPLEX_PLIST_PATH"
-plutil -insert NSCameraUsageDescription -string "A program in Warp wants to use the camera." "$ZAPLEX_PLIST_PATH"
-plutil -insert NSMicrophoneUsageDescription -string "A program in Warp wants to use your microphone." "$ZAPLEX_PLIST_PATH"
-plutil -insert NSContactsUsageDescription -string "A program in Warp wants to use your contacts." "$ZAPLEX_PLIST_PATH"
-plutil -insert NSCalendarsUsageDescription -string "A program in Warp wants to use your calendar." "$ZAPLEX_PLIST_PATH"
-plutil -insert NSLocationUsageDescription -string "A program in Warp wants to use your location information." "$ZAPLEX_PLIST_PATH"
-plutil -insert NSPhotoLibraryUsageDescription -string "A program in Warp wants to use your photo library." "$ZAPLEX_PLIST_PATH"
+plutil -insert NSAppleEventsUsageDescription -string "A program in Zaplex wants to use AppleScript." "$ZAPLEX_PLIST_PATH"
+plutil -insert NSCameraUsageDescription -string "A program in Zaplex wants to use the camera." "$ZAPLEX_PLIST_PATH"
+plutil -insert NSMicrophoneUsageDescription -string "A program in Zaplex wants to use your microphone." "$ZAPLEX_PLIST_PATH"
+plutil -insert NSContactsUsageDescription -string "A program in Zaplex wants to use your contacts." "$ZAPLEX_PLIST_PATH"
+plutil -insert NSCalendarsUsageDescription -string "A program in Zaplex wants to use your calendar." "$ZAPLEX_PLIST_PATH"
+plutil -insert NSLocationUsageDescription -string "A program in Zaplex wants to use your location information." "$ZAPLEX_PLIST_PATH"
+plutil -insert NSPhotoLibraryUsageDescription -string "A program in Zaplex wants to use your photo library." "$ZAPLEX_PLIST_PATH"
 
 echo "Disabling use of Liquid Glass on macOS Tahoe"
 plutil -insert UIDesignRequiresCompatibility -bool true "$ZAPLEX_PLIST_PATH"
