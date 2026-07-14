@@ -408,7 +408,19 @@ pub fn ctx_pct_element(
     verbose: bool,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let color = heat_coloru(HeatLevel::from_fraction(fill));
+    // Utilisation is NOT an attention signal: it stays muted grey and only turns
+    // red when the window is nearly full (≥ 90 %). This keeps amber exclusive to
+    // the waiting state — a full heat gradient here would compete with it (spec
+    // §1: one encoding per data type).
+    let _ = fill;
+    let color = if pct >= 90 {
+        heat_coloru(HeatLevel::Critical)
+    } else {
+        appearance
+            .theme()
+            .sub_text_color(appearance.theme().background())
+            .into_solid()
+    };
     let label = if verbose {
         format!("· {pct}% ctx")
     } else {

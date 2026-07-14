@@ -766,9 +766,6 @@ impl CockpitPanel {
         host_id: Option<&str>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let muted = theme.sub_text_color(theme.background());
-
         let effort = crate::cockpit::session_effort(session, is_local, host_id);
         let attrs = zaplex_cockpit::session_attrs(
             &session.model,
@@ -776,23 +773,14 @@ impl CockpitPanel {
             session.ctx_tokens,
             session.state,
         );
-        // Glance surface: only the provider mark + context fill. Model·effort is
-        // detail — it lives in the dashboard pane, not on every sidebar row (it
-        // overflowed the column and made the list read as noise).
+        // Glance surface: ONLY the context-fill readout, right-aligned in a fixed
+        // column. No provider mark in the tree — provider (account) colour lives
+        // in the KI-Konten cards + the pane table, never the spine (spec §1:
+        // provider colours never appear in the tree). Model·effort is pane detail.
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::End)
-            .with_spacing(4.0)
-            .with_child(
-                ConstrainedBox::new(
-                    provider_icon(session.provider)
-                        .to_warpui_icon(muted)
-                        .finish(),
-                )
-                .with_width(GLYPH_COL_WIDTH)
-                .with_height(GLYPH_COL_WIDTH)
-                .finish(),
-            );
+            .with_spacing(4.0);
         if let Some(pct) = attrs.ctx_pct {
             row = row.with_child(ctx_pct_element(pct, attrs.ctx_fill, false, appearance));
         }
