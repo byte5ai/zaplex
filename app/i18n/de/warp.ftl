@@ -48,6 +48,10 @@ cockpit-card-plan-none = —
 cockpit-card-sessions-active = ● { $count } aktiv
 cockpit-card-sessions-waiting = ● { $count } wartend
 cockpit-card-sessions-running = ◌ { $count } laufend
+cockpit-card-sessions-count = { $count } { $count ->
+    [one] laufende Session
+   *[other] laufende Sessions
+}
 cockpit-card-reset-5h = 5h ↻ { $reset }
 cockpit-card-reset-week = Wo ↻ { $reset }
 cockpit-card-reset-both = 5h ↻ { $reset5h } · Wo ↻ { $resetwk }
@@ -73,7 +77,7 @@ cockpit-tt-favorite-add = Zu Favoriten
 cockpit-tt-favorite-remove = Aus Favoriten entfernen
 cockpit-tt-manage-host = Host verwalten
 cockpit-tt-review = Änderungen prüfen
-cockpit-host-no-agents = keine Agents
+cockpit-host-no-agents = Keine laufenden Sessions
 cockpit-conductor-rest-show-both = { $running } laufend · { $idle } ruhend — zeigen
 cockpit-conductor-rest-show-running = { $running } laufend — zeigen
 cockpit-conductor-rest-show-idle = { $idle } ruhend — zeigen

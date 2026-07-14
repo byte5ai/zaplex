@@ -18,14 +18,14 @@ use warpui::elements::{
 use warpui::platform::Cursor;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 use zaplex_cockpit::{
-    fleet_is_large, format_cost, format_tokens, heat_fill, heat_pct_label_with_provenance,
+    fleet_is_large, format_cost, heat_fill, heat_pct_label_with_provenance,
     host_auto_collapsed, host_ident, host_key, host_summary, session_glyph, AccountUsage, Favorite,
     FavoriteKind, FleetTree, HeatLevel, HostNode, SessionSnapshot, SessionState, UsageProvenance,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button_tooltip, provider_icon,
+    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button_tooltip, provider_color,
     provider_label, status_dot_coloru, zone_card, GLYPH_COL_WIDTH, METRIC_COL_WIDTH,
 };
 use crate::ui_components::icons;
@@ -67,15 +67,25 @@ pub struct CockpitPanel {
     conductor_row_star_states: HashMap<String, MouseStateHandle>,
     /// Hover state for the spine's "＋ Add host" root.
     add_host_btn: MouseStateHandle,
-    /// Hover state of each host's "N running · M idle — show" density toggle
-    /// (D1+C2, key = stable host identity `host_ident`). Waiting rows are always
-    /// shown; the calm running/idle rows fold behind this summary until clicked.
-    conductor_host_rest_states: HashMap<String, MouseStateHandle>,
-    /// Which hosts have their non-waiting (running/idle) rows expanded, keyed by
-    /// stable host identity `host_ident`. Absent / `false` = folded behind the
-    /// summary (the calm default); `true` = the user expanded them. Retained
-    /// across the 45s reconcile like the hover maps, so expanding doesn't flicker.
-    expanded_host_rest: HashMap<String, bool>,
+    /// Hover/click state of each **project group header** (the collapsible
+    /// Host → Projekt → Session level), keyed by `project_key`. Clicking the
+    /// header folds/unfolds that project's sessions.
+    conductor_project_states: HashMap<String, MouseStateHandle>,
+    /// Which project groups are collapsed, keyed by `project_key`. **Absent =
+    /// expanded** (the calm default — you see the sessions); present + `false`
+    /// means the user collapsed it. Retained across the 45s reconcile like the
+    /// hover maps, so toggling doesn't flicker.
+    expanded_projects: HashMap<String, bool>,
+}
+
+/// Stable identity of a project group within the tree: the host identity plus
+/// the project's **root path** (`ProjectNode::root`, its unique key — NOT the
+/// display name, so two same-named repos on one host don't share collapse
+/// state), joined by a unit separator so `host` + `a/b` can never collide with
+/// `host/a` + `b`. Keys the collapse state + the header hover handle across
+/// renders.
+fn project_key(host_ident: &str, project_root: &str) -> String {
+    format!("{host_ident}\u{1f}{project_root}")
 }
 
 /// The branch-first label that identifies a session in the redesigned sidebar
@@ -129,8 +139,8 @@ impl CockpitPanel {
             conductor_host_manage_states: HashMap::new(),
             conductor_row_star_states: HashMap::new(),
             add_host_btn: MouseStateHandle::default(),
-            conductor_host_rest_states: HashMap::new(),
-            expanded_host_rest: HashMap::new(),
+            conductor_project_states: HashMap::new(),
+            expanded_projects: HashMap::new(),
         };
         me.sync_conductor_states(ctx);
         me
@@ -187,20 +197,26 @@ impl CockpitPanel {
             self.conductor_host_star_states.entry(key.clone()).or_default();
             self.conductor_host_manage_states.entry(key).or_default();
         }
-        // Per-host density-toggle handles + expand overrides, keyed by the
-        // stable host identity (never the label — two remote daemons can share
-        // one). Drop hosts that vanished so the maps don't grow unbounded.
-        let host_idents: std::collections::HashSet<String> = inv
+        // Project-group header handles + collapse overrides, keyed by
+        // `project_key` (host identity + project name — never the label alone).
+        // Drop projects that vanished so the maps don't grow unbounded; the
+        // collapse map keeps only live keys, so absent still means "expanded".
+        let project_keys: std::collections::HashSet<String> = inv
             .hosts
             .iter()
-            .map(|h| host_ident(h.is_local, h.host_id.as_deref()))
+            .flat_map(|h| {
+                let ident = host_ident(h.is_local, h.host_id.as_deref());
+                h.projects
+                    .iter()
+                    .map(move |p| project_key(&ident, &p.root))
+            })
             .collect();
-        self.conductor_host_rest_states
-            .retain(|k, _| host_idents.contains(k));
-        self.expanded_host_rest
-            .retain(|k, _| host_idents.contains(k));
-        for ident in host_idents {
-            self.conductor_host_rest_states.entry(ident).or_default();
+        self.conductor_project_states
+            .retain(|k, _| project_keys.contains(k));
+        self.expanded_projects
+            .retain(|k, _| project_keys.contains(k));
+        for key in project_keys {
+            self.conductor_project_states.entry(key).or_default();
         }
     }
 
@@ -227,17 +243,22 @@ impl CockpitPanel {
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_body();
         let muted = theme.sub_text_color(theme.background()).into_solid();
-        let level = HeatLevel::from_fraction(fraction);
+        // Utilisation is not attention: the bar stays calm grey and only reddens
+        // when the window is nearly full (≥ 90 %), so amber/heat colours never
+        // appear here (spec §1). The bar's WIDTH shows the level; the colour only
+        // flags "nearly full".
+        let near_full = fraction >= 0.90;
+        let bar_color = if near_full {
+            heat_coloru(HeatLevel::Critical)
+        } else {
+            muted
+        };
         let fill_w = (heat_fill(fraction) as f32) * HEAT_BAR_WIDTH;
 
-        let fill = ConstrainedBox::new(
-            Rect::new()
-                .with_background_color(heat_coloru(level))
-                .finish(),
-        )
-        .with_width(fill_w)
-        .with_height(HEAT_BAR_HEIGHT)
-        .finish();
+        let fill = ConstrainedBox::new(Rect::new().with_background_color(bar_color).finish())
+            .with_width(fill_w)
+            .with_height(HEAT_BAR_HEIGHT)
+            .finish();
 
         let track = ConstrainedBox::new(
             Container::new(fill)
@@ -258,7 +279,7 @@ impl CockpitPanel {
                 heat_pct_label_with_provenance(fraction, provenance),
                 family,
                 size,
-                heat_coloru(level),
+                bar_color,
             ))
             .with_main_axis_size(MainAxisSize::Min)
             .finish()
@@ -277,20 +298,22 @@ impl CockpitPanel {
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
 
-        // Header: the provider icon leads (spec §2.5), then the account label
-        // (email/org — which account, not which plan).
+        // Header: a provider-colour swatch leads (spec §1 — this is the ONE place
+        // provider colour appears: Claude clay / Codex blue), then the account
+        // label (alias/email — which account, not which plan).
         let header = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(6.0)
             .with_child(
                 ConstrainedBox::new(
-                    provider_icon(acct.account.provider)
-                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                    Rect::new()
+                        .with_background_color(provider_color(acct.account.provider))
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
                         .finish(),
                 )
-                .with_width(GLYPH_COL_WIDTH)
-                .with_height(GLYPH_COL_WIDTH)
+                .with_width(12.0)
+                .with_height(12.0)
                 .finish(),
             )
             .with_child(
@@ -316,38 +339,23 @@ impl CockpitPanel {
             plan = plan
         );
 
-        let cost_line = crate::t!(
-            "cockpit-card-cost-line",
-            cost = format_cost(acct.today.cost_usd),
-            tokens = format_tokens(acct.today.total)
-        );
-
-        // Live-session status (C3a): waiting sessions are THE signal — they
-        // need the user. Rendered in the heat palette when non-zero.
+        // The card carries ONE live-session line: „N laufende Sessions" (running
+        // = active + waiting + monitor; idle is not counted). Waiting is
+        // attention, so the count goes amber when any session waits, else muted.
+        // The spend/token breakdown moved to the pane (spec §2.2: the card's one
+        // metric signal is the 5h meter).
         let waiting = acct
             .sessions
             .iter()
             .filter(|s| s.state == SessionState::Waiting)
             .count();
-        let active = acct
+        let running = acct
             .sessions
             .iter()
-            .filter(|s| s.state == SessionState::Active)
+            .filter(|s| !matches!(s.state, SessionState::Idle))
             .count();
-        let session_line = (!acct.sessions.is_empty()).then(|| {
-            let mut parts = Vec::new();
-            if active > 0 {
-                parts.push(crate::t!("cockpit-card-sessions-active", count = (active as i64)));
-            }
-            if waiting > 0 {
-                parts.push(crate::t!("cockpit-card-sessions-waiting", count = (waiting as i64)));
-            }
-            let monitor = acct.sessions.len() - active - waiting;
-            if monitor > 0 {
-                parts.push(crate::t!("cockpit-card-sessions-running", count = (monitor as i64)));
-            }
-            parts.join(" · ")
-        });
+        let session_line = (running > 0)
+            .then(|| crate::t!("cockpit-card-sessions-count", count = (running as i64)));
 
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -355,12 +363,9 @@ impl CockpitPanel {
             .with_spacing(CARD_SPACING)
             .with_child(header.finish())
             .with_child(Self::text(provider_plan, family, body, muted))
-            // BOTH meters, not just the binding window (spec §2.5): the rolling
-            // 5h block and the 7-day week, each heat-colored, so the user sees
-            // both limits at a glance instead of one merged headline.
-            .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance))
-            .with_child(self.heat_bar("wk", acct.heat_week, acct.provenance, appearance))
-            .with_child(Self::text(cost_line, family, body, muted));
+            // ONE metric signal on the card: the rolling 5h block (spec §2.2). The
+            // week meter, spend and tokens live in the pane, where there is room.
+            .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance));
         if let Some(session_line) = session_line {
             let color = if waiting > 0 {
                 heat_coloru(HeatLevel::Critical)
@@ -545,70 +550,54 @@ impl CockpitPanel {
             }
             col = col.with_child(header_row.with_main_axis_size(MainAxisSize::Max).finish());
 
-            // Sessions (D1+C2 density): waiting rows are ALWAYS shown — they are
-            // the attention signal — while the calm running/idle rows fold behind
-            // a one-line summary until the user opens it. Sessions are already
-            // waiting-first within each needs-me-first project, so the waiting
-            // rows lead naturally.
-            let mut waiting: Vec<(&str, &SessionSnapshot)> = Vec::new();
-            let mut rest: Vec<(&str, &SessionSnapshot)> = Vec::new();
+            // Sessions grouped by project — the Host → Projekt → Session tree
+            // (spec §2.1). Each project is a collapsible group header (its own
+            // typographic level, no dot); its sessions are shown waiting-first.
+            // Projects default to expanded (absent in `expanded_projects`).
             for project in &host.projects {
-                for session in &project.sessions {
-                    if session.state == SessionState::Waiting {
-                        waiting.push((project.name.as_str(), session));
-                    } else {
-                        rest.push((project.name.as_str(), session));
-                    }
-                }
-            }
-            for (pname, session) in &waiting {
+                let pkey = project_key(&ident, &project.root);
+                let expanded = self.expanded_projects.get(&pkey).copied().unwrap_or(true);
+                let has_waiting = project
+                    .sessions
+                    .iter()
+                    .any(|s| s.state == SessionState::Waiting);
                 col = col.with_child(
-                    Container::new(self.render_conductor_row(
-                        &host.host,
-                        host.host_id.as_deref(),
-                        pname,
-                        session,
-                        is_local,
-                        favorites,
+                    Container::new(self.render_project_header(
+                        &pkey,
+                        &project.name,
+                        project.sessions.len(),
+                        has_waiting,
+                        expanded,
                         appearance,
                     ))
-                    .with_padding_left(10.0)
+                    .with_padding_left(4.0)
                     .finish(),
                 );
-            }
-            if !rest.is_empty() {
-                let expanded = self.expanded_host_rest.get(&ident).copied().unwrap_or(false);
                 if expanded {
-                    for (pname, session) in &rest {
+                    // Waiting-first within the project (stable sort): the
+                    // attention rows lead, the calm ones follow, none hidden.
+                    let mut sessions: Vec<&SessionSnapshot> = project.sessions.iter().collect();
+                    sessions.sort_by_key(|s| s.state != SessionState::Waiting);
+                    for session in sessions {
                         col = col.with_child(
                             Container::new(self.render_conductor_row(
                                 &host.host,
                                 host.host_id.as_deref(),
-                                pname,
                                 session,
                                 is_local,
                                 favorites,
                                 appearance,
                             ))
-                            .with_padding_left(10.0)
+                            .with_padding_left(22.0)
                             .finish(),
                         );
                     }
                 }
-                let running = rest
-                    .iter()
-                    .filter(|(_, s)| matches!(s.state, SessionState::Active | SessionState::Monitor))
-                    .count();
-                let idle = rest.len() - running;
-                col = col.with_child(
-                    Container::new(self.render_rest_toggle(&ident, running, idle, expanded, appearance))
-                        .with_padding_left(10.0)
-                        .finish(),
-                );
-            } else if host.projects.is_empty() {
-                // A registered host with no live agent — shown as a spine root so
-                // it stays navigable/launchable, with a calm hint that it is idle
-                // (build_fleet_tree drops agentless hosts; the registry merge
+            }
+            if host.projects.is_empty() {
+                // A registered host with no live session — shown as a spine root
+                // so it stays navigable/launchable, with a calm hint that it is
+                // idle (build_fleet_tree drops agentless hosts; the registry merge
                 // re-adds them, see CockpitModel).
                 col = col.with_child(
                     Container::new(Self::text(
@@ -617,7 +606,7 @@ impl CockpitPanel {
                         body,
                         muted,
                     ))
-                    .with_padding_left(10.0)
+                    .with_padding_left(22.0)
                     .finish(),
                 );
             }
@@ -668,17 +657,17 @@ impl CockpitPanel {
         Some(col.finish())
     }
 
-    /// One fixed Conductor line: `Dot · Branch · [Provider Model ctx%]` with the
-    /// metric cluster in a **fixed-width right column** so it never shifts as the
-    /// branch label grows (spec §2.3). Status is the leading colour dot only.
-    /// The whole line attaches on click (local + remote); the ★ favourite and
-    /// local review verb trail after the metric column, so they never push the
+    /// One fixed Conductor line: `Dot · Branch · ctx%` with the metric cluster in
+    /// a **fixed-width right column** so it never shifts as the branch label grows
+    /// (spec §2.3). Status is the leading shape-coded dot only; the branch is the
+    /// sole identity (the project is carried by the group header above it, so the
+    /// row never repeats it). The whole line attaches on click (local + remote);
+    /// the ★ favourite trails after the metric column so it never pushes the
     /// metrics around. Hover recolors, never re-lays-out (spec §2.7).
     fn render_conductor_row(
         &self,
         host_label: &str,
         host_id: Option<&str>,
-        project_name: &str,
         session: &SessionSnapshot,
         is_local: bool,
         favorites: &[Favorite],
@@ -689,8 +678,9 @@ impl CockpitPanel {
         let body = appearance.ui_font_body();
         let main = theme.main_text_color(theme.background()).into_solid();
 
-        // Identity = branch / worktree, never the model (spec §2.2).
-        let label = session_identity_label(session, project_name);
+        // Identity = branch / worktree only, never the model and never the
+        // project (the group header carries the project) — spec §2.2.
+        let label = session_identity_label(session, "");
         let fav_label = label.clone();
 
         // The glance line: colour dot · branch (flex) · fixed metric column.
@@ -812,54 +802,81 @@ impl CockpitPanel {
         )
     }
 
-    /// The per-host density toggle (D1+C2): a calm one-line summary of the folded
-    /// running/idle rows that expands/collapses them on click. Muted at rest,
-    /// accent on hover (colour only — the list doesn't jump).
-    fn render_rest_toggle(
+    /// A **project group header** — the collapsible middle level of the tree
+    /// (Host → Projekt → Session, spec §2.1). It reads as a group label, never a
+    /// session: a disclosure chevron (`▾` open / `▸` collapsed) + the project name
+    /// (muted, brightening on hover) + the session count, with **no status dot**
+    /// (the user vetoed a dot before the project). Attention still reaches the
+    /// eye: a *collapsed* project that hides a waiting session tints its chevron
+    /// amber (spec §1: amber = attention only). Clicking anywhere folds/unfolds.
+    fn render_project_header(
         &self,
-        ident: &str,
-        running: usize,
-        idle: usize,
+        pkey: &str,
+        name: &str,
+        count: usize,
+        has_waiting: bool,
         expanded: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
         let theme = appearance.theme();
-        let rest = theme.sub_text_color(theme.background());
-        let accent = theme.accent();
-        // Pick the message by which parts are non-zero so the summary never
-        // reads a hollow "· 0 idle" (Idle sessions aren't surfaced yet, so idle
-        // is usually 0). `rest` is never empty here, so at least one part is > 0.
-        let r = running as i64;
-        let i = idle as i64;
-        let label = match (running > 0, idle > 0, expanded) {
-            (true, true, false) => {
-                crate::t!("cockpit-conductor-rest-show-both", running = r, idle = i)
-            }
-            (true, false, false) => crate::t!("cockpit-conductor-rest-show-running", running = r),
-            (false, _, false) => crate::t!("cockpit-conductor-rest-show-idle", idle = i),
-            (true, true, true) => {
-                crate::t!("cockpit-conductor-rest-hide-both", running = r, idle = i)
-            }
-            (true, false, true) => crate::t!("cockpit-conductor-rest-hide-running", running = r),
-            (false, _, true) => crate::t!("cockpit-conductor-rest-hide-idle", idle = i),
+        let bg = theme.background();
+        let main_c = theme.main_text_color(bg).into_solid();
+        let muted_c = theme.sub_text_color(bg).into_solid();
+        let faint_c = theme.sub_text_color(bg).with_opacity(55).into_solid();
+        // The chevron carries the collapse state; it only turns amber when a
+        // COLLAPSED project hides a waiting session, so attention still surfaces
+        // without a per-project dot. Same amber as the status dots (ColorU).
+        let chevron: &'static str = if expanded { "▾" } else { "▸" };
+        let chevron_c = if !expanded && has_waiting {
+            heat_coloru(HeatLevel::Critical)
+        } else {
+            muted_c
         };
         let handle = self
-            .conductor_host_rest_states
-            .get(ident)
+            .conductor_project_states
+            .get(pkey)
             .cloned()
             .unwrap_or_default();
-        let ident_owned = ident.to_string();
+        let pkey_owned = pkey.to_string();
+        let name_s = name.to_string();
+        let count_s = count.to_string();
         Hoverable::new(handle, move |mouse| {
-            let color = if mouse.is_hovered() { accent } else { rest };
-            Text::new_inline(label.clone(), family, body)
-                .with_color(color.into_solid())
+            let name_color = if mouse.is_hovered() { main_c } else { muted_c };
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(6.0)
+                .with_child(
+                    ConstrainedBox::new(
+                        Text::new_inline(chevron.to_string(), family, body)
+                            .with_color(chevron_c)
+                            .finish(),
+                    )
+                    .with_width(GLYPH_COL_WIDTH)
+                    .with_height(GLYPH_COL_WIDTH)
+                    .finish(),
+                )
+                .with_child(
+                    Shrinkable::new(
+                        1.0,
+                        Text::new_inline(name_s.clone(), family, body)
+                            .with_color(name_color)
+                            .finish(),
+                    )
+                    .finish(),
+                )
+                .with_child(
+                    Text::new_inline(count_s.clone(), family, body)
+                        .with_color(faint_c)
+                        .finish(),
+                )
+                .with_main_axis_size(MainAxisSize::Max)
                 .finish()
         })
         .with_cursor(warpui::platform::Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(CockpitPanelAction::ToggleHostRest(ident_owned.clone()))
+            ctx.dispatch_typed_action(CockpitPanelAction::ToggleProject(pkey_owned.clone()))
         })
         .finish()
     }
@@ -1067,10 +1084,10 @@ impl Entity for CockpitPanel {
 #[derive(Clone, Debug)]
 pub enum CockpitPanelAction {
     OpenDashboardPane,
-    /// Fold/unfold a host's calm (running/idle) rows in the density view
-    /// (D1+C2), keyed by stable host identity `host_ident`. Waiting rows are
-    /// unaffected — they always stay visible.
-    ToggleHostRest(String),
+    /// Collapse/expand a project group in the Host → Projekt → Session tree,
+    /// keyed by `project_key`. Toggles between absent/`true` (expanded, the
+    /// default) and `false` (collapsed).
+    ToggleProject(String),
     /// Select an account (its `account.key`) → open the dashboard pane focused
     /// on it and carry a stable highlight in the sidebar (WS4 S5). A second
     /// click on the selected account de-selects it.
@@ -1085,9 +1102,10 @@ impl TypedActionView for CockpitPanel {
             CockpitPanelAction::OpenDashboardPane => {
                 ctx.emit(CockpitPanelEvent::OpenDashboardPane);
             }
-            CockpitPanelAction::ToggleHostRest(ident) => {
-                let cur = self.expanded_host_rest.get(ident).copied().unwrap_or(false);
-                self.expanded_host_rest.insert(ident.clone(), !cur);
+            CockpitPanelAction::ToggleProject(key) => {
+                // Absent = expanded (default); the first toggle collapses to false.
+                let cur = self.expanded_projects.get(key).copied().unwrap_or(true);
+                self.expanded_projects.insert(key.clone(), !cur);
                 ctx.notify();
             }
             CockpitPanelAction::SelectAccount(key) => {

@@ -182,6 +182,27 @@ pub fn provider_label(provider: Provider) -> &'static str {
     }
 }
 
+/// The provider identity colour, shown ONLY on the account-card provider swatch
+/// (spec §1: provider colours live in the KI-Konten cards + the pane table, never
+/// the tree). Own marks, not the vendors' trademarked logos: Claude = clay,
+/// Codex = blue.
+pub fn provider_color(provider: Provider) -> ColorU {
+    match provider {
+        Provider::Claude => ColorU {
+            r: 0xC8,
+            g: 0x72,
+            b: 0x4A,
+            a: 0xFF,
+        },
+        Provider::Codex => ColorU {
+            r: 0x3D,
+            g: 0x9B,
+            b: 0xF0,
+            a: 0xFF,
+        },
+    }
+}
+
 /// The status-dot color for a session state on the given surface (spec §2.3:
 /// status is carried by **color**, not a chrome glyph). Waiting is the one
 /// attention band (amber), working rests in the calm "ok" green, idle fades to
