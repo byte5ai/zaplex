@@ -2222,33 +2222,81 @@ impl ServerModel {
         ))
         .detach();
 
-        // Bootstrap the daemon-spawned shell with the Zaplexify shell integration
-        // (blocks, prompt marks, completions) by writing the init script as the
-        // session's first input — the ordered writer delivers it ahead of any
-        // user input. The script emits the InitShell DCS hook and is idempotent
-        // (ZAPLEX_BOOTSTRAPPED guard), so a later re-attach won't double-run it.
-        // The terminal *identity* (TERM_PROGRAM=ZaplexTerminal etc.) is set as a
-        // spawn env var in `spawn_session_pty`, not by this script. Together the
-        // identity env and the integration script are what make a daemon session
-        // a real Zaplex terminal rather than a bare VT.
-        match crate::terminal::shell::ShellType::from_name(&shell) {
-            Some(shell_type) => {
-                let mut bootstrap =
-                    crate::terminal::bootstrap::init_shell_script_for_shell(shell_type, &crate::ASSETS)
-                        .into_bytes();
-                bootstrap.extend_from_slice(shell_type.execute_command_bytes());
+        // Deliver the Zaplexify shell integration as the session's first input
+        // (ahead of any user input, via the ordered writer). The terminal
+        // *identity* (TERM_PROGRAM=ZaplexTerminal etc.) is a spawn env var in
+        // `spawn_session_pty`; here we feed the integration *scripts*.
+        //
+        // `spawn_session_pty` launches the shell with RC loading suppressed (the
+        // same contract the local app uses), so — exactly like a local session —
+        // we must deliver BOTH the InitShell emitter and the shell *body*. The
+        // body is what sources the user's login RC, sets `ZAPLEX_BOOTSTRAPPED`,
+        // and emits the `Bootstrapped` DCS hook carrying the remote `HISTFILE`
+        // path. Without the body the session stops at InitShell (prompt marks
+        // render) but never becomes bootstrapped, so `is_bootstrapped()` stays
+        // false and history is never queryable — history-backed autosuggestions
+        // and tab-completions never arm over the remote session.
+        //
+        // What to send per shell mirrors the local contract exactly
+        // (`arguments_for_session_spawning_command` + `enqueue_init_script`):
+        //   • zsh  — spawn args use `--no-rcs` (no embedded init) → init + body.
+        //   • bash — init is embedded in `--rcfile <(echo …)>` at spawn → body only.
+        //   • fish/pwsh — spawned as a plain login shell (RC loads at launch);
+        //     init-only, no body (their full body lacks a top-level idempotency
+        //     guard, unsafe to replay on a re-attachable daemon session).
+        //   • unclassified $SHELL — plain login shell, no integration.
+        let bootstrap =
+            match crate::terminal::local_tty::shell::supported_shell_path_and_type(&shell)
+                .map(|(_, shell_type)| shell_type)
+            {
+                Some(ShellType::Zsh) => {
+                    let mut buf = crate::terminal::bootstrap::init_shell_script_for_shell(
+                        ShellType::Zsh,
+                        &crate::ASSETS,
+                    )
+                    .into_bytes();
+                    buf.extend_from_slice(ShellType::Zsh.execute_command_bytes());
+                    buf.extend_from_slice(&crate::terminal::bootstrap::script_for_shell(
+                        ShellType::Zsh,
+                        &crate::ASSETS,
+                    ));
+                    Some(buf)
+                }
+                Some(ShellType::Bash) => Some(
+                    crate::terminal::bootstrap::script_for_shell(ShellType::Bash, &crate::ASSETS)
+                        .into_owned(),
+                ),
+                // fish / PowerShell: spawned as a plain login shell (see
+                // `spawn_session_pty`), so RC loads at launch. Deliver only the
+                // InitShell emitter (the prior behavior) — their full body lacks
+                // a top-level idempotency guard and would double-load RC under a
+                // login shell, so it is intentionally not sent.
+                Some(other) => {
+                    let mut buf = crate::terminal::bootstrap::init_shell_script_for_shell(
+                        other,
+                        &crate::ASSETS,
+                    )
+                    .into_bytes();
+                    buf.extend_from_slice(other.execute_command_bytes());
+                    Some(buf)
+                }
+                // Unclassified $SHELL: plain login shell, no integration.
+                None => None,
+            };
+        match bootstrap {
+            Some(bootstrap) => {
                 if let Some(session) = self.sessions.get(&session_id) {
                     if let Err(e) = session.input_tx.try_send(bootstrap) {
                         log::warn!("Daemon: failed to enqueue bootstrap for {session_id}: {e}");
                     } else {
-                        log::info!("Daemon: bootstrapped session {session_id} ({})", shell_type.name());
+                        log::info!("Daemon: bootstrapped session {session_id} (shell={shell})");
                     }
                 }
             }
             None => {
                 log::info!(
-                    "Daemon: shell {shell:?} is not Zaplexify-capable; session {session_id} \
-                     runs as a plain shell (no blocks)"
+                    "Daemon: shell {shell:?} runs as a plain shell (no block integration); \
+                     session {session_id}"
                 );
             }
         }

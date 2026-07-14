@@ -525,9 +525,56 @@ pub(crate) fn spawn_session_pty(
     rows: usize,
     cols: usize,
 ) -> Result<(std::os::fd::OwnedFd, std::process::Child)> {
-    let mut command = Command::new(shell);
-    // Login shell so the user's profile (PATH etc.) is loaded.
-    command.arg("-l");
+    // Match the LOCAL app's shell-integration launch contract
+    // (`build_host_shell_command` → `arguments_for_session_spawning_command`)
+    // for the shells whose full body `handle_open_session` delivers — i.e.
+    // **bash and zsh only**. For those, start with RC loading SUPPRESSED (zsh
+    // `--no-rcs`; bash `--rcfile <(echo <init>)>`): the shell *body* (written as
+    // session input in `handle_open_session`) sources the user's login RC
+    // itself, so the shell must not also source it at launch — a plain `-l`
+    // would double-load the profile (duplicated PATH, re-run login side effects,
+    // .rc-launched multiplexers firing before the body runs).
+    //
+    // Every other shell (fish, PowerShell, or an unclassified `$SHELL`) stays on
+    // a plain login shell: fish/pwsh get NO body (their full scripts lack a
+    // top-level idempotency guard, unsafe on re-attachable sessions), so
+    // RC-suppressing them would leave their profile unloaded. They keep the
+    // prior behavior — `-l` + an init-only write in `handle_open_session`.
+    let mut command = match super::shell::supported_shell_path_and_type(shell) {
+        Some((resolved_path, shell_type))
+            if matches!(shell_type, ShellType::Bash | ShellType::Zsh) =>
+        {
+            let path_str = resolved_path.to_string_lossy();
+            let args = super::shell::arguments_for_session_spawning_command(&path_str, shell_type);
+            let mut command = Command::new(resolved_path.as_os_str());
+            for arg in args {
+                command.arg(arg);
+            }
+            // Bash truncates $HISTFILE to its default 500 lines on startup unless
+            // HISTFILESIZE is pre-set large; the body only clears the sentinel
+            // when it is still unchanged (`bash_body.sh`). Mirror
+            // `build_host_shell_command`.
+            if shell_type == ShellType::Bash && !env.contains_key("HISTFILESIZE") {
+                command.env("HISTFILESIZE", "57265949261");
+                command.env("ZAPLEX_INITIAL_HISTFILESIZE", "57265949261");
+            }
+            // The body reads ZAPLEX_HONOR_PS1; unset behaves like "0" (Zaplex
+            // prompt), but set it explicitly for parity with the local spawn.
+            if !env.contains_key("ZAPLEX_HONOR_PS1") {
+                command.env("ZAPLEX_HONOR_PS1", "0");
+            }
+            command
+        }
+        _ => {
+            // fish / PowerShell / unclassified $SHELL: plain login shell so the
+            // user's profile (PATH etc.) is still loaded at launch. No body is
+            // written for these in `handle_open_session`, so there is no
+            // double-load.
+            let mut command = Command::new(shell);
+            command.arg("-l");
+            command
+        }
+    };
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }

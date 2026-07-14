@@ -552,7 +552,10 @@ fn parse_shell_type_from_path(path: &Path) -> Option<(PathBuf, ShellType)> {
         .map(|shell_type| (path.to_path_buf(), shell_type))
 }
 
-fn arguments_for_session_spawning_command(
+// `pub(super)` so the daemon shell spawn (`local_tty::unix::spawn_session_pty`)
+// can reuse the exact same RC-suppressing launch contract the local app uses,
+// keeping local and remote bootstrap in lockstep.
+pub(super) fn arguments_for_session_spawning_command(
     resolved_shell_path: &str,
     shell_type: ShellType,
 ) -> Vec<OsString> {
