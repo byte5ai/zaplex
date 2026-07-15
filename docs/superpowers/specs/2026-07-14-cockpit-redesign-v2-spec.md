@@ -53,7 +53,12 @@ Keine Maximieren-Icons. Zwei Zonen, keine Verwaltungs-Icons in der Sidebar
 
 - **Max. ein Pane pro Konto.** Zweites Konto = zweites Pane. Dedup per Konto-Identität
   (gleiche Mechanik wie Cockpit-/SSH-Pane-Dedup).
-- **Titel:** „`<Host> — <Konto-Anzeigename>`" (z. B. „devhost — Hauptkonto").
+- **Titel:** der **Konto-Anzeigename** (Alias, sonst Label) — z. B. „Hauptkonto".
+  > **Korrigiert 2026-07-14:** die erste Fassung schrieb „`<Host> — <Konto>`" („devhost —
+  > Hauptkonto"). Das ist faktisch falsch: `Account` (crates/zaplex_cockpit/src/types.rs) hat
+  > **kein Host-Feld** — Konten werden aus lokalen Config-Dirs (`~/.claude`, `~/.claude-work`)
+  > entdeckt und sind **nicht host-gebunden**; ihre Sessions laufen über *mehrere* Hosts (daher
+  > die Host-Spalte in der Tabelle). Der Host gehört in die Zeile, nicht in den Titel.
 - **Oben:** Konto-Detail-Card — Provider-Kachel · Anzeigename · **Mail (hier erlaubt, Platz)** ·
   Plan · Reset-Timer · **⋯ (Konto verwalten / Alias ändern — nur hier, nicht in der Sidebar)**.
   5h- + Wochen-Meter (grau), 3-Spalten-Tabelle Heute/5h/Woche × $/Tokens.
