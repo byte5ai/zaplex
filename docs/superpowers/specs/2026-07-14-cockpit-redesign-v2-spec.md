@@ -65,8 +65,34 @@ Keine Maximieren-Icons. Zwei Zonen, keine Verwaltungs-Icons in der Sidebar
   - **Sortierbare Spaltenköpfe.** Spalten: Session (Branch) · Worktree · Modell · **Kontext (Balken+%)** ·
     **Kosten heute** · Status (Punkt+Wort) · Zuletzt. Zahlen rechtsbündig, tabellarisch, **einheitliche
     Spaltenabstände** (nichts angeklebt).
-  - **Zeilen-Klick** → öffnet/fokussiert die Session (max. eine Instanz). **Hover-Aktionen:**
-    Fokussieren · Fork · Fortsetzen.
+  - **Zeilen-Klick** → öffnet/fokussiert die Session (max. eine Instanz).
+
+### 3.1 Agent-Steuerung („Cockpit-Drive") — das ⋯ pro Zeile · **KEINE REGRESSION**
+
+> **Nachgetragen 2026-07-14 (User-Entscheidung).** Die erste Fassung dieser Spec kannte nur
+> „Hover-Aktionen: Fokussieren · Fork · Fortsetzen" und hätte damit die halbe Agent-Steuerung
+> des alten Dashboard-Panes **gelöscht**. Das war ein Fehler der Spec, nicht ein Grund, Funktion
+> zu streichen. **Eiserne Regel: der Umbau darf keine einzige heute vorhandene Agent-Steuerung
+> verlieren.** Wer diese Spec umsetzt, prüft das aktiv gegen `app/src/cockpit/pane.rs`.
+
+- **Zeilen-Klick öffnet/fokussiert die Session** (siehe oben) — er wird *nicht* für Auswahl/Detail
+  verbraucht.
+- **Das ⋯ am Zeilenende trägt die vollständige Steuerung** der Session, **kontext-gated** (nur was
+  zutrifft wird gezeigt), destruktives am Ende abgesetzt:
+  - `Fork` · `Fork in neuen Worktree` (nur mit Fork-Mechanismus; Worktree nur im Git-Repo)
+  - `⚙ /compact` · `⌫ /clear` (nur Claude **und** resumebare Session)
+  - `Verlauf` (Transcript) · `Review ›` (Untermenü: review · ✓ approve · ↻ redirect · ⎙ commit ·
+    ⬈ PR — **nur lokale** Sessions)
+  - `⏸ Stop` · `⨯ Kill` (destruktiv, abgesetzt, amber/rot)
+- **Warum Menü statt Hover-Verbs:** es sind bis zu 8+ kontextabhängige Verbs — in die Zeile
+  gehovert wären sie exakt die Noise-Explosion, die §0/§1 verbieten. Ein ⋯ ist ein Vokabular mit
+  den Host-Zeilen der Sidebar.
+- **Fleet-weites `⏹ stop all`: KEINE Chrome.** Selten + destruktiv → **Command-Palette**
+  (bestehender Confirm-Dialog bleibt). Es gehört **nicht** in die Zone „Verbindungen" (die trägt
+  *Hosts*, nicht Agents — Kategoriefehler) und in kein einzelnes Konto-Pane (es ist fleet-weit).
+  Der häufige Fall („dieser eine Agent nervt") liegt im ⋯ als Stop/Kill.
+- **Der Conductor-Tree im Pane entfällt** — die Sidebar trägt ihn (§2.1); das ist Entdopplung,
+  keine Regression. Er darf aber **erst** entfallen, wenn seine Verbs über das ⋯ ihren Platz haben.
 
 ## 4. Plexing (Konto-Routing beim Spawn) — Auto ist Default
 
@@ -104,7 +130,9 @@ Keine Maximieren-Icons. Zwei Zonen, keine Verwaltungs-Icons in der Sidebar
 
 1. **i18n-Vervollständigung** (fehlende DE-Keys + Parity-Check) — risikoarm, voll gemappt.
 2. **Sidebar/Tree + KI-Konten-Cards** — Encoding-System, Chevrons, Terminologie.
-3. **Konto-Pane + Sessions-Tabelle** (Suche/Gruppierung/Sortierung/Filter, Dedup pro Konto).
+3. **Konto-Pane + Sessions-Tabelle** (Suche/Gruppierung/Sortierung/Filter, Dedup pro Konto) —
+   **inkl. §3.1 Cockpit-Drive (⋯-Menü)**: erst wenn jeder Verb des alten Panes dort einen Platz
+   hat, darf der Pane-Tree entfallen. Vorher gegen `app/src/cockpit/pane.rs` gegenprüfen.
 4. **Plexing** (Auto-Routing + Spawn-Card) — baut auf 5h-Heat + C4-Account-Pinning.
 5. **FM-Modus-Badge** (Host bleibt im Tab-Titel) + **FM-SFTP-Bug** (Daemon-Browse statt Key-SFTP).
 
