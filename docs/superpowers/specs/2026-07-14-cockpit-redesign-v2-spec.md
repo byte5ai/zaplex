@@ -1,4 +1,12 @@
-# Cockpit-Redesign v2 — verbindliche Spec (User-abgenommen 2026-07-14)
+# Cockpit-Redesign v2 — ABGELÖST durch v3
+
+> ⛔ **NICHT MEHR VERBINDLICH.** Adversariales Review (2026-07-15) fand Faktenfehler,
+> innere Widersprüche und Konflikte mit existierendem, besserem Code. Verbindlich ist
+> **`2026-07-15-cockpit-redesign-v3-spec.md`** — gleiches Premium-Ziel, Ist-Zustand mit
+> file:line belegt, jede Lücke als Arbeitspaket (Code wird ans Ziel herangebaut, nie
+> umgekehrt). Dieses Dokument bleibt nur als Historie.
+
+# (historisch) Cockpit-Redesign v2 — verbindliche Spec (User-abgenommen 2026-07-14)
 
 > Ersetzt den Sidebar-Teil von `2026-07-11-cockpit-sidebar-redesign.md` und erweitert
 > ihn um Konto-Panes, Sessions-Tabelle und Plexing. Konvergiert über ~10 Iterationen
