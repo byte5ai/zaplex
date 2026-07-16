@@ -32,7 +32,7 @@ use warpui::platform::Cursor;
 use warpui::{
     AppContext, Entity, SingletonEntity as _, TypedActionView, View, ViewContext, ViewHandle,
 };
-use zaplex_cockpit::{Provider, SessionState};
+use zaplex_cockpit::SessionState;
 
 use crate::appearance::Appearance;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
@@ -122,10 +122,7 @@ impl AttentionInbox {
         // resumable in place; capability-gate on the provider's resume command.
         let mut adopt_targets = HashMap::new();
         for acct in &model.snapshot().accounts {
-            let agent = match acct.account.provider {
-                Provider::Claude => CLIAgent::Claude,
-                Provider::Codex => CLIAgent::Codex,
-            };
+            let agent = crate::cockpit::agent_of(acct.account.provider);
             for session in &acct.sessions {
                 if session.state != SessionState::Waiting {
                     continue;

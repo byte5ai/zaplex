@@ -5,6 +5,7 @@
 //! subscribe to `CockpitEvent::Updated` land in Increment 2 (`app/src/cockpit/…`).
 
 pub mod ambient;
+pub mod capabilities;
 pub mod favorites;
 pub mod github_flows;
 pub mod launch_registry;
@@ -48,6 +49,18 @@ use crate::terminal::cli_agent::CLIAgent;
 /// the inventory node's `host_id` makes a remote Claude launch's effort resolve
 /// instead of being dropped. `None` = honestly unknown; the label then omits the
 /// effort rather than inventing one.
+/// The CLI behind a discovered session's provider.
+///
+/// One mapping, so a caller cannot quietly disagree with another about which
+/// binary a session belongs to — and so `CLIAgent` stays the single place that
+/// knows what each CLI can do (see `capabilities`).
+pub(crate) fn agent_of(provider: Provider) -> CLIAgent {
+    match provider {
+        Provider::Claude => CLIAgent::Claude,
+        Provider::Codex => CLIAgent::Codex,
+    }
+}
+
 pub(crate) fn session_effort(
     session: &SessionSnapshot,
     is_local: bool,
@@ -56,10 +69,7 @@ pub(crate) fn session_effort(
     if let Some(effort) = session.effort.clone() {
         return Some(effort);
     }
-    let agent = match session.provider {
-        Provider::Claude => CLIAgent::Claude,
-        Provider::Codex => CLIAgent::Codex,
-    };
+    let agent = agent_of(session.provider);
     // Local sessions are keyed with `host = None` (the launch recorded none);
     // remote sessions key on the daemon's stable `host_id`, the same identity
     // the launch resolved and stored. A remote node with no id (shouldn't

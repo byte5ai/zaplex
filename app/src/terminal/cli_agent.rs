@@ -246,6 +246,17 @@ impl CLIAgent {
         Some(self.pin_config_dir(self.resume_command(session_id)?, config_dir))
     }
 
+    /// Whether this CLI takes **in-conversation slash commands** (`/compact`,
+    /// `/clear`) typed into a resumed session.
+    ///
+    /// Verified against the current CLIs (2026-07-16): Claude Code does; Codex
+    /// has no equivalent. Lives here beside `fork_command`/`resume_command` so
+    /// that what a given CLI can do is stated in one place — a caller asks
+    /// rather than re-deciding it with a `provider ==` test of its own.
+    pub fn supports_slash_commands(&self) -> bool {
+        matches!(self, CLIAgent::Claude)
+    }
+
     /// Prepend an account's config dir as an inline env assignment
     /// (`CLAUDE_CONFIG_DIR=… <cmd>` / `CODEX_HOME=… <cmd>`) so `<cmd>` runs on a
     /// specific subscription. Inline env (not per-launch injection) keeps the

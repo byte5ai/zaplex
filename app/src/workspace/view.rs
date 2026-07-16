@@ -4374,10 +4374,7 @@ impl Workspace {
         };
 
         if is_local {
-            let agent = match provider {
-                zaplex_cockpit::Provider::Claude => CLIAgent::Claude,
-                zaplex_cockpit::Provider::Codex => CLIAgent::Codex,
-            };
+            let agent = crate::cockpit::agent_of(provider);
             self.adopt_agent_session(
                 agent,
                 session_id,
@@ -4391,10 +4388,7 @@ impl Workspace {
             // resume command, and open a remote terminal that runs it in the
             // session's cwd (the host's own CLI login — remote account routing is
             // the host's, not a local config dir).
-            let agent = match provider {
-                zaplex_cockpit::Provider::Claude => CLIAgent::Claude,
-                zaplex_cockpit::Provider::Codex => CLIAgent::Codex,
-            };
+            let agent = crate::cockpit::agent_of(provider);
             let place = if name.is_empty() {
                 Path::new(&cwd)
                     .file_name()

@@ -29,6 +29,7 @@ use zaplex_cockpit::{
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
+use crate::cockpit::capabilities::SessionCapabilities;
 use crate::cockpit::style::{
     cluster_divider, ctx_pct_element, glyph_cell, heat_coloru, icon_word_verb, status_dot_coloru,
     utilisation_coloru, verb_button, verb_button_colored, VerbKind, INFO_VERBS_GAP, VERB_SPACING,
@@ -37,7 +38,6 @@ use crate::ui_components::icons;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
-use crate::terminal::cli_agent::CLIAgent;
 use crate::WorkspaceAction;
 
 const PANE_PADDING: f32 = 16.0;
@@ -393,12 +393,14 @@ impl CockpitPaneView {
         into_worktree: bool,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let agent = match acct.account.provider {
-            Provider::Claude => CLIAgent::Claude,
-            Provider::Codex => CLIAgent::Codex,
-        };
-        // Capability gate — agents without a fork mechanism get no surface.
-        agent.fork_command(&session.session_id)?;
+        let agent = crate::cockpit::agent_of(acct.account.provider);
+        // Disabled-by-absence: an agent with no fork mechanism gets no surface.
+        // `acct.sessions` is local by contract (see `AccountUsage::sessions`),
+        // which is what `is_local` states here; when the table starts showing
+        // other hosts' rows it will pass the row's real flag.
+        if !SessionCapabilities::of(session, true).can_fork {
+            return None;
+        }
         if into_worktree
             && !self
                 .session_in_repo
@@ -449,12 +451,12 @@ impl CockpitPaneView {
         session: &zaplex_cockpit::SessionSnapshot,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let agent = match acct.account.provider {
-            Provider::Claude => CLIAgent::Claude,
-            Provider::Codex => CLIAgent::Codex,
-        };
-        // Capability gate — agents without a resume mechanism get no surface.
-        agent.resume_command(&session.session_id)?;
+        let agent = crate::cockpit::agent_of(acct.account.provider);
+        // Disabled-by-absence: an agent with no resume mechanism gets no
+        // surface. `acct.sessions` is local by contract — see the fork verb.
+        if !SessionCapabilities::of(session, true).can_resume {
+            return None;
+        }
         let state = self
             .session_adopt_states
             .get(&session.session_id)
@@ -1197,7 +1199,10 @@ impl CockpitPaneView {
         // Review verbs are local-only (they inspect the repo on this
         // machine); guardrails are cross-host, so every live row — local and
         // remote — gets them (step 7 design: attempt remote, never fake it).
-        let review_verbs = is_local
+        // Review reads a git working tree, and `project_root` is a path on the
+        // host that reported the session — so it is only answerable here.
+        let review_verbs = SessionCapabilities::of(session, is_local)
+            .can_review
             .then(|| self.render_review_verbs(is_local, host_id, session, appearance))
             .flatten();
         let guardrail_verbs =
@@ -1253,10 +1258,7 @@ impl CockpitPaneView {
         app: &AppContext,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let agent = match session.provider {
-            Provider::Claude => CLIAgent::Claude,
-            Provider::Codex => CLIAgent::Codex,
-        };
+        let agent = crate::cockpit::agent_of(session.provider);
         // Same subscription as the source session (None = default login).
         let config_dir = CockpitModel::as_ref(app).config_dir_for_session(&session.session_id);
 
@@ -1278,11 +1280,13 @@ impl CockpitPaneView {
             .with_spacing(VERB_SPACING);
         let mut any = false;
 
-        // /compact + /clear — Claude Code slash commands; gated to Claude and to
-        // a resumable session (belt-and-braces with the SlashCommandSession
-        // handler's own resume-command guard).
-        let has_resume = agent.resume_command(&session.session_id).is_some();
-        if session.provider == Provider::Claude && has_resume {
+        // /compact + /clear — typed into a resumed conversation, so they need a
+        // CLI that has slash commands AND a session that can be resumed. Asked
+        // of `SessionCapabilities` rather than re-tested here: a `provider ==`
+        // check in the middle of rendering is how the row and the ⋯ menu end up
+        // disagreeing about the same session.
+        let caps = SessionCapabilities::of(session, is_local);
+        if caps.can_slash {
             let slash = |command: &'static str| WorkspaceAction::SlashCommandSession {
                 agent,
                 session_id: session.session_id.clone(),
@@ -1453,15 +1457,20 @@ impl CockpitPaneView {
         Some(row.with_main_axis_size(MainAxisSize::Min).finish())
     }
 
-    /// The guardrail verb cluster (step 7) for **every** live Conductor
-    /// session row, local and remote alike: `⏸ stop` (SIGINT, dispatched
-    /// immediately — no confirmation, mirrors Ctrl-C) and `⨯ kill` (SIGKILL,
-    /// opens the confirm dialog first — destructive). Muted, turning Critical
-    /// on hover (a danger affordance, distinct from the review cluster's
-    /// muted→accent) — see `zaplex_cockpit::conductor`'s glyph/color
-    /// vocabulary. Unlike [`Self::render_review_verbs`] this renders
-    /// regardless of `is_local`: interrupt/kill are cross-host operations
-    /// (local `libc::kill`, remote daemon `RunCommandRequest`).
+    /// The guardrail verb cluster (step 7) for a Conductor session row: `⏸ stop`
+    /// (SIGINT, dispatched immediately — no confirmation, mirrors Ctrl-C) and
+    /// `⨯ kill` (SIGKILL, opens the confirm dialog first — destructive). Muted,
+    /// turning Critical on hover (a danger affordance, distinct from the review
+    /// cluster's muted→accent) — see `zaplex_cockpit::conductor`'s glyph/color
+    /// vocabulary.
+    ///
+    /// Rendered regardless of `is_local` — interrupt/kill are cross-host
+    /// operations (local `libc::kill`, remote daemon `RunCommandRequest`) — but
+    /// **only when the session can be signalled at all** (F6). A Codex session
+    /// carries no pid, so these verbs could never do anything: the signal path
+    /// itself refuses at `pid_signalable` and answers with an error toast.
+    /// Offering a verb whose only outcome is that toast is a lie the row tells;
+    /// the honest row simply has no stop/kill.
     fn render_guardrail_verbs(
         &self,
         host_label: &str,
@@ -1470,6 +1479,9 @@ impl CockpitPaneView {
         session: &SessionSnapshot,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
+        if !SessionCapabilities::of(session, is_local).can_signal {
+            return None;
+        }
         let rk = host_key(is_local, host_id, &session.session_id);
         let state = |verb: &str| {
             self.conductor_guardrail_states

@@ -193,11 +193,36 @@ Bestandsfehler und fehlende Datenpfade. Ohne sie ist jedes UI darüber Fassade.
   `account_email` → devhost-Sessions joinen kein Konto (degradiert sauber, kein
   Fehler).
 
-- **F6 · Capability-Semantik statt Provider-Ifs.**
-  Codex-Sessions haben `pid == 0` (codex_sessions.rs:20/231) → Stop/Kill unmöglich;
-  Slash nur Claude+resumebar; Review nur lokal. Ein `SessionCapabilities`-Modell
-  (can_signal/can_fork/can_slash/can_review/can_resume) speist Menüs & Verbs.
-  *Abnahme:* ⋯-Menü zeigt für eine Codex-Session kein Stop/Kill.
+- **F6 · Capability-Semantik statt Provider-Ifs.** ✅ *gebaut*
+  Codex-Sessions haben `pid == 0` (kein Prozess-Registry) → Stop/Kill unmöglich.
+  `SessionCapabilities::of(session, is_local)` (app/src/cockpit/capabilities.rs)
+  speist Verbs & (später) das ⋯-Menü.
+
+  **Realer Defekt war genau EINER:** Stop/Kill wurden als einzige Verben **gar
+  nicht** gated → eine Codex-Zeile bot sie an und antwortete auf den Klick nur mit
+  einem Fehler-Toast. Ein Verb anzubieten, dessen einziges Ergebnis dieser Toast
+  ist, ist eine Lüge der Oberfläche. **Keine Sicherheitslücke:** der Signalpfad
+  prüft `pid_signalable` **vor** jedem `libc::kill` (view.rs:11686) — `kill(0,…)`
+  (= ganze Prozessgruppe) ist verhindert; „stop all" filtert ebenso.
+  *Korrektur am Spec:* Fork **und** Resume können **beide** Provider
+  (`codex fork` / `codex resume`, cli_agent.rs) — nicht Claude-only. Review war
+  bereits auf `is_local` gated (an der Aufrufstelle), Fork fragte bereits
+  `fork_command().is_some()`. Verstreut und je Verb anders, aber nicht falsch.
+
+  **Prinzip: fragen, nicht nachbauen.** `can_signal` **ist** das Prädikat, auf dem
+  der Handler selbst ablehnt (dieselbe Funktion) → Verb und Aktion können nicht
+  auseinanderlaufen, weil keiner eine eigene Meinung hat. Der Rest fragt
+  `CLIAgent`, wo das Wissen „was kann dieses CLI" ohnehin lebt (`+
+  supports_slash_commands()`). Das Modell **erzwingt** nichts — es ist die eine
+  Stelle zum Fragen, kein Gatter um die Aktionen.
+
+  **Nebenbei: 6 Kopien** der `Provider → CLIAgent`-Zuordnung (mod.rs, pane.rs ×3,
+  view.rs ×2, attention_inbox.rs) auf **eine** (`cockpit::agent_of`) — genau die
+  „Provider-Ifs", die der Paketname meint.
+
+  *Abnahme:* Codex-Session zeigt kein Stop/Kill; **kein Verlust** — ein Test prüft
+  über alle pids/Provider/Lokalitäten, dass `can_signal` **exakt** dem entspricht,
+  was der Signalpfad akzeptiert (no-regression als Test statt als Behauptung).
 
 - **F7 · „Geprüft"-Markierung persistent + ehrlich benannt.**
   Heutiges „approve" togglet ein In-Memory-`HashSet` (pane.rs:1370/1419) — nach
@@ -356,7 +381,7 @@ Bearbeiten über ⋯ im Konto-Pane. Anzeige-Fallback ohne Alias = bisheriges Lab
    *Abnahme:* `heat_coloru` kommt im Cockpit außerhalb von style.rs nicht mehr vor;
    Kontrast-Test deckt beide Themes ab.
 3. **F3–F9** — Datenpfade & strukturelle Fundamente (einzeln committen).
-   **F3 ✅ · F4 ✅ · F5 ✅** — sichtbare Hälfte jeweils bewusst an P3/P4 (siehe §2).
+   **F3 ✅ · F4 ✅ · F5 ✅ · F6 ✅** — sichtbare Hälfte jeweils bewusst an P3/P4 (siehe §2).
    **F5 hat eine Release-Konsequenz:** neues Proto-Feld ⇒ **Daemon-Rebuild +
    Redeploy** nötig, sonst bleibt die Host-Spalte für devhost leer (sauber
    degradiert, kein Fehler). Fährt mit dem Autocomplete-Fix im selben Zyklus.
