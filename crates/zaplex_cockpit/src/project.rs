@@ -78,6 +78,12 @@ pub fn resolve_project(cwd: &Path) -> ResolvedProject {
 /// file is the contract, and it keeps holding when the git dir lives somewhere
 /// else entirely (`--separate-git-dir`).
 fn main_worktree_root(root: &Path) -> Option<std::path::PathBuf> {
+    // Not a checkout → no repo above it. Guarding here too keeps a dangling
+    // `.git` file from producing a repo_root under a path that does not exist:
+    // a grouping key made of leftovers, quietly collecting unrelated sessions.
+    if !is_work_tree(root) {
+        return None;
+    }
     let dot_git = root.join(".git");
     // A directory means this IS the main checkout; nothing to resolve.
     if std::fs::metadata(&dot_git).ok()?.is_dir() {
@@ -117,6 +123,15 @@ fn worktree_gitdir(root: &Path) -> Option<std::path::PathBuf> {
 /// under `worktrees/<name>` — **not** the shared common dir, so two worktrees of
 /// one repo report their own distinct branch.
 fn resolve_worktree_identity(root: &Path) -> (Option<String>, Option<String>) {
+    // Only a real checkout has an identity to report. Without this, a stray
+    // `.git` holding nothing but a HEAD would hand back a branch for a directory
+    // that is not a repo, and a `.git` file pointing at a pruned worktree would
+    // name one after the dead path's last segment — facts invented out of
+    // leftovers. `git_root` refuses to call either a work tree; this must agree,
+    // or `root` and the identity beside it describe different things.
+    if !is_work_tree(root) {
+        return (None, None);
+    }
     let dot_git = root.join(".git");
     let Ok(meta) = std::fs::metadata(&dot_git) else {
         return (None, None);
@@ -160,16 +175,45 @@ fn head_branch(git_dir: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-/// First ancestor of `cwd` (inclusive) containing a `.git` entry, if any.
+/// First ancestor of `cwd` (inclusive) that is a git working tree, if any.
 fn git_root(cwd: &Path) -> Option<&Path> {
     let mut cur = Some(cwd);
     while let Some(dir) = cur {
-        if dir.join(".git").exists() {
+        if is_work_tree(dir) {
             return Some(dir);
         }
         cur = dir.parent();
     }
     None
+}
+
+/// Is `dir` a git working tree — i.e. would git itself say so?
+///
+/// The presence of something named `.git` is **not** enough, though it is the
+/// obvious test and this used to make it. An empty directory called `.git` — an
+/// aborted `git init`, a half-finished copy, some other tool's leftovers — made
+/// every directory beneath it look like one repo. Sessions from unrelated work
+/// were then filed under a project that does not exist, named after whatever
+/// directory happened to hold the stray. (This host has exactly that at
+/// `/tmp/.git`, which is what kept three of this crate's tests red.)
+///
+/// So apply git's own rule instead, verified against git:
+/// - a `.git` **directory** must hold `HEAD`, `refs/` and `objects/` — git wants
+///   all three, and rejects any two of them;
+/// - a `.git` **file** must say `gitdir: …` and point at a directory holding a
+///   `HEAD` (a linked worktree or submodule; its `refs`/`objects` live in the
+///   repo's shared common dir, so they are not here to check).
+fn is_work_tree(dir: &Path) -> bool {
+    let dot_git = dir.join(".git");
+    let Ok(meta) = std::fs::metadata(&dot_git) else {
+        return false;
+    };
+    if meta.is_dir() {
+        return dot_git.join("HEAD").exists()
+            && dot_git.join("refs").exists()
+            && dot_git.join("objects").exists();
+    }
+    worktree_gitdir(dir).is_some_and(|gitdir| gitdir.join("HEAD").exists())
 }
 
 /// Normalize a path to a string without a trailing slash (root `/` preserved).

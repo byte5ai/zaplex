@@ -6,9 +6,14 @@ use std::path::{Path, PathBuf};
 
 /// Write a minimal `.git/config` with the given origin url under `dir`, plus a
 /// `HEAD` on `main` (so branch resolution has something to read).
+/// A `.git` git actually recognises: `HEAD` **and** `refs/` **and** `objects/`.
+/// Git wants all three and rejects any two (verified against git), and so does
+/// `git_root` — a fixture with fewer would describe a directory that no real
+/// checkout looks like, and would only prove the resolver accepts more than git.
 fn init_repo_with_origin(dir: &Path, url: &str) {
     let git = dir.join(".git");
-    fs::create_dir_all(&git).unwrap();
+    fs::create_dir_all(git.join("refs")).unwrap();
+    fs::create_dir_all(git.join("objects")).unwrap();
     fs::write(
         git.join("config"),
         format!("[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]\n\turl = {url}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n"),
@@ -247,5 +252,70 @@ fn a_non_repo_dir_is_its_own_repo_root() {
     std::fs::create_dir_all(&dir).unwrap();
     let p = resolve_project(&dir);
     assert_eq!(p.repo_root, p.root);
+    assert_eq!(p.worktree, None);
+}
+
+/// A directory named `.git` is not a repo, and believing it is has teeth: every
+/// session anywhere beneath a stray one gets filed under a project that does not
+/// exist, named after whatever directory happens to hold it. This host had
+/// exactly that — an empty `/tmp/.git` — which silently made three of this
+/// crate's tests fail for a year's worth of the wrong reason.
+#[test]
+fn an_empty_dot_git_directory_is_not_a_repo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stray = tmp.path().join("not-a-repo");
+    fs::create_dir_all(stray.join(".git")).unwrap();
+    let work = stray.join("some").join("work");
+    fs::create_dir_all(&work).unwrap();
+
+    let p = resolve_project(&work);
+    assert_eq!(
+        p.root,
+        normalize(&work),
+        "an empty .git must not swallow the directories under it"
+    );
+    assert_eq!(p.repo_root, p.root);
+    assert_eq!(p.branch, None);
+}
+
+/// Git wants HEAD *and* refs *and* objects, and rejects any two of the three
+/// (verified against git itself). Anything less is a leftover, not a checkout.
+#[test]
+fn a_partial_dot_git_is_not_a_repo_either() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (name, files, dirs) in [
+        ("head-only", vec!["HEAD"], vec![]),
+        ("no-head", vec![], vec!["refs", "objects"]),
+        ("no-objects", vec!["HEAD"], vec!["refs"]),
+        ("no-refs", vec!["HEAD"], vec!["objects"]),
+    ] {
+        let dir = tmp.path().join(name);
+        let git = dir.join(".git");
+        fs::create_dir_all(&git).unwrap();
+        for f in files {
+            fs::write(git.join(f), "ref: refs/heads/main\n").unwrap();
+        }
+        for d in dirs {
+            fs::create_dir_all(git.join(d)).unwrap();
+        }
+        assert_eq!(
+            resolve_project(&dir).root,
+            normalize(&dir),
+            "{name}: an incomplete .git is not a checkout"
+        );
+        assert_eq!(resolve_project(&dir).branch, None, "{name}: and has no branch");
+    }
+}
+
+/// A `.git` file pointing nowhere (a pruned worktree) is a leftover too.
+#[test]
+fn a_dangling_worktree_pointer_is_not_a_repo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("pruned");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(".git"), "gitdir: /nowhere/that/exists\n").unwrap();
+
+    let p = resolve_project(&dir);
+    assert_eq!(p.root, normalize(&dir), "a dangling pointer is not a worktree");
     assert_eq!(p.worktree, None);
 }
