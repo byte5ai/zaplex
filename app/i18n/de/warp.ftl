@@ -60,6 +60,12 @@ cockpit-card-reset-both = 5h ↻ { $reset5h } · Wo ↻ { $resetwk }
 cockpit-conductor-needs-me-badge = ● { $count }
 cockpit-header-cost-summary = heute { $today } · { $week } Wo
 cockpit-header-today-total = heute { $today }
+# Review-Cluster. „geprüft" ist bewusst kein „freigegeben": die Markierung ist
+# eine private Notiz an dich selbst — sie sagt dem Agenten nichts und gibt nichts frei.
+cockpit-session-review = Ansehen
+cockpit-session-mark-reviewed = ✓ Als geprüft markieren
+cockpit-session-is-reviewed = ✓ Geprüft
+cockpit-session-redirect = ↻ Umlenken
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
 

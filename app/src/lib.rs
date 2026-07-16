@@ -1511,6 +1511,7 @@ fn initialize_app(
     ctx.add_singleton_model(|_| KeybindingChangedNotifier::new());
     ctx.add_singleton_model(|_| crate::ssh_manager::SshTreeChangedNotifier::new());
     ctx.add_singleton_model(crate::cockpit::favorites::FavoritesStore::new);
+    ctx.add_singleton_model(crate::cockpit::reviewed::ReviewedStore::new);
     ctx.add_singleton_model(|_| search::command_palette::SelectedItems::new());
     ctx.add_singleton_model(search::files::model::FileSearchModel::new);
     ctx.add_singleton_model(|_| VimRegisters::new());

@@ -2852,6 +2852,12 @@ cockpit-card-reset-both = 5h ↻ { $reset5h } · wk ↻ { $resetwk }
 cockpit-conductor-needs-me-badge = ● { $count }
 cockpit-header-cost-summary = today { $today } · { $week } wk
 cockpit-header-today-total = today { $today }
+# Review cluster. "reviewed" is deliberately not "approved": the mark is a
+# private note to yourself — it tells the agent nothing and approves nothing.
+cockpit-session-review = Review
+cockpit-session-mark-reviewed = ✓ Mark reviewed
+cockpit-session-is-reviewed = ✓ Reviewed
+cockpit-session-redirect = ↻ Redirect
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
 workspace-left-panel-cockpit-empty = No Claude or Codex accounts found.

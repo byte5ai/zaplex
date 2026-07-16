@@ -14,6 +14,7 @@ pub mod oauth;
 pub mod pane;
 pub mod tailscale;
 pub mod panel;
+pub mod reviewed;
 pub mod settings;
 pub mod style;
 

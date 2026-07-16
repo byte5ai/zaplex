@@ -118,15 +118,10 @@ pub struct CockpitPaneView {
     collapsed_projects: HashMap<String, bool>,
     /// Hover state of each Conductor session row's review-loop verbs (step 6),
     /// keyed `"{verb}\0{host_ident}\0{id}"` (verb ∈
-    /// review/approve/redirect/commit/pr). One combined map (rather than five)
+    /// review/mark/redirect/commit/pr). One combined map (rather than five)
     /// keeps the sync/retain cheap; hover still needs a stable handle per (verb,
     /// session) across renders.
     conductor_review_states: HashMap<String, MouseStateHandle>,
-    /// Sessions the user marked reviewed (approve verb), keyed by
-    /// `host_ident\0id`.
-    /// A lightweight local marker — never mutates the agent — retained across
-    /// the 45s reconcile like the hover-state maps, so approving doesn't flicker.
-    reviewed_sessions: std::collections::HashSet<String>,
     /// Hover state of each Conductor session row's guardrail verbs (step 7):
     /// `⏸ stop` / `⨯ kill`, keyed `"{verb}\0{host_ident}\0{id}"` like the review-loop
     /// map. Unlike the review cluster, guardrails render on **every** live row
@@ -145,7 +140,9 @@ pub struct CockpitPaneView {
 
 /// The review-loop verbs (step 6) that hang on a local Conductor session row, in
 /// render order. Used both to seed their hover-state handles and to render them.
-const REVIEW_VERB_KEYS: [&str; 5] = ["review", "approve", "redirect", "commit", "pr"];
+/// Hover-state keys for the review cluster. `"mark"` is the read-marker verb —
+/// named for what it does, not for an approval it never performs.
+const REVIEW_VERB_KEYS: [&str; 5] = ["review", "mark", "redirect", "commit", "pr"];
 
 /// The guardrail verbs (step 7) that hang on **every** live Conductor session
 /// row (local and remote alike — unlike the review cluster, which is
@@ -182,9 +179,12 @@ pub enum CockpitPaneAction {
     ToggleHost(String),
     /// Fold/unfold a project node (key = `host_ident\0root`).
     ToggleProject(String),
-    /// Mark a reviewed session as reviewed (approve verb, key = `host_ident\0id`).
+    /// Toggle the user's "I have read this" mark for a session, keyed by the
+    /// session's own id (never the row's `host_key` — a daemon's host_id is
+    /// regenerated on every start). Persisted by `ReviewedStore`; it tells the
+    /// agent nothing and approves nothing.
     /// A local, non-mutating marker — dims the row's review affordance so the
-    /// user's eye moves on; toggles off if approved twice.
+    /// user's eye moves on; toggles off if marked twice.
     MarkReviewed(String),
 }
 
@@ -215,7 +215,6 @@ impl CockpitPaneView {
             collapsed_hosts: HashMap::new(),
             collapsed_projects: HashMap::new(),
             conductor_review_states: HashMap::new(),
-            reviewed_sessions: std::collections::HashSet::new(),
             conductor_guardrail_states: HashMap::new(),
             conductor_lever_states: HashMap::new(),
             conductor_stop_all_state: MouseStateHandle::default(),
@@ -315,7 +314,6 @@ impl CockpitPaneView {
                 .map(|(_, rest)| live_rows.contains(rest))
                 .unwrap_or(false)
         });
-        self.reviewed_sessions.retain(|k| live_rows.contains(k));
         // Guardrail verb map: same key shape as the review-loop map, retained
         // the same way.
         self.conductor_guardrail_states.retain(|k, _| {
@@ -1203,7 +1201,7 @@ impl CockpitPaneView {
         // host that reported the session — so it is only answerable here.
         let review_verbs = SessionCapabilities::of(session, is_local)
             .can_review
-            .then(|| self.render_review_verbs(is_local, host_id, session, appearance))
+            .then(|| self.render_review_verbs(is_local, host_id, session, app, appearance))
             .flatten();
         let guardrail_verbs =
             self.render_guardrail_verbs(host_label, host_id, is_local, session, appearance);
@@ -1357,9 +1355,9 @@ impl CockpitPaneView {
     }
 
     /// The review-loop verb cluster for a **local** Conductor session row (step
-    /// 6): `review · ✓ approve · ↻ redirect · ⎙ commit · ⬈ PR`. Each verb is
+    /// 6): `review · ✓ mark reviewed · ↻ redirect · ⎙ commit · ⬈ PR`. Each verb is
     /// muted, accent on hover, and dispatches its action — review / redirect /
-    /// commit / PR to the workspace ([`WorkspaceAction`]); approve to this pane
+    /// commit / PR to the workspace ([`WorkspaceAction`]); the mark to this pane
     /// ([`CockpitPaneAction::MarkReviewed`], a local non-mutating marker that
     /// dims to "✓ reviewed"). `None` before the hover handles are seeded (first
     /// frame), so a row never renders half a cluster. Remote sessions get no
@@ -1370,6 +1368,7 @@ impl CockpitPaneView {
         is_local: bool,
         host_id: Option<&str>,
         session: &SessionSnapshot,
+        app: &AppContext,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         let theme = appearance.theme();
@@ -1384,7 +1383,12 @@ impl CockpitPaneView {
         };
         let project_root = PathBuf::from(&session.project_root);
         let project_name = session.project_name.clone();
-        let reviewed = self.reviewed_sessions.contains(&rk);
+        // Keyed by the session's own id, not the row's `host_key`: a daemon's
+        // host_id is regenerated on every daemon start, so a mark stored under
+        // it would vanish on the next restart.
+        let reviewed = crate::cockpit::reviewed::ReviewedStore::handle(app)
+            .as_ref(app)
+            .contains(&session.session_id);
 
         // One shared-style verb dispatching a WorkspaceAction (muted → accent).
         let make =
@@ -1400,7 +1404,7 @@ impl CockpitPaneView {
             row = row.with_child(icon_word_verb(
                 st,
                 icons::Icon::Eye,
-                "review",
+                &crate::t!("cockpit-session-review"),
                 VerbKind::Constructive,
                 appearance,
                 WorkspaceAction::ReviewSession {
@@ -1409,28 +1413,31 @@ impl CockpitPaneView {
                 },
             ));
         }
-        // ✓ approve — local marker; label + rest color flip once reviewed
+        // The read-marker — label + rest color flip once marked
         // (a reviewed row rests in accent so the eye can move on).
-        if let Some(st) = state("approve") {
+        if let Some(st) = state("mark") {
+            // "reviewed", never "approved": the mark is a private note to
+            // yourself. It sends the agent nothing and approves no change — a
+            // label promising otherwise would be the lie, not the feature.
             let label = if reviewed {
-                "✓ reviewed"
+                crate::t!("cockpit-session-is-reviewed")
             } else {
-                "✓ approve"
+                crate::t!("cockpit-session-mark-reviewed")
             };
             let rest = if reviewed { accent } else { muted };
             row = row.with_child(verb_button_colored(
                 st,
-                label,
+                &label,
                 rest,
                 accent,
                 appearance,
-                CockpitPaneAction::MarkReviewed(rk.clone()),
+                CockpitPaneAction::MarkReviewed(session.session_id.clone()),
             ));
         }
         if let Some(st) = state("redirect") {
             row = row.with_child(make(
                 st,
-                "↻ redirect",
+                &crate::t!("cockpit-session-redirect"),
                 WorkspaceAction::AskAgentRouted {
                     prompt: review_redirect_prompt(&project_name),
                     config_dir: None,
@@ -1737,10 +1744,11 @@ impl TypedActionView for CockpitPaneView {
                 self.collapsed_projects.insert(key.clone(), !eff);
                 ctx.notify();
             }
-            CockpitPaneAction::MarkReviewed(key) => {
-                if !self.reviewed_sessions.remove(key) {
-                    self.reviewed_sessions.insert(key.clone());
-                }
+            CockpitPaneAction::MarkReviewed(session_id) => {
+                let id = session_id.clone();
+                crate::cockpit::reviewed::ReviewedStore::handle(ctx).update(ctx, |store, ctx| {
+                    store.toggle(&id, ctx);
+                });
                 ctx.notify();
             }
         }
