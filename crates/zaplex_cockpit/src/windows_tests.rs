@@ -179,6 +179,7 @@ fn snapshot(state: SessionState) -> crate::types::SessionSnapshot {
         effort: None,
         ctx_tokens: 0,
         project_root: "/tmp/p".into(),
+        repo_root: "/tmp/p".into(),
         project_name: "p".into(),
         branch: None,
         worktree: None,

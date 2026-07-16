@@ -287,6 +287,7 @@ fn snapshot_of(
         effort: None,
         ctx_tokens: tail.ctx_tokens,
         project_root: project.root,
+        repo_root: project.repo_root,
         project_name: project.name,
         branch: project.branch,
         worktree: project.worktree,

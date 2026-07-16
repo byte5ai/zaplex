@@ -15,7 +15,18 @@ use std::path::Path;
 pub struct ResolvedProject {
     /// Git working-tree root of the `cwd` (normalized, no trailing slash), or
     /// the `cwd` itself when it is not inside a repo.
+    ///
+    /// **This session's own tree** — for a linked worktree, the worktree, not the
+    /// repo it belongs to. Anything that acts on the files the session sees
+    /// (review, a launch scoped to where it works) must use this.
     pub root: String,
+    /// Working-tree root of the **repo** `root` belongs to: the main checkout for
+    /// a linked worktree, `root` itself otherwise.
+    ///
+    /// The grouping key for the inventory. Three worktrees of one repo are three
+    /// `root`s but one `repo_root`, so they read as one project with three
+    /// sessions rather than three unrelated projects that happen to share a name.
+    pub repo_root: String,
     /// Human repo label: the `origin` remote's basename when parseable, else
     /// the root directory's basename.
     pub name: String,
@@ -39,14 +50,61 @@ pub struct ResolvedProject {
 pub fn resolve_project(cwd: &Path) -> ResolvedProject {
     let root_path = git_root(cwd).unwrap_or(cwd);
     let root = normalize(root_path);
-    let name = origin_repo_name(root_path).unwrap_or_else(|| basename(&root));
+    // The repo this tree belongs to. A linked worktree points at the main
+    // checkout; everything else is its own repo.
+    let repo_root = main_worktree_root(root_path)
+        .map(|p| normalize(&p))
+        .unwrap_or_else(|| root.clone());
+    // Named after the REPO, not this tree: `origin` is recorded once, in the
+    // shared config, so every worktree of a repo answers with the same name.
+    let name = origin_repo_name(root_path).unwrap_or_else(|| basename(&repo_root));
     let (branch, worktree) = resolve_worktree_identity(root_path);
     ResolvedProject {
         root,
+        repo_root,
         name,
         branch,
         worktree,
     }
+}
+
+/// The main checkout of the repo `root` belongs to, or `None` when `root` is
+/// already it (a primary checkout) or is not a repo at all.
+///
+/// Git states the relationship itself: a linked worktree's per-worktree gitdir
+/// holds a `commondir` file pointing at the repo's shared git dir, whose parent
+/// is the main working tree. Read that rather than stripping `worktrees/<name>`
+/// off the gitdir by hand — the two agree for an ordinary layout, but only the
+/// file is the contract, and it keeps holding when the git dir lives somewhere
+/// else entirely (`--separate-git-dir`).
+fn main_worktree_root(root: &Path) -> Option<std::path::PathBuf> {
+    let dot_git = root.join(".git");
+    // A directory means this IS the main checkout; nothing to resolve.
+    if std::fs::metadata(&dot_git).ok()?.is_dir() {
+        return None;
+    }
+    let gitdir = worktree_gitdir(root)?;
+    let common = git_common_dir(&gitdir);
+    // `<main>/.git` → `<main>`. A bare repo has no working tree above it, so its
+    // parent is not one; grouping still keys on a path every worktree of the repo
+    // shares, which is all the key has to do.
+    let common = common.canonicalize().unwrap_or(common);
+    common.parent().map(Path::to_path_buf)
+}
+
+/// The per-worktree git dir a `.git` *file* points at (`gitdir: <path>`).
+fn worktree_gitdir(root: &Path) -> Option<std::path::PathBuf> {
+    let contents = std::fs::read_to_string(root.join(".git")).ok()?;
+    let gitdir = contents
+        .lines()
+        .find_map(|l| l.strip_prefix("gitdir:"))
+        .map(str::trim)?;
+    let p = Path::new(gitdir);
+    Some(if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        root.join(p)
+    })
 }
 
 /// Resolve `(branch, worktree)` for a working-tree root by reading Git plumbing
@@ -134,16 +192,29 @@ fn basename(root: &str) -> String {
         .to_string()
 }
 
-/// Parse `<root>/.git/config` for `[remote "origin"] url` and return its repo
+/// Parse the repo's git config for `[remote "origin"] url` and return its repo
 /// basename (trailing `.git` stripped, last `/`- or `:`-separated segment).
 ///
-/// Handles a `.git` file (worktree/submodule: `gitdir: <path>`) by following
-/// it to the real git dir. Returns `None` if there is no origin url.
+/// Reads the **shared** git dir, not the per-worktree one. `config` is recorded
+/// once per repo and lives in the common dir; a linked worktree's own gitdir has
+/// no `config` at all, so looking there found nothing and every worktree fell
+/// back to being named after its own directory — one repo showing up as
+/// "zaplex" and "rc-master-plan", two projects that share nothing but a name.
+/// Returns `None` if there is no origin url.
 fn origin_repo_name(root: &Path) -> Option<String> {
     let git_dir = resolve_git_dir(root)?;
-    let config = std::fs::read_to_string(git_dir.join("config")).ok()?;
+    let config = std::fs::read_to_string(git_common_dir(&git_dir).join("config")).ok()?;
     let url = origin_url(&config)?;
     Some(repo_name_from_url(&url))
+}
+
+/// The repo's shared git dir for a (possibly per-worktree) git dir: follows the
+/// `commondir` file when there is one, else `git_dir` itself is already shared.
+fn git_common_dir(git_dir: &Path) -> std::path::PathBuf {
+    match std::fs::read_to_string(git_dir.join("commondir")) {
+        Ok(rel) => git_dir.join(rel.trim()),
+        Err(_) => git_dir.to_path_buf(),
+    }
 }
 
 /// Resolve the real git directory for a working-tree root: `<root>/.git` when a

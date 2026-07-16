@@ -782,6 +782,14 @@ message AgentSessionInfo {
   // session still folds into the host tree; it simply joins no account rather than
   // being guessed onto one.
   string account_email = 16;
+  // Working-tree root of the REPO project_root belongs to (its main checkout when
+  // project_root is a linked worktree, otherwise the same path). The inventory
+  // groups on this, so several worktrees of one repo read as one project.
+  //
+  // Empty = the daemon predates this field; the client then groups that session by
+  // its own project_root, i.e. the old worktree-per-project split. Degraded, not
+  // mis-grouped.
+  string repo_root = 17;
 }
 
 // Daemon → client: result of ListAgentSessions.

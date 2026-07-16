@@ -27,6 +27,7 @@ fn session(id: &str, cwd: &str, state: SessionState, activity: i64) -> SessionSn
         effort: None,
         ctx_tokens: 0,
         project_root: cwd.into(),
+        repo_root: cwd.into(),
         project_name: name,
         branch: None,
         worktree: None,

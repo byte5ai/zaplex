@@ -588,6 +588,7 @@ mod tests {
             effort: None,
             ctx_tokens: 0,
             project_root: "/w".into(),
+            repo_root: "/w".into(),
             project_name: "proj".into(),
             branch: None,
             worktree: None,

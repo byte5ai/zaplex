@@ -98,6 +98,7 @@ mod session_effort_tests {
             effort,
             ctx_tokens: 0,
             project_root: cwd.into(),
+            repo_root: cwd.into(),
             project_name: String::new(),
             branch: None,
             worktree: None,

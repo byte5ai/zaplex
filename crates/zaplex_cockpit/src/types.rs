@@ -168,9 +168,21 @@ pub struct SessionSnapshot {
     pub effort: Option<String>,
     /// Context-window fill of the latest assistant turn.
     pub ctx_tokens: u64,
-    /// Git-root of `cwd` (or `cwd` itself when not inside a repo). The
-    /// project-grouping key for the Agent-Inventory tree.
+    /// Git-root of `cwd` (or `cwd` itself when not inside a repo) — **this
+    /// session's own working tree**. What acts on the files the session sees
+    /// (review, a launch scoped to it) must use this, not `repo_root`: for a
+    /// linked worktree the two differ, and the repo's tree holds other work.
     pub project_root: String,
+    /// Working-tree root of the **repo** `project_root` belongs to — the main
+    /// checkout for a linked worktree, `project_root` itself otherwise.
+    ///
+    /// The inventory's grouping key: several worktrees of one repo are one
+    /// project with several sessions, not several projects that merely share a
+    /// name. Empty from a producer that predates the field; grouping then falls
+    /// back to `project_root`, i.e. to the old per-worktree split — the honest
+    /// degradation, not a wrong grouping.
+    #[serde(default)]
+    pub repo_root: String,
     /// Human repo label — origin-url basename, else the root's dir basename.
     pub project_name: String,
     /// Git branch checked out in this session's working tree (`.git/HEAD` →

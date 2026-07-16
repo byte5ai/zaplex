@@ -7,9 +7,11 @@
 //! project to host. This is the "conductor" leit-view over the unified
 //! inventory: at a glance, which host/project is waiting on you.
 //!
-//! Projects are keyed by **git root** ([`SessionSnapshot::project_root`]), so
-//! sessions launched in different sub-directories of the same repo collapse
-//! into one project node. Idle/Monitor/Active sessions never count as needs-me.
+//! Projects are keyed by the **repo** ([`SessionSnapshot::repo_root`]), so
+//! sessions launched in different sub-directories — or in different linked
+//! worktrees — of the same repo collapse into one project node. Each session
+//! keeps its own tree in `project_root`; the worktree is an attribute of the
+//! session, not a project of its own. Idle/Monitor/Active never count as needs-me.
 //!
 //! Pure aggregation (no IO, no remote calls): given per-host session lists it
 //! yields the sorted tree. Fetching sessions cross-host (`list_sessions` over
@@ -62,11 +64,14 @@ pub struct RemoteHost {
 }
 
 /// A project grouping within a host, with its own needs-me tally. Sessions are
-/// grouped by their git **root** (see [`SessionSnapshot::project_root`]), so
-/// nested sub-directory launches of one repo share a single node.
+/// grouped by their **repo** (see [`SessionSnapshot::repo_root`]), so nested
+/// sub-directory launches and parallel worktrees of one repo share a single node.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectNode {
-    /// The sessions' shared git root — the grouping key.
+    /// The sessions' shared **repo** root — the grouping key. For sessions in
+    /// linked worktrees this is the main checkout, which none of them sits in;
+    /// each session keeps its own tree in [`SessionSnapshot::project_root`], and
+    /// anything acting on a session's files must use that.
     pub root: String,
     /// Human repo label (from [`SessionSnapshot::project_name`]).
     pub name: String,
@@ -130,10 +135,22 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
         .into_iter()
         .filter(|h| !h.sessions.is_empty())
         .map(|h| {
-            // Group sessions by git root (stable order via BTreeMap on the key).
+            // Group by the REPO, not by each session's own tree (stable order
+            // via BTreeMap on the key). Three worktrees of one repo are one
+            // project with three sessions — they share a history and a name, and
+            // splitting them into three headers said the opposite.
+            //
+            // A producer older than `repo_root` sends it empty; such a session
+            // falls back to grouping by its own tree, i.e. exactly the old
+            // per-worktree split. Degraded, never mis-grouped.
             let mut by_root: BTreeMap<String, Vec<SessionSnapshot>> = BTreeMap::new();
             for s in h.sessions {
-                by_root.entry(s.project_root.clone()).or_default().push(s);
+                let key = if s.repo_root.is_empty() {
+                    s.project_root.clone()
+                } else {
+                    s.repo_root.clone()
+                };
+                by_root.entry(key).or_default().push(s);
             }
             let mut projects: Vec<ProjectNode> = by_root
                 .into_iter()
@@ -145,7 +162,7 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
                             .then_with(|| b.last_activity.cmp(&a.last_activity))
                     });
                     let needs_me = sessions.iter().filter(|s| is_waiting(s)).count();
-                    // All sessions in the group share a root → share the label.
+                    // All sessions in the group share a repo → share its label.
                     let name = sessions
                         .first()
                         .map(|s| s.project_name.clone())

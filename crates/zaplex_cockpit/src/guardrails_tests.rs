@@ -13,6 +13,7 @@ fn session(name: &str, cwd: &str, pid: u32) -> SessionSnapshot {
         effort: None,
         ctx_tokens: 0,
         project_root: cwd.to_string(),
+        repo_root: cwd.to_string(),
         project_name: "proj".to_string(),
         branch: None,
         worktree: None,

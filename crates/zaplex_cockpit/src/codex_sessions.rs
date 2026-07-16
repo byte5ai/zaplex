@@ -77,9 +77,6 @@ struct RolloutInfo {
     has_turn: bool,
 }
 
-/// Read a rollout transcript and distil its live-session signals. Best-effort
-/// and defensive: each line is an independent JSON object, malformed lines are
-/// skipped, and both the wrapped (`{type,payload}`) and flat shapes are handled.
 /// Session id derived from a rollout's file name — the fallback for a rollout
 /// with no `session_meta` line to name itself.
 ///
@@ -107,6 +104,9 @@ pub(crate) fn session_id_from_path(path: &Path) -> String {
 /// A uuid is five dash-separated groups (`8-4-4-4-12`).
 const UUID_GROUPS: usize = 5;
 
+/// Read a rollout transcript and distil its live-session signals. Best-effort
+/// and defensive: each line is an independent JSON object, malformed lines are
+/// skipped, and both the wrapped (`{type,payload}`) and flat shapes are handled.
 fn parse_rollout(path: &Path) -> RolloutInfo {
     let mut info = RolloutInfo::default();
     let Ok(content) = std::fs::read_to_string(path) else {
@@ -247,6 +247,7 @@ fn snapshot_of(
         effort: info.effort,
         ctx_tokens: info.ctx_tokens,
         project_root: project.root,
+        repo_root: project.repo_root,
         project_name: project.name,
         branch: project.branch,
         worktree: project.worktree,

@@ -62,6 +62,7 @@ pub fn snapshot_to_proto(s: &SessionSnapshot) -> AgentSessionInfo {
         effort: s.effort.clone().unwrap_or_default(),
         ctx_tokens: s.ctx_tokens,
         project_root: s.project_root.clone(),
+        repo_root: s.repo_root.clone(),
         project_name: s.project_name.clone(),
         // Empty string encodes "honestly unknown" (None), like `effort`.
         worktree: s.worktree.clone().unwrap_or_default(),
@@ -95,6 +96,7 @@ pub fn proto_to_snapshot(p: &AgentSessionInfo) -> SessionSnapshot {
         },
         ctx_tokens: p.ctx_tokens,
         project_root: p.project_root.clone(),
+        repo_root: p.repo_root.clone(),
         project_name: p.project_name.clone(),
         // Empty string ⇒ None (honestly unknown), symmetric with `effort`.
         worktree: (!p.worktree.is_empty()).then(|| p.worktree.clone()),

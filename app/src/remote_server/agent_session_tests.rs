@@ -14,6 +14,7 @@ fn sample(state: SessionState, provider: Provider, effort: Option<String>) -> Se
         effort,
         ctx_tokens: 123_456,
         project_root: "/home/me/proj".to_string(),
+        repo_root: "/home/me/proj".to_string(),
         project_name: "proj".to_string(),
         // Present values so the proto round-trip exercises the new identity
         // fields (Some → wire string → Some).

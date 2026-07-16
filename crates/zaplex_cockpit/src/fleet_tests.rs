@@ -37,6 +37,7 @@ fn session_in(
         effort: None,
         ctx_tokens: 0,
         project_root: root.into(),
+        repo_root: root.into(),
         project_name: name,
         branch: None,
         worktree: None,
