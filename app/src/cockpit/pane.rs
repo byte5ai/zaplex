@@ -30,7 +30,8 @@ use zaplex_cockpit::{
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    cluster_divider, ctx_pct_element, glyph_cell, heat_coloru, icon_word_verb, verb_button,
+    cluster_divider, ctx_pct_element, glyph_cell, heat_coloru, icon_word_verb, utilisation_coloru,
+    verb_button,
     verb_button_colored, VerbKind, INFO_VERBS_GAP, VERB_SPACING,
 };
 use crate::ui_components::icons;
@@ -540,17 +541,16 @@ impl CockpitPaneView {
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_body();
         let muted = theme.sub_text_color(theme.background()).into_solid();
-        let level = HeatLevel::from_fraction(fraction);
+        // Utilisation, not attention: one shared rule (spec v3 §1.2) — calm grey,
+        // true red only at/above the single "fast voll" threshold, contrast-adapted.
+        // Same helper the sidebar meters use, so both surfaces read identically.
+        let bar_color = utilisation_coloru(fraction, appearance);
         let fill_w = (heat_fill(fraction) as f32) * HEAT_BAR_WIDTH;
 
-        let fill = ConstrainedBox::new(
-            Rect::new()
-                .with_background_color(heat_coloru(level))
-                .finish(),
-        )
-        .with_width(fill_w)
-        .with_height(HEAT_BAR_HEIGHT)
-        .finish();
+        let fill = ConstrainedBox::new(Rect::new().with_background_color(bar_color).finish())
+            .with_width(fill_w)
+            .with_height(HEAT_BAR_HEIGHT)
+            .finish();
 
         let track = ConstrainedBox::new(
             Container::new(fill)
@@ -575,7 +575,7 @@ impl CockpitPaneView {
                 heat_pct_label_with_provenance(fraction, provenance),
                 family,
                 size,
-                heat_coloru(level),
+                bar_color,
             ))
             .with_main_axis_size(MainAxisSize::Min)
             .finish()

@@ -63,7 +63,10 @@ pub fn heat_fill(fraction: f64) -> f64 {
 /// estimates keep their `~`. Kept `pub(crate)` (not exported) so the app can't
 /// reach the un-marked variant (#106).
 pub(crate) fn heat_pct_label(fraction: f64) -> String {
-    format!("{}%", (fraction * 100.0).round() as i64)
+    // Narrow no-break space before the percent sign (U+202F) — German premium
+    // typography, and it keeps "62 %" from wrapping between number and sign
+    // (spec v3 §7). Shared by every heat bar so the whole cockpit is consistent.
+    format!("{}\u{202f}%", (fraction * 100.0).round() as i64)
 }
 
 /// Percent label with provenance (C3b): real numbers get no extra chrome,

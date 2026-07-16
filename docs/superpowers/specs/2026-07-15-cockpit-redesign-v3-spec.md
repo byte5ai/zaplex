@@ -55,10 +55,15 @@ Funktionalität — **je Konflikt gewinnt das Produktziel, der Code wird nachgez
 Warte-Farbe**. Zusätzlich existierten drei Schwellen (85 Heat-Band / 90 Spec / 85
 Plexing).
 
-**Neu — ein Vokabular:**
-- **„fast voll" = ≥ 85 %** — die eine Schwelle, überall gleich:
-  Kontext-%, 5h-/Wochen-Meter, Plexing-Skip. (Deckungsgleich mit dem bestehenden
-  `HeatLevel::Critical`-Band, format.rs:17-29 — Code und Sichtbarkeit fallen zusammen.)
+**Neu — ein *visuelles* Vokabular:**
+- **„fast voll" = ≥ 85 %** — die eine Schwelle für alle **Anzeigen**: Kontext-%,
+  5h-/Wochen-Meter. (Deckungsgleich mit dem bestehenden `HeatLevel::Critical`-Band,
+  format.rs:17-29 — Code und Sichtbarkeit fallen zusammen.)
+- **Kein „Plexing-Skip" bei 85 %.** Der Router (`zaplex_cockpit::routing`,
+  `OVER_BUDGET_HEAT = 1.0`) **überspringt nicht hart**, sondern *depriorisiert*
+  vollere/arbeitende Konten über seinen Bindungsfenster-Score. „fast voll" ist die
+  *visuelle* Marke; die Routing-Logik ist ihr eigener Vertrag (§5/X1). (Das war eine
+  Falschbehauptung der ersten v3-Fassung — Routing skippt nirgends bei 85 %.)
 - **Farbe für „fast voll" = echtes Rot** = `HeatLevel::Over`-Palette (#EF4444/#B91C1C),
   **immer kontrast-adaptiert** über `heat_coloru_on(…, bg)` (style.rs:128) — nie die
   Dark-Palette hart (`heat_coloru`) auf themebaren Flächen.
@@ -70,7 +75,7 @@ Plexing).
 
 | Datentyp | Kodierung |
 |---|---|
-| Attention | Amber, exklusiv. Stille Punkt-Spur Host-Punkt → Session-Punkt. **Nichts codiert doppelt** → das needs-me-Zähler-Badge am Host **entfällt** (panel.rs:475-482 rendert heute Punkt UND Amber-Badge), und das Amber-Chevron eingeklappter Projekte (panel.rs:833) entfällt; stattdessen färbt sich der **Zähler** des eingeklappten Projekts amber (ein Signal, am Ort der Verbergung). → **E2** |
+| Attention | Amber als **Status** ausschließlich für „wartet auf Dich". Stille Punkt-Spur Host-Punkt → Session-Punkt. **Nichts codiert doppelt** → needs-me-Zähler-Badge am Host **entfällt**, Amber-Chevron eingeklappter Projekte **entfällt**; stattdessen färbt sich der **Zähler** des eingeklappten Projekts amber (ein Signal, am Ort der Verbergung). → **E2** · **Carve-out:** destruktive Verben (Stop/Kill/Stop-all) dürfen **beim Hover** amber werden — das ist eine transiente Gefahren-*Affordanz* („du bist dabei, etwas Destruktives zu tun"), kein Dauer-Status; sie kollidiert nicht mit dem Warte-Status, weil sie nur unter dem Cursor und nur momentan erscheint (`VerbKind::Destructive`, style.rs:281). |
 | Provider | Farbkachel (Clay `#C8724A` = Claude, Blau `#3D9BF0` = Codex) **nur** in Konten-Cards; **kontrast-adaptiert** analog `heat_coloru_on` (Light-Variante definieren) → **S3**. Nie im Tree. |
 | Auswahl | **`theme.accent()`-Overlay** — v2s Hex `#6b74e8` ist gestrichen (App ist themebar; Code macht es bereits richtig, panel.rs:397). |
 | Verwaltungs-Icons Sidebar | Erlaubt sind genau: **Zahnrad** (Zonen-Header), **★** (Host), **⋯** (Host). v2s Ausnahmeliste war unvollständig. ⋯ ist **immer gerendert** (faint, Hover färbt) — „Hover färbt um, re-layoutet nie" gilt weiter; v2s „nur bei Hover" ist gestrichen (Code macht es bereits richtig, style.rs:310ff). |
@@ -144,9 +149,20 @@ Session-Zeile = Branch + Punkt + ctx %, Konten-Cards mit 5h-Signal + Provider-Ka
 **Nicht gebaut (v2 behauptete fälschlich „komplett") → Arbeitspakete:**
 
 - **S1 · Zonen-Header.** `VERBINDUNGEN` / `KI-KONTEN` als Kapitälchen-Label + Zähler
-  (heute: `cockpit-conductor-title = Hosts`, de/warp.ftl:37; Konten-Header zeigt
-  Spend + Maximize, panel.rs:955/968 — beides ersetzen). Zahnrad (SVG, Stern-Größe)
-  rechts im VERBINDUNGEN-Header → öffnet SSH-Manager. Kein Icon im KI-KONTEN-Header.
+  (heute: `cockpit-conductor-title = Hosts`, de/warp.ftl:37). Zahnrad (SVG,
+  Stern-Größe) rechts im VERBINDUNGEN-Header → öffnet SSH-Manager (nie togglen).
+  **KI-KONTEN-Header behält die Flotten-Summe** („heute $X" über alle Konten) und
+  **die Summe ist selbst der Einstieg** ins Flotten-Pane — das Maximize-**Icon**
+  entfällt, die Flotten-**Sicht** nicht.
+  > **Korrigiert 2026-07-16.** Ein erster Anlauf entfernte Icon *und* Summe. Das war
+  > eine Regression: das **geplante** Konto-Pane (P1) zeigt nur *sein* Konto, also
+  > hätten kontenübergreifende Zahlen danach **keinen Ort** mehr gehabt (der Compiler
+  > bewies es: `format_cost` wurde ungenutzt). Solange P1 nicht steht, ist das
+  > aktuelle Pane (`OpenDashboardPane`) noch das **Flotten-Dashboard** (Aggregat +
+  > Conductor + alle Konten-Cards, pane.rs) — die Summe öffnet genau dieses. Regel:
+  > „Maximieren-Icon entfernen" heißt Chrome entfernen, **nicht** die dahinterliegende
+  > Sicht. Fleet-weite Flächen (Summe, Aggregat, `⏹ stop all`) behalten immer einen
+  > Ort — Konto-Panes sind ein *zusätzlicher* Zugriffspfad, kein Ersatz.
 - **S2 · „+ Host hinzufügen" entfällt** (panel.rs:632ff) — läuft übers Zahnrad
   (SSH-Manager hat den Add-Flow bereits).
 - **S3 · Karten-Feinschliff.** Provider-Wort + Plan-**Badge** als getrennte Slots

@@ -218,12 +218,43 @@ pub fn status_dot_coloru(state: SessionState, appearance: &Appearance) -> ColorU
     }
 }
 
-/// The **one** attention accent — the Critical amber. Every `✋` (conductor
-/// rows, host/project badges, inbox rows, titlebar pulse) and every destructive
-/// hover uses exactly this color; everything else stays quiet so this is the
-/// only thing that draws the eye.
+/// The **one** attention accent — the Critical amber. Every waiting mark
+/// (conductor rows, host badges, inbox rows, titlebar pulse) and every
+/// destructive hover uses exactly this color; everything else stays quiet so
+/// this is the only thing that draws the eye.
+///
+/// **Never use this for utilisation** — see [`utilisation_coloru`]. Amber is
+/// reserved for "needs you" (spec v3 §1.3).
 pub fn attention_coloru() -> ColorU {
     heat_coloru(HeatLevel::Critical)
+}
+
+/// The **one** utilisation threshold — "fast voll" (spec v3 §1.2). Deliberately
+/// identical to the `HeatLevel::Critical` band boundary (`HeatLevel::from_fraction`),
+/// so what the data model calls critical and what the eye sees fall together.
+/// This is a *visual* threshold: the plexing router (`zaplex_cockpit::routing`)
+/// deprioritises fuller/working accounts by its own binding-window score rather
+/// than hard-skipping at this number — the UI shows "fast voll" here; routing is
+/// its own contract (spec v3 §5/X1).
+pub const NEARLY_FULL: f64 = 0.85;
+
+/// Colour for a **utilisation** readout (context fill, 5h/week meters): calm
+/// muted grey below [`NEARLY_FULL`], **true red** at/above it.
+///
+/// Two rules are encoded here, both of which the first implementation got wrong:
+/// 1. The full band is `HeatLevel::Over` (**red**, `#EF4444`), never
+///    `HeatLevel::Critical` — `Critical` is `#F97316`, the *exact* colour
+///    [`attention_coloru`] returns, so using it would make a nearly-full context
+///    look identical to a waiting agent and break amber-exclusivity.
+/// 2. It resolves through [`heat_coloru_on`], so it stays legible on light
+///    themes — the raw [`heat_coloru`] palette is tuned for dark backgrounds only.
+pub fn utilisation_coloru(fraction: f64, appearance: &Appearance) -> ColorU {
+    let theme = appearance.theme();
+    if fraction >= NEARLY_FULL {
+        heat_coloru_on(HeatLevel::Over, theme.background().into_solid())
+    } else {
+        theme.sub_text_color(theme.background()).into_solid()
+    }
 }
 
 /// How a verb colors on hover. At rest every verb is equally muted — the
@@ -429,23 +460,16 @@ pub fn ctx_pct_element(
     verbose: bool,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    // Utilisation is NOT an attention signal: it stays muted grey and only turns
-    // red when the window is nearly full (≥ 90 %). This keeps amber exclusive to
-    // the waiting state — a full heat gradient here would compete with it (spec
-    // §1: one encoding per data type).
-    let _ = fill;
-    let color = if pct >= 90 {
-        heat_coloru(HeatLevel::Critical)
-    } else {
-        appearance
-            .theme()
-            .sub_text_color(appearance.theme().background())
-            .into_solid()
-    };
+    // Utilisation is NOT an attention signal — one shared rule decides the colour
+    // (spec v3 §1.2): muted grey, true red only when nearly full. See
+    // `utilisation_coloru` for why this must not be the Critical amber.
+    let color = utilisation_coloru(fill, appearance);
+    // German typography: a narrow no-break space before the percent sign
+    // (spec v3 §7). U+202F keeps "42 %" from wrapping between number and sign.
     let label = if verbose {
-        format!("· {pct}% ctx")
+        format!("· {pct}\u{202f}% ctx")
     } else {
-        format!("· {pct}%")
+        format!("· {pct}\u{202f}%")
     };
     Text::new_inline(
         label,

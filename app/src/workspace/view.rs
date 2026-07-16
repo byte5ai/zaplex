@@ -21608,31 +21608,13 @@ impl TypedActionView for Workspace {
                 // Spine "⋯ manage": open the SSH-manager editor for this host.
                 self.open_ssh_server(node_id.clone(), ctx);
             }
-            AddSshHost => {
-                // Spine "＋ Add host": create a blank registered host (same path as
-                // the SSH-manager's "New server"), open its editor, and broadcast
-                // the registry change so the SSH-manager panel + spine refresh.
-                match crate::ssh_manager::panel::create_blank_host() {
-                    Ok(node_id) => {
-                        self.open_ssh_server(node_id, ctx);
-                        crate::ssh_manager::SshTreeChangedNotifier::handle(ctx).update(
-                            ctx,
-                            |_, ctx| {
-                                ctx.emit(
-                                    crate::ssh_manager::notifier::SshTreeChangedEvent::TreeChanged,
-                                );
-                            },
-                        );
-                    }
-                    Err(err) => {
-                        self.toast_stack.update(ctx, |view, ctx| {
-                            view.add_ephemeral_toast(
-                                DismissibleToast::error(format!("Couldn't add host: {err}")),
-                                ctx,
-                            );
-                        });
-                    }
-                }
+            OpenSshManager => {
+                // The spine's „VERBINDUNGEN" zone gear: always SHOW the SSH-manager,
+                // never toggle it shut. Passing `is_showing = false` makes the
+                // toggle take its show branch unconditionally — a gear that closed
+                // the panel on a second click would read as a switch, not as
+                // "take me to the SSH configuration" (spec v3 §1.3/S1).
+                self.toggle_left_panel_view(&LeftPanelAction::SshManager, false, ctx);
             }
             RemoteSpawnDirPicked { path } => {
                 // The SFTP picker returned a directory: fill the card's remote-dir

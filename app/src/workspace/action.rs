@@ -174,9 +174,13 @@ pub enum WorkspaceAction {
     ManageSshHost {
         node_id: String,
     },
-    /// Create a blank registered SSH host and open its editor — the Conductor
-    /// spine's "＋ Add host" root (same path as the SSH-manager's "New server").
-    AddSshHost,
+    /// Open (never toggle shut) the SSH-manager panel — the „VERBINDUNGEN"
+    /// zone-header gear (spec v3 §3/S1). Unlike [`Self::ToggleSshManager`] a
+    /// second click must not close it: the gear means "take me to the SSH
+    /// configuration", and it is the single entry point now that the spine's
+    /// "＋ Add host" root is gone (the manager owns the add flow — its own
+    /// toolbar `+` creates a blank host and opens its editor).
+    OpenSshManager,
     /// A remote directory was picked in the SFTP browser (opened in pick mode from
     /// the spawn card's "Browse…"): fill the spawn card's remote-dir field with
     /// `path`, re-show the card, and close the picker (#105).
@@ -963,6 +967,10 @@ impl WorkspaceAction {
             | OpenSshTerminalByNode { .. }
             | OpenLocalFileManager { .. }
             | ToggleSshManager
+            // Opening the SSH manager changes the persisted left-panel view, exactly
+            // like toggling it — so it is app state (the gear only differs in never
+            // hiding on a second click, not in what it persists).
+            | OpenSshManager
             | ToggleSkillManager
             | AddTabWithShell { .. }
             | AddGetStartedTab
@@ -1189,9 +1197,9 @@ impl WorkspaceAction {
             OpenLinkOnDesktop(_) => false,
             // Favorites live in their own persisted store, not in app state.
             ToggleFavorite { .. } | RemoveFavorite { .. } => false,
-            // Managing/adding a host opens an editor pane; the registry itself is
+            // Managing a host opens an editor pane; the registry itself is
             // persisted separately (SQLite), so this isn't app-state either.
-            ManageSshHost { .. } | AddSshHost => false,
+            ManageSshHost { .. } => false,
             // Fills a transient modal field / re-shows a modal; not app state.
             RemoteSpawnDirPicked { .. } | RemoteSpawnDirPickCanceled => false,
             // actions that are related to updating user settings or

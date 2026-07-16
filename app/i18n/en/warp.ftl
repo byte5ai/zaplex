@@ -2852,13 +2852,8 @@ cockpit-card-reset-5h = 5h ↻ { $reset }
 cockpit-card-reset-week = wk ↻ { $reset }
 cockpit-card-reset-both = 5h ↻ { $reset5h } · wk ↻ { $resetwk }
 cockpit-conductor-needs-me-badge = ● { $count }
-cockpit-header-account-count = { $count } { $count ->
-        [one] account
-       *[other] accounts
-    }
 cockpit-header-cost-summary = today { $today } · { $week } wk
 cockpit-header-today-total = today { $today }
-cockpit-header-dashboard-button = Dashboard
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
 workspace-left-panel-cockpit-empty = No Claude or Codex accounts found.
@@ -3783,7 +3778,10 @@ cockpit-flow-pr-review = Review a PR (freest)
 cockpit-flow-triage = Triage an issue (freest)
 cockpit-spawn-card-new-agent = New agent…
 cockpit-conductor-title = Hosts
-cockpit-conductor-add-host = Add host
+# Sidebar zone headers (spec v3 §S1) — the label is rendered uppercased
+cockpit-zone-connections = Connections
+cockpit-zone-connections-settings = Open SSH configuration
+cockpit-zone-accounts = AI accounts
 cockpit-conductor-empty = No agents or hosts yet
 cockpit-tt-favorite-add = Add to favorites
 cockpit-tt-favorite-remove = Remove from favorites

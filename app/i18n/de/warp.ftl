@@ -35,6 +35,10 @@ cockpit-attention-inbox-count = { $count ->
 }
 cockpit-attention-inbox-empty = Alles erledigt — nichts wartet auf dich.
 cockpit-conductor-title = Hosts
+# Zonen-Header der Sidebar (spec v3 §S1) — Label wird großgeschrieben gerendert
+cockpit-zone-connections = Verbindungen
+cockpit-zone-connections-settings = SSH-Konfiguration öffnen
+cockpit-zone-accounts = KI-Konten
 
 # Session-Zeilen-Aktionen im Cockpit
 cockpit-session-adopt = ▸ übernehmen
@@ -56,13 +60,8 @@ cockpit-card-reset-5h = 5h ↻ { $reset }
 cockpit-card-reset-week = Wo ↻ { $reset }
 cockpit-card-reset-both = 5h ↻ { $reset5h } · Wo ↻ { $resetwk }
 cockpit-conductor-needs-me-badge = ● { $count }
-cockpit-header-account-count = { $count } { $count ->
-        [one] Konto
-       *[other] Konten
-    }
 cockpit-header-cost-summary = heute { $today } · { $week } Wo
 cockpit-header-today-total = heute { $today }
-cockpit-header-dashboard-button = Dashboard
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
 
@@ -71,7 +70,6 @@ cockpit-flow-quick-issue = GitHub-Issue entwerfen (freieste)
 cockpit-flow-pr-review = PR reviewen (freieste)
 cockpit-flow-triage = Issue triagieren (freieste)
 cockpit-spawn-card-new-agent = Neuer Agent…
-cockpit-conductor-add-host = Host hinzufügen
 cockpit-conductor-empty = Noch keine Agents oder Hosts
 cockpit-tt-favorite-add = Zu Favoriten
 cockpit-tt-favorite-remove = Aus Favoriten entfernen

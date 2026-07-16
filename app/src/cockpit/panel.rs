@@ -20,13 +20,14 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 use zaplex_cockpit::{
     fleet_is_large, format_cost, heat_fill, heat_pct_label_with_provenance,
     host_auto_collapsed, host_ident, host_key, host_summary, session_glyph, AccountUsage, Favorite,
-    FavoriteKind, FleetTree, HeatLevel, HostNode, SessionSnapshot, SessionState, UsageProvenance,
+    FavoriteKind, FleetTree, HostNode, SessionSnapshot, SessionState, UsageProvenance,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    ctx_pct_element, glyph_cell, heat_coloru, icon_verb_button_tooltip, provider_color,
-    provider_label, status_dot_coloru, zone_card, GLYPH_COL_WIDTH, METRIC_COL_WIDTH,
+    attention_coloru, ctx_pct_element, glyph_cell, icon_verb_button_tooltip, provider_color,
+    provider_label, status_dot_coloru, utilisation_coloru, verb_button_colored, zone_card,
+    GLYPH_COL_WIDTH, METRIC_COL_WIDTH,
 };
 use crate::ui_components::icons;
 use crate::WorkspaceAction;
@@ -44,7 +45,6 @@ pub enum CockpitPanelEvent {
 
 pub struct CockpitPanel {
     scroll_state: ClippedScrollStateHandle,
-    expand_btn: MouseStateHandle,
     /// Hover/click state per Conductor session row (key = `host_ident\0id`,
     /// stable host identity — never the display label), synced against the
     /// unified inventory. Clicking a row attaches the agent.
@@ -65,8 +65,12 @@ pub struct CockpitPanel {
     conductor_host_manage_states: HashMap<String, MouseStateHandle>,
     /// Hover/click state per session ★ (favorite toggle), keyed by `host_key`.
     conductor_row_star_states: HashMap<String, MouseStateHandle>,
-    /// Hover state for the spine's "＋ Add host" root.
-    add_host_btn: MouseStateHandle,
+    /// Hover state of the „VERBINDUNGEN" zone-header gear (opens the SSH manager,
+    /// which owns host add/edit — spec v3 §S1/§S2).
+    zone_gear_btn: MouseStateHandle,
+    /// Hover state of the „KI-KONTEN" header's fleet total — the cross-account
+    /// spend figure doubles as the entry point to the fleet pane (spec v3 §S1).
+    fleet_total_btn: MouseStateHandle,
     /// Hover/click state of each **project group header** (the collapsible
     /// Host → Projekt → Session level), keyed by `project_key`. Clicking the
     /// header folds/unfolds that project's sessions.
@@ -131,14 +135,14 @@ impl CockpitPanel {
         );
         let mut me = Self {
             scroll_state: ClippedScrollStateHandle::default(),
-            expand_btn: MouseStateHandle::default(),
             conductor_row_states: HashMap::new(),
             card_states: HashMap::new(),
             conductor_host_states: HashMap::new(),
             conductor_host_star_states: HashMap::new(),
             conductor_host_manage_states: HashMap::new(),
             conductor_row_star_states: HashMap::new(),
-            add_host_btn: MouseStateHandle::default(),
+            zone_gear_btn: MouseStateHandle::default(),
+            fleet_total_btn: MouseStateHandle::default(),
             conductor_project_states: HashMap::new(),
             expanded_projects: HashMap::new(),
         };
@@ -243,16 +247,10 @@ impl CockpitPanel {
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_body();
         let muted = theme.sub_text_color(theme.background()).into_solid();
-        // Utilisation is not attention: the bar stays calm grey and only reddens
-        // when the window is nearly full (≥ 90 %), so amber/heat colours never
-        // appear here (spec §1). The bar's WIDTH shows the level; the colour only
-        // flags "nearly full".
-        let near_full = fraction >= 0.90;
-        let bar_color = if near_full {
-            heat_coloru(HeatLevel::Critical)
-        } else {
-            muted
-        };
+        // Utilisation is not attention: one shared rule (spec v3 §1.2) — calm grey,
+        // true red only at/above the single "fast voll" threshold, contrast-adapted.
+        // The bar's WIDTH carries the level; the colour only flags "nearly full".
+        let bar_color = utilisation_coloru(fraction, appearance);
         let fill_w = (heat_fill(fraction) as f32) * HEAT_BAR_WIDTH;
 
         let fill = ConstrainedBox::new(Rect::new().with_background_color(bar_color).finish())
@@ -367,8 +365,11 @@ impl CockpitPanel {
             // week meter, spend and tokens live in the pane, where there is room.
             .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance));
         if let Some(session_line) = session_line {
+            // Amber here is the attention signal (someone waits on this account),
+            // not a heat level — name the intent so it can never drift into the
+            // utilisation palette (spec v3 §1.3).
             let color = if waiting > 0 {
-                heat_coloru(HeatLevel::Critical)
+                attention_coloru()
             } else {
                 muted
             };
@@ -419,6 +420,41 @@ impl CockpitPanel {
     /// and the `w`-jump. Always `Some`: an empty inventory still renders the
     /// Hosts card (a calm empty-state hint + the "+ Add host" root), so the
     /// surface guides a fresh user instead of vanishing.
+    /// The **one** zone header both sidebar zones use (spec v3 §S1), so they can
+    /// never drift apart again: a quiet uppercase label, the count as a trailing
+    /// muted number, and **at most one** trailing element — the connections
+    /// zone's gear, or the accounts zone's fleet total (which doubles as the
+    /// fleet-pane entry point). The old Maximize icon is gone; the fleet spend it
+    /// used to sit beside is now that single trailing element, not a second one.
+    fn render_zone_header(
+        label: String,
+        count: usize,
+        trailing: Option<Box<dyn Element>>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let sub = appearance.ui_font_subheading();
+        let faint = theme.sub_text_color(theme.background()).with_opacity(55).into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.0)
+            // The label is scaffolding, not content: muted + uppercase, so the eye
+            // reads it as structure and skips to the rows (spec v3 §0).
+            .with_child(Self::text(label.to_uppercase(), family, sub, muted))
+            .with_child(Shrinkable::new(
+                1.0,
+                Self::text(count.to_string(), family, sub, faint),
+            )
+            .finish());
+        if let Some(trailing) = trailing {
+            row = row.with_child(trailing);
+        }
+        row.with_main_axis_size(MainAxisSize::Max).finish()
+    }
+
     fn render_conductor(
         &self,
         tree: &FleetTree,
@@ -428,7 +464,6 @@ impl CockpitPanel {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
-        let sub = appearance.ui_font_subheading();
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
         let fleet_large = fleet_is_large(tree);
@@ -439,11 +474,22 @@ impl CockpitPanel {
             // The same calm row rhythm as the roomy pane, scaled down.
             .with_spacing(3.0)
             .with_child(
-                Container::new(Self::text(
-                    crate::t!("cockpit-conductor-title").to_string(),
-                    family,
-                    sub,
-                    main,
+                Container::new(Self::render_zone_header(
+                    crate::t!("cockpit-zone-connections").to_string(),
+                    tree.hosts.len(),
+                    // The gear is this zone's ONE affordance: it opens the SSH
+                    // manager, which owns host add/edit — that is why the spine's
+                    // „＋ Host hinzufügen" root is gone (spec v3 §S2).
+                    Some(icon_verb_button_tooltip(
+                        self.zone_gear_btn.clone(),
+                        icons::Icon::Gear,
+                        theme.sub_text_color(theme.background()),
+                        theme.accent(),
+                        crate::t!("cockpit-zone-connections-settings"),
+                        appearance,
+                        WorkspaceAction::OpenSshManager,
+                    )),
+                    appearance,
                 ))
                 .with_margin_bottom(2.0)
                 .finish(),
@@ -477,14 +523,10 @@ impl CockpitPanel {
                     Shrinkable::new(1.0, Self::text(host.host.clone(), family, body, main))
                         .finish(),
                 );
-            if host.needs_me > 0 {
-                label_row = label_row.with_child(Self::text(
-                    crate::t!("cockpit-conductor-needs-me-badge", count = (host.needs_me as i64)),
-                    family,
-                    body,
-                    heat_coloru(HeatLevel::Critical),
-                ));
-            }
+            // NO needs-me badge here: the host's leading status dot already carries
+            // "wartet" (worst-child, amber). A second amber count beside the name
+            // would encode the same fact twice — spec v3 §1.3 „Nichts codiert
+            // doppelt". The attention trail is dot → dot, nothing else.
             let label_el = label_row.with_main_axis_size(MainAxisSize::Max).finish();
             // A registered host (no live agent, re-added by the registry merge)
             // becomes a click target that opens a terminal on it — the spine's
@@ -626,34 +668,10 @@ impl CockpitPanel {
                 .finish(),
             );
         }
-        // "Add host" root — folds the SSH-manager add function onto the spine
-        // (design §10). A Plus icon + label (#107), muted at rest / accent on
-        // hover; creates a blank registered host and opens its editor.
-        let add_label = crate::t!("cockpit-conductor-add-host").to_string();
-        let add_rest = theme.sub_text_color(theme.background());
-        let add_accent = theme.accent();
-        let add_host = Hoverable::new(self.add_host_btn.clone(), move |mouse| {
-            let color = if mouse.is_hovered() { add_accent } else { add_rest };
-            Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(6.0)
-                .with_child(
-                    ConstrainedBox::new(icons::Icon::Plus.to_warpui_icon(color).finish())
-                        .with_width(GLYPH_COL_WIDTH)
-                        .with_height(GLYPH_COL_WIDTH)
-                        .finish(),
-                )
-                .with_child(
-                    Text::new_inline(add_label.clone(), family, body)
-                        .with_color(color.into_solid())
-                        .finish(),
-                )
-                .finish()
-        })
-        .with_cursor(warpui::platform::Cursor::PointingHand)
-        .on_click(move |ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::AddSshHost))
-        .finish();
-        col = col.with_child(add_host);
+        // NO "＋ Add host" root here (spec v3 §S2): host add/edit belongs to the
+        // SSH manager, which the zone-header gear opens. A second entry point in
+        // the spine made the zone's last row read as data ("a fourth host") and
+        // duplicated a flow the manager already owns.
         Some(col.finish())
     }
 
@@ -825,14 +843,19 @@ impl CockpitPanel {
         let main_c = theme.main_text_color(bg).into_solid();
         let muted_c = theme.sub_text_color(bg).into_solid();
         let faint_c = theme.sub_text_color(bg).with_opacity(55).into_solid();
-        // The chevron carries the collapse state; it only turns amber when a
-        // COLLAPSED project hides a waiting session, so attention still surfaces
-        // without a per-project dot. Same amber as the status dots (ColorU).
+        // The chevron carries ONLY the collapse state — never attention (spec v3
+        // §1.3: nothing is encoded twice, and the chevron is an affordance, not a
+        // signal). It stays muted in every case.
         let chevron: &'static str = if expanded { "▾" } else { "▸" };
-        let chevron_c = if !expanded && has_waiting {
-            heat_coloru(HeatLevel::Critical)
+        let chevron_c = muted_c;
+        // Attention for a hidden waiting session rides the COUNT instead: when a
+        // project is collapsed and hides someone who waits, its session count goes
+        // amber. One signal, at the place that does the hiding — expanded projects
+        // never need it, because the waiting session's own dot is then visible.
+        let count_c = if !expanded && has_waiting {
+            attention_coloru()
         } else {
-            muted_c
+            faint_c
         };
         let handle = self
             .conductor_project_states
@@ -868,7 +891,7 @@ impl CockpitPanel {
                 )
                 .with_child(
                     Text::new_inline(count_s.clone(), family, body)
-                        .with_color(faint_c)
+                        .with_color(count_c)
                         .finish(),
                 )
                 .with_main_axis_size(MainAxisSize::Max)
@@ -916,11 +939,15 @@ impl CockpitPanel {
         icon_verb_button_tooltip(state, icon, rest, hover, tooltip, appearance, action)
     }
 
-    /// The AI-Accounts zone-card header — deliberately spare so it never
-    /// overflows the narrow rail (the old count · today · week · button line
-    /// clipped): the section title (with count) on the left, today's fleet spend
-    /// on the right, and a compact dashboard icon. The week total lives in the
-    /// pane aggregate and on each account card, so it is not repeated here.
+    /// The „KI-KONTEN" zone header: label + count like the connections zone, plus
+    /// the **fleet total** — the one cross-account number (spec v3 §S1).
+    ///
+    /// The Maximize icon is gone, but the *fleet view it opened* is not: an
+    /// account pane can only ever show its own account, so if this number and its
+    /// entry point both vanished, cross-account spend would have no home at all —
+    /// a regression, not a decluttering. The total therefore stays visible and
+    /// **is itself the affordance**: clicking it opens the fleet pane. One
+    /// element, two jobs, no extra chrome.
     fn render_header(
         &self,
         snapshot_len: usize,
@@ -928,55 +955,27 @@ impl CockpitPanel {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let sub = appearance.ui_font_subheading();
-        let body = appearance.ui_font_body();
-        let main = theme.main_text_color(theme.background()).into_solid();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
-
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_spacing(8.0)
-            // The title flexes/truncates first, so the number + icon on the right
-            // are never the thing that gets clipped.
-            .with_child(
-                Shrinkable::new(
-                    1.0,
-                    Self::text(
-                        crate::t!("cockpit-header-account-count", count = (snapshot_len as i64)),
-                        family,
-                        sub,
-                        main,
-                    ),
-                )
-                .finish(),
-            )
-            .with_child(Self::text(
-                crate::t!("cockpit-header-today-total", today = format_cost(fleet_today)),
-                family,
-                body,
-                muted,
-            ))
-            .with_child(self.render_expand_button(appearance))
-            .finish()
-    }
-
-    /// "Open dashboard" affordance: a compact icon (tooltip-labelled) that opens
-    /// the roomy main-area cockpit pane (C2b). Icon-only keeps the header line
-    /// from overflowing the narrow rail.
-    fn render_expand_button(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        icon_verb_button_tooltip(
-            self.expand_btn.clone(),
-            icons::Icon::Maximize,
-            theme.sub_text_color(theme.background()),
-            theme.accent(),
-            crate::t!("cockpit-header-dashboard-button"),
+        let total = verb_button_colored(
+            self.fleet_total_btn.clone(),
+            crate::t!("cockpit-header-today-total", today = format_cost(fleet_today)),
+            theme.sub_text_color(theme.background()).into_solid(),
+            theme.accent().into_solid(),
             appearance,
             CockpitPanelAction::OpenDashboardPane,
+        );
+        Self::render_zone_header(
+            crate::t!("cockpit-zone-accounts").to_string(),
+            snapshot_len,
+            Some(total),
+            appearance,
         )
     }
+
+    // (No standalone Maximize icon any more — spec v3 §S1. The fleet dashboard it
+    // opened is still reachable: the KI-KONTEN header's fleet total is now the
+    // affordance, dispatching the same `OpenDashboardPane`. Per-account panes are
+    // an *additional* path (P1, not yet built), never a replacement for the
+    // fleet-wide view.)
 }
 
 impl View for CockpitPanel {
@@ -1021,15 +1020,32 @@ impl View for CockpitPanel {
         // accounts show a calm hint instead (a section under the hosts, not the
         // whole panel — hosts stay visible without an account).
         if snapshot.accounts.is_empty() {
-            cards = cards.with_child(
-                Container::new(Self::text(
+            // Even with no accounts the zone keeps its header („KI-KONTEN 0"), so
+            // the section reads as a deliberate empty state, not a missing panel
+            // (spec §S1). No fleet total here — there is no fleet to open into.
+            let empty = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_child(
+                    Container::new(Self::render_zone_header(
+                        crate::t!("cockpit-zone-accounts").to_string(),
+                        0,
+                        None,
+                        appearance,
+                    ))
+                    .with_margin_bottom(CARD_SPACING * 2.0)
+                    .finish(),
+                )
+                .with_child(Self::text(
                     crate::t!("workspace-left-panel-cockpit-empty"),
                     family,
                     body,
                     muted,
-                ))
-                .with_uniform_padding(CARD_PADDING)
-                .finish(),
+                ));
+            cards = cards.with_child(
+                Container::new(empty.finish())
+                    .with_uniform_padding(CARD_PADDING)
+                    .finish(),
             );
         } else {
             let fleet_today: f64 = snapshot.accounts.iter().map(|a| a.today.cost_usd).sum();
