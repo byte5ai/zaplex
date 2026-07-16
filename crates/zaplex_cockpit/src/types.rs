@@ -221,11 +221,15 @@ pub struct AccountUsage {
     /// `today`, split by the session that spent it — what the session table's
     /// "today $" column reads, keyed by [`SessionSnapshot::session_id`].
     ///
-    /// Folded from the same entries under the same day rule as `today`, so the
-    /// rows sum **exactly** to the account figure above them rather than to a
-    /// second, independently-derived estimate of it. The empty key collects
-    /// turns whose transcript names no session: counted for the account, just
-    /// not attributable to a row.
+    /// Folded from the same entries under the same day rule as `today`: every
+    /// turn is counted once, on exactly one side, so the rows account for the
+    /// figure above them rather than being a second estimate of it. The token
+    /// counters therefore sum to `today` exactly; `cost_usd` sums to within a
+    /// float rounding step, since grouping the same summands per session adds
+    /// them in a different order. Far below a cent — but not the same bit.
+    ///
+    /// The empty key collects turns whose transcript names no session: counted
+    /// for the account, just not attributable to a row.
     #[serde(default)]
     pub today_by_session: BTreeMap<String, WindowTotals>,
     /// Current rolling 7-day block.

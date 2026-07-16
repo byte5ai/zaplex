@@ -264,10 +264,12 @@ fn todays_spend_is_attributed_to_the_session_that_incurred_it() {
 }
 
 /// The account figure and the rows beneath it are one fold, not two estimates:
-/// the parts must sum to the whole exactly, or the table quietly contradicts the
-/// header above it.
+/// the parts must account for the whole, or the table quietly contradicts the
+/// header above it. Exact for the counters; `cost_usd` is an `f64` summed in a
+/// different order here, so it gets a tolerance — a rounding step, never a real
+/// amount.
 #[test]
-fn per_session_spend_sums_exactly_to_the_account_total() {
+fn per_session_spend_accounts_for_the_account_total() {
     let pricing = PricingTable::default();
     let now = ts("2026-06-30T12:00:00Z");
     let entries = vec![

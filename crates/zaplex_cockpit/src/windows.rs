@@ -123,9 +123,14 @@ fn today_totals(
 /// The same day's spend, split by the session that incurred it.
 ///
 /// Folds the identical entries [`today_totals_in`] does, under the identical day
-/// rule, so the parts sum **exactly** to the whole — the account total is not a
-/// second, independently-derived figure that could drift from the rows beneath
-/// it. Turns whose transcript names no session group under the empty id: still
+/// rule, and puts each on exactly one side — so the parts account for the whole
+/// rather than the whole being a second figure that could drift from the rows
+/// beneath it. Exactly, for the token counters. `cost_usd` is an `f64` and
+/// addition is not associative, so grouping the same summands per session can
+/// land a rounding step away from the sequential total; the tests assert the
+/// counters exactly and the cost within a tolerance for that reason.
+///
+/// Turns whose transcript names no session group under the empty id: still
 /// counted for the account, simply not attributable to a row.
 fn today_by_session_in<Tz: TimeZone>(
     entries: &[UsageEntry],
