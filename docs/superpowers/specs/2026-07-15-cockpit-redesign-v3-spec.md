@@ -42,11 +42,18 @@ Funktionalität — **je Konflikt gewinnt das Produktziel, der Code wird nachgez
 - **„laufend" = alle nicht-idle** (Aktiv + Wartet + Monitor). v2 definierte
   „aktiv + wartend" und widersprach dem Code (`panel.rs:352` zählt non-idle) — der
   Code hat recht, die Definition wird angepasst.
-- **Formen als SVG-Icons, nicht Font-Glyphen** → Arbeitspaket **E3**. Die aktuell
-  gebauten `●/◉/○` (conductor.rs:28-38) und `▾/▸`-Chevrons (panel.rs:831) sind
-  Übergangszustand und verstoßen gegen §7; sie werden durch drei kleine SVGs
-  (dot-filled, dot-fisheye, dot-hollow) + die vorhandenen `ChevronDown/ChevronRight`
-  (icons.rs:122f) ersetzt.
+- **Rendering-Technik ist frei** (korrigiert 2026-07-16). Eine frühere Fassung
+  verlangte „alle Status-Zeichen als SVG" und machte daraus ein Arbeitspaket — das
+  war **erfunden**, nicht gefordert. Maßstab ist allein: **keine Emojis** (§7),
+  farblich ruhig, konsistent. `●/◉/○` sind geometrische Glyphen, keine Emojis, und
+  erscheinen auch **inline in Textbadges** (Attention-Badge, Inbox) — dort müssen
+  sie identisch aussehen, was gegen SVG spricht. Sie bleiben.
+  Affordanzen (Chevron, Zahnrad, Stern) sind SVG-Icons, weil sie ohnehin
+  Icon-Elemente sind — kein Dogma, nur der praktikable Weg.
+- **Eine Quelle für Form + Farbe: `session_glyph` + `status_dot_coloru`.**
+  Jede Render-Stelle zieht daraus; niemand hartkodiert Glyphen. (pane.rs:732 tat
+  genau das und rannte damit in exakt die Rot-Grün-Kollision, die §1.1 verbietet —
+  behobene Lektion: „konsistent mit X" im Kommentar ist keine Konsistenz.)
 
 ### 1.2 Auslastung: EIN Schwellwert, EIN Rot
 
@@ -249,7 +256,13 @@ Bearbeiten über ⋯ im Konto-Pane. Anzeige-Fallback ohne Alias = bisheriges Lab
 - Konsequent Deutsch, korrekte Groß-/Kleinschreibung, FTL-Parity-Guard bleibt Gate.
 - `42 %` mit schmalem Leerzeichen (heute `42%`, style.rs:445 → in E5 fixen),
   „4 h 00 min".
-- Keine Emojis; **alle** Status-/Disclosure-Zeichen als SVG (E3).
+- **Keine Emojis** — zaplex soll nicht nach Discord aussehen. Das ist die Regel;
+  **wie** ein Zeichen technisch gerendert wird (SVG-Icon oder geometrischer Glyph),
+  ist *frei*. Maßstab: farblich ruhig, konsistent, guideline-konform (§1).
+  > Korrigiert 2026-07-16: eine frühere Fassung schrieb „alle Status-/Disclosure-
+  > Zeichen als SVG" vor. Das stand so nie in der Anforderung — es war eine
+  > Erfindung der Spec und hätte Umbauten quer durch view.rs/attention_inbox
+  > erzwungen, ohne dass jemand etwas davon sieht.
 - UI-Verbs im ⋯-Menü deutsch („Verlauf", „Als geprüft markieren", „Fork in neuen
   Worktree").
 
@@ -257,8 +270,11 @@ Bearbeiten über ⋯ im Konto-Pane. Anzeige-Fallback ohne Alias = bisheriges Lab
 
 ## 8. Bau-Reihenfolge (Gates: cargo check --locked grün · codex 2 Linsen · Selbstverifikation · Parity-Guard)
 
-1. **E1–E5 + S1–S3** — Encoding-Korrekturen + Sidebar wirklich fertigstellen
+1. **E1/E2/E5 + S1–S3** — Encoding-Korrekturen + Sidebar wirklich fertigstellen
    (klein, sichtbar, korrigiert die falsche „Schritt 2 komplett"-Meldung).
+   **E3 ist gestrichen** (die „alles-SVG"-Regel war erfunden — §1.1/§7); was davon
+   sinnvoll war (Chevron als Icon, eine Quelle für Glyph+Farbe), ist in E2 erledigt.
+   **E4 existierte nie** — die Nummer war ein Zählfehler der ersten Fassung.
 2. **F1 + F2** — die zwei P0-Bestandsbugs (Host-Identity, UTC-Heute).
 3. **F3–F9** — Datenpfade & strukturelle Fundamente (einzeln committen).
 4. **P1–P6** — Konto-Pane, Tabelle, Drive; Tree-Entdopplung zuletzt.

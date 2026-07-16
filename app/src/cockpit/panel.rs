@@ -516,7 +516,7 @@ impl CockpitPanel {
             // Label + needs-me badge = the terminal click target (registered
             // hosts); the ★ favorite toggle sits *beside* it, not inside, so the
             // two clicks never collide.
-            let mut label_row = Flex::row()
+            let label_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
                 .with_child(
@@ -825,8 +825,9 @@ impl CockpitPanel {
     /// session: a disclosure chevron (`▾` open / `▸` collapsed) + the project name
     /// (muted, brightening on hover) + the session count, with **no status dot**
     /// (the user vetoed a dot before the project). Attention still reaches the
-    /// eye: a *collapsed* project that hides a waiting session tints its chevron
-    /// amber (spec §1: amber = attention only). Clicking anywhere folds/unfolds.
+    /// eye: a *collapsed* project that hides a waiting session tints its **count**
+    /// amber — the chevron stays a pure affordance, so nothing is encoded twice
+    /// (spec v3 §1.3). Clicking anywhere folds/unfolds.
     fn render_project_header(
         &self,
         pkey: &str,
@@ -845,9 +846,15 @@ impl CockpitPanel {
         let faint_c = theme.sub_text_color(bg).with_opacity(55).into_solid();
         // The chevron carries ONLY the collapse state — never attention (spec v3
         // §1.3: nothing is encoded twice, and the chevron is an affordance, not a
-        // signal). It stays muted in every case.
-        let chevron: &'static str = if expanded { "▾" } else { "▸" };
-        let chevron_c = muted_c;
+        // signal). It stays muted in every case. A real SVG icon, not a text
+        // glyph: as an affordance it must be pixel-identical everywhere and can't
+        // depend on the UI font happening to carry ▾/▸ (spec v3 §7 / E3).
+        let chevron_icon = if expanded {
+            icons::Icon::ChevronDown
+        } else {
+            icons::Icon::ChevronRight
+        };
+        let chevron_fill = theme.sub_text_color(bg);
         // Attention for a hidden waiting session rides the COUNT instead: when a
         // project is collapsed and hides someone who waits, its session count goes
         // amber. One signal, at the place that does the hiding — expanded projects
@@ -871,14 +878,10 @@ impl CockpitPanel {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
                 .with_child(
-                    ConstrainedBox::new(
-                        Text::new_inline(chevron.to_string(), family, body)
-                            .with_color(chevron_c)
-                            .finish(),
-                    )
-                    .with_width(GLYPH_COL_WIDTH)
-                    .with_height(GLYPH_COL_WIDTH)
-                    .finish(),
+                    ConstrainedBox::new(chevron_icon.to_warpui_icon(chevron_fill).finish())
+                        .with_width(GLYPH_COL_WIDTH)
+                        .with_height(GLYPH_COL_WIDTH)
+                        .finish(),
                 )
                 .with_child(
                     Shrinkable::new(

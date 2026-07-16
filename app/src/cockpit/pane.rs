@@ -30,9 +30,8 @@ use zaplex_cockpit::{
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    cluster_divider, ctx_pct_element, glyph_cell, heat_coloru, icon_word_verb, utilisation_coloru,
-    verb_button,
-    verb_button_colored, VerbKind, INFO_VERBS_GAP, VERB_SPACING,
+    cluster_divider, ctx_pct_element, glyph_cell, heat_coloru, icon_word_verb, status_dot_coloru,
+    utilisation_coloru, verb_button, verb_button_colored, VerbKind, INFO_VERBS_GAP, VERB_SPACING,
 };
 use crate::ui_components::icons;
 use crate::pane_group::focus_state::PaneFocusHandle;
@@ -726,15 +725,14 @@ impl CockpitPaneView {
         // Live sessions (C3a), waiting-first (the spine pre-sorts): the
         // dashboard's job is surfacing what needs YOU.
         for session in acct.sessions.iter().take(4) {
-            // Premium status dots — meaning by colour, not emoji (see conductor.rs
-            // GLYPH_* ). Amber dot = waiting/attention, green = working, hollow =
-            // idle. Consistent with `session_glyph`.
-            let (glyph, color) = match session.state {
-                SessionState::Waiting => ("●", heat_coloru(HeatLevel::Critical)),
-                SessionState::Active => ("●", heat_coloru(HeatLevel::Ok)),
-                SessionState::Monitor => ("◌", muted),
-                SessionState::Idle => ("○", muted),
-            };
+            // Status dots: the SHAPE carries the state, colour only reinforces it
+            // (spec v3 §1.1). This used to hard-code its own glyphs and rendered
+            // Waiting and Active as the SAME "●", telling them apart by amber vs
+            // green alone — indistinguishable with red-green colour blindness, and
+            // it silently drifted from the shared vocabulary while its comment
+            // claimed to follow it. Both now come from the single source of truth.
+            let glyph = session_glyph(session.state);
+            let color = status_dot_coloru(session.state, appearance);
             let dir = std::path::Path::new(&session.cwd)
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
