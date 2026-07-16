@@ -30,8 +30,10 @@ fn heat_fill_clamps_but_label_does_not() {
     assert_eq!(heat_fill(0.5), 0.5);
     assert_eq!(heat_fill(1.3), 1.0);
     assert_eq!(heat_fill(-0.2), 0.0);
-    assert_eq!(heat_pct_label(1.3), "130%");
-    assert_eq!(heat_pct_label(0.615), "62%");
+    // Number and unit are joined by a narrow no-break space (U+202F): typographic
+    // convention, and it keeps "130 %" from ever wrapping across a line.
+    assert_eq!(heat_pct_label(1.3), "130\u{202f}%");
+    assert_eq!(heat_pct_label(0.615), "62\u{202f}%");
 }
 
 #[test]
@@ -39,15 +41,15 @@ fn provenance_marks_estimates_only() {
     use crate::types::UsageProvenance;
     assert_eq!(
         heat_pct_label_with_provenance(0.62, UsageProvenance::Real),
-        "62%"
+        "62\u{202f}%"
     );
     assert_eq!(
         heat_pct_label_with_provenance(0.62, UsageProvenance::Estimate),
-        "~62%"
+        "~62\u{202f}%"
     );
     assert_eq!(
         heat_pct_label_with_provenance(1.3, UsageProvenance::Estimate),
-        "~130%"
+        "~130\u{202f}%"
     );
 }
 

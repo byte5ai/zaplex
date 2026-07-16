@@ -1133,19 +1133,10 @@ impl CockpitPaneView {
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
         let main = theme.main_text_color(theme.background()).into_solid();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
         let accent = theme.accent().into_solid();
 
-        let (glyph, glyph_color) = match session.state {
-            SessionState::Waiting => (
-                session_glyph(session.state),
-                heat_coloru(HeatLevel::Critical),
-            ),
-            SessionState::Active | SessionState::Monitor => {
-                (session_glyph(session.state), heat_coloru(HeatLevel::Ok))
-            }
-            SessionState::Idle => (session_glyph(session.state), muted),
-        };
+        let glyph = session_glyph(session.state);
+        let glyph_color = status_dot_coloru(session.state, appearance);
         let dir = Path::new(&session.cwd)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
