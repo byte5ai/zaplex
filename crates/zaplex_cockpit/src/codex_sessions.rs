@@ -7,12 +7,14 @@
 //! its transcripts — Codex "liveness" can only be *inferred* from the
 //! transcript, and the honest mapping is deliberately conservative:
 //!
-//! - **Only recently-touched rollouts count.** A rollout whose last activity is
-//!   older than [`CODEX_LIVE_WINDOW`] is not listed at all: with no pid we
-//!   cannot prove its process is still alive, so we scope discovery to sessions
-//!   active within the window rather than claim a stale session is live. (Fully
-//!   transcript-only *dormant* [`SessionState::Idle`] discovery is a separate
-//!   future feature, matching Claude, which also does not surface Idle yet.)
+//! - **Only recently-touched rollouts count as live.** A rollout whose last
+//!   activity is older than [`CODEX_LIVE_WINDOW`] is never called live: with no
+//!   pid we cannot prove its process is still alive, so liveness is scoped to
+//!   sessions active within the window rather than claimed for a stale one.
+//!   Those older rollouts are not lost — [`scan_sessions`] classifies them as
+//!   dormant, resumable conversations. The window is the single line between the
+//!   two halves, drawn on the transcript's own last timestamp, so every rollout
+//!   within `max_age` lands on exactly one side.
 //! - **State** mirrors Claude's `stop_reason` logic as faithfully as Codex
 //!   allows: the rollout's last turn-level event decides it — `task_complete`
 //!   (the agent handed control back) → [`SessionState::Waiting`]; a started but
@@ -27,7 +29,7 @@
 //! Privacy invariant holds: only token counts + coordinates are read, never
 //! message text.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
@@ -174,68 +176,133 @@ fn state_of(ended: bool) -> SessionState {
 /// transcripts touched within [`CODEX_LIVE_WINDOW`], each distilled to
 /// (model, effort, context, state, project) with `provider = Codex` and a `0`
 /// pid (Codex records none). Sorted waiting-first, like the Claude path.
-pub fn live_sessions(codex_home: &Path, now: DateTime<Utc>) -> Vec<SessionSnapshot> {
-    let sessions_dir = codex_home.join("sessions");
-    let cutoff = now - CODEX_LIVE_WINDOW;
-    let mut out: Vec<SessionSnapshot> = Vec::new();
-
-    for file in WalkDir::new(&sessions_dir)
+/// Every rollout transcript under `<codex_home>/sessions` with its mtime.
+/// Rollouts whose mtime is unreadable are skipped: recency is the only liveness
+/// proxy Codex offers, and a session we cannot date cannot be classified.
+fn rollout_files(codex_home: &Path) -> impl Iterator<Item = (PathBuf, DateTime<Utc>)> {
+    WalkDir::new(codex_home.join("sessions"))
         .into_iter()
         .flatten()
         .filter(|e| e.file_type().is_file())
-    {
-        let name = file.file_name().to_str().unwrap_or("");
-        if !(name.starts_with("rollout-") && name.ends_with(".jsonl")) {
-            continue;
-        }
-        // Recency gate on the file's mtime — cheap, and with no pid it is the
-        // only honest liveness proxy. Older rollouts are dormant, not listed.
-        let mtime: Option<DateTime<Utc>> = file
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .map(DateTime::<Utc>::from);
-        if let Some(mtime) = mtime {
-            if mtime < cutoff {
-                continue;
-            }
-        } else {
-            continue;
-        }
+        .filter(|e| {
+            let name = e.file_name().to_str().unwrap_or("");
+            name.starts_with("rollout-") && name.ends_with(".jsonl")
+        })
+        .filter_map(|e| {
+            let mtime = e
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(DateTime::<Utc>::from)?;
+            Some((e.into_path(), mtime))
+        })
+}
 
-        let info = parse_rollout(file.path());
-        // Cross-check the transcript's own last activity against the window and
-        // require a real turn — an empty/aborted rollout is not a session.
-        let last_activity = info.last_ts.or(mtime).unwrap_or(now);
-        if !info.has_turn || last_activity < cutoff {
-            continue;
+/// Parse one rollout into a snapshot. `None` when it holds no real turn — an
+/// empty or aborted rollout is not a session. `force_state` overrides the
+/// turn-derived state (a dormant rollout is Idle regardless of how it ended).
+fn snapshot_of(
+    path: &Path,
+    mtime: DateTime<Utc>,
+    now: DateTime<Utc>,
+    force_state: Option<SessionState>,
+) -> Option<SessionSnapshot> {
+    let info = parse_rollout(path);
+    if !info.has_turn {
+        return None;
+    }
+    let project = crate::project::resolve_project(Path::new(&info.cwd));
+    Some(SessionSnapshot {
+        session_id: info.session_id,
+        cwd: info.cwd,
+        // Codex rollouts carry no session name.
+        name: String::new(),
+        state: force_state.unwrap_or_else(|| state_of(info.ended)),
+        provider: Provider::Codex,
+        model: info.model,
+        effort: info.effort,
+        ctx_tokens: info.ctx_tokens,
+        project_root: project.root,
+        project_name: project.name,
+        branch: project.branch,
+        worktree: project.worktree,
+        // Set by the snapshot builder from the owning account (per pin).
+        config_dir: None,
+        last_activity: info.last_ts.or(Some(mtime)).unwrap_or(now),
+        // Codex records no pid — guardrail signalling can't target it.
+        pid: 0,
+    })
+}
+
+/// Both halves of a `<codex_home>`'s sessions, classified in one walk.
+pub struct SessionScan {
+    /// Touched inside [`CODEX_LIVE_WINDOW`] — as close to "running" as a
+    /// pid-less provider gets.
+    pub live: Vec<SessionSnapshot>,
+    /// Dormant but resumable, most-recent first and capped.
+    pub idle: Vec<SessionSnapshot>,
+}
+
+/// Walk the rollouts once and put each on exactly one side of
+/// [`CODEX_LIVE_WINDOW`].
+///
+/// The transcript's **own** last timestamp decides, with mtime as the cheap
+/// gate. That ordering matters: a rollout touched without gaining content (fresh
+/// mtime, old turns) is not live — [`live_sessions`] has always rejected it on
+/// its timestamps — and it is dormant, so it belongs in `idle`. Classifying on
+/// mtime alone would drop it from both lists. Recently-touched rollouts are few,
+/// so parsing all of them to find out is cheap; the long dormant tail is ranked
+/// and capped on mtime first, and only `limit` of those are parsed.
+///
+/// One walk, one classification: two separate passes could disagree about the
+/// same rollout and list it twice.
+pub fn scan_sessions(
+    codex_home: &Path,
+    now: DateTime<Utc>,
+    max_age: Duration,
+    limit: usize,
+) -> SessionScan {
+    let live_cutoff = now - CODEX_LIVE_WINDOW;
+    let age_cutoff = now - max_age;
+
+    // Cheap split. `fresh` is bounded by how much was touched in the last few
+    // minutes; `dormant` is the open-ended history, so it gets capped here.
+    let mut fresh: Vec<(PathBuf, DateTime<Utc>)> = Vec::new();
+    let mut dormant: Vec<(PathBuf, DateTime<Utc>)> = Vec::new();
+    for (path, mtime) in rollout_files(codex_home) {
+        if mtime >= live_cutoff {
+            fresh.push((path, mtime));
+        } else if limit > 0 && mtime >= age_cutoff {
+            dormant.push((path, mtime));
         }
-        let project = crate::project::resolve_project(Path::new(&info.cwd));
-        out.push(SessionSnapshot {
-            session_id: info.session_id,
-            cwd: info.cwd,
-            // Codex rollouts carry no session name.
-            name: String::new(),
-            state: state_of(info.ended),
-            provider: Provider::Codex,
-            model: info.model,
-            effort: info.effort,
-            ctx_tokens: info.ctx_tokens,
-            project_root: project.root,
-            project_name: project.name,
-            branch: project.branch,
-            worktree: project.worktree,
-            // Set by the snapshot builder from the owning account (per pin).
-            config_dir: None,
-            last_activity,
-            // Codex records no pid — guardrail signalling can't target it.
-            pid: 0,
-        });
+    }
+    dormant.sort_by(|a, b| b.1.cmp(&a.1));
+    dormant.truncate(limit);
+
+    let mut live: Vec<SessionSnapshot> = Vec::new();
+    let mut idle: Vec<SessionSnapshot> = Vec::new();
+
+    for (path, mtime) in fresh {
+        let Some(mut s) = snapshot_of(&path, mtime, now, None) else {
+            continue;
+        };
+        if s.last_activity >= live_cutoff {
+            live.push(s);
+        } else if limit > 0 && s.last_activity >= age_cutoff {
+            // Touched, but the conversation itself is old: dormant after all.
+            s.state = SessionState::Idle;
+            idle.push(s);
+        }
+    }
+    for (path, mtime) in dormant {
+        if let Some(s) = snapshot_of(&path, mtime, now, Some(SessionState::Idle)) {
+            idle.push(s);
+        }
     }
 
     // Waiting first (they need the user), then by recency — same order as the
     // Claude path so the two providers interleave consistently in the tree.
-    out.sort_by(|a, b| {
+    live.sort_by(|a, b| {
         let rank = |s: &SessionSnapshot| match s.state {
             SessionState::Waiting => 0u8,
             SessionState::Active => 1,
@@ -246,7 +313,27 @@ pub fn live_sessions(codex_home: &Path, now: DateTime<Utc>) -> Vec<SessionSnapsh
             .cmp(&rank(b))
             .then(b.last_activity.cmp(&a.last_activity))
     });
-    out
+    idle.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    // The mtime cap bounded the dormant tail; re-apply it now that the
+    // touched-but-stale ones have joined.
+    idle.truncate(limit);
+
+    SessionScan { live, idle }
+}
+
+pub fn live_sessions(codex_home: &Path, now: DateTime<Utc>) -> Vec<SessionSnapshot> {
+    scan_sessions(codex_home, now, Duration::zero(), 0).live
+}
+
+/// Dormant Codex sessions. See [`scan_sessions`], which this delegates to;
+/// prefer it when both halves are wanted.
+pub fn idle_sessions(
+    codex_home: &Path,
+    now: DateTime<Utc>,
+    max_age: Duration,
+    limit: usize,
+) -> Vec<SessionSnapshot> {
+    scan_sessions(codex_home, now, max_age, limit).idle
 }
 
 #[cfg(test)]

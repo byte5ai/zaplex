@@ -105,14 +105,46 @@ Bestandsfehler und fehlende Datenpfade. Ohne sie ist jedes UI darüber Fassade.
   zeigt das Cockpit falsche Tageswerte. Auf lokale Tagesgrenze umstellen.
   *Abnahme:* Test mit fixierter TZ.
 
-- **F3 · Idle-Discovery bauen.**
-  Es gibt heute **keinen** Produktionspfad, der `SessionState::Idle` erzeugt: Claude
-  liefert nur PID-lebende Registry-Sessions (sessions.rs:252/259), Codex verwirft
+- **F3 · Idle-Discovery bauen.** ✅ *gebaut*
+  Es gab **keinen** Produktionspfad, der `SessionState::Idle` erzeugt: Claude
+  liefert nur PID-lebende Registry-Sessions (sessions.rs:252/259), Codex verwarf
   ruhende Rollouts (codex_sessions.rs:10/14). Das Produktziel (Idle-Filter §4.3,
   claudeplex „Adopt idle Session") **bleibt** → Discovery für wiederaufnehmbare
-  ruhende Sessions bauen (Claude: Registry-Einträge mit totem PID + jüngste
+  ruhende Sessions (Claude: Registry-Einträge mit totem PID + jüngste
   Transcripts; Codex: ruhende Rollouts), gedeckelt & sortiert nach Recency.
-  *Abnahme:* beendete CLI-Session erscheint als Idle und ist über Resume adoptierbar.
+
+  **Ein Scan, eine Klassifikation.** Live und ruhend werden in **einem** Durchlauf
+  je Provider entschieden (`scan_sessions`), nicht in zwei Aufrufen: die Prädikate
+  sind komplementär, zwei Scans aber nicht atomar — ein Prozess, der dazwischen
+  endet, stünde in **beiden** Listen (codex-Fund). Nebeneffekt: halbe I/O.
+  Der Deckel rangiert auf `max(Registry-Zeit, Transcript-mtime)`, nicht auf der
+  Registry allein — sonst kippt eine veraltete `updatedAt` eine real aktuelle
+  Session aus den Top-N. Bei Codex entscheidet der **Transcript-Zeitstempel**
+  (mtime nur als billiges Gate), sonst fiele ein „berührtes, aber inhaltlich
+  altes" Rollout durch beide Raster.
+
+  **Getrennte Liste, kein Mischen.** Ruhende Sessions gehen in ein eigenes Feld
+  `AccountUsage.idle_sessions`, **nicht** in `sessions`. Grund: aus `sessions`
+  speisen sich Conductor-Baum, Konto-Status und Karten-Zählung (15 Konsumenten).
+  Würde Idle dort mitlaufen, wäre ein Konto „live" ohne laufende Arbeit **und**
+  die Sidebar liefe mit ruhenden Sessions voll — die Überfüllung, die §3 gerade
+  behebt. Disjunkt per Konstruktion (der PID bzw. das Live-Fenster entscheidet).
+  `with_sessions` leitet „live" zusätzlich **total** ab (`any(state != Idle)`),
+  weil Remote-Hosts unbekannte Zustände auf `Idle` falten (agent_session.rs:39)
+  und die spätestens mit F5 hereinkommen.
+
+  **Resume existiert bereits** (`claude --resume {id}` / `codex resume {id}`,
+  cli_agent.rs:232; `adopt_agent_session`, view.rs:4267; „▸ adopt", pane.rs:446)
+  — F3 ist Discovery, kein Neubau.
+
+  *Abnahme (Datenpfad):* beendete CLI-Session wird als Idle **entdeckt**, trägt
+  die `session_id` für Resume, ist von den laufenden disjunkt, gedeckelt und
+  nach Recency sortiert; ruhende Sessions ändern den Konto-Status nicht.
+  *Abnahme (sichtbar) → **P3/P4***: Idle erscheint in der Sessions-Tabelle
+  (Filter-Chip §4.3) und ist von dort adoptierbar. Bewusst dort verortet: F3 ist
+  laut §8 ein **Datenpfad**, und wo Idle sichtbar wird, ist eine UI-Entscheidung
+  — die entsteht mit der Tabelle, nicht davor. **Bis P3/P4 ist Idle sichtbar
+  wirkungslos** (Absicht, keine Lücke).
 
 - **F4 · Kosten pro Session (heute).**
   Existiert nicht als Feld — braucht Transcript-Fold pro `session_id` im Spine.
@@ -275,8 +307,18 @@ Bearbeiten über ⋯ im Konto-Pane. Anzeige-Fallback ohne Alias = bisheriges Lab
    **E3 ist gestrichen** (die „alles-SVG"-Regel war erfunden — §1.1/§7); was davon
    sinnvoll war (Chevron als Icon, eine Quelle für Glyph+Farbe), ist in E2 erledigt.
    **E4 existierte nie** — die Nummer war ein Zählfehler der ersten Fassung.
-2. **F1 + F2** — die zwei P0-Bestandsbugs (Host-Identity, UTC-Heute).
+2. **F1 + F2** — die zwei P0-Bestandsbugs (Host-Identity, UTC-Heute). ✅
+   **E6 fällt hier an** (Fund beim F1-Review, eigenes Paket statt stiller
+   Ausweitung): `attention_coloru()` nennt sich im eigenen Doc „der **eine**
+   Attention-Akzent", nutzt intern aber die **dark-only** `heat_coloru` statt
+   `heat_coloru_on` (style.rs:249) — auf hellem Theme haben damit **alle**
+   Warte-Marken schlechten Kontrast, entgegen der „contrast-tested"-Zusage aus
+   S1/§1.3. Dazu umgehen vier Stellen den Helper direkt (pane.rs:635/930/1037/1591;
+   635 hard-coded zusätzlich `AccountStatus::Working`-Glyph+Farbe).
+   *Abnahme:* `heat_coloru` kommt im Cockpit außerhalb von style.rs nicht mehr vor;
+   Kontrast-Test deckt beide Themes ab.
 3. **F3–F9** — Datenpfade & strukturelle Fundamente (einzeln committen).
+   **F3 ✅** — sichtbare Hälfte bewusst an P3/P4 (siehe §2 F3).
 4. **P1–P6** — Konto-Pane, Tabelle, Drive; Tree-Entdopplung zuletzt.
 5. **X1** — Plexing-UI auf bestehendem Routing.
 6. **FM** — Modus-Badge (Host bleibt im Tab-Titel) + FM-SFTP-Bug (Daemon-Browse).

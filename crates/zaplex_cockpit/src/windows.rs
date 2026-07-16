@@ -155,6 +155,7 @@ pub fn build_account_usage(
         heat_opus: None,
         heat_sonnet: None,
         sessions: Vec::new(),
+        idle_sessions: Vec::new(),
         status: crate::types::AccountStatus::Offline,
         provenance: crate::types::UsageProvenance::Estimate,
     }
@@ -179,22 +180,37 @@ pub fn plan_budgets(plan_tier: Option<&str>) -> (u64, u64) {
 }
 
 /// Attaches live sessions to a built usage view and derives the account status.
+///
+/// "Live" asks for a session that is actually *there*, so a dormant one never
+/// counts. `sessions` is not supposed to carry [`SessionState::Idle`] at all
+/// (that is what [`AccountUsage::idle_sessions`] is for), but the rule is
+/// written to be total rather than to trust the invariant: a remote host folds
+/// any state string it does not recognise to `Idle`, and an account must not
+/// claim to be live on the strength of one of those.
 pub fn with_sessions(
     mut usage: AccountUsage,
     sessions: Vec<crate::types::SessionSnapshot>,
 ) -> AccountUsage {
     use crate::types::{AccountStatus, SessionState};
-    usage.status = if sessions
-        .iter()
-        .any(|s| s.state == SessionState::Active)
-    {
+    usage.status = if sessions.iter().any(|s| s.state == SessionState::Active) {
         AccountStatus::Working
-    } else if !sessions.is_empty() {
+    } else if sessions.iter().any(|s| s.state != SessionState::Idle) {
         AccountStatus::Live
     } else {
         AccountStatus::Offline
     };
     usage.sessions = sessions;
+    usage
+}
+
+/// Attaches the dormant, resumable sessions. Kept apart from [`with_sessions`]
+/// because they answer a different question — "what could I pick back up?"
+/// rather than "what is running?" — and must not colour the account's status.
+pub fn with_idle_sessions(
+    mut usage: AccountUsage,
+    idle: Vec<crate::types::SessionSnapshot>,
+) -> AccountUsage {
+    usage.idle_sessions = idle;
     usage
 }
 

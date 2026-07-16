@@ -65,12 +65,26 @@ pub use types::{
     UsageEntry, UsageProvenance, WindowTotals,
 };
 pub use windows::{
-    build_account_usage, window_5h, window_week, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK,
+    build_account_usage, window_5h, window_week, with_idle_sessions, with_sessions,
+    DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK,
 };
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
+
+/// How far back dormant-session discovery looks, for **both** providers.
+///
+/// Not a limit of `claude --resume` / `codex resume` — the transcripts live far
+/// longer than this. It is a *usefulness* bound: picking a conversation back up
+/// is something you do within days, and by then the working tree it refers to
+/// has usually moved on. Older ones would be list noise, so they stay out.
+pub const IDLE_MAX_AGE: Duration = Duration::days(7);
+
+/// Upper bound on dormant sessions surfaced per account, most-recent first.
+/// Discovery walks a history that grows without limit, so the cost of a refresh
+/// and the length of the session list must not grow with it.
+pub const IDLE_SESSION_LIMIT: usize = 50;
 
 /// Build a full cockpit snapshot from disk: discover Claude + Codex accounts, parse
 /// their transcripts within the widest (week) window, and aggregate per-account
@@ -97,13 +111,19 @@ pub fn build_snapshot(
         // Non-default accounts carry their config dir so a remote resume can pin
         // the right subscription (`CLAUDE_CONFIG_DIR`); the default needs no pin.
         let cfg = account.config_dir_pin();
-        let live: Vec<SessionSnapshot> = sessions::live_sessions(&account.config_dir, now)
-            .into_iter()
-            .map(|mut s| {
-                s.config_dir = cfg.clone();
-                s
-            })
-            .collect();
+        // One scan: live and dormant are decided by the same pid probe, so a
+        // session cannot show up as both because it exited between two passes.
+        let scan = sessions::scan_sessions(
+            &account.config_dir,
+            now,
+            IDLE_MAX_AGE,
+            IDLE_SESSION_LIMIT,
+        );
+        let pin = |mut s: SessionSnapshot| {
+            s.config_dir = cfg.clone();
+            s
+        };
+        let live: Vec<SessionSnapshot> = scan.live.into_iter().map(pin).collect();
         // Explicit user budgets win; otherwise estimate from the plan tier so
         // Enterprise/Team accounts aren't shown falsely maxed.
         let (plan_5h, plan_week) = windows::plan_budgets(account.plan_tier.as_deref());
@@ -113,8 +133,15 @@ pub fn build_snapshot(
         } else {
             plan_week
         };
+        // Dormant conversations of this account: not running, but resumable.
+        // Same pin as the live ones, so adopting one re-enters the subscription
+        // it belongs to rather than whichever account happens to be default.
+        let idle: Vec<SessionSnapshot> = scan.idle.into_iter().map(pin).collect();
         let usage = build_account_usage(account, entries, now, b5h, bwk, pricing);
-        accounts.push(windows::with_sessions(usage, live));
+        accounts.push(windows::with_idle_sessions(
+            windows::with_sessions(usage, live),
+            idle,
+        ));
     }
     for account in codex::discover_accounts(codex_home) {
         let entries = codex::usage_for_account(&account, since);
@@ -128,19 +155,28 @@ pub fn build_snapshot(
         } else {
             DEFAULT_BUDGET_WEEK
         };
-        // Codex live agent-sessions (Step 8 parity): transcript-inferred, no
+        // Codex agent-sessions (Step 8 parity): transcript-inferred, no
         // registry/pid (see `codex_sessions`). Attached so they flow into the
-        // unified Agent-Inventory exactly like Claude's.
+        // unified Agent-Inventory exactly like Claude's — one walk, so the live
+        // window classifies each rollout once.
         let cfg = account.config_dir_pin();
-        let live: Vec<SessionSnapshot> = codex_sessions::live_sessions(&account.config_dir, now)
-            .into_iter()
-            .map(|mut s| {
-                s.config_dir = cfg.clone();
-                s
-            })
-            .collect();
+        let scan = codex_sessions::scan_sessions(
+            &account.config_dir,
+            now,
+            IDLE_MAX_AGE,
+            IDLE_SESSION_LIMIT,
+        );
+        let pin = |mut s: SessionSnapshot| {
+            s.config_dir = cfg.clone();
+            s
+        };
+        let live: Vec<SessionSnapshot> = scan.live.into_iter().map(pin).collect();
+        let idle: Vec<SessionSnapshot> = scan.idle.into_iter().map(pin).collect();
         let usage = build_account_usage(account, entries, now, b5h, bwk, pricing);
-        accounts.push(windows::with_sessions(usage, live));
+        accounts.push(windows::with_idle_sessions(
+            windows::with_sessions(usage, live),
+            idle,
+        ));
     }
 
     CockpitSnapshot {

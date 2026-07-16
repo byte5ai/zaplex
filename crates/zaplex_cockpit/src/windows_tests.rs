@@ -1,5 +1,5 @@
 use super::*;
-use crate::types::{Account, Provider, UsageEntry};
+use crate::types::{Account, AccountStatus, Provider, SessionState, UsageEntry};
 use chrono::{DateTime, FixedOffset, Utc};
 
 fn ts(s: &str) -> DateTime<Utc> {
@@ -158,4 +158,79 @@ fn empty_entries_are_all_zero() {
     assert!(u.reset5h.is_none());
     assert!(u.reset_week.is_none());
     approx(u.heat, 0.0);
+}
+
+// ── Account status vs. dormant sessions ─────────────────────────────────────
+
+fn snapshot(state: SessionState) -> crate::types::SessionSnapshot {
+    crate::types::SessionSnapshot {
+        session_id: "s".into(),
+        cwd: "/tmp/p".into(),
+        name: String::new(),
+        state,
+        provider: Provider::Claude,
+        model: String::new(),
+        effort: None,
+        ctx_tokens: 0,
+        project_root: "/tmp/p".into(),
+        project_name: "p".into(),
+        branch: None,
+        worktree: None,
+        config_dir: None,
+        last_activity: ts("2026-06-30T12:00:00Z"),
+        pid: 0,
+    }
+}
+
+fn status_of(sessions: Vec<crate::types::SessionSnapshot>) -> AccountStatus {
+    let pricing = PricingTable::default();
+    let now = ts("2026-06-30T12:00:00Z");
+    let usage = build_account_usage(acct(), vec![], now, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK, &pricing);
+    with_sessions(usage, sessions).status
+}
+
+#[test]
+fn account_status_reflects_running_work_only() {
+    assert_eq!(status_of(vec![]), AccountStatus::Offline);
+    assert_eq!(status_of(vec![snapshot(SessionState::Active)]), AccountStatus::Working);
+    assert_eq!(status_of(vec![snapshot(SessionState::Waiting)]), AccountStatus::Live);
+    assert_eq!(status_of(vec![snapshot(SessionState::Monitor)]), AccountStatus::Live);
+}
+
+/// A finished conversation must not make the account look live. Dormant
+/// sessions belong in `idle_sessions`, but a remote host folds any state it
+/// cannot parse to `Idle`, so the rule is written to hold even then.
+#[test]
+fn dormant_sessions_never_make_an_account_live() {
+    assert_eq!(
+        status_of(vec![snapshot(SessionState::Idle)]),
+        AccountStatus::Offline,
+        "nothing is running, so the account is not live"
+    );
+    // Mixed: the running one still decides.
+    assert_eq!(
+        status_of(vec![snapshot(SessionState::Idle), snapshot(SessionState::Waiting)]),
+        AccountStatus::Live
+    );
+    assert_eq!(
+        status_of(vec![snapshot(SessionState::Idle), snapshot(SessionState::Active)]),
+        AccountStatus::Working
+    );
+}
+
+#[test]
+fn idle_sessions_are_carried_separately_from_live_ones() {
+    let pricing = PricingTable::default();
+    let now = ts("2026-06-30T12:00:00Z");
+    let usage = build_account_usage(acct(), vec![], now, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK, &pricing);
+    let usage = with_sessions(usage, vec![snapshot(SessionState::Waiting)]);
+    let usage = with_idle_sessions(usage, vec![snapshot(SessionState::Idle)]);
+
+    assert_eq!(usage.sessions.len(), 1);
+    assert_eq!(usage.idle_sessions.len(), 1);
+    assert_eq!(
+        usage.status,
+        AccountStatus::Live,
+        "attaching dormant sessions must not disturb the status"
+    );
 }

@@ -26,6 +26,7 @@ fn account(key: &str) -> AccountUsage {
         heat_opus: None,
         heat_sonnet: None,
         sessions: Vec::new(),
+        idle_sessions: Vec::new(),
         status: AccountStatus::Live,
         provenance: UsageProvenance::Real,
     }

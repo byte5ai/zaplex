@@ -121,6 +121,7 @@ mod tests {
             heat_opus: None,
             heat_sonnet: None,
             sessions: Vec::new(),
+            idle_sessions: Vec::new(),
             status,
             provenance,
         }

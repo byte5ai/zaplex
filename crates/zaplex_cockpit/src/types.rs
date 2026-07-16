@@ -128,8 +128,9 @@ pub enum SessionState {
 }
 
 /// One agent-session snapshot (registry-backed + transcript-joined for live
-/// Claude Code sessions; the same shape carries dormant [`SessionState::Idle`]
-/// sessions once transcript-only discovery lands).
+/// Claude Code sessions). The same shape carries dormant [`SessionState::Idle`]
+/// sessions, which `sessions::scan_sessions` discovers from the transcript that
+/// outlives the process.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionSnapshot {
     pub session_id: String,
@@ -207,7 +208,7 @@ pub struct AccountUsage {
     pub account: Account,
     /// Current rolling 5-hour block.
     pub block5h: WindowTotals,
-    /// Current calendar day (UTC in Increment 1).
+    /// Current calendar day on the **local** clock (see `windows::today_totals`).
     pub today: WindowTotals,
     /// Current rolling 7-day block.
     pub week: WindowTotals,
@@ -229,10 +230,29 @@ pub struct AccountUsage {
     /// for real OAuth accounts whose plan reports it; `None` otherwise.
     #[serde(default)]
     pub heat_sonnet: Option<f64>,
-    /// Live sessions (Claude Code registry), waiting-first. Empty for
-    /// providers without a session registry (Codex, for now).
+    /// **Live** sessions — a process is provably there (Claude: a pid-alive
+    /// registry entry; Codex: a rollout touched inside its live window),
+    /// waiting-first. The surfaces that mean "running work" — the Conductor
+    /// tree, `status`, the account card's count — read this field alone, so a
+    /// finished conversation cannot be counted as work in progress.
+    ///
+    /// Producers must keep [`SessionState::Idle`] out of here and put dormant
+    /// sessions in `idle_sessions`; today's do, by construction (neither
+    /// provider's state function can return `Idle`). That is a contract, not an
+    /// enforced invariant — `windows::with_sessions` therefore derives `status`
+    /// in a way that stays right even if an `Idle` ever slips in.
     pub sessions: Vec<SessionSnapshot>,
-    /// Coarse activity status derived from `sessions`.
+    /// **Dormant** sessions: the CLI process is gone, but the transcript
+    /// survives, so `--resume` can pick the conversation back up. Bounded and
+    /// most-recent-first. Disjoint from `sessions` because a single scan
+    /// (`sessions::scan_sessions`) classifies each session once — filling these
+    /// two fields from two separate scans would let one that exits in between
+    /// land in both. Surfaced by the session table's Idle filter; deliberately
+    /// kept out of the Conductor, which lists live work.
+    #[serde(default)]
+    pub idle_sessions: Vec<SessionSnapshot>,
+    /// Coarse activity status derived from `sessions` — dormant sessions do not
+    /// make an account "live".
     pub status: AccountStatus,
     /// Whether `heat`/`heat_week`/resets are the provider's real numbers or the
     /// local estimate (see [`UsageProvenance`]). Token/cost totals are always

@@ -11,12 +11,16 @@
 //! - **Waiting** — the last assistant turn ended (`stop_reason != tool_use`):
 //!   the session needs YOU. The cockpit's most important signal.
 //! - **Monitor** — mid tool-run / live background job: working, hands off.
+//!
+//! [`idle_sessions`] covers the other half: entries whose process is **gone**
+//! but whose transcript survives, i.e. dormant conversations that `--resume` can
+//! pick back up. The pid decides, so the two sets can never overlap.
 
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde_json::Value;
 
 use crate::types::{Provider, SessionSnapshot, SessionState};
@@ -249,51 +253,142 @@ pub fn transcript_path(config_dir: &Path, session_id: &str) -> Option<PathBuf> {
     transcripts_by_id(config_dir).remove(session_id)
 }
 
-/// Collects the live sessions of a Claude Code account: registry entries that
-/// are real, PID-alive and transcript-backed, joined with their transcript
-/// tail for the waiting/working classification.
-pub fn live_sessions(config_dir: &Path, now: DateTime<Utc>) -> Vec<SessionSnapshot> {
+/// The registry's own idea of when a session was last touched — available
+/// without opening the (potentially large) transcript.
+fn reg_updated(r: &RegEntry, now: DateTime<Utc>) -> DateTime<Utc> {
+    Utc.timestamp_millis_opt(r.updated_at.max(r.started_at))
+        .single()
+        .unwrap_or(now)
+}
+
+/// Join one registry entry to its transcript tail and build the snapshot.
+/// `state` is derived from the tail unless the caller overrides it (a dormant
+/// session's state is decided by its dead process, not by its last turn).
+fn snapshot_of(
+    r: RegEntry,
+    transcript: &Path,
+    now: DateTime<Utc>,
+    force_state: Option<SessionState>,
+) -> SessionSnapshot {
+    let tail = read_transcript_tail(transcript);
+    let updated = reg_updated(&r, now);
+    let last_activity = tail.last_ts.map_or(updated, |t| t.max(updated));
+    let background = r.kind == "bg"
+        && (r.status == "busy" || (now - last_activity).num_milliseconds() < ACTIVE_WINDOW_MS);
+    let project = crate::project::resolve_project(Path::new(&r.cwd));
+    SessionSnapshot {
+        session_id: r.session_id,
+        cwd: r.cwd,
+        name: r.name,
+        state: force_state.unwrap_or_else(|| state_of(&r.status, tail.ended, background)),
+        provider: Provider::Claude,
+        model: tail.model,
+        // Not in the transcript; populated at launch time later.
+        effort: None,
+        ctx_tokens: tail.ctx_tokens,
+        project_root: project.root,
+        project_name: project.name,
+        branch: project.branch,
+        worktree: project.worktree,
+        // Set by the snapshot builder from the owning account (per pin).
+        config_dir: None,
+        last_activity,
+        pid: r.pid,
+    }
+}
+
+/// A cheap upper estimate of a session's last activity, used to rank and cap
+/// dormant candidates *before* any transcript is opened.
+///
+/// The registry's own `updatedAt` alone is not enough: it can lag the
+/// conversation, and `last_activity` is `max(tail, updatedAt)`, so ranking on
+/// `updatedAt` could cut a session that is in truth more recent than one it
+/// kept. The transcript's mtime moves with every turn, so the later of the two
+/// tracks the real figure closely — and costs one `stat`, not a parse.
+fn recency_estimate(
+    r: &RegEntry,
+    transcript: &Path,
+    now: DateTime<Utc>,
+) -> DateTime<Utc> {
+    let updated = reg_updated(r, now);
+    std::fs::metadata(transcript)
+        .and_then(|m| m.modified())
+        .map(DateTime::<Utc>::from)
+        .map_or(updated, |mtime| mtime.max(updated))
+}
+
+/// Both halves of an account's sessions, classified in one pass.
+pub struct SessionScan {
+    /// Proven running: the registry's pid answered.
+    pub live: Vec<SessionSnapshot>,
+    /// Dormant but resumable, most-recent first and capped.
+    pub idle: Vec<SessionSnapshot>,
+}
+
+/// Classify every registry entry of a Claude Code account **once**: real,
+/// transcript-backed entries are probed for liveness a single time and land in
+/// exactly one half of the [`SessionScan`].
+///
+/// Two separate scans would not do. `live` and `idle` ask complementary
+/// questions, but asked at two different moments they can both answer "yes" for
+/// one session — the process only has to exit in between — and it would show up
+/// as running *and* dormant at once. One probe per entry makes the split a fact
+/// rather than a hope, and reads the registry and transcript index once instead
+/// of twice.
+///
+/// The dormant half is deliberately conservative and bounded:
+/// - A pid of `0` means *unknown*, not dead ([`pid_alive`] reports it alive), so
+///   such an entry stays live and is never claimed dormant — we don't assert
+///   "resumable" where we cannot show the process is gone.
+/// - Only the last `max_age` counts; older conversations are not usefully
+///   resumable and would only be noise.
+/// - At most `limit`, most-recent first.
+///
+/// Cost: a heavy user has hundreds of dead entries, and reading every transcript
+/// *tail* on each refresh would be real I/O. So dormant candidates are ranked and
+/// capped on [`recency_estimate`] — registry time plus one `stat` — and only the
+/// surviving `limit` transcripts are opened and read. Live entries are few (a
+/// running process each), so all of them are read. What this does **not** avoid:
+/// [`transcripts_by_id`] still walks the whole `projects/` tree to build the id
+/// index, as it must for any lookup, and `read_registry` still parses every
+/// entry. The saving is on transcript *contents*, not on the directory scan.
+pub fn scan_sessions(
+    config_dir: &Path,
+    now: DateTime<Utc>,
+    max_age: Duration,
+    limit: usize,
+) -> SessionScan {
     let transcripts = transcripts_by_id(config_dir);
-    let mut sessions: Vec<SessionSnapshot> = read_registry(config_dir)
-        .into_iter()
-        .filter(|r| is_real_reg(r) && transcripts.contains_key(&r.session_id) && pid_alive(r.pid))
-        .map(|r| {
-            let tail = transcripts
-                .get(&r.session_id)
-                .map(|p| read_transcript_tail(p))
-                .unwrap_or_default();
-            let updated = Utc
-                .timestamp_millis_opt(r.updated_at.max(r.started_at))
-                .single()
-                .unwrap_or(now);
-            let last_activity = tail.last_ts.map_or(updated, |t| t.max(updated));
-            let background = r.kind == "bg"
-                && (r.status == "busy"
-                    || (now - last_activity).num_milliseconds() < ACTIVE_WINDOW_MS);
-            let project = crate::project::resolve_project(Path::new(&r.cwd));
-            SessionSnapshot {
-                session_id: r.session_id,
-                cwd: r.cwd,
-                name: r.name,
-                state: state_of(&r.status, tail.ended, background),
-                provider: Provider::Claude,
-                model: tail.model,
-                // Not in the transcript; populated at launch time later.
-                effort: None,
-                ctx_tokens: tail.ctx_tokens,
-                project_root: project.root,
-                project_name: project.name,
-                branch: project.branch,
-                worktree: project.worktree,
-                // Set by the snapshot builder from the owning account (per pin).
-                config_dir: None,
-                last_activity,
-                pid: r.pid,
+    let cutoff = now - max_age;
+
+    let mut live_entries: Vec<(RegEntry, PathBuf)> = Vec::new();
+    let mut idle_candidates: Vec<(DateTime<Utc>, RegEntry, PathBuf)> = Vec::new();
+
+    for r in read_registry(config_dir) {
+        if !is_real_reg(&r) {
+            continue;
+        }
+        let Some(path) = transcripts.get(&r.session_id).cloned() else {
+            // No transcript → a helper process, not a session.
+            continue;
+        };
+        // The single probe that decides which half this entry belongs to.
+        if pid_alive(r.pid) {
+            live_entries.push((r, path));
+        } else if limit > 0 {
+            let est = recency_estimate(&r, &path, now);
+            if est >= cutoff {
+                idle_candidates.push((est, r, path));
             }
-        })
+        }
+    }
+
+    let mut live: Vec<SessionSnapshot> = live_entries
+        .into_iter()
+        .map(|(r, path)| snapshot_of(r, &path, now, None))
         .collect();
     // Waiting first (they need the user), then by recency.
-    sessions.sort_by(|a, b| {
+    live.sort_by(|a, b| {
         let rank = |s: &SessionSnapshot| match s.state {
             SessionState::Waiting => 0u8,
             SessionState::Active => 1,
@@ -304,7 +399,35 @@ pub fn live_sessions(config_dir: &Path, now: DateTime<Utc>) -> Vec<SessionSnapsh
             .cmp(&rank(b))
             .then(b.last_activity.cmp(&a.last_activity))
     });
-    sessions
+
+    idle_candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    idle_candidates.truncate(limit);
+    let mut idle: Vec<SessionSnapshot> = idle_candidates
+        .into_iter()
+        .map(|(_, r, path)| snapshot_of(r, &path, now, Some(SessionState::Idle)))
+        .collect();
+    idle.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+
+    SessionScan { live, idle }
+}
+
+/// The live sessions of a Claude Code account: registry entries that are real,
+/// PID-alive and transcript-backed, joined with their transcript tail for the
+/// waiting/working classification. Callers that also want the dormant ones must
+/// use [`scan_sessions`] rather than pair this with a second scan — see there.
+pub fn live_sessions(config_dir: &Path, now: DateTime<Utc>) -> Vec<SessionSnapshot> {
+    scan_sessions(config_dir, now, Duration::zero(), 0).live
+}
+
+/// The dormant sessions of a Claude Code account. See [`scan_sessions`], which
+/// this delegates to; prefer it when both halves are wanted.
+pub fn idle_sessions(
+    config_dir: &Path,
+    now: DateTime<Utc>,
+    max_age: Duration,
+    limit: usize,
+) -> Vec<SessionSnapshot> {
+    scan_sessions(config_dir, now, max_age, limit).idle
 }
 
 #[cfg(test)]
