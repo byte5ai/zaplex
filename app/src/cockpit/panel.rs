@@ -19,7 +19,8 @@ use warpui::platform::Cursor;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 use zaplex_cockpit::{
     fleet_is_large, format_cost, heat_fill, heat_pct_label_with_provenance,
-    host_auto_collapsed, host_ident, host_key, host_summary, session_glyph, AccountUsage, Favorite,
+    host_auto_collapsed, host_ident, host_key, host_session_count, session_glyph, AccountUsage,
+    Favorite,
     FavoriteKind, FleetTree, HostNode, SessionSnapshot, SessionState, UsageProvenance,
 };
 
@@ -480,6 +481,11 @@ impl CockpitPanel {
         let body = appearance.ui_font_body();
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
+        // Same faint as the project header's count — the two read as one level.
+        let faint = theme
+            .sub_text_color(theme.background())
+            .with_opacity(55)
+            .into_solid();
         let fleet_large = fleet_is_large(tree);
 
         let mut col = Flex::column()
@@ -510,19 +516,15 @@ impl CockpitPanel {
             );
 
         for host in &tree.hosts {
-            // Inverse-complexity: a calm host in a large fleet folds to one line.
-            if host_auto_collapsed(host, fleet_large) {
-                // L2 (supaterm): the loudest colour survives every collapse level
-                // — a folded host that needs you still reads amber, so attention
-                // is never hidden by the fold.
-                let color = if host.needs_me > 0 {
-                    status_dot_coloru(SessionState::Waiting, appearance)
-                } else {
-                    muted
-                };
-                col = col.with_child(Self::text(host_summary(host), family, body, color));
-                continue;
-            }
+            // Inverse-complexity: a calm host in a large fleet folds away its
+            // children. Only its children — the header row itself stays exactly
+            // as interactive as any other host's (spec v3 §2 F8).
+            //
+            // It used to fold to a bare line of text, which meant the ★, the ⋯,
+            // the open-a-terminal click and the status dot all disappeared the
+            // moment the fleet grew past two hosts. Interaction died precisely at
+            // the scale this tool exists for.
+            let collapsed = host_auto_collapsed(host, fleet_large);
             // Locality from the inventory's explicit marker, not a label match.
             let is_local = host.is_local;
             // Stable host identity keys the density-fold state (never the label).
@@ -572,6 +574,27 @@ impl CockpitPanel {
                 .with_spacing(6.0)
                 .with_child(Self::host_status_dot(host, appearance))
                 .with_child(Shrinkable::new(1.0, label_el).finish());
+            if collapsed {
+                // How much is behind the fold — the one thing the header cannot
+                // show once the children are gone. Only when folded: an expanded
+                // host shows its sessions, so counting them again would be noise.
+                //
+                // Faint, and never amber. A host only auto-folds when nothing on
+                // it is waiting (`host_auto_collapsed`), so the fold can only ever
+                // hide calm work — there is no attention here to carry. That is
+                // also why the old collapsed branch's `needs_me > 0 → amber` could
+                // never fire: it was unreachable by its own condition.
+                //
+                // A *project* header is the opposite case and does colour its
+                // count: the user folds it by hand, so it can hide someone who
+                // waits, and it has no dot of its own to say so.
+                header_row = header_row.with_child(Self::text(
+                    host_session_count(host).to_string(),
+                    family,
+                    body,
+                    faint,
+                ));
+            }
             if let Some(node_id) = host.registry_node_id.clone() {
                 if let Some(star_state) = self.conductor_host_star_states.get(&node_id).cloned() {
                     let is_fav = favorites
@@ -610,6 +633,12 @@ impl CockpitPanel {
             // (spec §2.1). Each project is a collapsible group header (its own
             // typographic level, no dot); its sessions are shown waiting-first.
             // Projects default to expanded (absent in `expanded_projects`).
+            //
+            // A folded host contributes none of this: the fold is what keeps a
+            // large fleet calm. Its header above stays whole either way.
+            if collapsed {
+                continue;
+            }
             for project in &host.projects {
                 let pkey = project_key(&ident, &project.root);
                 let expanded = self.expanded_projects.get(&pkey).copied().unwrap_or(true);

@@ -229,11 +229,30 @@ Bestandsfehler und fehlende Datenpfade. Ohne sie ist jedes UI darüber Fassade.
   Pane-Schließen weg. Persistieren (Spine-State) und in der UI ehrlich als
   „Als geprüft markieren" führen — es approved nichts beim Agenten.
 
-- **F8 · Fleet-Kollaps ersetzen.**
-  Ab > 2 Hosts / > 8 Sessions degradiert jeder ruhige Host zu rohem Text ohne
-  Klick/★/⋯/Status (conductor.rs:175/193, panel.rs:452-463) — Interaktion stirbt
-  genau bei Skalierung. Neu: Header-Zeile bleibt **immer** voll interaktiv (Punkt,
-  Name, Zähler, ★, ⋯); nur die Kinder falten.
+- **F8 · Fleet-Kollaps ersetzen.** ✅ *gebaut*
+  Ab > 2 Hosts / > 8 Sessions degradierte jeder ruhige Host zu rohem Text ohne
+  Klick/★/⋯/Status — Interaktion stirbt genau bei Skalierung. Neu: Header-Zeile
+  bleibt **immer** voll interaktiv (Punkt, Name, Zähler, ★, ⋯); nur die Kinder
+  falten.
+
+  **Präzisierung am Ist-Zustand:** betroffen war **nur die Sidebar**
+  (`panel.rs`, ein `continue`, das die ganze Kopfzeile übersprang). Der **Pane**
+  rendert seine Kopfzeile bereits immer (Chevron/Name/Badge/„+", klickbar) und
+  hängt eingeklappt nur eine Zusammenfassungszeile **darunter** — er war nie
+  kaputt. Die Spec-Zeilennummern waren durch den Sidebar-Umbau veraltet.
+
+  **Zähler nur im eingeklappten Zustand**, faint, nie amber: ein Host klappt laut
+  `host_auto_collapsed` **nur bei `needs_me == 0`** ein — die Faltung kann also
+  ausschließlich ruhige Arbeit verbergen, es gibt dort keine Attention zu tragen.
+  (Deshalb war der Amber-Zweig des alten Kollaps-Codes **unerreichbar** — codex-Fund.)
+  Die Projekt-Kopfzeile ist der Gegenfall und färbt ihren Zähler sehr wohl: sie
+  wird **von Hand** gefaltet, kann also Wartende verbergen, und hat keinen eigenen Punkt.
+
+  **Kein Aufklappen in der Sidebar** (bewusst): die Sidebar ist die Blick-Fläche,
+  der Fleet-Pane die Arbeits-Fläche — dort gibt es den Chevron + User-Override
+  (`collapsed_hosts`). Einstieg: Fleet-Summe im KI-KONTEN-Header.
+  *Abnahme:* Render-Änderung; `panel.rs` hat **keinen Test-Harnisch** (ehrliche
+  Lücke) — verifiziert per Code-Lesen + codex; Laufzeit-Abnahme am RC-DMG.
 
 - **F9 · Projekt = Repo, Worktree = Attribut.**
   `project_root` ist der Root **jedes Worktrees** (project.rs:32/40, fleet.rs:133) →
@@ -381,7 +400,7 @@ Bearbeiten über ⋯ im Konto-Pane. Anzeige-Fallback ohne Alias = bisheriges Lab
    *Abnahme:* `heat_coloru` kommt im Cockpit außerhalb von style.rs nicht mehr vor;
    Kontrast-Test deckt beide Themes ab.
 3. **F3–F9** — Datenpfade & strukturelle Fundamente (einzeln committen).
-   **F3 ✅ · F4 ✅ · F5 ✅ · F6 ✅ · F7 ✅** — offen: **F8 · F9**.
+   **F3 ✅ · F4 ✅ · F5 ✅ · F6 ✅ · F7 ✅ · F8 ✅** — offen: **F9**.
    Sichtbare Hälfte von F3–F5 jeweils bewusst an P3/P4 (siehe §2).
    **F5 hat eine Release-Konsequenz:** neues Proto-Feld ⇒ **Daemon-Rebuild +
    Redeploy** nötig, sonst bleibt die Host-Spalte für devhost leer (sauber
