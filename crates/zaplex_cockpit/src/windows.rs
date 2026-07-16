@@ -1,10 +1,12 @@
 //! Time-window aggregation: ccusage-style rolling blocks (5h / 7d) + calendar
 //! "today", producing [`WindowTotals`] and reset times, plus heat.
 //!
-//! All functions are pure and take an explicit `now`, so window boundaries are
-//! deterministic and unit-testable without touching the clock.
+//! Functions take an explicit `now`, so window boundaries are deterministic and
+//! unit-testable without touching the clock. The one ambient input is the
+//! machine's time zone, which fixes the calendar-day boundary; it is injected
+//! into [`today_totals_in`] so that path stays testable against a fixed zone.
 
-use chrono::{DateTime, Duration, Timelike, Utc};
+use chrono::{DateTime, Duration, Local, TimeZone, Timelike, Utc};
 
 use crate::pricing::PricingTable;
 use crate::types::{Account, AccountUsage, UsageEntry, WindowTotals};
@@ -80,18 +82,40 @@ fn current_window(
     }
 }
 
-/// Sum of entries whose timestamp is on the same UTC calendar day as `now`.
+/// Sum of entries falling on the same calendar day as `now` **in `tz`**.
+///
+/// The day boundary is the one the user sees on their own clock, not UTC:
+/// east of UTC, work done just after local midnight still carries the previous
+/// UTC date, and would otherwise be booked into yesterday's "today".
+/// Each instant is converted on its own, so the offset applied is the one in
+/// force at that instant. With a DST-aware zone (production passes [`Local`])
+/// the local day therefore stays correct across a transition; a `FixedOffset`,
+/// as the tests pass, is not DST-aware to begin with. UTC→local is always
+/// unambiguous, so this cannot panic even inside a repeated fall-back hour.
+fn today_totals_in<Tz: TimeZone>(
+    entries: &[UsageEntry],
+    now: DateTime<Utc>,
+    tz: &Tz,
+    pricing: &PricingTable,
+) -> WindowTotals {
+    let today = now.with_timezone(tz).date_naive();
+    let mut totals = WindowTotals::default();
+    for e in entries
+        .iter()
+        .filter(|e| e.ts.with_timezone(tz).date_naive() == today)
+    {
+        totals.add(e, pricing);
+    }
+    totals
+}
+
+/// Sum of entries on the machine's current local calendar day.
 fn today_totals(
     entries: &[UsageEntry],
     now: DateTime<Utc>,
     pricing: &PricingTable,
 ) -> WindowTotals {
-    let today = now.date_naive();
-    let mut totals = WindowTotals::default();
-    for e in entries.iter().filter(|e| e.ts.date_naive() == today) {
-        totals.add(e, pricing);
-    }
-    totals
+    today_totals_in(entries, now, &Local, pricing)
 }
 
 /// Build the full per-account usage view (5h block / today / week + resets + heat).

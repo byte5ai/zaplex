@@ -1,6 +1,6 @@
 use super::*;
 use crate::types::{Account, Provider, UsageEntry};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
 
 fn ts(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
@@ -107,6 +107,44 @@ fn a_gap_of_at_least_the_window_starts_a_new_block() {
     assert_eq!(u.block5h.messages, 1);
     assert_eq!(u.block5h.work, 2200);
     assert_eq!(u.reset5h, Some(ts("2026-06-30T21:00:00Z")));
+}
+
+/// "Today" must follow the clock on the user's wall, not UTC. Both assertions
+/// below fail under a `now.date_naive()` (UTC-day) implementation.
+#[test]
+fn today_follows_the_local_calendar_day_east_of_utc() {
+    let berlin = FixedOffset::east_opt(2 * 3600).unwrap(); // CEST
+    let pricing = PricingTable::default();
+    let entries = vec![
+        entry("2026-06-30T09:00:00Z", 1000, 100), // local 30 Jun 11:00 → yesterday
+        entry("2026-06-30T22:35:00Z", 2000, 200), // local 01 Jul 00:35 → today
+    ];
+    // 01 Jul 00:30 local, while UTC still says 30 Jun.
+    let now = ts("2026-06-30T22:30:00Z");
+
+    let today = today_totals_in(&entries, now, &berlin, &pricing);
+
+    // Only the after-midnight turn counts: the UTC day would have taken both.
+    assert_eq!(today.messages, 1);
+    assert_eq!(today.work, 2200);
+}
+
+#[test]
+fn today_follows_the_local_calendar_day_west_of_utc() {
+    let new_york = FixedOffset::west_opt(5 * 3600).unwrap(); // EST
+    let pricing = PricingTable::default();
+    let entries = vec![
+        entry("2026-06-30T20:00:00Z", 1000, 100), // local 30 Jun 15:00 → today
+        entry("2026-07-01T01:00:00Z", 2000, 200), // local 30 Jun 20:00 → today
+    ];
+    // 30 Jun 22:00 local, while UTC has already rolled over to 01 Jul.
+    let now = ts("2026-07-01T03:00:00Z");
+
+    let today = today_totals_in(&entries, now, &new_york, &pricing);
+
+    // Both turns are on the same local day; the UTC day would have split them.
+    assert_eq!(today.messages, 2);
+    assert_eq!(today.work, 3300);
 }
 
 #[test]
