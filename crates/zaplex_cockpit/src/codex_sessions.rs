@@ -246,13 +246,19 @@ pub struct SessionScan {
 /// Walk the rollouts once and put each on exactly one side of
 /// [`CODEX_LIVE_WINDOW`].
 ///
-/// The transcript's **own** last timestamp decides, with mtime as the cheap
-/// gate. That ordering matters: a rollout touched without gaining content (fresh
-/// mtime, old turns) is not live — [`live_sessions`] has always rejected it on
-/// its timestamps — and it is dormant, so it belongs in `idle`. Classifying on
-/// mtime alone would drop it from both lists. Recently-touched rollouts are few,
-/// so parsing all of them to find out is cheap; the long dormant tail is ranked
-/// and capped on mtime first, and only `limit` of those are parsed.
+/// The transcript's **own** last timestamp decides for every rollout that gets
+/// parsed; mtime only picks who gets parsed. Keeping those two jobs apart is the
+/// point — deciding with mtime as well would let the file's disk time and its
+/// content disagree, and a rollout touched without gaining content (fresh mtime,
+/// old turns) would then fall out of both lists: not live, because
+/// [`live_sessions`] has always judged it on its timestamps, and not dormant,
+/// because its mtime looks current.
+///
+/// Recently-touched rollouts are few, so all of them are parsed; the dormant
+/// tail is open-ended, so it is ranked and capped on mtime first and only
+/// `limit` of those are read. The cap is therefore only as good as mtime is a
+/// proxy for the last turn — true for an appending CLI, not for a restored or
+/// back-dated file.
 ///
 /// One walk, one classification: two separate passes could disagree about the
 /// same rollout and list it twice.
@@ -282,22 +288,20 @@ pub fn scan_sessions(
     let mut live: Vec<SessionSnapshot> = Vec::new();
     let mut idle: Vec<SessionSnapshot> = Vec::new();
 
-    for (path, mtime) in fresh {
+    // Everything parsed is classified by the same rule, whichever gate it came
+    // through: the transcript's own last timestamp decides. mtime only chose who
+    // got parsed — deciding *with* it as well would let the two disagree.
+    for (path, mtime) in fresh.into_iter().chain(dormant) {
         let Some(mut s) = snapshot_of(&path, mtime, now, None) else {
             continue;
         };
         if s.last_activity >= live_cutoff {
             live.push(s);
         } else if limit > 0 && s.last_activity >= age_cutoff {
-            // Touched, but the conversation itself is old: dormant after all.
             s.state = SessionState::Idle;
             idle.push(s);
         }
-    }
-    for (path, mtime) in dormant {
-        if let Some(s) = snapshot_of(&path, mtime, now, Some(SessionState::Idle)) {
-            idle.push(s);
-        }
+        // Older than the retention bound: not usefully resumable, dropped.
     }
 
     // Waiting first (they need the user), then by recency — same order as the

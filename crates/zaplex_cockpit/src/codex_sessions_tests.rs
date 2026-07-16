@@ -350,3 +350,62 @@ fn a_touched_but_stale_rollout_is_dormant_rather_than_lost() {
     );
     assert_eq!(scan.idle[0].state, SessionState::Idle);
 }
+
+/// mtime picks who gets parsed; the transcript's own timestamp decides what they
+/// are. These two cases only differ in which gate they came through, so letting
+/// mtime decide as well would classify them inconsistently.
+#[test]
+fn the_transcript_timestamp_decides_for_everything_that_gets_parsed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let now = Utc::now();
+
+    // Stale on disk, but the conversation itself is current: it is live, and
+    // being reached through the dormant gate must not force it to Idle.
+    let path = write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-backdated.jsonl",
+        &stamped(&dormant_lines("sess-current"), now - Duration::minutes(1)),
+    );
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(SystemTime::from(now - Duration::hours(2)))
+        .unwrap();
+
+    let scan = scan_sessions(tmp.path(), now, MAX_AGE, 50);
+    assert_eq!(
+        scan.live.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(),
+        ["sess-current"],
+        "a current conversation is live no matter which gate found it"
+    );
+    assert!(scan.idle.is_empty());
+}
+
+/// The retention bound is on the conversation, not on the file. A rollout whose
+/// mtime is inside the window but whose turns are far older is not resumable in
+/// any useful sense.
+#[test]
+fn the_age_bound_is_judged_on_the_transcript_not_the_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let now = Utc::now();
+    let path = write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-ancient.jsonl",
+        &stamped(&dormant_lines("sess-ancient"), now - Duration::days(30)),
+    );
+    // Inside the 7d retention on disk, 30 days old inside.
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(SystemTime::from(now - Duration::days(2)))
+        .unwrap();
+
+    let scan = scan_sessions(tmp.path(), now, MAX_AGE, 50);
+    assert!(scan.live.is_empty());
+    assert!(
+        scan.idle.is_empty(),
+        "a 30-day-old conversation is out regardless of its file's mtime"
+    );
+}

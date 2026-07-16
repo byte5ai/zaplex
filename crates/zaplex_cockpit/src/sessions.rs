@@ -305,6 +305,11 @@ fn snapshot_of(
 /// `updatedAt` could cut a session that is in truth more recent than one it
 /// kept. The transcript's mtime moves with every turn, so the later of the two
 /// tracks the real figure closely — and costs one `stat`, not a parse.
+///
+/// A close estimate, not a bound: the tail's own timestamp can still exceed the
+/// file's mtime if the two clocks disagree, or if the transcript was restored or
+/// back-dated. Ranking is then off by that skew. Reading every tail to rule it
+/// out is precisely the cost this exists to avoid.
 fn recency_estimate(
     r: &RegEntry,
     transcript: &Path,
