@@ -409,3 +409,30 @@ fn the_age_bound_is_judged_on_the_transcript_not_the_file() {
         "a 30-day-old conversation is out regardless of its file's mtime"
     );
 }
+
+/// The rollout name is `rollout-<timestamp>-<uuid>` and both halves contain
+/// dashes, so the id is the last five groups. Taking the last group alone
+/// yielded a uuid fragment: plausible-looking in a row, but `codex resume` on it
+/// finds nothing. Shape taken from a real `~/.codex/sessions` file name.
+#[test]
+fn the_file_name_fallback_recovers_the_whole_session_uuid() {
+    let id = "019f135f-7fcc-7d93-8a28-4835d98f8f0a";
+    assert_eq!(
+        session_id_from_path(Path::new(&format!(
+            "/x/sessions/2026/06/29/rollout-2026-06-29T14-34-13-{id}.jsonl"
+        ))),
+        id,
+    );
+}
+
+/// An unexpected name is handed back whole rather than sliced into a guess —
+/// a wrong id resumes the wrong conversation; an odd one merely fails to match.
+#[test]
+fn an_unexpected_rollout_name_is_not_guessed_at() {
+    assert_eq!(
+        session_id_from_path(Path::new("/x/rollout-weird.jsonl")),
+        "rollout-weird"
+    );
+    // No file name at all → no id to invent.
+    assert_eq!(session_id_from_path(Path::new("/")), "");
+}

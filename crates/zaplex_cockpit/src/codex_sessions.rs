@@ -86,12 +86,26 @@ struct RolloutInfo {
 /// Shared so that discovery and usage attribution can never disagree about what
 /// a rollout's id is: they must produce the same string, or spend would be
 /// stamped with an id no session row carries.
+///
+/// The name is `rollout-<timestamp>-<uuid>`, and **both halves contain dashes**
+/// (`rollout-2026-06-29T14-34-13-019f135f-7fcc-7d93-8a28-4835d98f8f0a`), so the
+/// id is the last five dash-separated groups, not the last one. Taking only the
+/// last group yields a fragment of the uuid — enough to look plausible in a row,
+/// but `codex resume <fragment>` would not find the session.
 pub(crate) fn session_id_from_path(path: &Path) -> String {
-    path.file_stem()
-        .and_then(|s| s.to_str())
-        .map(|stem| stem.rsplit_once('-').map_or(stem, |(_, id)| id).to_string())
-        .unwrap_or_default()
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return String::new();
+    };
+    let parts: Vec<&str> = stem.split('-').collect();
+    if parts.len() < UUID_GROUPS {
+        // Not the expected shape — hand back the stem rather than a guess.
+        return stem.to_string();
+    }
+    parts[parts.len() - UUID_GROUPS..].join("-")
 }
+
+/// A uuid is five dash-separated groups (`8-4-4-4-12`).
+const UUID_GROUPS: usize = 5;
 
 fn parse_rollout(path: &Path) -> RolloutInfo {
     let mut info = RolloutInfo::default();
