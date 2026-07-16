@@ -93,14 +93,14 @@ Plexing).
 
 Bestandsfehler und fehlende Datenpfade. Ohne sie ist jedes UI darüber Fassade.
 
-- **F1 · Host-Identity statt Label-Match (P0, Bestandsbug).**
+- **F1 · Host-Identity statt Label-Match (P0, Bestandsbug).** ✅ *gebaut*
   Registry-Hosts werden per **Anzeige-Label** in Live-Hosts gemerged; der erste
   Treffer bekommt die `node_id` (fleet.rs:214/230). Zwei gleichnamige Hosts →
   Verwalten/Favorit/Öffnen trifft den **falschen** SSH-Eintrag. Merge auf stabile
   Identität umstellen. *Abnahme:* zwei Registry-Hosts mit gleichem Label bleiben
   getrennt bedienbar (Test).
 
-- **F2 · „Heute" = lokale Tagesgrenze (P0, Bestandsbug).**
+- **F2 · „Heute" = lokale Tagesgrenze (P0, Bestandsbug).** ✅ *gebaut*
   `today`-Fenster rechnet in UTC (windows.rs:83/89) — um Mitternacht Europe/Berlin
   zeigt das Cockpit falsche Tageswerte. Auf lokale Tagesgrenze umstellen.
   *Abnahme:* Test mit fixierter TZ.
@@ -146,7 +146,7 @@ Bestandsfehler und fehlende Datenpfade. Ohne sie ist jedes UI darüber Fassade.
   — die entsteht mit der Tabelle, nicht davor. **Bis P3/P4 ist Idle sichtbar
   wirkungslos** (Absicht, keine Lücke).
 
-- **F4 · Kosten pro Session (heute).**
+- **F4 · Kosten pro Session (heute).** ✅ *gebaut*
   Existiert nicht als Feld — braucht Transcript-Fold pro `session_id` im Spine.
   *Abnahme:* Tabelle §4 zeigt $-Wert je Session; Summe ≈ Konto-Heute.
 
@@ -224,7 +224,7 @@ Bestandsfehler und fehlende Datenpfade. Ohne sie ist jedes UI darüber Fassade.
   über alle pids/Provider/Lokalitäten, dass `can_signal` **exakt** dem entspricht,
   was der Signalpfad akzeptiert (no-regression als Test statt als Behauptung).
 
-- **F7 · „Geprüft"-Markierung persistent + ehrlich benannt.**
+- **F7 · „Geprüft"-Markierung persistent + ehrlich benannt.** ✅ *gebaut*
   Heutiges „approve" togglet ein In-Memory-`HashSet` (pane.rs:1370/1419) — nach
   Pane-Schließen weg. Persistieren (Spine-State) und in der UI ehrlich als
   „Als geprüft markieren" führen — es approved nichts beim Agenten.
@@ -381,7 +381,8 @@ Bearbeiten über ⋯ im Konto-Pane. Anzeige-Fallback ohne Alias = bisheriges Lab
    *Abnahme:* `heat_coloru` kommt im Cockpit außerhalb von style.rs nicht mehr vor;
    Kontrast-Test deckt beide Themes ab.
 3. **F3–F9** — Datenpfade & strukturelle Fundamente (einzeln committen).
-   **F3 ✅ · F4 ✅ · F5 ✅ · F6 ✅** — sichtbare Hälfte jeweils bewusst an P3/P4 (siehe §2).
+   **F3 ✅ · F4 ✅ · F5 ✅ · F6 ✅ · F7 ✅** — offen: **F8 · F9**.
+   Sichtbare Hälfte von F3–F5 jeweils bewusst an P3/P4 (siehe §2).
    **F5 hat eine Release-Konsequenz:** neues Proto-Feld ⇒ **Daemon-Rebuild +
    Redeploy** nötig, sonst bleibt die Host-Spalte für devhost leer (sauber
    degradiert, kein Fehler). Fährt mit dem Autocomplete-Fix im selben Zyklus.
