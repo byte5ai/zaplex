@@ -254,7 +254,7 @@ Bestandsfehler und fehlende Datenpfade. Ohne sie ist jedes UI darüber Fassade.
   *Abnahme:* Render-Änderung; `panel.rs` hat **keinen Test-Harnisch** (ehrliche
   Lücke) — verifiziert per Code-Lesen + codex; Laufzeit-Abnahme am RC-DMG.
 
-- **F9 · Projekt = Repo, Worktree = Attribut.**
+- **F9 · Projekt = Repo, Worktree = Attribut.** ✅ *gebaut*
   `project_root` ist der Root **jedes Worktrees** (project.rs:32/40, fleet.rs:133) →
   parallele Worktrees erzeugen mehrfach denselben Projekt-Header. Neu: Gruppierung
   auf dem Haupt-Repo-Root (`git worktree`-Hauptpfad), Worktree wird Session-Attribut
@@ -400,7 +400,17 @@ Bearbeiten über ⋯ im Konto-Pane. Anzeige-Fallback ohne Alias = bisheriges Lab
    *Abnahme:* `heat_coloru` kommt im Cockpit außerhalb von style.rs nicht mehr vor;
    Kontrast-Test deckt beide Themes ab.
 3. **F3–F9** — Datenpfade & strukturelle Fundamente (einzeln committen).
-   **F3 ✅ · F4 ✅ · F5 ✅ · F6 ✅ · F7 ✅ · F8 ✅** — offen: **F9**.
+   **F3–F9 ✅ — Fundament komplett.**
+   **Nebenfund bei F9 (eigener Commit):** `git_root` fragte nur `.git.exists()` —
+   ein **leeres Verzeichnis** namens `.git` machte jedes Verzeichnis darunter zu
+   „einem Repo"; Sessions landeten in einem Projekt, das es nicht gibt. Git selbst
+   verlangt `HEAD` **+** `refs/` **+** `objects/` (am echten git verifiziert).
+   `resolve_worktree_identity` und `main_worktree_root` waren gleich leichtgläubig
+   (Branch für ein Nicht-Repo; `repo_root` unter einem toten Pfad) — alle drei
+   teilen jetzt EIN Urteil (`is_work_tree`).
+   **Das waren die drei „Bestandsfehler" der Testsuite** — von mir die ganze
+   Session als „harmlose Sandbox-Artefakte" fehlgedeutet. Ursache: ein leeres
+   `/tmp/.git` auf devhost (12. Juli). **Suite erstmals komplett grün: 196/0.**
    Sichtbare Hälfte von F3–F5 jeweils bewusst an P3/P4 (siehe §2).
    **F5 hat eine Release-Konsequenz:** neues Proto-Feld ⇒ **Daemon-Rebuild +
    Redeploy** nötig, sonst bleibt die Host-Spalte für devhost leer (sauber
