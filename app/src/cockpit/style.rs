@@ -182,24 +182,44 @@ pub fn provider_label(provider: Provider) -> &'static str {
     }
 }
 
-/// The provider identity colour, shown ONLY on the account-card provider swatch
-/// (spec §1: provider colours live in the KI-Konten cards + the pane table, never
-/// the tree). Own marks, not the vendors' trademarked logos: Claude = clay,
-/// Codex = blue.
-pub fn provider_color(provider: Provider) -> ColorU {
+/// Provider identity colours for a **dark** background — our own marks, never the
+/// vendors' trademarked logos: Claude = clay, Codex = blue.
+const PROVIDER_ON_DARK: [u32; 2] = [
+    0xC8724AFF, // Claude — clay
+    0x3D9BF0FF, // Codex  — blue
+];
+
+/// The same identities tuned for a **light** background: the dark-theme clay and
+/// blue wash out on white, so a light theme gets the deeper tones. Same hues, so
+/// the provider stays recognisable — only the lightness moves.
+const PROVIDER_ON_LIGHT: [u32; 2] = [
+    0x9A4F2BFF, // Claude — deeper clay
+    0x1D6FBFFF, // Codex  — deeper blue
+];
+
+fn provider_index(provider: Provider) -> usize {
     match provider {
-        Provider::Claude => ColorU {
-            r: 0xC8,
-            g: 0x72,
-            b: 0x4A,
-            a: 0xFF,
-        },
-        Provider::Codex => ColorU {
-            r: 0x3D,
-            g: 0x9B,
-            b: 0xF0,
-            a: 0xFF,
-        },
+        Provider::Claude => 0,
+        Provider::Codex => 1,
+    }
+}
+
+/// The provider identity colour for the account-card swatch, **contrast-adapted**
+/// to the surface it sits on — the same picker the heat palette uses
+/// ([`heat_coloru_on`]). Provider colour lives ONLY here (spec v3 §1.3): never in
+/// the tree.
+///
+/// The first implementation hard-coded a single dark-theme hex with no light
+/// path, which would have sunk the swatch on a light theme — the exact footgun
+/// `heat_coloru_on` exists to prevent.
+pub fn provider_color_on(provider: Provider, bg: ColorU) -> ColorU {
+    let i = provider_index(provider);
+    let dark = ColorU::from_u32(PROVIDER_ON_DARK[i]);
+    let light = ColorU::from_u32(PROVIDER_ON_LIGHT[i]);
+    if contrast_ratio(dark, bg) >= contrast_ratio(light, bg) {
+        dark
+    } else {
+        light
     }
 }
 

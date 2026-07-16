@@ -83,7 +83,7 @@ Plexing).
 | Datentyp | Kodierung |
 |---|---|
 | Attention | Amber als **Status** ausschließlich für „wartet auf Dich". Stille Punkt-Spur Host-Punkt → Session-Punkt. **Nichts codiert doppelt** → needs-me-Zähler-Badge am Host **entfällt**, Amber-Chevron eingeklappter Projekte **entfällt**; stattdessen färbt sich der **Zähler** des eingeklappten Projekts amber (ein Signal, am Ort der Verbergung). → **E2** · **Carve-out:** destruktive Verben (Stop/Kill/Stop-all) dürfen **beim Hover** amber werden — das ist eine transiente Gefahren-*Affordanz* („du bist dabei, etwas Destruktives zu tun"), kein Dauer-Status; sie kollidiert nicht mit dem Warte-Status, weil sie nur unter dem Cursor und nur momentan erscheint (`VerbKind::Destructive`, style.rs:281). |
-| Provider | Farbkachel (Clay `#C8724A` = Claude, Blau `#3D9BF0` = Codex) **nur** in Konten-Cards; **kontrast-adaptiert** analog `heat_coloru_on` (Light-Variante definieren) → **S3**. Nie im Tree. |
+| Provider | Farbkachel **nur** in Konten-Cards, nie im Tree. Zwei Paletten wie beim Heat (`PROVIDER_ON_DARK` Clay `#C8724A` / Blau `#3D9BF0`, `PROVIDER_ON_LIGHT` `#9A4F2B` / `#1D6FBF`), aufgelöst über denselben Kontrast-Pick (`provider_color_on`) — der erste Wurf hatte **einen festen Dark-Hex ohne Light-Pfad** und wäre auf hellem Theme abgesoffen. |
 | Auswahl | **`theme.accent()`-Overlay** — v2s Hex `#6b74e8` ist gestrichen (App ist themebar; Code macht es bereits richtig, panel.rs:397). |
 | Verwaltungs-Icons Sidebar | Erlaubt sind genau: **Zahnrad** (Zonen-Header), **★** (Host), **⋯** (Host). v2s Ausnahmeliste war unvollständig. ⋯ ist **immer gerendert** (faint, Hover färbt) — „Hover färbt um, re-layoutet nie" gilt weiter; v2s „nur bei Hover" ist gestrichen (Code macht es bereits richtig, style.rs:310ff). |
 

@@ -25,7 +25,7 @@ use zaplex_cockpit::{
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    attention_coloru, ctx_pct_element, glyph_cell, icon_verb_button_tooltip, provider_color,
+    attention_coloru, ctx_pct_element, glyph_cell, icon_verb_button_tooltip, provider_color_on,
     provider_label, status_dot_coloru, utilisation_coloru, verb_button_colored, zone_card,
     GLYPH_COL_WIDTH, METRIC_COL_WIDTH,
 };
@@ -306,7 +306,10 @@ impl CockpitPanel {
             .with_child(
                 ConstrainedBox::new(
                     Rect::new()
-                        .with_background_color(provider_color(acct.account.provider))
+                        .with_background_color(provider_color_on(
+                            acct.account.provider,
+                            theme.background().into_solid(),
+                        ))
                         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
                         .finish(),
                 )
@@ -322,20 +325,31 @@ impl CockpitPanel {
                 .finish(),
             );
 
-        // Provider · Plan as two fixed slots (spec §2.4) — a dash fills the plan
-        // slot when the plan is unknown, so the slot is always present and the
-        // plan never silently reads as the provider. The Codex `plan_tier` leak
-        // (provider name bleeding into the plan) was fixed in the data model (S2).
-        let plan = acct
-            .account
-            .plan_tier
-            .clone()
-            .unwrap_or_else(|| crate::t!("cockpit-card-plan-none"));
-        let provider_plan = crate::t!(
-            "cockpit-card-provider-plan",
-            provider = provider_label(acct.account.provider),
-            plan = plan
-        );
+        // Provider and Plan are two **separate slots**, not one string (spec v3
+        // §S3): the provider is a quiet word, the plan a small badge. Flattening
+        // them into "Claude · Max" made the plan read as part of the provider name
+        // and gave the two different things one weight. The badge only appears when
+        // a plan is actually known — an empty "—" chip is chrome for nothing.
+        let mut provider_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.0)
+            .with_child(Self::text(
+                provider_label(acct.account.provider).to_string(),
+                family,
+                body,
+                muted,
+            ));
+        if let Some(plan) = acct.account.plan_tier.clone() {
+            provider_row = provider_row.with_child(
+                Container::new(Self::text(plan, family, body, main))
+                    .with_background(internal_colors::fg_overlay_1(theme))
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                    .with_padding_left(5.0)
+                    .with_padding_right(5.0)
+                    .finish(),
+            );
+        }
+        let provider_plan = provider_row.with_main_axis_size(MainAxisSize::Min).finish();
 
         // The card carries ONE live-session line: „N laufende Sessions" (running
         // = active + waiting + monitor; idle is not counted). Waiting is
@@ -360,7 +374,7 @@ impl CockpitPanel {
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(CARD_SPACING)
             .with_child(header.finish())
-            .with_child(Self::text(provider_plan, family, body, muted))
+            .with_child(provider_plan)
             // ONE metric signal on the card: the rolling 5h block (spec §2.2). The
             // week meter, spend and tokens live in the pane, where there is room.
             .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance));
