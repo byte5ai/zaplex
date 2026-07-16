@@ -110,11 +110,16 @@ const HEAT_ON_LIGHT: [u32; 5] = [
     0xB91C1CFF, // Over     — red-700
 ];
 
-/// Heat band → display color for the **dark** default theme. The single source
-/// for every heat-colored bar, percentage and badge; prefer
-/// [`heat_coloru_on`] where the surface's lightness is known so the palette
-/// stays legible on a light theme too.
-pub fn heat_coloru(level: HeatLevel) -> ColorU {
+/// Heat band → the **dark-theme** hue, flat.
+///
+/// Private on purpose. Every themed surface must go through
+/// [`heat_coloru_on`], which picks the variant that actually contrasts with the
+/// background; this one is the raw dark palette and sinks on a light theme.
+/// Four call sites reached past the helpers for it and put the attention amber —
+/// the one mark meant to be unmissable — at the mercy of the theme (spec v3 E6).
+/// Keeping it unreachable from outside makes that a structural fact rather than
+/// a rule someone has to remember.
+fn heat_coloru(level: HeatLevel) -> ColorU {
     ColorU::from_u32(HEAT_ON_DARK[heat_index(level)])
 }
 
@@ -245,8 +250,14 @@ pub fn status_dot_coloru(state: SessionState, appearance: &Appearance) -> ColorU
 ///
 /// **Never use this for utilisation** — see [`utilisation_coloru`]. Amber is
 /// reserved for "needs you" (spec v3 §1.3).
-pub fn attention_coloru() -> ColorU {
-    heat_coloru(HeatLevel::Critical)
+///
+/// Contrast-adapted, like every other colour that lands on a themed surface:
+/// this used to hand back the dark-theme hue flat, so the **one** thing meant to
+/// draw the eye was the one thing that faded on a light theme — the mark that
+/// says "an agent is waiting for you" being the worst possible thing to lose.
+pub fn attention_coloru(appearance: &Appearance) -> ColorU {
+    let theme = appearance.theme();
+    heat_coloru_on(HeatLevel::Critical, theme.background().into_solid())
 }
 
 /// The **one** utilisation threshold — "fast voll" (spec v3 §1.2). Deliberately
@@ -301,7 +312,7 @@ pub fn verb_button<A: Action + Clone>(
     let rest = theme.sub_text_color(theme.background()).into_solid();
     let hover = match kind {
         VerbKind::Constructive => theme.accent().into_solid(),
-        VerbKind::Destructive => attention_coloru(),
+        VerbKind::Destructive => attention_coloru(appearance),
     };
     verb_button_colored(state, label, rest, hover, appearance, action)
 }
@@ -414,7 +425,7 @@ pub fn icon_word_verb<A: Action + Clone>(
     let rest = theme.sub_text_color(theme.background()).into_solid();
     let hover = match kind {
         VerbKind::Constructive => theme.accent().into_solid(),
-        VerbKind::Destructive => attention_coloru(),
+        VerbKind::Destructive => attention_coloru(appearance),
     };
     let family = appearance.ui_font_family();
     let size = appearance.ui_font_body();
@@ -572,6 +583,51 @@ mod tests {
         for level in LEVELS {
             assert_ne!(heat_coloru_on(level, WHITE), heat_coloru(level));
             assert_eq!(heat_coloru_on(level, NEAR_BLACK), heat_coloru(level));
+        }
+    }
+
+    /// E6: the attention accent is the ONE thing meant to be unmissable, so it
+    /// must survive both themes. It used to hand back the dark hue flat — the
+    /// waiting mark fading on a light background, which is the worst mark to
+    /// lose. WCAG calls 3:1 the floor for a non-text graphic; the accent clears
+    /// it on either surface.
+    #[test]
+    fn the_attention_accent_is_legible_on_both_themes() {
+        for bg in [NEAR_BLACK, WHITE] {
+            let c = heat_coloru_on(HeatLevel::Critical, bg);
+            let ratio = contrast_ratio(c, bg);
+            assert!(
+                ratio >= 3.0,
+                "attention amber on {bg:?} has contrast {ratio:.2} — below the 3:1 \
+                 floor for a graphic that must always be seen"
+            );
+        }
+        // …and it is not the same hue on both: picking one would mean one theme
+        // gets the worse of the two.
+        assert_ne!(
+            heat_coloru_on(HeatLevel::Critical, NEAR_BLACK),
+            heat_coloru_on(HeatLevel::Critical, WHITE),
+        );
+    }
+
+    /// The same floor for every band, on both surfaces — a meter or dot that
+    /// only reads on one theme is half a signal.
+    #[test]
+    fn every_heat_band_clears_the_contrast_floor_on_both_themes() {
+        for level in [
+            HeatLevel::Ok,
+            HeatLevel::Elevated,
+            HeatLevel::High,
+            HeatLevel::Critical,
+            HeatLevel::Over,
+        ] {
+            for bg in [NEAR_BLACK, WHITE] {
+                let ratio = contrast_ratio(heat_coloru_on(level, bg), bg);
+                assert!(
+                    ratio >= 3.0,
+                    "{level:?} on {bg:?}: contrast {ratio:.2} < 3.0"
+                );
+            }
         }
     }
 }

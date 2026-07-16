@@ -227,7 +227,7 @@ impl AttentionInbox {
                 // alarm-red — in the shared fixed-width glyph column.
                 .with_child(glyph_cell(
                     zaplex_cockpit::GLYPH_WAITING,
-                    attention_coloru(),
+                    attention_coloru(appearance),
                     appearance,
                 ))
                 .with_child(

@@ -14,6 +14,7 @@ fn session(provider: Provider, pid: u32) -> SessionSnapshot {
         effort: None,
         ctx_tokens: 0,
         project_root: "/tmp/proj".into(),
+        repo_root: "/tmp/proj".into(),
         project_name: "proj".into(),
         branch: None,
         worktree: None,

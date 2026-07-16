@@ -19263,7 +19263,7 @@ impl Workspace {
         let family = appearance.ui_font_family();
         // The one waiting glyph in the one attention amber — the same ✋ color
         // as every Conductor badge and inbox row — kept small/quiet.
-        let critical = crate::cockpit::style::attention_coloru();
+        let critical = crate::cockpit::style::attention_coloru(appearance);
         let label = format!("{} {}", zaplex_cockpit::GLYPH_WAITING, n);
         let handle = self.mouse_states.attention_pulse.clone();
         Some(

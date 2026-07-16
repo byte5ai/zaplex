@@ -384,7 +384,7 @@ impl CockpitPanel {
             // not a heat level — name the intent so it can never drift into the
             // utilisation palette (spec v3 §1.3).
             let color = if waiting > 0 {
-                attention_coloru()
+                attention_coloru(appearance)
             } else {
                 muted
             };
@@ -903,7 +903,7 @@ impl CockpitPanel {
         // amber. One signal, at the place that does the hiding — expanded projects
         // never need it, because the waiting session's own dot is then visible.
         let count_c = if !expanded && has_waiting {
-            attention_coloru()
+            attention_coloru(appearance)
         } else {
             faint_c
         };

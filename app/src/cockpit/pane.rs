@@ -31,7 +31,8 @@ use zaplex_cockpit::{
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::capabilities::SessionCapabilities;
 use crate::cockpit::style::{
-    cluster_divider, ctx_pct_element, glyph_cell, heat_coloru, icon_word_verb, status_dot_coloru,
+    attention_coloru, cluster_divider, ctx_pct_element, glyph_cell, heat_coloru_on, icon_word_verb,
+    status_dot_coloru,
     utilisation_coloru, verb_button, verb_button_colored, VerbKind, INFO_VERBS_GAP, VERB_SPACING,
 };
 use crate::ui_components::icons;
@@ -631,8 +632,13 @@ impl CockpitPaneView {
         let now = chrono::Utc::now();
 
         // Account activity glyph (WORKING/LIVE/OFFLINE), derived by the spine.
+        // The working hue is contrast-picked like every other themed mark; the
+        // dark-palette constant used here would sink on a light theme.
         let (status_glyph, status_color) = match acct.status {
-            AccountStatus::Working => ("●", heat_coloru(HeatLevel::Ok)),
+            AccountStatus::Working => (
+                "●",
+                heat_coloru_on(HeatLevel::Ok, theme.background().into_solid()),
+            ),
             AccountStatus::Live => ("◐", muted),
             AccountStatus::Offline => ("○", muted),
         };
@@ -927,7 +933,7 @@ impl CockpitPaneView {
                 format!("● {}", host.needs_me),
                 family,
                 body,
-                heat_coloru(HeatLevel::Critical),
+                attention_coloru(appearance),
             ));
         }
         if !is_local {
@@ -1034,7 +1040,7 @@ impl CockpitPaneView {
                 format!("● {}", project.needs_me),
                 family,
                 body,
-                heat_coloru(HeatLevel::Critical),
+                attention_coloru(appearance),
             ));
         }
         // Non-flexible children only: this header is a `Min` flex added (via a
@@ -1606,7 +1612,7 @@ impl CockpitPaneView {
                 family,
                 heading,
                 if waiting > 0 {
-                    heat_coloru(HeatLevel::Critical)
+                    attention_coloru(appearance)
                 } else {
                     main
                 },
