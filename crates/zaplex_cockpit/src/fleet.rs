@@ -334,6 +334,83 @@ pub fn fold_inventory(
     build_fleet_tree(inputs)
 }
 
+/// One of an account's sessions, wherever in the fleet it runs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountSession<'a> {
+    /// The host it lives on — the session table's Host column.
+    pub host: &'a str,
+    /// `true` when that host is this machine.
+    pub is_local: bool,
+    /// The daemon identity to route through for a remote session (attach,
+    /// resume, guardrails). `None` for the local host. The **label is never the
+    /// route** — two daemons can share one.
+    pub host_id: Option<&'a str>,
+    pub session: &'a SessionSnapshot,
+}
+
+/// Every session in the fleet that belongs to `account`, local and remote.
+///
+/// This is the account pane's view of the inventory, and it is a **query over
+/// the tree** rather than a second copy of it: the tree already holds every
+/// host's sessions, so copying them onto the account would leave two sets that
+/// can disagree — and the tree fold would then count the local ones twice.
+///
+/// The join is `(provider, account_email)`. Not `config_dir`: that is a path on
+/// whichever host produced it, so it neither matches this machine's spelling of
+/// the same account nor exists at all for a default account. Joining on it would
+/// hang every host's default sessions on the first default account and hide every
+/// plexed one. An email is the only thing a subscription is called the same on
+/// every host — and since one address can own both a Claude and a Codex account,
+/// the provider has to match too.
+///
+/// A session whose account is unknown (`account_email: None` — an older daemon,
+/// or a host with no OAuth identity) joins nothing: it stays visible under its
+/// host in the Conductor rather than being claimed by an account it may not
+/// belong to.
+/// The result borrows from `tree` alone — `account` is read, never held — so a
+/// caller may pass a temporary without keeping it alive to use the rows.
+pub fn sessions_of_account<'a>(
+    tree: &'a FleetTree,
+    account: &crate::types::Account,
+) -> Vec<AccountSession<'a>> {
+    let Some(email) = account.email.as_deref() else {
+        // An account we cannot name cannot claim anything.
+        return Vec::new();
+    };
+    tree.hosts
+        .iter()
+        .flat_map(|h| {
+            h.projects
+                .iter()
+                .flat_map(|p| p.sessions.iter())
+                .filter(move |s| {
+                    s.provider == account.provider
+                        && s.account_email
+                            .as_deref()
+                            // Case-insensitive. Both hosts read the address from
+                            // the provider's own token, so it ought to match byte
+                            // for byte — but if it ever didn't, this join would
+                            // fail *silently*: the sessions simply absent, with
+                            // nothing on screen to explain why. Not noticing a
+                            // difference in capitalisation costs nothing, and no
+                            // two real accounts differ by case alone.
+                            //
+                            // ASCII-only on purpose: a domain is ASCII by
+                            // definition, and full Unicode folding of a local
+                            // part is a worse bet than no folding (dotted vs
+                            // dotless i, and providers do not vary it anyway).
+                            .is_some_and(|e| e.eq_ignore_ascii_case(email))
+                })
+                .map(move |session| AccountSession {
+                    host: &h.host,
+                    is_local: h.is_local,
+                    host_id: h.host_id.as_deref(),
+                    session,
+                })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "fleet_tests.rs"]
 mod tests;

@@ -57,6 +57,19 @@ impl Account {
     pub fn config_dir_pin(&self) -> Option<String> {
         (!self.is_default).then(|| self.config_dir.to_string_lossy().into_owned())
     }
+
+    /// Stamp a session discovered under this account with the two things it
+    /// cannot know about itself: how to **route** back to the account
+    /// ([`Self::config_dir_pin`]) and **whose** account it is (the email — the
+    /// only identity that means the same on another host).
+    ///
+    /// One function, because both the local snapshot builder and the daemon do
+    /// this to their own hosts' sessions. Two copies would eventually stamp
+    /// differently, and the client's join would quietly stop matching.
+    pub fn stamp(&self, session: &mut SessionSnapshot) {
+        session.config_dir = self.config_dir_pin();
+        session.account_email = self.email.clone();
+    }
 }
 
 /// One usage record extracted from a transcript line (one assistant turn/message).
@@ -179,8 +192,24 @@ pub struct SessionSnapshot {
     /// wire this is the *host's* path, replayed verbatim in the daemon's
     /// `startup_command`. `None` for the default account (no pin needed) or when
     /// the producer didn't record it.
+    ///
+    /// **Routing, not identity.** It names a directory on the host that produced
+    /// it, so it says nothing about *which subscription* this is: two hosts spell
+    /// the same account differently, and a default account carries no pin at all.
+    /// To ask "whose account is this?", use `account_email`.
     #[serde(default)]
     pub config_dir: Option<String>,
+    /// The email of the account this session runs under — the one thing about a
+    /// session that means the same on every host, and therefore the only sound
+    /// way to tell that a remote session belongs to an account discovered here.
+    ///
+    /// Paired with `provider` it is the join key: one address can own both a
+    /// Claude and a Codex subscription. `None` when the producer could not
+    /// determine it (no OAuth identity on that host, or an older daemon that
+    /// does not send it) — such a session stays visible in the host tree and
+    /// simply joins no account, rather than being guessed onto one.
+    #[serde(default)]
+    pub account_email: Option<String>,
     pub last_activity: DateTime<Utc>,
     pub pid: u32,
 }

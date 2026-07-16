@@ -108,9 +108,6 @@ pub fn build_snapshot(
 
     for account in claude::discover_accounts(home, claude_config_dir_env) {
         let entries = claude::usage_for_account(&account, since);
-        // Non-default accounts carry their config dir so a remote resume can pin
-        // the right subscription (`CLAUDE_CONFIG_DIR`); the default needs no pin.
-        let cfg = account.config_dir_pin();
         // One scan: live and dormant are decided by the same pid probe, so a
         // session cannot show up as both because it exited between two passes.
         let scan = sessions::scan_sessions(
@@ -119,11 +116,12 @@ pub fn build_snapshot(
             IDLE_MAX_AGE,
             IDLE_SESSION_LIMIT,
         );
-        let pin = |mut s: SessionSnapshot| {
-            s.config_dir = cfg.clone();
+        // Route + identity, from the one function the daemon also uses.
+        let stamp = |mut s: SessionSnapshot| {
+            account.stamp(&mut s);
             s
         };
-        let live: Vec<SessionSnapshot> = scan.live.into_iter().map(pin).collect();
+        let live: Vec<SessionSnapshot> = scan.live.into_iter().map(stamp).collect();
         // Explicit user budgets win; otherwise estimate from the plan tier so
         // Enterprise/Team accounts aren't shown falsely maxed.
         let (plan_5h, plan_week) = windows::plan_budgets(account.plan_tier.as_deref());
@@ -134,9 +132,9 @@ pub fn build_snapshot(
             plan_week
         };
         // Dormant conversations of this account: not running, but resumable.
-        // Same pin as the live ones, so adopting one re-enters the subscription
+        // Stamped like the live ones, so adopting one re-enters the subscription
         // it belongs to rather than whichever account happens to be default.
-        let idle: Vec<SessionSnapshot> = scan.idle.into_iter().map(pin).collect();
+        let idle: Vec<SessionSnapshot> = scan.idle.into_iter().map(stamp).collect();
         let usage = build_account_usage(account, entries, now, b5h, bwk, pricing);
         accounts.push(windows::with_idle_sessions(
             windows::with_sessions(usage, live),
@@ -159,19 +157,18 @@ pub fn build_snapshot(
         // registry/pid (see `codex_sessions`). Attached so they flow into the
         // unified Agent-Inventory exactly like Claude's — one walk, so the live
         // window classifies each rollout once.
-        let cfg = account.config_dir_pin();
         let scan = codex_sessions::scan_sessions(
             &account.config_dir,
             now,
             IDLE_MAX_AGE,
             IDLE_SESSION_LIMIT,
         );
-        let pin = |mut s: SessionSnapshot| {
-            s.config_dir = cfg.clone();
+        let stamp = |mut s: SessionSnapshot| {
+            account.stamp(&mut s);
             s
         };
-        let live: Vec<SessionSnapshot> = scan.live.into_iter().map(pin).collect();
-        let idle: Vec<SessionSnapshot> = scan.idle.into_iter().map(pin).collect();
+        let live: Vec<SessionSnapshot> = scan.live.into_iter().map(stamp).collect();
+        let idle: Vec<SessionSnapshot> = scan.idle.into_iter().map(stamp).collect();
         let usage = build_account_usage(account, entries, now, b5h, bwk, pricing);
         accounts.push(windows::with_idle_sessions(
             windows::with_sessions(usage, live),

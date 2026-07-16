@@ -183,6 +183,7 @@ fn snapshot(state: SessionState) -> crate::types::SessionSnapshot {
         branch: None,
         worktree: None,
         config_dir: None,
+        account_email: None,
         last_activity: ts("2026-06-30T12:00:00Z"),
         pid: 0,
     }

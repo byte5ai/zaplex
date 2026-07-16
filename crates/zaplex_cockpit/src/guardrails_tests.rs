@@ -17,6 +17,7 @@ fn session(name: &str, cwd: &str, pid: u32) -> SessionSnapshot {
         branch: None,
         worktree: None,
         config_dir: None,
+        account_email: None,
         last_activity: Utc::now(),
         pid,
     }

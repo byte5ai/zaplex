@@ -150,10 +150,48 @@ Bestandsfehler und fehlende Datenpfade. Ohne sie ist jedes UI darüber Fassade.
   Existiert nicht als Feld — braucht Transcript-Fold pro `session_id` im Spine.
   *Abnahme:* Tabelle §4 zeigt $-Wert je Session; Summe ≈ Konto-Heute.
 
-- **F5 · Fleet-Join Konto ↔ Sessions über Hosts.**
-  `AccountUsage.sessions` ist nur lokale Discovery (lib.rs:100-117); die Konto-Tabelle
-  braucht die Sessions **aller** Hosts (Join über config_dir-Pin im Inventory).
-  *Abnahme:* Remote-Session des Kontos erscheint in dessen Pane mit Host-Spalte.
+- **F5 · Fleet-Join Konto ↔ Sessions über Hosts.** ✅ *gebaut*
+  `AccountUsage.sessions` ist nur lokale Discovery; die Konto-Tabelle braucht die
+  Sessions **aller** Hosts.
+
+  **⚠️ KORREKTUR: „Join über config_dir-Pin" war falsch — das war ein Spec-Fehler,
+  kein Umsetzungsdetail.** `config_dir` ist laut eigenem Proto-Kommentar
+  (remote_server.proto:769) ein **Routing**-Wert: der Pfad **auf dem Host**, damit
+  der Client beim Resume das richtige Abo pinnen kann. Als Identität versagt er in
+  beide Richtungen:
+  - **Default-Konten tragen bewusst keinen Pin** (leer, `config_dir_pin() → None`).
+    Ein Join darauf hängt **alle** Default-Sessions **aller** Hosts an das erste
+    Default-Konto — auch wenn der Host mit einem **anderen Abo** eingeloggt ist.
+  - **Plexed-Konten** tragen den Host-Pfad (`/home/…/.claude-work`), der zum
+    Client-Pfad (`/Users/…/.claude-work`) nie passt → Remote-Session unsichtbar.
+
+  Bei einem Produkt, dessen Kern Multi-Konto-Plexing ist, ist beides untragbar
+  (falsch zugeordnet bzw. verschwunden).
+
+  **Neu: Identität über die Leitung.** `AgentSessionInfo.account_email` (Feld 16,
+  User-Entscheidung Klartext statt Hash) + `provider` = Join-Schlüssel. Eine Adresse
+  kann Claude **und** Codex besitzen → Provider muss mit. Leer ⇒ `None` = „unbekannt",
+  **nicht** „Konto mit leerem Namen": sonst teilen sich alle alten Daemons dieselbe
+  leere Identität und ihre Sessions landen auf einem Konto. Solche Sessions bleiben
+  im Host-Baum sichtbar, gehören nur keinem Konto.
+
+  **Join = Abfrage auf dem Baum** (`fleet::sessions_of_account`), kein Kopieren:
+  der Baum hält die Host-Sessions bereits; eine zweite Menge am Konto liefe
+  auseinander, und die lokalen wären im Fold doppelt gezählt. Liefert je Zeile
+  `host` (Tabellen-Spalte), `is_local` und `host_id` (Routing — **nie das Label**).
+
+  **Stempeln in EINER Funktion** (`Account::stamp`): lokal (lib.rs) und Daemon
+  (server_model.rs) stempeln dieselben Sessions; die `config_dir`-Stempelung war
+  bereits dupliziert. Zwei Kopien driften, und der Join verstummt still.
+
+  *Abnahme (Datenpfad):* Remote-Session mit gleichem Konto joint; ein **anderes**
+  Abo auf einem anderen Host joint **nicht**; gleiche Adresse auf zwei Providern
+  bleibt zwei Konten; Session ohne Identität joint nichts, bleibt aber im Baum.
+  *Abnahme (sichtbar) → **P3/P4***: Host-Spalte in der Sessions-Tabelle.
+  **⚠️ Braucht Daemon-Rebuild + Redeploy** (fährt mit dem Autocomplete-Fix
+  `1e484697` im selben Zyklus). Ohne neuen Daemon: alter Daemon sendet kein
+  `account_email` → devhost-Sessions joinen kein Konto (degradiert sauber, kein
+  Fehler).
 
 - **F6 · Capability-Semantik statt Provider-Ifs.**
   Codex-Sessions haben `pid == 0` (codex_sessions.rs:20/231) → Stop/Kill unmöglich;
@@ -318,7 +356,10 @@ Bearbeiten über ⋯ im Konto-Pane. Anzeige-Fallback ohne Alias = bisheriges Lab
    *Abnahme:* `heat_coloru` kommt im Cockpit außerhalb von style.rs nicht mehr vor;
    Kontrast-Test deckt beide Themes ab.
 3. **F3–F9** — Datenpfade & strukturelle Fundamente (einzeln committen).
-   **F3 ✅** — sichtbare Hälfte bewusst an P3/P4 (siehe §2 F3).
+   **F3 ✅ · F4 ✅ · F5 ✅** — sichtbare Hälfte jeweils bewusst an P3/P4 (siehe §2).
+   **F5 hat eine Release-Konsequenz:** neues Proto-Feld ⇒ **Daemon-Rebuild +
+   Redeploy** nötig, sonst bleibt die Host-Spalte für devhost leer (sauber
+   degradiert, kein Fehler). Fährt mit dem Autocomplete-Fix im selben Zyklus.
 4. **P1–P6** — Konto-Pane, Tabelle, Drive; Tree-Entdopplung zuletzt.
 5. **X1** — Plexing-UI auf bestehendem Routing.
 6. **FM** — Modus-Badge (Host bleibt im Tab-Titel) + FM-SFTP-Bug (Daemon-Browse).

@@ -250,8 +250,10 @@ fn snapshot_of(
         project_name: project.name,
         branch: project.branch,
         worktree: project.worktree,
-        // Set by the snapshot builder from the owning account (per pin).
+        // Both set by the owning account via `Account::stamp` — discovery
+        // reads a transcript, which knows nothing about the account above it.
         config_dir: None,
+        account_email: None,
         last_activity: info.last_ts.or(Some(mtime)).unwrap_or(now),
         // Codex records no pid — guardrail signalling can't target it.
         pid: 0,

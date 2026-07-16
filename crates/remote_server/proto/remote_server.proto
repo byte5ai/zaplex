@@ -769,7 +769,19 @@ message AgentSessionInfo {
   // The session account's provider config dir ON THE HOST (a plexed CODEX_HOME /
   // CLAUDE_CONFIG_DIR), so the client can pin the right subscription when it asks
   // the daemon to resume the session. Empty = default account (no pin).
+  //
+  // Routing only — NOT an account identity. It is a path on the daemon's host, so
+  // it neither matches how the client spells the same account nor exists at all for
+  // a default account. Use account_email to tell whose account a session is.
   string config_dir = 15;
+  // Email of the account this session runs under: the join key (with `provider`)
+  // that lets a client tell which of ITS accounts a remote session belongs to.
+  // Nothing else on this wire identifies a subscription across hosts.
+  //
+  // Empty = the daemon could not determine it, or predates this field. Such a
+  // session still folds into the host tree; it simply joins no account rather than
+  // being guessed onto one.
+  string account_email = 16;
 }
 
 // Daemon → client: result of ListAgentSessions.

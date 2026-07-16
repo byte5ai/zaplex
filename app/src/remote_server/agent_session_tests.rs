@@ -20,6 +20,7 @@ fn sample(state: SessionState, provider: Provider, effort: Option<String>) -> Se
         branch: Some("rc/master-plan".to_string()),
         worktree: Some("wt-rc".to_string()),
         config_dir: Some("/home/me/.codex-work".to_string()),
+        account_email: Some("me@example.de".to_string()),
         // Millisecond-precise so the epoch-millis round-trip is exact.
         last_activity: Utc
             .timestamp_millis_opt(1_720_000_000_123)
@@ -101,4 +102,40 @@ fn unknown_effort_round_trips_to_none() {
     let back = proto_to_snapshot(&proto);
     assert_eq!(back.effort, None);
     assert_eq!(back, original);
+}
+
+/// The account identity has to survive the wire, or a remote session cannot be
+/// joined to the account it belongs to.
+#[test]
+fn the_account_email_round_trips() {
+    let original = sample(SessionState::Active, Provider::Claude, None);
+    let proto = snapshot_to_proto(&original);
+    assert_eq!(proto.account_email, "me@example.de");
+    assert_eq!(proto_to_snapshot(&proto).account_email, original.account_email);
+}
+
+/// A daemon older than this field sends nothing. That must read as "unknown"
+/// rather than as an account named "" — an empty-string identity would collide
+/// with every other silent daemon and pull all their sessions onto one account.
+#[test]
+fn a_daemon_that_sends_no_account_decodes_as_unknown() {
+    let mut proto = snapshot_to_proto(&sample(SessionState::Active, Provider::Claude, None));
+    proto.account_email = String::new();
+    assert_eq!(proto_to_snapshot(&proto).account_email, None);
+}
+
+/// The routing pin and the identity are different questions: a session can name
+/// its account while carrying no pin at all (a default account), and that is the
+/// exact case a config_dir-based join would get wrong.
+#[test]
+fn a_default_account_session_has_an_identity_but_no_pin() {
+    let mut s = sample(SessionState::Active, Provider::Claude, None);
+    s.config_dir = None;
+    let proto = snapshot_to_proto(&s);
+    assert_eq!(proto.config_dir, "", "no pin for a default account");
+    assert_eq!(proto.account_email, "me@example.de", "but it still says whose it is");
+
+    let back = proto_to_snapshot(&proto);
+    assert_eq!(back.config_dir, None);
+    assert_eq!(back.account_email, Some("me@example.de".to_string()));
 }

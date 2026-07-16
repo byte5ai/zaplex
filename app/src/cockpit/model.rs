@@ -592,6 +592,7 @@ mod tests {
             branch: None,
             worktree: None,
             config_dir: None,
+            account_email: None,
             last_activity: Utc::now(),
             pid: 0,
         }

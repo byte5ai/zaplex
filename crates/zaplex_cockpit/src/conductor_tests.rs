@@ -31,6 +31,7 @@ fn session(id: &str, cwd: &str, state: SessionState, activity: i64) -> SessionSn
         branch: None,
         worktree: None,
         config_dir: None,
+        account_email: None,
         last_activity: at(activity),
         pid: 0,
     }

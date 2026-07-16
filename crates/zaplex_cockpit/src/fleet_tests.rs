@@ -41,6 +41,7 @@ fn session_in(
         branch: None,
         worktree: None,
         config_dir: None,
+        account_email: None,
         last_activity: at(activity),
         pid: 0,
     }
@@ -531,4 +532,185 @@ fn merge_registered_is_idempotent() {
         "a second merge of the same registry must be a no-op"
     );
     assert_eq!(tree.hosts.len(), 2, "the live devhost + the agentless root");
+}
+
+// ── Account ↔ fleet join (F5) ───────────────────────────────────────────────
+
+use crate::types::Account;
+
+fn account(provider: Provider, email: Option<&str>, config_dir: &str) -> Account {
+    Account {
+        provider,
+        key: format!("{}:{}", provider.as_str(), config_dir),
+        config_dir: config_dir.into(),
+        label: "acct".into(),
+        email: email.map(str::to_string),
+        org: None,
+        role: None,
+        plan_tier: None,
+        is_default: config_dir.ends_with(".claude") || config_dir.ends_with(".codex"),
+    }
+}
+
+/// A session as a host reports it: stamped with the account that owns it.
+fn owned(
+    id: &str,
+    cwd: &str,
+    provider: Provider,
+    email: Option<&str>,
+    config_dir: Option<&str>,
+) -> SessionSnapshot {
+    let mut s = session(id, cwd, SessionState::Active, 10);
+    s.provider = provider;
+    s.account_email = email.map(str::to_string);
+    s.config_dir = config_dir.map(str::to_string);
+    s
+}
+
+#[test]
+fn an_accounts_sessions_are_found_on_every_host() {
+    let tree = build_fleet_tree(vec![
+        HostSessions {
+            host: "mac".into(),
+            is_local: true,
+            host_id: None,
+            sessions: vec![owned("local", "/p/a", Provider::Claude, Some("me@x.de"), None)],
+        },
+        HostSessions {
+            host: "devhost".into(),
+            is_local: false,
+            host_id: Some("daemon-1".into()),
+            sessions: vec![owned(
+                "remote",
+                "/p/b",
+                Provider::Claude,
+                Some("me@x.de"),
+                // The host's own path — deliberately unlike anything local.
+                Some("/home/cwendler/.claude"),
+            )],
+        },
+    ]);
+
+    let found = sessions_of_account(&tree, &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude"));
+    // Rows come in tree order (hosts by needs-me, then name); the table sorts by
+    // its own columns anyway, so assert the set rather than that incidental order.
+    let mut ids: Vec<&str> = found.iter().map(|a| a.session.session_id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["local", "remote"], "both hosts contribute");
+
+    // The Host column, and the identity a remote action must route through.
+    let remote = found.iter().find(|a| a.session.session_id == "remote").unwrap();
+    assert_eq!(remote.host, "devhost");
+    assert!(!remote.is_local);
+    assert_eq!(remote.host_id, Some("daemon-1"));
+    let local = found.iter().find(|a| a.session.session_id == "local").unwrap();
+    assert!(local.is_local);
+    assert_eq!(local.host_id, None);
+}
+
+/// The bug the spec's "join on config_dir" would have shipped: a default account
+/// carries no pin at all, so every host's default sessions would land on the
+/// first default account — even when that host is signed into another
+/// subscription entirely.
+#[test]
+fn a_second_account_on_another_host_is_not_claimed_as_ours() {
+    let tree = build_fleet_tree(vec![
+        HostSessions {
+            host: "mac".into(),
+            is_local: true,
+            host_id: None,
+            sessions: vec![owned("mine", "/p/a", Provider::Claude, Some("me@x.de"), None)],
+        },
+        HostSessions {
+            host: "devhost".into(),
+            is_local: false,
+            host_id: Some("daemon-1".into()),
+            // Same provider, same (empty) pin — a different subscription.
+            sessions: vec![owned("theirs", "/p/b", Provider::Claude, Some("other@x.de"), None)],
+        },
+    ]);
+
+    let mine = sessions_of_account(&tree, &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude"));
+    assert_eq!(
+        mine.iter().map(|a| a.session.session_id.as_str()).collect::<Vec<_>>(),
+        ["mine"],
+        "another host's account must not be folded into ours"
+    );
+}
+
+/// One address can hold both a Claude and a Codex subscription, so the provider
+/// is part of the key.
+#[test]
+fn the_same_address_on_two_providers_stays_two_accounts() {
+    let tree = build_fleet_tree(vec![HostSessions {
+        host: "mac".into(),
+        is_local: true,
+        host_id: None,
+        sessions: vec![
+            owned("c", "/p/a", Provider::Claude, Some("me@x.de"), None),
+            owned("x", "/p/b", Provider::Codex, Some("me@x.de"), None),
+        ],
+    }]);
+
+    let claude = sessions_of_account(&tree, &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude"));
+    assert_eq!(claude.len(), 1);
+    assert_eq!(claude[0].session.session_id, "c");
+
+    let codex = sessions_of_account(&tree, &account(Provider::Codex, Some("me@x.de"), "/Users/me/.codex"));
+    assert_eq!(codex.len(), 1);
+    assert_eq!(codex[0].session.session_id, "x");
+}
+
+/// An older daemon sends no email. Its sessions still belong in the host tree —
+/// they simply join no account, rather than being guessed onto one.
+#[test]
+fn a_session_that_names_no_account_joins_none() {
+    let tree = build_fleet_tree(vec![HostSessions {
+        host: "old-daemon".into(),
+        is_local: false,
+        host_id: Some("daemon-old".into()),
+        sessions: vec![owned("anon", "/p/a", Provider::Claude, None, None)],
+    }]);
+
+    assert!(sessions_of_account(
+        &tree,
+        &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude")
+    )
+    .is_empty());
+    // But it is still in the inventory, under its host.
+    assert_eq!(tree.hosts.len(), 1);
+    assert_eq!(tree.hosts[0].projects[0].sessions.len(), 1);
+}
+
+/// An account with no email of its own cannot claim anything — matching every
+/// unknown session would be worse than showing none.
+#[test]
+fn an_account_without_an_email_claims_nothing() {
+    let tree = build_fleet_tree(vec![HostSessions {
+        host: "mac".into(),
+        is_local: true,
+        host_id: None,
+        sessions: vec![owned("anon", "/p/a", Provider::Claude, None, None)],
+    }]);
+
+    assert!(sessions_of_account(&tree, &account(Provider::Claude, None, "/Users/me/.claude")).is_empty());
+}
+
+/// Both hosts read the address from the provider's own token, so it should
+/// already match exactly. If it ever didn't, the join would fail with no symptom
+/// but the absence of rows — so it does not hinge on capitalisation.
+#[test]
+fn the_join_does_not_hinge_on_how_the_address_is_capitalised() {
+    let tree = build_fleet_tree(vec![HostSessions {
+        host: "devhost".into(),
+        is_local: false,
+        host_id: Some("daemon-1".into()),
+        sessions: vec![owned("remote", "/p/a", Provider::Claude, Some("Me@Example.DE"), None)],
+    }]);
+
+    let found = sessions_of_account(
+        &tree,
+        &account(Provider::Claude, Some("me@example.de"), "/Users/me/.claude"),
+    );
+    assert_eq!(found.len(), 1, "same account, differently spelled");
 }
