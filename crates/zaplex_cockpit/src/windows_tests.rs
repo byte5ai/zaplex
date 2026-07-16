@@ -9,6 +9,11 @@ fn ts(s: &str) -> DateTime<Utc> {
 }
 
 fn entry(t: &str, input: u64, output: u64) -> UsageEntry {
+    entry_of("s1", t, input, output)
+}
+
+/// A turn attributed to a specific session.
+fn entry_of(session_id: &str, t: &str, input: u64, output: u64) -> UsageEntry {
     UsageEntry {
         ts: ts(t),
         provider: Provider::Claude,
@@ -18,6 +23,7 @@ fn entry(t: &str, input: u64, output: u64) -> UsageEntry {
         cache_create: 0,
         cache_read: 0,
         reasoning: 0,
+        session_id: session_id.into(),
     }
 }
 
@@ -233,4 +239,87 @@ fn idle_sessions_are_carried_separately_from_live_ones() {
         AccountStatus::Live,
         "attaching dormant sessions must not disturb the status"
     );
+}
+
+// ── Per-session spend ───────────────────────────────────────────────────────
+
+#[test]
+fn todays_spend_is_attributed_to_the_session_that_incurred_it() {
+    let pricing = PricingTable::default();
+    let now = ts("2026-06-30T12:00:00Z");
+    let entries = vec![
+        entry_of("alpha", "2026-06-30T10:00:00Z", 1000, 100),
+        entry_of("beta", "2026-06-30T10:30:00Z", 2000, 200),
+        entry_of("alpha", "2026-06-30T11:00:00Z", 500, 50),
+        // Yesterday: must not land in today's split at all.
+        entry_of("alpha", "2026-06-29T11:00:00Z", 9000, 900),
+    ];
+    let by = today_by_session_in(&entries, now, &Utc, &pricing);
+
+    assert_eq!(by.len(), 2, "one bucket per session that spent today");
+    assert_eq!(by["alpha"].messages, 2);
+    assert_eq!(by["alpha"].work, 1650);
+    assert_eq!(by["beta"].messages, 1);
+    assert_eq!(by["beta"].work, 2200);
+}
+
+/// The account figure and the rows beneath it are one fold, not two estimates:
+/// the parts must sum to the whole exactly, or the table quietly contradicts the
+/// header above it.
+#[test]
+fn per_session_spend_sums_exactly_to_the_account_total() {
+    let pricing = PricingTable::default();
+    let now = ts("2026-06-30T12:00:00Z");
+    let entries = vec![
+        entry_of("alpha", "2026-06-30T10:00:00Z", 1000, 100),
+        entry_of("beta", "2026-06-30T10:30:00Z", 2000, 200),
+        entry_of("alpha", "2026-06-30T11:00:00Z", 500, 50),
+        entry_of("gamma", "2026-06-30T11:30:00Z", 700, 70),
+        entry_of("alpha", "2026-06-29T11:00:00Z", 9000, 900), // yesterday
+    ];
+    let today = today_totals_in(&entries, now, &Utc, &pricing);
+    let by = today_by_session_in(&entries, now, &Utc, &pricing);
+
+    assert_eq!(by.values().map(|t| t.work).sum::<u64>(), today.work);
+    assert_eq!(by.values().map(|t| t.total).sum::<u64>(), today.total);
+    assert_eq!(by.values().map(|t| t.messages).sum::<u64>(), today.messages);
+    approx(by.values().map(|t| t.cost_usd).sum::<f64>(), today.cost_usd);
+}
+
+/// A turn whose transcript names no session still belongs to the account. It
+/// groups under the empty id rather than being dropped — losing it would make
+/// the rows stop summing to the header.
+#[test]
+fn unattributable_spend_still_counts_towards_the_account() {
+    let pricing = PricingTable::default();
+    let now = ts("2026-06-30T12:00:00Z");
+    let entries = vec![
+        entry_of("alpha", "2026-06-30T10:00:00Z", 1000, 100),
+        entry_of("", "2026-06-30T10:30:00Z", 2000, 200),
+    ];
+    let today = today_totals_in(&entries, now, &Utc, &pricing);
+    let by = today_by_session_in(&entries, now, &Utc, &pricing);
+
+    assert_eq!(by[""].work, 2200, "kept under the empty id");
+    assert_eq!(by.values().map(|t| t.work).sum::<u64>(), today.work);
+}
+
+/// The split follows the same local-day rule as the total it must sum to — a
+/// second, UTC-based day boundary here would silently break that.
+#[test]
+fn the_per_session_split_uses_the_same_day_boundary_as_the_total() {
+    let berlin = FixedOffset::east_opt(2 * 3600).unwrap();
+    let pricing = PricingTable::default();
+    let entries = vec![
+        entry_of("alpha", "2026-06-30T09:00:00Z", 1000, 100), // local: yesterday
+        entry_of("beta", "2026-06-30T22:35:00Z", 2000, 200),  // local: today 00:35
+    ];
+    let now = ts("2026-06-30T22:30:00Z");
+
+    let today = today_totals_in(&entries, now, &berlin, &pricing);
+    let by = today_by_session_in(&entries, now, &berlin, &pricing);
+
+    assert_eq!(by.len(), 1);
+    assert_eq!(by["beta"].work, 2200);
+    assert_eq!(by.values().map(|t| t.work).sum::<u64>(), today.work);
 }

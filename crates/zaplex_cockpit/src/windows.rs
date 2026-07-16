@@ -6,6 +6,8 @@
 //! machine's time zone, which fixes the calendar-day boundary; it is injected
 //! into [`today_totals_in`] so that path stays testable against a fixed zone.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Duration, Local, TimeZone, Timelike, Utc};
 
 use crate::pricing::PricingTable;
@@ -118,6 +120,39 @@ fn today_totals(
     today_totals_in(entries, now, &Local, pricing)
 }
 
+/// The same day's spend, split by the session that incurred it.
+///
+/// Folds the identical entries [`today_totals_in`] does, under the identical day
+/// rule, so the parts sum **exactly** to the whole — the account total is not a
+/// second, independently-derived figure that could drift from the rows beneath
+/// it. Turns whose transcript names no session group under the empty id: still
+/// counted for the account, simply not attributable to a row.
+fn today_by_session_in<Tz: TimeZone>(
+    entries: &[UsageEntry],
+    now: DateTime<Utc>,
+    tz: &Tz,
+    pricing: &PricingTable,
+) -> BTreeMap<String, WindowTotals> {
+    let today = now.with_timezone(tz).date_naive();
+    let mut by_session: BTreeMap<String, WindowTotals> = BTreeMap::new();
+    for e in entries
+        .iter()
+        .filter(|e| e.ts.with_timezone(tz).date_naive() == today)
+    {
+        by_session.entry(e.session_id.clone()).or_default().add(e, pricing);
+    }
+    by_session
+}
+
+/// [`today_by_session_in`] on the machine's local calendar day.
+fn today_by_session(
+    entries: &[UsageEntry],
+    now: DateTime<Utc>,
+    pricing: &PricingTable,
+) -> BTreeMap<String, WindowTotals> {
+    today_by_session_in(entries, now, &Local, pricing)
+}
+
 /// Build the full per-account usage view (5h block / today / week + resets + heat).
 /// `entries` may be in any order; it is sorted internally.
 pub fn build_account_usage(
@@ -132,6 +167,7 @@ pub fn build_account_usage(
     let (block5h, reset5h) = current_window(&entries, now, window_5h(), pricing);
     let (week, reset_week) = current_window(&entries, now, window_week(), pricing);
     let today = today_totals(&entries, now, pricing);
+    let today_by_session = today_by_session(&entries, now, pricing);
     let heat = if budget_5h > 0 {
         block5h.work as f64 / budget_5h as f64
     } else {
@@ -146,6 +182,7 @@ pub fn build_account_usage(
         account,
         block5h,
         today,
+        today_by_session,
         week,
         reset5h,
         reset_week,

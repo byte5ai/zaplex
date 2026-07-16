@@ -108,3 +108,63 @@ fn usage_for_account_walks_sessions_tree() {
     assert_eq!(entries[0].input, 10);
     assert_eq!(entries[0].provider, Provider::Codex);
 }
+
+/// Codex names its session inside the rollout, so spend must be stamped from
+/// `session_meta` — and with the same id discovery reads, or the table's
+/// "today $" column looks up a key no row has.
+#[test]
+fn parsed_spend_carries_the_session_id_from_session_meta() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp
+        .path()
+        .join("sessions/2026/06/30/rollout-2026-06-30T10-00-00-abc.jsonl");
+    let id = "a9b3a0e6-9067-41a0-b9fd-dcbee7ad5c01";
+    write(
+        &path,
+        &format!(
+            "{}\n{}\n",
+            serde_json::json!({"type":"session_meta","timestamp":"2026-06-30T10:00:00Z",
+                "payload":{"id":id,"cwd":"/tmp/proj"}}),
+            serde_json::json!({"type":"event_msg","timestamp":"2026-06-30T10:01:00Z",
+                "payload":{"type":"token_count","info":{"last_token_usage":{
+                    "input_tokens":100,"cached_input_tokens":0,"output_tokens":10,
+                    "reasoning_output_tokens":5,"total_tokens":115}}}}),
+        ),
+    );
+
+    let entries = parse_transcript(&path, DateTime::parse_from_rfc3339("2026-06-30T00:00:00Z").unwrap().with_timezone(&Utc));
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].session_id, id,
+        "the rollout's own id wins over the file name"
+    );
+}
+
+/// Without a `session_meta` line both sides fall back to the file name — and
+/// must fall back to the *same* string, which is why one shared function derives
+/// it. Diverging fallbacks would silently unattribute the spend.
+#[test]
+fn the_file_name_fallback_matches_the_one_discovery_uses() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp
+        .path()
+        .join("sessions/2026/06/30/rollout-2026-06-30T10-00-00-abc.jsonl");
+    write(
+        &path,
+        &format!(
+            "{}\n",
+            serde_json::json!({"type":"event_msg","timestamp":"2026-06-30T10:01:00Z",
+                "payload":{"type":"token_count","info":{"last_token_usage":{
+                    "input_tokens":100,"cached_input_tokens":0,"output_tokens":10,
+                    "reasoning_output_tokens":5,"total_tokens":115}}}}),
+        ),
+    );
+
+    let entries = parse_transcript(&path, DateTime::parse_from_rfc3339("2026-06-30T00:00:00Z").unwrap().with_timezone(&Utc));
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].session_id,
+        crate::codex_sessions::session_id_from_path(&path),
+        "both sides derive the fallback id from the same function"
+    );
+}

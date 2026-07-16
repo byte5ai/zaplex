@@ -113,3 +113,42 @@ fn usage_for_account_respects_the_since_cutoff() {
     assert_eq!(entries.len(), 1, "only the 06-30 entry passes the cutoff");
     assert_eq!(entries[0].input, 2);
 }
+
+/// The join that makes per-session spend usable: the id `parse_transcript`
+/// stamps must be the very id discovery gives the session, or the table's "today
+/// $" column looks up a key no row has.
+#[test]
+fn parsed_spend_carries_the_same_session_id_discovery_uses() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("projects").join("-tmp-proj");
+    std::fs::create_dir_all(&dir).unwrap();
+    let id = "a9b3a0e6-9067-41a0-b9fd-dcbee7ad5c01";
+    std::fs::write(
+        dir.join(format!("{id}.jsonl")),
+        serde_json::to_string(&serde_json::json!({
+            "type": "assistant",
+            "timestamp": "2026-06-30T10:00:00Z",
+            "sessionId": id,
+            "message": {
+                "model": "claude-opus-4-8",
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            }
+        }))
+        .unwrap()
+            + "\n",
+    )
+    .unwrap();
+
+    let entries = parse_transcript(&dir.join(format!("{id}.jsonl")));
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].session_id, id,
+        "spend must be stamped with the transcript's own session id"
+    );
+    // And that id is exactly the key discovery indexes transcripts by.
+    assert_eq!(
+        crate::sessions::transcript_path(tmp.path(), id),
+        Some(dir.join(format!("{id}.jsonl"))),
+        "the stamped id is the key `transcripts_by_id` resolves"
+    );
+}

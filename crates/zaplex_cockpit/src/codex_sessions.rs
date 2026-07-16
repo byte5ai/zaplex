@@ -80,15 +80,25 @@ struct RolloutInfo {
 /// Read a rollout transcript and distil its live-session signals. Best-effort
 /// and defensive: each line is an independent JSON object, malformed lines are
 /// skipped, and both the wrapped (`{type,payload}`) and flat shapes are handled.
+/// Session id derived from a rollout's file name — the fallback for a rollout
+/// with no `session_meta` line to name itself.
+///
+/// Shared so that discovery and usage attribution can never disagree about what
+/// a rollout's id is: they must produce the same string, or spend would be
+/// stamped with an id no session row carries.
+pub(crate) fn session_id_from_path(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .map(|stem| stem.rsplit_once('-').map_or(stem, |(_, id)| id).to_string())
+        .unwrap_or_default()
+}
+
 fn parse_rollout(path: &Path) -> RolloutInfo {
     let mut info = RolloutInfo::default();
     let Ok(content) = std::fs::read_to_string(path) else {
         return info;
     };
-    // Session id fallback: the rollout filename ends with the session uuid.
-    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-        info.session_id = stem.rsplit_once('-').map_or(stem, |(_, id)| id).to_string();
-    }
+    info.session_id = session_id_from_path(path);
 
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {

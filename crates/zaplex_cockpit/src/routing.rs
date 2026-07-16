@@ -113,6 +113,7 @@ mod tests {
             },
             block5h: WindowTotals::default(),
             today: WindowTotals::default(),
+            today_by_session: Default::default(),
             week: WindowTotals::default(),
             reset5h: None,
             reset_week: None,

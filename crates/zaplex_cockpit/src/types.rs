@@ -3,6 +3,7 @@
 //! Privacy invariant: these types carry only **token counts and account metadata**,
 //! never token strings, transcript content, or any credential material.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -70,6 +71,13 @@ pub struct UsageEntry {
     pub cache_read: u64,
     /// Codex reasoning output tokens (billed as output); 0 for Claude.
     pub reasoning: u64,
+    /// The session this turn belongs to — the same id [`SessionSnapshot`]
+    /// carries, so spend can be attributed per session rather than only per
+    /// account. Empty when the transcript does not name one (a Codex rollout
+    /// with no `session_meta`); such turns still count towards the account, they
+    /// just cannot be pinned to a row.
+    #[serde(default)]
+    pub session_id: String,
 }
 
 /// Aggregated token + cost totals over a time window.
@@ -210,6 +218,16 @@ pub struct AccountUsage {
     pub block5h: WindowTotals,
     /// Current calendar day on the **local** clock (see `windows::today_totals`).
     pub today: WindowTotals,
+    /// `today`, split by the session that spent it — what the session table's
+    /// "today $" column reads, keyed by [`SessionSnapshot::session_id`].
+    ///
+    /// Folded from the same entries under the same day rule as `today`, so the
+    /// rows sum **exactly** to the account figure above them rather than to a
+    /// second, independently-derived estimate of it. The empty key collects
+    /// turns whose transcript names no session: counted for the account, just
+    /// not attributable to a row.
+    #[serde(default)]
+    pub today_by_session: BTreeMap<String, WindowTotals>,
     /// Current rolling 7-day block.
     pub week: WindowTotals,
     /// When the current 5h block resets (block start + 5h), if a block is active.

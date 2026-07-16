@@ -115,12 +115,21 @@ pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry
     };
     let mut current_model = String::from("unknown");
     let mut current_ts = file_date;
+    // Same rule discovery uses, from the same function: the file name names the
+    // session until a `session_meta` line does it properly. Deriving it any other
+    // way here would stamp spend with an id no session row carries.
+    let mut session_id = crate::codex_sessions::session_id_from_path(path);
     let mut entries = Vec::new();
 
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if v.get("type").and_then(Value::as_str) == Some("session_meta") {
+            if let Some(id) = find(&v, "id").and_then(|x| x.as_str()) {
+                session_id = id.to_string();
+            }
+        }
         if let Some(m) = find(&v, "model").and_then(|x| x.as_str()) {
             current_model = m.to_string();
         }
@@ -143,6 +152,7 @@ pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry
                     cache_create: 0, // Codex has no separate cache-write concept
                     cache_read: cached,
                     reasoning,
+                    session_id: session_id.clone(),
                 });
             }
         }

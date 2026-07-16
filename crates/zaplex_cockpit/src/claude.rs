@@ -166,7 +166,8 @@ pub fn discover_accounts(home: &Path, config_dir_env: Option<&str>) -> Vec<Accou
 
 /// Extract a [`UsageEntry`] from one parsed transcript line, or `None` if the line
 /// is not an assistant turn with usage. Reads counts + model + timestamp only.
-fn parse_line(v: &Value) -> Option<UsageEntry> {
+/// `session_id` is supplied by the caller — see [`parse_transcript`].
+fn parse_line(v: &Value, session_id: &str) -> Option<UsageEntry> {
     if v.get("type")?.as_str()? != "assistant" {
         return None;
     }
@@ -194,19 +195,31 @@ fn parse_line(v: &Value) -> Option<UsageEntry> {
         cache_create: n("cache_creation_input_tokens"),
         cache_read: n("cache_read_input_tokens"),
         reasoning: 0,
+        session_id: session_id.to_string(),
     })
 }
 
 /// Parse a single Claude `.jsonl` transcript into usage entries (skips malformed lines).
+///
+/// Every entry is stamped with the session the transcript belongs to, taken from
+/// the **file name**. The lines carry a `sessionId` of their own and it agrees,
+/// but the stem is the id the rest of the crate keys on: `transcripts_by_id`
+/// indexes by it, and a session is only discovered when a transcript named after
+/// its registry id exists. Reading the id from the content could therefore
+/// attribute spend to an id no session row has.
 pub fn parse_transcript(path: &Path) -> Vec<UsageEntry> {
     let Ok(content) = fs::read_to_string(path) else {
         return Vec::new();
     };
+    let session_id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
     content
         .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter_map(|v| parse_line(&v))
+        .filter_map(|v| parse_line(&v, session_id))
         .collect()
 }
 
