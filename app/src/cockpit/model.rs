@@ -51,6 +51,13 @@ pub enum CockpitEvent {
     Updated,
 }
 
+/// Where the user's account overrides live. One derivation, so the reader (the
+/// off-thread refresh) and the writer (`set_alias`) can never point at different
+/// files — which would look exactly like an alias that does not stick.
+fn instances_path(home: &std::path::Path) -> PathBuf {
+    home.join(".zap").join("instances.json")
+}
+
 pub struct CockpitModel {
     snapshot: CockpitSnapshot,
     /// The unified cross-host Agent-Inventory: local sessions folded together
@@ -179,7 +186,7 @@ impl CockpitModel {
         Some(RefreshInputs {
             codex_home: home.join(".codex"),
             claude_config_dir_env: std::env::var("CLAUDE_CONFIG_DIR").ok(),
-            instances_path: home.join(".zap").join("instances.json"),
+            instances_path: instances_path(&home),
             home,
             budget_5h,
             budget_week,
@@ -338,6 +345,23 @@ impl CockpitModel {
 
     /// The user-overridden display color for an account key, if any (hex string
     /// like `#22C55E`; the renderer parses/validates it).
+    /// Set (or clear) an account's alias, persisted to `instances.json` — the
+    /// one place overrides live (A1). Returns the IO error so the caller can
+    /// toast it: a write that silently did nothing would be the worst outcome.
+    ///
+    /// The file is watched, so the snapshot reloads on its own and the alias
+    /// appears everywhere at once — card, pane title, table, spawn card — without
+    /// this having to know about any of those surfaces.
+    pub fn set_alias(&self, account_key: &str, alias: Option<&str>) -> std::io::Result<()> {
+        let Some(home) = dirs::home_dir() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no home directory — cannot locate instances.json",
+            ));
+        };
+        zaplex_cockpit::set_label_override(&instances_path(&home), account_key, alias)
+    }
+
     pub fn override_color(&self, key: &str) -> Option<&str> {
         self.overrides.color_for(key)
     }
