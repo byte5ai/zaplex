@@ -45,14 +45,14 @@ zaplex is a fork of [Zap](https://github.com/zerx-lab/zap) — the open-source, 
 
 1. **A session daemon on each host.** zaplex installs and maintains its own headless session host on your remote machines (automatic install ladder, offline-capable via bundled binaries). Sessions are PTYs owned by the daemon under persistent IDs, with a replay ring buffer: re-attach and your scrollback is replayed to the exact byte. Lifecycle is governed — idle sessions are garbage-collected under a host-wide RAM ceiling.
 2. **Real terminals, real PTYs.** The client is a GPU-rendered, block-based terminal (Warp's proven core). Agents run as ordinary interactive CLIs in real PTYs — zaplex never wraps, proxies, or replaces them.
-3. **A cockpit that reads, never phones home.** Account discovery, usage heat, and session states come from read-only parsing of local data (config dirs, JSONL transcripts, session registries) on your machines. No cloud, no account, no telemetry.
+3. **A cockpit that reads, no telemetry.** Account discovery, usage heat, and session states come from read-only parsing of local data (config dirs, JSONL transcripts, session registries) on your machines — no zaplex cloud, no zaplex account. One disclosed exception: for Claude accounts, zaplex by default also asks Anthropic's own read-only OAuth usage endpoint for your exact quota utilization (capped at one request per account per 15 minutes); turn `cockpit.oauth_usage` off for local-estimate-only heat with zero outbound requests.
 
 **What runs on your hosts:** one binary under `~/.zaplex/remote-server/`, spoken to exclusively over your existing SSH connection. It keeps session scrollback in bounded RAM, writes no telemetry, and retires itself when idle with no live sessions. Delete the directory and it is gone.
 
 ## Features
 
 - **Persistent remote sessions** — agents survive lid-close, network roaming, and app restarts; re-attach replays history seamlessly. No tmux, no byobu, no mosh setup on the host.
-- **Agent cockpit (Conductor)** — every subscription account with rolling 5h/week utilization heat, real cost from the OAuth usage endpoint, and reset timers, plus a cross-host **Host ▸ Project ▸ Session** tree; sessions **waiting on you** bubble up as `✋ N waiting`.
+- **Agent cockpit (Conductor)** — every subscription account with rolling 5h/week utilization heat and reset timers, backed by real numbers from Anthropic's own OAuth usage endpoint (on by default, read-only, opt-out), plus a cross-host **Host ▸ Project ▸ Session** tree; sessions **waiting on you** bubble up as `✋ N waiting`.
 - **Guardrails & review loop** — pause, stop, or kill any agent (or all of them); review a session's diff and approve, redirect, commit, or open a PR in one flow.
 - **Native agent awareness** — blocks know when an agent needs input, finished, or got blocked: banner, footer, notification center.
 - **Multi-account, multi-provider** — all your Claude and ChatGPT/Codex subscription logins discovered and monitored side by side; launching a new agent can route to the freest account, including on a remote host, straight from the new-session menu.

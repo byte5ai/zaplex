@@ -2,7 +2,7 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
-## zaplex — [Unreleased]
+## zaplex — Unreleased
 
 Work landed on top of the [Zap fork](https://github.com/zerx-lab/zap), starting from the native session-daemon merge ([PR #16](https://github.com/byte5ai/zaplex/pull/16)). Grouped by area; PR numbers are representative, not exhaustive — see `git log` for the full history.
 
