@@ -3859,3 +3859,4 @@ cockpit-menu-kill = Kill
 cockpit-menu-commit = Commit changes
 cockpit-menu-pr = Open pull request
 keybinding-desc-workspace-stop-all-agents = Stop all running agents
+cockpit-spawn-card-new-agent-on-host = New agent on { $host }

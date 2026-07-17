@@ -333,41 +333,33 @@ Klickziele getrennt (Muster pane.rs:1186: Attach auf Info-Span, Verbs außerhalb
 **Erst wenn jeder heutige Verb (Gegenprüfung `app/src/cockpit/pane.rs`) seinen Platz
 hat, entfällt der Dashboard-Tree im Pane** (Entdopplung zur Sidebar) — **P6**.
 
-#### P6 · Gegenprüfung durchgeführt — **ein Verb blockiert noch**
+#### P6 · Gegenprüfung durchgeführt — **erfüllt**, Tree entfernt ✅
 
-Die Entdopplung ist **teilweise erreicht**: ein **Konto-Pane zeigt den Tree nicht
-mehr** (Detail-Card + Tabelle statt dessen, P1–P5). Offen bleibt der Tree im
-**Flotten-Pane**.
+Der Tree ist aus dem Pane raus (**741 Zeilen** toten Render-Codes mit). Vorher
+wurden beide Verb-Listen **mechanisch** verglichen — nicht behauptet — und der
+Abgleich hat sich gelohnt: drei Verben hatten keinen Nachfolger, darunter eines,
+über das eine frühere Commit-Message bereits das Gegenteil behauptete.
 
-Diff Tree-Verben ↔ ⋯-Drive (mechanisch geprüft, nicht behauptet):
-
-| Verb | Heimat nach P6 |
+| Verb im Tree | Heimat |
 |---|---|
-| Adopt · Fork · Fork+Worktree · /compact · /clear · Verlauf · Review · Geprüft · Redirect · Commit · PR · Stop · Kill | ✅ ⋯-Drive (capability-gated, F6) |
-| `ToggleHost` / `ToggleProject` | ✅ reine Baum-Struktur — stirbt mit dem Tree, kein Verb |
-| `StopAllRequest` (`⏹ stop all`) | ✅ **neu**: als Kommando registriert (`workspace:stop_all_agents`), bindbar, **ohne Default-Taste** (breitester destruktiver Akt; Confirm bleibt) |
-| `OpenSpawnCard` **projekt**-gebunden | ✅ **neu**: „+" in der Tabellen-Gruppenzeile |
-| `OpenSpawnCard` **host**-gebunden | ⛔ **kein Nachfolger** |
+| Adopt · Fork · Fork+Worktree · /compact · /clear · Verlauf · Review · Geprüft · Redirect · Commit · PR · Stop · Kill | ⋯-Drive je Zeile (capability-gated, F6) |
+| `ToggleHost` / `ToggleProject` | reine Baum-Struktur — kein Verb, stirbt mit ihm |
+| `StopAllRequest` | **neu:** `workspace:stop_all_agents` — bindbar, **ohne Default-Taste** (breitester destruktiver Akt; Confirm bleibt) |
+| `OpenSpawnCard` **projekt**-gebunden | **neu:** „+" in der Tabellen-Gruppenzeile |
+| `OpenSpawnCard` **host**-gebunden | **neu:** „Neuer Agent auf ‹Host›" im Titelleisten-„+"-Menü, aus dem Inventar, skopiert per `host_id` (nie per Label) |
 
-**Der Blocker, konkret:** Der Tree bietet „neuer Agent, vorab auf *diesen Host*
-gebunden". Nachfolger fehlen: der Host-**Favorit** öffnet ein *Terminal*
-(`OpenSshTerminalByNode`), nicht die Spawn-Karte; die globale Karte startet
-**unskopiert**. Man müsste den Host in der Karte selbst wählen — Verlust des
-Vorbefüllens, also eine (kleine) Regression, und §0 verbietet Regressionen.
-**In der Sidebar ist kein „+" erlaubt** (§1.3 listet abschließend Zahnrad · ★ · ⋯).
+**Warum das „+"-Menü und nicht die Sidebar:** §1.3 listet die Sidebar-Icons
+abschließend (Zahnrad · ★ · ⋯) — ein „+" dort bräuchte eine Spec-Änderung, keine
+stille Ausnahme. Das Startmenü trägt ohnehin die unskopierte Karte und die
+projekt-gebundenen Favoriten; der host-gebundene Eintrag ist die Zeile, die
+dazwischen fehlte. Nur **Remote**-Hosts: die lokale Maschine ist das, worauf die
+unskopierte Karte ohnehin fällt.
 
-**Entscheidung nötig** (bewusst nicht eigenmächtig getroffen — sichtbare UI):
-1. Host-„+" in die Sidebar-Hostzeile → **§1.3 müsste geändert** werden.
-2. Host-„+" ins Titelleisten-„+"-Menü, je Host aus dem Inventar → keine
-   Sidebar-Änderung, aber ein längeres Menü.
-3. Host-Vorbefüllen aufgeben → Tree im Flotten-Pane entfällt, kleine Regression
-   bewusst akzeptiert.
-4. Flotten-Pane **behält** den Tree → er ist dort die *Leitansicht*, keine
-   Dopplung zur Sidebar (die Sidebar ist die Blick-, der Pane die Arbeitsfläche).
-
-Bis zur Entscheidung gilt die Spec-Regel wörtlich: **der Tree im Flotten-Pane
-bleibt.** Ihn ohne Nachfolger zu entfernen wäre genau die Regression, die dieser
-Absatz verhindern soll.
+**Warum der Tree überhaupt weg musste:** zwei Renderings desselben Baums driften
+— und taten es. Der Pane-Tree mappte Session-Zustand noch von Hand auf Farbe,
+lange nachdem die Sidebar damit aufgehört hatte (E1). Das Pane ist jetzt die
+**Zahlen** der Flotte (Aggregat + Konto-Cards); der Baum ist Sache der Sidebar,
+und die Sessions eines Kontos sind Sache seiner Tabelle.
 
 ---
 

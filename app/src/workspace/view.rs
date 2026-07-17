@@ -8235,6 +8235,42 @@ impl Workspace {
                     .with_icon(icons::Icon::LayoutAlt01)
                     .into_item(),
             );
+            // …and the same card pre-bound to a remote host. This is where the
+            // Conductor tree's per-host "+" moved to (P6): the tree could scope a
+            // launch to the machine you were looking at, and dropping that would
+            // have meant picking the host inside the card every time — a small
+            // regression, but §0 does not grade them by size.
+            //
+            // The launch menu is the right home: it already holds the unscoped
+            // card above and the project-scoped favourites below, so a
+            // host-scoped entry is the row that was missing between them. The
+            // sidebar could not take it — §1.3 lists its icons exhaustively
+            // (gear · star · ⋯), and a "+" there would need a spec change rather
+            // than a quiet exception.
+            //
+            // Remote hosts only: the local machine is what the unscoped card
+            // already defaults to, so a "here" entry would say the same thing
+            // twice. Sourced from the live inventory — the very hosts the tree
+            // listed — so the menu can't offer a machine that isn't there.
+            let inventory = crate::cockpit::CockpitModel::as_ref(ctx).inventory().clone();
+            for host in inventory.hosts.iter().filter(|h| !h.is_local) {
+                menu_items.push(
+                    MenuItemFields::new(crate::t!(
+                        "cockpit-spawn-card-new-agent-on-host",
+                        host = host.host.clone()
+                    ))
+                    .with_on_select_action(WorkspaceAction::OpenSpawnCard {
+                        // Scope by the stable daemon id, never the label: two
+                        // daemons can share one, and a launch must not land on
+                        // the wrong machine.
+                        host_id: host.host_id.clone(),
+                        host: Some(host.host.clone()),
+                        project: None,
+                    })
+                    .with_icon(icons::Icon::LayoutAlt01)
+                    .into_item(),
+                );
+            }
         }
 
         // 5. Coding Agents — only those installed and with tab_menu enabled appear in the menu

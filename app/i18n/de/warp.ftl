@@ -661,3 +661,4 @@ cockpit-menu-kill = Kill
 cockpit-menu-commit = Änderungen committen
 cockpit-menu-pr = Pull Request öffnen
 keybinding-desc-workspace-stop-all-agents = Alle laufenden Agenten stoppen
+cockpit-spawn-card-new-agent-on-host = Neuer Agent auf { $host }
