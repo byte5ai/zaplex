@@ -9,6 +9,8 @@
 > **Was hier NICHT steht:** Implementierungs-Details der Rust-Crates. Die entstehen in der Session selbst — geleitet von den Prinzipien unten, nicht prescripted.
 >
 > **Namensregel (verbindlich):** Das Projekt heißt **einzig und allein `zaplex`**. Kein Artefakt dieses Projekts (Crate, Binary, MCP-Namespace, Settings-Key, UI-Komponente) darf „claudeplex" heißen — auch aus markenrechtlichen Gründen. Der Name „claudeplex" bezeichnet ausschließlich das **bestehende Bun-Referenz-Tool/-Repo**, dessen Datenschicht-Logik wir als **Vorlage** nativ nachbauen (keine Laufzeit-Abhängigkeit); auf dieses verweisen wir bei Bedarf mit seinem realen Namen. Alles, was wir selbst bauen, trägt den Prefix `zaplex_*`.
+>
+> **Nachtrag 2026-07-17 (Doku-Aktualisierung, gegen main verifiziert):** Die Umsetzung (`byte5ai/zaplex`, main) ist inzwischen weit fortgeschritten und weicht in der Crate-Aufteilung vom Plan in §4.2 ab: statt der fünf geplanten Crates existieren tatsächlich **zwei** — `zaplex_cockpit` (Accounts, Usage/Heat, Session-Inventar, Routing — deckt den geplanten `zaplex_accounts`+`zaplex_sessions`+Teile von `zaplex_fleet` ab) und `zaplex_remote_session` (Session-Daemon/PTY-Host/Replay — deckt den geplanten `zaplex_fleet` ab). Ein dedizierter `zaplex_mc`- oder `zaplex_ui`-Crate wurde nie angelegt; Dateimanager und Cockpit-UI leben direkt in `app/src/`. Details und Begründung inline in §4.2. Dieses Dokument bleibt darüber hinaus als **Entscheidungs-Historie** stehen (Stand 2026-06-22/23) — für den laufend aktuellen Shipped-Stand siehe [README.md](../README.md#status--roadmap), für spätere Design-Entscheidungen die datierten Specs unter [`docs/superpowers/specs/`](superpowers/specs/).
 
 ---
 
@@ -230,6 +232,22 @@ Das `Usage`/`Heat`-Output ist provider-agnostisch; die UI weiß nichts von der P
 - Alles andere lebt in unseren eigenen Crates
 
 Diese Disziplin ist die Maintenance-Versicherung. Je weniger Zeilen wir in geerbten Crates ändern, desto weniger Rebase-Schmerz.
+
+#### Tatsächliche Umsetzung (Stand 2026-07-17, verifiziert gegen `main`)
+
+Die obige Fünf-Crate-Aufteilung war der Plan vom 2026-06-22 — gebaut wurde stattdessen eine schlankere Zwei-Crate-Aufteilung, konsolidiert statt Punkt-für-Punkt umgesetzt:
+
+| Crate                     | Enthält (laut `Cargo.toml`-Beschreibung + Modul-Layout)                                                                                          | Deckt vom Plan ab |
+|---------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
+| `zaplex_cockpit`           | Read-only Daten-Spine, keine GUI, kein Netz: `claude.rs`/`codex.rs` (Discovery+Usage-Parsing), `windows.rs` (5h/Wochen-Fenster+Heat), `pricing.rs`, `sessions.rs`/`codex_sessions.rs` (Waiting-Detection), `fleet.rs` (Host▸Projekt▸Session-Baum), `routing.rs` (freester Account), `guardrails.rs`, `review.rs`, `transcript.rs`, `overrides.rs`, `favorites.rs`, `conductor.rs` | `zaplex_accounts` + `zaplex_sessions` + der Datenteil von `zaplex_fleet` |
+| `zaplex_remote_session`    | PTY-Host + Output-Replay-Ring + Session-Registry (`server.rs`), Attach/Resume-Client-Logik (`client.rs`), transport-agnostische Typen inkl. reservierter (noch nicht gebauter) `FEATURE_UDP_TRANSPORT`-Capability (`types.rs`) | der Daemon-Teil von `zaplex_fleet` (§3.5) |
+| *(kein eigener Crate)*    | Dateimanager (MC-Dual-Pane, SFTP, Cross-Connection-Copy) lebt direkt unter `app/src/sftp_manager/`; Cockpit-UI (Sidebar-Panel, Pane-Dashboard) direkt unter `app/src/cockpit/` (`panel.rs`, `pane.rs`, `model.rs`, …) | `zaplex_mc`, `zaplex_ui` — nie als eigene Crates angelegt |
+
+Der RAM-Governor (§3.2) sitzt ebenfalls nicht in einem `zaplex_*`-Crate, sondern direkt im Daemon-Code (`app/src/remote_server/server_model.rs`, Idle-Session-GC unter Host-RAM-Ceiling).
+
+Die **Provider-Abstraktion** existiert wie geplant — `pub enum Provider { Claude, Codex }` in `crates/zaplex_cockpit/src/types.rs` — aber ohne das oben skizzierte `ProviderBackend`-Trait; Discovery/Usage/Launch sind stattdessen als separate Funktionen pro Provider-Modul (`claude.rs`, `codex.rs`) implementiert, nicht hinter einem gemeinsamen Trait-Interface. Funktional deckungsgleich mit der Absicht („eine Impl pro Provider"), nur ohne die Trait-Indirektion.
+
+Was in §5 „Account Dock" und „Agent Tree" heißt, trägt im Code andere Namen: die Sidebar-Fläche ist `CockpitPanel` (`app/src/cockpit/panel.rs`), die große Pane-Ansicht `CockpitPaneView` (`app/src/cockpit/pane.rs`), der Host▸Projekt▸Session-Baum heißt im Code **Conductor** (`crates/zaplex_cockpit/src/conductor.rs` + `fleet.rs`). Einen dedizierten Launch-Wizard-Modal (§5.3) gibt es nicht — Provider-/Account-Auswahl läuft menügetrieben über das New-Session-Menü (freester Account vorausgewählt), siehe README-Statustabelle.
 
 ### 4.3 Datenfluss (nativ, provider-symmetrisch)
 
