@@ -150,6 +150,19 @@ pub fn init(app: &mut AppContext) {
     .with_context_predicate(id!("Workspace"))
     .with_mac_key_binding("cmd-shift-O")
     .with_linux_or_windows_key_binding("ctrl-shift-O")]);
+    // "Stop all": interrupt every signalable agent in the fleet. Registered so it
+    // is reachable by name and bindable, but with **no default key** — it is the
+    // broadest destructive act in the app, and a key you can hit by accident is
+    // not where it belongs. The confirm dialog stays regardless (spec v3 §4.4).
+    //
+    // This is the home the Conductor tree's `⏹ stop all` button needed before
+    // that tree could be de-duplicated against the sidebar (P6).
+    app.register_editable_bindings([EditableBinding::new(
+        "workspace:stop_all_agents",
+        crate::t!("keybinding-desc-workspace-stop-all-agents"),
+        WorkspaceAction::StopAllRequest,
+    )
+    .with_context_predicate(id!("Workspace"))]);
     app.register_fixed_bindings([
         FixedBinding::new(
             "escape",

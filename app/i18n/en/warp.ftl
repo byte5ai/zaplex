@@ -3856,3 +3856,6 @@ cockpit-menu-transcript = History
 cockpit-menu-review = Review
 cockpit-menu-stop = Stop
 cockpit-menu-kill = Kill
+cockpit-menu-commit = Commit changes
+cockpit-menu-pr = Open pull request
+keybinding-desc-workspace-stop-all-agents = Stop all running agents

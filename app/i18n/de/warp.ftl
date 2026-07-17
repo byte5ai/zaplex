@@ -658,3 +658,6 @@ cockpit-menu-transcript = Verlauf
 cockpit-menu-review = Review
 cockpit-menu-stop = Stop
 cockpit-menu-kill = Kill
+cockpit-menu-commit = Änderungen committen
+cockpit-menu-pr = Pull Request öffnen
+keybinding-desc-workspace-stop-all-agents = Alle laufenden Agenten stoppen

@@ -222,6 +222,9 @@ pub struct CockpitPaneView {
     collapsed_table_groups: HashMap<String, bool>,
     /// Hover/click state per table group header, keyed by repo root.
     table_group_states: HashMap<String, MouseStateHandle>,
+    /// Hover state per group's "+" (a new agent scoped to that repo), keyed by
+    /// repo root.
+    table_plus_states: HashMap<String, MouseStateHandle>,
     /// Hover/click state per table row, keyed by `host_key(host, session_id)` —
     /// never the session id alone: two hosts can hold the same id.
     table_row_states: HashMap<String, MouseStateHandle>,
@@ -436,6 +439,7 @@ impl CockpitPaneView {
             session_filter: SessionFilter::All,
             collapsed_table_groups: HashMap::new(),
             table_group_states: HashMap::new(),
+            table_plus_states: HashMap::new(),
             table_row_states: HashMap::new(),
             filter_chip_states: HashMap::new(),
             sort: Sort::default(),
@@ -556,6 +560,7 @@ impl CockpitPaneView {
         // the collapse map keeps only live keys, so absent still means "expanded".
         self.table_row_states.retain(|k, _| row_keys.contains(k));
         self.table_group_states.retain(|k, _| group_keys.contains(k));
+        self.table_plus_states.retain(|k, _| group_keys.contains(k));
         self.collapsed_table_groups
             .retain(|k, _| group_keys.contains(k));
         for k in row_keys {
@@ -568,7 +573,7 @@ impl CockpitPaneView {
             if self.row_menu.as_ref().is_some_and(|m| m.row_key == k) {
                 for item in [
                     "adopt", "fork", "forkwt", "compact", "clear", "transcript", "review",
-                    "reviewed", "stop", "kill",
+                    "reviewed", "redirect", "commit", "pr", "stop", "kill",
                 ] {
                     self.row_dots_states
                         .entry(format!("{k}\u{0}{item}"))
@@ -578,6 +583,7 @@ impl CockpitPaneView {
             self.table_row_states.entry(k).or_default();
         }
         for k in group_keys {
+            self.table_plus_states.entry(k.clone()).or_default();
             self.table_group_states.entry(k).or_default();
         }
     }
@@ -1359,6 +1365,46 @@ impl CockpitPaneView {
                 ),
                 &mut col,
             );
+            // What you do *after* reading the changes: steer, land, or open a
+            // PR. They ride with review because they act on the same working
+            // tree — and so on the same "only from this machine" condition.
+            push(
+                self.menu_item(
+                    &k("redirect"),
+                    crate::t!("cockpit-session-redirect").to_string(),
+                    VerbKind::Constructive,
+                    WorkspaceAction::AskAgentRouted {
+                        prompt: review_redirect_prompt(&session.project_name),
+                        config_dir: config_dir.clone(),
+                    },
+                    appearance,
+                ),
+                &mut col,
+            );
+            push(
+                self.menu_item(
+                    &k("commit"),
+                    crate::t!("cockpit-menu-commit").to_string(),
+                    VerbKind::Constructive,
+                    WorkspaceAction::CommitReviewChanges {
+                        project_root: PathBuf::from(&session.project_root),
+                    },
+                    appearance,
+                ),
+                &mut col,
+            );
+            push(
+                self.menu_item(
+                    &k("pr"),
+                    crate::t!("cockpit-menu-pr").to_string(),
+                    VerbKind::Constructive,
+                    WorkspaceAction::CreateReviewPr {
+                        project_root: PathBuf::from(&session.project_root),
+                    },
+                    appearance,
+                ),
+                &mut col,
+            );
         }
         if caps.can_signal {
             col.add_child(cluster_divider(appearance));
@@ -1593,6 +1639,7 @@ impl CockpitPaneView {
         let group_states = self.table_group_states.clone();
         let row_states = self.table_row_states.clone();
         let dots_states = self.row_dots_states.clone();
+        let plus_states = self.table_plus_states.clone();
 
         self.table_state.set_row_count(rows_len);
         // The closure outlives this frame, so it reads the appearance from the
@@ -1629,6 +1676,24 @@ impl CockpitPaneView {
                         .with_child(Self::text(count.to_string(), family, body, faint))
                         .with_main_axis_size(MainAxisSize::Min)
                         .finish();
+                    // The tree's project "+" lands here: a new agent pre-bound to
+                    // the repo you are looking at. Without a successor, folding
+                    // the tree away would take the scoped launch with it.
+                    let plus: Option<Box<dyn Element>> =
+                        plus_states.get(root).cloned().map(|st| {
+                            let root_owned = root.clone();
+                            verb_button(
+                                st,
+                                "+",
+                                VerbKind::Constructive,
+                                appearance,
+                                WorkspaceAction::OpenSpawnCard {
+                                    host_id: None,
+                                    host: None,
+                                    project: Some(PathBuf::from(root_owned)),
+                                },
+                            )
+                        });
                     let first: Box<dyn Element> = match group_states.get(root).cloned() {
                         Some(state) => {
                             let key = root.clone();
@@ -1642,6 +1707,16 @@ impl CockpitPaneView {
                                 .finish()
                         }
                         None => inner,
+                    };
+                    let first = match plus {
+                        Some(plus) => Flex::row()
+                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                            .with_spacing(8.0)
+                            .with_child(first)
+                            .with_child(plus)
+                            .with_main_axis_size(MainAxisSize::Min)
+                            .finish(),
+                        None => first,
                     };
                     let mut cells: Vec<Box<dyn Element>> = vec![first];
                     for _ in 1..TABLE_COLUMNS {

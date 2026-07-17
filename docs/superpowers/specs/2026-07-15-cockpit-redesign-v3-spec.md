@@ -306,12 +306,12 @@ sind nicht host-gebunden). Karten-Klick: erneuter Klick **fokussiert** das Pane
 (heute: deselektiert, model.rs:147 — fixen). Keine Persistenz nötig
 (`LeafContents::Cockpit => false`, app_state.rs:184).
 
-### 4.2 Detail-Card — **P2**
+### 4.2 Detail-Card — **P2** ✅ *gebaut*
 Provider-Kachel · Anzeigename · Mail/Org (hier erlaubt) · Plan · Reset-Timer ·
 ⋯ (Alias ändern, §6). Meter 5h + Woche (grau, rot ab 85 %), 3-Spalten Heute/5h/Woche
 × $/Tokens (Heute = lokale Tagesgrenze, F2).
 
-### 4.3 Sessions-Tabelle — **P3/P4**
+### 4.3 Sessions-Tabelle — **P3/P4** ✅ *gebaut*
 - **Fundament: `warpui::elements::Table`** (Sum-Tree-Virtualisierung,
   warpui_core/elements/table/mod.rs:262-542) — kein handgebautes Flex-Grid; bei
   „Hunderten Sessions" Pflicht. Sortierung/Filter/Gruppierung app-seitig (Table ist
@@ -324,7 +324,7 @@ Provider-Kachel · Anzeigename · Mail/Org (hier erlaubt) · Plan · Reset-Timer
   einklappbar · sortierbare Spaltenköpfe.
 - Zeilen-Klick → öffnet/fokussiert die Session (max. 1 Instanz).
 
-### 4.4 Cockpit-Drive: das ⋯ pro Zeile — **P5** · KEINE REGRESSION
+### 4.4 Cockpit-Drive: das ⋯ pro Zeile — **P5** ✅ · KEINE REGRESSION
 Das ⋯ trägt die vollständige Steuerung, **capability-gated (F6)**, destruktives
 abgesetzt: Fork · Fork in neuen Worktree · /compact · /clear · Verlauf ·
 Review ›(review / als geprüft markieren (F7) / redirect / commit / PR) · Stop · Kill.
@@ -332,6 +332,42 @@ Klickziele getrennt (Muster pane.rs:1186: Attach auf Info-Span, Verbs außerhalb
 `⏹ stop all`: **Command-Palette** (Confirm bleibt) — keine Chrome.
 **Erst wenn jeder heutige Verb (Gegenprüfung `app/src/cockpit/pane.rs`) seinen Platz
 hat, entfällt der Dashboard-Tree im Pane** (Entdopplung zur Sidebar) — **P6**.
+
+#### P6 · Gegenprüfung durchgeführt — **ein Verb blockiert noch**
+
+Die Entdopplung ist **teilweise erreicht**: ein **Konto-Pane zeigt den Tree nicht
+mehr** (Detail-Card + Tabelle statt dessen, P1–P5). Offen bleibt der Tree im
+**Flotten-Pane**.
+
+Diff Tree-Verben ↔ ⋯-Drive (mechanisch geprüft, nicht behauptet):
+
+| Verb | Heimat nach P6 |
+|---|---|
+| Adopt · Fork · Fork+Worktree · /compact · /clear · Verlauf · Review · Geprüft · Redirect · Commit · PR · Stop · Kill | ✅ ⋯-Drive (capability-gated, F6) |
+| `ToggleHost` / `ToggleProject` | ✅ reine Baum-Struktur — stirbt mit dem Tree, kein Verb |
+| `StopAllRequest` (`⏹ stop all`) | ✅ **neu**: als Kommando registriert (`workspace:stop_all_agents`), bindbar, **ohne Default-Taste** (breitester destruktiver Akt; Confirm bleibt) |
+| `OpenSpawnCard` **projekt**-gebunden | ✅ **neu**: „+" in der Tabellen-Gruppenzeile |
+| `OpenSpawnCard` **host**-gebunden | ⛔ **kein Nachfolger** |
+
+**Der Blocker, konkret:** Der Tree bietet „neuer Agent, vorab auf *diesen Host*
+gebunden". Nachfolger fehlen: der Host-**Favorit** öffnet ein *Terminal*
+(`OpenSshTerminalByNode`), nicht die Spawn-Karte; die globale Karte startet
+**unskopiert**. Man müsste den Host in der Karte selbst wählen — Verlust des
+Vorbefüllens, also eine (kleine) Regression, und §0 verbietet Regressionen.
+**In der Sidebar ist kein „+" erlaubt** (§1.3 listet abschließend Zahnrad · ★ · ⋯).
+
+**Entscheidung nötig** (bewusst nicht eigenmächtig getroffen — sichtbare UI):
+1. Host-„+" in die Sidebar-Hostzeile → **§1.3 müsste geändert** werden.
+2. Host-„+" ins Titelleisten-„+"-Menü, je Host aus dem Inventar → keine
+   Sidebar-Änderung, aber ein längeres Menü.
+3. Host-Vorbefüllen aufgeben → Tree im Flotten-Pane entfällt, kleine Regression
+   bewusst akzeptiert.
+4. Flotten-Pane **behält** den Tree → er ist dort die *Leitansicht*, keine
+   Dopplung zur Sidebar (die Sidebar ist die Blick-, der Pane die Arbeitsfläche).
+
+Bis zur Entscheidung gilt die Spec-Regel wörtlich: **der Tree im Flotten-Pane
+bleibt.** Ihn ohne Nachfolger zu entfernen wäre genau die Regression, die dieser
+Absatz verhindern soll.
 
 ---
 
