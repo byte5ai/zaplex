@@ -421,7 +421,12 @@ fn host_name_for_node(node_id: &str) -> Option<String> {
         .ok()?
         .into_iter()
         .find(|n| n.id == node_id)
+        // A blank name is not a title. The editor rejects one, but the
+        // repository takes any string, so an entry written another way could
+        // hand back "" — and `Some("")` would beat the fallback and leave an
+        // empty tab.
         .map(|n| n.name)
+        .filter(|n| !n.trim().is_empty())
 }
 
 impl SftpBrowserView {

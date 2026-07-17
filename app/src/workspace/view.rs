@@ -6848,7 +6848,8 @@ impl Workspace {
     /// instead of the tab-level `ssh_tab_nodes` map, so a mixed local/remote split
     /// targets the right filesystem (Codex #1). Returns `None` for a local session
     /// (or a daemon session predating the mapping); the caller then falls back to
-    /// the tab node, then to Local.
+    /// the tab node — and, for a pane it knows to be remote, refuses rather than
+    /// opening this machine's filesystem under a remote path.
     fn node_for_session(&self, session_id: SessionId) -> Option<String> {
         self.daemon_node_sessions
             .iter()
@@ -21727,8 +21728,10 @@ impl TypedActionView for Workspace {
                     // Resolve the FM host context from the INVOKING (focused) pane's own
                     // session — NOT the tab (Codex #1). A local split inside an SSH tab
                     // opens the LOCAL file manager; a remote pane opens its host's FM.
-                    // Fall back to the tab's recorded node, then Local as the safe
-                    // default. Safe to borrow the view here: the invoking update has
+                    // Fall back to the tab's recorded node. For a pane known to be
+                    // remote with no node either, the file manager does not open:
+                    // "Local" is not a safe default there, it is the wrong host's
+                    // files. Safe to borrow the view here: the invoking update has
                     // returned, so the pane view is no longer checked out.
                     //
                     // Resolve from the CAPTURED `target_pane_id`, not the *current*
@@ -21742,7 +21745,14 @@ impl TypedActionView for Workspace {
                     let pane_is_local = active_view
                         .as_ref()
                         .and_then(|v| v.as_ref(ctx).active_session_is_local(ctx));
-                    let target = if pane_is_local == Some(true) {
+                    // `active_session_is_local` is a THREE-valued answer:
+                    // Some(true) local, Some(false) remote, None = no active
+                    // session at all — a fresh local pane, which falls back to
+                    // $HOME. Only a *known* remote may be refused below; reading
+                    // None as "remote" would turn a local split with no session
+                    // into an error, and inside an SSH tab it would even scope it
+                    // to that tab's host.
+                    let target = if pane_is_local != Some(false) {
                         crate::pane_group::FileManagerTarget::Local {
                             start_path: start_path.clone(),
                         }
