@@ -407,6 +407,23 @@ pub struct SftpBrowserView {
     pick_resolved: bool,
 }
 
+/// The display name of an SSH registry node, for the tab title.
+///
+/// Read from the registry rather than carried in: the browser is opened from
+/// several places, and a name threaded through each of them is a name that can
+/// be threaded through wrong. `None` when the node is gone or the registry can't
+/// be read — the caller then shows a generic title instead of an empty one.
+fn host_name_for_node(node_id: &str) -> Option<String> {
+    if node_id.is_empty() {
+        return None;
+    }
+    warp_ssh_manager::with_conn(|c| Ok(warp_ssh_manager::SshRepository::list_nodes(c)?))
+        .ok()?
+        .into_iter()
+        .find(|n| n.id == node_id)
+        .map(|n| n.name)
+}
+
 impl SftpBrowserView {
     /// Create a new SFTP browser view, opened at `start_path` (the remote
     /// shell's cwd) when known, else the host root `/`.
@@ -415,7 +432,17 @@ impl SftpBrowserView {
         start_path: Option<PathBuf>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("File Manager"));
+        // The tab keeps saying which HOST this is; that it happens to be showing
+        // files rather than a shell is the pane's own obvious business (spec v3
+        // FM). Titling it "File Manager" dropped the host entirely — with two
+        // browsers open you could not tell which machine either was on, which is
+        // the one thing a tab title has to answer here.
+        //
+        // A host whose registry entry has gone (deleted while open) falls back to
+        // the generic title rather than a blank tab.
+        let title = host_name_for_node(&node_id)
+            .unwrap_or_else(|| crate::t!("sftp-file-manager-title").to_string());
+        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(title));
         let rename_editor = make_editor("Enter new name", ctx);
         let new_folder_editor = make_editor("Folder name", ctx);
         let search_editor = make_editor("Search files...", ctx);

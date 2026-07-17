@@ -666,3 +666,4 @@ cockpit-spawn-card-auto = automatisch
 cockpit-spawn-card-change = Ändern
 cockpit-account-rename = Konto umbenennen
 file-manager-unknown-host = Datei-Manager nicht möglich: Der Host dieses Panes ließ sich nicht bestimmen — stattdessen diesen Rechner zu zeigen, wären die falschen Dateien.
+sftp-file-manager-title = Datei-Manager
