@@ -20,8 +20,10 @@ use warpui::elements::{
     TableVerticalSizing, Text,
 };
 use warpui::platform::Cursor;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View, ViewContext,
+    ViewHandle,
 };
 use zaplex_cockpit::{
     fleet_is_large, fleet_session_count, format_cost, format_relative, format_reset, format_tokens,
@@ -32,6 +34,7 @@ use zaplex_cockpit::{
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
+use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions};
 use crate::cockpit::capabilities::SessionCapabilities;
 use crate::cockpit::style::{
     attention_coloru, cluster_divider, ctx_pct_element, glyph_cell, heat_coloru_on, icon_word_verb,
@@ -49,6 +52,10 @@ const PANE_PADDING: f32 = 16.0;
 /// Columns in the session table (spec v3 §4.3). A group header fills the first
 /// and leaves the rest empty — the table is flat, so a group is a row.
 const TABLE_COLUMNS: usize = 8;
+/// The search box's width. Fixed on purpose: an `EditorView` panics when it is
+/// measured against an infinite width constraint, which is what a flexible child
+/// of a row gets during the intrinsic pass.
+const SEARCH_WIDTH: f32 = 220.0;
 const CARD_PADDING: f32 = 12.0;
 const CARD_SPACING: f32 = 8.0;
 const HEAT_BAR_WIDTH: f32 = 160.0;
@@ -105,6 +112,68 @@ impl SessionFilter {
     }
 }
 
+/// Attention order: waiting, then working, then resting. The same rank every
+/// other surface sorts by — a table that ordered its states differently would
+/// teach the eye a second vocabulary.
+fn state_rank(state: SessionState) -> u8 {
+    match state {
+        SessionState::Waiting => 0,
+        SessionState::Active => 1,
+        SessionState::Monitor => 2,
+        SessionState::Idle => 3,
+    }
+}
+
+/// A sortable column of the session table (P4).
+///
+/// Sorting happens app-side: `warpui::Table` is layout only — it windows rows,
+/// it does not know what they mean. Which is the right split; a table element
+/// that sorted would have to understand sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortColumn {
+    Session,
+    Worktree,
+    Host,
+    Model,
+    Context,
+    Today,
+    Status,
+    /// Most-recent activity — the default, because "what changed" is what a
+    /// glance is usually after.
+    Last,
+}
+
+/// The table's sort: a column and a direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sort {
+    pub column: SortColumn,
+    /// `true` = ascending. Defaults differ per column: text reads A→Z, but a
+    /// clock or a cost reads biggest-first, because that is the end you look at.
+    pub ascending: bool,
+}
+
+impl Default for Sort {
+    fn default() -> Self {
+        Self {
+            column: SortColumn::Last,
+            ascending: false,
+        }
+    }
+}
+
+impl SortColumn {
+    /// Which way this column reads when first clicked. Text A→Z; a number or a
+    /// timestamp starts at the end that matters — newest, priciest, fullest.
+    fn default_ascending(self) -> bool {
+        match self {
+            SortColumn::Session | SortColumn::Worktree | SortColumn::Host | SortColumn::Model => {
+                true
+            }
+            SortColumn::Context | SortColumn::Today | SortColumn::Last | SortColumn::Status => false,
+        }
+    }
+}
+
 /// One line of the flattened table: the sum-tree wants a flat row list, so a
 /// group header is a row of its own rather than a nesting level.
 enum TableRow {
@@ -146,6 +215,15 @@ pub struct CockpitPaneView {
     table_row_states: HashMap<String, MouseStateHandle>,
     /// Hover state per filter chip.
     filter_chip_states: HashMap<&'static str, MouseStateHandle>,
+    /// How the table is sorted (P4).
+    sort: Sort,
+    /// Hover state per sortable column header.
+    sort_header_states: HashMap<&'static str, MouseStateHandle>,
+    /// The live search box (P4) — project, branch or worktree.
+    search: ViewHandle<EditorView>,
+    /// Its current text, kept here so the render path doesn't reach into the
+    /// editor on every frame.
+    search_text: String,
     /// The account this pane belongs to (`Account::key`), or `None` for the
     /// fleet dashboard.
     ///
@@ -260,6 +338,9 @@ pub enum CockpitPaneAction {
     ToggleTableGroup(String),
     /// Show only these sessions in the table (P3 filter chips).
     SetSessionFilter(SessionFilter),
+    /// Sort the table by this column. Clicking the active column flips the
+    /// direction; a new column starts at whichever end it reads from.
+    SortBy(SortColumn),
     /// Fold/unfold a host node (key = stable host identity `host_ident`, not the
     /// display label — two remote daemons can share a label).
     ToggleHost(String),
@@ -282,6 +363,35 @@ impl CockpitPaneView {
 
     /// A pane for one account (`None` = the fleet dashboard).
     pub fn for_account(account_key: Option<String>, ctx: &mut ViewContext<Self>) -> Self {
+        // The search box. Filtering happens as you type — a search you have to
+        // submit is a search you check, and this one is meant to be glanced at.
+        let search = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let theme = appearance.theme();
+            EditorView::single_line(
+                SingleLineEditorOptions {
+                    is_password: false,
+                    text: TextOptions {
+                        font_size_override: Some(appearance.ui_font_body()),
+                        font_family_override: Some(appearance.ui_font_family()),
+                        text_colors_override: Some(TextColors {
+                            default_color: theme.active_ui_text_color(),
+                            disabled_color: theme.disabled_ui_text_color(),
+                            hint_color: theme.disabled_ui_text_color(),
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ctx,
+            )
+        });
+        ctx.subscribe_to_view(&search, |me: &mut Self, editor, event, ctx| {
+            if matches!(event, EditorEvent::Edited(_)) {
+                me.search_text = editor.as_ref(ctx).buffer_text(ctx);
+                ctx.notify();
+            }
+        });
         ctx.subscribe_to_model(&Appearance::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&CockpitModel::handle(ctx), |me, _, event, ctx| {
             if matches!(event, CockpitEvent::Updated) {
@@ -304,6 +414,10 @@ impl CockpitPaneView {
             table_group_states: HashMap::new(),
             table_row_states: HashMap::new(),
             filter_chip_states: HashMap::new(),
+            sort: Sort::default(),
+            sort_header_states: HashMap::new(),
+            search,
+            search_text: String::new(),
             pane_configuration,
             account_key,
             focus_handle: None,
@@ -362,6 +476,11 @@ impl CockpitPaneView {
         // The chips are fixed, so their handles are seeded once and never pruned.
         for key in ["all", "waiting", "active", "idle"] {
             self.filter_chip_states.entry(key).or_default();
+        }
+        for key in [
+            "session", "worktree", "host", "model", "context", "today", "status", "last",
+        ] {
+            self.sort_header_states.entry(key).or_default();
         }
         let Some(account_key) = self.account_key.clone() else {
             return;
@@ -861,6 +980,24 @@ impl CockpitPaneView {
 
         all.retain(|(s, ..)| self.session_filter.matches(s.state));
 
+        // Live search over the coordinates that identify a session to a human:
+        // its project, its branch, its worktree — plus its own name and host.
+        // Not the model or the state: those have a chip and a column, and a
+        // search that also matched them would make "opus" select half the table.
+        let needle = self.search_text.trim().to_lowercase();
+        if !needle.is_empty() {
+            all.retain(|(s, host, ..)| {
+                let hay = [
+                    s.project_name.as_str(),
+                    s.name.as_str(),
+                    s.branch.as_deref().unwrap_or(""),
+                    s.worktree.as_deref().unwrap_or(""),
+                    host.as_deref().unwrap_or(""),
+                ];
+                hay.iter().any(|h| h.to_lowercase().contains(&needle))
+            });
+        }
+
         // Group by repo (F9): three worktrees of one repo are one group with
         // three sessions, each keeping its own worktree in its row.
         let mut by_repo: BTreeMap<String, Vec<(SessionSnapshot, Option<String>, Option<String>, bool)>> =
@@ -876,12 +1013,49 @@ impl CockpitPaneView {
 
         let mut rows = Vec::new();
         for (root, mut group) in by_repo {
-            // Waiting first, then most recent — the same order every other
-            // surface uses, so the eye does not have to relearn it per view.
+            // Sort inside the group — the grouping is the outer order, and a
+            // sort that broke it apart would just be an ungrouped table.
+            let acct_ref = acct;
             group.sort_by(|a, b| {
-                (b.0.state == SessionState::Waiting)
-                    .cmp(&(a.0.state == SessionState::Waiting))
-                    .then(b.0.last_activity.cmp(&a.0.last_activity))
+                let ord = match self.sort.column {
+                    SortColumn::Session => zaplex_cockpit::session_label(&a.0)
+                        .to_lowercase()
+                        .cmp(&zaplex_cockpit::session_label(&b.0).to_lowercase()),
+                    SortColumn::Worktree => a
+                        .0
+                        .worktree
+                        .as_deref()
+                        .unwrap_or("")
+                        .cmp(b.0.worktree.as_deref().unwrap_or("")),
+                    SortColumn::Host => a
+                        .1
+                        .as_deref()
+                        .unwrap_or("")
+                        .cmp(b.1.as_deref().unwrap_or("")),
+                    SortColumn::Model => a.0.model.cmp(&b.0.model),
+                    SortColumn::Context => zaplex_cockpit::context_fill(&a.0.model, a.0.ctx_tokens)
+                        .partial_cmp(&zaplex_cockpit::context_fill(&b.0.model, b.0.ctx_tokens))
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                    SortColumn::Today => {
+                        let cost = |id: &str| {
+                            acct_ref
+                                .today_by_session
+                                .get(id)
+                                .map(|t| t.cost_usd)
+                                .unwrap_or(0.0)
+                        };
+                        cost(&a.0.session_id)
+                            .partial_cmp(&cost(&b.0.session_id))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }
+                    // Waiting first — the whole point of the cockpit's order.
+                    SortColumn::Status => state_rank(a.0.state).cmp(&state_rank(b.0.state)),
+                    SortColumn::Last => a.0.last_activity.cmp(&b.0.last_activity),
+                };
+                let ord = if self.sort.ascending { ord } else { ord.reverse() };
+                // A stable tie-break, so two equal rows don't swap places
+                // between frames for no reason the user can see.
+                ord.then_with(|| a.0.session_id.cmp(&b.0.session_id))
             });
             let name = group
                 .first()
@@ -936,6 +1110,57 @@ impl CockpitPaneView {
         } else {
             el
         }
+    }
+
+    /// **P4** — the table's toolbar: live search, then the filter chips.
+    ///
+    /// Search and chips narrow the same list and compose: searching inside
+    /// "Wartet" is a question people actually have ("is anything waiting on
+    /// zaplex?"), and making them exclusive would answer a different one.
+    fn render_table_toolbar(
+        &self,
+        acct: &AccountUsage,
+        tree: &FleetTree,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+
+        // An EditorView panics on an infinite width constraint, and a Flex child
+        // is measured against one during the intrinsic pass — so it gets a fixed
+        // box rather than a flexible one. (`ssh_manager/panel.rs:2144` learned
+        // this the same way.)
+        let search = ConstrainedBox::new(
+            appearance
+                .ui_builder()
+                .text_input(self.search.clone())
+                .with_style(UiComponentStyles {
+                    padding: Some(Coords {
+                        left: 6.0,
+                        right: 6.0,
+                        top: 2.0,
+                        bottom: 2.0,
+                    }),
+                    background: Some(theme.surface_2().into()),
+                    border_color: Some(theme.split_pane_border_color().into()),
+                    border_width: Some(1.0),
+                    border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.0))),
+                    font_size: Some(appearance.ui_font_body()),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+        )
+        .with_width(SEARCH_WIDTH)
+        .finish();
+
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_spacing(10.0)
+            .with_child(search)
+            .with_child(Shrinkable::new(1.0, Empty::new().finish()).finish())
+            .with_child(self.render_filter_chips(acct, tree, appearance))
+            .finish()
     }
 
     /// **P3** — the filter chips: which sessions the table lists.
@@ -1030,8 +1255,28 @@ impl CockpitPaneView {
             .finish();
         }
 
-        let header = |label: String, right: bool| -> TableHeader {
-            TableHeader::new(Self::cell(label, muted, right, appearance))
+        let main = theme.main_text_color(bg).into_solid();
+        // A header says what it sorts by and which way — a caret only on the
+        // active one, so the row of headers stays quiet until it means something.
+        let header = |key: &'static str, label: String, col: SortColumn, right: bool| -> TableHeader {
+            let active = self.sort.column == col;
+            let text = if active {
+                format!("{label} {}", if self.sort.ascending { "▲" } else { "▼" })
+            } else {
+                label
+            };
+            let color = if active { main } else { muted };
+            let el = Self::cell(text, color, right, appearance);
+            let el: Box<dyn Element> = match self.sort_header_states.get(key).cloned() {
+                Some(state) => Hoverable::new(state, move |_m| el)
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(CockpitPaneAction::SortBy(col))
+                    })
+                    .finish(),
+                None => el,
+            };
+            TableHeader::new(el)
         };
 
         // Everything the render closure needs, owned: it outlives this frame.
@@ -1216,21 +1461,21 @@ impl CockpitPaneView {
 
         Table::new(self.table_state.clone(), 0.0, 0.0)
             .with_headers(vec![
-                header(crate::t!("cockpit-table-col-session").to_string(), false)
+                header("session", crate::t!("cockpit-table-col-session").to_string(), SortColumn::Session, false)
                     .with_width(TableColumnWidth::Flex(2.2)),
-                header(crate::t!("cockpit-table-col-worktree").to_string(), false)
+                header("worktree", crate::t!("cockpit-table-col-worktree").to_string(), SortColumn::Worktree, false)
                     .with_width(TableColumnWidth::Flex(1.2)),
-                header(crate::t!("cockpit-table-col-host").to_string(), false)
+                header("host", crate::t!("cockpit-table-col-host").to_string(), SortColumn::Host, false)
                     .with_width(TableColumnWidth::Flex(0.9)),
-                header(crate::t!("cockpit-table-col-model").to_string(), false)
+                header("model", crate::t!("cockpit-table-col-model").to_string(), SortColumn::Model, false)
                     .with_width(TableColumnWidth::Flex(1.0)),
-                header(crate::t!("cockpit-table-col-context").to_string(), true)
+                header("context", crate::t!("cockpit-table-col-context").to_string(), SortColumn::Context, true)
                     .with_width(TableColumnWidth::Flex(1.0)),
-                header(crate::t!("cockpit-pane-col-today").to_string(), true)
+                header("today", crate::t!("cockpit-pane-col-today").to_string(), SortColumn::Today, true)
                     .with_width(TableColumnWidth::Flex(0.8)),
-                header(crate::t!("cockpit-table-col-status").to_string(), false)
+                header("status", crate::t!("cockpit-table-col-status").to_string(), SortColumn::Status, false)
                     .with_width(TableColumnWidth::Flex(1.0)),
-                header(crate::t!("cockpit-table-col-last").to_string(), true)
+                header("last", crate::t!("cockpit-table-col-last").to_string(), SortColumn::Last, true)
                     .with_width(TableColumnWidth::Flex(0.8)),
             ])
             .with_row_count(rows_len)
@@ -2421,7 +2666,7 @@ impl View for CockpitPaneView {
                         .with_main_axis_size(MainAxisSize::Min)
                         .with_child(self.render_account_detail(acct, appearance))
                         .with_child(
-                            Container::new(self.render_filter_chips(acct, &tree, appearance))
+                            Container::new(self.render_table_toolbar(acct, &tree, appearance))
                                 .with_margin_bottom(CARD_SPACING)
                                 .finish(),
                         )
@@ -2538,6 +2783,22 @@ impl TypedActionView for CockpitPaneView {
             }
             CockpitPaneAction::SetSessionFilter(filter) => {
                 self.session_filter = *filter;
+                ctx.notify();
+            }
+            CockpitPaneAction::SortBy(column) => {
+                self.sort = if self.sort.column == *column {
+                    // Same column again: flip. That is what a second click means
+                    // everywhere else, and a table is not the place to be novel.
+                    Sort {
+                        column: *column,
+                        ascending: !self.sort.ascending,
+                    }
+                } else {
+                    Sort {
+                        column: *column,
+                        ascending: column.default_ascending(),
+                    }
+                };
                 ctx.notify();
             }
             CockpitPaneAction::ToggleHost(host_ident_key) => {
