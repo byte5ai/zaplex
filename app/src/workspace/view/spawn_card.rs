@@ -21,7 +21,7 @@ use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex, Hoverable,
-    MouseStateHandle, ParentElement, Radius, Text,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Rect, Text,
 };
 use warpui::keymap::FixedBinding;
 use warpui::platform::file_picker::{FilePickerConfiguration, FilePickerError};
@@ -44,9 +44,18 @@ const MODAL_WIDTH: f32 = 480.;
 /// One account option offered in the card.
 #[derive(Clone, Debug)]
 pub struct AccountOption {
+    /// Display name — already the user's alias where one is set (A1: the
+    /// overrides layer replaced it before the snapshot existed).
     pub label: String,
     pub config_dir: PathBuf,
+    /// Binding-window utilisation, already formatted (`~` marks an estimate).
     pub heat_label: String,
+    /// The same figure as a fraction, so the card can colour it by the one
+    /// utilisation rule instead of parsing its own label back.
+    pub heat: f64,
+    /// Plan tier, when the provider told us.
+    pub plan: Option<String>,
+    pub provider: zaplex_cockpit::Provider,
 }
 
 /// The account options for one provider, plus its precomputed freest pick.
@@ -57,6 +66,12 @@ pub struct ProviderOptions {
     pub freest_label: Option<String>,
     /// Config dir of the freest account (`None` = only the default login).
     pub freest_dir: Option<PathBuf>,
+    /// The freest account itself — what the auto line shows (X1). The pick comes
+    /// from `routing::pick_freest`, which stays the truth: it ranks by the
+    /// binding window and deprioritises working accounts, and this card only
+    /// *shows* its answer. It never skips an account, at 85 % or anywhere —
+    /// "fast voll" is a visual mark (§1.2), not a routing rule.
+    pub freest: Option<AccountOption>,
     pub accounts: Vec<AccountOption>,
 }
 
@@ -164,6 +179,10 @@ pub struct SpawnCard {
     model: String,
     effort: String,
     account: AccountChoice,
+    /// Whether the account list is unfolded (X1). Collapsed by default: the
+    /// router already chose, so the card states the answer instead of asking the
+    /// question again on every launch.
+    show_accounts: bool,
     host: HostChoice,
     project: Option<PathBuf>,
     /// Task prompt to prefill into the launched agent after start (contextual
@@ -276,6 +295,7 @@ impl SpawnCard {
             model: "opus".to_string(),
             effort: "high".to_string(),
             account: AccountChoice::Freest,
+            show_accounts: false,
             host: HostChoice::Local,
             project: None,
             prompt: None,
@@ -372,6 +392,134 @@ impl SpawnCard {
             });
             ctx.notify();
         }
+    }
+
+    /// **X1** — the account section: one calm auto line, and the list only when
+    /// asked for.
+    ///
+    /// Auto is the point. The router already picks well — by the binding window,
+    /// deprioritising accounts that are working — so the card's job is to say
+    /// *which* account that is and let you look away. A row of chips made the
+    /// user re-decide a decision that had already been made well, every single
+    /// launch.
+    ///
+    /// "Ändern" reveals the full list with each account's utilisation. Nothing is
+    /// hidden — it is one click behind the answer instead of in front of it.
+    fn account_controls(&self, appearance: &Appearance) -> Vec<Box<dyn Element>> {
+        let opts = self.provider_options();
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let faint = theme
+            .sub_text_color(theme.background())
+            .with_opacity(55)
+            .into_solid();
+
+        // Collapsed: the account the router chose, stated plainly.
+        if !self.show_accounts {
+            let Some(freest) = opts.freest.clone() else {
+                // No accounts discovered — the card launches under the provider's
+                // default login, and saying "auto" would imply a choice was made.
+                return vec![Container::new(
+                    Text::new_inline(crate::t!("cockpit-spawn-card-freest"), family, 12.)
+                        .with_color(muted)
+                        .finish(),
+                )
+                .finish()];
+            };
+            let selected = match self.account {
+                AccountChoice::Freest => freest.clone(),
+                AccountChoice::Specific(i) => {
+                    opts.accounts.get(i).cloned().unwrap_or(freest.clone())
+                }
+            };
+            let auto = matches!(self.account, AccountChoice::Freest);
+
+            let mut row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(7.0)
+                // Provider tile — the same identity colour the cards carry,
+                // contrast-picked for the theme.
+                .with_child(
+                    ConstrainedBox::new(
+                        Rect::new()
+                            .with_background_color(crate::cockpit::style::provider_color_on(
+                                selected.provider,
+                                theme.background().into_solid(),
+                            ))
+                            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(2.0)))
+                            .finish(),
+                    )
+                    .with_width(8.0)
+                    .with_height(8.0)
+                    .finish(),
+                )
+                .with_child(
+                    Text::new_inline(selected.label.clone(), family, 12.)
+                        .with_color(main)
+                        .finish(),
+                );
+            if let Some(plan) = &selected.plan {
+                row = row.with_child(
+                    Text::new_inline(plan.clone(), family, 12.)
+                        .with_color(faint)
+                        .finish(),
+                );
+            }
+            // The binding window's utilisation, by the one rule: calm grey below
+            // the threshold, true red at or above it (§1.2).
+            row = row.with_child(
+                Text::new_inline(selected.heat_label.clone(), family, 12.)
+                    .with_color(crate::cockpit::style::utilisation_coloru(
+                        selected.heat,
+                        appearance,
+                    ))
+                    .finish(),
+            );
+            if auto {
+                row = row.with_child(
+                    Text::new_inline(crate::t!("cockpit-spawn-card-auto"), family, 11.)
+                        .with_color(faint)
+                        .finish(),
+                );
+            }
+            let line = row.with_main_axis_size(MainAxisSize::Min).finish();
+            return vec![
+                line,
+                self.chip(
+                    "acct-change",
+                    crate::t!("cockpit-spawn-card-change"),
+                    false,
+                    SpawnCardAction::ToggleAccountList,
+                    appearance,
+                ),
+            ];
+        }
+
+        // Expanded: every account with its utilisation, plus the auto option.
+        let freest_label = opts
+            .freest_label
+            .clone()
+            .map(|l| crate::t!("cockpit-spawn-card-freest-named", label = l))
+            .unwrap_or_else(|| crate::t!("cockpit-spawn-card-freest"));
+        let mut chips = vec![self.chip(
+            "acct-freest",
+            freest_label,
+            self.account == AccountChoice::Freest,
+            SpawnCardAction::SetAccountFreest,
+            appearance,
+        )];
+        for (i, a) in opts.accounts.iter().enumerate() {
+            chips.push(self.chip(
+                &format!("acct-{i}"),
+                format!("{} ({})", a.label, a.heat_label),
+                self.account == AccountChoice::Specific(i),
+                SpawnCardAction::SetAccount(i),
+                appearance,
+            ));
+        }
+        chips
     }
 
     fn provider_options(&self) -> &ProviderOptions {
@@ -761,30 +909,11 @@ impl SpawnCard {
                 appearance,
             ));
         } else {
-            let opts = self.provider_options();
-            let mut acct_chips = Vec::new();
-            let freest_label = opts
-                .freest_label
-                .clone()
-                .map(|l| crate::t!("cockpit-spawn-card-freest-named", label = l))
-                .unwrap_or_else(|| crate::t!("cockpit-spawn-card-freest"));
-            acct_chips.push(self.chip(
-                "acct-freest",
-                freest_label,
-                self.account == AccountChoice::Freest,
-                SpawnCardAction::SetAccountFreest,
+            col = col.with_child(self.row(
+                &crate::t!("cockpit-spawn-card-account"),
+                self.account_controls(appearance),
                 appearance,
             ));
-            for (i, a) in opts.accounts.iter().enumerate() {
-                acct_chips.push(self.chip(
-                    &format!("acct-{i}"),
-                    format!("{} ({})", a.label, a.heat_label),
-                    self.account == AccountChoice::Specific(i),
-                    SpawnCardAction::SetAccount(i),
-                    appearance,
-                ));
-            }
-            col = col.with_child(self.row(&crate::t!("cockpit-spawn-card-account"), acct_chips, appearance));
         }
 
         // Host row — local + connected SSH hosts.
@@ -965,12 +1094,20 @@ impl TypedActionView for SpawnCard {
                 self.effort = e.clone();
                 ctx.notify();
             }
+            SpawnCardAction::ToggleAccountList => {
+                self.show_accounts = !self.show_accounts;
+                ctx.notify();
+            }
             SpawnCardAction::SetAccountFreest => {
                 self.account = AccountChoice::Freest;
+                // Chosen — fold back to the calm line. Leaving the list open
+                // after a pick would keep asking a question already answered.
+                self.show_accounts = false;
                 ctx.notify();
             }
             SpawnCardAction::SetAccount(i) => {
                 self.account = AccountChoice::Specific(*i);
+                self.show_accounts = false;
                 ctx.notify();
             }
             SpawnCardAction::SetHostLocal => {
@@ -1086,6 +1223,8 @@ pub enum SpawnCardAction {
     SetEffort(String),
     SetAccountFreest,
     SetAccount(usize),
+    /// Unfold (or fold) the account list behind the auto line.
+    ToggleAccountList,
     SetHostLocal,
     SetHost(usize),
     /// Open the native folder picker to choose the launch directory (local host).
@@ -1263,6 +1402,7 @@ mod tests {
             model: "sonnet".to_string(),
             effort: "low".to_string(),
             account: AccountChoice::Freest,
+            show_accounts: false,
             host: HostChoice::Local,
             project: Some(PathBuf::from("/home/dev/projects/zaplex")),
             prompt: None,
@@ -1313,6 +1453,7 @@ mod tests {
             model: "opus".to_string(),
             effort: "high".to_string(),
             account: AccountChoice::Freest,
+            show_accounts: false,
             host: HostChoice::Remote(0),
             project: None,
             prompt: None,
@@ -1357,6 +1498,7 @@ mod tests {
             model: "opus".to_string(),
             effort: "high".to_string(),
             account: AccountChoice::Freest,
+            show_accounts: false,
             host: HostChoice::Local,
             project: None,
             prompt: None,

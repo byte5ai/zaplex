@@ -17802,6 +17802,28 @@ impl Workspace {
     /// its accounts (label + config dir + heat) and the precomputed freest pick.
     /// Empty when the cockpit is disabled or the provider has no accounts — the
     /// card then launches under the provider's default login.
+    /// One account, as the Spawn-Karte needs it.
+    ///
+    /// The heat is the **binding window** (`binding_window`) — the fullest of
+    /// 5h / week / Opus / Sonnet — not the 5h block: an account whose weekly or
+    /// Opus sublimit is the real cap must not read calm here. Carried as both the
+    /// formatted label (with `~` for an estimate) and the raw fraction, so the
+    /// card can colour by the one utilisation rule rather than parse its own
+    /// string back.
+    fn spawn_card_account_option(a: &zaplex_cockpit::AccountUsage) -> spawn_card::AccountOption {
+        spawn_card::AccountOption {
+            label: a.account.label.clone(),
+            config_dir: a.account.config_dir.clone(),
+            heat_label: zaplex_cockpit::heat_pct_label_with_provenance(
+                zaplex_cockpit::binding_window(a).0,
+                a.provenance,
+            ),
+            heat: zaplex_cockpit::binding_window(a).0,
+            plan: a.account.plan_tier.clone(),
+            provider: a.account.provider,
+        }
+    }
+
     fn spawn_card_provider_options(
         &self,
         provider: zaplex_cockpit::Provider,
@@ -17821,18 +17843,10 @@ impl Workspace {
             .iter()
             .filter(|a| a.account.provider == provider)
         {
-            opts.accounts.push(spawn_card::AccountOption {
-                label: a.account.label.clone(),
-                config_dir: a.account.config_dir.clone(),
-                // Binding-window heat + provenance ("~" for estimates), so a chip
-                // never reads calm while a weekly/Opus sublimit is the real cap.
-                heat_label: zaplex_cockpit::heat_pct_label_with_provenance(
-                    zaplex_cockpit::binding_window(a).0,
-                    a.provenance,
-                ),
-            });
+            opts.accounts.push(Self::spawn_card_account_option(a));
         }
         if let Some(f) = zaplex_cockpit::pick_freest(provider, &snapshot.accounts) {
+            opts.freest = Some(Self::spawn_card_account_option(f));
             opts.freest_label = Some(format!(
                 "{} ({})",
                 f.account.label,

@@ -54,7 +54,7 @@ pub use guardrails::{
     stop_all_summary_toast, unsignalable_toast, GuardrailSignal, GuardrailTarget,
 };
 pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
-pub use overrides::{AccountOverride, AccountOverrides};
+pub use overrides::{set_label_override, AccountOverride, AccountOverrides};
 pub use pricing::{ModelPrice, PricingTable};
 pub use project::{resolve_project, ResolvedProject};
 pub use review::{git_commit_all_cmd, git_diff_cmd, render_review_markdown, WorkingChanges};

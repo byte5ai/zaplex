@@ -101,6 +101,121 @@ impl AccountOverrides {
     }
 }
 
+/// Set (or clear, with `None`) an account's **label** override in an
+/// `instances.json`, preserving every other *value* in the file.
+///
+/// This file is **not ours**. It is claudeplex's format, and a user's copy may
+/// carry keys this crate has never heard of. So the edit goes through
+/// `serde_json::Value` rather than [`AccountOverrides`]: that struct knows four
+/// fields, drops the rest on parse, and writing it back would silently delete
+/// whatever the other tool put there. Round-tripping the raw value touches one
+/// key and leaves the other values standing.
+///
+/// **Not byte-for-byte.** The file is re-serialised, so formatting, key order
+/// and comments-as-whitespace change, and duplicate keys (legal JSON, last one
+/// wins) collapse to one. Values survive; the text does not.
+///
+/// Refuses rather than clobbers:
+/// - A file that is not a JSON object is left alone (`Err`). Overwriting it
+///   would destroy something we failed to understand.
+/// - A missing file is fine — the object starts empty.
+/// - Unreadable/unwritable paths surface the IO error; the caller decides
+///   whether to toast. Silence would be the one unacceptable outcome.
+///
+/// Written via a temp file + rename, so a crash mid-write cannot leave a
+/// half-written file where a valid one was: the reader is the cockpit's own
+/// startup, and a truncated file would blank every alias at once. The temp name
+/// carries this process's id — a fixed one would collide with another zaplex
+/// writing at the same moment, and with whatever else happens to sit there.
+/// A symlinked `instances.json` is resolved first, so the write lands on the
+/// file the user pointed at instead of replacing their link with a copy, and the
+/// original's permissions are carried onto the replacement.
+///
+/// **Last writer wins.** This is read-modify-write with no lock: if claudeplex
+/// saves between our read and our rename, its change is lost. A lock would not
+/// help — it only works when both writers honour it, and the other tool has
+/// never heard of ours, so it would buy false confidence rather than safety. The
+/// window is the few milliseconds of one edit, and the loss is one field of one
+/// account, recoverable by setting it again.
+pub fn set_label_override(
+    path: &std::path::Path,
+    account_key: &str,
+    label: Option<&str>,
+) -> std::io::Result<()> {
+    use serde_json::Value;
+
+    let mut root: Value = match std::fs::read_to_string(path) {
+        Ok(raw) if !raw.trim().is_empty() => serde_json::from_str(&raw).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("instances.json is not valid JSON ({e}) — refusing to overwrite it"),
+            )
+        })?,
+        // Absent or empty: start from an empty object.
+        Ok(_) => Value::Object(Default::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Object(Default::default()),
+        Err(e) => return Err(e),
+    };
+
+    let Some(obj) = root.as_object_mut() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "instances.json is not a JSON object — refusing to overwrite it",
+        ));
+    };
+
+    let entry = obj
+        .entry(account_key.to_string())
+        .or_insert_with(|| Value::Object(Default::default()));
+    let Some(entry) = entry.as_object_mut() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("instances.json entry for {account_key} is not an object"),
+        ));
+    };
+
+    match label {
+        // An empty alias means "no alias", not an account named "".
+        Some(l) if !l.trim().is_empty() => {
+            entry.insert("label".into(), Value::String(l.trim().to_string()));
+        }
+        _ => {
+            entry.remove("label");
+        }
+    }
+    // An entry we emptied carries nothing — leave no bookkeeping behind.
+    if entry.is_empty() {
+        obj.remove(account_key);
+    }
+
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // Follow a symlink to its target: renaming onto the link would leave the
+    // user with a regular file where they had deliberately pointed elsewhere.
+    // Unresolvable (the file may not exist yet) → write where we were told.
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    // A per-process temp name: a fixed one races another zaplex mid-edit, and
+    // would happily overwrite anything already sitting at that path.
+    let tmp = target.with_extension(format!("tmp{}", std::process::id()));
+    let body = serde_json::to_string_pretty(&root)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    std::fs::write(&tmp, body)?;
+    // Carry the original's permissions across — the rename swaps the inode, so
+    // without this a 0600 file would come back with whatever the umask says.
+    if let Ok(meta) = std::fs::metadata(&target) {
+        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    }
+    match std::fs::rename(&tmp, &target) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Don't leave our scratch file behind on a failed swap.
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "overrides_tests.rs"]
 mod tests;
