@@ -1606,11 +1606,20 @@ impl CockpitPaneView {
 
     /// **P3/P4** — the account's sessions, every host, on the virtualised table.
     ///
-    /// `warpui::Table` rather than a hand-rolled flex grid: it windows its rows
-    /// through a sum-tree, so the cost of a hundred sessions is the cost of the
-    /// dozen on screen. A grid would build every row every frame — fine at three
-    /// sessions, which is exactly why the wrong choice would not show until it
-    /// mattered.
+    /// `warpui::Table` rather than a hand-rolled flex grid — for the column model
+    /// and the sum-tree row store, **not** for virtualisation: this table is
+    /// `ExpandToContent`, which builds every row. The `Viewported` mode does
+    /// window them, but only when the table owns its viewport, and here the whole
+    /// pane scrolls as one so the detail card scrolls away with the rows.
+    ///
+    /// That is a deliberate trade, not an oversight, and it holds only because
+    /// the row count is already bounded: dormant discovery caps at
+    /// `IDLE_SESSION_LIMIT` (50) per account and live sessions are few, so a
+    /// pane shows tens of rows, not the "hundreds" the spec worried about — and
+    /// it is *per account*, which P1 made true. Lift that cap, or give one
+    /// account hundreds of live sessions, and this must move to `Viewported`
+    /// with the table taking the remaining height (a flexible child needs a
+    /// finite constraint — see the header note at `render_conductor_row`).
     fn render_sessions_table(
         &self,
         acct: &AccountUsage,

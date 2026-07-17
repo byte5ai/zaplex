@@ -265,9 +265,11 @@ pub struct AccountUsage {
     /// Folded from the same entries under the same day rule as `today`: every
     /// turn is counted once, on exactly one side, so the rows account for the
     /// figure above them rather than being a second estimate of it. The token
-    /// counters therefore sum to `today` exactly; `cost_usd` sums to within a
-    /// float rounding step, since grouping the same summands per session adds
-    /// them in a different order. Far below a cent — but not the same bit.
+    /// counters therefore sum to `today` exactly. `cost_usd` does not: grouping
+    /// the same summands per session adds them in a different order, and f64
+    /// addition is not associative. The drift is far below a cent — the test
+    /// pins it under 1e-9 — but it is a tolerance, not a rounding step, and not
+    /// a bound anyone has proved.
     ///
     /// The empty key collects turns whose transcript names no session: counted
     /// for the account, just not attributable to a row.

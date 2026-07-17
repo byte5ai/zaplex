@@ -22,12 +22,18 @@
 //! Offering an action that cannot work is a lie the UI tells; the honest move is
 //! not to offer it.
 //!
-//! This module answers those questions in one place, by **asking** the sources
-//! rather than restating them: `can_signal` is the very predicate the signal
-//! path itself refuses on, and the rest come from `CLIAgent`, which is where
-//! what-a-CLI-can-do already lives. So a verb and the action behind it cannot
-//! drift apart — not because they are checked together, but because neither
-//! holds an opinion of its own.
+//! This module answers those questions in one place, and **asks** wherever there
+//! is something to ask:
+//!
+//! - `can_signal` **is** the predicate the signal path refuses on — the same
+//!   function, so the verb and the action cannot disagree.
+//! - `can_fork` / `can_resume` ask `CLIAgent`, where what-a-CLI-can-do lives.
+//! - `can_slash` composes two of those facts (a CLI that has slash commands,
+//!   and a session that can be resumed).
+//! - `can_review` **restates** a rule of its own: reviewing needs the working
+//!   tree to be here. There is no other holder of that fact to ask, so this is
+//!   the one field that could drift from a caller who decided it differently —
+//!   which is the reason for asking here rather than at the call site.
 //!
 //! It does not enforce anything: a caller that skips it can still render a verb
 //! that fails. It is the one place to ask, not a gate around the actions.
