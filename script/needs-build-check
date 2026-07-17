@@ -35,7 +35,13 @@ else
   MERGE_BASE="$BASE_REF"
 fi
 
-changed_files="$(git diff --name-only --diff-filter=ACMR "$MERGE_BASE" HEAD)"
+# No --diff-filter: unlike script/check-no-new-cjk (which only cares about
+# ADDED lines, so dropping deletions is correct there), this classification
+# must also see deletions and renames. Filtering to ACMR would drop deleted
+# (D) files entirely, so a PR that e.g. only deletes a .rs file — leaving a
+# module or Cargo.toml reference dangling — would read as an empty/doc-only
+# diff and skip the compile check meant to catch exactly that breakage.
+changed_files="$(git diff --name-only "$MERGE_BASE" HEAD)"
 
 if [ -z "$changed_files" ]; then
   echo "false"
@@ -46,8 +52,13 @@ fi
 # Conservative by design: unrecognized paths count as "needs build", not the
 # other way around — a false "false" would let a real breakage through
 # unchecked, a false "true" only costs the compile minutes we already pay
-# today.
-DOC_ONLY_PATTERN='^([^/]+\.md|docs/.*|LICENSE(-[A-Za-z]+)?|CODE_OF_CONDUCT\.md|CONTRIBUTING\.md|SECURITY\.md|CHANGELOG\.md)$'
+# today. `specs/` is included: it is the repo's product/tech-spec tree
+# (`specs/<id>/PRODUCT.md`, `TECH.md`, ...) and, like `docs/`, is Markdown
+# only — verified empty of non-.md files at the time this was written.
+# Every branch requires the .md extension (not just the docs/specs prefix) so
+# a rename that moves a non-Markdown file (e.g. a .rs source file) into
+# docs/ or specs/ is still classified as a build-relevant change.
+DOC_ONLY_PATTERN='^([^/]+\.md|docs/.*\.md|specs/.*\.md|LICENSE(-[A-Za-z]+)?|CODE_OF_CONDUCT\.md|CONTRIBUTING\.md|SECURITY\.md|CHANGELOG\.md)$'
 
 if printf '%s\n' "$changed_files" | grep -vE "$DOC_ONLY_PATTERN" | grep -q .; then
   echo "true"
