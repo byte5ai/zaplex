@@ -13,12 +13,14 @@ use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
+    Border, ChildAnchor, Dismiss, OffsetPositioning, ParentAnchor, ParentOffsetBounds, Stack,
     ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Empty, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Radius, Rect, RowBackground, ScrollbarWidth,
     Shrinkable, Table, TableColumnWidth, TableConfig, TableHeader, TableStateHandle,
     TableVerticalSizing, Text,
 };
+use pathfinder_geometry::vector::Vector2F;
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
@@ -51,11 +53,13 @@ use crate::WorkspaceAction;
 const PANE_PADDING: f32 = 16.0;
 /// Columns in the session table (spec v3 §4.3). A group header fills the first
 /// and leaves the rest empty — the table is flat, so a group is a row.
-const TABLE_COLUMNS: usize = 8;
+const TABLE_COLUMNS: usize = 9;
 /// The search box's width. Fixed on purpose: an `EditorView` panics when it is
 /// measured against an infinite width constraint, which is what a flexible child
 /// of a row gets during the intrinsic pass.
 const SEARCH_WIDTH: f32 = 220.0;
+/// The ⋯ drive's width.
+const ROW_MENU_WIDTH: f32 = 216.0;
 const CARD_PADDING: f32 = 12.0;
 const CARD_SPACING: f32 = 8.0;
 const HEAT_BAR_WIDTH: f32 = 160.0;
@@ -122,6 +126,14 @@ fn state_rank(state: SessionState) -> u8 {
         SessionState::Monitor => 2,
         SessionState::Idle => 3,
     }
+}
+
+/// The open ⋯ drive: which row, and where it was clicked (P5).
+pub struct RowMenu {
+    /// `host_key(is_local, host_id, session_id)` — the row's identity. Never the
+    /// session id alone: two hosts can hold the same one.
+    pub row_key: String,
+    pub position: Vector2F,
 }
 
 /// A sortable column of the session table (P4).
@@ -217,6 +229,11 @@ pub struct CockpitPaneView {
     filter_chip_states: HashMap<&'static str, MouseStateHandle>,
     /// How the table is sorted (P4).
     sort: Sort,
+    /// The row whose ⋯ drive is open (P5), if any: its row key and where to
+    /// anchor the menu.
+    row_menu: Option<RowMenu>,
+    /// Hover state per row's ⋯ button, keyed like the row.
+    row_dots_states: HashMap<String, MouseStateHandle>,
     /// Hover state per sortable column header.
     sort_header_states: HashMap<&'static str, MouseStateHandle>,
     /// The live search box (P4) — project, branch or worktree.
@@ -341,6 +358,13 @@ pub enum CockpitPaneAction {
     /// Sort the table by this column. Clicking the active column flips the
     /// direction; a new column starts at whichever end it reads from.
     SortBy(SortColumn),
+    /// Open the ⋯ drive for a table row (P5), anchored where it was clicked.
+    OpenRowMenu {
+        row_key: String,
+        position: Vector2F,
+    },
+    /// Close it.
+    CloseRowMenu,
     /// Fold/unfold a host node (key = stable host identity `host_ident`, not the
     /// display label — two remote daemons can share a label).
     ToggleHost(String),
@@ -415,6 +439,8 @@ impl CockpitPaneView {
             table_row_states: HashMap::new(),
             filter_chip_states: HashMap::new(),
             sort: Sort::default(),
+            row_menu: None,
+            row_dots_states: HashMap::new(),
             sort_header_states: HashMap::new(),
             search,
             search_text: String::new(),
@@ -533,6 +559,22 @@ impl CockpitPaneView {
         self.collapsed_table_groups
             .retain(|k, _| group_keys.contains(k));
         for k in row_keys {
+            // Two handles per row: the row itself, and its ⋯ — separate click
+            // targets, so neither can fire the other.
+            self.row_dots_states.entry(k.clone()).or_default();
+            // …plus one per item of whichever drive is open. Seeding them all
+            // for every row would be thousands of handles for a menu that shows
+            // one row's worth at a time.
+            if self.row_menu.as_ref().is_some_and(|m| m.row_key == k) {
+                for item in [
+                    "adopt", "fork", "forkwt", "compact", "clear", "transcript", "review",
+                    "reviewed", "stop", "kill",
+                ] {
+                    self.row_dots_states
+                        .entry(format!("{k}\u{0}{item}"))
+                        .or_default();
+                }
+            }
             self.table_row_states.entry(k).or_default();
         }
         for k in group_keys {
@@ -1112,6 +1154,272 @@ impl CockpitPaneView {
         }
     }
 
+    /// One ⋯ item: a label and what it does. Destructive ones rest muted and
+    /// turn amber under the cursor — a danger affordance, transient by
+    /// construction, which is why it may borrow the attention colour (§1.3).
+    fn menu_item<A: warpui::Action + Clone>(
+        &self,
+        key: &str,
+        label: String,
+        kind: VerbKind,
+        action: A,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let state = self.row_dots_states.get(key).cloned()?;
+        Some(
+            Container::new(verb_button(state, &label, kind, appearance, action))
+                .with_padding_left(8.0)
+                .with_padding_right(8.0)
+                .with_padding_top(3.0)
+                .with_padding_bottom(3.0)
+                .finish(),
+        )
+    }
+
+    /// **P5** — the ⋯ drive: everything you can do to a session, in one place,
+    /// **capability-gated** (F6).
+    ///
+    /// An item appears only when it can actually work. A Codex session gets no
+    /// Stop/Kill — it carries no pid, so the signal path would refuse and answer
+    /// with an error toast; offering it would be the row lying. A remote session
+    /// gets no Review: `project_root` is a path over there. Disabled-by-absence,
+    /// not greyed-out — a menu that lists what it cannot do makes the user read
+    /// it twice.
+    fn render_row_menu(
+        &self,
+        acct: &AccountUsage,
+        tree: &FleetTree,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let menu = self.row_menu.as_ref()?;
+        // Find the row again — the inventory may have moved on since the click.
+        let rows = self.build_table_rows(acct, tree, app);
+        let (session, host, host_id, is_local) = rows.iter().find_map(|r| match r {
+            TableRow::Session {
+                session,
+                host,
+                host_id,
+                is_local,
+                ..
+            } if host_key(*is_local, host_id.as_deref(), &session.session_id) == menu.row_key => {
+                Some((session, host, host_id, *is_local))
+            }
+            _ => None,
+        })?;
+
+        let caps = SessionCapabilities::of(session, is_local);
+        let agent = crate::cockpit::agent_of(session.provider);
+        let config_dir = CockpitModel::as_ref(app).config_dir_for_session(&session.session_id);
+        let label = zaplex_cockpit::session_label(session);
+        let rk = &menu.row_key;
+        let k = |suffix: &str| format!("{rk}\u{0}{suffix}");
+
+        let theme = appearance.theme();
+        let mut col = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Min);
+        let push = |el: Option<Box<dyn Element>>, col: &mut Flex| {
+            if let Some(el) = el {
+                col.add_child(el);
+            }
+        };
+
+        // Adopt — the row click does this too, but a menu that omitted the
+        // primary action would read as if it were missing.
+        if caps.can_resume {
+            push(
+                self.menu_item(
+                    &k("adopt"),
+                    crate::t!("cockpit-menu-adopt").to_string(),
+                    VerbKind::Constructive,
+                    WorkspaceAction::AttachFleetSession {
+                        host: host.clone().unwrap_or_default(),
+                        host_id: host_id.clone(),
+                        session_id: session.session_id.clone(),
+                        is_local,
+                    },
+                    appearance,
+                ),
+                &mut col,
+            );
+        }
+        if caps.can_fork {
+            push(
+                self.menu_item(
+                    &k("fork"),
+                    crate::t!("cockpit-menu-fork").to_string(),
+                    VerbKind::Constructive,
+                    WorkspaceAction::ForkAgentSession {
+                        agent,
+                        session_id: session.session_id.clone(),
+                        cwd: PathBuf::from(&session.cwd),
+                        config_dir: config_dir.clone(),
+                        into_worktree: false,
+                    },
+                    appearance,
+                ),
+                &mut col,
+            );
+            // Into a worktree only where there is a repo to branch — otherwise
+            // the fork would have nowhere to go.
+            if self
+                .session_in_repo
+                .get(&session.session_id)
+                .copied()
+                .unwrap_or(false)
+            {
+                push(
+                    self.menu_item(
+                        &k("forkwt"),
+                        crate::t!("cockpit-menu-fork-worktree").to_string(),
+                        VerbKind::Constructive,
+                        WorkspaceAction::ForkAgentSession {
+                            agent,
+                            session_id: session.session_id.clone(),
+                            cwd: PathBuf::from(&session.cwd),
+                            config_dir: config_dir.clone(),
+                            into_worktree: true,
+                        },
+                        appearance,
+                    ),
+                    &mut col,
+                );
+            }
+        }
+        if caps.can_slash {
+            // `t!` wants a literal, so these are spelled out rather than looped.
+            let slash = |command: &str| WorkspaceAction::SlashCommandSession {
+                agent,
+                session_id: session.session_id.clone(),
+                cwd: PathBuf::from(&session.cwd),
+                config_dir: config_dir.clone(),
+                command: command.to_string(),
+            };
+            push(
+                self.menu_item(
+                    &k("compact"),
+                    crate::t!("cockpit-session-compact").to_string(),
+                    VerbKind::Constructive,
+                    slash("/compact"),
+                    appearance,
+                ),
+                &mut col,
+            );
+            push(
+                self.menu_item(
+                    &k("clear"),
+                    crate::t!("cockpit-session-clear").to_string(),
+                    VerbKind::Constructive,
+                    slash("/clear"),
+                    appearance,
+                ),
+                &mut col,
+            );
+        }
+        push(
+            self.menu_item(
+                &k("transcript"),
+                crate::t!("cockpit-menu-transcript").to_string(),
+                VerbKind::Constructive,
+                WorkspaceAction::ViewTranscript {
+                    session_id: session.session_id.clone(),
+                    config_dir: config_dir.clone().unwrap_or_default(),
+                    cwd: PathBuf::from(&session.cwd),
+                    // Follow a live conversation; a dormant one has nothing left
+                    // to follow, and re-reading it on every reconcile would be
+                    // work done to watch a file that cannot change.
+                    watch: session.state != SessionState::Idle,
+                },
+                appearance,
+            ),
+            &mut col,
+        );
+        if caps.can_review {
+            push(
+                self.menu_item(
+                    &k("review"),
+                    crate::t!("cockpit-menu-review").to_string(),
+                    VerbKind::Constructive,
+                    WorkspaceAction::ReviewSession {
+                        project_root: PathBuf::from(&session.project_root),
+                        project_name: session.project_name.clone(),
+                    },
+                    appearance,
+                ),
+                &mut col,
+            );
+            push(
+                self.menu_item(
+                    &k("reviewed"),
+                    crate::t!("cockpit-session-mark-reviewed").to_string(),
+                    VerbKind::Constructive,
+                    CockpitPaneAction::MarkReviewed(session.session_id.clone()),
+                    appearance,
+                ),
+                &mut col,
+            );
+        }
+        if caps.can_signal {
+            col.add_child(cluster_divider(appearance));
+            push(
+                self.menu_item(
+                    &k("stop"),
+                    crate::t!("cockpit-menu-stop").to_string(),
+                    VerbKind::Destructive,
+                    WorkspaceAction::StopAgent {
+                        host: host.clone().unwrap_or_default(),
+                        host_id: host_id.clone(),
+                        session_id: session.session_id.clone(),
+                        pid: session.pid,
+                        is_local,
+                        agent_label: label.clone(),
+                    },
+                    appearance,
+                ),
+                &mut col,
+            );
+            push(
+                self.menu_item(
+                    &k("kill"),
+                    crate::t!("cockpit-menu-kill").to_string(),
+                    VerbKind::Destructive,
+                    WorkspaceAction::KillAgentRequest {
+                        host: host.clone().unwrap_or_default(),
+                        host_id: host_id.clone(),
+                        session_id: session.session_id.clone(),
+                        pid: session.pid,
+                        is_local,
+                        agent_label: label,
+                        project_name: session.project_name.clone(),
+                    },
+                    appearance,
+                ),
+                &mut col,
+            );
+        }
+
+        let inner = ConstrainedBox::new(
+            Container::new(col.finish())
+                .with_background(theme.surface_2())
+                .with_border(Border::all(1.0).with_border_color(theme.surface_3().into()))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.0)))
+                .with_uniform_padding(4.0)
+                .finish(),
+        )
+        .with_width(ROW_MENU_WIDTH)
+        .finish();
+
+        Some(
+            Dismiss::new(inner)
+                .prevent_interaction_with_other_elements()
+                .on_dismiss(|ctx, _| {
+                    ctx.dispatch_typed_action(CockpitPaneAction::CloseRowMenu);
+                })
+                .finish(),
+        )
+    }
+
     /// **P4** — the table's toolbar: live search, then the filter chips.
     ///
     /// Search and chips narrow the same list and compose: searching inside
@@ -1284,6 +1592,7 @@ impl CockpitPaneView {
         let rows_len = rows_for_render.len();
         let group_states = self.table_group_states.clone();
         let row_states = self.table_row_states.clone();
+        let dots_states = self.row_dots_states.clone();
 
         self.table_state.set_row_count(rows_len);
         // The closure outlives this frame, so it reads the appearance from the
@@ -1454,6 +1763,27 @@ impl CockpitPaneView {
                             true,
                             appearance,
                         ),
+                        // The ⋯ is its own cell, outside the row's click target:
+                        // opening the drive and opening the session are different
+                        // intents, and one must never fire the other.
+                        match dots_states.get(&rk).cloned() {
+                            Some(state) => {
+                                let key = rk.clone();
+                                Hoverable::new(state, move |mouse| {
+                                    let c = if mouse.is_hovered() { main } else { faint };
+                                    Self::text("⋯".to_string(), family, body, c)
+                                })
+                                .with_cursor(Cursor::PointingHand)
+                                .on_click(move |ctx, _, position| {
+                                    ctx.dispatch_typed_action(CockpitPaneAction::OpenRowMenu {
+                                        row_key: key.clone(),
+                                        position,
+                                    })
+                                })
+                                .finish()
+                            }
+                            None => Empty::new().finish(),
+                        },
                     ]
                 }
             }
@@ -1477,6 +1807,9 @@ impl CockpitPaneView {
                     .with_width(TableColumnWidth::Flex(1.0)),
                 header("last", crate::t!("cockpit-table-col-last").to_string(), SortColumn::Last, true)
                     .with_width(TableColumnWidth::Flex(0.8)),
+                // The ⋯ column: no label — a header over a menu affordance would
+                // be naming the furniture.
+                TableHeader::new(Empty::new().finish()).with_width(TableColumnWidth::Fixed(24.0)),
             ])
             .with_row_count(rows_len)
             .with_config(TableConfig {
@@ -2661,6 +2994,7 @@ impl View for CockpitPaneView {
                 .find(|a| a.account.key == key)
             {
                 Some(acct) => {
+                    let scroll = {
                     let col = Flex::column()
                         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                         .with_main_axis_size(MainAxisSize::Min)
@@ -2681,6 +3015,31 @@ impl View for CockpitPaneView {
                     )
                     .with_overlayed_scrollbar()
                     .finish()
+                    };
+                    // The ⋯ drive floats over the pane, anchored where it was
+                    // clicked, and dismisses on any click outside itself.
+                    match self.render_row_menu(acct, &tree, app, appearance) {
+                        Some(menu) => {
+                            let position = self
+                                .row_menu
+                                .as_ref()
+                                .map(|m| m.position)
+                                .unwrap_or_default();
+                            let mut stack = Stack::new();
+                            stack.add_child(scroll);
+                            stack.add_positioned_overlay_child(
+                                menu,
+                                OffsetPositioning::offset_from_parent(
+                                    position,
+                                    ParentOffsetBounds::ParentByPosition,
+                                    ParentAnchor::TopLeft,
+                                    ChildAnchor::TopLeft,
+                                ),
+                            );
+                            stack.finish()
+                        }
+                        None => scroll,
+                    }
                 }
                 // Signed out, config dir gone — say so instead of an empty pane
                 // that looks like a load that never finished.
@@ -2783,6 +3142,17 @@ impl TypedActionView for CockpitPaneView {
             }
             CockpitPaneAction::SetSessionFilter(filter) => {
                 self.session_filter = *filter;
+                ctx.notify();
+            }
+            CockpitPaneAction::OpenRowMenu { row_key, position } => {
+                self.row_menu = Some(RowMenu {
+                    row_key: row_key.clone(),
+                    position: *position,
+                });
+                ctx.notify();
+            }
+            CockpitPaneAction::CloseRowMenu => {
+                self.row_menu = None;
                 ctx.notify();
             }
             CockpitPaneAction::SortBy(column) => {
