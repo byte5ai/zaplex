@@ -63,7 +63,11 @@ fn title_case(s: &str) -> String {
 }
 
 /// Human word for a session state, used in the one-line attribute summary.
-fn state_word(state: SessionState) -> &'static str {
+/// The state's word, for surfaces that spell it out beside the glyph (the
+/// session table's Status column). One source, like [`session_glyph`] is for the
+/// shape — a second `match` elsewhere is how a row ends up saying "working" next
+/// to a waiting mark.
+pub fn state_word(state: SessionState) -> &'static str {
     match state {
         SessionState::Waiting => "waiting",
         SessionState::Active | SessionState::Monitor => "working",

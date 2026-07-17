@@ -104,3 +104,33 @@ fn model_family_shortens_or_passes_through() {
     assert_eq!(model_family("gpt-5-codex"), "gpt-5-codex");
     assert_eq!(model_family(""), "");
 }
+
+/// "Last" reads in the same units as "resets in" — a row and a meter should not
+/// speak two dialects of the same clock.
+#[test]
+fn relative_time_is_short_and_matches_the_reset_units() {
+    let now = DateTime::parse_from_rfc3339("2026-07-17T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let ago = |secs: i64| format_relative(now - chrono::Duration::seconds(secs), now);
+
+    assert_eq!(ago(5), "now", "under a minute is not worth a number");
+    assert_eq!(ago(59), "now");
+    assert_eq!(ago(60), "1m");
+    assert_eq!(ago(3599), "59m");
+    assert_eq!(ago(3600), "1h");
+    assert_eq!(ago(86_399), "23h");
+    assert_eq!(ago(86_400), "1d");
+    assert_eq!(ago(10 * 86_400), "10d");
+}
+
+/// A timestamp from the future means two clocks disagree — the host that wrote
+/// it and this one. That is not news to put in a row, so it reads as `now`
+/// rather than as a negative age.
+#[test]
+fn a_future_timestamp_reads_as_now_rather_than_negative() {
+    let now = DateTime::parse_from_rfc3339("2026-07-17T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    assert_eq!(format_relative(now + chrono::Duration::hours(3), now), "now");
+}

@@ -3833,3 +3833,19 @@ workspace-favorites-header = Favorites
 workspace-favorites-empty = No favorites yet — ★ a host or project in the sidebar
 workspace-favorites-add-header = Add to favorites
 workspace-favorite-unavailable = unavailable — click to remove
+
+# Cockpit — session table (spec v3 §4.3)
+cockpit-table-empty = No sessions match this filter.
+cockpit-table-host-local = this machine
+cockpit-table-col-session = Session
+cockpit-table-col-worktree = Worktree
+cockpit-table-col-host = Host
+cockpit-table-col-model = Model
+cockpit-table-col-context = Context
+cockpit-table-col-status = Status
+cockpit-table-col-last = Last
+cockpit-table-filter-all = All
+cockpit-table-filter-waiting = Waiting
+cockpit-table-filter-active = Active
+cockpit-table-filter-idle = Idle
+cockpit-account-gone = This account is no longer discoverable — signed out, or its config directory is gone.

@@ -34,17 +34,18 @@ pub mod windows;
 pub use conductor::{
     fleet_is_large, fleet_session_count, host_auto_collapsed, host_ident, host_key,
     host_key_is_local, host_session_count, host_summary, model_effort_label, next_waiting,
-    session_attr_line, session_attrs, session_glyph, split_host_key, waiting_sessions, SessionAttrs,
+    session_attr_line, session_attrs, session_glyph, split_host_key, state_word,
+    waiting_sessions, SessionAttrs,
     WaitingTarget, GLYPH_IDLE, GLYPH_WAITING, GLYPH_WORKING,
 };
 pub use favorites::{Favorite, FavoriteKind, Favorites};
 pub use fleet::{
-    build_fleet_tree, fold_inventory, merge_registered_hosts, AgentSession, FleetTree, HostNode,
-    HostSessions, ProjectNode,
-    RemoteHost,
+    build_fleet_tree, fold_inventory, merge_registered_hosts, sessions_of_account, AccountSession,
+    AgentSession, FleetTree, HostNode, HostSessions, ProjectNode, RemoteHost,
 };
 pub use format::{
-    binding_window, context_fill, context_window, format_cost, format_reset, format_tokens,
+    binding_window, context_fill, context_window, format_cost, format_relative, format_reset,
+    format_tokens,
     heat_fill, heat_pct_label_with_provenance, model_family, HeatLevel,
 };
 pub use guardrails::{

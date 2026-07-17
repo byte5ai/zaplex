@@ -191,6 +191,29 @@ pub fn format_reset(reset: Option<DateTime<Utc>>, now: DateTime<Utc>) -> String 
     format!("{}d{}h", d, h % 24)
 }
 
+/// How long ago something happened, as a short glance-value: `"jetzt"`-scale
+/// `now`, then `5m`, `3h`, `2d`.
+///
+/// The mirror of [`format_reset`], which counts forward — same units, same
+/// shortness, so a row's "last" and a meter's "resets in" read as one language.
+/// A future timestamp (a clock that disagrees with the host that wrote it) reads
+/// as `now` rather than a negative age: skew is not news.
+pub fn format_relative(ts: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let ms = (now - ts).num_milliseconds();
+    if ms < 60_000 {
+        return "now".to_string();
+    }
+    let total_min = ((ms as f64) / 60_000.0).floor() as i64;
+    if total_min < 60 {
+        return format!("{total_min}m");
+    }
+    let h = total_min / 60;
+    if h < 24 {
+        return format!("{h}h");
+    }
+    format!("{}d", h / 24)
+}
+
 #[cfg(test)]
 #[path = "format_tests.rs"]
 mod tests;

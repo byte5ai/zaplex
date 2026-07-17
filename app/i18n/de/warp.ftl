@@ -635,3 +635,19 @@ workspace-left-panel-ssh-manager-status-unknown = Unbekannt
 workspace-left-panel-ssh-manager-test = Testen
 workspace-left-panel-ssh-manager-testing = Teste…
 workspace-left-panel-warp-drive = Zaplex Drive
+
+# Cockpit — Sessions-Tabelle (Spec v3 §4.3)
+cockpit-table-empty = Keine Sessions für diesen Filter.
+cockpit-table-host-local = dieser Rechner
+cockpit-table-col-session = Session
+cockpit-table-col-worktree = Worktree
+cockpit-table-col-host = Host
+cockpit-table-col-model = Modell
+cockpit-table-col-context = Kontext
+cockpit-table-col-status = Status
+cockpit-table-col-last = Zuletzt
+cockpit-table-filter-all = Alle
+cockpit-table-filter-waiting = Wartet
+cockpit-table-filter-active = Aktiv
+cockpit-table-filter-idle = Idle
+cockpit-account-gone = Dieses Konto ist nicht mehr auffindbar — abgemeldet, oder sein Konfig-Verzeichnis fehlt.
