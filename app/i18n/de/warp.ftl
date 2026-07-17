@@ -664,3 +664,4 @@ keybinding-desc-workspace-stop-all-agents = Alle laufenden Agenten stoppen
 cockpit-spawn-card-new-agent-on-host = Neuer Agent auf { $host }
 cockpit-spawn-card-auto = automatisch
 cockpit-spawn-card-change = Ändern
+cockpit-account-rename = Konto umbenennen

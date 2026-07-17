@@ -38,7 +38,8 @@ use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions};
 use crate::cockpit::capabilities::SessionCapabilities;
 use crate::cockpit::style::{
-    attention_coloru, cluster_divider, ctx_pct_element, glyph_cell, heat_coloru_on, icon_word_verb,
+    attention_coloru, cluster_divider, ctx_pct_element, glyph_cell, heat_coloru_on,
+    icon_verb_button_tooltip, icon_word_verb,
     provider_color_on,
     status_dot_coloru,
     utilisation_coloru, verb_button, verb_button_colored, VerbKind,
@@ -59,6 +60,8 @@ const TABLE_COLUMNS: usize = 9;
 const SEARCH_WIDTH: f32 = 220.0;
 /// The ⋯ drive's width.
 const ROW_MENU_WIDTH: f32 = 216.0;
+/// The alias editor's width — fixed for the same reason the search box is.
+const ALIAS_EDITOR_WIDTH: f32 = 220.0;
 const CARD_PADDING: f32 = 12.0;
 const CARD_SPACING: f32 = 8.0;
 const HEAT_BAR_WIDTH: f32 = 160.0;
@@ -262,6 +265,12 @@ pub struct CockpitPaneView {
     row_dots_states: HashMap<String, MouseStateHandle>,
     /// Hover state per sortable column header.
     sort_header_states: HashMap<&'static str, MouseStateHandle>,
+    /// The alias editor (A1), present only while renaming this pane's account.
+    /// `Some` is the whole "am I editing" state — a separate bool could disagree
+    /// with it.
+    alias_editor: Option<ViewHandle<EditorView>>,
+    /// Hover state for the detail card's ⋯.
+    alias_dots_state: MouseStateHandle,
     /// The live search box (P4) — project, branch or worktree.
     search: ViewHandle<EditorView>,
     /// Its current text, kept here so the render path doesn't reach into the
@@ -384,6 +393,8 @@ pub enum CockpitPaneAction {
     /// Sort the table by this column. Clicking the active column flips the
     /// direction; a new column starts at whichever end it reads from.
     SortBy(SortColumn),
+    /// Start renaming this pane's account (A1) — the ⋯ on the detail card.
+    StartAliasEdit,
     /// Open the ⋯ drive for a table row (P5), anchored where it was clicked.
     OpenRowMenu {
         row_key: String,
@@ -469,6 +480,8 @@ impl CockpitPaneView {
             row_menu: None,
             row_dots_states: HashMap::new(),
             sort_header_states: HashMap::new(),
+            alias_editor: None,
+            alias_dots_state: MouseStateHandle::default(),
             search,
             search_text: String::new(),
             pane_configuration,
@@ -1956,6 +1969,47 @@ impl CockpitPaneView {
             .finish()
     }
 
+    /// Persist a typed alias and close the editor (A1).
+    ///
+    /// What you typed is what you get; blank clears the alias, since an account
+    /// is never named "".
+    ///
+    /// There was a cleverness here — "an alias equal to the discovered label is
+    /// stored as no alias" — and it was worse than useless. The snapshot's label
+    /// has already had the override applied by the time anyone can read it
+    /// (`overrides.apply` runs before the snapshot exists), so the comparison was
+    /// against the *current alias*, not the discovered name. Opening the editor
+    /// on an existing alias and pressing Enter without touching it silently
+    /// deleted that alias. Deriving the discovered label would need the account
+    /// to carry it separately — a data change to buy a nicety nobody asked for.
+    /// Storing what the user typed is simpler and cannot be wrong.
+    fn commit_alias(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        let Some(key) = self.account_key.clone() else {
+            self.alias_editor = None;
+            ctx.notify();
+            return;
+        };
+        let text = text.trim().to_string();
+        let alias = (!text.is_empty()).then_some(text);
+
+        match CockpitModel::as_ref(ctx).set_alias(&key, alias.as_deref()) {
+            Ok(()) => {
+                // The file is watched: the snapshot reloads and the new name
+                // reaches the title, the card and the sidebar on its own.
+                self.alias_editor = None;
+            }
+            Err(e) => {
+                // The editor STAYS OPEN. A rename that quietly did nothing is the
+                // one unacceptable outcome, and the pane has no toast of its own —
+                // so the failure shows as the name refusing to settle, which is
+                // at least honest. (`set_label_override` refuses rather than
+                // clobbers, so the file is intact; it is the alias that is lost.)
+                log::warn!("cockpit: could not write alias for {key}: {e}");
+            }
+        }
+        ctx.notify();
+    }
+
     /// **P2** — the account's own detail card: who it is, how close to full, and
     /// what it has spent.
     ///
@@ -1991,13 +2045,57 @@ impl CockpitPaneView {
         // `label` already carries the user's alias — the overrides layer replaced
         // it before this snapshot existed. Reading the alias again here would be
         // a second source for one fact.
+        // The name, or the box you rename it in. One `Option`, so there is no
+        // second flag to disagree with it about whether we are editing.
+        let name_el: Box<dyn Element> = match &self.alias_editor {
+            Some(editor) => ConstrainedBox::new(
+                appearance
+                    .ui_builder()
+                    .text_input(editor.clone())
+                    .with_style(UiComponentStyles {
+                        padding: Some(Coords {
+                            left: 5.0,
+                            right: 5.0,
+                            top: 1.0,
+                            bottom: 1.0,
+                        }),
+                        background: Some(theme.surface_2().into()),
+                        border_color: Some(theme.accent().into()),
+                        border_width: Some(1.0),
+                        border_radius: Some(CornerRadius::with_all(Radius::Pixels(3.0))),
+                        font_size: Some(heading),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+            )
+            // Fixed: an EditorView panics when measured against an infinite
+            // width, which a flexible row child gets during the intrinsic pass.
+            .with_width(ALIAS_EDITOR_WIDTH)
+            .finish(),
+            None => Self::text(acct.account.label.clone(), family, heading, main),
+        };
         let mut ident = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(8.0)
             .with_child(tile)
-            .with_child(Self::text(acct.account.label.clone(), family, heading, main));
+            .with_child(name_el);
         if let Some(plan) = &acct.account.plan_tier {
             ident = ident.with_child(Self::text(plan.clone(), family, body, faint));
+        }
+        // ⋯ — rename this account (A1). The alias is a label override in
+        // instances.json, the one place overrides live; there is no second store.
+        if self.alias_editor.is_none() {
+            ident = ident.with_child(Shrinkable::new(1.0, Empty::new().finish()).finish());
+            ident = ident.with_child(icon_verb_button_tooltip(
+                self.alias_dots_state.clone(),
+                icons::Icon::DotsHorizontal,
+                theme.sub_text_color(bg),
+                theme.accent(),
+                crate::t!("cockpit-account-rename"),
+                appearance,
+                CockpitPaneAction::StartAliasEdit,
+            ));
         }
 
         // Mail / org: allowed here, unlike the sidebar (spec v3 §4.2). Absent
@@ -2526,6 +2624,54 @@ impl TypedActionView for CockpitPaneView {
             }
             CockpitPaneAction::SetSessionFilter(filter) => {
                 self.session_filter = *filter;
+                ctx.notify();
+            }
+            CockpitPaneAction::StartAliasEdit => {
+                let Some(key) = self.account_key.clone() else {
+                    return;
+                };
+                // Seed with the name as shown — which is the alias if one is set,
+                // and the discovered label otherwise. Editing starts from what the
+                // user is looking at, not from an empty box that discards it.
+                let current = Self::pane_title(Some(&key), ctx);
+                let editor = ctx.add_typed_action_view(move |ctx| {
+                    let appearance = Appearance::as_ref(ctx);
+                    let theme = appearance.theme();
+                    let mut e = EditorView::single_line(
+                        SingleLineEditorOptions {
+                            is_password: false,
+                            text: TextOptions {
+                                font_size_override: Some(appearance.ui_font_heading_3()),
+                                font_family_override: Some(appearance.ui_font_family()),
+                                text_colors_override: Some(TextColors {
+                                    default_color: theme.active_ui_text_color(),
+                                    disabled_color: theme.disabled_ui_text_color(),
+                                    hint_color: theme.disabled_ui_text_color(),
+                                }),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                    e.set_buffer_text(&current, ctx);
+                    e
+                });
+                ctx.subscribe_to_view(&editor, |me: &mut Self, editor, event, ctx| match event {
+                    // Enter and blur both commit: clicking away from a rename you
+                    // typed should keep it, not throw it out.
+                    EditorEvent::Enter | EditorEvent::Blurred => {
+                        let text = editor.as_ref(ctx).buffer_text(ctx);
+                        me.commit_alias(text, ctx);
+                    }
+                    EditorEvent::Escape => {
+                        me.alias_editor = None;
+                        ctx.notify();
+                    }
+                    _ => {}
+                });
+                ctx.focus(&editor);
+                self.alias_editor = Some(editor);
                 ctx.notify();
             }
             CockpitPaneAction::OpenRowMenu { row_key, position } => {
