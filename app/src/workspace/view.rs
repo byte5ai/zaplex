@@ -6393,8 +6393,8 @@ impl Workspace {
             LeftPanelEvent::OpenSftpPane { node_id, server: _ } => {
                 self.open_sftp_pane(node_id.clone(), ctx);
             }
-            LeftPanelEvent::OpenCockpitPane => {
-                self.open_cockpit_pane(ctx);
+            LeftPanelEvent::OpenCockpitPane(account_key) => {
+                self.open_cockpit_pane_for(account_key.clone(), ctx);
             }
             LeftPanelEvent::AdoptDaemonSession {
                 server,
@@ -6414,26 +6414,38 @@ impl Workspace {
     /// Opens the roomy cockpit dashboard pane in the central area (C2b). Like
     /// the SSH panes, always opens a new pane (multi-instance is fine — it's a
     /// read-only lens over the data spine).
+    /// Open (or focus) the **fleet dashboard** — every account at once.
     pub fn open_cockpit_pane(&mut self, ctx: &mut ViewContext<Self>) {
+        self.open_cockpit_pane_for(None, ctx);
+    }
+
+    /// Open (or focus) the pane for one account (`None` = the fleet dashboard).
+    ///
+    /// Deduped **per account**, not per pane type: clicking an account whose
+    /// pane is already open focuses it rather than stacking an identical one —
+    /// and clicking a different account opens its own pane beside the first,
+    /// which is the point. A single dashboard filtered by one global selection
+    /// could only ever show one subscription at a time (spec v3 §4.1 P1).
+    pub fn open_cockpit_pane_for(
+        &mut self,
+        account_key: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         use crate::pane_group::pane::cockpit_pane::CockpitPane;
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            // The Cockpit dashboard is a singleton per tab: every account click and
-            // the sidebar's ⤢ button dispatch OpenDashboardPane, so without dedup
-            // each one spawned another identical Cockpit pane. If one already
-            // exists, just focus it (the selection highlight already tracks the
-            // clicked account).
             // `visible_pane_ids` excludes panes hidden-for-close, so we never match
             // a stale pane that `focus_pane_by_id` can't focus (which would `return`
             // and open nothing — review).
-            let existing = pane_group
-                .visible_pane_ids()
-                .into_iter()
-                .find(|id| pane_group.downcast_pane_by_id::<CockpitPane>(*id).is_some());
+            let existing = pane_group.visible_pane_ids().into_iter().find(|id| {
+                pane_group
+                    .downcast_pane_by_id::<CockpitPane>(*id)
+                    .is_some_and(|p| p.account_key(ctx) == account_key)
+            });
             if let Some(id) = existing {
                 pane_group.focus_pane_by_id(id, ctx);
                 return;
             }
-            let pane = CockpitPane::new(ctx);
+            let pane = CockpitPane::for_account(account_key.clone(), ctx);
             let smart_split_direction =
                 pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
             pane_group.add_pane_with_direction(

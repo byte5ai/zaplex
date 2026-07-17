@@ -40,8 +40,13 @@ const HEAT_BAR_HEIGHT: f32 = 6.0;
 
 /// Events the sidebar emits toward the workspace (via the left panel).
 pub enum CockpitPanelEvent {
-    /// Open the full cockpit dashboard pane in the main area.
-    OpenDashboardPane,
+    /// Open the cockpit pane in the main area: `None` = the fleet dashboard
+    /// (every account), `Some(account.key)` = that account's own pane.
+    ///
+    /// The key travels with the request because the pane IS the account —
+    /// opening dedupes on it, so two accounts open two panes rather than one
+    /// dashboard that can only look at whichever was clicked last.
+    OpenCockpitPane(Option<String>),
 }
 
 pub struct CockpitPanel {
@@ -1019,9 +1024,10 @@ impl CockpitPanel {
 
     // (No standalone Maximize icon any more — spec v3 §S1. The fleet dashboard it
     // opened is still reachable: the KI-KONTEN header's fleet total is now the
-    // affordance, dispatching the same `OpenDashboardPane`. Per-account panes are
-    // an *additional* path (P1, not yet built), never a replacement for the
-    // fleet-wide view.)
+    // affordance, dispatching `OpenDashboardPane` → the fleet pane (no account
+    // key). A card click opens that account's own pane instead — an *additional*
+    // path, never a replacement for the fleet-wide view, which is why the total
+    // stays a target of its own.)
 }
 
 impl View for CockpitPanel {
@@ -1150,9 +1156,9 @@ pub enum CockpitPanelAction {
     /// keyed by `project_key`. Toggles between absent/`true` (expanded, the
     /// default) and `false` (collapsed).
     ToggleProject(String),
-    /// Select an account (its `account.key`) → open the dashboard pane focused
-    /// on it and carry a stable highlight in the sidebar (WS4 S5). A second
-    /// click on the selected account de-selects it.
+    /// Select an account (its `account.key`) → open (or focus) that account's
+    /// own pane and carry a stable highlight in the sidebar. A second click
+    /// focuses the pane; it does not de-select.
     SelectAccount(String),
 }
 
@@ -1162,7 +1168,7 @@ impl TypedActionView for CockpitPanel {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             CockpitPanelAction::OpenDashboardPane => {
-                ctx.emit(CockpitPanelEvent::OpenDashboardPane);
+                ctx.emit(CockpitPanelEvent::OpenCockpitPane(None));
             }
             CockpitPanelAction::ToggleProject(key) => {
                 // Absent = expanded (default); the first toggle collapses to false.
@@ -1171,12 +1177,14 @@ impl TypedActionView for CockpitPanel {
                 ctx.notify();
             }
             CockpitPanelAction::SelectAccount(key) => {
-                // Store the selection on the shared model (so the pane reacts),
-                // then open the dashboard pane. The model emits Updated, which
-                // re-renders both the sidebar highlight and the pane focus.
+                // Mark it selected (the sidebar highlight follows), then open —
+                // or focus — that account's own pane. Clicking the same card
+                // again lands here too and simply focuses the pane it already
+                // has: the selection no longer toggles off underneath it.
                 let key = key.clone();
-                CockpitModel::handle(ctx).update(ctx, |model, ctx| model.select_account(key, ctx));
-                ctx.emit(CockpitPanelEvent::OpenDashboardPane);
+                CockpitModel::handle(ctx)
+                    .update(ctx, |model, ctx| model.select_account(key.clone(), ctx));
+                ctx.emit(CockpitPanelEvent::OpenCockpitPane(Some(key)));
             }
         }
     }

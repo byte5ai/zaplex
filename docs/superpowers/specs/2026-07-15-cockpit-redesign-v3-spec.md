@@ -298,7 +298,7 @@ Session-Zeile = Branch + Punkt + ctx %, Konten-Cards mit 5h-Signal + Provider-Ka
 
 ## 4. Konto-Pane (eines pro Konto) + Sessions-Tabelle + Drive
 
-### 4.1 Pane-Identität — **P1**
+### 4.1 Pane-Identität — **P1** ✅ *gebaut*
 Heute: eine globale `selected_account` (model.rs:76), konto-lose `CockpitPaneView`,
 Singleton-Dedup (view.rs:6423-6437). Neu: Konto-Key in Wrapper + View, Dedup per
 `account.key`, Titel = **Konto-Anzeigename** (Alias→Label; kein Host-Präfix — Konten

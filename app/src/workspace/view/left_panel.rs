@@ -144,7 +144,10 @@ pub enum LeftPanelEvent {
     },
     /// User clicked "open dashboard" in the cockpit sidebar → main window opens
     /// the roomy cockpit pane in the central area.
-    OpenCockpitPane,
+    /// Open the cockpit pane: `None` = the fleet dashboard, `Some(account.key)`
+    /// = that account's own pane (deduped on the key — see
+    /// `Workspace::open_cockpit_pane_for`).
+    OpenCockpitPane(Option<String>),
     /// User clicked a listed running daemon session in the SSH manager → main
     /// window adopts it (attach + replay) in a new tab.
     AdoptDaemonSession {
@@ -282,8 +285,8 @@ impl LeftPanelView {
         let skill_manager_view = ctx.add_typed_action_view(SkillManagerPanel::new);
         let cockpit_view = ctx.add_typed_action_view(CockpitPanel::new);
         ctx.subscribe_to_view(&cockpit_view, |_, _, event, ctx| match event {
-            crate::cockpit::panel::CockpitPanelEvent::OpenDashboardPane => {
-                ctx.emit(LeftPanelEvent::OpenCockpitPane);
+            crate::cockpit::panel::CockpitPanelEvent::OpenCockpitPane(account_key) => {
+                ctx.emit(LeftPanelEvent::OpenCockpitPane(account_key.clone()));
             }
         });
         ctx.subscribe_to_view(&ssh_manager_view, |_me, _, event, ctx| {

@@ -74,6 +74,14 @@ fn parse_hex_color(s: &str) -> Option<ColorU> {
 pub struct CockpitPaneView {
     scroll_state: ClippedScrollStateHandle,
     pane_configuration: ModelHandle<PaneConfiguration>,
+    /// The account this pane belongs to (`Account::key`), or `None` for the
+    /// fleet dashboard.
+    ///
+    /// The pane's identity, not a filter: one pane per account, deduped on this,
+    /// titled after it. A single global `selected_account` could only ever show
+    /// one account at a time — you could not put two side by side, which is the
+    /// whole point of running several subscriptions (spec v3 §4.1 P1).
+    account_key: Option<String>,
     focus_handle: Option<PaneFocusHandle>,
     /// Hover state of each session row's "fork" action (key = session_id).
     /// Synced against the snapshot on every cockpit update so handles persist
@@ -190,7 +198,13 @@ pub enum CockpitPaneAction {
 }
 
 impl CockpitPaneView {
+    /// The fleet dashboard — every account at once.
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
+        Self::for_account(None, ctx)
+    }
+
+    /// A pane for one account (`None` = the fleet dashboard).
+    pub fn for_account(account_key: Option<String>, ctx: &mut ViewContext<Self>) -> Self {
         ctx.subscribe_to_model(&Appearance::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&CockpitModel::handle(ctx), |me, _, event, ctx| {
             if matches!(event, CockpitEvent::Updated) {
@@ -198,11 +212,14 @@ impl CockpitPaneView {
                 ctx.notify();
             }
         });
-        let pane_configuration =
-            ctx.add_model(|_ctx| PaneConfiguration::new(crate::t!("cockpit-pane-title")));
+        // Titled after the account it shows — no host prefix: an account is a
+        // subscription, not something that lives on a machine.
+        let title = Self::pane_title(account_key.as_deref(), ctx);
+        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(title));
         let mut me = Self {
             scroll_state: ClippedScrollStateHandle::default(),
             pane_configuration,
+            account_key,
             focus_handle: None,
             session_fork_states: HashMap::new(),
             session_forkwt_states: HashMap::new(),
@@ -512,6 +529,37 @@ impl CockpitPaneView {
             appearance,
             action,
         ))
+    }
+
+    /// The pane's tab title: the account's display name, or the fleet
+    /// dashboard's when this pane shows every account.
+    ///
+    /// The display name is simply `account.label` — the overrides layer has
+    /// already replaced it with the user's alias by the time the snapshot exists
+    /// (`overrides.apply`), so reading the alias again here would be a second
+    /// source for one fact, free to disagree with the sidebar's.
+    ///
+    /// No host prefix: an account is a subscription. It is reachable from every
+    /// machine, so naming it after one would be wrong, not merely noisy.
+    fn pane_title(account_key: Option<&str>, ctx: &AppContext) -> String {
+        let Some(key) = account_key else {
+            return crate::t!("cockpit-pane-title").to_string();
+        };
+        CockpitModel::as_ref(ctx)
+            .snapshot()
+            .accounts
+            .iter()
+            .find(|a| a.account.key == key)
+            .map(|a| a.account.label.clone())
+            // An account that vanished (signed out, config dir gone) keeps its
+            // pane titled by key rather than going blank — honest about what it
+            // is showing.
+            .unwrap_or_else(|| key.to_string())
+    }
+
+    /// The account this pane belongs to, or `None` for the fleet dashboard.
+    pub fn account_key(&self) -> Option<&str> {
+        self.account_key.as_deref()
     }
 
     pub fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {

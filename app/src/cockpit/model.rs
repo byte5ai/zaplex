@@ -138,17 +138,17 @@ impl CockpitModel {
         self.selected_account.as_deref()
     }
 
-    /// Select an account for detail-in-pane (WS4 S5): stores its `account.key`
-    /// and emits [`CockpitEvent::Updated`] so the sidebar highlight and the pane
-    /// focus both refresh. Selecting the already-selected account toggles it off
-    /// (clears the selection), so a second click de-selects. No-op if nothing
+    /// Select an account: stores its `account.key` and emits
+    /// [`CockpitEvent::Updated`] so the sidebar highlight refreshes.
+    ///
+    /// Clicking the selected account again **keeps** it selected — the click
+    /// then focuses its pane (the caller opens/focuses it). It used to toggle
+    /// the selection off, which read as the card fighting the user: click to
+    /// look at an account, click again because its pane is behind something,
+    /// and the highlight vanishes instead (spec v3 §4.1 P1). No-op if nothing
     /// actually changed.
     pub fn select_account(&mut self, key: String, ctx: &mut ModelContext<Self>) {
-        let next = if self.selected_account.as_deref() == Some(key.as_str()) {
-            None
-        } else {
-            Some(key)
-        };
+        let next = Some(key);
         if next != self.selected_account {
             self.selected_account = next;
             ctx.emit(CockpitEvent::Updated);
