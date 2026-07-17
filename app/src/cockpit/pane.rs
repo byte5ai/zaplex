@@ -127,6 +127,22 @@ fn state_rank(state: SessionState) -> u8 {
     }
 }
 
+/// A table group's key: **host + repo root** (F9 groups by repo, but a repo on
+/// another machine is another working tree). Falls back to the session's own cwd
+/// when it is not in a repo at all.
+///
+/// The same `host_key` shape every other surface uses, so a display label can
+/// never merge two hosts.
+fn group_key(row: &(SessionSnapshot, Option<String>, Option<String>, bool)) -> String {
+    let (session, _host, host_id, is_local) = row;
+    let root = if session.repo_root.is_empty() {
+        session.project_root.as_str()
+    } else {
+        session.repo_root.as_str()
+    };
+    host_key(*is_local, host_id.as_deref(), root)
+}
+
 /// The open ⋯ drive: which row, and where it was clicked (P5).
 pub struct RowMenu {
     /// `host_key(is_local, host_id, session_id)` — the row's identity. Never the
@@ -189,10 +205,18 @@ impl SortColumn {
 /// group header is a row of its own rather than a nesting level.
 enum TableRow {
     /// A project group header (F9: the repo, not one of its worktrees).
+    ///
+    /// Keyed by **host + repo**, not repo alone: the same path on two machines is
+    /// two working trees, and a group that merged them could not say which one
+    /// its "+" should launch on — it would silently pick this machine.
     Group {
-        /// Repo root — the group key, and what the collapse state is keyed by.
-        root: String,
+        /// `host_key(is_local, host_id, repo_root)` — the group key, and what the
+        /// collapse state is keyed by.
+        key: String,
         name: String,
+        /// The host it lives on, `None` for this machine — scopes the group's "+".
+        host: Option<String>,
+        host_id: Option<String>,
         count: usize,
         collapsed: bool,
     },
@@ -531,28 +555,26 @@ impl CockpitPaneView {
             .chain(acct.idle_sessions.iter())
             .map(|s| host_key(true, None, &s.session_id))
             .collect();
+        // Group handles key exactly like the rows do (`group_key`), or a group
+        // would render without its chevron and its "+".
         let mut group_keys: std::collections::HashSet<String> = acct
             .sessions
             .iter()
             .chain(acct.idle_sessions.iter())
-            .map(|s| {
-                if s.repo_root.is_empty() {
-                    s.project_root.clone()
-                } else {
-                    s.repo_root.clone()
-                }
-            })
+            .map(|s| group_key(&(s.clone(), None, None, true)))
             .collect();
         for row in zaplex_cockpit::sessions_of_account(&tree, &acct.account) {
-            if row.is_local {
-                continue;
-            }
-            row_keys.insert(host_key(false, row.host_id, &row.session.session_id));
-            group_keys.insert(if row.session.repo_root.is_empty() {
-                row.session.project_root.clone()
-            } else {
-                row.session.repo_root.clone()
-            });
+            row_keys.insert(host_key(
+                row.is_local,
+                row.host_id,
+                &row.session.session_id,
+            ));
+            group_keys.insert(group_key(&(
+                row.session.clone(),
+                (!row.is_local).then(|| row.host.to_string()),
+                row.host_id.map(str::to_string),
+                row.is_local,
+            )));
         }
 
         // Drop what vanished so the maps don't grow with every session ever seen;
@@ -1006,22 +1028,30 @@ impl CockpitPaneView {
         let _ = app;
         // (session, host, host_id, is_local)
         let mut all: Vec<(SessionSnapshot, Option<String>, Option<String>, bool)> = Vec::new();
-        // This machine's, live and dormant alike.
+        // This machine's, live and dormant alike. The account's own lists are the
+        // only place the dormant ones exist — the fleet tree holds live work.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for s in acct.sessions.iter().chain(acct.idle_sessions.iter()) {
-            all.push((s.clone(), None, None, true));
+            if seen.insert(host_key(true, None, &s.session_id)) {
+                all.push((s.clone(), None, None, true));
+            }
         }
-        // …and the same account's sessions on every other host.
+        // …and the same account's sessions on every host, this one included.
+        //
+        // Deduped by identity rather than by skipping whatever claims to be
+        // local: the tree's local rows come from these same account lists today,
+        // but relying on that would mean a session appears twice the day it stops
+        // being true — and a set costs nothing to be sure.
         for row in zaplex_cockpit::sessions_of_account(tree, &acct.account) {
-            if row.is_local {
-                // Already counted above, from the account's own lists — the tree
-                // holds the same local sessions.
+            let key = host_key(row.is_local, row.host_id, &row.session.session_id);
+            if !seen.insert(key) {
                 continue;
             }
             all.push((
                 row.session.clone(),
-                Some(row.host.to_string()),
+                (!row.is_local).then(|| row.host.to_string()),
                 row.host_id.map(str::to_string),
-                false,
+                row.is_local,
             ));
         }
 
@@ -1045,21 +1075,19 @@ impl CockpitPaneView {
             });
         }
 
-        // Group by repo (F9): three worktrees of one repo are one group with
-        // three sessions, each keeping its own worktree in its row.
+        // Group by host + repo (F9): three worktrees of one repo are one group
+        // with three sessions, each keeping its own worktree in its row — but the
+        // same repo on another machine is its own group. Merging those would give
+        // the group's "+" no host to launch on, and mix two working trees under
+        // one count.
         let mut by_repo: BTreeMap<String, Vec<(SessionSnapshot, Option<String>, Option<String>, bool)>> =
             BTreeMap::new();
         for row in all {
-            let key = if row.0.repo_root.is_empty() {
-                row.0.project_root.clone()
-            } else {
-                row.0.repo_root.clone()
-            };
-            by_repo.entry(key).or_default().push(row);
+            by_repo.entry(group_key(&row)).or_default().push(row);
         }
 
         let mut rows = Vec::new();
-        for (root, mut group) in by_repo {
+        for (key, mut group) in by_repo {
             // Sort inside the group — the grouping is the outer order, and a
             // sort that broke it apart would just be an ungrouped table.
             let acct_ref = acct;
@@ -1104,18 +1132,20 @@ impl CockpitPaneView {
                 // between frames for no reason the user can see.
                 ord.then_with(|| a.0.session_id.cmp(&b.0.session_id))
             });
-            let name = group
+            let (name, host, host_id) = group
                 .first()
-                .map(|(s, ..)| s.project_name.clone())
-                .unwrap_or_else(|| root.clone());
+                .map(|(s, h, hid, _)| (s.project_name.clone(), h.clone(), hid.clone()))
+                .unwrap_or_else(|| (key.clone(), None, None));
             let collapsed = self
                 .collapsed_table_groups
-                .get(&root)
+                .get(&key)
                 .copied()
                 .unwrap_or(false);
             rows.push(TableRow::Group {
-                root: root.clone(),
+                key: key.clone(),
                 name,
+                host,
+                host_id,
                 count: group.len(),
                 collapsed,
             });
@@ -1658,8 +1688,10 @@ impl CockpitPaneView {
             match rows_for_render.get(i) {
                 None => vec![],
                 Some(TableRow::Group {
-                    root,
+                    key,
                     name,
+                    host,
+                    host_id,
                     count,
                     collapsed,
                 }) => {
@@ -1679,23 +1711,30 @@ impl CockpitPaneView {
                     // the repo you are looking at. Without a successor, folding
                     // the tree away would take the scoped launch with it.
                     let plus: Option<Box<dyn Element>> =
-                        plus_states.get(root).cloned().map(|st| {
-                            let root_owned = root.clone();
+                        plus_states.get(key).cloned().map(|st| {
+                            // Scoped to the group's OWN host, not this machine.
+                            // The tree's plus carried the host identity; passing
+                            // None here would launch a remote project's agent
+                            // locally — the exact regression P6 must not ship.
+                            let (host_owned, host_id_owned) = (host.clone(), host_id.clone());
+                            let root_owned = zaplex_cockpit::split_host_key(key)
+                                .map(|(_, root)| root.to_string())
+                                .unwrap_or_else(|| key.clone());
                             verb_button(
                                 st,
                                 "+",
                                 VerbKind::Constructive,
                                 appearance,
                                 WorkspaceAction::OpenSpawnCard {
-                                    host_id: None,
-                                    host: None,
+                                    host_id: host_id_owned,
+                                    host: host_owned,
                                     project: Some(PathBuf::from(root_owned)),
                                 },
                             )
                         });
-                    let first: Box<dyn Element> = match group_states.get(root).cloned() {
+                    let first: Box<dyn Element> = match group_states.get(key).cloned() {
                         Some(state) => {
-                            let key = root.clone();
+                            let key = key.clone();
                             Hoverable::new(state, move |_m| inner)
                                 .with_cursor(Cursor::PointingHand)
                                 .on_click(move |ctx, _, _| {
@@ -2485,6 +2524,13 @@ impl TypedActionView for CockpitPaneView {
                     row_key: row_key.clone(),
                     position: *position,
                 });
+                // Seed this row's item handles NOW. They are seeded per open row
+                // (all rows × ten items would be thousands of handles), and the
+                // periodic sync only runs on a cockpit update — so without this
+                // the first open renders an empty box: every `menu_item` finds no
+                // handle and returns `None`. State set, handles missing, UI blank
+                // — the same shape as the spawn card's stale-render bug.
+                self.sync_table_states(ctx);
                 ctx.notify();
             }
             CockpitPaneAction::CloseRowMenu => {
