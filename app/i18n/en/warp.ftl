@@ -3863,3 +3863,4 @@ cockpit-spawn-card-new-agent-on-host = New agent on { $host }
 cockpit-spawn-card-auto = auto
 cockpit-spawn-card-change = Change
 cockpit-account-rename = Rename this account
+file-manager-unknown-host = Cannot open the file manager: this pane's host could not be identified, and browsing this machine instead would show the wrong files.

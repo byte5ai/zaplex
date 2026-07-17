@@ -21757,9 +21757,39 @@ impl TypedActionView for Workspace {
                                 node_id,
                                 start_path: Some(start_path.clone()),
                             },
-                            None => crate::pane_group::FileManagerTarget::Local {
-                                start_path: start_path.clone(),
-                            },
+                            // This pane is NOT local, and we could not work out
+                            // which host it is. Falling back to `Local` used to
+                            // be the answer here, and it is the worst one
+                            // available: the file manager would open on THIS
+                            // machine, rooted at the remote shell's path — a
+                            // path that either doesn't exist here (confusing) or
+                            // does and holds something else entirely (dangerous,
+                            // because copy and delete would land on it).
+                            //
+                            // `node_for_session` only resolves daemon-backed
+                            // sessions ("Returns None for classic SSH hosts"),
+                            // and `ssh_tab_nodes` only knows tabs opened through
+                            // the SSH path — so this gap is reachable, not
+                            // theoretical.
+                            //
+                            // Refuse and say so. No file manager is a small loss;
+                            // the wrong filesystem, silently, is not.
+                            None => {
+                                log::warn!(
+                                    "file manager: pane is remote but its host could not be \
+                                     resolved (no daemon session, no ssh tab node) — refusing \
+                                     rather than browsing this machine"
+                                );
+                                workspace.toast_stack.update(ctx, |toast_stack, ctx| {
+                                    toast_stack.add_ephemeral_toast(
+                                        DismissibleToast::error(
+                                            crate::t!("file-manager-unknown-host").to_string(),
+                                        ),
+                                        ctx,
+                                    );
+                                });
+                                return;
+                            }
                         }
                     };
                     active_pg.update(ctx, |pane_group, ctx| {
