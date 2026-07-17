@@ -72,8 +72,18 @@ const MATRIX_COL_WIDTH: f32 = 110.0;
 /// Parse a `#RRGGBB` or `#RGB` hex string into an opaque color. Returns `None`
 /// for anything malformed, so an invalid instances.json override color simply
 /// yields no tint (never a panic, never a wrong color).
+///
+/// The ASCII check is what makes that promise true. `len()` counts **bytes**
+/// while the slices below index **char boundaries**, so `#éa` measured 3 and
+/// took the shorthand branch, where `&hex[0..1]` cut the `é` in half and
+/// panicked — taking the app down while rendering an account card, from a value
+/// a user typed into a file by hand. A hex colour is ASCII by definition, so
+/// rejecting the rest up front makes every byte a boundary.
 fn parse_hex_color(s: &str) -> Option<ColorU> {
     let hex = s.strip_prefix('#')?;
+    if !hex.is_ascii() {
+        return None;
+    }
     let (r, g, b) = match hex.len() {
         6 => (
             u8::from_str_radix(&hex[0..2], 16).ok()?,
@@ -2804,5 +2814,37 @@ mod tests {
         ] {
             assert!(parse_hex_color(bad).is_none(), "{bad:?} must not parse");
         }
+    }
+
+    /// The doc promised "never a panic" and did not deliver. `len()` counts
+    /// bytes; the slices index char boundaries. `#éa` measures 3 bytes, takes
+    /// the shorthand branch, and `&hex[0..1]` cuts the `é` in half — aborting
+    /// the app while it renders an account card, over a value someone typed into
+    /// instances.json by hand.
+    #[test]
+    fn a_non_ascii_colour_yields_no_tint_rather_than_taking_the_app_down() {
+        // 3 bytes, 2 chars: exactly the shorthand branch's length check.
+        assert_eq!(parse_hex_color("#éa"), None);
+        // 6 bytes, 3 chars: the same trap on the long branch.
+        assert_eq!(parse_hex_color("#ééé"), None);
+        assert_eq!(parse_hex_color("#22C55é"), None);
+        assert_eq!(parse_hex_color("#🎨🎨"), None);
+    }
+
+    /// Malformed-but-ASCII stays malformed — the guard must not start accepting
+    /// things it used to reject.
+    #[test]
+    fn ascii_rubbish_is_still_rejected() {
+        for bad in ["#", "#12", "#1234", "#12345", "#1234567", "#GGGGGG", "22C55E", ""] {
+            assert_eq!(parse_hex_color(bad), None, "{bad:?} must not parse");
+        }
+    }
+
+    /// …and the valid cases still work.
+    #[test]
+    fn the_guard_does_not_reject_real_colours() {
+        assert!(parse_hex_color("#22C55E").is_some());
+        assert!(parse_hex_color("#f0a").is_some());
+        assert!(parse_hex_color("#FFFFFF").is_some());
     }
 }
