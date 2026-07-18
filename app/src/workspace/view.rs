@@ -7100,12 +7100,19 @@ impl Workspace {
     /// `false` to fall through to the ordinary local-PTY SSH path. v1 only takes
     /// the daemon path for resilient hosts with headless-capable (key) auth.
     ///
-    /// Preflights the ControlMaster + daemon-binary presence OFF the main thread
-    /// *before* creating any tab: only if the daemon is actually reachable do we
-    /// open a daemon-hosted tab; otherwise we fall back to a classic SSH session
-    /// with a prominent warning. This keeps persistence the default while degrading
-    /// gracefully — never a dead "Starting…" tab and never an install-on-connect
-    /// stall on a host without the daemon.
+    /// The tab opens IMMEDIATELY with a visible "Connecting…" line — a click must
+    /// produce a reaction now, not after the SSH handshake. The bounded preflight
+    /// (ControlMaster + daemon-binary presence) then runs OFF the main thread and
+    /// streams its outcome into that tab: ready → connect; first connect →
+    /// install ladder; unavailable → a classic SSH session opens with a prominent
+    /// warning and THEN the pending tab is retired (that order — see the note at
+    /// the close call). A failed *install* keeps its tab, the failure visible in
+    /// it, and opens the classic session alongside; closing the pending tab
+    /// meanwhile cancels the attempt — no connect, no fallback (an install
+    /// already running on the host merely finishes, which is idempotent and
+    /// serves the next connect). Every path is bounded and announced — never a
+    /// silently dead "Starting…" tab and never an install-on-connect stall on a
+    /// host without the daemon.
     #[cfg(unix)]
     fn try_open_daemon_ssh_terminal(
         &mut self,
@@ -7140,11 +7147,59 @@ impl Workspace {
         let node_id_owned = node_id.to_string();
         let server_owned = server.clone();
 
-        // Fast, bounded preflight off the main thread (ControlMaster + binary check
-        // + install-source classification) — no tab yet, so a host that can't do
-        // persistence degrades to classic SSH without ever showing a dead daemon
-        // tab. A first-connect install runs *after* the tab exists, streaming its
-        // progress into it (Warp-style auto-install).
+        // The progress channel exists from the start (not only for installs): the
+        // very first thing the user sees in the new tab is a "Connecting…" line,
+        // written before any SSH work has happened. A first-connect install
+        // reuses the same channel for its ladder phases.
+        let (progress_tx, install_progress_rx) = async_channel::unbounded();
+        let _ = progress_tx.try_send(format!(
+            "Connecting to {host} — starting your persistent session…"
+        ));
+
+        let request = crate::terminal::daemon_tty::DaemonSessionRequest {
+            connection_session_id: session_id,
+            open_params: crate::terminal::daemon_tty::OpenSessionParams {
+                // Per-host scrollback ceiling (MiB → bytes); 0 → daemon default.
+                ring_ceiling_bytes: (server.ring_ceiling_mb > 0)
+                    .then(|| server.ring_ceiling_mb as u64 * 1024 * 1024),
+                // Honor the host's saved startup command on the daemon path too,
+                // matching the local-PTY SSH path (run once after the session opens).
+                startup_command: server.startup_command.clone(),
+                ..Default::default()
+            },
+            adopt_pty_session_id: None,
+            install_progress_rx: Some(install_progress_rx),
+            host_label: server.host.clone(),
+        };
+
+        // Create the daemon-backed tab BEFORE the preflight: the click must
+        // produce a visible pane now, not after the SSH handshake. The tab's
+        // event loop subscribes for `SessionConnected` (and renders the
+        // progress lines) before any connect can resolve.
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                hide_homepage: true,
+                daemon_request: Some(request),
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None, /* custom_tab_title */
+            ctx,
+        );
+        // Remember which host this tab belongs to (pane-scoped context for e.g.
+        // "Open file manager here") — and keep the pane-group id so the failure
+        // path below can find this exact tab again to retire it.
+        let pending_pane_group = self
+            .get_pane_group_view(self.active_tab_index)
+            .map(|pane_group| pane_group.id());
+        if let Some(pane_group_id) = pending_pane_group {
+            self.ssh_tab_nodes.insert(pane_group_id, node_id_owned.clone());
+        }
+
+        // Bounded preflight off the main thread (ControlMaster + binary check +
+        // install-source classification): ready → connect, needs-install →
+        // ladder + connect, unavailable → classic SSH opens and the pending tab
+        // is retired — and a tab the user closed meanwhile cancels the attempt.
         ctx.spawn(
             headless_connect::preflight_daemon_transport(
                 server.clone(),
@@ -7152,6 +7207,25 @@ impl Workspace {
                 auth_context.clone(),
             ),
             move |workspace, result, ctx| {
+                // The pending tab is the handle on this whole attempt: if the
+                // user closed it while the preflight ran, they cancelled.
+                // Connecting anyway would register a self-healing transport
+                // with no consumer (the tab's event loop — the only thing that
+                // ever sends `OpenSession` — died with the tab), and the
+                // install path would run a remote install for nobody.
+                let pending_tab_alive = pending_pane_group.is_some_and(|pane_group_id| {
+                    workspace
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.pane_group.id() == pane_group_id)
+                });
+                if !pending_tab_alive {
+                    log::info!(
+                        "daemon connect [{host}]: pending tab closed during preflight — \
+                         cancelling the connect"
+                    );
+                    return;
+                }
                 let preflight = match result {
                     Ok(preflight) => preflight,
                     Err(e) => {
@@ -7174,72 +7248,52 @@ impl Workspace {
                         log::warn!(
                             "daemon connect [{host}] unavailable; falling back to classic SSH: {e}"
                         );
+                        if let Some(pane_group_id) = pending_pane_group {
+                            workspace.ssh_tab_nodes.remove(&pane_group_id);
+                        }
+                        // Classic session first, THEN retire the pending
+                        // "Connecting…" tab: in this order the workspace never
+                        // hits the close-guarded single-tab state, and the user
+                        // sees a replacement, not a disappearance. The user may
+                        // have closed the pending tab themselves meanwhile —
+                        // look it up by pane-group id rather than by index.
                         workspace.fall_back_to_classic_ssh(node_id_owned, server_owned, warning, ctx);
+                        if let Some(pane_group_id) = pending_pane_group {
+                            if let Some(index) = workspace
+                                .tabs
+                                .iter()
+                                .position(|tab| tab.pane_group.id() == pane_group_id)
+                            {
+                                workspace.close_tab(
+                                    index, true, /* skip_confirmation */
+                                    false, /* add_to_undo_stack */
+                                    ctx,
+                                );
+                            }
+                        }
                         return;
                     }
                 };
 
-                // First-connect install → wire a progress channel into the tab so the
-                // install ladder's phases render there.
-                let (progress_tx, install_progress_rx) = match preflight {
-                    DaemonPreflight::Ready => (None, None),
-                    DaemonPreflight::NeedsInstall => {
-                        let (tx, rx) = async_channel::unbounded();
-                        (Some(tx), Some(rx))
-                    }
-                };
-
-                let request = crate::terminal::daemon_tty::DaemonSessionRequest {
-                    connection_session_id: session_id,
-                    open_params: crate::terminal::daemon_tty::OpenSessionParams {
-                        // Per-host scrollback ceiling (MiB → bytes); 0 → daemon default.
-                        ring_ceiling_bytes: (server_owned.ring_ceiling_mb > 0)
-                            .then(|| server_owned.ring_ceiling_mb as u64 * 1024 * 1024),
-                        // Honor the host's saved startup command on the daemon path too,
-                        // matching the local-PTY SSH path (run once after the session opens).
-                        startup_command: server_owned.startup_command.clone(),
-                        ..Default::default()
-                    },
-                    adopt_pty_session_id: None,
-                    install_progress_rx,
-                    host_label: server_owned.host.clone(),
-                };
-
-                // Create the daemon-backed tab: its event loop subscribes for
-                // `SessionConnected` (and renders install progress) before we
-                // connect below.
-                workspace.add_tab_with_pane_layout(
-                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
-                        hide_homepage: true,
-                        daemon_request: Some(request),
-                        ..Default::default()
-                    })),
-                    Arc::new(HashMap::new()),
-                    None, /* custom_tab_title */
-                    ctx,
-                );
-                // Remember which host this tab belongs to (pane-scoped context
-                // for e.g. "Open file manager here").
-                if let Some(pane_group) = workspace.get_pane_group_view(workspace.active_tab_index)
-                {
-                    workspace
-                        .ssh_tab_nodes
-                        .insert(pane_group.id(), node_id_owned.clone());
-                }
                 // Record node_id → daemon session so the SFTP file manager on this
                 // host can later resolve a live `HostId` and open files in the
-                // native editor (see `daemon_host_for_node`).
+                // native editor (see `daemon_host_for_node`). Recorded only once
+                // the daemon is known to be reachable, as before the tab moved
+                // ahead of the preflight.
                 #[cfg(feature = "local_tty")]
                 workspace
                     .daemon_node_sessions
                     .insert(node_id_owned.clone(), session_id);
 
-                match progress_tx {
-                    // Daemon already installed → connect right away.
-                    None => {
+                match preflight {
+                    // Daemon already installed → connect right away. Dropping the
+                    // progress sender ends the tab's progress stream after the
+                    // initial "Connecting…" line.
+                    DaemonPreflight::Ready => {
                         log::info!(
                             "daemon connect [{host}]: ready — opening daemon session {session_id:?}"
                         );
+                        drop(progress_tx);
                         workspace.connect_daemon_session(
                             server_owned,
                             session_id,
@@ -7250,7 +7304,7 @@ impl Workspace {
                     }
                     // First connect → auto-install with progress in the tab, then
                     // connect; on failure degrade to classic SSH + warning.
-                    Some(progress_tx) => {
+                    DaemonPreflight::NeedsInstall => {
                         log::info!(
                             "daemon connect [{host}]: first connect — installing the session daemon"
                         );
@@ -7259,7 +7313,39 @@ impl Workspace {
                         let install = transport.install_binary_with_progress(
                             InstallProgress::new(progress_tx.clone()),
                         );
-                        ctx.spawn(install, move |workspace, result, ctx| match result {
+                        ctx.spawn(install, move |workspace, result, ctx| {
+                            // Same cancellation contract as the preflight above:
+                            // the install runs for seconds — a tab the user
+                            // closed meanwhile means connect to nothing, fall
+                            // back to nothing. (The remote install itself has
+                            // already run to completion or failure by now; a
+                            // completed install is idempotent and simply serves
+                            // the next connect.) The node→session record from
+                            // the preflight is withdrawn again — nothing will
+                            // ever connect this session, and a dead record here
+                            // would shadow a later live one for the same node
+                            // (`daemon_host_for_node`).
+                            let pending_tab_alive =
+                                pending_pane_group.is_some_and(|pane_group_id| {
+                                    workspace
+                                        .tabs
+                                        .iter()
+                                        .any(|tab| tab.pane_group.id() == pane_group_id)
+                                });
+                            if !pending_tab_alive {
+                                #[cfg(feature = "local_tty")]
+                                if workspace.daemon_node_sessions.get(&node_id_owned)
+                                    == Some(&session_id)
+                                {
+                                    workspace.daemon_node_sessions.remove(&node_id_owned);
+                                }
+                                log::info!(
+                                    "daemon connect [{host}]: pending tab closed during \
+                                     install — cancelling the connect"
+                                );
+                                return;
+                            }
+                            match result {
                             Ok(()) => {
                                 log::info!(
                                     "daemon connect [{host}]: install complete — connecting"
@@ -7296,6 +7382,7 @@ impl Workspace {
                                     warning,
                                     ctx,
                                 );
+                            }
                             }
                         });
                     }
