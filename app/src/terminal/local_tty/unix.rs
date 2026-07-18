@@ -25,7 +25,7 @@ use mio::unix::SourceFd;
 use mio::Interest;
 use nix::{
     pty::openpty,
-    sys::termios::{self, InputFlags, SetArg},
+    sys::termios::{self, InputFlags, LocalFlags, SetArg},
 };
 use serde::{Deserialize, Serialize};
 use signal_hook_mio::v1_0::Signals;
@@ -540,10 +540,16 @@ pub(crate) fn spawn_session_pty(
     // top-level idempotency guard, unsafe on re-attachable sessions), so
     // RC-suppressing them would leave their profile unloaded. They keep the
     // prior behavior — `-l` + an init-only write in `handle_open_session`.
+    // Whether this shell gets the RC-suppressed contract — and therefore the
+    // shell *body* as session input. Only those may have ECHO cleared below:
+    // their body ends with `stty sane`, which restores it. A shell that gets no
+    // body would never restore it and would type blind forever.
+    let mut delivers_body = false;
     let mut command = match super::shell::supported_shell_path_and_type(shell) {
         Some((resolved_path, shell_type))
             if matches!(shell_type, ShellType::Bash | ShellType::Zsh) =>
         {
+            delivers_body = true;
             let path_str = resolved_path.to_string_lossy();
             let args = super::shell::arguments_for_session_spawning_command(&path_str, shell_type);
             let mut command = Command::new(resolved_path.as_os_str());
@@ -636,6 +642,29 @@ pub(crate) fn spawn_session_pty(
     }
     let size = SizeInfo::new_without_font_metrics(rows, cols);
     let info = spawn_command_in_pty(command, &size, true)?;
+
+    // Silence the line discipline before anyone can write to this PTY.
+    //
+    // The bootstrap body is enqueued as the session's first input the moment
+    // this returns. The shell's own rcfile clears ECHO too — but it only runs
+    // once the inner shell has exec'd, and the write does not wait for that. Win
+    // that race and ~1500 lines of bootstrap get echoed into the user's terminal
+    // at session start; the code that builds those spawn args calls the symptom
+    // "garbage being inserted in every line" (shell.rs). Doing it here, on the
+    // fd we already hold, removes the timing question entirely: there is no
+    // window in which input can arrive with ECHO still on.
+    //
+    // Only for shells that receive the body — it ends with `stty sane`, which
+    // restores this. Clearing it for a shell that gets no body would leave the
+    // user typing invisibly.
+    if delivers_body {
+        if let Ok(mut tio) = termios::tcgetattr(info.result.leader_fd) {
+            tio.local_flags.remove(LocalFlags::ECHO);
+            // TCSANOW: take effect before the first byte, not after the queue
+            // drains — the queue is exactly what we are trying to stay ahead of.
+            let _ = termios::tcsetattr(info.result.leader_fd, SetArg::TCSANOW, &tio);
+        }
+    }
     // SAFETY: `leader_fd` is a freshly-opened PTY master fd that we now own.
     let leader = unsafe { std::os::fd::OwnedFd::from_raw_fd(info.result.leader_fd) };
     Ok((leader, info.child))

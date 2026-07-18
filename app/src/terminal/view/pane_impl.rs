@@ -448,14 +448,12 @@ impl BackingView for TerminalView {
 
         // File manager (FM pane-mode P1): open the local FM rooted at this
         // session's cwd. Pane-scoped — the target context is the pane itself.
-        if !items.is_empty() {
-            items.push(MenuItem::Separator);
-        }
-        items.push(
-            MenuItemFields::new(crate::t!("menu-pane-open-file-manager"))
-                .with_on_select_action(TerminalAction::OpenFileManagerHere)
-                .into_item(),
-        );
+        //
+        // NOT repeated as a menu item. The folder icon sits in this same header,
+        // one click away, and its tooltip is this very string — so a ⋯ entry
+        // beside it offered the identical action twice, two clicks deep, right
+        // next to the one-click version. An affordance that already exists does
+        // not become clearer by being listed again.
 
         // Split-pane related items.
         if self.split_pane_state(ctx).is_in_split_pane() {
