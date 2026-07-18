@@ -559,14 +559,42 @@ impl CockpitPanel {
                         .get(&node_id)
                         .cloned()
                         .unwrap_or_default();
-                    Hoverable::new(handle, move |_mouse| label_el)
-                        .with_cursor(warpui::platform::Cursor::PointingHand)
-                        .on_click(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(WorkspaceAction::OpenSshTerminalByNode {
-                                node_id: node_id.clone(),
-                            })
+                    // The same hover surface an account card uses
+                    // (`fg_overlay_1`) — one grammar for "this row is a click
+                    // target", not one per zone. It used to discard the mouse
+                    // state entirely (`|_mouse|`): the row was clickable and
+                    // said nothing, so you had to guess, while the cards right
+                    // below it lit up.
+                    let host_name = host.host.clone();
+                    Hoverable::new(handle, move |mouse| {
+                        let mut c = Container::new(
+                            Flex::row()
+                                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                                .with_child(
+                                    Shrinkable::new(
+                                        1.0,
+                                        Self::text(host_name.clone(), family, body, main),
+                                    )
+                                    .finish(),
+                                )
+                                .with_main_axis_size(MainAxisSize::Max)
+                                .finish(),
+                        )
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                        .with_padding_left(3.0)
+                        .with_padding_right(3.0);
+                        if mouse.is_hovered() {
+                            c = c.with_background(internal_colors::fg_overlay_1(theme));
+                        }
+                        c.finish()
+                    })
+                    .with_cursor(warpui::platform::Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(WorkspaceAction::OpenSshTerminalByNode {
+                            node_id: node_id.clone(),
                         })
-                        .finish()
+                    })
+                    .finish()
                 }
                 None => label_el,
             };
