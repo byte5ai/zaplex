@@ -51,19 +51,34 @@ use super::types::{
     TransferTask,
 };
 
-/// The MC-style function-key bar: `(key label, caption, action)`. Rendered as
-/// a footer and mirroring the physical F-keys handled in `on_keydown`, so the
-/// same verbs are reachable by keyboard (pros) and click (beginners). F5/F6
-/// cross-pane copy/move light up fully once a second file panel exists.
-const FUNCTION_BAR: &[(&str, &str, fn() -> SftpBrowserAction)] = &[
-    ("F3", "View", || SftpBrowserAction::OpenCursorInEditor),
-    ("F4", "Edit", || SftpBrowserAction::OpenCursorInEditor),
-    ("F5", "Copy", || SftpBrowserAction::CopyToOtherPane),
-    ("F6", "Move", || SftpBrowserAction::MoveToOtherPane),
-    ("F7", "MkDir", || SftpBrowserAction::CreateFolder),
-    ("F8", "Delete", || SftpBrowserAction::DeleteSelected),
-    ("F10", "Quit", || SftpBrowserAction::CloseFileManager),
+/// The function-key bar: `(key label, action)`. Rendered as a footer and
+/// mirroring the physical F-keys handled in `on_keydown`, so the same verbs
+/// are reachable by keyboard (pros) and click (beginners). F5/F6 cross-pane
+/// copy/move light up fully once a second file panel exists. Captions come
+/// from [`function_bar_caption`] — localized, not the raw English the bar
+/// used to carry in an otherwise localized app (polish audit FM.3).
+const FUNCTION_BAR: &[(&str, fn() -> SftpBrowserAction)] = &[
+    ("F3", || SftpBrowserAction::OpenCursorInEditor),
+    ("F4", || SftpBrowserAction::OpenCursorInEditor),
+    ("F5", || SftpBrowserAction::CopyToOtherPane),
+    ("F6", || SftpBrowserAction::MoveToOtherPane),
+    ("F7", || SftpBrowserAction::CreateFolder),
+    ("F8", || SftpBrowserAction::DeleteSelected),
+    ("F10", || SftpBrowserAction::CloseFileManager),
 ];
+
+/// Localized caption for a [`FUNCTION_BAR`] key.
+fn function_bar_caption(key: &str) -> String {
+    match key {
+        "F3" => crate::t!("fm-key-view"),
+        "F4" => crate::t!("fm-key-edit"),
+        "F5" => crate::t!("fm-key-copy"),
+        "F6" => crate::t!("fm-key-move"),
+        "F7" => crate::t!("fm-key-mkdir"),
+        "F8" => crate::t!("fm-key-delete"),
+        _ => crate::t!("fm-key-quit"),
+    }
+}
 
 /// Toolbar button size
 const TOOLBAR_BTN_SIZE: f32 = 28.0;
@@ -448,9 +463,9 @@ impl SftpBrowserView {
         let title = host_name_for_node(&node_id)
             .unwrap_or_else(|| crate::t!("sftp-file-manager-title").to_string());
         let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(title));
-        let rename_editor = make_editor("Enter new name", ctx);
-        let new_folder_editor = make_editor("Folder name", ctx);
-        let search_editor = make_editor("Search files...", ctx);
+        let rename_editor = make_editor(&crate::t!("fm-rename-placeholder"), ctx);
+        let new_folder_editor = make_editor(&crate::t!("fm-folder-name-placeholder"), ctx);
+        let search_editor = make_editor(&crate::t!("fm-search-placeholder"), ctx);
 
         let mut me = Self {
             node_id,
@@ -2376,7 +2391,7 @@ impl SftpBrowserView {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_size();
-        let key_color = theme.accent().into_solid();
+        let key_color = theme.sub_text_color(theme.background());
         let caption_color = theme.sub_text_color(theme.background());
 
         let mut row = Flex::row()
@@ -2384,22 +2399,37 @@ impl SftpBrowserView {
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(4.0);
 
-        for (i, (key, caption, make_action)) in FUNCTION_BAR.iter().enumerate() {
+        for (i, (key, make_action)) in FUNCTION_BAR.iter().enumerate() {
             let handle = self.fn_bar_handles.get(i).cloned().unwrap_or_default();
             let key = *key;
-            let caption = *caption;
             let make_action = *make_action;
             let cell = Hoverable::new(handle, move |mouse| {
+                // The key renders as a quiet keycap chip (surface_2, hairline
+                // border, small radius) instead of a bare accent "F3" shouting
+                // DOS at the bottom of the pane (polish audit FM.4). Muted at
+                // rest, the shared hover fill on approach; the VERBS stay
+                // captions.
+                let keycap = Container::new(
+                    Text::new_inline(key.to_string(), family, size)
+                        .with_color(key_color.into())
+                        .finish(),
+                )
+                .with_padding_left(4.0)
+                .with_padding_right(4.0)
+                .with_padding_top(1.0)
+                .with_padding_bottom(1.0)
+                .with_background(theme.surface_2())
+                .with_border(
+                    Border::all(1.0).with_border_fill(theme.split_pane_border_color()),
+                )
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
+                .finish();
                 let content = Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(3.0)
+                    .with_spacing(4.0)
+                    .with_child(keycap)
                     .with_child(
-                        Text::new_inline(key.to_string(), family, size)
-                            .with_color(key_color.into())
-                            .finish(),
-                    )
-                    .with_child(
-                        Text::new_inline(caption.to_string(), family, size)
+                        Text::new_inline(function_bar_caption(key), family, size)
                             .with_color(caption_color.into())
                             .finish(),
                     )
@@ -2409,9 +2439,9 @@ impl SftpBrowserView {
                     .with_padding_right(6.0)
                     .with_padding_top(2.0)
                     .with_padding_bottom(2.0)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)));
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
                 if mouse.is_hovered() {
-                    container = container.with_background(internal_colors::neutral_3(theme));
+                    container = container.with_background(internal_colors::fg_overlay_1(theme));
                 }
                 container.finish()
             })
@@ -2421,12 +2451,15 @@ impl SftpBrowserView {
             row.add_child(cell);
         }
 
+        // A hairline seats the bar against the list above it — footer chrome,
+        // not another list row.
         Container::new(row.finish())
             .with_padding_left(PANEL_PADDING)
             .with_padding_right(PANEL_PADDING)
             .with_padding_top(4.0)
             .with_padding_bottom(4.0)
             .with_background(theme.background())
+            .with_border(Border::top(1.0).with_border_fill(theme.split_pane_border_color()))
             .finish()
     }
 

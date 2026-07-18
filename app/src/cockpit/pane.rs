@@ -13,8 +13,8 @@ use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Border, ChildAnchor, Dismiss, OffsetPositioning, ParentAnchor, ParentOffsetBounds, Stack,
-    ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
+    Border, ChildAnchor, ChildView, Dismiss, OffsetPositioning, ParentAnchor, ParentOffsetBounds,
+    Stack, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Empty, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Radius, Rect, RowBackground, ScrollbarWidth,
     Shrinkable, Table, TableColumnWidth, TableConfig, TableHeader, TableStateHandle,
@@ -43,7 +43,9 @@ use crate::cockpit::style::{
     provider_color_on,
     status_dot_coloru,
     utilisation_coloru, verb_button, verb_button_colored, zone_card, VerbKind,
+    BLOCK_RADIUS, CONTROL_RADIUS,
 };
+use crate::search_bar::SearchBar;
 use crate::ui_components::icons;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
@@ -283,6 +285,9 @@ pub struct CockpitPaneView {
     alias_dots_state: MouseStateHandle,
     /// The live search box (P4) — project, branch or worktree.
     search: ViewHandle<EditorView>,
+    /// The app's [`SearchBar`] chrome around it (magnifier icon, border) — a
+    /// bare rectangle is not a search field (audit P0.1).
+    search_bar: ViewHandle<SearchBar>,
     /// Its current text, kept here so the render path doesn't reach into the
     /// editor on every frame.
     search_text: String,
@@ -439,7 +444,7 @@ impl CockpitPaneView {
         let search = ctx.add_typed_action_view(|ctx| {
             let appearance = Appearance::as_ref(ctx);
             let theme = appearance.theme();
-            EditorView::single_line(
+            let mut editor = EditorView::single_line(
                 SingleLineEditorOptions {
                     is_password: false,
                     text: TextOptions {
@@ -455,8 +460,36 @@ impl CockpitPaneView {
                     ..Default::default()
                 },
                 ctx,
-            )
+            );
+            // An empty input must say what it is for (audit P0.1).
+            editor.set_placeholder_text(crate::t!("cockpit-table-search-placeholder"), ctx);
+            editor
         });
+        // The shared SearchBar chrome (magnifier + border) around that editor —
+        // sized to sit in one line with the filter chips.
+        let search_bar = {
+            let editor = search.clone();
+            ctx.add_typed_action_view(move |ctx| {
+                let appearance = Appearance::as_ref(ctx);
+                let theme = appearance.theme();
+                let mut bar = SearchBar::new(editor);
+                bar.with_style(UiComponentStyles {
+                    padding: Some(Coords {
+                        left: 6.0,
+                        right: 6.0,
+                        top: 3.0,
+                        bottom: 3.0,
+                    }),
+                    background: Some(theme.surface_2().into()),
+                    border_color: Some(theme.split_pane_border_color().into()),
+                    border_width: Some(1.0),
+                    border_radius: Some(CornerRadius::with_all(Radius::Pixels(CONTROL_RADIUS))),
+                    font_size: Some(appearance.ui_font_body()),
+                    ..Default::default()
+                });
+                bar
+            })
+        };
         ctx.subscribe_to_view(&search, |me: &mut Self, editor, event, ctx| {
             if matches!(event, EditorEvent::Edited(_)) {
                 me.search_text = editor.as_ref(ctx).buffer_text(ctx);
@@ -493,6 +526,7 @@ impl CockpitPaneView {
             alias_editor: None,
             alias_dots_state: MouseStateHandle::default(),
             search,
+            search_bar,
             search_text: String::new(),
             pane_configuration,
             account_key,
@@ -930,6 +964,26 @@ impl CockpitPaneView {
         self.account_key.as_deref()
     }
 
+    /// The ONE reset-countdown line, shared by the fleet card and the account
+    /// detail: `5h ↻ <t> · Wo ↻ <t>` — absent windows drop out, `None` when
+    /// neither is known. Labels are the same short meter vocabulary as
+    /// [`Self::heat_bar`]'s, so the line reads against the meters above it
+    /// (audit P0.4: bare times with no label read as debug output).
+    fn reset_line(acct: &AccountUsage, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
+        let label_5h = crate::t!("cockpit-meter-5h");
+        let label_week = crate::t!("cockpit-meter-week");
+        let reset_5h = format_reset(acct.reset5h, now);
+        let reset_wk = format_reset(acct.reset_week, now);
+        match (reset_5h.is_empty(), reset_wk.is_empty()) {
+            (true, true) => None,
+            (false, true) => Some(format!("{label_5h} ↻ {reset_5h}")),
+            (true, false) => Some(format!("{label_week} ↻ {reset_wk}")),
+            (false, false) => {
+                Some(format!("{label_5h} ↻ {reset_5h} · {label_week} ↻ {reset_wk}"))
+            }
+        }
+    }
+
     pub fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {
         self.pane_configuration.clone()
     }
@@ -971,7 +1025,7 @@ impl CockpitPaneView {
         let track = ConstrainedBox::new(
             Container::new(fill)
                 .with_background(internal_colors::fg_overlay_1(theme))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CONTROL_RADIUS)))
                 .finish(),
         )
         .with_width(HEAT_BAR_WIDTH)
@@ -1501,7 +1555,7 @@ impl CockpitPaneView {
             Container::new(col.finish())
                 .with_background(theme.surface_2())
                 .with_border(Border::all(1.0).with_border_color(theme.surface_3().into()))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.0)))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(BLOCK_RADIUS)))
                 .with_uniform_padding(4.0)
                 .finish(),
         )
@@ -1529,35 +1583,14 @@ impl CockpitPaneView {
         tree: &FleetTree,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-
-        // An EditorView panics on an infinite width constraint, and a Flex child
-        // is measured against one during the intrinsic pass — so it gets a fixed
-        // box rather than a flexible one. (`ssh_manager/panel.rs:2144` learned
-        // this the same way.)
-        let search = ConstrainedBox::new(
-            appearance
-                .ui_builder()
-                .text_input(self.search.clone())
-                .with_style(UiComponentStyles {
-                    padding: Some(Coords {
-                        left: 6.0,
-                        right: 6.0,
-                        top: 2.0,
-                        bottom: 2.0,
-                    }),
-                    background: Some(theme.surface_2().into()),
-                    border_color: Some(theme.split_pane_border_color().into()),
-                    border_width: Some(1.0),
-                    border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.0))),
-                    font_size: Some(appearance.ui_font_body()),
-                    ..Default::default()
-                })
-                .build()
-                .finish(),
-        )
-        .with_width(SEARCH_WIDTH)
-        .finish();
+        // The app-wide SearchBar (magnifier + placeholder + border), not a bare
+        // rectangle (audit P0.1). Fixed width: an EditorView panics on an
+        // infinite width constraint, and a Flex child is measured against one
+        // during the intrinsic pass. (`ssh_manager/panel.rs:2144` learned this
+        // the same way.)
+        let search = ConstrainedBox::new(ChildView::new(&self.search_bar).finish())
+            .with_width(SEARCH_WIDTH)
+            .finish();
 
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -1660,13 +1693,22 @@ impl CockpitPaneView {
 
         let rows = self.build_table_rows(acct, tree, app);
         if rows.is_empty() {
-            return Container::new(Self::text(
-                crate::t!("cockpit-table-empty"),
-                family,
-                body,
-                muted,
-            ))
-            .with_margin_top(CARD_SPACING)
+            // An empty state is a designed state, not a debug printout: the
+            // line sits centered with room around it (audit P0.7).
+            return Container::new(
+                Flex::row()
+                    .with_main_axis_alignment(MainAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_child(Self::text(
+                        crate::t!("cockpit-table-empty"),
+                        family,
+                        body,
+                        muted,
+                    ))
+                    .finish(),
+            )
+            .with_padding_top(24.0)
+            .with_padding_bottom(24.0)
             .finish();
         }
 
@@ -1942,8 +1984,14 @@ impl CockpitPaneView {
                     .with_width(TableColumnWidth::Flex(1.2)),
                 header("host", crate::t!("cockpit-table-col-host").to_string(), SortColumn::Host, false)
                     .with_width(TableColumnWidth::Flex(0.9)),
+                // 1.4: the model cell carries "family·effort" strings that a
+                // 1.0 share truncated mid-word ("codex-auto-revie…") with no
+                // way to read the rest. The existing tooltip helpers are
+                // button-bound (`icon_verb_button_tooltip`), there is no plain
+                // cell-tooltip wrapper — so the column gets the room instead
+                // (audit P1.3).
                 header("model", crate::t!("cockpit-table-col-model").to_string(), SortColumn::Model, false)
-                    .with_width(TableColumnWidth::Flex(1.0)),
+                    .with_width(TableColumnWidth::Flex(1.4)),
                 header("context", crate::t!("cockpit-table-col-context").to_string(), SortColumn::Context, true)
                     .with_width(TableColumnWidth::Flex(1.0)),
                 header("today", crate::t!("cockpit-pane-col-today").to_string(), SortColumn::Today, true)
@@ -2039,6 +2087,9 @@ impl CockpitPaneView {
         let now = chrono::Utc::now();
 
         // Identity: provider tile, display name, then the quieter facts.
+        // The tile is a glyph-scale colour swatch: its radius follows its own
+        // size (10 px → 3), not the control scale — CONTROL_RADIUS on a mark
+        // this small would read as a circle.
         let tile = ConstrainedBox::new(
             Rect::new()
                 .with_background_color(provider_color_on(
@@ -2072,7 +2123,7 @@ impl CockpitPaneView {
                         background: Some(theme.surface_2().into()),
                         border_color: Some(theme.accent().into()),
                         border_width: Some(1.0),
-                        border_radius: Some(CornerRadius::with_all(Radius::Pixels(3.0))),
+                        border_radius: Some(CornerRadius::with_all(Radius::Pixels(CONTROL_RADIUS))),
                         font_size: Some(heading),
                         ..Default::default()
                     })
@@ -2129,29 +2180,26 @@ impl CockpitPaneView {
 
         // The two meters. `heat_bar` carries the one utilisation rule (grey below
         // the threshold, true red at or above it) — asked for rather than redone.
-        col = col.with_child(
-            self.heat_bar(
-                &crate::t!("cockpit-pane-col-5h"),
-                acct.heat,
-                acct.provenance,
-                appearance,
-            ),
-        );
-        let reset5h = format_reset(acct.reset5h, now);
-        if !reset5h.is_empty() {
-            col = col.with_child(Self::text(reset5h, family, body, faint));
-        }
-        col = col.with_child(
-            self.heat_bar(
-                &crate::t!("cockpit-pane-col-week"),
-                acct.heat_week,
-                acct.provenance,
-                appearance,
-            ),
-        );
-        let reset_week = format_reset(acct.reset_week, now);
-        if !reset_week.is_empty() {
-            col = col.with_child(Self::text(reset_week, family, body, faint));
+        // Meter labels are the short vocabulary („5h"/„Wo"), same as the fleet
+        // card — the long column titles clipped inside the label cell (audit
+        // P0.3); they belong to the figures matrix below.
+        col = col.with_child(self.heat_bar(
+            &crate::t!("cockpit-meter-5h"),
+            acct.heat,
+            acct.provenance,
+            appearance,
+        ));
+        col = col.with_child(self.heat_bar(
+            &crate::t!("cockpit-meter-week"),
+            acct.heat_week,
+            acct.provenance,
+            appearance,
+        ));
+        // ONE reset line under both meters, in the fleet card's format
+        // (`5h ↻ … · Wo ↻ …`) — bare times with no label read as debug output
+        // (audit P0.4).
+        if let Some(reset_line) = Self::reset_line(acct, now) {
+            col = col.with_child(Self::text(reset_line, family, body, faint));
         }
 
         // Three windows × ($ / tokens). "Today" is the LOCAL day (F2).
@@ -2242,7 +2290,7 @@ impl CockpitPaneView {
                     .with_padding_top(2.0)
                     .with_padding_bottom(2.0)
                     .with_background(internal_colors::fg_overlay_1(theme))
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.0)))
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CONTROL_RADIUS)))
                     .finish(),
             );
         }
@@ -2271,22 +2319,25 @@ impl CockpitPaneView {
             ))
             .finish();
 
-        let reset_5h = format_reset(acct.reset5h, now);
-        let reset_wk = format_reset(acct.reset_week, now);
-        let reset_line = match (reset_5h.is_empty(), reset_wk.is_empty()) {
-            (true, true) => None,
-            (false, true) => Some(format!("5h ↻ {reset_5h}")),
-            (true, false) => Some(format!("wk ↻ {reset_wk}")),
-            (false, false) => Some(format!("5h ↻ {reset_5h} · wk ↻ {reset_wk}")),
-        };
+        let reset_line = Self::reset_line(acct, now);
 
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(CARD_SPACING)
             .with_child(header.finish())
-            .with_child(self.heat_bar("5h", acct.heat, acct.provenance, appearance))
-            .with_child(self.heat_bar("wk", acct.heat_week, acct.provenance, appearance));
+            .with_child(self.heat_bar(
+                &crate::t!("cockpit-meter-5h"),
+                acct.heat,
+                acct.provenance,
+                appearance,
+            ))
+            .with_child(self.heat_bar(
+                &crate::t!("cockpit-meter-week"),
+                acct.heat_week,
+                acct.provenance,
+                appearance,
+            ));
         // 7-day per-model sublimits (Max plans) when the endpoint reports them —
         // often the binding constraint, so the dashboard shows them explicitly
         // next to 5h/wk (Codex #6).
@@ -2377,7 +2428,7 @@ impl CockpitPaneView {
             .with_uniform_padding(CARD_PADDING)
             .with_margin_bottom(CARD_SPACING)
             .with_background(card_bg)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.0)))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(BLOCK_RADIUS)))
             .finish()
     }
 
@@ -2511,11 +2562,26 @@ impl View for CockpitPaneView {
                     )
                     .with_uniform_padding(CARD_PADDING)
                     .finish();
-                    let col = Flex::column()
+                    let mut col = Flex::column()
                         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                         .with_main_axis_size(MainAxisSize::Min)
                         .with_child(self.render_account_detail(acct, appearance))
                         .with_child(sessions_zone);
+                    // C3b: the ~ marker needs its explanation wherever it is
+                    // visible — this pane showed estimates unexplained while
+                    // only the fleet dashboard carried the legend (audit P0.6).
+                    if acct.provenance == UsageProvenance::Estimate {
+                        col = col.with_child(
+                            Container::new(Self::text(
+                                crate::t!("cockpit-pane-provenance-legend"),
+                                family,
+                                body,
+                                muted,
+                            ))
+                            .with_margin_top(CARD_SPACING)
+                            .finish(),
+                        );
+                    }
                     // The pane padding sits INSIDE the scrollable, so the ⋯
                     // drive's overlay Stack keeps its geometry (its anchor maths
                     // broke once already; don't move its parent).

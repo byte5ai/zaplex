@@ -8,9 +8,10 @@ use std::collections::HashSet;
 
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
 use warpui::elements::{
-    ConstrainedBox, Container, CrossAxisAlignment, Fill, Flex, Hoverable,
-    MouseStateHandle, ParentElement, SavePosition, Shrinkable, Text,
+    Border, ConstrainedBox, Container, CrossAxisAlignment, Expanded, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition, Text,
 };
 use warpui::platform::Cursor;
 use warpui::Element;
@@ -23,6 +24,11 @@ use crate::ui_components::icons::Icon;
 const FILE_SIZE_WIDTH: f32 = 80.0;
 /// File date column width
 const FILE_DATE_WIDTH: f32 = 120.0;
+/// Leading icon cell (16 px icon + 8 px row spacing) — the header mirrors it
+/// so the Name header sits exactly over the names, not 24 px beside them.
+const ICON_CELL: f32 = 16.0;
+/// Row spacing between icon / name / columns.
+const ROW_SPACING: f32 = 8.0;
 
 /// Return appropriate icon based on file entry type
 pub fn file_icon(entry_type: &FileEntryType) -> Icon {
@@ -34,10 +40,13 @@ pub fn file_icon(entry_type: &FileEntryType) -> Icon {
 
 /// Render a single file row.
 ///
-/// Two independent highlights, MC-style: `is_cursor` is the single keyboard
-/// cursor (an accent bar with inverse text, like MC's cyan cursor), while
-/// `is_selected` is the multi-selection set (a subtle neutral background). The
-/// cursor wins when a row is both.
+/// Two independent highlights, MC-style in SEMANTICS only: `is_cursor` is the
+/// single keyboard cursor, `is_selected` the multi-selection set; the cursor
+/// wins when a row is both, selection wins over hover. The LOOK is the app's
+/// own vocabulary (polish audit FM.1) — an accent *tint* for the cursor, the
+/// shared neutral overlays for selection and hover, text colours untouched —
+/// not MC's full accent slab with inverted text, which made the cursor row a
+/// foreign object in the theme.
 pub fn render_file_row(
     entry: &FileEntry,
     index: usize,
@@ -47,33 +56,14 @@ pub fn render_file_row(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let bg_color = if is_cursor {
-        theme.accent().into_solid()
-    } else if is_selected {
-        internal_colors::neutral_3(theme)
-    } else {
-        theme.background().into_solid()
-    };
     let is_dir = matches!(entry.file_type, FileEntryType::Directory | FileEntryType::Symlink);
-    // On the accent cursor bar, use the background colour for foreground marks
-    // so icon/name/columns stay legible (inverse video, the MC cursor look).
-    let icon_color = if is_cursor {
-        theme.background().into_solid()
-    } else if is_dir {
+    let icon_color = if is_dir {
         theme.accent().into_solid()
     } else {
         theme.sub_text_color(theme.background()).into_solid()
     };
-    let text_color = if is_cursor {
-        theme.background()
-    } else {
-        theme.active_ui_text_color()
-    };
-    let sub_color = if is_cursor {
-        theme.background()
-    } else {
-        theme.sub_text_color(theme.background())
-    };
+    let text_color = theme.active_ui_text_color();
+    let sub_color = theme.sub_text_color(theme.background());
 
     let name = entry.name.clone();
     let file_type = entry.file_type;
@@ -81,19 +71,30 @@ pub fn render_file_row(
     let modified = entry.modified.clone();
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
-    let bg_fill: Fill = bg_color.into();
 
-    Hoverable::new(mouse_handle, move |_| {
+    Hoverable::new(mouse_handle, move |mouse| {
+        let bg: Option<Fill> = if is_cursor {
+            Some(theme.accent().with_opacity(22))
+        } else if is_selected {
+            Some(internal_colors::fg_overlay_2(theme))
+        } else if mouse.is_hovered() {
+            Some(internal_colors::fg_overlay_1(theme))
+        } else {
+            None
+        };
+
         // Icon
         let icon_el = ConstrainedBox::new(
             file_icon(&file_type).to_warpui_icon(icon_color.into()).finish(),
         )
-        .with_width(16.0)
-        .with_height(16.0)
+        .with_width(ICON_CELL)
+        .with_height(ICON_CELL)
         .finish();
 
-        // Name
-        let name_el = Shrinkable::new(
+        // Name — `Expanded` (tight fit), not `Shrinkable` (loose fit): only a
+        // tight-fit child actually consumes the remaining width, and consuming
+        // it is what pins Size/Modified into stable right columns.
+        let name_el = Expanded::new(
             1.0,
             Text::new_inline(name.clone(), ui_font, ui_font_size)
                 .with_color(text_color.into())
@@ -101,15 +102,21 @@ pub fn render_file_row(
         )
         .finish();
 
-        // Size
+        // Size — right-aligned in its fixed column, like every numeric column.
         let size_text = if matches!(file_type, FileEntryType::Directory | FileEntryType::Symlink) {
             String::from("--")
         } else {
             format_size(size)
         };
         let size_el = ConstrainedBox::new(
-            Text::new_inline(size_text, ui_font, ui_font_size)
-                .with_color(sub_color.into())
+            Flex::row()
+                .with_main_axis_alignment(MainAxisAlignment::End)
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_child(
+                    Text::new_inline(size_text, ui_font, ui_font_size)
+                        .with_color(sub_color.into())
+                        .finish(),
+                )
                 .finish(),
         )
         .with_width(FILE_SIZE_WIDTH)
@@ -125,23 +132,28 @@ pub fn render_file_row(
         .with_width(FILE_DATE_WIDTH)
         .finish();
 
-        // Assemble row content
+        // Assemble row content. `Max` is what pins Size/Modified into stable
+        // columns — without it the row hugged its content and the columns
+        // wandered with the name length (polish audit FM.2).
         let row_content = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(8.0)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_spacing(ROW_SPACING)
             .with_child(icon_el)
             .with_child(name_el)
             .with_child(size_el)
             .with_child(date_el)
             .finish();
 
-        Container::new(row_content)
-            .with_background(bg_fill)
+        let mut container = Container::new(row_content)
             .with_padding_left(8.0)
             .with_padding_right(8.0)
             .with_padding_top(4.0)
-            .with_padding_bottom(4.0)
-            .finish()
+            .with_padding_bottom(4.0);
+        if let Some(bg) = bg {
+            container = container.with_background(bg);
+        }
+        container.finish()
     })
     .with_cursor(Cursor::PointingHand)
     .on_click(move |ctx, _, _| {
@@ -164,50 +176,57 @@ pub fn render_file_row(
     .finish()
 }
 
-/// Render file list header
+/// Render file list header — localized, mirroring the rows' column grid
+/// (leading icon cell included) and separated from them by a hairline.
 pub fn render_header(appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let header_color = theme.sub_text_color(theme.background());
+    let family = appearance.ui_font_family();
+    let size = appearance.ui_font_size();
 
-    let name_el = Shrinkable::new(
+    // The rows lead with a 16 px icon; the header mirrors that cell so "Name"
+    // sits over the names (audit FM.2 — the header had no icon cell at all,
+    // so "Name" sat a fixed 24 px beside the names, with a magic spacing 24
+    // standing in for icon + gap between the other columns).
+    let icon_spacer = ConstrainedBox::new(Flex::row().finish())
+        .with_width(ICON_CELL)
+        .finish();
+
+    let name_el = Expanded::new(
         1.0,
-        Text::new_inline(
-            String::from("Name"),
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(header_color.into())
-        .finish(),
+        Text::new_inline(crate::t!("fm-col-name"), family, size)
+            .with_color(header_color.into())
+            .finish(),
     )
     .finish();
 
     let size_el = ConstrainedBox::new(
-        Text::new_inline(
-            String::from("Size"),
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(header_color.into())
-        .finish(),
+        Flex::row()
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(
+                Text::new_inline(crate::t!("fm-col-size"), family, size)
+                    .with_color(header_color.into())
+                    .finish(),
+            )
+            .finish(),
     )
     .with_width(FILE_SIZE_WIDTH)
     .finish();
 
     let date_el = ConstrainedBox::new(
-        Text::new_inline(
-            String::from("Modified"),
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(header_color.into())
-        .finish(),
+        Text::new_inline(crate::t!("fm-col-modified"), family, size)
+            .with_color(header_color.into())
+            .finish(),
     )
     .with_width(FILE_DATE_WIDTH)
     .finish();
 
     let header_row = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_spacing(24.0) // Icon 16 + spacing 8
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_spacing(ROW_SPACING)
+        .with_child(icon_spacer)
         .with_child(name_el)
         .with_child(size_el)
         .with_child(date_el)
@@ -218,6 +237,7 @@ pub fn render_header(appearance: &Appearance) -> Box<dyn Element> {
         .with_padding_right(8.0)
         .with_padding_top(4.0)
         .with_padding_bottom(4.0)
+        .with_border(Border::bottom(1.0).with_border_fill(theme.split_pane_border_color()))
         .finish()
 }
 

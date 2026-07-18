@@ -94,6 +94,22 @@ impl EventLoop {
     ) -> Self {
         let mut event_loop = Self::new(model, channel_event_listener, connection_session_id);
         event_loop.host_label = host_label;
+        // Name the tab from second 0: an OSC-0 title through the normal ANSI
+        // path, so a connecting tab reads its host instead of sitting nameless
+        // until the session opens (polish audit P0.5). Deliberately NOT the
+        // sticky pane `custom_title` — the session's own title updates (the
+        // bootstrap's precmd metadata drives title events once the shell is
+        // up) must keep replacing this naturally. Control
+        // characters are stripped: a label containing ESC/BEL would otherwise
+        // terminate the sequence and inject terminal control through the
+        // parser.
+        let safe_label: String = event_loop
+            .host_label
+            .chars()
+            .filter(|c| !c.is_control())
+            .collect();
+        let title_seq = format!("\x1b]0;{safe_label}\x07");
+        event_loop.process_pty_bytes(title_seq.as_bytes());
         match adopt_pty_session_id {
             // Adopt an existing daemon session: attach + replay on connect.
             Some(id) => event_loop.pty_session_id = Some(id),

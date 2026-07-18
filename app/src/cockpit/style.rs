@@ -21,6 +21,7 @@
 
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex,
@@ -54,6 +55,47 @@ pub const CARD_RADIUS: f32 = 12.0;
 
 /// Hairline zone-card border width (spec §2.1: `0.5px border`, no shadow).
 pub const CARD_BORDER: f32 = 0.5;
+
+/// Corner radius of a multi-line interactive BLOCK inside a zone-card (an
+/// account block in the sidebar, an account card in the pane). The container
+/// radius scale is 12 → 8 → 4 — zone-card, block, row/control — one radius per
+/// size class, never one per zone (polish audit 2026-07-18, P1.1).
+pub const BLOCK_RADIUS: f32 = 8.0;
+
+/// Corner radius of one-LINE interactive rows (host row, session row) and of
+/// small controls (inputs, chips, badges). See [`BLOCK_RADIUS`] for the scale.
+pub const CONTROL_RADIUS: f32 = 4.0;
+
+/// Vertical padding of a one-line interactive row — what makes its hover fill
+/// read as a surface instead of a text-height sliver.
+pub const ROW_V_PADDING: f32 = 3.0;
+/// Horizontal padding of a one-line interactive row.
+pub const ROW_H_PADDING: f32 = 6.0;
+
+/// Wraps one already-assembled row LINE as an interactive row surface: row
+/// padding, control radius, and — when `hovered` — the shared `fg_overlay_1`
+/// hover fill. The ONE hover grammar for host and session rows; pass
+/// `hovered = false` for a non-interactive sibling so its text still aligns
+/// with the interactive rows around it. (Polish audit 2026-07-18: a row that
+/// hovers as a text-width sliver, or not at all, is exactly the inconsistency
+/// this bans.)
+pub fn hover_row(
+    line: Box<dyn Element>,
+    hovered: bool,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let mut c = Container::new(line)
+        .with_padding_top(ROW_V_PADDING)
+        .with_padding_bottom(ROW_V_PADDING)
+        .with_padding_left(ROW_H_PADDING)
+        .with_padding_right(ROW_H_PADDING)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CONTROL_RADIUS)));
+    if hovered {
+        c = c.with_background(internal_colors::fg_overlay_1(theme));
+    }
+    c.finish()
+}
 
 /// Fixed width of a session row's right-hand **metric column** (provider icon +
 /// ctx%), so the metrics align into a clean column across rows and never shift

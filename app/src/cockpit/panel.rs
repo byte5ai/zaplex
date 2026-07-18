@@ -26,9 +26,10 @@ use zaplex_cockpit::{
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    attention_coloru, ctx_pct_element, glyph_cell, icon_verb_button_tooltip, provider_color_on,
-    provider_label, status_dot_coloru, utilisation_coloru, verb_button_colored, zone_card,
-    GLYPH_COL_WIDTH, METRIC_COL_WIDTH,
+    attention_coloru, ctx_pct_element, glyph_cell, hover_row, icon_verb_button_tooltip,
+    provider_color_on, provider_label, status_dot_coloru, utilisation_coloru,
+    verb_button_colored, zone_card, BLOCK_RADIUS, CONTROL_RADIUS, GLYPH_COL_WIDTH,
+    METRIC_COL_WIDTH,
 };
 use crate::ui_components::icons;
 use crate::WorkspaceAction;
@@ -349,7 +350,7 @@ impl CockpitPanel {
             provider_row = provider_row.with_child(
                 Container::new(Self::text(plan, family, body, main))
                     .with_background(internal_colors::fg_overlay_1(theme))
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CONTROL_RADIUS)))
                     .with_padding_left(5.0)
                     .with_padding_right(5.0)
                     .finish(),
@@ -414,7 +415,7 @@ impl CockpitPanel {
             let mut c = Container::new(col_el)
                 .with_uniform_padding(CARD_PADDING)
                 .with_margin_bottom(CARD_SPACING)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.0)));
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(BLOCK_RADIUS)));
             if is_selected {
                 c = c.with_background(internal_colors::fg_overlay_2(theme));
             } else if mouse.is_hovered() {
@@ -534,24 +535,36 @@ impl CockpitPanel {
             let is_local = host.is_local;
             // Stable host identity keys the density-fold state (never the label).
             let ident = host_ident(is_local, host.host_id.as_deref());
-            // Label + needs-me badge = the terminal click target (registered
-            // hosts); the ★ favorite toggle sits *beside* it, not inside, so the
-            // two clicks never collide.
-            let label_row = Flex::row()
+            // The row's GLANCE span: worst-child status dot (the host reads
+            // amber when any child is waiting, without opening it — spec §3),
+            // the name, and — only when folded — how much is behind the fold.
+            // The fold count is faint and never amber: a host only auto-folds
+            // when nothing on it is waiting (`host_auto_collapsed`), so the
+            // fold can only ever hide calm work. NO needs-me badge beside the
+            // name: the dot already carries "wartet" (spec v3 §1.3 „Nichts
+            // codiert doppelt").
+            let mut head = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
+                .with_child(Self::host_status_dot(host, appearance))
                 .with_child(
                     Shrinkable::new(1.0, Self::text(host.host.clone(), family, body, main))
                         .finish(),
                 );
-            // NO needs-me badge here: the host's leading status dot already carries
-            // "wartet" (worst-child, amber). A second amber count beside the name
-            // would encode the same fact twice — spec v3 §1.3 „Nichts codiert
-            // doppelt". The attention trail is dot → dot, nothing else.
-            let label_el = label_row.with_main_axis_size(MainAxisSize::Max).finish();
+            if collapsed {
+                head = head.with_child(Self::text(
+                    host_session_count(host).to_string(),
+                    family,
+                    body,
+                    faint,
+                ));
+            }
+            let head_el = head.with_main_axis_size(MainAxisSize::Max).finish();
             // A registered host (no live agent, re-added by the registry merge)
-            // becomes a click target that opens a terminal on it — the spine's
-            // host-row action. Live-only hosts keep their plain label.
+            // is a click target that opens a terminal on it. The hover surface
+            // is the WHOLE glance span via the shared row grammar (`hover_row`)
+            // — not a text-width sliver around the word (audit P0.2). Live-only
+            // hosts get the same geometry, hover-less, so the column aligns.
             let label_el: Box<dyn Element> = match host.registry_node_id.clone() {
                 Some(node_id) => {
                     let handle = self
@@ -559,34 +572,8 @@ impl CockpitPanel {
                         .get(&node_id)
                         .cloned()
                         .unwrap_or_default();
-                    // The same hover surface an account card uses
-                    // (`fg_overlay_1`) — one grammar for "this row is a click
-                    // target", not one per zone. It used to discard the mouse
-                    // state entirely (`|_mouse|`): the row was clickable and
-                    // said nothing, so you had to guess, while the cards right
-                    // below it lit up.
-                    let host_name = host.host.clone();
                     Hoverable::new(handle, move |mouse| {
-                        let mut c = Container::new(
-                            Flex::row()
-                                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                                .with_child(
-                                    Shrinkable::new(
-                                        1.0,
-                                        Self::text(host_name.clone(), family, body, main),
-                                    )
-                                    .finish(),
-                                )
-                                .with_main_axis_size(MainAxisSize::Max)
-                                .finish(),
-                        )
-                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                        .with_padding_left(3.0)
-                        .with_padding_right(3.0);
-                        if mouse.is_hovered() {
-                            c = c.with_background(internal_colors::fg_overlay_1(theme));
-                        }
-                        c.finish()
+                        hover_row(head_el, mouse.is_hovered(), appearance)
                     })
                     .with_cursor(warpui::platform::Cursor::PointingHand)
                     .on_click(move |ctx, _, _| {
@@ -596,38 +583,15 @@ impl CockpitPanel {
                     })
                     .finish()
                 }
-                None => label_el,
+                None => hover_row(head_el, false, appearance),
             };
-            // Compose the header: a leading worst-child status dot (the host
-            // reads amber when any child is waiting, without opening it — spec §3
-            // worst-child inheritance), then the clickable label (flex), then a
-            // ★ favorite toggle for registered hosts (points at the node_id).
+            // Compose the header: the glance span (flex), then the ★ favorite
+            // toggle and the ⋯ manage verb for registered hosts — beside the
+            // click target, not inside it, so the clicks never collide.
             let mut header_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
-                .with_child(Self::host_status_dot(host, appearance))
                 .with_child(Shrinkable::new(1.0, label_el).finish());
-            if collapsed {
-                // How much is behind the fold — the one thing the header cannot
-                // show once the children are gone. Only when folded: an expanded
-                // host shows its sessions, so counting them again would be noise.
-                //
-                // Faint, and never amber. A host only auto-folds when nothing on
-                // it is waiting (`host_auto_collapsed`), so the fold can only ever
-                // hide calm work — there is no attention here to carry. That is
-                // also why the old collapsed branch's `needs_me > 0 → amber` could
-                // never fire: it was unreachable by its own condition.
-                //
-                // A *project* header is the opposite case and does colour its
-                // count: the user folds it by hand, so it can hide someone who
-                // waits, and it has no dot of its own to say so.
-                header_row = header_row.with_child(Self::text(
-                    host_session_count(host).to_string(),
-                    family,
-                    body,
-                    faint,
-                ));
-            }
             if let Some(node_id) = host.registry_node_id.clone() {
                 if let Some(star_state) = self.conductor_host_star_states.get(&node_id).cloned() {
                     let is_fav = favorites
@@ -688,7 +652,10 @@ impl CockpitPanel {
                         expanded,
                         appearance,
                     ))
-                    .with_padding_left(4.0)
+                    // 4 + ROW_H_PADDING: the host rows above sit inside the
+                    // shared `hover_row` inset now, so every level below keeps
+                    // its old indent relative to them.
+                    .with_padding_left(10.0)
                     .finish(),
                 );
                 if expanded {
@@ -802,12 +769,17 @@ impl CockpitPanel {
                     session_id: session.session_id.clone(),
                     is_local,
                 };
-                Hoverable::new(state, move |_mouse| glance)
-                    .with_cursor(Cursor::PointingHand)
-                    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                    .finish()
+                // Same full-span hover grammar as the host rows (`hover_row`).
+                // The mouse state used to be discarded here — a clickable row
+                // that never says so (audit P0.2).
+                Hoverable::new(state, move |mouse| {
+                    hover_row(glance, mouse.is_hovered(), appearance)
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                .finish()
             }
-            None => glance,
+            None => hover_row(glance, false, appearance),
         };
 
         // The one trailing affordance: the ★ favourite (design §10). Review + the
