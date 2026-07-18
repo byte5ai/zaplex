@@ -42,7 +42,7 @@ use crate::cockpit::style::{
     icon_verb_button_tooltip, icon_word_verb,
     provider_color_on,
     status_dot_coloru,
-    utilisation_coloru, verb_button, verb_button_colored, VerbKind,
+    utilisation_coloru, verb_button, verb_button_colored, zone_card, VerbKind,
 };
 use crate::ui_components::icons;
 use crate::pane_group::focus_state::PaneFocusHandle;
@@ -2175,7 +2175,11 @@ impl CockpitPaneView {
             .finish();
         col = col.with_child(figures);
 
-        Container::new(col.finish())
+        // A bounded card (hairline zone-card, §2.1), not print on the pane
+        // background: the edge is what keeps the meters from visually running
+        // off into empty pane space (RC acceptance, 2026-07-17).
+        zone_card(col.finish(), appearance)
+            .with_uniform_padding(CARD_PADDING)
             .with_margin_bottom(CARD_SPACING * 2.0)
             .finish()
     }
@@ -2484,19 +2488,42 @@ impl View for CockpitPaneView {
             {
                 Some(acct) => {
                     let scroll = {
+                    // Two zone-cards (the sidebar's §2.1 vocabulary): the
+                    // account's identity + meters, then its sessions (toolbar +
+                    // table). Bounded surfaces with a hairline edge instead of
+                    // print on the raw pane background — without them, stacked
+                    // account panes read as one continuous debug dump (RC
+                    // acceptance, 2026-07-17).
+                    let sessions_zone = zone_card(
+                        Flex::column()
+                            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                            .with_main_axis_size(MainAxisSize::Min)
+                            .with_child(
+                                Container::new(
+                                    self.render_table_toolbar(acct, &tree, appearance),
+                                )
+                                .with_margin_bottom(CARD_SPACING)
+                                .finish(),
+                            )
+                            .with_child(self.render_sessions_table(acct, &tree, app, appearance))
+                            .finish(),
+                        appearance,
+                    )
+                    .with_uniform_padding(CARD_PADDING)
+                    .finish();
                     let col = Flex::column()
                         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                         .with_main_axis_size(MainAxisSize::Min)
                         .with_child(self.render_account_detail(acct, appearance))
-                        .with_child(
-                            Container::new(self.render_table_toolbar(acct, &tree, appearance))
-                                .with_margin_bottom(CARD_SPACING)
-                                .finish(),
-                        )
-                        .with_child(self.render_sessions_table(acct, &tree, app, appearance));
+                        .with_child(sessions_zone);
+                    // The pane padding sits INSIDE the scrollable, so the ⋯
+                    // drive's overlay Stack keeps its geometry (its anchor maths
+                    // broke once already; don't move its parent).
                     ClippedScrollable::vertical(
                         self.scroll_state.clone(),
-                        col.finish(),
+                        Container::new(col.finish())
+                            .with_uniform_padding(PANE_PADDING)
+                            .finish(),
                         ScrollbarWidth::Auto,
                         theme.disabled_text_color(theme.background()).into(),
                         theme.main_text_color(theme.background()).into(),
@@ -2532,14 +2559,21 @@ impl View for CockpitPaneView {
                 }
                 // Signed out, config dir gone — say so instead of an empty pane
                 // that looks like a load that never finished.
-                None => Self::text(
+                None => Container::new(Self::text(
                     crate::t!("cockpit-account-gone"),
                     family,
                     body,
                     muted,
-                ),
+                ))
+                .with_uniform_padding(PANE_PADDING)
+                .finish(),
             };
-            return Container::new(content).finish();
+            // Same opaque pane background as the fleet branch below — an
+            // account pane left it unset, so its content sat directly on
+            // whatever was behind the pane (part of the "debug view" look).
+            return Container::new(content)
+                .with_background(theme.background())
+                .finish();
         }
 
         let content: Box<dyn Element> = if snapshot.accounts.is_empty() {
@@ -2780,9 +2814,13 @@ impl BackingView for CockpitPaneView {
     fn render_header_content(
         &self,
         _ctx: &view::HeaderRenderContext<'_>,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple(crate::t!("cockpit-pane-title"))
+        // An account pane is titled by ITS account (alias→label, spec §4.1) —
+        // two stacked account panes both reading "Cockpit" left the user unable
+        // to tell whose numbers were whose (RC acceptance, 2026-07-17). The
+        // fleet dashboard (no account key) keeps the generic title.
+        view::HeaderContent::simple(Self::pane_title(self.account_key.as_deref(), app))
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {
