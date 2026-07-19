@@ -20,8 +20,6 @@
 //! is guaranteed by the `AskpassSession` RAII guard, which cleans up immediately after ssh exits.
 
 use crate::types::{AuthType, ConnectionStatus, SshServerInfo};
-#[cfg(not(windows))]
-use futures_lite::io::AsyncWriteExt as _;
 use std::borrow::Cow;
 use std::process::Stdio;
 use std::time::Duration;
@@ -73,7 +71,10 @@ pub async fn test_connection(
     let start = instant::Instant::now();
 
     let result = match server.auth_type {
-        AuthType::Key => test_key_auth(server).await,
+        // Key auth also carries a secret: the *passphrase* of an encrypted
+        // private key (resolved by the caller into the same `password` slot). It
+        // must reach ssh, or testing an encrypted key always fails.
+        AuthType::Key => test_key_auth(server, password).await,
         AuthType::Password | AuthType::OneKey => test_password_auth(server, password).await,
     };
 
@@ -93,36 +94,53 @@ pub async fn test_connection(
     }
 }
 
-async fn test_key_auth(server: &SshServerInfo) -> Result<(), String> {
-    let mut args = build_ssh_args(server);
-    // build_ssh_args ends with the destination (user@host); -o options must be inserted
-    // before the destination, otherwise SSH treats -o as part of the remote command rather than its own option.
-    let target = args.pop().unwrap();
-    args.extend([
-        "-o".into(),
-        "BatchMode=yes".into(),
-        "-o".into(),
-        "ConnectTimeout=5".into(),
-        "-o".into(),
-        "StrictHostKeyChecking=no".into(),
-        "-o".into(),
-        "LogLevel=ERROR".into(),
-    ]);
-    args.push(target);
-    args.push("echo ok".into());
-    let cmd_args = args;
+async fn test_key_auth(
+    server: &SshServerInfo,
+    passphrase: Option<Zeroizing<String>>,
+) -> Result<(), String> {
+    // A non-empty passphrase means the private key is encrypted. ssh reads a key
+    // passphrase the same way it reads a login password — from the controlling
+    // tty or SSH_ASKPASS, never from stdin — so we hand it over through the same
+    // askpass helper as password auth, and drop `BatchMode` (which would suppress
+    // the passphrase prompt entirely). With no passphrase we keep `BatchMode=yes`:
+    // the key must be usable non-interactively (ssh-agent or unencrypted) and no
+    // secret is needed. Same auth double-path the file manager had — the test path
+    // now pulls even.
+    let passphrase = passphrase.filter(|secret| !secret.is_empty());
+    let cmd_args = build_key_auth_cmd_args(server, passphrase.is_some());
 
-    match tokio::time::timeout(TEST_TIMEOUT, run_ssh_test(&cmd_args)).await {
-        Ok(Ok(output)) => {
-            // Strictly match `echo ok`; don't let a banner/motd ending exactly in "ok" cause a false positive.
-            if output.trim() == "ok" {
-                Ok(())
-            } else {
-                Err(format!("Unexpected output: {}", output.trim()))
-            }
-        }
-        Ok(Err(e)) => Err(e.to_string()),
-        Err(_) => Err("Connection timeout".into()),
+    let askpass = match &passphrase {
+        Some(secret) => Some(
+            AskpassSession::new(secret).map_err(|e| format!("Failed to prepare askpass: {e}"))?,
+        ),
+        None => None,
+    };
+
+    let output = match tokio::time::timeout(
+        TEST_TIMEOUT,
+        run_ssh_test_capture(&cmd_args, askpass.as_ref()),
+    )
+    .await
+    {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => return Err(e),
+        Err(_) => return Err("Connection timeout".into()),
+    };
+    drop(askpass);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        log::warn!("ssh key-auth test stderr: {stderr}");
+    }
+    // Strictly match `echo ok`; don't let a banner/motd ending in "ok" pass.
+    if output.status.success() && stdout.trim() == "ok" {
+        Ok(())
+    } else if !stderr.is_empty() {
+        let snippet: String = stderr.chars().take(200).collect();
+        Err(format!("Key authentication failed ({snippet})"))
+    } else {
+        Err(format!("Unexpected output: {}", stdout.trim()))
     }
 }
 
@@ -135,75 +153,57 @@ async fn test_password_auth(
     // Build the ssh command args (note: -o options must be inserted before the destination, see that function's comment)
     let cmd_args = build_password_auth_cmd_args(server);
 
-    // Platform branch: Windows uses SSH_ASKPASS, other platforms use stdin injection
-    #[cfg(windows)]
-    return test_password_auth_windows(cmd_args, &password).await;
-    #[cfg(not(windows))]
-    test_password_auth_unix(cmd_args, &password).await
-}
+    // ssh never reads the password from the pipe stdin for the `password` auth
+    // method — it uses the controlling tty or SSH_ASKPASS. A GUI app launched from
+    // Finder/Dock has no controlling tty, so ssh can't read the prompt at all and
+    // the piped password is ignored; SSH_ASKPASS (OpenSSH >= 8.4, forced via
+    // SSH_ASKPASS_REQUIRE) is the only channel that works on *every* platform. The
+    // secret is handed over out-of-band through a temp file, never on argv or
+    // stdin. (This replaces the old stdin injection, which failed that way.)
+    let askpass =
+        AskpassSession::new(&password).map_err(|e| format!("Failed to prepare askpass: {e}"))?;
 
-/// Non-Windows platforms: `ssh` can read the password normally from pipe stdin.
-#[cfg(not(windows))]
-async fn test_password_auth_unix(
-    cmd_args: Vec<String>,
-    password: &Zeroizing<String>,
-) -> Result<(), String> {
-    let stdin_bytes = build_password_auth_stdin(password);
-
-    let mut child = command::r#async::Command::new("ssh")
-        .args(&cmd_args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| format!("Failed to spawn ssh: {e}"))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(&stdin_bytes)
-            .await
-            .map_err(|e| format!("Failed to write password: {e}"))?;
-    }
-
-    let output = match tokio::time::timeout(TEST_TIMEOUT, child.output()).await {
+    let output = match tokio::time::timeout(
+        TEST_TIMEOUT,
+        run_ssh_test_capture(&cmd_args, Some(&askpass)),
+    )
+    .await
+    {
         Ok(Ok(out)) => out,
-        Ok(Err(e)) => return Err(format!("Failed to read ssh output: {e}")),
-        Err(_) => return Err("Connection timeout".into()),
-    };
-
-    finalize_password_test_result(&output)
-}
-
-/// Windows platforms: use the SSH_ASKPASS mechanism to hand the password to ssh, completely bypassing stdin/console.
-#[cfg(windows)]
-async fn test_password_auth_windows(
-    cmd_args: Vec<String>,
-    password: &Zeroizing<String>,
-) -> Result<(), String> {
-    let askpass = AskpassSession::new(password).map_err(|e| format!("Failed to prepare askpass: {e}"))?;
-
-    let mut cmd = command::r#async::Command::new("ssh");
-    cmd.args(&cmd_args)
-        // ssh no longer needs to read the password from stdin; set to null to avoid ssh thinking a tty is present
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    askpass.apply_env(&mut cmd);
-
-    let child = cmd.spawn().map_err(|e| format!("Failed to spawn ssh: {e}"))?;
-
-    // When the timeout fires, child is dropped → kill_on_drop automatically kills ssh.
-    // The askpass guard is dropped at the end of the function, cleaning up the temporary files.
-    let output = match tokio::time::timeout(TEST_TIMEOUT, child.output()).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => return Err(format!("Failed to read ssh output: {e}")),
+        Ok(Err(e)) => return Err(e),
         Err(_) => return Err("Connection timeout".into()),
     };
     drop(askpass);
 
     finalize_password_test_result(&output)
+}
+
+/// Spawn `ssh <cmd_args>` for a connection test and capture its completed output.
+/// `cmd_args` never includes the leading `"ssh"` (spawned explicitly here). When an
+/// [`AskpassSession`] is supplied, ssh obtains the password / key passphrase from it
+/// via `SSH_ASKPASS`, never from stdin or argv; stdin is `/dev/null` either way so
+/// ssh doesn't hang believing a tty is present. On timeout the caller drops this
+/// future and `kill_on_drop` kills ssh.
+async fn run_ssh_test_capture(
+    cmd_args: &[String],
+    askpass: Option<&AskpassSession>,
+) -> Result<std::process::Output, String> {
+    let mut cmd = command::r#async::Command::new("ssh");
+    cmd.args(cmd_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(askpass) = askpass {
+        askpass.apply_env(&mut cmd);
+    }
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn ssh: {e}"))?;
+    child
+        .output()
+        .await
+        .map_err(|e| format!("Failed to read ssh output: {e}"))
 }
 
 /// Parse the ssh child process output, unifying the success/failure decision logic (shared by both platforms).
@@ -244,19 +244,6 @@ fn finalize_password_test_result(output: &std::process::Output) -> Result<(), St
             stderr_trimmed
         ))
     }
-}
-
-/// Encode the password into the byte stream to write to ssh stdin: password UTF-8 + newline.
-/// Kept as a standalone pure function to make it easy for unit tests to assert "stdin contains the password literal + newline".
-/// Only the unix branch actually calls it (Windows uses SSH_ASKPASS), but the function itself compiles cross-platform,
-/// so the `build_password_auth_stdin_*` unit tests can also run on Windows CI.
-// On Windows only tests call this function; the production path uses SSH_ASKPASS, hence the dead_code suppression
-#[cfg_attr(windows, allow(dead_code))]
-fn build_password_auth_stdin(password: &Zeroizing<String>) -> Zeroizing<Vec<u8>> {
-    let mut v = Zeroizing::new(Vec::with_capacity(password.len() + 1));
-    v.extend_from_slice(password.as_bytes());
-    v.push(b'\n');
-    v
 }
 
 /// Assemble the full argv passed to the ssh child process during password authentication testing.
@@ -311,55 +298,81 @@ fn build_password_auth_cmd_args(server: &SshServerInfo) -> Vec<String> {
     args
 }
 
-async fn run_ssh_test(args: &[String]) -> Result<String, std::io::Error> {
-    // Uniformly spawn the child process via command::r#async, which adds CREATE_NO_WINDOW on Windows,
-    // avoiding a flashing console window (see the ban on tokio::process::Command in .clippy.toml).
-    let output = command::r#async::Command::new(&args[0])
-        .args(&args[1..])
-        .output()
-        .await?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    // Success decision: process exit code is 0, or the remote `echo ok` output has been returned (some sshpass
-    // warnings make the exit code non-zero, but stdout still contains "ok").
-    if output.status.success() || stdout.contains("ok") {
-        Ok(stdout)
+/// Assemble the full argv (minus the leading `"ssh"`, spawned explicitly) for a
+/// key-auth connection test. `has_passphrase` picks the mode:
+///
+/// - `false` (ssh-agent / unencrypted key): `BatchMode=yes` — no prompt at all;
+///   the key must be usable non-interactively. This is the original behavior.
+/// - `true` (encrypted key, passphrase supplied): `BatchMode=no` so ssh will call
+///   `SSH_ASKPASS` for the key passphrase, plus `PreferredAuthentications=publickey`
+///   so a wrong passphrase can't fall through to an interactive password prompt
+///   that would hang the test. The passphrase is delivered out-of-band via
+///   [`AskpassSession`], never on argv.
+///
+/// `-o` options precede the destination (else ssh treats them as the remote
+/// command); the destination precedes `echo ok`, whose exact stdout decides success.
+fn build_key_auth_cmd_args(server: &SshServerInfo, has_passphrase: bool) -> Vec<String> {
+    let mut args: Vec<String> = build_ssh_args(server).into_iter().skip(1).collect();
+    let target = args.pop().unwrap();
+    if has_passphrase {
+        args.extend([
+            "-o".into(),
+            "BatchMode=no".into(),
+            "-o".into(),
+            "PreferredAuthentications=publickey".into(),
+            // A wrong key passphrase must never fall through to the server's
+            // password prompt — that risks account lockout, or a false "success"
+            // if the passphrase happens to equal the login password. Disabling
+            // both interactive server methods outright is belt-and-suspenders on
+            // top of the publickey-only preference.
+            "-o".into(),
+            "PasswordAuthentication=no".into(),
+            "-o".into(),
+            "KbdInteractiveAuthentication=no".into(),
+        ]);
     } else {
-        Err(std::io::Error::other(stderr))
+        args.extend(["-o".into(), "BatchMode=yes".into()]);
     }
+    args.extend([
+        "-o".into(),
+        "ConnectTimeout=5".into(),
+        "-o".into(),
+        "StrictHostKeyChecking=no".into(),
+        "-o".into(),
+        "LogLevel=ERROR".into(),
+    ]);
+    args.push(target);
+    args.push("echo ok".into());
+    args
 }
 
-/// Windows-specific askpass session: creates a password file and askpass helper script
-/// in a temporary directory, exposes them to `ssh` via the `SSH_ASKPASS` environment
-/// variable, and automatically cleans up both files on drop.
+/// A cross-platform askpass session: writes the secret (login password or the
+/// passphrase of an encrypted key) to a temporary file plus a tiny helper script
+/// that echoes it, exposes both to `ssh` via `SSH_ASKPASS`, and removes them on
+/// drop.
 ///
-/// `ssh.exe` on Windows refuses to read the password from stdin even when stdin is a pipe
-/// because there is no console (prints `GetConsoleMode on STD_INPUT_HANDLE failed` and then
-/// hangs). See PowerShell/Win32-OpenSSH issue #1470. The workaround is `SSH_ASKPASS`:
-/// when ssh sees this environment variable, it spawns the specified program and treats its
-/// stdout as the password, completely bypassing stdin and the console. `SSH_ASKPASS_REQUIRE=force`
-/// forces ssh to use the askpass path even if it detects a TTY.
+/// Why askpass on *every* platform, not just Windows: `ssh` never reads the
+/// password/passphrase from the pipe stdin for its interactive prompts — it uses
+/// the controlling tty or `SSH_ASKPASS`. A GUI app launched from Finder/Dock has
+/// no controlling tty, so stdin injection fails on macOS (ssh can't read the
+/// prompt), and on Windows Win32-OpenSSH prints `GetConsoleMode on
+/// STD_INPUT_HANDLE failed` and hangs (Win32-OpenSSH #1470).
+/// `SSH_ASKPASS_REQUIRE=force` (OpenSSH >= 8.4) forces the askpass path even when
+/// a tty is present.
 ///
-/// The password is passed to the askpass script via a temporary file (not via an env var,
-/// to reduce the leak surface): env vars are visible to the `ssh` child process and all its
-/// descendants. The askpass process lifetime is very short (ssh forks then immediately execs,
-/// reads the password and exits), keeping the disk exposure window to milliseconds.
+/// The secret travels through a temp file, not an env var, to keep it out of the
+/// child's environment (visible to `ssh` and every descendant). The askpass
+/// process lifetime is milliseconds (ssh forks, execs it, reads, exits), and the
+/// [`Drop`] impl deletes both files immediately after ssh finishes.
 ///
-/// **Security trade-off**: the two temporary files do not set `FILE_ATTRIBUTE_HIDDEN` and
-/// do not modify ACLs; they rely on Windows `%TEMP%` default isolation
-/// (`C:\Users\<user>\AppData\Local\Temp`, per-user). Earlier versions tried setting
-/// the hidden attribute and tightening ACLs to `(R)`, but `FILE_ATTRIBUTE_HIDDEN` causes
-/// `posix_spawnp` to return `ERROR_ACCESS_DENIED` (error 5) during the `CreateProcessW` phase,
-/// preventing askpass from starting at all and incorrectly sending the password to the server's
-/// password prompt (users see "wrong password" but no credentials actually left the machine).
-/// The per-user isolation of Windows temp dir is sufficient; here simplicity and reliability
-/// take precedence over "defense in depth".
+/// **Security trade-off**: on Windows the temp files rely on per-user `%TEMP%`
+/// isolation — they intentionally do *not* set `FILE_ATTRIBUTE_HIDDEN` or tighten
+/// ACLs, because the hidden attribute made `posix_spawnp` return
+/// `ERROR_ACCESS_DENIED` (error 5) and askpass never ran. On Unix the secret file
+/// is created mode `0600` and the helper script `0700` (owner-only) in `TMPDIR`.
 ///
-/// author: logic
+/// author: logic (Windows path)
 /// date: 2026-06-01
-#[cfg(windows)]
 struct AskpassSession {
     password_path: std::path::PathBuf,
     script_path: std::path::PathBuf,
@@ -398,13 +411,18 @@ impl AskpassSession {
         // + `!PW!` for delayed expansion to avoid password containing cmd special characters
         // (&, |, <, >, ^) being truncated by immediate expansion of %PW%.
         let body = "@echo off\r\nsetlocal enabledelayedexpansion\r\nset /p PW=<\"%ZAPLEX_SSH_ASKPASS_FILE%\"\r\necho !PW!\r\nendlocal\r\n";
-        {
+        if let Err(e) = (|| -> std::io::Result<()> {
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&script_path)?;
             f.write_all(body.as_bytes())?;
-            f.sync_all()?;
+            f.sync_all()
+        })() {
+            // `Drop` can't run yet (Self isn't built), so remove the secret we
+            // already wrote rather than leaving plaintext behind in %TEMP%.
+            let _ = std::fs::remove_file(&password_path);
+            return Err(e);
         }
 
         Ok(Self {
@@ -412,7 +430,66 @@ impl AskpassSession {
             script_path,
         })
     }
+}
 
+#[cfg(not(windows))]
+impl AskpassSession {
+    fn new(password: &Zeroizing<String>) -> std::io::Result<Self> {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let dir = std::env::temp_dir();
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let suffix = format!("{pid}-{nanos}");
+
+        let password_path = dir.join(format!("warp-ssh-askpass-{suffix}.secret"));
+        let script_path = dir.join(format!("warp-ssh-askpass-{suffix}.sh"));
+
+        // Secret file: owner-only (0600), the exact bytes with no trailing newline.
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&password_path)?;
+            f.write_all(password.as_bytes())?;
+            f.sync_all()?;
+        }
+
+        // Askpass helper: ssh execs it and reads its stdout as the secret. It cats
+        // the secret file verbatim (no trailing newline in the file). OpenSSH takes
+        // the askpass output up to the first `\r`/`\n`, so this delivers the secret
+        // exactly for any single-line secret — which is all the UI's single-line
+        // password/passphrase field can produce. Owner-only executable (0700);
+        // `$ZAPLEX_SSH_ASKPASS_FILE` is our own absolute temp path, so `cat --` is safe.
+        let body = "#!/bin/sh\ncat -- \"$ZAPLEX_SSH_ASKPASS_FILE\"\n";
+        if let Err(e) = (|| -> std::io::Result<()> {
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o700)
+                .open(&script_path)?;
+            f.write_all(body.as_bytes())?;
+            f.sync_all()
+        })() {
+            // `Drop` can't run yet (Self isn't built), so remove the secret we
+            // already wrote rather than leaving plaintext behind in TMPDIR.
+            let _ = std::fs::remove_file(&password_path);
+            return Err(e);
+        }
+
+        Ok(Self {
+            password_path,
+            script_path,
+        })
+    }
+}
+
+impl AskpassSession {
     /// Attach the SSH_ASKPASS environment variables to the ssh child process.
     fn apply_env(&self, cmd: &mut command::r#async::Command) {
         cmd.env("SSH_ASKPASS", &self.script_path)
@@ -422,11 +499,10 @@ impl AskpassSession {
     }
 }
 
-#[cfg(windows)]
 impl Drop for AskpassSession {
     fn drop(&mut self) {
         // Immediately delete both temporary files after ssh exits, minimizing the time
-        // the password spends on disk. Errors are silently ignored: cleanup failures
+        // the secret spends on disk. Errors are silently ignored: cleanup failures
         // should not affect the main flow return value.
         let _ = std::fs::remove_file(&self.password_path);
         let _ = std::fs::remove_file(&self.script_path);

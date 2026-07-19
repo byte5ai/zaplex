@@ -4,8 +4,9 @@
 //! `#[path]` attribute at the end of `ssh_command.rs`. Coverage includes:
 //! - `build_ssh_args` / `build_ssh_command_line` argument construction
 //! - `test_connection` error paths for missing password / wrong auth type
-//! - `build_password_auth_stdin` byte stream construction (also covers the critical
-//!   security path for stdin injection)
+//! - `build_key_auth_cmd_args` BatchMode / publickey selection by passphrase
+//! - `AskpassSession` secret delivery (the SSH_ASKPASS channel that replaced the
+//!   stdin injection ssh ignores on a tty-less GUI app)
 //!
 //! Note: end-to-end tests that actually spawn SSH subprocesses are covered by
 //! integration tests / manual tests in `app/src/ssh_manager/server_view.rs` — unit tests
@@ -155,36 +156,123 @@ fn connection_status_equality() {
     assert_ne!(ConnectionStatus::Offline, ConnectionStatus::Unknown);
 }
 
-// -------- Password stdin injection security --------
+// -------- Askpass secret delivery (replaces the broken stdin injection) --------
 
-/// Verify that `build_password_auth_stdin` correctly encodes password + newline.
-/// This is critical for the password leak fix: we must confirm that the byte stream
-/// written to SSH stdin is exactly the password literal + `\n`, not any form that would
-/// allow the password to accidentally leak via argv / environment variables / temp files.
+/// End-to-end mechanism proof (Unix): `AskpassSession` produces a helper script
+/// that, spawned the way ssh spawns it (with `ZAPLEX_SSH_ASKPASS_FILE` set), prints
+/// exactly the secret on stdout. This is the channel that replaced stdin injection,
+/// which OpenSSH ignores for interactive prompts — so on a macOS GUI app with no
+/// controlling tty a valid password/passphrase used to fail. The secret here holds
+/// shell metacharacters to prove `cat` echoes file *content* verbatim, unparsed.
+#[cfg(not(windows))]
 #[test]
-fn build_password_auth_stdin_contains_password_with_newline() {
-    let password: Zeroizing<String> = Zeroizing::new("s3cret-pass".into());
-    let bytes = build_password_auth_stdin(&password);
-    assert_eq!(&*bytes, b"s3cret-pass\n");
+fn unix_askpass_script_prints_the_secret() {
+    let secret: Zeroizing<String> = Zeroizing::new("s3cret-\"pass$ & spaces".into());
+    let session = AskpassSession::new(&secret).expect("AskpassSession::new failed");
+    let script = session.script_path.clone();
+    let password_file = session.password_path.clone();
+
+    let output = std::process::Command::new(&script)
+        .env("ZAPLEX_SSH_ASKPASS_FILE", &password_file)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("askpass script is not spawnable");
+
+    assert!(
+        output.status.success(),
+        "askpass script exited non-zero: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // ssh takes askpass output up to the first CR/LF; our secret is single-line
+    // with no trailing newline, so stdout is the exact secret.
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "s3cret-\"pass$ & spaces",
+        "askpass must echo the secret verbatim"
+    );
 }
 
-/// Edge case: even an empty password must write a `\n`, so ssh gets EOF immediately and
-/// can determine authentication failed (rather than hanging waiting for a prompt).
+/// The askpass temp files are owner-only (0600 secret, 0700 script): the secret
+/// must not be group/world-readable while it briefly lives in TMPDIR.
+#[cfg(not(windows))]
 #[test]
-fn build_password_auth_stdin_empty_password_still_has_newline() {
-    let password: Zeroizing<String> = Zeroizing::new(String::new());
-    let bytes = build_password_auth_stdin(&password);
-    assert_eq!(&*bytes, b"\n");
+fn unix_askpass_files_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let secret: Zeroizing<String> = Zeroizing::new("pw".into());
+    let session = AskpassSession::new(&secret).expect("AskpassSession::new failed");
+    let secret_mode = std::fs::metadata(&session.password_path)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    let script_mode = std::fs::metadata(&session.script_path)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(secret_mode, 0o600, "secret file must be 0600, got {secret_mode:o}");
+    assert_eq!(script_mode, 0o700, "script file must be 0700, got {script_mode:o}");
 }
 
-/// Unicode password: UTF-8 bytes written as-is.
+/// Dropping the session removes both temp files — the secret must not linger.
+#[cfg(not(windows))]
 #[test]
-fn build_password_auth_stdin_unicode_password() {
-    let password: Zeroizing<String> = Zeroizing::new("密码🔐".into());
-    let bytes = build_password_auth_stdin(&password);
-    let mut expected = "密码🔐".as_bytes().to_vec();
-    expected.push(b'\n');
-    assert_eq!(&*bytes, expected.as_slice());
+fn unix_askpass_files_removed_on_drop() {
+    let secret: Zeroizing<String> = Zeroizing::new("pw".into());
+    let session = AskpassSession::new(&secret).expect("AskpassSession::new failed");
+    let secret_path = session.password_path.clone();
+    let script_path = session.script_path.clone();
+    assert!(secret_path.exists() && script_path.exists());
+    drop(session);
+    assert!(!secret_path.exists(), "secret file must be deleted on drop");
+    assert!(!script_path.exists(), "script file must be deleted on drop");
+}
+
+/// Key auth without a passphrase keeps `BatchMode=yes` (agent / unencrypted key,
+/// no prompt) — the original behavior.
+#[test]
+fn key_auth_args_no_passphrase_uses_batch_mode() {
+    let mut s = server();
+    s.auth_type = AuthType::Key;
+    s.key_path = Some("/home/u/.ssh/id_ed25519".into());
+    let joined = build_key_auth_cmd_args(&s, false).join(" ");
+    assert!(joined.contains("BatchMode=yes"), "got {joined}");
+    assert!(!joined.contains("BatchMode=no"), "got {joined}");
+    assert!(joined.ends_with("echo ok"), "got {joined}");
+}
+
+/// Key auth WITH a passphrase must drop `BatchMode` (so ssh calls SSH_ASKPASS for
+/// the key passphrase) and pin `publickey` (so a wrong passphrase can't fall through
+/// to an interactive password prompt that hangs the test). Regression for the
+/// encrypted-key-can't-be-tested bug.
+#[test]
+fn key_auth_args_with_passphrase_drops_batch_mode_and_pins_publickey() {
+    let mut s = server();
+    s.auth_type = AuthType::Key;
+    s.key_path = Some("/home/u/.ssh/id_ed25519".into());
+    let joined = build_key_auth_cmd_args(&s, true).join(" ");
+    assert!(
+        !joined.contains("BatchMode=yes"),
+        "passphrase mode must not batch; got {joined}"
+    );
+    assert!(joined.contains("BatchMode=no"), "got {joined}");
+    assert!(
+        joined.contains("PreferredAuthentications=publickey"),
+        "must pin publickey so a bad passphrase can't hang on a password prompt; got {joined}"
+    );
+    // Belt-and-suspenders: a wrong passphrase must not fall through to the server's
+    // password / keyboard-interactive prompt (lockout / false success risk).
+    assert!(
+        joined.contains("PasswordAuthentication=no"),
+        "must disable server password auth; got {joined}"
+    );
+    assert!(
+        joined.contains("KbdInteractiveAuthentication=no"),
+        "must disable keyboard-interactive; got {joined}"
+    );
+    assert!(joined.ends_with("echo ok"), "got {joined}");
 }
 
 /// Regression test: `build_ssh_args` must not emit `sshpass`, preventing someone from
