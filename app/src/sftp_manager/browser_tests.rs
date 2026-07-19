@@ -2082,3 +2082,147 @@ fn test_sort_keeps_cursor_on_its_file() {
         });
     });
 }
+
+// ============================================================
+// Refresh race + stale indices (T1.5)
+// ============================================================
+
+/// A listing from a *superseded* refresh must be discarded, not installed:
+/// otherwise a slow list of the old directory lands after the user navigated
+/// away, the rows desync from the header/path, and every index-addressed verb
+/// (open/download/delete) hits the wrong file. Without the generation guard the
+/// stale listing overwrites the current one.
+#[test]
+fn stale_refresh_result_is_discarded() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(
+            &view,
+            &mut app,
+            vec![entry("current-a", false), entry("current-b", false)],
+        );
+
+        view.update(&mut app, |view, ctx| {
+            // A newer refresh (generation 7) is the current one …
+            view.refresh_generation = 7;
+            // … but a late result from an OLDER refresh (generation 6) arrives.
+            let stale = vec![entry("OLD-x", false), entry("OLD-y", false)];
+            view.on_dir_listed(6, Ok(Ok(stale)), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            let names: Vec<_> = view.entries.iter().map(|e| e.name.clone()).collect();
+            assert_eq!(
+                names,
+                vec!["current-a", "current-b"],
+                "a stale refresh result must not replace the current listing"
+            );
+        });
+    });
+}
+
+/// The matching (current) generation installs its listing normally.
+#[test]
+fn current_refresh_result_installs() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("old", false)]);
+        view.update(&mut app, |view, ctx| {
+            view.refresh_generation = 3;
+            view.on_dir_listed(
+                3,
+                Ok(Ok(vec![entry("new-1", false), entry("new-2", false)])),
+                ctx,
+            );
+        });
+        view.read(&app, |view, _| {
+            let names: Vec<_> = view.entries.iter().map(|e| e.name.clone()).collect();
+            assert_eq!(names, vec!["new-1", "new-2"]);
+        });
+    });
+}
+
+/// Marks survive a refresh, re-mapped by path: a mark is on a *file*, so after
+/// the directory is re-read and re-sorted the mark stays on the same file even
+/// though its row index changed, and a file that disappeared loses its mark.
+/// The old code cleared every mark on every refresh.
+#[test]
+fn refresh_preserves_marks_by_path() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        // Sorted: alpha(0), beta(1), gamma(2). Mark beta + gamma.
+        seed(
+            &view,
+            &mut app,
+            vec![entry("alpha", false), entry("beta", false), entry("gamma", false)],
+        );
+        view.update(&mut app, |view, _| {
+            view.selected.insert(1); // beta
+            view.selected.insert(2); // gamma
+        });
+
+        // Refresh returns a different input order, drops gamma, adds zeta. After
+        // sort: alpha(0), beta(1), zeta(2). beta stays marked (now index 1),
+        // gamma's mark is gone, zeta is unmarked.
+        view.update(&mut app, |view, ctx| {
+            view.refresh_generation = view.refresh_generation.wrapping_add(1);
+            let gen = view.refresh_generation;
+            let listing = vec![entry("zeta", false), entry("beta", false), entry("alpha", false)];
+            view.on_dir_listed(gen, Ok(Ok(listing)), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            let names: Vec<_> = view.entries.iter().map(|e| e.name.clone()).collect();
+            assert_eq!(names, vec!["alpha", "beta", "zeta"], "re-sorted listing");
+            let marked: std::collections::HashSet<String> = view
+                .selected
+                .iter()
+                .filter_map(|&i| view.entries.get(i).map(|e| e.name.clone()))
+                .collect();
+            assert_eq!(
+                marked,
+                std::collections::HashSet::from(["beta".to_string()]),
+                "only the surviving marked file keeps its mark"
+            );
+        });
+    });
+}
+
+/// A refresh closes any open context menu: its raw entry index would otherwise
+/// point at a possibly-different file once the listing changed, so a menu action
+/// (delete/rename) could hit the wrong file.
+#[test]
+fn refresh_closes_open_context_menu() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("a", false), entry("b", false)]);
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 1,
+                    position: Vector2F::new(10.0, 10.0),
+                },
+                ctx,
+            );
+        });
+        view.read(&app, |view, _| {
+            assert!(view.context_menu.is_some(), "menu should be open");
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.refresh_generation = view.refresh_generation.wrapping_add(1);
+            let gen = view.refresh_generation;
+            view.on_dir_listed(gen, Ok(Ok(vec![entry("a", false), entry("b", false)])), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert!(
+                view.context_menu.is_none(),
+                "a refresh must close the context menu so a stale index can't be actioned"
+            );
+        });
+    });
+}

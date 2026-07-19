@@ -485,6 +485,12 @@ pub struct SftpBrowserView {
     connect_handle: Option<SpawnedFutureHandle>,
     /// Future handle for the current directory refresh
     refresh_handle: Option<SpawnedFutureHandle>,
+    /// Monotonic id bumped on every `refresh_dir`. A refresh's completion only
+    /// installs its listing if this id still matches — so a slow list of the old
+    /// directory can't land *after* the user has navigated away and overwrite the
+    /// new listing (header says one directory, rows are another → open/delete hit
+    /// the wrong file).
+    pub(crate) refresh_generation: u64,
     /// Mapping from transfer task ID to its future handle
     transfer_handles: HashMap<usize, SpawnedFutureHandle>,
     /// Pending queue for batched drag-and-drop uploads
@@ -608,6 +614,7 @@ impl SftpBrowserView {
             scroll_state: ClippedScrollStateHandle::default(),
             connect_handle: None,
             refresh_handle: None,
+            refresh_generation: 0,
             transfer_handles: HashMap::new(),
             pending_uploads: Vec::new(),
             pending_dir_move_cleanups: Vec::new(),
@@ -999,53 +1006,105 @@ impl SftpBrowserView {
         self.is_loading = true;
         ctx.notify();
 
+        // Supersede any in-flight refresh: bump the generation so its late
+        // completion is discarded, and abort its task to stop wasting a worker.
+        // Dropping the handle does *not* cancel it (`SpawnedFutureHandle` has no
+        // cancel-on-drop), so the generation check in `on_dir_listed` is the
+        // correctness backstop; the abort is only an optimization.
+        if let Some(handle) = &self.refresh_handle {
+            handle.abort();
+        }
+        self.refresh_generation = self.refresh_generation.wrapping_add(1);
+        let generation = self.refresh_generation;
+
         let path = self.current_path.clone();
         self.refresh_handle = self.run_blocking(
             ctx,
             move || sftp.list_dir(&path),
-            |me, result, ctx| {
-                me.is_loading = false;
-                match result {
-                    Ok(Ok(mut entries)) => {
-                        entries.sort_by(|a, b| match (a.file_type, b.file_type) {
-                            (FileEntryType::Directory, FileEntryType::Directory) => {
-                                a.name.to_lowercase().cmp(&b.name.to_lowercase())
-                            }
-                            (
-                                FileEntryType::Directory,
-                                FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
-                            ) => std::cmp::Ordering::Less,
-                            (
-                                FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
-                                FileEntryType::Directory,
-                            ) => std::cmp::Ordering::Greater,
-                            (
-                                FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
-                                FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
-                            ) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                        });
-                        me.entries = entries;
-                        me.selected.clear();
-                        me.sync_row_mouse_handles();
-                        // A refresh may have shrunk the listing (files removed);
-                        // keep the cursor in range rather than pointing past it.
-                        me.clamp_cursor_to_visible();
-                    }
-                    Ok(Err(e)) => {
-                        me.show_error_toast(format!("Failed to list directory: {e}"), ctx);
-                    }
-                    Err(_) => {}
-                }
-
-                let path = me.current_path.display();
-                let title = format!("SFTP: {path}");
-                me.pane_configuration.update(ctx, |config, ctx| {
-                    config.set_title(title, ctx);
-                });
-                me.publish_to_registry(ctx);
-                ctx.notify();
-            },
+            move |me, result, ctx| me.on_dir_listed(generation, result, ctx),
         );
+    }
+
+    /// Install the listing produced by the refresh identified by `generation`.
+    ///
+    /// Discarded if a newer refresh has since superseded this one (the user
+    /// navigated away, or a second refresh started): letting a slow listing of
+    /// the *old* directory land would leave the header naming one directory while
+    /// the rows are another — and every index-addressed verb (open, download,
+    /// delete) would then hit the wrong file. The newer refresh owns the view and
+    /// the `is_loading` flag, so a stale result is dropped untouched.
+    pub(crate) fn on_dir_listed(
+        &mut self,
+        generation: u64,
+        result: Result<Result<Vec<FileEntry>, super::sftp_ops::SftpOpsError>, tokio::task::JoinError>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if generation != self.refresh_generation {
+            return;
+        }
+        self.is_loading = false;
+        match result {
+            Ok(Ok(mut entries)) => {
+                entries.sort_by(|a, b| match (a.file_type, b.file_type) {
+                    (FileEntryType::Directory, FileEntryType::Directory) => {
+                        a.name.to_lowercase().cmp(&b.name.to_lowercase())
+                    }
+                    (
+                        FileEntryType::Directory,
+                        FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
+                    ) => std::cmp::Ordering::Less,
+                    (
+                        FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
+                        FileEntryType::Directory,
+                    ) => std::cmp::Ordering::Greater,
+                    (
+                        FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
+                        FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
+                    ) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                });
+                // A mark is on a *file*, not a row index. Carry the marked paths
+                // across the refresh and re-derive the index set from the new
+                // listing: a re-sort or an added/removed file then can't silently
+                // move a mark onto another file, and a file that vanished loses
+                // its mark. (The old code cleared every mark whenever a listing
+                // successfully loaded.)
+                let marked_paths: std::collections::HashSet<PathBuf> = self
+                    .selected
+                    .iter()
+                    .filter_map(|&i| self.entries.get(i).map(|e| e.path.clone()))
+                    .collect();
+                self.entries = entries;
+                self.selected = self
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| marked_paths.contains(&e.path))
+                    .map(|(i, _)| i)
+                    .collect();
+                // The listing changed under any open context menu, whose raw
+                // entry index now points at a possibly different file — close it
+                // so a stale index can't be actioned (delete/rename the wrong
+                // file). (An already-open Save-As picker is a separate flow and
+                // is not addressed here.)
+                self.context_menu = None;
+                self.sync_row_mouse_handles();
+                // A refresh may have shrunk the listing (files removed); keep the
+                // cursor in range rather than pointing past it.
+                self.clamp_cursor_to_visible();
+            }
+            Ok(Err(e)) => {
+                self.show_error_toast(format!("Failed to list directory: {e}"), ctx);
+            }
+            Err(_) => {}
+        }
+
+        let path = self.current_path.display();
+        let title = format!("SFTP: {path}");
+        self.pane_configuration.update(ctx, |config, ctx| {
+            config.set_title(title, ctx);
+        });
+        self.publish_to_registry(ctx);
+        ctx.notify();
     }
 
     /// Keep the number of row mouse handles in sync with the number of entries
