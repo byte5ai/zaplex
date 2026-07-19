@@ -41,18 +41,21 @@ const UNSUPPORTED_SHELL_ERROR: &str =
 const TMUX_INSTALL_FAILED_ERROR: &str =
     "The tmux install hit an unexpected error. Please install tmux manually and try again.";
 
-const SSH_GITHUB_ISSUE_URL: &str = "https://github.com/zerx-lab/warp/issues/new?assignees=&labels=Bugs,SSH-tmux&projects=&template=03_ssh_tmux.yml";
+// zaplex's own tracker (no upstream issue template — a plain new-issue link so it
+// never 404s on a template that doesn't exist in this repo).
+const SSH_GITHUB_ISSUE_URL: &str = "https://github.com/byte5ai/zaplex/issues/new";
 
 fn get_ssh_github_issue_url(title: &str) -> String {
-    let url = if let Some(version) = ChannelState::app_version() {
-        format!("{SSH_GITHUB_ISSUE_URL}&warp-version={version}")
-    } else {
-        SSH_GITHUB_ISSUE_URL.to_string()
-    };
     // prepend the title with "SSH tmux bug report: " and uri encode it
     let title = format!("SSH tmux bug report: {title:?}");
     let title = urlencoding::encode(&title);
-    format!("{url}&title={title}")
+    // The base is a plain new-issue link (no template), so the query starts with
+    // `?title=` and any extra param chains with `&`.
+    let mut url = format!("{SSH_GITHUB_ISSUE_URL}?title={title}");
+    if let Some(version) = ChannelState::app_version() {
+        url.push_str(&format!("&zap-version={version}"));
+    }
+    url
 }
 
 impl ZaplexificationUnavailableReason {

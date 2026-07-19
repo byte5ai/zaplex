@@ -244,7 +244,8 @@ impl OnboardingPromptBlock {
         const NO_PS1_TEXT: &str = "No existing prompt.";
         const CORRECTION_TEXT: &str = "Look incorrect? ";
         const LINK_TEXT: &str = "Let us know.";
-        const LINK_DESTINATION: &str = "https://github.com/zerx-lab/warp/issues/new?assignees=&labels=Bug&projects=&template=01_bug_report.yml";
+        // zaplex's own tracker; the upstream Bug template doesn't exist in this repo.
+        const LINK_DESTINATION: &str = "https://github.com/byte5ai/zaplex/issues/new";
 
         const HEADER_MARGIN_LEFT: f32 = 4.;
         const PS1_PADDING_VERTICAL: f32 = 12.;
