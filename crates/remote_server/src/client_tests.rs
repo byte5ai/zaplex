@@ -715,6 +715,10 @@ async fn list_agent_sessions_round_trip() {
                     config_dir: "/home/me/.codex-work".to_string(),
                     last_activity_epoch_millis: 1_720_000_000_123,
                     pid: 4242,
+                    // F5 fleet-join keys: whose account (email + provider) and
+                    // which repo the worktree belongs to.
+                    account_email: "me@example.com".to_string(),
+                    repo_root: "/home/me/proj".to_string(),
                 },
                 AgentSessionInfo {
                     session_id: "a2".to_string(),
@@ -735,6 +739,11 @@ async fn list_agent_sessions_round_trip() {
                     config_dir: String::new(),
                     last_activity_epoch_millis: 0,
                     pid: 0,
+                    // Empty = honestly-unknown identity: this session folds
+                    // into the host tree but joins no account, and groups by
+                    // its own project_root (the degraded, not mis-grouped path).
+                    account_email: String::new(),
+                    repo_root: String::new(),
                 },
             ],
         })
