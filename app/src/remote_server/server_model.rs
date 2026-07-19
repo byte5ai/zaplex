@@ -735,7 +735,7 @@ impl ServerModel {
             }
             #[cfg(unix)]
             Some(client_message::Message::CloseSession(msg)) => {
-                self.handle_close_session(msg);
+                self.handle_close_session(msg, ctx);
                 return;
             }
             // Re-attach a reconnecting client to a still-running session and
@@ -2486,14 +2486,16 @@ impl ServerModel {
         reaped
     }
 
-    /// After a GC sweep, arm the shutdown grace timer if the daemon is now fully
-    /// idle: no connected proxies *and* no live sessions. This closes the leak
-    /// where `deregister_connection` left the daemon up because sessions still
-    /// existed, and those sessions were later reaped by the GC (age / RAM cap) —
-    /// leaving a daemon with nothing to do and no timer to retire it. The
-    /// `grace_timer_cancel.is_none()` guard avoids restarting an already-running
-    /// timer (which would reset the countdown each tick).
-    fn maybe_arm_grace_after_gc(&mut self, ctx: &mut ModelContext<Self>) {
+    /// Arm the shutdown grace timer if the daemon is now fully idle: no
+    /// connected proxies *and* no live sessions. Called from every place a
+    /// session can cease to exist — explicit close (`handle_close_session`),
+    /// PTY EOF (`on_session_reader_eof`) and the periodic GC sweep — so a
+    /// daemon whose last session ends while no client is attached retires
+    /// after [`GRACE_PERIOD`] instead of lingering until the next GC tick
+    /// noticed (`deregister_connection` deliberately skips the timer while
+    /// sessions exist). The `grace_timer_cancel.is_none()` guard avoids
+    /// restarting an already-running timer (which would reset the countdown).
+    fn maybe_arm_grace_when_idle(&mut self, ctx: &mut ModelContext<Self>) {
         if self.connection_senders.is_empty()
             && !self.has_live_sessions()
             && self.grace_timer_cancel.is_none()
@@ -2526,7 +2528,7 @@ impl ServerModel {
                             // arm the grace timer so it exits. deregister_connection
                             // deliberately skipped the timer while sessions existed,
                             // so without this the daemon would linger forever.
-                            me.maybe_arm_grace_after_gc(ctx);
+                            me.maybe_arm_grace_when_idle(ctx);
                         })
                         .await;
                     if outcome.is_err() {
@@ -2561,7 +2563,7 @@ impl ServerModel {
     }
 
     /// Closes a session: kills + reaps the shell and emits `SessionExited`.
-    fn handle_close_session(&mut self, msg: CloseSession) {
+    fn handle_close_session(&mut self, msg: CloseSession, ctx: &mut ModelContext<Self>) {
         let Some(mut session) = self.sessions.remove(&msg.session_id) else {
             return;
         };
@@ -2578,6 +2580,9 @@ impl ServerModel {
         );
         // Dropping `session` drops `input_tx` (writer task ends) and the last
         // app-side Arc; the reader task ends once it observes PTY EOF.
+        // This may have been the last session with no proxy attached — retire
+        // an idle daemon now, not at the next GC tick.
+        self.maybe_arm_grace_when_idle(ctx);
     }
 
     /// Reader-task callback: append output to the ring and push it to the
@@ -2621,7 +2626,11 @@ impl ServerModel {
     }
 
     /// Reader-task callback on PTY EOF: reap the shell and emit `SessionExited`.
-    pub(super) fn on_session_reader_eof(&mut self, session_id: &str) {
+    pub(super) fn on_session_reader_eof(
+        &mut self,
+        session_id: &str,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let Some(mut session) = self.sessions.remove(session_id) else {
             return;
         };
@@ -2635,6 +2644,10 @@ impl ServerModel {
                 exit_code,
             }),
         );
+        // The shell ending on its own may leave the daemon fully idle (the
+        // client may have long disconnected) — retire it now, not at the next
+        // GC tick.
+        self.maybe_arm_grace_when_idle(ctx);
     }
 }
 

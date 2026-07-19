@@ -147,14 +147,22 @@ fn version_is_compatible(client: Option<&str>, server: &str) -> bool {
 
 /// Whether to enforce strict tag matching for the remote `server_version`.
 ///
-/// For [`Channel::Oss`](Zaplex), locally-built source has no `GIT_RELEASE_TAG`,
-/// but SSH Extension may install a latest-release remote-server.
-/// Enforcing strict version check would cause a delete/reinstall/mismatch loop
-/// when client is `None` and server has a non-empty tag. Release builds avoid stale binaries
-/// via versioned install paths; local builds continue to skip strict version checking.
+/// For [`Channel::Oss`](Zaplex), **release** builds (a `GIT_RELEASE_TAG` is
+/// present) enforce: they install versioned binaries AND rendezvous on
+/// versioned daemon sockets (`setup::daemon_runtime_filename`), so a version
+/// mismatch in the handshake means a genuinely wrong daemon answered — a path
+/// bug that must surface as a connect error, never silently serve old code
+/// (the stale-daemon trap, RC finding 2026-07-19).
+///
+/// Zaplex **source** builds keep skipping: locally-built source has no
+/// `GIT_RELEASE_TAG`, but may talk to an installed release daemon — enforcing
+/// would make the `deploy_remote_server` dev loop fail on `None` vs tag.
 #[cfg(not(target_family = "wasm"))]
 fn should_enforce_remote_version_check(channel: Channel) -> bool {
-    !matches!(channel, Channel::Oss)
+    match channel {
+        Channel::Oss => ChannelState::app_version().is_some(),
+        _ => true,
+    }
 }
 
 /// Per-session connection state. Encodes which data is available at each
@@ -941,35 +949,47 @@ impl RemoteServerManager {
             .await
             .map_err(|e| ConnectAndHandshakeError::Initialize(anyhow::anyhow!("{e:#}")))?;
 
-        // Version compatibility check. If the server reports a different release
-        // tag than the client expects, the binary on disk is stale. Remove it so
-        // the next reconnect (or explicit reconnect by the user) will reinstall.
+        // Version compatibility check — see [`should_enforce_remote_version_check`]
+        // for when it is armed. What a mismatch MEANS differs by channel:
         //
-        // Under `Channel::Oss`(Zaplex), we temporarily reuse the official release binary;
-        // the client has no `GIT_RELEASE_TAG`, so it will never match the server.
-        // Therefore, strict version checking is skipped. See [`should_enforce_remote_version_check`] for details.
+        // - Non-Oss channels keep their original recovery semantics: treat
+        //   the on-disk binary as the stale artefact, remove it so the next
+        //   reconnect reinstalls (upstream behavior, unchanged here).
+        // - Zaplex release builds (versioned install slot + versioned daemon
+        //   socket, both keyed on the same tag): the on-disk binary is the
+        //   right one for this client by construction; a mismatch means a
+        //   wrong RUNNING daemon answered our socket. Removing the binary
+        //   would delete a good install and buy nothing — fail the connect
+        //   loudly instead (the daemon tab shows it via the connect-failed
+        //   path and the caller falls back to classic SSH).
         let client_version = ChannelState::app_version();
         let enforce_version_check = should_enforce_remote_version_check(ChannelState::channel());
         if enforce_version_check && !version_is_compatible(client_version, &resp.server_version) {
             log::warn!(
                 "Remote server version mismatch for session {session_id:?}: \
-                 client={client_version:?}, server={:?}. Removing stale binary.",
+                 client={client_version:?}, server={:?}.",
                 resp.server_version
             );
 
-            const REMOVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+            if !matches!(ChannelState::channel(), Channel::Oss) {
+                const REMOVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-            if let Err(e) = transport
-                .remove_remote_server_binary()
-                .with_timeout(REMOVAL_TIMEOUT)
-                .await
-                .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out after {REMOVAL_TIMEOUT:?}")))
-            {
-                log::warn!("Failed to remove stale remote binary for session {session_id:?}: {e}");
+                if let Err(e) = transport
+                    .remove_remote_server_binary()
+                    .with_timeout(REMOVAL_TIMEOUT)
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(anyhow::anyhow!("timed out after {REMOVAL_TIMEOUT:?}"))
+                    })
+                {
+                    log::warn!(
+                        "Failed to remove stale remote binary for session {session_id:?}: {e}"
+                    );
+                }
             }
             return Err(ConnectAndHandshakeError::Initialize(anyhow::anyhow!(
                 "remote server version mismatch (client: {client_version:?}, \
-                 server: {:?}); reconnect to reinstall",
+                 server: {:?})",
                 resp.server_version
             )));
         }

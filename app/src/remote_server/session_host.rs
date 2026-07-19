@@ -82,7 +82,9 @@ pub(super) async fn run_session_reader(
         }
     }
     let id = session_id.clone();
-    let _ = spawner.spawn(move |me, _ctx| me.on_session_reader_eof(&id)).await;
+    let _ = spawner
+        .spawn(move |me, ctx| me.on_session_reader_eof(&id, ctx))
+        .await;
 }
 
 /// One-shot multiplexer probe: shortly after a session opens, check whether the

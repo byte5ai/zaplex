@@ -4,11 +4,21 @@
 //! Responsibilities:
 //! 1. Acquire an exclusive `flock` on the PID file to serialise concurrent
 //!    proxy starts (e.g. two tabs SSH-ing to the same host at the same time).
-//! 2. Check whether the daemon is already running (`kill -0`).
+//! 2. Check whether a matching daemon is already running (`kill -0` on the
+//!    PID file — versioned for Zaplex release builds, see
+//!    [`setup::daemon_runtime_filename`]).
 //! 3. If not: spawn the daemon subcommand in a new session and wait for its
 //!    socket to appear.
-//! 4. Connect to `server.sock` and bridge stdin/stdout to the socket using
-//!    the existing 4-byte length-prefixed frame format.
+//! 4. Connect to the socket and bridge stdin/stdout to it using the
+//!    existing 4-byte length-prefixed frame format.
+//!
+//! For Zaplex (Oss) release builds the socket/PID names carry the release
+//! tag: reuse-by-liveness alone once bridged new clients to a running daemon
+//! from a PREVIOUS release (RC finding 2026-07-19) — versioned rendezvous
+//! makes that structurally impossible. An old daemon stays reachable only
+//! under its old rendezvous name (its own release's clients) and retires via
+//! its idle grace timer once its last session ends. Source builds and
+//! non-Oss channels keep the legacy unversioned names.
 
 use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
@@ -19,18 +29,20 @@ use std::time::Duration;
 
 use super::super::setup;
 
-/// Path to the daemon's Unix domain socket.
+/// Path to the daemon Unix domain socket (versioned on Zaplex release
+/// builds — see [`setup::daemon_runtime_filename`]).
 pub(super) fn socket_path(identity_key: &str) -> PathBuf {
     let dir = setup::remote_server_daemon_dir(identity_key);
     let expanded = shellexpand::tilde(&dir).into_owned();
-    PathBuf::from(expanded).join("server.sock")
+    PathBuf::from(expanded).join(setup::daemon_runtime_filename("sock"))
 }
 
-/// Path to the daemon's PID file (also used as the flock target).
+/// Path to the daemon PID file, also used as the flock target (versioned on
+/// Zaplex release builds — see [`setup::daemon_runtime_filename`]).
 pub(super) fn pid_path(identity_key: &str) -> PathBuf {
     let dir = setup::remote_server_daemon_dir(identity_key);
     let expanded = shellexpand::tilde(&dir).into_owned();
-    PathBuf::from(expanded).join("server.pid")
+    PathBuf::from(expanded).join(setup::daemon_runtime_filename("pid"))
 }
 
 /// Ensures the daemon directory exists with owner-only permissions.
