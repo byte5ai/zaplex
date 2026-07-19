@@ -1010,6 +1010,16 @@ pub struct Workspace {
     /// host-scoped advisories (e.g. the multiplexer-nesting warning toast).
     #[cfg(unix)]
     daemon_session_hosts: std::collections::HashMap<SessionId, String>,
+    /// The SSH server behind each pending daemon connection (`SessionId`), kept
+    /// only until the session connects or fails. If the initialize handshake
+    /// fails — most importantly a version mismatch, where a stale daemon of a
+    /// different release answered — the daemon tab shows the error but is
+    /// otherwise dead; this lets the workspace fall back to a working classic SSH
+    /// session (the recovery the manager's mismatch branch documents but nobody
+    /// caught). Entry is removed on connect or on the one-shot fallback.
+    #[cfg(unix)]
+    daemon_session_servers:
+        std::collections::HashMap<SessionId, warp_ssh_manager::SshServerInfo>,
     /// SSH host `node_id` → its daemon connection `SessionId`, recorded when a
     /// resilient host opens (or adopts) a daemon-backed session. The SFTP file
     /// manager is keyed by `node_id`; this lets it resolve a live daemon
@@ -2888,18 +2898,46 @@ impl Workspace {
         #[cfg(unix)]
         ctx.subscribe_to_model(
             &crate::remote_server::manager::RemoteServerManager::handle(ctx),
-            |me, _handle, event, ctx| {
-                if let RemoteServerManagerEvent::SessionNotice {
+            |me, _handle, event, ctx| match event {
+                RemoteServerManagerEvent::SessionNotice {
                     session_id,
                     kind,
                     detail,
                     ..
-                } = event
-                {
-                    if kind == "multiplexer-detected" {
-                        me.on_daemon_session_multiplexer_notice(*session_id, detail.clone(), ctx);
-                    }
+                } if kind == "multiplexer-detected" => {
+                    me.on_daemon_session_multiplexer_notice(*session_id, detail.clone(), ctx);
                 }
+                // The daemon connected fine — drop the classic-SSH fallback record
+                // we no longer need for this session.
+                RemoteServerManagerEvent::SessionConnected { session_id, .. } => {
+                    me.daemon_session_servers.remove(session_id);
+                }
+                // Session torn down (the user closed the tab, possibly mid-connect)
+                // — drop the fallback record so a *trailing* Initialize failure
+                // can't open an unwanted classic tab after the user cancelled.
+                RemoteServerManagerEvent::SessionDeregistered { session_id } => {
+                    me.daemon_session_servers.remove(session_id);
+                }
+                RemoteServerManagerEvent::SessionConnectionFailed {
+                    session_id, phase, ..
+                } => match phase {
+                    // The initialize handshake failed for a daemon session — often
+                    // a version mismatch, where a stale daemon of another release
+                    // answered our socket. The daemon tab already shows the error
+                    // via its connect-failed path; recover by opening a working
+                    // classic SSH session (the fallback the manager's mismatch
+                    // branch documents but that nothing was catching before).
+                    crate::remote_server::manager::RemoteServerInitPhase::Initialize => {
+                        me.fall_back_to_classic_after_daemon_handshake_failure(*session_id, ctx);
+                    }
+                    // Connect-phase failures are handled by the daemon-connect
+                    // preflight path; just drop the record so a later event can't
+                    // act on a stale entry.
+                    crate::remote_server::manager::RemoteServerInitPhase::Connect => {
+                        me.daemon_session_servers.remove(session_id);
+                    }
+                },
+                _ => {}
             },
         );
 
@@ -3151,6 +3189,8 @@ impl Workspace {
             ssh_tab_nodes: std::collections::HashMap::new(),
             #[cfg(unix)]
             daemon_session_hosts: std::collections::HashMap::new(),
+            #[cfg(unix)]
+            daemon_session_servers: std::collections::HashMap::new(),
             #[cfg(all(unix, feature = "local_tty"))]
             daemon_node_sessions: std::collections::HashMap::new(),
             #[cfg(all(unix, feature = "local_tty"))]
@@ -7425,6 +7465,10 @@ impl Workspace {
 
         self.daemon_session_hosts
             .insert(session_id, server.host.clone());
+        // Remembered so a handshake failure (e.g. version mismatch) can fall back
+        // to classic SSH instead of leaving a dead daemon tab.
+        self.daemon_session_servers
+            .insert(session_id, server.clone());
         let host_label = server.host.clone();
         let transport =
             SshTransport::new(socket_path, auth_context.clone()).with_self_heal(server);
@@ -7463,6 +7507,37 @@ impl Workspace {
         self.toast_stack.update(ctx, |stack, ctx| {
             stack.add_persistent_toast(DismissibleToast::error(warning), ctx);
         });
+    }
+
+    /// A daemon session's initialize handshake failed. The common cause is a
+    /// version mismatch (a stale daemon of another release answering our versioned
+    /// socket), but any handshake-level failure lands here, so the wording stays
+    /// generic. The daemon tab already surfaced the error via its connect-failed
+    /// path, but on its own that leaves the user with only a dead tab; open a
+    /// working classic SSH session in a new tab instead (the recovery the
+    /// manager's mismatch branch documents). One-shot: the fallback record is
+    /// taken, so a `SessionConnectionFailed` re-fire — or an unrelated non-daemon
+    /// session — can't reopen it.
+    #[cfg(unix)]
+    fn fall_back_to_classic_after_daemon_handshake_failure(
+        &mut self,
+        session_id: SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(server) = self.daemon_session_servers.remove(&session_id) else {
+            return;
+        };
+        log::warn!(
+            "daemon session {session_id:?} handshake failed; falling back to classic SSH on {}",
+            server.host
+        );
+        let warning = format!(
+            "Couldn't start the persistent-session daemon on {} (handshake failed — often a \
+             daemon of a different zaplex version). Opened a standard SSH session instead — a \
+             disconnect will lose open work.",
+            server.host
+        );
+        self.fall_back_to_classic_ssh(server.node_id.clone(), server, warning, ctx);
     }
 
     /// Daemon path unavailable/failed → open a classic local-PTY SSH session (no
@@ -7577,6 +7652,10 @@ impl Workspace {
         let host = server.host.clone();
         self.daemon_session_hosts
             .insert(session_id, server.host.clone());
+        // Remembered so a handshake failure (e.g. version mismatch) can fall back
+        // to classic SSH instead of leaving a dead daemon tab.
+        self.daemon_session_servers
+            .insert(session_id, server.clone());
         // Kept for the transport so reconnect can re-heal a dead ControlMaster.
         let server_for_transport = server.clone();
 
