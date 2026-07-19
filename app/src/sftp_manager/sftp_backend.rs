@@ -8,7 +8,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use dunce;
@@ -329,6 +329,16 @@ impl SftpBackend for InMemorySftpBackend {
     fn rename(&self, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
         let old_local = self.to_local(old_path);
         let new_local = self.to_local(new_path);
+        // `fs::rename` silently replaces an existing target on Unix, so renaming
+        // onto a name that already existed destroyed that file without a word.
+        // The remote path has always refused this (`overwrite: false`); the
+        // local one now does too, and the caller surfaces the conflict.
+        if fs::symlink_metadata(&new_local).is_ok() {
+            return Err(SftpOpsError::Operation(format!(
+                "{} already exists",
+                new_path.display()
+            )));
+        }
         fs::rename(&old_local, &new_local).map_err(|e| {
             SftpOpsError::Operation(format!(
                 "Failed to rename {} -> {}: {e}",
@@ -364,74 +374,111 @@ impl SftpBackend for InMemorySftpBackend {
         &self,
         local_path: &Path,
         remote_path: &Path,
-        _progress_cb: Option<&ProgressCallback>,
-        _cancel_flag: Option<&AtomicBool>,
+        progress_cb: Option<&ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError> {
         let dest = self.to_local(remote_path);
-        // Ensure parent directory exists
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                SftpOpsError::LocalIo(format!("Failed to create directory: {e}"))
-            })?;
-        }
-        fs::copy(local_path, &dest).map_err(|e| {
-            SftpOpsError::LocalIo(format!("Failed to upload file: {e}"))
-        })?;
-        Ok(())
+        copy_into_place(local_path, &dest, progress_cb, cancel_flag)
     }
 
     fn download_file(
         &self,
         remote_path: &Path,
         local_path: &Path,
-        _progress_cb: Option<&ProgressCallback>,
-        _cancel_flag: Option<&AtomicBool>,
+        progress_cb: Option<&ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError> {
         let src = self.to_local(remote_path);
-        // Ensure local parent directory exists
-        if let Some(parent) = local_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                SftpOpsError::LocalIo(format!("Failed to create directory: {e}"))
-            })?;
-        }
-        let mut src_file = fs::File::open(&src).map_err(|e| {
-            SftpOpsError::LocalIo(format!("Failed to open remote file: {e}"))
-        })?;
-        let mut dest_file = fs::File::create(local_path).map_err(|e| {
-            SftpOpsError::LocalIo(format!("Failed to create local file: {e}"))
-        })?;
-
-        // Copy in chunks to simulate streaming
-        const CHUNK_SIZE: usize = 32 * 1024;
-        let mut buf = vec![0u8; CHUNK_SIZE];
-        loop {
-            let n = src_file.read(&mut buf).map_err(|e| {
-                SftpOpsError::LocalIo(format!("Read failed: {e}"))
-            })?;
-            if n == 0 {
-                break;
-            }
-            dest_file.write_all(&buf[..n]).map_err(|e| {
-                SftpOpsError::LocalIo(format!("Write failed: {e}"))
-            })?;
-        }
-        dest_file.flush().map_err(|e| {
-            SftpOpsError::LocalIo(format!("Flush failed: {e}"))
-        })?;
-        Ok(())
+        copy_into_place(&src, local_path, progress_cb, cancel_flag)
     }
 
     fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
         let src_local = self.to_local(src);
         let dst_local = self.to_local(dst);
-        if let Some(parent) = dst_local.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| SftpOpsError::LocalIo(format!("Failed to create directory: {e}")))?;
-        }
-        fs::copy(&src_local, &dst_local)
-            .map_err(|e| SftpOpsError::LocalIo(format!("Failed to copy file: {e}")))?;
-        Ok(())
+        copy_into_place(&src_local, &dst_local, None, None)
     }
+}
+
+/// Sibling temp path for an in-progress copy: `.<name>.zaplex_partial` next to
+/// the destination, so the finalizing rename stays on the same filesystem (and
+/// is therefore atomic) and a leftover partial is obviously ours.
+fn temp_sibling(dest: &Path) -> PathBuf {
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string());
+    dest.with_file_name(format!(".{name}.zaplex_partial"))
+}
+
+/// Copy `src` onto `dest` the way the REMOTE backend already does: stream into
+/// a sibling temp file, then rename it into place.
+///
+/// Writing straight to `dest` — what the local backend did until the RC audit —
+/// destroys the existing file the moment the copy starts. An I/O error, a full
+/// disk, a cancel, or copying a file onto itself left the user with a truncated
+/// or half-written file and no way back. The closing rename is atomic on every
+/// platform we ship, so `dest` holds either its old content or the complete new
+/// one, never something in between.
+fn copy_into_place(
+    src: &Path,
+    dest: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(), SftpOpsError> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| SftpOpsError::LocalIo(format!("Failed to create directory: {e}")))?;
+    }
+
+    let total = fs::metadata(src).map(|m| m.len()).unwrap_or(0);
+    let temp = temp_sibling(dest);
+
+    let result = (|| -> Result<(), SftpOpsError> {
+        let mut src_file = fs::File::open(src)
+            .map_err(|e| SftpOpsError::LocalIo(format!("Failed to open source: {e}")))?;
+        let mut temp_file = fs::File::create(&temp)
+            .map_err(|e| SftpOpsError::LocalIo(format!("Failed to create temp file: {e}")))?;
+
+        const CHUNK_SIZE: usize = 32 * 1024;
+        let mut buf = vec![0u8; CHUNK_SIZE];
+        let mut copied: u64 = 0;
+        loop {
+            if cancel_flag.is_some_and(|f| f.load(Ordering::SeqCst)) {
+                return Err(SftpOpsError::Cancelled);
+            }
+            let n = src_file
+                .read(&mut buf)
+                .map_err(|e| SftpOpsError::LocalIo(format!("Read failed: {e}")))?;
+            if n == 0 {
+                break;
+            }
+            temp_file
+                .write_all(&buf[..n])
+                .map_err(|e| SftpOpsError::LocalIo(format!("Write failed: {e}")))?;
+            copied += n as u64;
+            if let Some(cb) = progress_cb {
+                cb(copied, total);
+            }
+        }
+        temp_file
+            .flush()
+            .map_err(|e| SftpOpsError::LocalIo(format!("Flush failed: {e}")))?;
+        // Durable before the rename: a crash in between must not publish an
+        // empty file over a good one.
+        temp_file
+            .sync_all()
+            .map_err(|e| SftpOpsError::LocalIo(format!("Sync failed: {e}")))?;
+        drop(temp_file);
+
+        fs::rename(&temp, dest)
+            .map_err(|e| SftpOpsError::LocalIo(format!("Failed to finalize copy: {e}")))
+    })();
+
+    if result.is_err() {
+        // `dest` still holds whatever it held before — only the partial goes.
+        let _ = fs::remove_file(&temp);
+    }
+    result
 }
 
 /// Convenience method for creating Arc<dyn SftpBackend>.
@@ -439,5 +486,91 @@ impl InMemorySftpBackend {
     /// Creates and wraps as Arc<dyn SftpBackend>.
     pub fn into_backend(self) -> Arc<dyn SftpBackend> {
         Arc::new(self)
+    }
+}
+
+#[cfg(test)]
+mod data_safety_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    fn backend() -> (InMemorySftpBackend, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        (InMemorySftpBackend::new(dir.path().to_path_buf()), dir)
+    }
+
+    /// Renaming onto an existing name must refuse, not silently destroy it.
+    /// `fs::rename` overwrites on Unix; the remote backend has always used
+    /// `overwrite: false`, and this is the local path catching up (RC audit).
+    #[test]
+    fn rename_refuses_to_clobber_an_existing_file() {
+        let (be, dir) = backend();
+        fs::write(dir.path().join("victim.txt"), b"PRECIOUS").unwrap();
+        fs::write(dir.path().join("source.txt"), b"new").unwrap();
+
+        let err = be
+            .rename(Path::new("/source.txt"), Path::new("/victim.txt"))
+            .expect_err("renaming onto an existing file must fail");
+        assert!(
+            matches!(err, SftpOpsError::Operation(ref m) if m.contains("already exists")),
+            "expected an already-exists conflict, got {err:?}"
+        );
+        assert_eq!(
+            fs::read(dir.path().join("victim.txt")).unwrap(),
+            b"PRECIOUS",
+            "the existing file must be untouched"
+        );
+    }
+
+    /// A cancelled copy must leave the destination exactly as it was — the old
+    /// code wrote straight into it, so a cancel truncated a good file.
+    #[test]
+    fn cancelled_copy_leaves_the_destination_intact() {
+        let (be, dir) = backend();
+        let dest = dir.path().join("dest.bin");
+        fs::write(&dest, b"ORIGINAL-CONTENT").unwrap();
+        // Source big enough that the cancel is observed inside the copy loop.
+        fs::write(dir.path().join("src.bin"), vec![b'x'; 512 * 1024]).unwrap();
+
+        let cancel = AtomicBool::new(true);
+        let err = be
+            .upload_file(
+                &dir.path().join("src.bin"),
+                Path::new("/dest.bin"),
+                None,
+                Some(&cancel),
+            )
+            .expect_err("a pre-cancelled copy must fail");
+        assert!(matches!(err, SftpOpsError::Cancelled), "got {err:?}");
+        assert_eq!(
+            fs::read(&dest).unwrap(),
+            b"ORIGINAL-CONTENT",
+            "a cancelled copy must not touch the destination"
+        );
+        // And it must not litter: no partial left behind.
+        let leftovers: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("zaplex_partial"))
+            .collect();
+        assert!(leftovers.is_empty(), "partial left behind: {leftovers:?}");
+    }
+
+    /// A successful copy still replaces the destination completely.
+    #[test]
+    fn successful_copy_replaces_the_destination() {
+        let (be, dir) = backend();
+        fs::write(dir.path().join("dest.bin"), b"OLD").unwrap();
+        fs::write(dir.path().join("src.bin"), b"NEW-CONTENT").unwrap();
+
+        be.upload_file(
+            &dir.path().join("src.bin"),
+            Path::new("/dest.bin"),
+            None,
+            None,
+        )
+        .expect("copy should succeed");
+        assert_eq!(fs::read(dir.path().join("dest.bin")).unwrap(), b"NEW-CONTENT");
     }
 }
