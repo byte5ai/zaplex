@@ -683,3 +683,6 @@ fm-key-move = Verschieben
 fm-key-mkdir = Neuer Ordner
 fm-key-delete = Löschen
 fm-key-quit = Schließen
+fm-empty-folder = Dieser Ordner ist leer
+fm-selection-status = { $count } markiert · { $size }
+fm-tt-hidden = Versteckte Dateien anzeigen

@@ -1074,6 +1074,7 @@ fn test_get_pw_entry() {
 #[cfg(test)]
 mod session_pty_tests {
     use super::spawn_session_pty;
+    use crate::terminal::shell::ShellType;
     use std::collections::HashMap;
     use std::io::{ErrorKind, Read, Write};
     use std::os::fd::AsRawFd;
@@ -1153,6 +1154,144 @@ mod session_pty_tests {
         assert!(
             text.contains("30 100"),
             "stty size should reflect the TIOCSWINSZ resize; got:\n{text}"
+        );
+    }
+
+    /// Starting a bash session must not dump the bootstrap into the terminal.
+    ///
+    /// This is the acceptance defect of 2026-07-17..19, reproduced end to end
+    /// through the real spawn contract and the real bootstrap script: the
+    /// daemon writes the shell *body* as the session's first input, and the
+    /// user saw ~1500 of its lines come straight back — the shell echoing its
+    /// own input, each continuation line prefixed by bash's `> ` PS2 prompt.
+    ///
+    /// Two independent causes, both fixed at the source and both asserted here:
+    ///   * `stty raw` does NOT clear ECHO (neither GNU/uutils nor BSD stty
+    ///     include it in `raw`), so `bash_init_shell.sh` now says
+    ///     `stty raw -echo`;
+    ///   * `bash.sh` never blanked PS2 while the heredoc was read — the zsh
+    ///     path always did — so every heredoc line drew a `> `.
+    #[test]
+    fn spawn_session_pty_does_not_echo_the_bootstrap() {
+        let env = HashMap::new();
+        let (leader, mut child) =
+            match spawn_session_pty(None, "/bin/bash", &env, 24, 80) {
+                Ok(pair) => pair,
+                // No bash on this machine: nothing to assert about bash's
+                // bootstrap. (The CI images all have it.)
+                Err(_) => return,
+            };
+        let mut master = std::fs::File::from(leader);
+
+        // Non-blocking master so no read below can hang.
+        let fd = master.as_raw_fd();
+        // SAFETY: toggling O_NONBLOCK on our own fd.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+
+        // Recreate the remote condition IMMEDIATELY, before the shell has
+        // finished exec'ing: on the classic-SSH path the PTY is allocated by
+        // `ssh` on the remote host with ECHO on, and `spawn_session_pty`'s
+        // local clearing has no reach there. The rcfile is what must turn it
+        // off — that is the fix under test — so this has to happen before the
+        // rcfile runs, never after it (doing it after would simply undo the
+        // fix and make the test fail for the wrong reason).
+        //
+        // Ordering: fork+exec+rcfile takes milliseconds, this ioctl
+        // microseconds, so the parent wins in practice. Should it ever lose,
+        // the failure is a visible red test, not a silent green one.
+        // SAFETY: `fd` is our live PTY leader; termios is zero-initialised and
+        // then filled by tcgetattr before use.
+        unsafe {
+            let mut tio: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(fd, &mut tio) == 0 {
+                tio.c_lflag |= libc::ECHO;
+                libc::tcsetattr(fd, libc::TCSANOW, &tio);
+            }
+        }
+
+        // Then wait for the rcfile to have run: it ends by emitting the
+        // InitShell DCS (`ESC P $ d …`). Writing the body only after that is
+        // what makes the assertions below deterministic — with the fix in
+        // place the rcfile has cleared ECHO by now, without it ECHO is still
+        // on and the body comes straight back.
+        let init_deadline = Instant::now() + Duration::from_secs(10);
+        let mut preamble = Vec::new();
+        let mut probe = [0u8; 4096];
+        while Instant::now() < init_deadline && !contains(&preamble, b"\x1bP$d") {
+            match master.read(&mut probe) {
+                Ok(0) => break,
+                Ok(n) => preamble.extend_from_slice(&probe[..n]),
+                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(
+            contains(&preamble, b"\x1bP$d"),
+            "the rcfile should emit the InitShell DCS before the body is written"
+        );
+
+        // Exactly what `handle_open_session` enqueues for a bash session.
+        let body = crate::terminal::bootstrap::script_for_shell(
+            ShellType::Bash,
+            &crate::ASSETS,
+        );
+        // Write from a thread: the body is ~250 KB and the PTY buffer is a few
+        // KB, so a blocking write would deadlock against our own read loop.
+        let writer = {
+            let mut w = master.try_clone().expect("clone pty leader");
+            let body = body.to_vec();
+            std::thread::spawn(move || {
+                let _ = w.write_all(&body);
+            })
+        };
+
+        // Read for a bounded window; we are looking for the ABSENCE of echo,
+        // so there is no marker to wait for — drain what the shell produces.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut out = Vec::new();
+        let mut buf = [0u8; 8192];
+        while Instant::now() < deadline {
+            match master.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => out.extend_from_slice(&buf[..n]),
+                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = writer.join();
+
+        let text = String::from_utf8_lossy(&out);
+        // A line that exists only inside the body. Coming back means the tty
+        // echoed our input — the dump the user reported.
+        let echoed = text.matches("warp_send_json_message").count();
+        assert_eq!(
+            echoed,
+            0,
+            "the bootstrap body must not be echoed back ({echoed} occurrences); \
+             first 800 bytes:\n{}",
+            &text.chars().take(800).collect::<String>()
+        );
+        // The other half of the dump: bash's `> ` continuation prompt, drawn
+        // once per line of every multi-line construct in the script. Measured
+        // against the pre-fix scripts: ~1766. A couple can still appear around
+        // the very first line (PS2 is only blanked once that line executes),
+        // so this asserts the order of magnitude rather than zero.
+        let ps2 = text.matches("> ").count();
+        assert!(
+            ps2 < 20,
+            "the bootstrap must not draw a PS2 prompt per line ({ps2} seen); \
+             first 800 bytes:\n{}",
+            &text.chars().take(800).collect::<String>()
         );
     }
 }

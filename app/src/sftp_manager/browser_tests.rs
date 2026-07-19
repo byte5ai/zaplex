@@ -16,7 +16,7 @@ use crate::test_util::settings::initialize_settings_for_tests;
 
 use pathfinder_geometry::vector::Vector2F;
 
-use super::browser::{SftpBrowserAction, SftpBrowserView};
+use super::browser::{SftpBrowserAction, SftpBrowserView, SortColumn};
 use super::types::{
     ConnectionState, Dialog, FileEntry, FileEntryType, TransferDirection, TransferState,
 };
@@ -1761,6 +1761,324 @@ fn test_activate_cursor_on_directory_navigates() {
         });
         view.read(&app, |view, _| {
             assert_eq!(view.current_path, PathBuf::from("/subdir"));
+        });
+    });
+}
+
+// ============================================================
+// List-view state: `..` row, sorting, hidden files, marking
+// (RC acceptance 2026-07-19 — MC parity gaps)
+// ============================================================
+
+/// An entry with an explicit size / modified stamp, for the sort tests.
+fn sized_entry(name: &str, is_dir: bool, size: u64, modified: Option<&str>) -> FileEntry {
+    FileEntry {
+        name: name.to_string(),
+        path: PathBuf::from("/sub").join(name),
+        file_type: if is_dir {
+            FileEntryType::Directory
+        } else {
+            FileEntryType::File
+        },
+        size,
+        modified: modified.map(str::to_string),
+        permissions: None,
+    }
+}
+
+/// In a sub-directory the list leads with a `..` row: the cursor starts on it,
+/// it maps to no entry (so no destructive verb can address it), and the entries
+/// live one row further down.
+#[test]
+fn test_parent_row_offsets_cursor_and_maps_to_no_entry() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, _| {
+            view.current_path = PathBuf::from("/sub");
+            view.entries = vec![entry("a", false), entry("b", false)];
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.has_parent_row(), "/sub has a parent");
+            assert_eq!(view.row_count(), 3, "`..` plus two entries");
+            assert!(view.cursor_on_parent_row());
+            assert_eq!(
+                view.cursor_entry_index(),
+                None,
+                "the `..` row must not resolve to an entry — that is what keeps \
+                 delete/rename/copy from ever addressing it"
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CursorDown, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.cursor, 1);
+            assert_eq!(view.cursor_entry_index(), Some(0), "first real entry");
+        });
+    });
+}
+
+/// At the filesystem root there is nothing to go up to, so no `..` row and the
+/// cursor addresses entries directly.
+#[test]
+fn test_root_has_no_parent_row() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("a", false)]);
+        view.read(&app, |view, _| {
+            assert!(!view.has_parent_row());
+            assert_eq!(view.row_count(), 1);
+            assert_eq!(view.cursor_entry_index(), Some(0));
+        });
+    });
+}
+
+/// Sorting reorders the *view*, never `entries` — so a mark set before the
+/// sort still points at the same files afterwards.
+#[test]
+fn test_sort_reorders_view_and_keeps_marks_on_their_files() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, _| {
+            view.entries = vec![
+                sized_entry("big.txt", false, 900, None),
+                sized_entry("small.txt", false, 10, None),
+                sized_entry("mid.txt", false, 100, None),
+            ];
+            // Mark "big.txt" (entry index 0).
+            view.selected.insert(0);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.visible_indices(),
+                vec![0, 2, 1],
+                "name ascending: big, mid, small"
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SortBy(SortColumn::Size), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.visible_indices(),
+                vec![0, 2, 1],
+                "size descending on first click: 900, 100, 10"
+            );
+            assert!(
+                view.selected.contains(&0),
+                "the mark stays on big.txt, not on whatever now sits in its old row"
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SortBy(SortColumn::Size), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.visible_indices(), vec![1, 2, 0], "second click flips");
+        });
+    });
+}
+
+/// Directories lead the list in both sort directions (MC's rule).
+#[test]
+fn test_directories_lead_in_both_directions() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, _| {
+            view.entries = vec![
+                sized_entry("zeta.txt", false, 5, None),
+                sized_entry("alpha_dir", true, 0, None),
+            ];
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.visible_indices(), vec![1, 0], "dir first, ascending");
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SortBy(SortColumn::Name), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.visible_indices(), vec![1, 0], "dir still first, descending");
+        });
+    });
+}
+
+/// Dot-files are hidden until asked for, and toggling them off again drops any
+/// marks that went with them (so a later F8 cannot delete an unlisted file).
+#[test]
+fn test_hidden_files_toggle_and_drop_marks_when_hidden() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, _| {
+            view.entries = vec![entry(".secret", false), entry("visible.txt", false)];
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.visible_indices(), vec![1], "dot-file hidden by default");
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ToggleHidden, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert!(view.show_hidden);
+            assert_eq!(view.visible_indices(), vec![0, 1], "both listed");
+        });
+
+        // Mark the dot-file, then hide it again.
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ToggleMark(0), ctx);
+            view.handle_action(&SftpBrowserAction::ToggleHidden, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert!(!view.show_hidden);
+            assert!(
+                view.selected.is_empty(),
+                "a mark on a now-unlisted file must not survive — F8 would delete \
+                 something the user cannot see"
+            );
+        });
+    });
+}
+
+/// Insert marks the current row and steps down (MC), so a run can be marked by
+/// repeating it.
+#[test]
+fn test_insert_marks_and_advances() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(
+            &view,
+            &mut app,
+            vec![entry("a", false), entry("b", false), entry("c", false)],
+        );
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::MarkAndAdvance, ctx);
+            view.handle_action(&SftpBrowserAction::MarkAndAdvance, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.selected.len(), 2);
+            assert!(view.selected.contains(&0) && view.selected.contains(&1));
+            assert_eq!(view.cursor, 2, "cursor advanced past both");
+        });
+    });
+}
+
+/// Clicking the mark zone toggles the multi-selection without collapsing it —
+/// the row click (SelectEntry) is exclusive, the mark click is additive.
+#[test]
+fn test_mark_clicks_accumulate_unlike_row_clicks() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(
+            &view,
+            &mut app,
+            vec![entry("a", false), entry("b", false), entry("c", false)],
+        );
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ToggleMark(0), ctx);
+            view.handle_action(&SftpBrowserAction::ToggleMark(2), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.selected.len(), 2, "marks accumulate");
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ToggleMark(0), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.selected.len(), 1, "toggling the same row unmarks it");
+            assert!(view.selected.contains(&2));
+        });
+
+        // A plain row click replaces the whole selection.
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SelectEntry(1), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.selected.len(), 1);
+            assert!(view.selected.contains(&1));
+        });
+    });
+}
+
+/// A mark must never survive out of view: `selected` is exactly what F5/F6/F8
+/// act on, so a filtered-away mark would let the user delete a file they
+/// cannot see.
+#[test]
+fn test_search_filter_drops_marks_it_hides() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(
+            &view,
+            &mut app,
+            vec![entry("alpha.txt", false), entry("beta.txt", false)],
+        );
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ToggleMark(0), ctx); // alpha
+            view.handle_action(&SftpBrowserAction::ToggleMark(1), ctx); // beta
+            view.handle_action(
+                &SftpBrowserAction::SetSearchFilter("beta".to_string()),
+                ctx,
+            );
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.visible_indices(), vec![1], "only beta matches");
+            assert_eq!(
+                view.selected.len(),
+                1,
+                "the mark on the now-hidden alpha must be dropped"
+            );
+            assert!(view.selected.contains(&1));
+        });
+    });
+}
+
+/// Re-sorting keeps the cursor on the same FILE, not on the same row number.
+#[test]
+fn test_sort_keeps_cursor_on_its_file() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, _| {
+            view.entries = vec![
+                sized_entry("a_big.txt", false, 900, None),
+                sized_entry("b_small.txt", false, 10, None),
+            ];
+        });
+
+        // Park the cursor on the SMALL file (row 1 in name order).
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CursorDown, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.cursor_entry_index(), Some(1), "on b_small.txt");
+        });
+
+        // Sort by size (descending first): the small file moves to the end.
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SortBy(SortColumn::Size), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.cursor_entry_index(),
+                Some(1),
+                "cursor still on b_small.txt, wherever it now sits"
+            );
         });
     });
 }

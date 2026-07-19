@@ -2735,8 +2735,12 @@ fn test_copy_conflict_overwrite_all_applies_to_batch() {
         let root = temp.path().to_path_buf();
 
         // Select both files, then F5 → conflict on the first.
+        // `/left` is a sub-directory, so the list leads with the `..` row and
+        // Home lands on it (MC-style) — step onto the first real file before
+        // marking. `..` marks nothing by design.
         view_a.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::CursorFirst, ctx);
+            v.handle_action(&SftpBrowserAction::CursorDown, ctx);
             v.handle_action(&SftpBrowserAction::ToggleSelectCursor, ctx);
             v.handle_action(&SftpBrowserAction::CursorDown, ctx);
             v.handle_action(&SftpBrowserAction::ToggleSelectCursor, ctx);

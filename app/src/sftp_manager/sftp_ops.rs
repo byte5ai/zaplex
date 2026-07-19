@@ -482,19 +482,24 @@ fn build_auth_method(
             })
         }
         AuthType::Key => {
-            let key_path = resolved_auth.key_path.as_ref().ok_or_else(|| {
-                SftpOpsError::NoCredentials("Key authentication selected but no key path specified".to_string())
-            })?;
-            let expanded = shellexpand_path(key_path);
             let passphrase = secret_store
                 .get(&resolved_auth.secret_lookup_id, resolved_auth.secret_kind)
                 .ok()
                 .flatten()
                 .map(|p| p.to_string());
-            Ok(AuthMethod::PublicKey {
-                key_path: PathBuf::from(expanded),
-                passphrase,
-            })
+            // A host configured for key auth without an explicit key file is
+            // the normal case for anyone relying on `~/.ssh/config` +
+            // `ssh-agent`: the terminal path shells out to `ssh` and just
+            // works, while the file manager used to refuse to even try
+            // ("no key path specified" — the FM never opened on such a host).
+            // Fall back to what ssh itself does: agent, then default keys.
+            match resolved_auth.key_path.as_ref() {
+                Some(key_path) => Ok(AuthMethod::PublicKey {
+                    key_path: PathBuf::from(shellexpand_path(key_path)),
+                    passphrase,
+                }),
+                None => Ok(AuthMethod::AgentOrDefaultKeys { passphrase }),
+            }
         }
     }
 }

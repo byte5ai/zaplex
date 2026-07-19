@@ -132,6 +132,11 @@ pub fn render_context_menu(state: &ContextMenuState, appearance: &Appearance) ->
             | SftpBrowserAction::GoForward
             | SftpBrowserAction::Refresh
             | SftpBrowserAction::SelectEntry(_)
+            | SftpBrowserAction::SelectParentRow
+            | SftpBrowserAction::ToggleMark(_)
+            | SftpBrowserAction::MarkAndAdvance
+            | SftpBrowserAction::SortBy(_)
+            | SftpBrowserAction::ToggleHidden
             | SftpBrowserAction::UploadFile
             | SftpBrowserAction::NewFolder
             | SftpBrowserAction::ConfirmDelete

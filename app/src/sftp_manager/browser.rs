@@ -80,6 +80,50 @@ fn function_bar_caption(key: &str) -> String {
     }
 }
 
+/// A sortable list column (MC's Name/Size/Modified ordering).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SortColumn {
+    Name,
+    Size,
+    Modified,
+}
+
+/// Which column orders the list and in which direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SortState {
+    pub column: SortColumn,
+    pub ascending: bool,
+}
+
+impl Default for SortState {
+    fn default() -> Self {
+        // Name ascending — the order the list has always loaded in.
+        Self {
+            column: SortColumn::Name,
+            ascending: true,
+        }
+    }
+}
+
+impl SortState {
+    /// Click on a header: the same column flips direction, a new column starts
+    /// ascending (descending first for Size/Modified, where "biggest" and
+    /// "newest" are what one actually looks for).
+    fn toggled(self, column: SortColumn) -> Self {
+        if self.column == column {
+            Self {
+                column,
+                ascending: !self.ascending,
+            }
+        } else {
+            Self {
+                column,
+                ascending: matches!(column, SortColumn::Name),
+            }
+        }
+    }
+}
+
 /// Toolbar button size
 const TOOLBAR_BTN_SIZE: f32 = 28.0;
 /// Toolbar icon size
@@ -106,6 +150,19 @@ pub enum SftpBrowserAction {
     Refresh,
     /// Select the entry at the given index
     SelectEntry(usize),
+    /// Put the keyboard cursor on the `..` parent row (mouse parity: clicking
+    /// it selects it the way clicking any row does; opening is the double
+    /// click, which dispatches `NavigateUp`).
+    SelectParentRow,
+    /// Toggle the multi-selection mark on the entry at the given index — the
+    /// mouse counterpart of Insert/Space.
+    ToggleMark(usize),
+    /// Mark the row under the cursor and advance one row (MC's Insert).
+    MarkAndAdvance,
+    /// Order the list by this column (or flip the direction if it already is).
+    SortBy(SortColumn),
+    /// Show / hide dot-files.
+    ToggleHidden,
     /// Open the entry at the given index (enter if a directory, download if a file)
     OpenEntry(usize),
     /// Delete the entry at the given index
@@ -368,10 +425,36 @@ pub struct SftpBrowserView {
     /// Search filter editor
     search_editor: ViewHandle<EditorView>,
     // ---- Keyboard cursor (MC-style) ----
-    /// Position of the keyboard cursor within the *visible* (filtered) row
-    /// list, MC-style. Distinct from `selected` (the multi-selection set).
-    /// Always clamped into range after any change to the visible list.
+    /// Position of the keyboard cursor within the *visible row* list, MC-style
+    /// — that is, over [`Self::row_count`] rows: the `..` parent row (when the
+    /// current directory has one) followed by the filtered, sorted entries.
+    /// Distinct from `selected` (the multi-selection set). Always clamped into
+    /// range after any change to the visible list.
     pub(crate) cursor: usize,
+    // ---- List view state (MC parity) ----
+    /// Which column the list is ordered by, and in which direction. Applied in
+    /// [`Self::visible_indices`] — a *view* concern, so `entries` (and every
+    /// index into it: `selected`, the mouse handles) stays stable when the
+    /// user re-sorts.
+    pub(crate) sort: SortState,
+    /// Whether dot-files are listed. Off by default: the file manager opens on
+    /// the useful contents of a directory, and `~` full of tool dot-dirs was
+    /// exactly the "no overview" complaint. Toggled from the toolbar.
+    pub(crate) show_hidden: bool,
+    /// Hover/click state per row **mark zone** (the leading icon cell, which
+    /// toggles the multi-selection). Parallel to `row_mouse_handles`; a second
+    /// handle is needed because the zone is its own click target inside the
+    /// row.
+    mark_handles: Vec<MouseStateHandle>,
+    /// Hover/click state per sortable column header.
+    header_handles: HashMap<SortColumn, MouseStateHandle>,
+    /// Hover state of the show-hidden toolbar toggle.
+    hidden_btn: MouseStateHandle,
+    /// Set when a *navigation* (not a refresh) has changed the directory, so
+    /// the next listing parks the cursor on the first real entry rather than
+    /// on `..`. MC starts on `..`; here the first thing under the cursor
+    /// should be something F3/F5/F8 can act on, and `..` stays one Up away.
+    cursor_reset_pending: bool,
     /// Hover/click state for each cell of the F-key function bar (mouse parity
     /// with the keyboard function keys). One per [`FUNCTION_BAR`] entry.
     fn_bar_handles: Vec<MouseStateHandle>,
@@ -504,6 +587,15 @@ impl SftpBrowserView {
             new_folder_editor,
             search_editor,
             cursor: 0,
+            sort: SortState::default(),
+            show_hidden: false,
+            mark_handles: Vec::new(),
+            header_handles: [SortColumn::Name, SortColumn::Size, SortColumn::Modified]
+                .into_iter()
+                .map(|c| (c, MouseStateHandle::default()))
+                .collect(),
+            hidden_btn: MouseStateHandle::default(),
+            cursor_reset_pending: true,
             fn_bar_handles: FUNCTION_BAR.iter().map(|_| MouseStateHandle::default()).collect(),
             fm_id: super::fm_registry::next_fm_id(),
             pending_copy_move: None,
@@ -577,9 +669,10 @@ impl SftpBrowserView {
                     } else {
                         me.search_filter = Some(trimmed);
                     }
-                    // A narrower/wider filter changes the visible set — a
-                    // filtered-out cursor must snap back into range.
-                    me.clamp_cursor_to_visible();
+                    // A narrower/wider filter changes the visible set — the
+                    // cursor must snap back into range, and marks must not
+                    // survive out of view (they are what F5/F6/F8 act on).
+                    me.retain_marks_to_visible();
                     ctx.notify();
                 }
             },
@@ -856,9 +949,10 @@ impl SftpBrowserView {
         });
         self.path_history = vec![self.current_path.clone()];
         self.history_index = 0;
-        // A freshly connected listing starts with the cursor at the top (MC);
-        // `refresh_dir` will additionally clamp it into range once entries land.
+        // A freshly connected listing parks the cursor on the first real entry
+        // once the listing lands (see `cursor_reset_pending`).
         self.cursor = 0;
+        self.cursor_reset_pending = true;
         self.connection = ConnectionState::Connected;
         self.sftp = Some(backend);
         self.refresh_dir(ctx);
@@ -960,35 +1054,153 @@ impl SftpBrowserView {
             self.row_mouse_handles.push(MouseStateHandle::default());
         }
         self.row_mouse_handles.truncate(self.entries.len());
+        // The mark zone is its own click target inside each row, so it needs
+        // its own hover state — kept in lockstep with the row handles.
+        while self.mark_handles.len() < self.entries.len() {
+            self.mark_handles.push(MouseStateHandle::default());
+        }
+        self.mark_handles.truncate(self.entries.len());
     }
 
     /// Entry indices currently visible (after the search filter), in display
     /// order. The single source of truth for both rendering and cursor
     /// arithmetic, so the MC cursor and the rows never disagree.
     pub(crate) fn visible_indices(&self) -> Vec<usize> {
-        self.entries
+        let mut indices: Vec<usize> = self
+            .entries
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
+                // Dot-files only when the user asked for them.
+                if !self.show_hidden && entry.name.starts_with('.') {
+                    return false;
+                }
                 self.search_filter.as_ref().map_or(true, |filter| {
                     entry.name.to_lowercase().contains(&filter.to_lowercase())
                 })
             })
             .map(|(i, _)| i)
-            .collect()
+            .collect();
+
+        // Sorting lives here, on the *view's* index list, rather than by
+        // re-ordering `entries`: `selected` and the per-row mouse handles are
+        // keyed by entry index, so shuffling the entries themselves would
+        // silently move the user's marks onto other files.
+        //
+        // Directories always lead, in both directions — MC's rule, and the one
+        // that makes a re-sort still navigable.
+        let sort = self.sort;
+        indices.sort_by(|&a, &b| {
+            let (ea, eb) = (&self.entries[a], &self.entries[b]);
+            let dir_a = matches!(
+                ea.file_type,
+                FileEntryType::Directory | FileEntryType::Symlink
+            );
+            let dir_b = matches!(
+                eb.file_type,
+                FileEntryType::Directory | FileEntryType::Symlink
+            );
+            if dir_a != dir_b {
+                return if dir_a {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                };
+            }
+            let ordering = match sort.column {
+                SortColumn::Name => ea.name.to_lowercase().cmp(&eb.name.to_lowercase()),
+                // Directories carry no meaningful size; keep them by name so
+                // the leading block stays readable when sorting by size.
+                SortColumn::Size if dir_a => {
+                    ea.name.to_lowercase().cmp(&eb.name.to_lowercase())
+                }
+                SortColumn::Size => ea.size.cmp(&eb.size),
+                // `modified` is a preformatted string; entries without one sort
+                // last. Ties fall back to the name so the order is total (a
+                // non-total comparator would render in an arbitrary order).
+                SortColumn::Modified => match (&ea.modified, &eb.modified) {
+                    (Some(x), Some(y)) => x.cmp(y),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+                .then_with(|| ea.name.to_lowercase().cmp(&eb.name.to_lowercase())),
+            };
+            if sort.ascending {
+                ordering
+            } else {
+                ordering.reverse()
+            }
+        });
+        indices
     }
 
-    /// The entry index under the keyboard cursor, or `None` when nothing is
-    /// visible.
+    /// Whether the list shows a leading `..` row — i.e. whether the current
+    /// directory has a parent to go up to (MC always offers this row; a click
+    /// target in the list is how one navigates up without hunting for the
+    /// toolbar arrow).
+    pub(crate) fn has_parent_row(&self) -> bool {
+        self.current_path.parent().is_some()
+    }
+
+    /// Number of navigable rows: the `..` row (if any) plus the visible
+    /// entries. The keyboard cursor indexes THIS space.
+    pub(crate) fn row_count(&self) -> usize {
+        self.visible_indices().len() + usize::from(self.has_parent_row())
+    }
+
+    /// Whether the cursor currently rests on the `..` row.
+    pub(crate) fn cursor_on_parent_row(&self) -> bool {
+        self.has_parent_row() && self.cursor == 0
+    }
+
+    /// The entry index under the keyboard cursor, or `None` when the cursor is
+    /// on the `..` row (or nothing is visible).
+    ///
+    /// Returning `None` for the parent row is what keeps `..` out of every
+    /// destructive verb: delete, rename, copy, move and download all resolve
+    /// their target through here, so none of them can address it.
     pub(crate) fn cursor_entry_index(&self) -> Option<usize> {
-        self.visible_indices().get(self.cursor).copied()
+        if self.cursor_on_parent_row() {
+            return None;
+        }
+        let offset = usize::from(self.has_parent_row());
+        self.visible_indices().get(self.cursor - offset).copied()
+    }
+
+    /// Drop marks on rows the list no longer shows, and re-clamp the cursor.
+    ///
+    /// Marks are the target set of F5/F6/F8 (`operation_sources`), so a mark
+    /// that survives out of view is a file the user can copy, move or DELETE
+    /// without seeing it. Anything that narrows the visible set — the search
+    /// filter, the hidden-files toggle — must come through here.
+    fn retain_marks_to_visible(&mut self) {
+        let visible: std::collections::HashSet<usize> =
+            self.visible_indices().into_iter().collect();
+        self.selected.retain(|i| visible.contains(i));
+        self.clamp_cursor_to_visible();
     }
 
     /// Re-clamp the cursor into the current visible range. Call after any
     /// change to the entries or the filter so a stale cursor can't point past
     /// the end.
+    ///
+    /// When a navigation is pending, the cursor also *lands* here: on the
+    /// first real entry of the new listing, so the row under the cursor is one
+    /// the verbs can act on. A plain refresh never moves it — the user's
+    /// position in the list is theirs to keep.
     fn clamp_cursor_to_visible(&mut self) {
-        self.cursor = clamp_cursor(self.cursor, self.visible_indices().len());
+        if self.cursor_reset_pending {
+            self.cursor_reset_pending = false;
+            // First entry row: past `..` when there is one, unless the
+            // directory has no listable entries at all.
+            self.cursor = if self.has_parent_row() && !self.visible_indices().is_empty() {
+                1
+            } else {
+                0
+            };
+        }
+        self.cursor = clamp_cursor(self.cursor, self.row_count());
     }
 
     /// Fixed page size for PageUp/PageDown. The model doesn't know the
@@ -999,13 +1211,18 @@ impl SftpBrowserView {
 
     /// Apply an MC cursor movement.
     fn move_cursor(&mut self, mv: CursorMove, ctx: &mut ViewContext<Self>) {
-        let len = self.visible_indices().len();
+        let len = self.row_count();
         self.cursor = apply_cursor_move(self.cursor, len, mv);
         ctx.notify();
     }
 
-    /// Activate the row under the cursor: enter a directory, or open a file.
+    /// Activate the row under the cursor: go up on `..`, enter a directory, or
+    /// open a file.
     fn activate_cursor(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.cursor_on_parent_row() {
+            self.go_up(ctx);
+            return;
+        }
         if let Some(index) = self.cursor_entry_index() {
             self.open_entry(index, ctx);
         }
@@ -1037,6 +1254,10 @@ impl SftpBrowserView {
 
     /// Enter the directory under the cursor (Right arrow); a file is a no-op.
     fn enter_cursor_dir(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.cursor_on_parent_row() {
+            self.go_up(ctx);
+            return;
+        }
         if let Some(index) = self.cursor_entry_index() {
             if let Some(entry) = self.entries.get(index) {
                 if matches!(
@@ -1057,6 +1278,32 @@ impl SftpBrowserView {
             }
             ctx.notify();
         }
+    }
+
+    /// MC's Insert: mark the row under the cursor, then step down one row, so
+    /// a run of files can be marked by holding the key. On the last row the
+    /// cursor stays put (movement never wraps).
+    fn mark_and_advance(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(index) = self.cursor_entry_index() {
+            if !self.selected.insert(index) {
+                self.selected.remove(&index);
+            }
+        }
+        // Advance even from the `..` row: Insert walks the list either way.
+        self.cursor = apply_cursor_move(self.cursor, self.row_count(), CursorMove::Down);
+        ctx.notify();
+    }
+
+    /// Total byte size of the marked entries — the number MC puts in its
+    /// selection status line. Directories contribute nothing (their size is
+    /// unknown without walking them).
+    pub(crate) fn marked_size(&self) -> u64 {
+        self.selected
+            .iter()
+            .filter_map(|&i| self.entries.get(i))
+            .filter(|e| !matches!(e.file_type, FileEntryType::Directory | FileEntryType::Symlink))
+            .map(|e| e.size)
+            .sum()
     }
 
     /// Rename the row under the cursor (F6, single-pane case).
@@ -1983,8 +2230,9 @@ impl SftpBrowserView {
             return;
         }
         self.current_path = path;
-        // A new directory listing starts with the cursor at the top (MC).
+        // A new directory listing parks the cursor on its first real entry.
         self.cursor = 0;
+        self.cursor_reset_pending = true;
         // Truncate the forward history
         self.path_history.truncate(self.history_index + 1);
         self.path_history.push(self.current_path.clone());
@@ -2208,6 +2456,52 @@ impl SftpBrowserView {
         SavePosition::new(btn_el, position_id).finish()
     }
 
+    /// A toolbar button that carries an on/off state: `active` tints the icon
+    /// with the accent and seats it on the shared hover surface, so the
+    /// toolbar answers "are hidden files showing?" without a click.
+    fn render_toolbar_toggle(
+        &self,
+        icon: Icon,
+        active: bool,
+        handle: MouseStateHandle,
+        action: SftpBrowserAction,
+        appearance: &Appearance,
+        position_id: &'static str,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let icon_color = if active {
+            theme.accent()
+        } else {
+            theme.sub_text_color(theme.background())
+        };
+
+        let icon_el = ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
+            .with_width(TOOLBAR_ICON_SIZE)
+            .with_height(TOOLBAR_ICON_SIZE)
+            .finish();
+
+        let btn_el = Hoverable::new(handle, move |mouse| {
+            let mut c = Container::new(
+                ConstrainedBox::new(Container::new(icon_el).with_uniform_padding(6.0).finish())
+                    .with_width(TOOLBAR_BTN_SIZE)
+                    .with_height(TOOLBAR_BTN_SIZE)
+                    .finish(),
+            )
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+            if active || mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_1(theme));
+            }
+            c.finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(action.clone());
+        })
+        .finish();
+
+        SavePosition::new(btn_el, position_id).finish()
+    }
+
     /// Render the toolbar
     fn render_toolbar(&self, appearance: &Appearance) -> Box<dyn Element> {
         let nav_buttons = Flex::row()
@@ -2266,6 +2560,14 @@ impl SftpBrowserView {
                 "New folder",
                 appearance,
                 "sftp_btn:new_folder",
+            ))
+            .with_child(self.render_toolbar_toggle(
+                Icon::Eye,
+                self.show_hidden,
+                self.hidden_btn.clone(),
+                SftpBrowserAction::ToggleHidden,
+                appearance,
+                "sftp_btn:hidden",
             ))
             .with_main_axis_size(MainAxisSize::Min)
             .finish();
@@ -2470,9 +2772,11 @@ impl SftpBrowserView {
         // Filter the entries — same source of truth as the keyboard cursor.
         let filtered_indices = self.visible_indices();
 
-        if filtered_indices.is_empty() {
+        // A directory with no listable entries still offers `..`: an empty
+        // folder you cannot leave by clicking would be a trap.
+        if filtered_indices.is_empty() && !self.has_parent_row() {
             let text_el = Text::new_inline(
-                "This folder is empty".to_string(),
+                crate::t!("fm-empty-folder"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -2483,24 +2787,34 @@ impl SftpBrowserView {
                 .finish();
         }
 
-        // Header row
-        let header = super::file_list::render_header(appearance);
+        // Header row — its columns sort the list on click.
+        let header = super::file_list::render_header(self.sort, &self.header_handles, appearance);
 
-        // File rows
+        // File rows (the `..` row first, when there is a parent)
         let rows = super::file_list::render_file_rows(
             &self.entries,
             &filtered_indices,
             &self.selected,
-            self.cursor_entry_index(),
+            self.cursor,
+            self.has_parent_row(),
             &self.row_mouse_handles,
+            &self.mark_handles,
             appearance,
         );
 
-        Flex::column()
+        let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(header)
-            .with_child(rows)
-            .finish()
+            .with_child(rows);
+        // MC's selection status line: what is marked, and how much of it.
+        if !self.selected.is_empty() {
+            col = col.with_child(super::file_list::render_selection_status(
+                self.selected.len(),
+                self.marked_size(),
+                appearance,
+            ));
+        }
+        col.finish()
     }
 
     /// Render the transfer panel
@@ -3084,6 +3398,52 @@ impl TypedActionView for SftpBrowserView {
             SftpBrowserAction::Refresh => {
                 self.refresh_dir(ctx);
             }
+            SftpBrowserAction::SelectParentRow => {
+                // Clicking `..` puts the cursor on it (double-click navigates,
+                // like every other row); a marked set is not disturbed.
+                self.cursor = 0;
+                ctx.notify();
+            }
+            SftpBrowserAction::ToggleMark(index) => {
+                let index = *index;
+                // Mouse parity for Insert/Space. The cursor follows the click,
+                // so keyboard and mouse never disagree about "the current row".
+                if let Some(pos) = self.visible_indices().iter().position(|&i| i == index) {
+                    self.cursor = pos + usize::from(self.has_parent_row());
+                }
+                if !self.selected.insert(index) {
+                    self.selected.remove(&index);
+                }
+                ctx.notify();
+            }
+            SftpBrowserAction::MarkAndAdvance => self.mark_and_advance(ctx),
+            SftpBrowserAction::SortBy(column) => {
+                // Resolve which FILE the cursor is on BEFORE reordering: after
+                // `self.sort` changes, the same row index resolves to a
+                // different file, and re-anchoring on that would silently move
+                // the cursor onto the wrong entry.
+                let cursor_entry = self.cursor_entry_index();
+                self.sort = self.sort.toggled(*column);
+                // Marks are entry-keyed, so they survive a re-sort untouched;
+                // only the cursor's ROW position is meaningless afterwards.
+                match cursor_entry {
+                    Some(entry) => {
+                        if let Some(pos) =
+                            self.visible_indices().iter().position(|&i| i == entry)
+                        {
+                            self.cursor = pos + usize::from(self.has_parent_row());
+                        }
+                    }
+                    None => self.clamp_cursor_to_visible(),
+                }
+                ctx.notify();
+            }
+            SftpBrowserAction::ToggleHidden => {
+                self.show_hidden = !self.show_hidden;
+                // Rows appear/disappear underneath the cursor and the marks.
+                self.retain_marks_to_visible();
+                ctx.notify();
+            }
             SftpBrowserAction::SelectEntry(index) => {
                 let index = *index;
                 // A mouse click also moves the MC keyboard cursor onto the
@@ -3091,7 +3451,7 @@ impl TypedActionView for SftpBrowserView {
                 // keyboard cursor never disagree. `cursor` indexes the *visible*
                 // (filtered) list, so translate the entry index into that space.
                 if let Some(pos) = self.visible_indices().iter().position(|&i| i == index) {
-                    self.cursor = pos;
+                    self.cursor = pos + usize::from(self.has_parent_row());
                 }
                 self.selected.clear();
                 self.selected.insert(index);
@@ -3313,7 +3673,8 @@ impl TypedActionView for SftpBrowserView {
             }
             SftpBrowserAction::SetSearchFilter(filter) => {
                 self.search_filter = Some(filter.clone());
-                self.clamp_cursor_to_visible();
+                // A narrowing filter must not leave marks on rows it hid.
+                self.retain_marks_to_visible();
                 ctx.notify();
             }
             SftpBrowserAction::ClearSearchFilter => {
@@ -3733,6 +4094,8 @@ impl View for SftpBrowserView {
                     "right" => Some(SftpBrowserAction::EnterCursorDir),
                     "left" | "backspace" => Some(SftpBrowserAction::NavigateUp),
                     "space" => Some(SftpBrowserAction::ToggleSelectCursor),
+                    // MC's Insert: mark and step down. Space marks in place.
+                    "insert" => Some(SftpBrowserAction::MarkAndAdvance),
                     // Rename (F2, the common file-manager convention; MC's F6
                     // is repurposed here for the cross-pane move).
                     "f2" => Some(SftpBrowserAction::RenameCursor),

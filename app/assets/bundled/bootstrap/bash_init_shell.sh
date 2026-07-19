@@ -1,6 +1,12 @@
 # command -p resolves the given command with the system default PATH, ensuring the shell
 # can find them even if the user has a clobbered PATH value.
-command -p stty raw
+# `raw` alone does NOT clear ECHO — neither GNU/uutils coreutils nor BSD
+# stty include it in the `raw` combination (unlike C's cfmakeraw). Without
+# the explicit `-echo`, every line of the bootstrap heredoc we write into
+# this PTY is echoed straight back at the user: the ~1500-line dump at
+# session start (RC acceptance 2026-07-19). `stty sane` in the wrapper
+# restores echo before the user ever types.
+command -p stty raw -echo
 HISTCONTROL=ignorespace
 HISTIGNORE=" *"
 ZAPLEX_SESSION_ID="$(command -p date +%s)$RANDOM"

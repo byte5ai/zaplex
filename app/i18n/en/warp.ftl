@@ -3881,3 +3881,6 @@ fm-key-move = Move
 fm-key-mkdir = New folder
 fm-key-delete = Delete
 fm-key-quit = Close
+fm-empty-folder = This folder is empty
+fm-selection-status = { $count } marked · { $size }
+fm-tt-hidden = Show hidden files

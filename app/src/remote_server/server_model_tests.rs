@@ -762,7 +762,7 @@ mod daemon_session {
             model.update(&mut app, |m, ctx| {
                 let reaped = m.gc_sessions(1_000_000_000_000, 60_000, usize::MAX);
                 assert_eq!(reaped, 1, "the last detached session is reaped");
-                m.maybe_arm_grace_after_gc(ctx);
+                m.maybe_arm_grace_when_idle(ctx);
             });
 
             model.update(&mut app, |m, _ctx| {

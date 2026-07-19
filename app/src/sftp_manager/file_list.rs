@@ -4,19 +4,20 @@
 //! author: logic
 //! date: 2026-05-26
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
-    Border, ConstrainedBox, Container, CrossAxisAlignment, Expanded, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition, Text,
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
+    SavePosition, Text,
 };
 use warpui::platform::Cursor;
 use warpui::Element;
 
-use crate::sftp_manager::browser::SftpBrowserAction;
+use crate::sftp_manager::browser::{SftpBrowserAction, SortColumn, SortState};
 use crate::sftp_manager::types::{format_size, FileEntry, FileEntryType};
 use crate::ui_components::icons::Icon;
 
@@ -38,21 +39,57 @@ pub fn file_icon(entry_type: &FileEntryType) -> Icon {
     }
 }
 
+/// The leading cell of a row: the type icon at rest, and the **mark zone** on
+/// approach — hovering swaps in a check outline, clicking toggles the
+/// multi-selection. Mouse parity for MC's Insert/Space, which is the only way
+/// to offer marking here at all: the framework's click handlers carry no
+/// modifier state, so ctrl/shift-click cannot be implemented (2026-07-19).
+fn mark_cell(
+    index: usize,
+    entry_type: FileEntryType,
+    is_marked: bool,
+    icon_color: Fill,
+    accent: Fill,
+    muted: Fill,
+    handle: MouseStateHandle,
+) -> Box<dyn Element> {
+    Hoverable::new(handle, move |mouse| {
+        let (icon, color) = if is_marked {
+            (Icon::Check, accent)
+        } else if mouse.is_hovered() {
+            (Icon::Check, muted)
+        } else {
+            (file_icon(&entry_type), icon_color)
+        };
+        ConstrainedBox::new(icon.to_warpui_icon(color).finish())
+            .with_width(ICON_CELL)
+            .with_height(ICON_CELL)
+            .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(SftpBrowserAction::ToggleMark(index));
+    })
+    .finish()
+}
+
 /// Render a single file row.
 ///
 /// Two independent highlights, MC-style in SEMANTICS only: `is_cursor` is the
 /// single keyboard cursor, `is_selected` the multi-selection set; the cursor
 /// wins when a row is both, selection wins over hover. The LOOK is the app's
 /// own vocabulary (polish audit FM.1) — an accent *tint* for the cursor, the
-/// shared neutral overlays for selection and hover, text colours untouched —
-/// not MC's full accent slab with inverted text, which made the cursor row a
-/// foreign object in the theme.
+/// shared neutral overlays for selection and hover — not MC's full accent slab
+/// with inverted text, which made the cursor row a foreign object in the theme.
+/// A marked row additionally carries its name in the accent colour, MC's
+/// yellow made theme-native, so marks read at a glance.
 pub fn render_file_row(
     entry: &FileEntry,
     index: usize,
     is_selected: bool,
     is_cursor: bool,
     mouse_handle: MouseStateHandle,
+    mark_handle: MouseStateHandle,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -62,7 +99,11 @@ pub fn render_file_row(
     } else {
         theme.sub_text_color(theme.background()).into_solid()
     };
-    let text_color = theme.active_ui_text_color();
+    let text_color = if is_selected {
+        theme.accent()
+    } else {
+        theme.active_ui_text_color()
+    };
     let sub_color = theme.sub_text_color(theme.background());
 
     let name = entry.name.clone();
@@ -71,6 +112,9 @@ pub fn render_file_row(
     let modified = entry.modified.clone();
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
+    let accent_fill: Fill = theme.accent().into();
+    let muted_fill: Fill = sub_color.into();
+    let icon_fill: Fill = icon_color.into();
 
     Hoverable::new(mouse_handle, move |mouse| {
         let bg: Option<Fill> = if is_cursor {
@@ -82,14 +126,6 @@ pub fn render_file_row(
         } else {
             None
         };
-
-        // Icon
-        let icon_el = ConstrainedBox::new(
-            file_icon(&file_type).to_warpui_icon(icon_color.into()).finish(),
-        )
-        .with_width(ICON_CELL)
-        .with_height(ICON_CELL)
-        .finish();
 
         // Name — `Expanded` (tight fit), not `Shrinkable` (loose fit): only a
         // tight-fit child actually consumes the remaining width, and consuming
@@ -139,7 +175,15 @@ pub fn render_file_row(
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(ROW_SPACING)
-            .with_child(icon_el)
+            .with_child(mark_cell(
+                index,
+                file_type,
+                is_selected,
+                icon_fill,
+                accent_fill,
+                muted_fill,
+                mark_handle.clone(),
+            ))
             .with_child(name_el)
             .with_child(size_el)
             .with_child(date_el)
@@ -155,6 +199,10 @@ pub fn render_file_row(
         }
         container.finish()
     })
+    // The mark zone lives inside this row and handles its own click; deferring
+    // to children is what keeps a mark-click from ALSO running SelectEntry,
+    // which would clear the very selection the user just made.
+    .with_defer_events_to_children()
     .with_cursor(Cursor::PointingHand)
     .on_click(move |ctx, _, _| {
         ctx.dispatch_typed_action(SftpBrowserAction::SelectEntry(index));
@@ -176,13 +224,140 @@ pub fn render_file_row(
     .finish()
 }
 
-/// Render file list header — localized, mirroring the rows' column grid
-/// (leading icon cell included) and separated from them by a hairline.
-pub fn render_header(appearance: &Appearance) -> Box<dyn Element> {
+/// The `..` row: the first row of any non-root directory, and the way one goes
+/// up without hunting for the toolbar arrow (MC parity — the acceptance
+/// complaint of 2026-07-19). It is a *virtual* row: it exists only here and in
+/// the cursor arithmetic, never in `entries`, so no destructive verb can
+/// address it.
+pub fn render_parent_row(
+    is_cursor: bool,
+    mouse_handle: MouseStateHandle,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let header_color = theme.sub_text_color(theme.background());
+    let accent = theme.accent();
+    let ui_font = appearance.ui_font_family();
+    let ui_font_size = appearance.ui_font_size();
+
+    Hoverable::new(mouse_handle, move |mouse| {
+        let bg: Option<Fill> = if is_cursor {
+            Some(theme.accent().with_opacity(22))
+        } else if mouse.is_hovered() {
+            Some(internal_colors::fg_overlay_1(theme))
+        } else {
+            None
+        };
+
+        let icon_el = ConstrainedBox::new(Icon::ArrowUp.to_warpui_icon(accent.into()).finish())
+            .with_width(ICON_CELL)
+            .with_height(ICON_CELL)
+            .finish();
+
+        let row_content = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_spacing(ROW_SPACING)
+            .with_child(icon_el)
+            .with_child(
+                Expanded::new(
+                    1.0,
+                    Text::new_inline("..".to_string(), ui_font, ui_font_size)
+                        .with_color(theme.active_ui_text_color().into())
+                        .finish(),
+                )
+                .finish(),
+            )
+            .finish();
+
+        let mut container = Container::new(row_content)
+            .with_padding_left(8.0)
+            .with_padding_right(8.0)
+            .with_padding_top(4.0)
+            .with_padding_bottom(4.0);
+        if let Some(bg) = bg {
+            container = container.with_background(bg);
+        }
+        container.finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(SftpBrowserAction::SelectParentRow);
+    })
+    .on_double_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(SftpBrowserAction::NavigateUp);
+    })
+    .finish()
+}
+
+/// One sortable column header: the label, plus a caret on the column that
+/// currently orders the list. Clicking sorts by it (or flips the direction).
+fn header_cell(
+    label: String,
+    column: SortColumn,
+    sort: SortState,
+    handle: Option<MouseStateHandle>,
+    right_aligned: bool,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
     let family = appearance.ui_font_family();
     let size = appearance.ui_font_size();
+    let active = sort.column == column;
+    let rest_color = if active {
+        theme.main_text_color(theme.background())
+    } else {
+        theme.sub_text_color(theme.background())
+    };
+    let text = if active {
+        format!("{label} {}", if sort.ascending { "▲" } else { "▼" })
+    } else {
+        label
+    };
+
+    let Some(handle) = handle else {
+        return Text::new_inline(text, family, size)
+            .with_color(rest_color.into())
+            .finish();
+    };
+
+    Hoverable::new(handle, move |mouse| {
+        let color = if mouse.is_hovered() {
+            theme.accent()
+        } else {
+            rest_color
+        };
+        let label_el = Text::new_inline(text.clone(), family, size)
+            .with_color(color.into())
+            .finish();
+        let inner: Box<dyn Element> = if right_aligned {
+            Flex::row()
+                .with_main_axis_alignment(MainAxisAlignment::End)
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_child(label_el)
+                .finish()
+        } else {
+            label_el
+        };
+        Container::new(inner)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+            .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(SftpBrowserAction::SortBy(column));
+    })
+    .finish()
+}
+
+/// Render file list header — localized, mirroring the rows' column grid
+/// (leading icon cell included), separated from them by a hairline, and
+/// sortable: each column header orders the list on click (MC parity).
+pub fn render_header(
+    sort: SortState,
+    handles: &HashMap<SortColumn, MouseStateHandle>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
 
     // The rows lead with a 16 px icon; the header mirrors that cell so "Name"
     // sits over the names (audit FM.2 — the header had no icon cell at all,
@@ -194,31 +369,36 @@ pub fn render_header(appearance: &Appearance) -> Box<dyn Element> {
 
     let name_el = Expanded::new(
         1.0,
-        Text::new_inline(crate::t!("fm-col-name"), family, size)
-            .with_color(header_color.into())
-            .finish(),
+        header_cell(
+            crate::t!("fm-col-name"),
+            SortColumn::Name,
+            sort,
+            handles.get(&SortColumn::Name).cloned(),
+            false,
+            appearance,
+        ),
     )
     .finish();
 
-    let size_el = ConstrainedBox::new(
-        Flex::row()
-            .with_main_axis_alignment(MainAxisAlignment::End)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_child(
-                Text::new_inline(crate::t!("fm-col-size"), family, size)
-                    .with_color(header_color.into())
-                    .finish(),
-            )
-            .finish(),
-    )
+    let size_el = ConstrainedBox::new(header_cell(
+        crate::t!("fm-col-size"),
+        SortColumn::Size,
+        sort,
+        handles.get(&SortColumn::Size).cloned(),
+        true,
+        appearance,
+    ))
     .with_width(FILE_SIZE_WIDTH)
     .finish();
 
-    let date_el = ConstrainedBox::new(
-        Text::new_inline(crate::t!("fm-col-modified"), family, size)
-            .with_color(header_color.into())
-            .finish(),
-    )
+    let date_el = ConstrainedBox::new(header_cell(
+        crate::t!("fm-col-modified"),
+        SortColumn::Modified,
+        sort,
+        handles.get(&SortColumn::Modified).cloned(),
+        false,
+        appearance,
+    ))
     .with_width(FILE_DATE_WIDTH)
     .finish();
 
@@ -241,28 +421,77 @@ pub fn render_header(appearance: &Appearance) -> Box<dyn Element> {
         .finish()
 }
 
+/// MC's selection status line: how much is marked. Shown only while something
+/// is — an empty line would be furniture.
+pub fn render_selection_status(
+    count: usize,
+    bytes: u64,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let text = crate::t!(
+        "fm-selection-status",
+        count = count.to_string(),
+        size = format_size(bytes)
+    );
+    Container::new(
+        Text::new_inline(
+            text,
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(theme.accent().into())
+        .finish(),
+    )
+    .with_padding_left(8.0)
+    .with_padding_right(8.0)
+    .with_padding_top(4.0)
+    .with_padding_bottom(4.0)
+    .with_border(Border::top(1.0).with_border_fill(theme.split_pane_border_color()))
+    .finish()
+}
+
 /// Render list of file rows.
 ///
-/// `cursor_entry_index` is the entry index of the MC keyboard cursor (the
-/// single accent-highlighted row), or `None` when the pane isn't the active
-/// keyboard target.
+/// `cursor_row` indexes the *row* space: the `..` row (present when
+/// `has_parent_row`) followed by the visible entries — the same space the
+/// keyboard cursor moves in, so the highlight and the keys never disagree.
 pub fn render_file_rows(
     entries: &[FileEntry],
     filtered_indices: &[usize],
     selected: &HashSet<usize>,
-    cursor_entry_index: Option<usize>,
+    cursor_row: usize,
+    has_parent_row: bool,
     mouse_handles: &[MouseStateHandle],
+    mark_handles: &[MouseStateHandle],
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let mut col = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-    for &index in filtered_indices {
+    if has_parent_row {
+        // The `..` row reuses no entry handle (it is not an entry); a
+        // dedicated one keeps its hover independent of the list.
+        let row = render_parent_row(cursor_row == 0, MouseStateHandle::default(), appearance);
+        col.add_child(SavePosition::new(row, "sftp_row:parent").finish());
+    }
+
+    let offset = usize::from(has_parent_row);
+    for (row_position, &index) in filtered_indices.iter().enumerate() {
         let entry = &entries[index];
         let is_selected = selected.contains(&index);
-        let is_cursor = cursor_entry_index == Some(index);
+        let is_cursor = cursor_row == row_position + offset;
         let mouse_handle = mouse_handles.get(index).cloned().unwrap_or_default();
-        let row = render_file_row(entry, index, is_selected, is_cursor, mouse_handle, appearance);
+        let mark_handle = mark_handles.get(index).cloned().unwrap_or_default();
+        let row = render_file_row(
+            entry,
+            index,
+            is_selected,
+            is_cursor,
+            mouse_handle,
+            mark_handle,
+            appearance,
+        );
         let position_id = format!("sftp_row:{index}");
         let positioned = SavePosition::new(row, &position_id).finish();
         col.add_child(positioned);
