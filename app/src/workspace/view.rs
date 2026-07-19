@@ -3557,6 +3557,21 @@ impl Workspace {
         window
             .tabs
             .iter()
+            // Skip layouts that cannot be opened — a branch with no panes,
+            // which user-edited (or older-version-written) TOML does contain.
+            // Restoring one yields a tab with zero panes and the app dies on
+            // the "at least one pane" expectation during startup. Dropping the
+            // broken tab keeps the rest of the config usable.
+            .filter(|tab_template| {
+                let openable = tab_template.layout.is_openable();
+                if !openable {
+                    log::warn!(
+                        "Skipping launch-config tab {:?}: its layout has an empty pane branch",
+                        tab_template.title
+                    );
+                }
+                openable
+            })
             .enumerate()
             .for_each(|(tab_index, tab_template)| {
                 self.add_tab_with_pane_layout(

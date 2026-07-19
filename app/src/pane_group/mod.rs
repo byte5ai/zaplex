@@ -1324,7 +1324,19 @@ impl PaneGroup {
                 let mut nodes = Vec::new();
                 let mut focus = InitialFocus::default();
                 let mut leftmost_pane_id = None;
-                let pane_flex = 1. / panes.len() as f32;
+                // A branch with no children is corrupt input, not a layout —
+                // and it reaches this code as a matter of course, because
+                // launch configs are user-editable TOML that older versions
+                // also wrote. Dividing by zero here (and underflowing
+                // `nodes.len() - 1` in `new_branch`) panicked in the dev
+                // profile the test DMGs are built with: dock bounce, no
+                // window, no dialog. Neither value is used when there are no
+                // children, so a safe placeholder is enough to keep the app up.
+                let pane_flex = if panes.is_empty() {
+                    1.
+                } else {
+                    1. / panes.len() as f32
+                };
 
                 let num_children = panes.len() as f32;
                 let total_divider_size = tree::get_divider_thickness() * (num_children - 1.);

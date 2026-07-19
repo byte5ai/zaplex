@@ -244,8 +244,12 @@ impl PaneData {
             // Safety: We know there is exactly one node in the list
             mutable_nodes.pop().unwrap().1
         } else {
+            // `saturating_sub`, not `- 1`: an empty node list reaches here from
+            // a corrupt or hand-edited launch config, and the underflow panicked
+            // the app at startup in dev-profile builds — which is what the test
+            // DMGs are. n children need n-1 dividers; zero children need none.
             let dividers = iter::repeat_with(Divider::new)
-                .take(nodes.len() - 1)
+                .take(nodes.len().saturating_sub(1))
                 .collect();
             PaneNode::Branch(PaneBranch {
                 axis,

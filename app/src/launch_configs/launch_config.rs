@@ -120,6 +120,26 @@ pub enum PaneTemplateType {
     },
 }
 
+impl PaneTemplateType {
+    /// Whether this layout can actually be opened.
+    ///
+    /// Launch configs are user-editable TOML that older versions also wrote, so
+    /// a branch with an empty `panes` list turns up in the field. It is not a
+    /// layout: restoring it produces a pane group with zero panes, and startup
+    /// then dies on the `expect("At least one pane should have been created")`
+    /// in `pane_group` — a dock bounce and no window in the dev-profile builds
+    /// the test DMGs ship with. Callers reject such a config (and say so in the
+    /// log) instead of opening it.
+    pub fn is_openable(&self) -> bool {
+        match self {
+            PaneTemplateType::PaneTemplate { .. } | PaneTemplateType::SshHost { .. } => true,
+            PaneTemplateType::PaneBranchTemplate { panes, .. } => {
+                !panes.is_empty() && panes.iter().all(Self::is_openable)
+            }
+        }
+    }
+}
+
 impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
     type Error = ();
 

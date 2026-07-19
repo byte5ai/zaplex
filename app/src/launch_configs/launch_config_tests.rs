@@ -443,3 +443,35 @@ fn test_ssh_host_reference_serde_round_trips_and_does_not_collide() {
         template
     );
 }
+
+/// A branch with no panes is not an openable layout.
+///
+/// Such a template comes from hand-edited or older-version TOML. Opening it
+/// produced a tab with zero panes, and startup then died on the "at least one
+/// pane should have been created" expectation — a dock bounce with no window in
+/// the dev-profile builds the test DMGs ship with. It must be rejected before
+/// it reaches the pane tree.
+#[test]
+fn empty_pane_branch_is_not_openable() {
+    let empty_branch = PaneTemplateType::PaneBranchTemplate {
+        split_direction: crate::launch_configs::launch_config::SplitDirection::Vertical,
+        panes: Vec::new(),
+    };
+    assert!(!empty_branch.is_openable(), "an empty branch must be rejected");
+
+    // Nested, too: a valid outer branch containing a broken inner one.
+    let nested = PaneTemplateType::PaneBranchTemplate {
+        split_direction: crate::launch_configs::launch_config::SplitDirection::Horizontal,
+        panes: vec![empty_branch],
+    };
+    assert!(
+        !nested.is_openable(),
+        "a branch containing an empty branch must be rejected"
+    );
+
+    // A plain SSH-host reference stays openable.
+    assert!(PaneTemplateType::SshHost {
+        node_id: "some-host".to_string(),
+    }
+    .is_openable());
+}

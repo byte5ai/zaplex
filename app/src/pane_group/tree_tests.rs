@@ -699,3 +699,25 @@ fn test_hide_multiple_child_agent_panes() {
     assert_eq!(tree.visible_pane_ids(), vec![panes[0], panes[1]]);
     assert!(tree.is_pane_hidden(&panes[2]));
 }
+
+/// A branch template with no children must not take the app down.
+///
+/// Launch configs are user-editable TOML that older versions also wrote, so an
+/// empty `panes` list reaches `new_branch` in the field. `nodes.len() - 1` then
+/// underflowed — a panic in the dev profile the test DMGs ship with, which
+/// meant a dock bounce and no window at startup (the same class as the
+/// lowercase-keymap crash). Zero children simply need zero dividers.
+#[test]
+fn new_branch_survives_an_empty_node_list() {
+    let data = PaneData::new_branch(SplitDirection::Vertical, Vec::new(), 0);
+    match data.root {
+        PaneNode::Branch(branch) => {
+            assert!(branch.nodes.is_empty());
+            assert!(
+                branch.dividers.is_empty(),
+                "zero children need zero dividers"
+            );
+        }
+        other => panic!("expected an empty branch, got {other:?}"),
+    }
+}
