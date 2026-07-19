@@ -75,6 +75,15 @@ pub(super) struct EventLoop {
     /// adopt's first attach welcomes while later re-attaches announce the
     /// reconnect instead.
     welcomed: bool,
+    /// Whether a *terminal* end-state notice has already been surfaced — a clean
+    /// `session ended` (`SessionExited`) or a `connection lost`
+    /// (`SessionDisconnected` with no reconnect left). Guards against a second,
+    /// contradictory notice when both terminal signals reach this loop: e.g. the
+    /// shell exits (`SessionExited`) and then the transport drops afterwards
+    /// (`SessionDisconnected`) before the tab is closed. Whichever lands first
+    /// wins; the latch swallows the other so we never tell the user the
+    /// connection was lost right after telling them the session ended.
+    terminated: bool,
 }
 
 impl EventLoop {
@@ -199,6 +208,17 @@ impl EventLoop {
                      two persistence layers are nested."
                 ));
             }
+            // The transport went away for good: a spontaneous drop with no
+            // reconnect possible, or reconnect attempts exhausted (§9). A mere
+            // blip never reaches here — it arrives as `SessionReconnected` and is
+            // handled above. Nothing will bring this view back on its own, so
+            // surface it instead of freezing the grid on its last frame and
+            // silently swallowing everything the user types.
+            RemoteServerManagerEvent::SessionDisconnected { session_id, .. }
+                if *session_id == me.connection_session_id =>
+            {
+                me.on_transport_lost();
+            }
             _ => {}
         });
 
@@ -241,6 +261,7 @@ impl EventLoop {
             last_seq: 0,
             host_label: String::new(),
             welcomed: false,
+            terminated: false,
         }
     }
 
@@ -524,11 +545,33 @@ impl EventLoop {
             "Daemon session {:?} exited (code {exit_code:?})",
             self.pty_session_id
         );
+        // A clean exit is a terminal state: latch it so that if the transport
+        // later drops (a `SessionDisconnected` reaching this still-open tab) we
+        // don't append a contradictory "connection lost" line under this one.
+        self.terminated = true;
         let notice = match exit_code {
             Some(code) => format!("session ended (exit code {code})"),
             None => "session ended".to_string(),
         };
         self.write_notice(&notice);
+    }
+
+    /// A terminal transport loss with no auto-reconnect left (spontaneous drop
+    /// or reconnect exhausted). Tell the user once instead of leaving a frozen
+    /// grid that quietly eats keystrokes — and be honest about the payoff: the
+    /// daemon owns the PTY, so a persistent session is very likely still running
+    /// on the host and reopening it reattaches. No-op if a terminal state was
+    /// already surfaced (a clean `SessionExited`, or a prior disconnect).
+    fn on_transport_lost(&mut self) {
+        if self.terminated {
+            return;
+        }
+        self.terminated = true;
+        self.write_notice(&format!(
+            "connection to {} lost. Your persistent session may still be running there — \
+             reopen the host to reattach.",
+            self.host_label
+        ));
     }
 
     /// Writes a Zaplex notice line (e.g. a connection error or session-ended
@@ -981,6 +1024,87 @@ mod tests {
             assert!(
                 !wakeups_rx.is_empty(),
                 "a connect failure must render a notice and request a repaint"
+            );
+        });
+    }
+
+    /// Regression (T1.2): a *terminal* transport loss for our connection — a
+    /// spontaneous drop with no reconnect, or reconnect exhausted (§9) — must
+    /// surface a notice, not freeze the grid on its last frame while silently
+    /// swallowing every keystroke. (A mere blip never reaches this arm; it
+    /// arrives as `SessionReconnected`.) Proven by the repaint wakeup the notice
+    /// fires and the `terminated` latch it sets. Without the fix the event falls
+    /// into `_ => {}`: no wakeup, no latch — the frozen tab the user reported.
+    #[test]
+    fn terminal_disconnect_is_surfaced_not_frozen() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(23u64);
+            let (manager, event_loop, _model, wakeups_rx) = start_adopted_loop(&mut app, conn);
+            drain(&wakeups_rx);
+
+            manager.update(&mut app, |_m, ctx| {
+                ctx.emit(RemoteServerManagerEvent::SessionDisconnected {
+                    session_id: conn,
+                    host_id: HostId::new(HOST.to_string()),
+                    exit_status: None,
+                });
+            });
+
+            assert!(
+                !wakeups_rx.is_empty(),
+                "a terminal disconnect must write a notice (repaint wakeup), not freeze the grid"
+            );
+            assert!(
+                event_loop.read(&app, |me, _| me.terminated),
+                "a terminal disconnect must latch `terminated`"
+            );
+        });
+    }
+
+    /// If a terminal `SessionDisconnected` ever reaches this loop *after* a clean
+    /// shell exit — e.g. the transport drops post-exit while the tab is still
+    /// open — it must not append a contradictory "connection lost" line under the
+    /// "session ended" one: the `terminated` latch set by `SessionExited` swallows
+    /// the later disconnect (no second wakeup). (Both events are emitted here by
+    /// the test to exercise the latch directly.)
+    #[test]
+    fn clean_exit_suppresses_the_trailing_disconnect_notice() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(29u64);
+            let (manager, event_loop, _model, wakeups_rx) = start_adopted_loop(&mut app, conn);
+            drain(&wakeups_rx);
+
+            // Clean exit first — one notice ("session ended").
+            manager.update(&mut app, |_m, ctx| {
+                ctx.emit(RemoteServerManagerEvent::SessionExited {
+                    session_id: conn,
+                    host_id: HostId::new(HOST.to_string()),
+                    pty_session_id: OUR_PTY.to_string(),
+                    exit_code: Some(0),
+                });
+            });
+            assert!(
+                !wakeups_rx.is_empty(),
+                "a clean exit must write the session-ended notice"
+            );
+            assert!(
+                event_loop.read(&app, |me, _| me.terminated),
+                "a clean exit latches `terminated`"
+            );
+            drain(&wakeups_rx);
+
+            // The teardown disconnect that follows must be swallowed.
+            manager.update(&mut app, |_m, ctx| {
+                ctx.emit(RemoteServerManagerEvent::SessionDisconnected {
+                    session_id: conn,
+                    host_id: HostId::new(HOST.to_string()),
+                    exit_status: None,
+                });
+            });
+            assert!(
+                wakeups_rx.is_empty(),
+                "after a clean exit, the trailing disconnect must not add a second, \
+                 contradictory notice"
             );
         });
     }
