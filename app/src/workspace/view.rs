@@ -3592,49 +3592,51 @@ impl Workspace {
         window: WindowTemplate,
         ctx: &mut ViewContext<Self>,
     ) {
-        let start_index = self.tabs.len();
-
-        window
-            .tabs
-            .iter()
-            // Skip layouts that cannot be opened — a branch with no panes,
-            // which user-edited (or older-version-written) TOML does contain.
-            // Restoring one yields a tab with zero panes and the app dies on
-            // the "at least one pane" expectation during startup. Dropping the
-            // broken tab keeps the rest of the config usable.
-            .filter(|tab_template| {
-                let openable = tab_template.layout.is_openable();
-                if !openable {
-                    log::warn!(
-                        "Skipping launch-config tab {:?}: its layout has an empty pane branch",
-                        tab_template.title
-                    );
-                }
-                openable
-            })
-            .enumerate()
-            .for_each(|(tab_index, tab_template)| {
-                self.add_tab_with_pane_layout(
-                    PanesLayout::Template(tab_template.layout.clone()),
-                    Arc::new(HashMap::new()),
-                    tab_template.title.clone(),
-                    ctx,
+        // Skip layouts that cannot be opened — a branch with no panes, which
+        // user-edited (or older-version-written) TOML does contain. Restoring one
+        // yields a tab with zero panes and the app dies on the "at least one pane"
+        // expectation during startup. Dropping the broken tab keeps the rest of
+        // the config usable.
+        //
+        // `add_tab_with_pane_layout` inserts at a position that depends on the
+        // NewTabPlacement setting (append, or after the active tab) and then
+        // activates the tab it inserted — so `self.active_tab_index` afterward is
+        // that tab's real index. We use it directly rather than assuming tabs
+        // append, and record the real index of the config's active tab so a
+        // skipped tab before it doesn't shift focus onto the wrong one.
+        let original_active = window.active_tab_index.unwrap_or_default();
+        let mut active_tab_index: Option<usize> = None;
+        let mut added = false;
+        for (original_index, tab_template) in window.tabs.iter().enumerate() {
+            if !tab_template.layout.is_openable() {
+                log::warn!(
+                    "Skipping launch-config tab {:?}: its layout has an empty pane branch",
+                    tab_template.title
                 );
-                self.tabs[start_index + tab_index].selected_color = tab_template
-                    .color
-                    .map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
-            });
-
-        if !window.tabs.is_empty() {
-            // Focus the active tab from the launch config.
-
-            let mut index = start_index + window.active_tab_index.unwrap_or_default();
-
-            if index >= self.tab_count() {
-                index = start_index;
+                continue;
             }
+            self.add_tab_with_pane_layout(
+                PanesLayout::Template(tab_template.layout.clone()),
+                Arc::new(HashMap::new()),
+                tab_template.title.clone(),
+                ctx,
+            );
+            added = true;
+            let inserted = self.active_tab_index;
+            self.tabs[inserted].selected_color = tab_template
+                .color
+                .map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+            if original_index == original_active {
+                active_tab_index = Some(inserted);
+            }
+        }
 
-            self.activate_tab_internal(index, ctx);
+        // Focus the config's active tab. If it was itself skipped, leave the
+        // last-added tab active (each add already activated the tab it inserted).
+        if added {
+            if let Some(index) = active_tab_index {
+                self.activate_tab_internal(index, ctx);
+            }
         }
     }
 

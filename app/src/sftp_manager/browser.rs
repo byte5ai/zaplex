@@ -994,6 +994,14 @@ impl SftpBrowserView {
 
     /// Refresh the current directory contents
     fn refresh_dir(&mut self, ctx: &mut ViewContext<Self>) {
+        // Close any open context menu the moment a refresh is initiated —
+        // navigation (Backspace/Left) or a post-op refresh changes the listing
+        // under it, and its raw entry index would otherwise still address the
+        // *old* directory's file (delete/rename the wrong one). Doing it here —
+        // before the connection check and regardless of success/failure/
+        // supersession — closes the stale-index window entirely.
+        self.context_menu = None;
+
         let sftp = match &self.sftp {
             Some(s) => s.clone(),
             None => {
@@ -1081,12 +1089,9 @@ impl SftpBrowserView {
                     .filter(|(_, e)| marked_paths.contains(&e.path))
                     .map(|(i, _)| i)
                     .collect();
-                // The listing changed under any open context menu, whose raw
-                // entry index now points at a possibly different file — close it
-                // so a stale index can't be actioned (delete/rename the wrong
-                // file). (An already-open Save-As picker is a separate flow and
-                // is not addressed here.)
-                self.context_menu = None;
+                // (Any open context menu was already closed when this refresh
+                // started — see `refresh_dir` — so a stale entry index can't be
+                // actioned against the new listing.)
                 self.sync_row_mouse_handles();
                 // A refresh may have shrunk the listing (files removed); keep the
                 // cursor in range rather than pointing past it.

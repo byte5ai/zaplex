@@ -2213,15 +2213,18 @@ fn refresh_closes_open_context_menu() {
             assert!(view.context_menu.is_some(), "menu should be open");
         });
 
+        // Initiating a refresh (here via the Refresh action) must close the menu
+        // immediately — before the async listing lands — so a stale entry index
+        // can't be actioned against a changed directory. Closed at the very start
+        // of `refresh_dir`, before the connection check, so it holds even when the
+        // refresh then fails.
         view.update(&mut app, |view, ctx| {
-            view.refresh_generation = view.refresh_generation.wrapping_add(1);
-            let gen = view.refresh_generation;
-            view.on_dir_listed(gen, Ok(Ok(vec![entry("a", false), entry("b", false)])), ctx);
+            view.handle_action(&SftpBrowserAction::Refresh, ctx);
         });
         view.read(&app, |view, _| {
             assert!(
                 view.context_menu.is_none(),
-                "a refresh must close the context menu so a stale index can't be actioned"
+                "starting a refresh must close the context menu"
             );
         });
     });

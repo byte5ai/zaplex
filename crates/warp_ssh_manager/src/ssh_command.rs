@@ -394,34 +394,41 @@ impl AskpassSession {
         let password_path = dir.join(format!("warp-ssh-askpass-{suffix}.txt"));
         let script_path = dir.join(format!("warp-ssh-askpass-{suffix}.cmd"));
 
-        // Write password to temporary file (no hidden attribute, no ACL changes; see
-        // type doc for security trade-off).
-        {
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&password_path)?;
-            f.write_all(password.as_bytes())?;
-            f.sync_all()?;
+        // Create + write each file, cleaning up on failure — but only files THIS
+        // call created. `Drop` can't run yet (Self isn't built), so a bare `?`
+        // after a successful `create_new` would leak a partial plaintext password;
+        // yet blindly removing both paths would delete a *colliding* file another
+        // session owns. `create_new` failing means we did not create it.
+        //
+        // Password file: no hidden attribute / ACL changes (see the type doc for
+        // the security trade-off). Askpass helper: `set /p PW=<file` reads the
+        // first line, `echo !PW!` outputs it; `setlocal enabledelayedexpansion` +
+        // `!PW!` avoids truncation on cmd metacharacters (& | < > ^).
+        let body = "@echo off\r\nsetlocal enabledelayedexpansion\r\nset /p PW=<\"%ZAPLEX_SSH_ASKPASS_FILE%\"\r\necho !PW!\r\nendlocal\r\n";
+
+        let mut pw = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&password_path)?;
+        if let Err(e) = pw.write_all(password.as_bytes()).and_then(|()| pw.sync_all()) {
+            let _ = std::fs::remove_file(&password_path);
+            return Err(e);
         }
 
-        // Write askpass helper script: read the first line from the file pointed to by
-        // %ZAPLEX_SSH_ASKPASS_FILE% and echo it to stdout. `set /p` reads the first line
-        // (stripping newline), `echo !PW!` outputs it. Use `setlocal enabledelayedexpansion`
-        // + `!PW!` for delayed expansion to avoid password containing cmd special characters
-        // (&, |, <, >, ^) being truncated by immediate expansion of %PW%.
-        let body = "@echo off\r\nsetlocal enabledelayedexpansion\r\nset /p PW=<\"%ZAPLEX_SSH_ASKPASS_FILE%\"\r\necho !PW!\r\nendlocal\r\n";
-        if let Err(e) = (|| -> std::io::Result<()> {
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&script_path)?;
-            f.write_all(body.as_bytes())?;
-            f.sync_all()
-        })() {
-            // `Drop` can't run yet (Self isn't built), so remove the secret we
-            // already wrote rather than leaving plaintext behind in %TEMP%.
+        let mut script = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&script_path)
+        {
+            Ok(script) => script,
+            Err(e) => {
+                let _ = std::fs::remove_file(&password_path);
+                return Err(e);
+            }
+        };
+        if let Err(e) = script.write_all(body.as_bytes()).and_then(|()| script.sync_all()) {
             let _ = std::fs::remove_file(&password_path);
+            let _ = std::fs::remove_file(&script_path);
             return Err(e);
         }
 
@@ -449,36 +456,46 @@ impl AskpassSession {
         let password_path = dir.join(format!("warp-ssh-askpass-{suffix}.secret"));
         let script_path = dir.join(format!("warp-ssh-askpass-{suffix}.sh"));
 
-        // Secret file: owner-only (0600), the exact bytes with no trailing newline.
-        {
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&password_path)?;
-            f.write_all(password.as_bytes())?;
-            f.sync_all()?;
+        // Create + write each file, cleaning up on failure — but only files THIS
+        // call created. `Drop` can't run yet (Self isn't built), so a bare `?`
+        // after a successful `create_new` would leak a partial plaintext secret;
+        // yet blindly removing both paths would delete a *colliding* file another
+        // session owns. `create_new` failing means we did not create it, so we
+        // leave it alone.
+        //
+        // Secret file: owner-only (0600), exact bytes with no trailing newline.
+        // Askpass helper: ssh execs it and reads its stdout as the secret; it cats
+        // the secret file verbatim. OpenSSH takes the askpass output up to the
+        // first `\r`/`\n`, so this delivers the secret exactly for any single-line
+        // secret — all the UI's single-line field can produce. Owner-only exec
+        // (0700); `$ZAPLEX_SSH_ASKPASS_FILE` is our own absolute temp path.
+        let body = "#!/bin/sh\ncat -- \"$ZAPLEX_SSH_ASKPASS_FILE\"\n";
+
+        let mut secret = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&password_path)?;
+        if let Err(e) = secret.write_all(password.as_bytes()).and_then(|()| secret.sync_all()) {
+            let _ = std::fs::remove_file(&password_path);
+            return Err(e);
         }
 
-        // Askpass helper: ssh execs it and reads its stdout as the secret. It cats
-        // the secret file verbatim (no trailing newline in the file). OpenSSH takes
-        // the askpass output up to the first `\r`/`\n`, so this delivers the secret
-        // exactly for any single-line secret — which is all the UI's single-line
-        // password/passphrase field can produce. Owner-only executable (0700);
-        // `$ZAPLEX_SSH_ASKPASS_FILE` is our own absolute temp path, so `cat --` is safe.
-        let body = "#!/bin/sh\ncat -- \"$ZAPLEX_SSH_ASKPASS_FILE\"\n";
-        if let Err(e) = (|| -> std::io::Result<()> {
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o700)
-                .open(&script_path)?;
-            f.write_all(body.as_bytes())?;
-            f.sync_all()
-        })() {
-            // `Drop` can't run yet (Self isn't built), so remove the secret we
-            // already wrote rather than leaving plaintext behind in TMPDIR.
+        let mut script = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(&script_path)
+        {
+            Ok(script) => script,
+            Err(e) => {
+                let _ = std::fs::remove_file(&password_path);
+                return Err(e);
+            }
+        };
+        if let Err(e) = script.write_all(body.as_bytes()).and_then(|()| script.sync_all()) {
             let _ = std::fs::remove_file(&password_path);
+            let _ = std::fs::remove_file(&script_path);
             return Err(e);
         }
 
