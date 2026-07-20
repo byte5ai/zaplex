@@ -7355,9 +7355,8 @@ impl Workspace {
         // written before any SSH work has happened. A first-connect install
         // reuses the same channel for its ladder phases.
         let (progress_tx, install_progress_rx) = async_channel::unbounded();
-        let _ = progress_tx.try_send(format!(
-            "Connecting to {host} — starting your persistent session…"
-        ));
+        let _ = progress_tx
+            .try_send(crate::t!("connect-progress-starting", host = host.clone()).to_string());
 
         let request = crate::terminal::daemon_tty::DaemonSessionRequest {
             connection_session_id: session_id,
@@ -7436,16 +7435,12 @@ impl Workspace {
                         // the user KNOWS they have no persistent session (a disconnect
                         // loses open work). Never silent, never a hang.
                         let warning = if e == DAEMON_BINARY_MISSING {
-                            format!(
-                                "Persistent session unavailable on {host}: the zaplex daemon \
-                                 isn't installed there and no install source is available. \
-                                 Opened a standard SSH session instead — a disconnect will \
-                                 lose open work."
-                            )
+                            crate::t!("connect-fallback-daemon-missing", host = host.clone())
                         } else {
-                            format!(
-                                "Couldn't start a persistent session on {host} ({e}). Opened a \
-                                 standard SSH session instead — a disconnect will lose open work."
+                            crate::t!(
+                                "connect-fallback-daemon-failed",
+                                host = host.clone(),
+                                error = e.to_string()
                             )
                         };
                         log::warn!(
@@ -7554,7 +7549,7 @@ impl Workspace {
                                     "daemon connect [{host}]: install complete — connecting"
                                 );
                                 let _ = progress_tx.try_send(
-                                    "Setup complete — starting your persistent session…".into(),
+                                    crate::t!("connect-progress-setup-complete").to_string(),
                                 );
                                 workspace.connect_daemon_session(
                                     server_owned,
@@ -7571,13 +7566,14 @@ impl Workspace {
                                 );
                                 // Leave the failure visible in the daemon tab, then open a
                                 // working classic session alongside it.
-                                let _ = progress_tx.try_send(format!(
-                                    "Setup failed: {e} — opened a standard SSH session in a new tab."
-                                ));
-                                let warning = format!(
-                                    "Couldn't install the Zaplex session daemon on {host} ({e}). \
-                                     Opened a standard SSH session instead — a disconnect will \
-                                     lose open work."
+                                let _ = progress_tx.try_send(
+                                    crate::t!("connect-progress-setup-failed", error = e.to_string())
+                                        .to_string(),
+                                );
+                                let warning = crate::t!(
+                                    "connect-fallback-install-failed",
+                                    host = host.clone(),
+                                    error = e.to_string()
                                 );
                                 workspace.fall_back_to_classic_ssh(
                                     node_id_owned,
@@ -7679,11 +7675,9 @@ impl Workspace {
             "daemon session {session_id:?} handshake failed; falling back to classic SSH on {}",
             server.host
         );
-        let warning = format!(
-            "Couldn't start the persistent-session daemon on {} (handshake failed — often a \
-             daemon of a different zaplex version). Opened a standard SSH session instead — a \
-             disconnect will lose open work.",
-            server.host
+        let warning = crate::t!(
+            "connect-fallback-handshake-failed",
+            host = server.host.clone()
         );
         self.fall_back_to_classic_ssh(server.node_id.clone(), server, warning, ctx);
     }

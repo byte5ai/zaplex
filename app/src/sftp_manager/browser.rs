@@ -792,7 +792,7 @@ impl SftpBrowserView {
             Err(_) => {}
         }
         let path = self.current_path.display();
-        let title = format!("SFTP: {path}");
+        let title = crate::t!("fm-title-sftp", path = path.to_string());
         self.pane_configuration.update(ctx, |config, ctx| {
             config.set_title(title, ctx);
         });
@@ -889,8 +889,8 @@ impl SftpBrowserView {
                                     }
                                     Err(e) => {
                                         me.connection =
-                                            ConnectionState::Failed(format!("Failed to create SFTP channel: {e}"));
-                                        me.show_error_toast(format!("Failed to create SFTP channel: {e}"), ctx);
+                                            ConnectionState::Failed(crate::t!("fm-toast-sftp-channel-failed", err = e.to_string()));
+                                        me.show_error_toast(crate::t!("fm-toast-sftp-channel-failed", err = e.to_string()), ctx);
                                     }
                                 }
                             }
@@ -900,7 +900,7 @@ impl SftpBrowserView {
                             }
                             Err(_) => {
                                 // JoinError (aborted or panicked)
-                                me.connection = ConnectionState::Failed("Connection cancelled".to_string());
+                                me.connection = ConnectionState::Failed(crate::t!("fm-status-connection-cancelled"));
                             }
                         }
                         ctx.notify();
@@ -908,13 +908,13 @@ impl SftpBrowserView {
                 );
             }
             Ok(None) => {
-                self.connection = ConnectionState::Failed("Server configuration not found".to_string());
-                self.show_error_toast("Server configuration not found".to_string(), ctx);
+                self.connection = ConnectionState::Failed(crate::t!("fm-status-server-config-not-found"));
+                self.show_error_toast(crate::t!("fm-status-server-config-not-found"), ctx);
                 ctx.notify();
             }
             Err(e) => {
-                self.connection = ConnectionState::Failed(format!("Failed to read server configuration: {e}"));
-                self.show_error_toast(format!("Failed to read server configuration: {e}"), ctx);
+                self.connection = ConnectionState::Failed(crate::t!("fm-toast-server-config-read-failed", err = e.to_string()));
+                self.show_error_toast(crate::t!("fm-toast-server-config-read-failed", err = e.to_string()), ctx);
                 ctx.notify();
             }
         }
@@ -1005,7 +1005,7 @@ impl SftpBrowserView {
         let sftp = match &self.sftp {
             Some(s) => s.clone(),
             None => {
-                self.show_error_toast("Not connected to server".to_string(), ctx);
+                self.show_error_toast(crate::t!("fm-toast-not-connected-server"), ctx);
                 ctx.notify();
                 return;
             }
@@ -1098,13 +1098,13 @@ impl SftpBrowserView {
                 self.clamp_cursor_to_visible();
             }
             Ok(Err(e)) => {
-                self.show_error_toast(format!("Failed to list directory: {e}"), ctx);
+                self.show_error_toast(crate::t!("fm-toast-list-dir-failed", err = e.to_string()), ctx);
             }
             Err(_) => {}
         }
 
         let path = self.current_path.display();
-        let title = format!("SFTP: {path}");
+        let title = crate::t!("fm-title-sftp", path = path.to_string());
         self.pane_configuration.update(ctx, |config, ctx| {
             config.set_title(title, ctx);
         });
@@ -1392,7 +1392,7 @@ impl SftpBrowserView {
     /// Human label for the destination picker, kept live with the current dir.
     fn fm_label(&self) -> String {
         let where_ = if self.node_id.is_empty() {
-            "local".to_string()
+            crate::t!("fm-label-local")
         } else {
             self.node_id.clone()
         };
@@ -1449,10 +1449,14 @@ impl SftpBrowserView {
     /// upload/download through the transfer engine (with progress). Two
     /// different remote hosts is a later increment.
     fn copy_or_move_to_other_pane(&mut self, is_move: bool, ctx: &mut ViewContext<Self>) {
-        let verb = if is_move { "move" } else { "copy" };
         let sources = self.operation_sources();
         if sources.is_empty() {
-            self.show_error_toast(format!("Nothing selected to {verb}."), ctx);
+            let msg = if is_move {
+                crate::t!("fm-toast-nothing-to-move")
+            } else {
+                crate::t!("fm-toast-nothing-to-copy")
+            };
+            self.show_error_toast(msg, ctx);
             return;
         }
 
@@ -1460,10 +1464,12 @@ impl SftpBrowserView {
         let candidates = FileManagerRegistry::as_ref(ctx).others(self_id);
         match candidates.as_slice() {
             [] => {
-                self.show_error_toast(
-                    format!("Open a second file-manager pane to {verb} into it."),
-                    ctx,
-                );
+                let msg = if is_move {
+                    crate::t!("fm-toast-open-second-pane-move")
+                } else {
+                    crate::t!("fm-toast-open-second-pane-copy")
+                };
+                self.show_error_toast(msg, ctx);
             }
             [only] => {
                 let target = only.clone();
@@ -1538,11 +1544,11 @@ impl SftpBrowserView {
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(source_backend) = self.sftp.clone() else {
-            self.show_error_toast("Not connected.".to_string(), ctx);
+            self.show_error_toast(crate::t!("fm-toast-not-connected"), ctx);
             return;
         };
         let Some(target_backend) = FileManagerRegistry::as_ref(ctx).backend_for(target.id) else {
-            self.show_error_toast("The other pane is no longer connected.".to_string(), ctx);
+            self.show_error_toast(crate::t!("fm-toast-other-pane-disconnected"), ctx);
             return;
         };
         let target_dir = target.current_path.clone();
@@ -1569,21 +1575,22 @@ impl SftpBrowserView {
                 move || relay_one(&src_backend, &tgt_backend, &source_path, &dest, is_dir, is_move, &temp),
                 move |me, result, ctx| match result {
                     Ok(Ok(())) => {
-                        me.show_info_toast(format!("Relayed {label}."), ctx);
+                        me.show_info_toast(crate::t!("fm-toast-relayed", name = label.clone()), ctx);
                         me.refresh_dir(ctx);
                     }
-                    Ok(Err(e)) => me.show_error_toast(format!("Relay of {label} failed: {e}"), ctx),
-                    Err(_) => me.show_error_toast(format!("Relay of {label} was cancelled."), ctx),
+                    Ok(Err(e)) => me.show_error_toast(crate::t!("fm-toast-relay-failed", name = label.clone(), err = e.to_string()), ctx),
+                    Err(_) => me.show_error_toast(crate::t!("fm-toast-relay-cancelled", name = label.clone()), ctx),
                 },
             );
             started += 1;
         }
         if started > 0 {
-            let verb = if is_move { "move" } else { "copy" };
-            self.show_info_toast(
-                format!("Relaying {started} item(s) to {target_label} ({verb} via this machine)…"),
-                ctx,
-            );
+            let msg = if is_move {
+                crate::t!("fm-toast-relaying-move", count = started, target = target_label.clone())
+            } else {
+                crate::t!("fm-toast-relaying-copy", count = started, target = target_label.clone())
+            };
+            self.show_info_toast(msg, ctx);
         }
         self.selected.clear();
     }
@@ -1599,11 +1606,10 @@ impl SftpBrowserView {
         is_move: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        let verb = if is_move { "move" } else { "copy" };
         let backend = match &self.sftp {
             Some(b) => b.clone(),
             None => {
-                self.show_error_toast("Not connected.".to_string(), ctx);
+                self.show_error_toast(crate::t!("fm-toast-not-connected"), ctx);
                 return;
             }
         };
@@ -1611,10 +1617,12 @@ impl SftpBrowserView {
 
         // Copying into our own current directory would collide name-for-name.
         if target_dir == self.current_path {
-            self.show_error_toast(
-                format!("Source and destination are the same folder — nothing to {verb}."),
-                ctx,
-            );
+            let msg = if is_move {
+                crate::t!("fm-toast-same-folder-move")
+            } else {
+                crate::t!("fm-toast-same-folder-copy")
+            };
+            self.show_error_toast(msg, ctx);
             return;
         }
 
@@ -1769,15 +1777,20 @@ impl SftpBrowserView {
         let Some(pending) = self.pending_copy_move.take() else {
             return;
         };
-        let past = if pending.is_move { "moved" } else { "copied" };
-        let mut parts = vec![format!("{} {past}", pending.done)];
+        let done_part = if pending.is_move {
+            crate::t!("fm-summary-moved", count = pending.done)
+        } else {
+            crate::t!("fm-summary-copied", count = pending.done)
+        };
+        let mut parts = vec![done_part];
         if pending.skipped > 0 {
-            parts.push(format!("{} skipped", pending.skipped));
+            parts.push(crate::t!("fm-summary-skipped", count = pending.skipped));
         }
         if pending.errors > 0 {
-            parts.push(format!("{} failed", pending.errors));
+            parts.push(crate::t!("fm-summary-failed", count = pending.errors));
         }
-        let summary = format!("{} → {}", parts.join(", "), pending.target_label);
+        let summary =
+            crate::t!("fm-summary-to-target", parts = parts.join(", "), target = pending.target_label.clone());
         if pending.errors > 0 {
             self.show_error_toast(summary, ctx);
         } else {
@@ -1847,7 +1860,7 @@ impl SftpBrowserView {
                 match FileManagerRegistry::as_ref(ctx).backend_for(target.id) {
                     Some(b) => b,
                     None => {
-                        self.show_error_toast("The other pane is no longer connected.".to_string(), ctx);
+                        self.show_error_toast(crate::t!("fm-toast-other-pane-disconnected"), ctx);
                         return;
                     }
                 }
@@ -1855,7 +1868,7 @@ impl SftpBrowserView {
             TransferDirection::Download => match &self.sftp {
                 Some(b) => b.clone(),
                 None => {
-                    self.show_error_toast("Not connected.".to_string(), ctx);
+                    self.show_error_toast(crate::t!("fm-toast-not-connected"), ctx);
                     return;
                 }
             },
@@ -1931,22 +1944,37 @@ impl SftpBrowserView {
         }
 
         // Report what started right away.
-        let verb = if is_move { "move" } else { "copy" };
         let mut parts = Vec::new();
         if started_files > 0 {
-            parts.push(format!("{started_files} file {verb}(s) started"));
+            parts.push(if is_move {
+                crate::t!("fm-toast-files-move-started", count = started_files)
+            } else {
+                crate::t!("fm-toast-files-copy-started", count = started_files)
+            });
         }
         if started_dirs > 0 {
-            parts.push(format!("{started_dirs} folder {verb}(s) started"));
+            parts.push(if is_move {
+                crate::t!("fm-toast-folders-move-started", count = started_dirs)
+            } else {
+                crate::t!("fm-toast-folders-copy-started", count = started_dirs)
+            });
         }
         if !parts.is_empty() {
-            self.show_info_toast(format!("{} → {}", parts.join(", "), target.label), ctx);
+            self.show_info_toast(
+                crate::t!("fm-summary-to-target", parts = parts.join(", "), target = target.label.clone()),
+                ctx,
+            );
         }
 
         // Ask once about any files that already exist on the destination.
         if conflicts.is_empty() {
             if parts.is_empty() {
-                self.show_info_toast(format!("Nothing to {verb} → {}", target.label), ctx);
+                let msg = if is_move {
+                    crate::t!("fm-toast-nothing-to-move-target", target = target.label.clone())
+                } else {
+                    crate::t!("fm-toast-nothing-to-copy-target", target = target.label.clone())
+                };
+                self.show_info_toast(msg, ctx);
             }
         } else {
             let existing = conflicts.len();
@@ -1971,13 +1999,12 @@ impl SftpBrowserView {
         let Some(pending) = self.pending_cross_conn.take() else {
             return;
         };
-        let verb = if pending.is_move { "move" } else { "copy" };
         if !overwrite {
             self.show_info_toast(
-                format!(
-                    "Skipped {} existing item(s) → {}",
-                    pending.files.len(),
-                    pending.target_label
+                crate::t!(
+                    "fm-toast-skipped-existing",
+                    count = pending.files.len(),
+                    target = pending.target_label.clone()
                 ),
                 ctx,
             );
@@ -2001,7 +2028,11 @@ impl SftpBrowserView {
             );
         }
         self.show_info_toast(
-            format!("Overwriting {count} existing item(s) ({verb}) → {}", pending.target_label),
+            if pending.is_move {
+                crate::t!("fm-toast-overwriting-move", count = count, target = pending.target_label.clone())
+            } else {
+                crate::t!("fm-toast-overwriting-copy", count = count, target = pending.target_label.clone())
+            },
             ctx,
         );
         ctx.notify();
@@ -2028,7 +2059,7 @@ impl SftpBrowserView {
     ) {
         // The source pane's own backend removes the source tree on a move.
         let Some(source_backend) = self.sftp.clone() else {
-            self.show_error_toast("Not connected.".to_string(), ctx);
+            self.show_error_toast(crate::t!("fm-toast-not-connected"), ctx);
             return;
         };
         let plan_backend = remote_backend.clone();
@@ -2041,14 +2072,15 @@ impl SftpBrowserView {
                 Ok(Ok(plan)) => {
                     if plan.files.is_empty() {
                         me.show_info_toast(
-                            format!(
-                                "{label}: nothing to transfer{}",
-                                if plan.skipped_existing > 0 {
-                                    format!(" ({} already exist)", plan.skipped_existing)
-                                } else {
-                                    String::new()
-                                }
-                            ),
+                            if plan.skipped_existing > 0 {
+                                crate::t!(
+                                    "fm-toast-dir-nothing-to-transfer-existing",
+                                    label = label.clone(),
+                                    count = plan.skipped_existing
+                                )
+                            } else {
+                                crate::t!("fm-toast-dir-nothing-to-transfer", label = label.clone())
+                            },
                             ctx,
                         );
                         return;
@@ -2083,21 +2115,23 @@ impl SftpBrowserView {
                         );
                     }
                     me.show_info_toast(
-                        format!(
-                            "{label}: {count} file(s) started{}",
-                            if plan.skipped_existing > 0 {
-                                format!(", {} skipped (exist)", plan.skipped_existing)
-                            } else {
-                                String::new()
-                            }
-                        ),
+                        if plan.skipped_existing > 0 {
+                            crate::t!(
+                                "fm-toast-dir-files-started-skipped",
+                                label = label.clone(),
+                                count = count,
+                                skipped = plan.skipped_existing
+                            )
+                        } else {
+                            crate::t!("fm-toast-dir-files-started", label = label.clone(), count = count)
+                        },
                         ctx,
                     );
                 }
                 Ok(Err(e)) => {
-                    me.show_error_toast(format!("{label}: couldn't prepare the transfer: {e}"), ctx)
+                    me.show_error_toast(crate::t!("fm-toast-dir-prepare-failed", label = label.clone(), err = e.to_string()), ctx)
                 }
-                Err(_) => me.show_error_toast(format!("{label}: preparation was cancelled"), ctx),
+                Err(_) => me.show_error_toast(crate::t!("fm-toast-dir-prepare-cancelled", label = label.clone()), ctx),
             },
         );
     }
@@ -2126,17 +2160,14 @@ impl SftpBrowserView {
         let batch = self.pending_dir_move_cleanups.remove(pos);
         if batch.any_failed {
             self.show_error_toast(
-                format!(
-                    "{}: source kept — some files didn't transfer, so the move is incomplete.",
-                    batch.label
-                ),
+                crate::t!("fm-toast-move-source-kept", label = batch.label.clone()),
                 ctx,
             );
         } else {
             match batch.source_backend.delete_dir_recursive(&batch.source_dir) {
-                Ok(()) => self.show_info_toast(format!("Moved {}.", batch.label), ctx),
+                Ok(()) => self.show_info_toast(crate::t!("fm-toast-moved", label = batch.label.clone()), ctx),
                 Err(e) => self.show_error_toast(
-                    format!("Copied {} but couldn't remove the source: {e}", batch.label),
+                    crate::t!("fm-toast-copied-source-remove-failed", label = batch.label.clone(), err = e.to_string()),
                     ctx,
                 ),
             }
@@ -2240,7 +2271,7 @@ impl SftpBrowserView {
                             if let Err(e) = source_backend.delete_file(source_path) {
                                 log::warn!("fm move: source delete failed: {e}");
                                 me.show_error_toast(
-                                    format!("Copied, but removing the source failed: {e}"),
+                                    crate::t!("fm-toast-copied-source-delete-failed", err = e.to_string()),
                                     ctx,
                                 );
                             }
@@ -2249,7 +2280,7 @@ impl SftpBrowserView {
                     }
                     Ok(Err(e)) => {
                         log::error!("sftp: cross-pane transfer failed: {e}");
-                        me.show_error_toast(format!("Transfer failed: {e}"), ctx);
+                        me.show_error_toast(crate::t!("fm-toast-transfer-failed", err = e.to_string()), ctx);
                         ctx.notify();
                     }
                     Err(_) => ctx.notify(),
@@ -2375,7 +2406,7 @@ impl SftpBrowserView {
         let sftp = match &self.sftp {
             Some(s) => s.clone(),
             None => {
-                self.show_error_toast("Not connected to server".to_string(), ctx);
+                self.show_error_toast(crate::t!("fm-toast-not-connected-server"), ctx);
                 self.dialog = None;
                 ctx.notify();
                 return;
@@ -2427,7 +2458,7 @@ impl SftpBrowserView {
                         me.refresh_dir(ctx);
                     }
                     Ok(Err(e)) => {
-                        me.show_error_toast(format!("Delete failed: {e}"), ctx);
+                        me.show_error_toast(crate::t!("fm-toast-delete-failed", err = e.to_string()), ctx);
                         me.refresh_dir(ctx);
                     }
                     Err(_) => {
@@ -2694,9 +2725,9 @@ impl SftpBrowserView {
     /// Render the connection state (when not connected)
     fn render_connection_state(&self, appearance: &Appearance) -> Box<dyn Element> {
         let (msg, icon) = match &self.connection {
-            ConnectionState::Connecting => ("Connecting...".to_string(), Icon::Loading),
+            ConnectionState::Connecting => (crate::t!("fm-status-connecting"), Icon::Loading),
             ConnectionState::Failed(err) => (err.clone(), Icon::AlertCircle),
-            ConnectionState::Disconnected => ("Disconnected".to_string(), Icon::AlertCircle),
+            ConnectionState::Disconnected => (crate::t!("fm-status-disconnected"), Icon::AlertCircle),
             ConnectionState::Connected => {
                 return Container::new(Flex::row().finish()).finish();
             }
@@ -2717,7 +2748,7 @@ impl SftpBrowserView {
         let hover_bg = theme.surface_3();
 
         let label = Text::new_inline(
-            format!("Pick a launch directory — {}", self.current_path.display()),
+            crate::t!("fm-pickbar-label", path = self.current_path.display().to_string()),
             family,
             size,
         )
@@ -2727,7 +2758,7 @@ impl SftpBrowserView {
         let btn = Hoverable::new(self.pick_btn.clone(), move |mouse| {
             let bg = if mouse.is_hovered() { hover_bg } else { rest_bg };
             Container::new(
-                Text::new_inline("Use this folder".to_string(), family, size)
+                Text::new_inline(crate::t!("fm-pickbar-use"), family, size)
                     .with_color(accent_color)
                     .finish(),
             )
@@ -2903,7 +2934,7 @@ impl SftpBrowserView {
         let remote_path = match build_upload_remote_path(&self.current_path, &file_name) {
             Some(p) => p,
             None => {
-                self.show_error_toast("Filename contains invalid characters".to_string(), ctx);
+                self.show_error_toast(crate::t!("fm-toast-invalid-filename-chars"), ctx);
                 return;
             }
         };
@@ -3022,7 +3053,7 @@ impl SftpBrowserView {
                         }
                         Ok(Err(e)) => {
                             log::error!("sftp: upload failed: {e}");
-                            me.show_error_toast(format!("Upload failed: {e}"), ctx);
+                            me.show_error_toast(crate::t!("fm-toast-upload-failed", err = e.to_string()), ctx);
                             ctx.notify();
                         }
                         Err(_) => {
@@ -3038,7 +3069,7 @@ impl SftpBrowserView {
                 t.state = TransferState::Failed("Not connected to server".to_string());
             }
             log::error!("sftp: upload failed: not connected to server");
-            self.show_error_toast("Upload failed: not connected to server".to_string(), ctx);
+            self.show_error_toast(crate::t!("fm-toast-upload-failed-not-connected"), ctx);
             ctx.notify();
         }
     }
@@ -3113,7 +3144,7 @@ impl SftpBrowserView {
 
                     if let Ok(Err(e)) = &result {
                         log::error!("sftp: download failed: {e}");
-                        me.show_error_toast(format!("Download failed: {e}"), ctx);
+                        me.show_error_toast(crate::t!("fm-toast-download-failed", err = e.to_string()), ctx);
                     }
                     ctx.notify();
                 },
@@ -3125,7 +3156,7 @@ impl SftpBrowserView {
                 t.state = TransferState::Failed("Not connected to server".to_string());
             }
             log::error!("sftp: download failed: not connected to server");
-            self.show_error_toast("Download failed: not connected to server".to_string(), ctx);
+            self.show_error_toast(crate::t!("fm-toast-download-failed-not-connected"), ctx);
             ctx.notify();
         }
     }
@@ -3161,7 +3192,7 @@ impl SftpBrowserView {
 
     /// Render the loading state
     fn render_loading(&self, appearance: &Appearance) -> Box<dyn Element> {
-        render_centered_status(Icon::Loading, "Loading...", 8.0, appearance)
+        render_centered_status(Icon::Loading, &crate::t!("fm-status-loading"), 8.0, appearance)
     }
 }
 
@@ -3572,13 +3603,13 @@ impl TypedActionView for SftpBrowserView {
                     let new_name = self.rename_editor.as_ref(ctx).buffer_text(ctx);
                     let new_name = new_name.trim().to_string();
                     if new_name.is_empty() {
-                        self.show_error_toast("Name cannot be empty".to_string(), ctx);
+                        self.show_error_toast(crate::t!("fm-toast-name-empty"), ctx);
                         return;
                     }
                     let new_path = match build_rename_path(original_path, &new_name) {
                         Some(p) => p,
                         None => {
-                            self.show_error_toast("Invalid name: cannot contain path separators".to_string(), ctx);
+                            self.show_error_toast(crate::t!("fm-toast-name-invalid-separators"), ctx);
                             return;
                         }
                     };
@@ -3597,7 +3628,7 @@ impl TypedActionView for SftpBrowserView {
                                         me.refresh_dir(ctx);
                                     }
                                     Ok(Err(e)) => {
-                                        me.show_error_toast(format!("Rename failed: {e}"), ctx);
+                                        me.show_error_toast(crate::t!("fm-toast-rename-failed", err = e.to_string()), ctx);
                                     }
                                     Err(_) => {}
                                 }
@@ -3605,7 +3636,7 @@ impl TypedActionView for SftpBrowserView {
                             },
                         );
                     } else {
-                        self.show_error_toast("Not connected to server".to_string(), ctx);
+                        self.show_error_toast(crate::t!("fm-toast-not-connected-server"), ctx);
                         self.dialog = None;
                     }
                 }
@@ -3615,13 +3646,13 @@ impl TypedActionView for SftpBrowserView {
                     let folder_name = self.new_folder_editor.as_ref(ctx).buffer_text(ctx);
                     let folder_name = folder_name.trim().to_string();
                     if folder_name.is_empty() {
-                        self.show_error_toast("Folder name cannot be empty".to_string(), ctx);
+                        self.show_error_toast(crate::t!("fm-toast-folder-name-empty"), ctx);
                         return;
                     }
                     let folder_path = match build_new_folder_path(parent_path, &folder_name) {
                         Some(p) => p,
                         None => {
-                            self.show_error_toast("Invalid name: cannot contain path separators".to_string(), ctx);
+                            self.show_error_toast(crate::t!("fm-toast-name-invalid-separators"), ctx);
                             return;
                         }
                     };
@@ -3639,7 +3670,7 @@ impl TypedActionView for SftpBrowserView {
                                         me.refresh_dir(ctx);
                                     }
                                     Ok(Err(e)) => {
-                                        me.show_error_toast(format!("Create folder failed: {e}"), ctx);
+                                        me.show_error_toast(crate::t!("fm-toast-create-folder-failed", err = e.to_string()), ctx);
                                     }
                                     Err(_) => {}
                                 }
@@ -3647,7 +3678,7 @@ impl TypedActionView for SftpBrowserView {
                             },
                         );
                     } else {
-                        self.show_error_toast("Not connected to server".to_string(), ctx);
+                        self.show_error_toast(crate::t!("fm-toast-not-connected-server"), ctx);
                         self.dialog = None;
                     }
                 }
@@ -3775,7 +3806,7 @@ impl TypedActionView for SftpBrowserView {
                     let target_path = match safe_join_name(target_dir, &file_name) {
                         Some(p) => normalize_remote_path(&p),
                         None => {
-                            self.show_error_toast("Invalid target path".to_string(), ctx);
+                            self.show_error_toast(crate::t!("fm-toast-invalid-target-path"), ctx);
                             self.dialog = None;
                             ctx.notify();
                             return;
@@ -3796,7 +3827,7 @@ impl TypedActionView for SftpBrowserView {
                                         me.refresh_dir(ctx);
                                     }
                                     Ok(Err(e)) => {
-                                        me.show_error_toast(format!("Move failed: {e}"), ctx);
+                                        me.show_error_toast(crate::t!("fm-toast-move-failed", err = e.to_string()), ctx);
                                     }
                                     Err(_) => {}
                                 }
@@ -3804,7 +3835,7 @@ impl TypedActionView for SftpBrowserView {
                             },
                         );
                     } else {
-                        self.show_error_toast("Not connected to server".to_string(), ctx);
+                        self.show_error_toast(crate::t!("fm-toast-not-connected-server"), ctx);
                         self.dialog = None;
                     }
                 }
@@ -4090,7 +4121,7 @@ impl View for SftpBrowserView {
         // 10. Drag-and-drop visual feedback
         if self.is_drag_hovering {
             let drop_hint = Text::new_inline(
-                "Drag files to upload".to_string(),
+                crate::t!("fm-drag-hint"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size() + 2.0,
             )
@@ -4242,7 +4273,7 @@ impl BackingView for SftpBrowserView {
         _app: &AppContext,
     ) -> view::HeaderContent {
         let path = self.current_path.display();
-        let title = format!("SFTP: {path}");
+        let title = crate::t!("fm-title-sftp", path = path.to_string());
         view::HeaderContent::simple(title)
     }
 

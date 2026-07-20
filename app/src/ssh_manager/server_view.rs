@@ -232,7 +232,8 @@ impl SshServerView {
             ctx,
         );
 
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("SSH server"));
+        let pane_configuration =
+            ctx.add_model(|_ctx| PaneConfiguration::new(crate::t!("ssh-server-title")));
 
         let group_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dd = Dropdown::new(ctx);
@@ -825,15 +826,14 @@ impl SshServerView {
         if self.auth_type != AuthType::OneKey && !password.is_empty() {
             let (secret_lookup_id, kind) = password_lookup_for_server_form(&info);
             let Some(secret_lookup_id) = secret_lookup_id else {
-                self.status = Some(StatusBanner::Error(
-                    "OneKey credential is missing".to_string(),
-                ));
+                self.status = Some(StatusBanner::Error(crate::t!("ssh-onekey-missing")));
                 ctx.notify();
                 return;
             };
             if let Err(e) = store.set(&secret_lookup_id, kind, &password) {
                 log::error!("ssh_server_view: keychain write failed: {e:?}");
-                self.status = Some(StatusBanner::Error(format!("keychain: {e}")));
+                self.status =
+                    Some(StatusBanner::Error(crate::t!("ssh-keychain-error", err = e.to_string())));
                 ctx.notify();
                 return;
             }
@@ -846,7 +846,8 @@ impl SshServerView {
         if !root_password.is_empty() {
             if let Err(e) = store.set(&self.node_id, SecretKind::RootPassword, &root_password) {
                 log::error!("ssh_server_view: root password keychain write failed: {e:?}");
-                self.status = Some(StatusBanner::Error(format!("keychain: {e}")));
+                self.status =
+                    Some(StatusBanner::Error(crate::t!("ssh-keychain-error", err = e.to_string())));
                 ctx.notify();
                 return;
             }
@@ -1003,12 +1004,14 @@ impl SshServerView {
                             .unwrap_or_else(|| "N/A".into());
                         let msg = result.error_message.unwrap_or_default();
                         if msg.contains("password auth required") {
-                            me.status = Some(StatusBanner::Success(format!(
-                                "Server reachable - latency: {latency_str}"
+                            me.status = Some(StatusBanner::Success(crate::t!(
+                                "ssh-test-reachable",
+                                latency = latency_str.as_str()
                             )));
                         } else {
-                            me.status = Some(StatusBanner::Success(format!(
-                                "Online - latency: {latency_str}"
+                            me.status = Some(StatusBanner::Success(crate::t!(
+                                "ssh-test-online",
+                                latency = latency_str.as_str()
                             )));
                         }
                     }
@@ -1016,7 +1019,7 @@ impl SshServerView {
                         me.latency_ms = None;
                         let err = result
                             .error_message
-                            .unwrap_or_else(|| "Unknown error".into());
+                            .unwrap_or_else(|| crate::t!("ssh-test-unknown-error"));
                         me.status = Some(StatusBanner::Error(err));
                     }
                     ConnectionStatus::Unknown => {
@@ -1183,7 +1186,8 @@ impl SshServerView {
             let kind = secret_kind_for_onekey_credential(credential.kind);
             if let Err(e) = KeychainSecretStore.set(&credential.id, kind, &secret) {
                 log::error!("ssh_server_view: OneKey keychain write failed: {e:?}");
-                self.status = Some(StatusBanner::Error(format!("keychain: {e}")));
+                self.status =
+                    Some(StatusBanner::Error(crate::t!("ssh-keychain-error", err = e.to_string())));
                 ctx.notify();
                 return;
             }
@@ -2585,7 +2589,7 @@ impl BackingView for SshServerView {
             .node
             .as_ref()
             .map(|n| n.name.clone())
-            .unwrap_or_else(|| "SSH server".to_string());
+            .unwrap_or_else(|| crate::t!("ssh-server-title"));
         view::HeaderContent::simple(title)
     }
 

@@ -48,14 +48,23 @@ fn render_state_label(state: &TransferState, appearance: &Appearance) -> Box<dyn
 
     let (label, color) = match state {
         TransferState::Pending => (
-            String::from("Waiting"),
+            crate::t!("fm-transfer-waiting").to_string(),
             theme.sub_text_color(theme.background()),
         ),
-        TransferState::InProgress => (String::from("Transferring"), theme.accent()),
-        TransferState::Completed => (String::from("Completed"), theme.ui_green_color().into()),
-        TransferState::Failed(_) => (String::from("Failed"), theme.ui_error_color().into()),
+        TransferState::InProgress => (
+            crate::t!("fm-transfer-inprogress").to_string(),
+            theme.accent(),
+        ),
+        TransferState::Completed => (
+            crate::t!("fm-transfer-completed").to_string(),
+            theme.ui_green_color().into(),
+        ),
+        TransferState::Failed(_) => (
+            crate::t!("fm-transfer-failed").to_string(),
+            theme.ui_error_color().into(),
+        ),
         TransferState::Cancelled => (
-            String::from("Cancelled"),
+            crate::t!("fm-transfer-cancelled").to_string(),
             theme.sub_text_color(theme.background()),
         ),
     };
@@ -204,7 +213,7 @@ pub fn render_transfer_panel(
 
     // Title bar
     let count = transfers.len();
-    let title_text = format!("Transfer ({count})");
+    let title_text = crate::t!("fm-transfer-title", count = count).to_string();
 
     let title_el = Text::new_inline(title_text, ui_font, ui_font_size)
         .with_color(text_color.into())
