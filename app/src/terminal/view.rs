@@ -3519,15 +3519,11 @@ impl TerminalView {
 
         let slow_bootstrap_banner = ctx.add_typed_action_view(|_| {
             Banner::<TerminalAction>::new_with_buttons(
-                BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text(crate::t!(
-                        "terminal-slow-shell-startup-banner-prefix"
-                    )),
-                    FormattedTextFragment::hyperlink(
-                        crate::t!("terminal-more-info"),
-                        KNOWN_ISSUES_URL,
-                    ),
-                ]),
+                // Dropped the "More info" link: no Zaplex known-issues page yet, so it
+                // opened an empty URL.
+                BannerTextContent::formatted_text(vec![FormattedTextFragment::plain_text(
+                    crate::t!("terminal-slow-shell-startup-banner-prefix"),
+                )]),
                 vec![BannerTextButton::new(
                     crate::t!("terminal-show-initialization-block"),
                     Rc::new(|event_ctx, _ctx, _position| {
@@ -3548,13 +3544,15 @@ impl TerminalView {
         });
 
         let control_master_error_banner = ctx.add_typed_action_view(|_| {
+            // The "(more info)" link is parenthesised in the copy, so it is repointed at
+            // the Zaplex issue tracker rather than dropped (which would leave empty "()").
             Banner::new(BannerTextContent::formatted_text(vec![
                 FormattedTextFragment::plain_text(crate::t!(
                     "terminal-banner-completions-not-working-prefix"
                 )),
                 FormattedTextFragment::hyperlink(
                     crate::t!("terminal-banner-more-info-lower"),
-                    CONTROLMASTER_ISSUES_URL,
+                    crate::util::links::GITHUB_ISSUES_URL,
                 ),
                 FormattedTextFragment::plain_text(crate::t!(
                     "terminal-banner-completions-not-working-middle"
@@ -3574,14 +3572,11 @@ impl TerminalView {
         });
 
         let incompatible_configuration_banner = ctx.add_typed_action_view(|_| {
+            // Dropped the "more info" link: no Zaplex known-issues page yet.
             Banner::new(BannerTextContent::formatted_text(vec![
                 FormattedTextFragment::plain_text(crate::t!(
                     "terminal-banner-shell-config-incompatible"
                 )),
-                FormattedTextFragment::hyperlink(
-                    crate::t!("terminal-banner-more-info"),
-                    KNOWN_ISSUES_URL,
-                ),
             ]))
         });
 
@@ -19808,14 +19803,11 @@ impl TerminalView {
                     )),
                 ]))
             } else if shell_plugins.contains("pure") {
+                // Dropped the "learn more" link: no Zaplex prompt-compatibility docs yet.
                 Some(BannerTextContent::formatted_text(vec![
                     FormattedTextFragment::plain_text(crate::t!(
                         "terminal-banner-pure-unsupported"
                     )),
-                    FormattedTextFragment::hyperlink(
-                        crate::t!("common-learn-more"),
-                        PROMPT_COMPATIBILITY_URL,
-                    ),
                 ]))
             } else {
                 None
@@ -22321,9 +22313,8 @@ impl TerminalView {
         use NotificationsErrorBannerAction::*;
 
         match action {
-            Troubleshoot => {
-                ctx.open_url(NOTIFICATIONS_TROUBLESHOOT_URL);
-            }
+            // Troubleshoot button removed (no Zaplex troubleshoot docs); arm kept for exhaustiveness.
+            Troubleshoot => {}
             Close => self.close_notification_error_banner(ctx),
             SetPermissions => {
                 ctx.request_desktop_notification_permissions(move |view, outcome, ctx| {
@@ -22364,12 +22355,9 @@ impl TerminalView {
         use NotificationsDiscoveryBannerAction::*;
 
         match action {
-            LearnMore => {
-                ctx.open_url(NOTIFICATIONS_LEARN_MORE_URL);
-            }
-            Troubleshoot => {
-                ctx.open_url(NOTIFICATIONS_TROUBLESHOOT_URL);
-            }
+            // Learn-more / Troubleshoot buttons removed (no Zaplex docs); arms kept for exhaustiveness.
+            LearnMore => {}
+            Troubleshoot => {}
             TurnOn(trigger) => {
                 let current_settings = SessionSettings::as_ref(ctx).notifications.value().clone();
                 let new_settings = NotificationsSettings {
@@ -22463,9 +22451,6 @@ impl TerminalView {
         use SSHBannerAction::*;
 
         match action {
-            LearnMore => {
-                ctx.open_url("");
-            }
             Settings => {
                 if FeatureFlag::SSHTmuxWrapper.is_enabled() {
                     ctx.emit(Event::OpenSettings(SettingsSection::Zaplexify));

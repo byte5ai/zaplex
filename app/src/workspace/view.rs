@@ -296,9 +296,7 @@ use ::settings::{Setting, ToggleableSetting};
 use warp_core::features::FeatureFlag;
 
 use crate::search::{self, QueryFilter};
-use crate::terminal::view::{
-    SyncEvent, SyncInputType, TerminalAction, NOTIFICATIONS_TROUBLESHOOT_URL,
-};
+use crate::terminal::view::{SyncEvent, SyncInputType, TerminalAction};
 use crate::terminal::{BlockListSettings, TerminalModel};
 use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
 use crate::themes::theme_chooser::{ThemeChooser, ThemeChooserEvent, ThemeChooserMode};
@@ -10089,12 +10087,8 @@ impl Workspace {
                     let command_name = ChannelState::channel().cli_command_name();
                     let message = format!("Successfully installed the Oz CLI! You can now run '{command_name}' from the command line.");
                     view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::success(message.to_string())
-                            .with_link(
-                                ToastLink::new(crate::t!("common-learn-more")).with_href(
-                                    "".to_string(),
-                                ),
-                            );
+                        // Dropped the dead "learn more" link (empty URL, no Zaplex docs).
+                        let toast = DismissibleToast::success(message.to_string());
                         toast_stack.add_ephemeral_toast(toast, ctx);
                     });
                 }
@@ -10784,13 +10778,22 @@ impl Workspace {
                 .with_on_select_action(WorkspaceAction::ToggleKeybindingsPage)
                 .into_item(),
             MenuItem::Separator,
-            MenuItemFields::new(crate::t!("workspace-menu-documentation"))
-                .with_on_select_action(WorkspaceAction::ViewUserDocs)
-                .into_item(),
+        ]);
+
+        // Documentation only when a real Zaplex docs destination exists; otherwise the
+        // item opens `""` and reads as a dead button.
+        if links::has_user_docs() {
+            items.push(
+                MenuItemFields::new(crate::t!("workspace-menu-documentation"))
+                    .with_on_select_action(WorkspaceAction::ViewUserDocs)
+                    .into_item(),
+            );
+        }
+        items.push(
             MenuItemFields::new(crate::t!("workspace-menu-feedback"))
                 .with_on_select_action(WorkspaceAction::SendFeedback)
                 .into_item(),
-        ]);
+        );
 
         #[cfg(not(target_family = "wasm"))]
         items.push(
@@ -10799,12 +10802,14 @@ impl Workspace {
                 .into_item(),
         );
 
-        items.extend([
-            MenuItemFields::new(crate::t!("workspace-menu-slack"))
-                .with_on_select_action(WorkspaceAction::JoinSlack)
-                .into_item(),
-            MenuItem::Separator,
-        ]);
+        // Slack only when a real community destination exists; otherwise it opens `""`.
+        if links::has_slack() {
+            items.push(
+                MenuItemFields::new(crate::t!("workspace-menu-slack"))
+                    .with_on_select_action(WorkspaceAction::JoinSlack)
+                    .into_item(),
+            );
+        }
 
         // Decentralized fork: this used to append account-related items such as account CTA / Upgrade / Billing / Invite / Log out;
         // they are all removed in local mode.
@@ -13084,9 +13089,9 @@ impl Workspace {
     }
 
     pub fn open_autoupdate_failure_link(&mut self, ctx: &mut ViewContext<Self>) {
-        ctx.open_url(
-            "",
-        );
+        // When the in-app update fails, "More info" sends the user to the Zaplex
+        // releases page so they can grab the latest build by hand.
+        ctx.open_url(links::GITHUB_RELEASES_URL);
     }
 
     pub fn add_terminal_tab(&mut self, hide_homepage: bool, ctx: &mut ViewContext<Self>) {
@@ -14529,18 +14534,13 @@ impl Workspace {
                 match &outcome {
                     RequestPermissionsOutcome::Accepted => (),
                     RequestPermissionsOutcome::PermissionsDenied => {
-                        // Show a helpful toast if the user denied permissions.
-                        let url = NOTIFICATIONS_TROUBLESHOOT_URL.to_string();
+                        // Show a helpful toast if the user denied permissions. The
+                        // "Troubleshoot" link is dropped: it pointed at an empty URL
+                        // (no Zaplex troubleshoot docs).
                         view.toast_stack.update(ctx, |toast_stack, ctx| {
-                            let toast = DismissibleToast::error(
-                                crate::t!("workspace-notification-permission-denied-toast"),
-                            )
-                            .with_link(
-                                ToastLink::new(crate::t!(
-                                    "workspace-troubleshoot-notifications-link"
-                                ))
-                                .with_href(url),
-                            );
+                            let toast = DismissibleToast::error(crate::t!(
+                                "workspace-notification-permission-denied-toast"
+                            ));
                             toast_stack.add_persistent_toast(toast, ctx);
                         });
                     }

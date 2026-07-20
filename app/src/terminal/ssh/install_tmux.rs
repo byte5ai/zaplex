@@ -382,13 +382,8 @@ impl View for SshInstallTmuxBlock {
             "In order to Zaplexify your SSH session, tmux must be installed. "
         };
 
-        let zaplexify_description = vec![
-            FormattedTextFragment::plain_text(explanation),
-            FormattedTextFragment::hyperlink(
-                crate::t!("terminal-ssh-why-need-tmux"),
-                WHY_INSTALL_TMUX_URL,
-            ),
-        ];
+        // Dropped the "why do I need tmux?" link: no Zaplex docs yet.
+        let zaplexify_description = vec![FormattedTextFragment::plain_text(explanation)];
 
         let text_color =
             blended_colors::text_sub(appearance.theme(), appearance.theme().surface_1());

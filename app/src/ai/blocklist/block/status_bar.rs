@@ -905,7 +905,9 @@ fn render_agent_tip(tip: &AgentTip, app: &AppContext) -> Box<dyn Element> {
     if let (Some(action), Some(text)) = (tip.action.clone(), action_text.clone()) {
         fragments.push(FormattedTextFragment::plain_text(" "));
         fragments.push(FormattedTextFragment::hyperlink_action(text, action));
-    } else if let Some(link_target) = tip.link.clone() {
+    } else if let Some(link_target) = tip.link.clone().filter(|l| !l.is_empty()) {
+        // Most inherited tips carry an empty link; only render "Learn more" when the tip
+        // actually has a destination, otherwise clicking it would open an empty URL.
         fragments.push(FormattedTextFragment::plain_text(" "));
         fragments.push(FormattedTextFragment::hyperlink(
             crate::t!("common-learn-more"),

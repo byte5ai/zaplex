@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 
-use markdown_parser::{
-    FormattedText, FormattedTextFragment, FormattedTextLine, FormattedTextStyles, Hyperlink,
-};
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warpui::elements::{
     Align, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
     FormattedTextElement, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
@@ -466,23 +464,12 @@ impl HoaOnboardingFlow {
         .with_style(Properties::default().weight(Weight::Bold))
         .finish();
 
-        // Build the description with an inline "Learn more" hyperlink.
-        let learn_more_fragment = FormattedTextFragment {
-            text: crate::t!("common-learn-more"),
-            styles: FormattedTextStyles {
-                underline: true,
-                hyperlink: Some(Hyperlink::Url(
-                    "".into(),
-                )),
-                ..Default::default()
-            },
-        };
-
+        // The upstream inline "Learn more" link pointed at docs Zaplex does not have
+        // yet; drop it rather than render a dead hyperlink that opens `""`.
         let formatted = FormattedText::new([FormattedTextLine::Line(vec![
             FormattedTextFragment::plain_text(
-                "Zaplex pipes through notifications from any CLI coding agent into a unified notification center that works across all coding agents and harnesses. ",
+                "Zaplex pipes through notifications from any CLI coding agent into a unified notification center that works across all coding agents and harnesses.",
             ),
-            learn_more_fragment,
         ])]);
 
         let description = FormattedTextElement::new(

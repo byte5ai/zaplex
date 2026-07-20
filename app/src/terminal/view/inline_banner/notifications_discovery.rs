@@ -47,97 +47,57 @@ pub fn render_inline_notifications_discovery_banner(
 ) -> Box<dyn Element> {
     let active_ui_text_color = appearance.theme().active_ui_text_color().into_solid();
 
-    let learn_more_button = InlineBannerTextButton {
-        text: crate::t!("common-learn-more"),
-        text_color: active_ui_text_color,
-        button_state: InlineBannerButtonState {
-            on_click_event: TerminalAction::NotificationsDiscoveryBanner(
-                NotificationsDiscoveryBannerAction::LearnMore,
-            ),
-            mouse_state_handle: state.mouse_states.learn_more.clone(),
-        },
-        font: Default::default(),
-        position_id: None,
-        variant: InlineBannerTextButtonVariant::Secondary,
-    };
-    let troubleshoot_button = InlineBannerTextButton {
-        text: crate::t!("notifications-banner-troubleshoot"),
-        text_color: active_ui_text_color,
-        button_state: InlineBannerButtonState {
-            on_click_event: TerminalAction::NotificationsDiscoveryBanner(
-                NotificationsDiscoveryBannerAction::Troubleshoot,
-            ),
-            mouse_state_handle: state.mouse_states.troubleshoot.clone(),
-        },
-        font: Default::default(),
-        position_id: None,
-        variant: InlineBannerTextButtonVariant::Secondary,
-    };
-
+    // The "Learn more" / "Troubleshoot" buttons opened empty URLs (no Zaplex
+    // notification docs), so they are omitted; the actionable buttons remain.
     let (title, buttons) = match notifications_mode {
         NotificationsMode::Dismissed => (crate::t!("notifications-banner-dismissed-title"), vec![]),
         NotificationsMode::Disabled => (crate::t!("notifications-banner-disabled-title"), vec![]),
         NotificationsMode::Unset => (
             trigger.discovery_banner_copy().to_owned(),
-            vec![
-                learn_more_button,
-                InlineBannerTextButton {
-                    text: crate::t!("notifications-banner-enable"),
-                    text_color: active_ui_text_color,
-                    button_state: InlineBannerButtonState {
-                        on_click_event: TerminalAction::NotificationsDiscoveryBanner(
-                            NotificationsDiscoveryBannerAction::TurnOn(trigger),
-                        ),
-                        mouse_state_handle: state.mouse_states.turn_on.clone(),
-                    },
-                    font: Default::default(),
-                    position_id: None,
-                    variant: InlineBannerTextButtonVariant::Primary,
+            vec![InlineBannerTextButton {
+                text: crate::t!("notifications-banner-enable"),
+                text_color: active_ui_text_color,
+                button_state: InlineBannerButtonState {
+                    on_click_event: TerminalAction::NotificationsDiscoveryBanner(
+                        NotificationsDiscoveryBannerAction::TurnOn(trigger),
+                    ),
+                    mouse_state_handle: state.mouse_states.turn_on.clone(),
                 },
-            ],
+                font: Default::default(),
+                position_id: None,
+                variant: InlineBannerTextButtonVariant::Primary,
+            }],
         ),
         NotificationsMode::Enabled => {
-            // Determine the messaging based on what the user's response was to the
-            // permissions request (if any)
-            let (title, docs_button) = match request_outcome {
-                Some(request_outcome) => match request_outcome {
-                    RequestPermissionsOutcome::Accepted => (
-                        crate::t!("notifications-banner-permissions-accepted-title"),
-                        learn_more_button,
-                    ),
-                    RequestPermissionsOutcome::PermissionsDenied => (
-                        crate::t!("notifications-banner-permissions-denied-title"),
-                        troubleshoot_button,
-                    ),
-                    RequestPermissionsOutcome::OtherError { .. } => (
-                        crate::t!("notifications-banner-permissions-error-title"),
-                        troubleshoot_button,
-                    ),
-                },
-                None => (
-                    crate::t!("notifications-banner-allow-permissions-title"),
-                    learn_more_button,
-                ),
+            // Only the title varies with the permission outcome now.
+            let title = match request_outcome {
+                Some(RequestPermissionsOutcome::Accepted) => {
+                    crate::t!("notifications-banner-permissions-accepted-title")
+                }
+                Some(RequestPermissionsOutcome::PermissionsDenied) => {
+                    crate::t!("notifications-banner-permissions-denied-title")
+                }
+                Some(RequestPermissionsOutcome::OtherError { .. }) => {
+                    crate::t!("notifications-banner-permissions-error-title")
+                }
+                None => crate::t!("notifications-banner-allow-permissions-title"),
             };
 
             (
                 title,
-                vec![
-                    docs_button,
-                    InlineBannerTextButton {
-                        text: crate::t!("notifications-banner-configure-notifications"),
-                        text_color: active_ui_text_color,
-                        button_state: InlineBannerButtonState {
-                            on_click_event: TerminalAction::NotificationsDiscoveryBanner(
-                                NotificationsDiscoveryBannerAction::Configure,
-                            ),
-                            mouse_state_handle: state.mouse_states.configure.clone(),
-                        },
-                        font: Default::default(),
-                        position_id: None,
-                        variant: InlineBannerTextButtonVariant::Secondary,
+                vec![InlineBannerTextButton {
+                    text: crate::t!("notifications-banner-configure-notifications"),
+                    text_color: active_ui_text_color,
+                    button_state: InlineBannerButtonState {
+                        on_click_event: TerminalAction::NotificationsDiscoveryBanner(
+                            NotificationsDiscoveryBannerAction::Configure,
+                        ),
+                        mouse_state_handle: state.mouse_states.configure.clone(),
                     },
-                ],
+                    font: Default::default(),
+                    position_id: None,
+                    variant: InlineBannerTextButtonVariant::Secondary,
+                }],
             )
         }
     };

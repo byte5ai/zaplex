@@ -119,9 +119,8 @@ impl SettingsWidget for WarpDriveToggleWidget {
             "Zaplex Drive".into(),
             Some(AdditionalInfo {
                 mouse_state: self.info_icon_mouse_state.clone(),
-                on_click_action: Some(WarpDriveSettingsPageAction::OpenUrl(
-                    "".to_string(),
-                )),
+                // No Zaplex docs destination yet; keep the setting, drop the dead docs link.
+                on_click_action: None,
                 secondary_text: None,
                 tooltip_override_text: None,
             }),

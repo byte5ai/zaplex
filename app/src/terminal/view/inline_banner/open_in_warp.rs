@@ -99,17 +99,7 @@ pub fn render_open_in_warp_banner(
         variant: InlineBannerTextButtonVariant::Primary,
     };
 
-    let learn_more_button = InlineBannerTextButton {
-        text: crate::t!("common-learn-more"),
-        text_color: appearance.theme().active_ui_text_color().into_solid(),
-        button_state: InlineBannerButtonState {
-            on_click_event: TerminalAction::OpenInWarpBanner(OpenInWarpBannerAction::LearnMore),
-            mouse_state_handle: state.learn_more_button_mouse_state.clone(),
-        },
-        font: Default::default(),
-        position_id: None,
-        variant: InlineBannerTextButtonVariant::Secondary,
-    };
+    // The "Learn more" button opened an empty URL (no Zaplex docs for Open-in-Zaplex); omitted.
 
     let close_button = InlineBannerCloseButton(InlineBannerButtonState {
         on_click_event: TerminalAction::OpenInWarpBanner(OpenInWarpBannerAction::Close),
@@ -123,7 +113,7 @@ pub fn render_open_in_warp_banner(
         appearance,
         InlineBannerContent {
             title,
-            buttons: vec![open_button, learn_more_button],
+            buttons: vec![open_button],
             close_button: Some(close_button),
             ..Default::default()
         },

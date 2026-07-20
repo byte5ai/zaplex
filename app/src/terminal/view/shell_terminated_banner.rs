@@ -208,7 +208,9 @@ impl TerminationType {
             TerminationType::Premature { .. } => {
                 let ui_builder = inverted_color_ui_builder(appearance);
 
-                handles.resize_with(2, MouseStateHandle::default);
+                // "More info" pointed at an empty URL (no Zaplex docs); drop it and keep
+                // the working "File issue" button (routes to the zaplex issue form).
+                handles.resize_with(1, MouseStateHandle::default);
                 vec![
                     ui_builder
                         .button(ButtonVariant::Text, handles[0].clone())
@@ -220,22 +222,14 @@ impl TerminationType {
                             ));
                         })
                         .finish(),
-                    ui_builder
-                        .button(ButtonVariant::Outlined, handles[1].clone())
-                        .with_text_label(crate::t!("terminal-more-info"))
-                        .build()
-                        .on_click(|ctx, _, _| {
-                            ctx.dispatch_typed_action(Action::OpenUrl(
-                                "".to_string(),
-                            ));
-                        })
-                        .finish(),
                 ]
             }
             TerminationType::PtySpawnFailure { pty_spawn_error } => {
                 let ui_builder = inverted_color_ui_builder(appearance);
 
-                handles.resize_with(3, MouseStateHandle::default);
+                // "More info" pointed at an empty URL (no Zaplex docs); drop it and keep
+                // Copy error + the working "File issue" button.
+                handles.resize_with(2, MouseStateHandle::default);
                 let error_str = format!("{pty_spawn_error:#}");
                 vec![
                     ui_builder
@@ -255,16 +249,6 @@ impl TerminationType {
                         .on_click(|ctx, _, _| {
                             ctx.dispatch_typed_action(Action::OpenUrl(
                                 crate::util::links::feedback_form_url(),
-                            ));
-                        })
-                        .finish(),
-                    ui_builder
-                        .button(ButtonVariant::Outlined, handles[2].clone())
-                        .with_text_label(crate::t!("terminal-more-info"))
-                        .build()
-                        .on_click(|ctx, _, _| {
-                            ctx.dispatch_typed_action(Action::OpenUrl(
-                                "".to_string(),
                             ));
                         })
                         .finish(),

@@ -453,19 +453,21 @@ impl ResourceCenterView {
     }
 
     fn render_footer(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let docs_button = self.render_footer_button(ResourceCenterFooterItem::Docs, appearance);
-        let slack_button = self.render_footer_button(ResourceCenterFooterItem::Slack, appearance);
-        let feedback_button =
-            self.render_footer_button(ResourceCenterFooterItem::Feedback, appearance);
-
-        let footer = Flex::row()
-            .with_child(docs_button)
-            .with_child(slack_button)
-            .with_child(feedback_button)
+        // Only surface Docs/Slack when a real Zaplex destination exists; otherwise the
+        // button opens `""`. Feedback always leads somewhere (guided flow or issue form).
+        let mut footer = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceEvenly)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .finish();
+            .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        if links::has_user_docs() {
+            footer.add_child(self.render_footer_button(ResourceCenterFooterItem::Docs, appearance));
+        }
+        if links::has_slack() {
+            footer
+                .add_child(self.render_footer_button(ResourceCenterFooterItem::Slack, appearance));
+        }
+        footer.add_child(self.render_footer_button(ResourceCenterFooterItem::Feedback, appearance));
+        let footer = footer.finish();
 
         Container::new(footer)
             .with_padding_top(SECTION_SPACING)

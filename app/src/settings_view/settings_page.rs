@@ -691,10 +691,18 @@ pub fn render_body_item_label_internal<T: Clone + Action>(
                 None
             };
 
+        // Only draw the info affordance when it actually leads somewhere: a real
+        // click action, or explanatory tooltip text. Otherwise the icon's default
+        // tooltip ("Click to learn more in docs") promises a destination that does
+        // not exist and clicking it is a no-op — a dead button.
+        let show_info_icon = additional_info.on_click_action.is_some()
+            || additional_info.tooltip_override_text.is_some();
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(label)
-            .with_child(render_info_icon(appearance, additional_info));
+            .with_child(label);
+        if show_info_icon {
+            row.add_child(render_info_icon(appearance, additional_info));
+        }
         if let LocalOnlyIconState::Visible {
             mouse_state,
             custom_tooltip,

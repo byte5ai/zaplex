@@ -157,11 +157,15 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
         menu_items.push(MenuItem::Services);
     }
 
-    menu_items.push(MenuItem::Separator);
-    menu_items.push(link_menu_item(
-        crate::t!("app-menu-privacy-policy"),
-        links::PRIVACY_POLICY_URL.into(),
-    ));
+    // Only show Privacy Policy (and its separator) once Zaplex has a real policy URL;
+    // otherwise the item opens `""`.
+    if links::has_privacy_policy() {
+        menu_items.push(MenuItem::Separator);
+        menu_items.push(link_menu_item(
+            crate::t!("app-menu-privacy-policy"),
+            links::PRIVACY_POLICY_URL.into(),
+        ));
+    }
 
     let debug_menu_items = debug_menu_items();
     if !debug_menu_items.is_empty() {
@@ -840,24 +844,27 @@ fn feedback_menu_item() -> MenuItem {
 }
 
 fn make_new_help_menu() -> Menu {
-    Menu::new(
-        &crate::t!("app-menu-help"),
-        vec![
-            feedback_menu_item(),
-            link_menu_item(
-                crate::t!("app-menu-warp-documentation"),
-                links::USER_DOCS_URL.into(),
-            ),
-            link_menu_item(
-                crate::t!("app-menu-github-issues"),
-                links::GITHUB_ISSUES_URL.into(),
-            ),
-            link_menu_item(
-                crate::t!("app-menu-warp-slack-community"),
-                links::SLACK_URL.into(),
-            ),
-        ],
-    )
+    // Feedback and GitHub Issues always lead somewhere (zaplex tracker); Documentation
+    // and Slack are only shown once Zaplex has a real destination for them, so a test
+    // user never lands on an empty-URL no-op.
+    let mut items = vec![feedback_menu_item()];
+    if links::has_user_docs() {
+        items.push(link_menu_item(
+            crate::t!("app-menu-warp-documentation"),
+            links::USER_DOCS_URL.into(),
+        ));
+    }
+    items.push(link_menu_item(
+        crate::t!("app-menu-github-issues"),
+        links::GITHUB_ISSUES_URL.into(),
+    ));
+    if links::has_slack() {
+        items.push(link_menu_item(
+            crate::t!("app-menu-warp-slack-community"),
+            links::SLACK_URL.into(),
+        ));
+    }
+    Menu::new(&crate::t!("app-menu-help"), items)
 }
 
 fn make_launch_config_menu_items(ctx: &mut AppContext) -> Vec<MenuItem> {

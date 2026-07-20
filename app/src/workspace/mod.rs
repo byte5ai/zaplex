@@ -1468,43 +1468,65 @@ fn add_overflow_menu_items_as_editable_binding(app: &mut AppContext) {
 
     // Add the ability to open all overflow menu items to the command palette.
     // Decentralization branch: "Invite People..." command mapped to ShowReferralSettingsPage, removed.
-    app.register_editable_bindings([
-        EditableBinding::new(
-            "workspace:link_to_slack",
-            crate::t!("keybinding-desc-workspace-link-to-slack"),
-            WorkspaceAction::JoinSlack,
-        )
-        .with_context_predicate(id!("Workspace")),
-        EditableBinding::new(
-            "workspace:link_to_user_docs",
-            crate::t!("keybinding-desc-workspace-link-to-user-docs"),
-            WorkspaceAction::ViewUserDocs,
-        )
-        .with_context_predicate(id!("Workspace")),
-        EditableBinding::new(
-            "workspace:send_feedback",
-            BindingDescription::new(crate::t!("keybinding-desc-workspace-send-feedback"))
-                .with_dynamic_override(|ctx| {
-                    is_feedback_skill_available(ctx)
-                        .then(|| crate::t!("keybinding-desc-workspace-send-feedback-oz"))
-                }),
-            WorkspaceAction::SendFeedback,
-        )
-        .with_context_predicate(id!("Workspace")),
-        #[cfg(not(target_family = "wasm"))]
+    //
+    // Feedback (and, off wasm, View Logs) always lead somewhere. The Docs / Slack /
+    // Privacy commands are registered only once Zaplex has a real destination for them;
+    // otherwise a test user invoking them from the palette would just open `""`.
+    let mut bindings = vec![EditableBinding::new(
+        "workspace:send_feedback",
+        BindingDescription::new(crate::t!("keybinding-desc-workspace-send-feedback"))
+            .with_dynamic_override(|ctx| {
+                is_feedback_skill_available(ctx)
+                    .then(|| crate::t!("keybinding-desc-workspace-send-feedback-oz"))
+            }),
+        WorkspaceAction::SendFeedback,
+    )
+    .with_context_predicate(id!("Workspace"))];
+
+    #[cfg(not(target_family = "wasm"))]
+    bindings.push(
         EditableBinding::new(
             "workspace:view_logs",
             crate::t!("keybinding-desc-workspace-view-logs"),
             WorkspaceAction::ViewLogs,
         )
         .with_context_predicate(id!("Workspace")),
-        EditableBinding::new(
-            "workspace:link_to_privacy_policy",
-            crate::t!("keybinding-desc-workspace-link-to-privacy-policy"),
-            WorkspaceAction::ViewPrivacyPolicy,
-        )
-        .with_context_predicate(id!("Workspace")),
-    ]);
+    );
+
+    if crate::util::links::has_user_docs() {
+        bindings.push(
+            EditableBinding::new(
+                "workspace:link_to_user_docs",
+                crate::t!("keybinding-desc-workspace-link-to-user-docs"),
+                WorkspaceAction::ViewUserDocs,
+            )
+            .with_context_predicate(id!("Workspace")),
+        );
+    }
+
+    if crate::util::links::has_slack() {
+        bindings.push(
+            EditableBinding::new(
+                "workspace:link_to_slack",
+                crate::t!("keybinding-desc-workspace-link-to-slack"),
+                WorkspaceAction::JoinSlack,
+            )
+            .with_context_predicate(id!("Workspace")),
+        );
+    }
+
+    if crate::util::links::has_privacy_policy() {
+        bindings.push(
+            EditableBinding::new(
+                "workspace:link_to_privacy_policy",
+                crate::t!("keybinding-desc-workspace-link-to-privacy-policy"),
+                WorkspaceAction::ViewPrivacyPolicy,
+            )
+            .with_context_predicate(id!("Workspace")),
+        );
+    }
+
+    app.register_editable_bindings(bindings);
 }
 
 #[derive(PartialEq, Copy, Clone, Debug)]

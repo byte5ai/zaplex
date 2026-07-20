@@ -4896,11 +4896,8 @@ impl AgentsWidget {
                     crate::t!("settings-ai-add-server"),
                     AISettingsPageAction::OpenMCPServerCollection,
                 ),
-                FormattedTextFragment::plain_text(" or "),
-                FormattedTextFragment::hyperlink(
-                    "learn more about MCPs.",
-                    "",
-                ),
+                // Dropped "or learn more about MCPs." link: no Zaplex MCP docs yet.
+                FormattedTextFragment::plain_text("."),
             ];
 
             Container::new(
@@ -5208,7 +5205,7 @@ impl AIInputWidget {
                         FormattedTextFragment::plain_text("Encountered an incorrect detection? "),
                         FormattedTextFragment::hyperlink(
                             "Let us know",
-                            "https://warpdotdev.typeform.com/to/offrTIpq",
+                            "https://github.com/byte5ai/zaplex/issues/new",
                         ),
                     ]
                 });
@@ -5268,7 +5265,7 @@ impl AIInputWidget {
                     ),
                     FormattedTextFragment::hyperlink(
                         "Let us know",
-                        "https://warpdotdev.typeform.com/to/offrTIpq",
+                        "https://github.com/byte5ai/zaplex/issues/new",
                     ),
                 ]
             });
@@ -5374,12 +5371,9 @@ impl SettingsWidget for MCPServersWidget {
         let mcp_description = vec![
             FormattedTextFragment::plain_text(
                 "Add MCP servers to extend the Zaplex Agent's capabilities. \
-            MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. ",
+            MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins.",
             ),
-            FormattedTextFragment::hyperlink(
-                crate::t!("common-learn-more"),
-                "",
-            ),
+            // Dropped "learn more" link: no Zaplex MCP docs yet.
         ];
 
         let description = Container::new(
@@ -5420,12 +5414,9 @@ impl SettingsWidget for MCPServersWidget {
                             Vec<FormattedTextFragment>,
                         > = LazyLock::new(|| {
                             vec![
+                                // Dropped "See supported providers." link: no Zaplex docs yet.
                                 FormattedTextFragment::plain_text(
-                                    "Automatically detect and spawn MCP servers from globally-scoped third-party AI agent configuration files (e.g. in your home directory). Servers detected inside a repository are never spawned automatically and must be enabled individually from the MCP settings page. ",
-                                ),
-                                FormattedTextFragment::hyperlink(
-                                    "See supported providers.",
-                                    "",
+                                    "Automatically detect and spawn MCP servers from globally-scoped third-party AI agent configuration files (e.g. in your home directory). Servers detected inside a repository are never spawned automatically and must be enabled individually from the MCP settings page.",
                                 ),
                             ]
                         });
@@ -5505,11 +5496,11 @@ impl AIFactWidget {
         );
 
         let rules_description = vec![
+            // No Zaplex docs destination for the AI rules "Learn more"; drop the dead link.
             FormattedTextFragment::plain_text(format!(
-                "{} ",
+                "{}",
                 crate::t!("settings-ai-rules-description")
             )),
-            FormattedTextFragment::hyperlink(crate::t!("settings-ai-learn-more"), ""),
         ];
         let description = Container::new(
             FormattedTextElement::new(

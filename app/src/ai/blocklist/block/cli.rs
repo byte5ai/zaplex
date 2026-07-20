@@ -1559,7 +1559,9 @@ impl TypedActionView for CLISubagentView {
                     .write(ClipboardContent::plain_text(debug_id.clone()));
             }
             CLISubagentAction::OpenFeedbackDocs => {
-                ctx.open_url("");
+                // Route the agent error-state "Send feedback" to the zaplex issue form
+                // instead of an empty URL, so the test-user feedback path actually works.
+                ctx.open_url(&crate::util::links::feedback_form_url());
             }
         }
     }

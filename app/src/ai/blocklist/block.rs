@@ -5447,7 +5447,9 @@ impl TypedActionView for AIBlock {
                     .write(ClipboardContent::plain_text(debug_id.clone()));
             }
             AIBlockAction::OpenFeedbackDocs => {
-                ctx.open_url("");
+                // Route the agent error-state "Send feedback" to the zaplex issue form
+                // instead of an empty URL, so the test-user feedback path actually works.
+                ctx.open_url(&crate::util::links::feedback_form_url());
             }
             AIBlockAction::CancelRequestedAction { action_id } => {
                 self.cancel_action(action_id, ctx);

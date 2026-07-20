@@ -1398,10 +1398,10 @@ impl AppearanceSettingsPageView {
     fn build_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let mut categories = vec![Category::new(
             Box::leak(crate::t!("settings-appearance-category-themes").into_boxed_str()),
-            vec![
-                Box::new(CreateCustomThemeWidget::default()),
-                Box::new(ThemeSelectWidget::default()),
-            ],
+            // CreateCustomThemeWidget removed: it only rendered a dead "Create custom
+            // theme" link (empty URL, editor not wired in this fork) and would otherwise
+            // show as a blank Themes search result.
+            vec![Box::new(ThemeSelectWidget::default())],
         )];
 
         categories.push(Category::new(
@@ -3049,25 +3049,12 @@ impl SettingsWidget for CreateCustomThemeWidget {
     fn render(
         &self,
         _view: &Self::View,
-        appearance: &Appearance,
+        _appearance: &Appearance,
         _app: &AppContext,
     ) -> Box<dyn Element> {
-        Align::new(
-            appearance
-                .ui_builder()
-                .link(
-                    crate::t!("settings-appearance-theme-create-custom"),
-                    Some("".to_string()),
-                    None,
-                    self.mouse_state.clone(),
-                )
-                .soft_wrap(false)
-                .build()
-                .with_margin_bottom(10.)
-                .finish(),
-        )
-        .left()
-        .finish()
+        // The "Create custom theme" link opened an empty URL (the theme editor is not
+        // wired in this fork); render nothing rather than a dead button.
+        warpui::elements::Empty::new().finish()
     }
 }
 
@@ -3646,9 +3633,8 @@ impl SettingsWidget for WindowBlurWidget {
         let blur_value = *window_settings.background_blur_radius;
         let label_info = AdditionalInfo {
             mouse_state: self.info_button.clone(),
-            on_click_action: Some(AppearancePageAction::OpenUrl(
-                "".into(),
-            )),
+            // No Zaplex docs destination yet; keep the setting, drop the dead docs link.
+            on_click_action: None,
             secondary_text: None,
             tooltip_override_text: None,
         };
@@ -5824,9 +5810,8 @@ impl SettingsWidget for AltScreenPaddingWidget {
             crate::t!("settings-appearance-alt-screen-padding-label"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_mouse_state.clone(),
-                on_click_action: Some(AppearancePageAction::OpenUrl(
-                    "".into(),
-                )),
+                // No Zaplex docs destination yet; keep the setting, drop the dead docs link.
+                on_click_action: None,
                 secondary_text: None,
                 tooltip_override_text: None,
             }),

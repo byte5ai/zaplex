@@ -2476,15 +2476,10 @@ impl PaneGroup {
 
         let user_default_shell_changed_banner = ctx.add_typed_action_view(|_| {
             Banner::<PaneGroupAction>::new_permanently_dismissible(
-                BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text(
-                        "Zaplex doesn't currently support your default shell, falling back to zsh.  ",
-                    ),
-                    FormattedTextFragment::hyperlink(
-                        crate::t!("common-learn-more"),
-                        ZAPLEX_SHELL_COMPATIBILITY_DOCS,
-                    ),
-                ]),
+                // Dropped the "learn more" link: no Zaplex shell-compatibility docs yet.
+                BannerTextContent::formatted_text(vec![FormattedTextFragment::plain_text(
+                    "Zaplex doesn't currently support your default shell, falling back to zsh.",
+                )]),
             )
         });
 

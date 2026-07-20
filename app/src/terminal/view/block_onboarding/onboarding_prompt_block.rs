@@ -80,12 +80,9 @@ impl OnboardingPromptBlock {
                 .finish(),
                 Container::new(
                     FormattedTextElement::new(
+                        // Dropped the "learn more" link: no Zaplex custom-prompt docs yet.
                         FormattedText::new([FormattedTextLine::Line(vec![
                             FormattedTextFragment::plain_text(LINE_TWO),
-                            FormattedTextFragment::hyperlink(
-                                crate::t!("common-learn-more"),
-                                LINK_DESTINATION,
-                            ),
                         ])]),
                         font_size,
                         font_family,

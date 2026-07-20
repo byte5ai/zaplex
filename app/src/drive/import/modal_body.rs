@@ -426,17 +426,9 @@ impl ImportModalBody {
             .build()
             .finish();
 
-        let link_to_document = appearance
-            .ui_builder()
-            .link(
-                crate::t!("drive-import-learn-file-support"),
-                Some(FILE_TYPE_DOCS_URL.to_string()),
-                None,
-                self.link_mouse_state.clone(),
-            )
-            .soft_wrap(false)
-            .build()
-            .finish();
+        // The "learn about file support" link opened an empty URL (no Zaplex docs);
+        // render nothing rather than a dead link.
+        let link_to_document = warpui::elements::Empty::new().finish();
 
         ConstrainedBox::new(
             Align::new(

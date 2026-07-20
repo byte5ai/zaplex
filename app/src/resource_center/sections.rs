@@ -2,8 +2,8 @@ use warp_core::{context_flag::ContextFlag, features::FeatureFlag};
 use warpui::ViewContext;
 
 use super::{
-    ContentItem, ContentSectionData, FeatureItem, FeatureSection, FeatureSectionData,
-    ResourceCenterMainView, Section, Tip, TipAction, TipHint,
+    FeatureItem, FeatureSection, FeatureSectionData, ResourceCenterMainView, Section, Tip,
+    TipAction, TipHint,
 };
 
 pub fn sections(ctx: &mut ViewContext<ResourceCenterMainView>) -> Vec<Section> {
@@ -56,30 +56,9 @@ pub fn sections(ctx: &mut ViewContext<ResourceCenterMainView>) -> Vec<Section> {
     };
     sections.push(Section::Feature(maximize_warp));
 
-    let advanced_setup = ContentSectionData {
-        section_name: FeatureSection::AdvancedSetup,
-        items: vec![
-            ContentItem {
-                title: crate::t!("resource-center-custom-prompt-title"),
-                description: crate::t!("resource-center-custom-prompt-description"),
-                url: "",
-                button_label: crate::t!("resource-center-view-documentation"),
-            },
-            ContentItem {
-                title: crate::t!("resource-center-integrate-ide-title"),
-                description: crate::t!("resource-center-integrate-ide-description"),
-                url: "",
-                button_label: crate::t!("resource-center-view-documentation"),
-            },
-            ContentItem {
-                title: crate::t!("resource-center-how-warp-uses-warp-title"),
-                description: crate::t!("resource-center-how-warp-uses-warp-description"),
-                url: "https://www.warp.dev/blog/how-warp-uses-warp",
-                button_label: crate::t!("resource-center-read-article"),
-            },
-        ],
-    };
-    sections.push(Section::Content(advanced_setup));
+    // The upstream "Advanced setup" section is dropped: its two "View documentation"
+    // items have no Zaplex docs destination, and the third linked warp.dev's blog —
+    // foreign branding in a test user's hand. Restore it once Zaplex docs exist.
 
     sections
 }
