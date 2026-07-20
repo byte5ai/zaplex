@@ -471,6 +471,7 @@ async fn attach_session_round_trip() {
             }),
             base_seq: 42,
             replay: b"replayed".to_vec(),
+            bootstrap_preamble: Vec::new(),
         })
     });
 

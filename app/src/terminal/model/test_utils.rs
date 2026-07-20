@@ -273,6 +273,23 @@ impl TerminalModel {
         )
     }
 
+    /// Like [`Self::mock`] but the model is NOT bootstrapped
+    /// (`is_bootstrapped()` is `false`), matching a fresh adopt tab whose shell
+    /// has not bootstrapped on this client yet (used by the T1.3 preamble tests).
+    pub fn mock_not_bootstrapped(event_proxy: Option<ChannelEventListener>) -> TerminalModel {
+        TerminalModel::new_for_test_unbootstrapped(
+            block_size(),
+            color::List::from(&Colors::default()),
+            event_proxy.unwrap_or_else(ChannelEventListener::new_for_test),
+            Arc::new(Background::default()),
+            false,
+            None,
+            false,
+            false, /* is_inverted */
+            None,
+        )
+    }
+
     /// Simulates the creation of a block as if the `input` command
     /// was run and it produced `output` bytes.
     ///

@@ -424,6 +424,7 @@ mod daemon_session {
             message: Some(client_message::Message::AttachSession(AttachSession {
                 session_id: session_id.to_string(),
                 last_seq,
+                supports_bootstrap_preamble: true,
             })),
         }
     }

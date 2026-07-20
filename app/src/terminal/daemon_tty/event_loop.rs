@@ -84,6 +84,14 @@ pub(super) struct EventLoop {
     /// wins; the latch swallows the other so we never tell the user the
     /// connection was lost right after telling them the session ended.
     terminated: bool,
+    /// Whether this loop should still report its session's bootstrap boundary to
+    /// the daemon (T1.3). True only for a session this loop *opened* (the client
+    /// that witnesses the real handshake from seq 0); set false once reported, and
+    /// false from the start for an *adopted* session, which did not see the
+    /// handshake from seq 0 and so cannot define the boundary (by convention only
+    /// the opener does). Lets the daemon freeze an eviction-proof preamble so a
+    /// future adopt can arm bootstrap.
+    report_bootstrap_boundary: bool,
 }
 
 impl EventLoop {
@@ -122,8 +130,13 @@ impl EventLoop {
         match adopt_pty_session_id {
             // Adopt an existing daemon session: attach + replay on connect.
             Some(id) => event_loop.pty_session_id = Some(id),
-            // Open a fresh session once the transport is connected.
-            None => event_loop.pending_open = Some((open_params, size_info)),
+            // Open a fresh session once the transport is connected. Only a
+            // fresh open witnesses the real bootstrap handshake from seq 0, so
+            // only it reports the boundary the daemon freezes (T1.3).
+            None => {
+                event_loop.pending_open = Some((open_params, size_info));
+                event_loop.report_bootstrap_boundary = true;
+            }
         }
 
         // First-connect auto-install: render the install ladder's phase messages
@@ -152,6 +165,7 @@ impl EventLoop {
                 if me.is_our_session(pty_session_id) {
                     me.process_pty_bytes(bytes);
                     me.last_seq = *seq + bytes.len() as u64;
+                    me.maybe_report_bootstrap_boundary(ctx);
                 } else if me.pty_session_id.is_none() && *session_id == me.connection_session_id {
                     // Output for our connection before `OpenSession` resolved — the
                     // daemon auto-attaches and starts the shell/bootstrap before the
@@ -262,6 +276,7 @@ impl EventLoop {
             host_label: String::new(),
             welcomed: false,
             terminated: false,
+            report_bootstrap_boundary: false,
         }
     }
 
@@ -282,19 +297,16 @@ impl EventLoop {
         let future = async move { client.attach_session(pty_session_id, last_seq).await };
         ctx.spawn(future, |me, result, ctx| match result {
             Ok(attached) => {
-                // If the daemon's ring evicted output we never saw, the replay
-                // starts past our cursor (base_seq > last_seq) — a hole. Applying
-                // post-gap bytes (which may omit the clears/cursor moves that were
-                // evicted) onto the stale grid corrupts it, so reset the screen
-                // first and tell the user scrollback was truncated.
-                if attached.base_seq > me.last_seq {
-                    me.process_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
-                    me.write_notice("scrollback truncated during a long disconnect");
-                }
-                if !attached.replay.is_empty() {
-                    me.process_pty_bytes(&attached.replay);
-                }
-                me.last_seq = attached.base_seq + attached.replay.len() as u64;
+                me.apply_attach(
+                    &attached.bootstrap_preamble,
+                    attached.base_seq,
+                    &attached.replay,
+                );
+                // If bootstrap only completed now — a fresh open that dropped
+                // mid-handshake and finished it from this reconnect's replay — the
+                // live-output path never saw the flip, so report the boundary here
+                // too (a no-op for adopted sessions and once already reported).
+                me.maybe_report_bootstrap_boundary(ctx);
                 // Stage the payoff moment: an adopt's first attach welcomes the
                 // user into their running session; a reconnect after a drop
                 // states plainly that nothing was lost.
@@ -424,6 +436,10 @@ impl EventLoop {
                 self.last_seq = seq + bytes.len() as u64;
             }
         }
+        // The bootstrap handshake may already be complete in that pre-open burst
+        // (the daemon auto-attaches and starts the shell before this response
+        // lands), so report the boundary now if so (T1.3).
+        self.maybe_report_bootstrap_boundary(ctx);
         // Run the host's startup command once, after the session is open — the
         // daemon-path analog of the local-PTY SSH startup-command injector. Sent
         // as input + newline (bash/zsh execute byte), the same way the daemon
@@ -611,6 +627,96 @@ impl EventLoop {
             .parse_bytes(&mut *terminal_model, bytes, &mut io::sink());
         self.channel_event_listener.send_wakeup_event();
     }
+
+    /// Applies an attach reply's bootstrap preamble and replay to the terminal,
+    /// advancing the `last_seq` replay cursor. Split out of `reattach` so the
+    /// preamble/gap/replay bookkeeping (the T1.3-sensitive part) is unit-testable
+    /// without a live client.
+    ///
+    /// - **Preamble** (T1.3): on an adopt whose ring already evicted the bootstrap
+    ///   handshake, the daemon ships it as `bootstrap_preamble`. Feed it through
+    ///   the normal parser path first — arming bootstrap exactly as a fresh
+    ///   session would — but only if we aren't already bootstrapped (a reconnect
+    ///   is). `base_seq` already points past the preamble range, so preamble and
+    ///   replay never overlap.
+    /// - **Gap**: if the ring evicted output we never saw (`base_seq > last_seq`),
+    ///   applying post-gap bytes onto the stale grid would corrupt it, so reset
+    ///   the screen — and, if a preamble was just fed, the parser too, so a
+    ///   preamble that ended mid-sequence can't bleed into the replay — then note
+    ///   the truncation.
+    fn apply_attach(&mut self, bootstrap_preamble: &[u8], base_seq: u64, replay: &[u8]) {
+        let fed_preamble = !bootstrap_preamble.is_empty() && !self.is_bootstrapped();
+        if fed_preamble {
+            // The daemon already bootstrapped this shell server-side, so arming
+            // bootstrap from the re-fed preamble must NOT make the client write
+            // the bootstrap body back into the running shell (T1.3). Arm the
+            // one-shot latch: the preamble's `InitShell` — parsed synchronously by
+            // the line below — consumes it and stamps *its* event so only that
+            // event skips the write.
+            self.terminal_model.lock().suppress_next_bootstrap_write();
+            self.process_pty_bytes(bootstrap_preamble);
+            // Belt-and-suspenders: if the preamble somehow carried no `InitShell`
+            // the latch is still armed; clear it so it can never leak onto a later
+            // genuine `InitShell`. (A frozen preamble always contains the
+            // handshake, so this is normally a no-op.)
+            self.terminal_model.lock().take_suppress_next_bootstrap_write();
+            self.last_seq = bootstrap_preamble.len() as u64;
+        }
+        if base_seq > self.last_seq {
+            if fed_preamble {
+                self.reset_parser();
+            }
+            self.process_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
+            self.write_notice("scrollback truncated during a long disconnect");
+        }
+        if !replay.is_empty() {
+            self.process_pty_bytes(replay);
+        }
+        self.last_seq = base_seq + replay.len() as u64;
+    }
+
+    /// Whether the terminal model has completed the Zaplexify bootstrap.
+    fn is_bootstrapped(&self) -> bool {
+        self.terminal_model.lock().block_list().is_bootstrapped()
+    }
+
+    /// Resets the ANSI parser to its ground state without touching the terminal
+    /// model. Used between a bootstrap preamble and a post-gap replay so a
+    /// preamble that ended mid-sequence can't corrupt the replay (T1.3); the
+    /// model's bootstrap arming lives in the block list, not the parser, so it
+    /// survives this reset.
+    fn reset_parser(&mut self) {
+        self.parser = Processor::default();
+    }
+
+    /// Reports this session's bootstrap boundary to the daemon exactly once —
+    /// only for a session this loop opened, only after the model is bootstrapped,
+    /// and only with a live client (T1.3). The daemon freezes the output up to
+    /// `last_seq` as an eviction-proof preamble for future adopts. A no-op
+    /// afterwards, for adopted sessions, and while not yet bootstrapped; if the
+    /// transport is momentarily down it stays pending and retries on the next
+    /// output chunk.
+    fn maybe_report_bootstrap_boundary(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.report_bootstrap_boundary {
+            return;
+        }
+        let Some(pty_session_id) = self.pty_session_id.clone() else {
+            return;
+        };
+        if !self.is_bootstrapped() {
+            return;
+        }
+        let Some(client) = self.client(ctx) else {
+            return; // Transport down; retry on the next output chunk.
+        };
+        // Only latch off once the report is actually enqueued; a lost send (closed
+        // or full channel) leaves the flag set so a later output chunk retries —
+        // otherwise the daemon never freezes the preamble and a future adopt hits
+        // T1.3 again.
+        if client.set_bootstrap_preamble(pty_session_id, self.last_seq) {
+            self.report_bootstrap_boundary = false;
+        }
+    }
 }
 
 impl Entity for EventLoop {
@@ -674,9 +780,42 @@ mod tests {
         Arc<FairMutex<TerminalModel>>,
         async_channel::Receiver<()>,
     ) {
+        start_adopted_loop_impl(app, conn, true)
+    }
+
+    /// Like [`start_adopted_loop`] but the terminal model is NOT bootstrapped,
+    /// matching a real adopt tab — so `apply_attach` actually feeds the preamble
+    /// (`fed_preamble` is true) instead of short-circuiting on an already-
+    /// bootstrapped model (T1.3).
+    fn start_adopted_loop_unbootstrapped(
+        app: &mut App,
+        conn: SessionId,
+    ) -> (
+        ModelHandle<RemoteServerManager>,
+        ModelHandle<EventLoop>,
+        Arc<FairMutex<TerminalModel>>,
+        async_channel::Receiver<()>,
+    ) {
+        start_adopted_loop_impl(app, conn, false)
+    }
+
+    fn start_adopted_loop_impl(
+        app: &mut App,
+        conn: SessionId,
+        bootstrapped: bool,
+    ) -> (
+        ModelHandle<RemoteServerManager>,
+        ModelHandle<EventLoop>,
+        Arc<FairMutex<TerminalModel>>,
+        async_channel::Receiver<()>,
+    ) {
         let manager = app.add_singleton_model(RemoteServerManager::new);
         let (listener, wakeups_rx) = test_listener();
-        let model = Arc::new(FairMutex::new(TerminalModel::mock(None, Some(listener.clone()))));
+        let model = Arc::new(FairMutex::new(if bootstrapped {
+            TerminalModel::mock(None, Some(listener.clone()))
+        } else {
+            TerminalModel::mock_not_bootstrapped(Some(listener.clone()))
+        }));
         // The input stream isn't exercised here; dropping the sender just closes it.
         let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
         let size = SizeInfo::new_without_font_metrics(24, 80);
@@ -1105,6 +1244,167 @@ mod tests {
                 wakeups_rx.is_empty(),
                 "after a clean exit, the trailing disconnect must not add a second, \
                  contradictory notice"
+            );
+        });
+    }
+
+    /// T1.3: an adopt whose ring evicted the handshake receives a
+    /// `bootstrap_preamble`; `apply_attach` feeds it (arming bootstrap via the
+    /// normal parser path) and then the contiguous replay, tracking the cursor as
+    /// `preamble_end + replay_len`. A repaint wakeup proves both reached the
+    /// parser. (The mock model is never bootstrapped, so the preamble is always
+    /// fed here — exactly the evicted-adopt case.)
+    #[test]
+    fn apply_attach_feeds_preamble_then_replay_contiguously() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(31u64);
+            let (_manager, event_loop, _model, wakeups_rx) =
+                start_adopted_loop_unbootstrapped(&mut app, conn);
+            drain(&wakeups_rx);
+
+            // Preamble "PRE" (3 bytes); replay starts exactly at seq 3 (contiguous).
+            event_loop.update(&mut app, |me, _| me.apply_attach(b"PRE", 3, b"replay"));
+
+            assert!(
+                !wakeups_rx.is_empty(),
+                "the preamble and replay must reach the parser/model (repaint wakeup)"
+            );
+            assert_eq!(
+                event_loop.read(&app, |me, _| me.last_seq),
+                (3 + 6) as u64,
+                "last_seq = preamble end (3) advanced by the replay length (6)"
+            );
+        });
+    }
+
+    /// T1.3: when the replay starts past the preamble's end (`base_seq > preamble
+    /// end`), the evicted bytes are a genuine hole: the screen is reset and the
+    /// user is told scrollback was truncated, then the replay is applied and the
+    /// cursor lands at `base_seq + replay_len`.
+    #[test]
+    fn apply_attach_preamble_then_gap_truncates_and_advances_cursor() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(37u64);
+            let (_manager, event_loop, _model, wakeups_rx) =
+                start_adopted_loop_unbootstrapped(&mut app, conn);
+            drain(&wakeups_rx);
+
+            // Preamble is 3 bytes; replay starts at seq 10 → a gap of [3,10).
+            event_loop.update(&mut app, |me, _| me.apply_attach(b"PRE", 10, b"tail"));
+
+            assert!(
+                !wakeups_rx.is_empty(),
+                "the gap path still renders (reset + truncation notice + replay)"
+            );
+            assert_eq!(
+                event_loop.read(&app, |me, _| me.last_seq),
+                (10 + 4) as u64,
+                "after a gap, last_seq = base_seq (10) + replay length (4)"
+            );
+        });
+    }
+
+    /// A fresh short adopt (or any attach without a preamble) replays plainly from
+    /// `base_seq`; the handshake is still in the replay, so no preamble is fed.
+    #[test]
+    fn apply_attach_without_preamble_replays_plainly() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(41u64);
+            let (_manager, event_loop, _model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
+
+            event_loop.update(&mut app, |me, _| me.apply_attach(b"", 0, b"hello"));
+
+            assert_eq!(
+                event_loop.read(&app, |me, _| me.last_seq),
+                b"hello".len() as u64,
+                "no preamble: last_seq is the replay length from base_seq 0"
+            );
+        });
+    }
+
+    /// A reconnect (already-advanced cursor, no preamble, no gap) replays only
+    /// what was missed and advances from its own cursor — the daemon never ships a
+    /// preamble here, and `apply_attach` must not fabricate a gap.
+    #[test]
+    fn apply_attach_reconnect_replays_from_existing_cursor() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(43u64);
+            let (_manager, event_loop, _model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
+
+            event_loop.update(&mut app, |me, _| {
+                me.last_seq = 100; // already consumed 100 bytes before the blip
+                me.apply_attach(b"", 100, b"more");
+            });
+            assert_eq!(
+                event_loop.read(&app, |me, _| me.last_seq),
+                (100 + 4) as u64,
+                "a reconnect advances from its own cursor (base_seq 100 + 4)"
+            );
+        });
+    }
+
+    /// An attach with no preamble (a short adopt or a reconnect) must NOT arm the
+    /// suppression latch — a genuine later `InitShell` must still write bootstrap.
+    #[test]
+    fn apply_attach_without_preamble_does_not_arm_suppression() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(53u64);
+            let (_manager, event_loop, model, _wakeups_rx) =
+                start_adopted_loop_unbootstrapped(&mut app, conn);
+
+            event_loop.update(&mut app, |me, _| me.apply_attach(b"", 0, b"hello"));
+
+            assert!(
+                !model.lock().take_suppress_next_bootstrap_write(),
+                "no preamble → the suppression latch must stay disarmed"
+            );
+        });
+    }
+
+    /// A real serialized `InitShell` DCS (`ESC P $ d <hex-json> ST`) — the same
+    /// wire form a bootstrapping shell emits — so feeding it drives the real
+    /// `TerminalModel::init_shell` (not just plain-text rendering).
+    fn init_shell_dcs() -> Vec<u8> {
+        let json = r#"{"hook":"InitShell","value":{"session_id":167303092612201,"shell":"zsh"}}"#;
+        let mut out = vec![0x1b, 0x50, 0x24, 0x64]; // ESC P $ d
+        out.extend_from_slice(hex::encode(json).as_bytes());
+        out.push(0x9c); // ST
+        out
+    }
+
+    /// T1.3 correlation (the crux of the write-suppression design): the latch must
+    /// be consumed by a *real* `InitShell` driven from the preamble — not by
+    /// unrelated output — so the suppression stamps exactly the preamble's
+    /// `InitShell` event and can never leak onto a later genuine one. Plain output
+    /// leaves the armed latch untouched; a real `InitShell` DCS consumes it
+    /// synchronously while parsing.
+    #[test]
+    fn suppression_latch_is_consumed_only_by_a_real_initshell() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(59u64);
+            let (_manager, event_loop, model, _wakeups_rx) =
+                start_adopted_loop_unbootstrapped(&mut app, conn);
+
+            // Plain output emits no InitShell, so the armed latch is left intact.
+            event_loop.update(&mut app, |me, _| {
+                me.terminal_model.lock().suppress_next_bootstrap_write();
+                me.process_pty_bytes(b"just some output\r\n");
+            });
+            assert!(
+                model.lock().take_suppress_next_bootstrap_write(),
+                "plain output must not consume the latch — only an InitShell does"
+            );
+
+            // A real InitShell DCS drives init_shell, which consumes the armed
+            // latch synchronously while parsing (and stamps its own event).
+            let dcs = init_shell_dcs();
+            event_loop.update(&mut app, |me, _| {
+                me.terminal_model.lock().suppress_next_bootstrap_write();
+                me.process_pty_bytes(&dcs);
+            });
+            assert!(
+                !model.lock().take_suppress_next_bootstrap_write(),
+                "a real InitShell must consume the armed latch (correlation)"
             );
         });
     }

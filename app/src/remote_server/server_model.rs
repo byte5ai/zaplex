@@ -30,7 +30,7 @@ use zaplex_remote_session::types::supported_features;
 use super::proto::{
     AttachSession, CloseSession, DetachSession, OpenSession, ResizeSession, SessionAttached,
     SessionExited, SessionInfo, SessionInput, SessionList, SessionNotice, SessionOpened,
-    SessionOutput, SessionSize,
+    SessionOutput, SessionSize, SetBootstrapPreamble,
 };
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -749,6 +749,16 @@ impl ServerModel {
                 self.handle_detach_session(conn_id, msg);
                 return;
             }
+            // The opening client reports where bootstrap completed so we can
+            // freeze an eviction-proof preamble for later adopts (T1.3).
+            #[cfg(unix)]
+            Some(client_message::Message::SetBootstrapPreamble(msg)) => {
+                self.handle_set_bootstrap_preamble(msg);
+                return;
+            }
+            // No session host off unix → nothing to capture; drop the notification.
+            #[cfg(not(unix))]
+            Some(client_message::Message::SetBootstrapPreamble(_)) => return,
             // Agent-session inventory (Agent-Cockpit): report this host's
             // Claude/Codex agent-sessions discovered on the daemon's filesystem.
             // Not PTY-bound, so available on every platform.
@@ -2201,6 +2211,9 @@ impl ServerModel {
                 cwd,
                 shell: shell.clone(),
                 last_attached_ms: now_epoch_millis(),
+                preamble: super::session_host::BootstrapPreamble::new(
+                    super::session_host::BOOTSTRAP_PREAMBLE_CAP_BYTES,
+                ),
             },
         );
 
@@ -2333,7 +2346,18 @@ impl ServerModel {
                 message: format!("no such session: {}", msg.session_id),
             }));
         };
-        let (base_seq, replay) = session.ring.replay_from(msg.last_seq);
+        // T1.3: on a *fresh adopt* (`last_seq == 0`) whose ring has already
+        // evicted seq 0, the bootstrap handshake is gone from the replay and the
+        // client could never arm bootstrap. `plan_attach` ships the frozen
+        // preamble and starts the replay at the preamble's end so the two never
+        // overlap; a reconnecting client (`last_seq > 0`) gets no preamble and a
+        // normal replay from where it left off.
+        let (base_seq, replay, bootstrap_preamble) = super::session_host::plan_attach(
+            &session.ring,
+            &session.preamble,
+            msg.last_seq,
+            msg.supports_bootstrap_preamble,
+        );
         // Route live output to the reconnected connection from now on.
         session.attached = conn_id;
         session.last_attached_ms = now_epoch_millis();
@@ -2344,16 +2368,42 @@ impl ServerModel {
             pixel_height: 0,
         };
         log::info!(
-            "Daemon: attached conn {conn_id} to session {} (replay {} bytes from seq {base_seq})",
+            "Daemon: attached conn {conn_id} to session {} (replay {} bytes from seq {base_seq}, \
+             preamble {} bytes)",
             msg.session_id,
-            replay.len()
+            replay.len(),
+            bootstrap_preamble.len(),
         );
         HandlerOutcome::Sync(server_message::Message::SessionAttached(SessionAttached {
             session_id: msg.session_id,
             size: Some(size),
             base_seq,
             replay,
+            bootstrap_preamble,
         }))
+    }
+
+    /// Freezes the session's bootstrap preamble at the boundary the opening
+    /// client just reported (T1.3). The preamble was accumulated from seq 0 by
+    /// `on_session_output`; here we truncate it to `end_seq` (the client's output
+    /// cursor at bootstrap completion) and stop capturing. Idempotent: a session
+    /// whose preamble is already frozen (or was abandoned at the cap) ignores
+    /// repeats — only the first, opening client defines the boundary.
+    fn handle_set_bootstrap_preamble(&mut self, msg: SetBootstrapPreamble) {
+        let Some(session) = self.sessions.get_mut(&msg.session_id) else {
+            log::debug!(
+                "SetBootstrapPreamble for unknown session {}; ignoring",
+                msg.session_id
+            );
+            return;
+        };
+        session.preamble.freeze(msg.end_seq);
+        log::info!(
+            "Daemon: froze bootstrap preamble for session {} (reported end_seq {}, {} bytes kept)",
+            msg.session_id,
+            msg.end_seq,
+            session.preamble.frozen().map(<[u8]>::len).unwrap_or(0),
+        );
     }
 
     /// Detaches a connection from a session without ending it: the session keeps
@@ -2588,11 +2638,13 @@ impl ServerModel {
     /// Reader-task callback: append output to the ring and push it to the
     /// attached connection with the chunk's start seq.
     pub(super) fn on_session_output(&mut self, session_id: &str, bytes: Vec<u8>) {
-        let Some((seq, conn)) = self
-            .sessions
-            .get_mut(session_id)
-            .map(|s| (s.ring.append(&bytes), s.attached))
-        else {
+        let Some((seq, conn)) = self.sessions.get_mut(session_id).map(|s| {
+            let seq = s.ring.append(&bytes);
+            // T1.3: mirror output into the bootstrap preamble (from seq 0, immune
+            // to ring eviction) until the handshake boundary is reported.
+            s.preamble.capture(&bytes);
+            (seq, s.attached)
+        }) else {
             return;
         };
         self.send_server_message(

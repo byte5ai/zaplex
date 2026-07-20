@@ -518,6 +518,18 @@ pub struct TerminalModel {
     /// cleared at the next precmd, because it is only relevant for the block where it was set.
     ignore_bootstrapping_messages: bool,
 
+    /// One-shot latch (T1.3): the daemon-session adopt path arms this just before
+    /// re-feeding the captured bootstrap-handshake preamble, so the client arms
+    /// bootstrap without writing the bootstrap body back into the *already-running*
+    /// shell (harmless for bash/zsh but a double-load for fish/pwsh — the daemon
+    /// already bootstrapped it server-side). It is consumed *synchronously* by
+    /// `init_shell` while the preamble is parsed, which stamps the resulting
+    /// `HandlerEvent::InitShell` with `suppress_bootstrap_write`; the decision then
+    /// rides on that exact event to `PtyController`. Because the latch is taken by
+    /// the preamble's own `InitShell`, it can never be claimed by a different (e.g.
+    /// live) `InitShell`, and the adopt path clears any residue afterwards.
+    suppress_next_bootstrap_write: bool,
+
     // This session's startup directory path. If None, the startup directory is treated as default
     // (the user's home directory).
     session_startup_path: Option<PathBuf>,
@@ -1045,25 +1057,16 @@ impl TerminalModel {
     ) -> Self {
         use super::session::get_local_hostname;
 
-        let mut terminal_model = Self::new(
-            restored_blocks,
+        let mut terminal_model = Self::new_for_test_unbootstrapped(
             sizes,
             colors,
             event_proxy,
             background_executor,
             should_show_bootstrap_block,
-            false,
-            false,
+            restored_blocks,
             honor_ps1,
             is_inverted,
-            ObfuscateSecrets::No,
-            false,
             session_startup_path,
-            ShellLaunchState::ShellSpawned {
-                available_shell: None,
-                display_name: ShellName::blank(),
-                shell_type: ShellType::Zsh,
-            },
         );
 
         // We need to set the hostname to the local hostname to ensure that we
@@ -1084,6 +1087,44 @@ impl TerminalModel {
         terminal_model.command_finished(Default::default());
         terminal_model.precmd(Default::default());
         terminal_model
+    }
+
+    /// Like [`Self::new_for_test`] but WITHOUT running the bootstrap handshake, so
+    /// `block_list().is_bootstrapped()` stays `false` — matching a fresh tab (e.g.
+    /// a daemon-session adopt) whose shell has not bootstrapped on this client yet.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_for_test_unbootstrapped(
+        sizes: BlockSize,
+        colors: color::List,
+        event_proxy: ChannelEventListener,
+        background_executor: Arc<Background>,
+        should_show_bootstrap_block: bool,
+        restored_blocks: Option<&[SerializedBlockListItem]>,
+        honor_ps1: bool,
+        is_inverted: bool,
+        session_startup_path: Option<PathBuf>,
+    ) -> Self {
+        Self::new(
+            restored_blocks,
+            sizes,
+            colors,
+            event_proxy,
+            background_executor,
+            should_show_bootstrap_block,
+            false,
+            false,
+            honor_ps1,
+            is_inverted,
+            ObfuscateSecrets::No,
+            false,
+            session_startup_path,
+            ShellLaunchState::ShellSpawned {
+                available_shell: None,
+                display_name: ShellName::blank(),
+                shell_type: ShellType::Zsh,
+            },
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1142,6 +1183,7 @@ impl TerminalModel {
             active_shell_launch_data: None,
             pending_session_info: None,
             ignore_bootstrapping_messages: false,
+            suppress_next_bootstrap_write: false,
             session_startup_path,
             is_receiving_in_band_command_output: IsReceivingInBandCommandOutput::No,
             #[cfg(windows)]
@@ -1497,6 +1539,18 @@ impl TerminalModel {
 
     pub fn ignore_bootstrapping_messages(&mut self) {
         self.ignore_bootstrapping_messages = true;
+    }
+
+    /// Arms the one-shot latch so the next bootstrap-script write triggered by an
+    /// `InitShell` is skipped (T1.3 daemon-session adopt). See the field docs.
+    pub fn suppress_next_bootstrap_write(&mut self) {
+        self.suppress_next_bootstrap_write = true;
+    }
+
+    /// Consumes the one-shot latch, returning whether the next bootstrap-script
+    /// write should be suppressed. Clears it so only a single write is affected.
+    pub fn take_suppress_next_bootstrap_write(&mut self) -> bool {
+        std::mem::take(&mut self.suppress_next_bootstrap_write)
     }
 
     pub fn exit(&mut self, reason: ExitReason) {
@@ -2383,6 +2437,12 @@ pub enum CommandType {
 pub enum HandlerEvent {
     InitShell {
         pending_session_info: Box<SessionInfo>,
+        /// T1.3: this specific `InitShell` was re-fed from a daemon-session
+        /// adopt's captured preamble, so the client must NOT write the bootstrap
+        /// body back into the already-running shell. Set (once) from the model's
+        /// one-shot latch while parsing the preamble, so it is scoped to exactly
+        /// this event — never a later genuine `InitShell`.
+        suppress_bootstrap_write: bool,
     },
     Bootstrapped(BootstrappedEvent),
     Precmd {
@@ -2938,8 +2998,15 @@ impl ansi::Handler for TerminalModel {
                 self.block_list_mut().reinit_shell();
             }
 
+            // T1.3: consume the one-shot suppression latch here — synchronously,
+            // while parsing the source bytes — so the decision rides on *this*
+            // `InitShell` event and can never be claimed by a different (e.g.
+            // live) `InitShell`. Only an `InitShell` re-fed from an adopt preamble
+            // (which arms the latch just before feeding) is stamped.
+            let suppress_bootstrap_write = self.take_suppress_next_bootstrap_write();
             self.emit_handler_event(HandlerEvent::InitShell {
                 pending_session_info: Box::new(pending_session_info),
+                suppress_bootstrap_write,
             });
         }
     }

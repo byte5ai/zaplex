@@ -10635,6 +10635,9 @@ impl TerminalView {
             }
             ModelEvent::Handler(AnsiHandlerEvent::InitShell {
                 pending_session_info,
+                // T1.3 write-suppression is a PtyController concern; the view
+                // renders the subshell bootstrap the same way regardless.
+                suppress_bootstrap_write: _,
             }) => {
                 // The remote confirmed a subshell bootstrap is starting. Hide the
                 // original long-running block now so the user doesn't see the

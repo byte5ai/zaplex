@@ -19,7 +19,7 @@ use crate::proto::{
     ReadFileContextResponse, ResizeSession, ResolveConflict, ResolveConflictResponse, ResolvePath,
     ResolvePathResponse, RunCommandRequest, RunCommandResponse, SaveBuffer, SaveBufferResponse,
     ServerMessage, SessionAttached, SessionBootstrapped, SessionInput, SessionList, SessionOpened,
-    SessionSize, TextEdit, WriteFile, WriteFileChunk, WriteFileChunkResponse,
+    SessionSize, SetBootstrapPreamble, TextEdit, WriteFile, WriteFileChunk, WriteFileChunkResponse,
 };
 
 use crate::protocol::{self, ProtocolError, RequestId};
@@ -269,6 +269,25 @@ impl RemoteServerClient {
             )),
         };
         self.send_notification(msg);
+    }
+
+    /// Reports where a daemon-hosted session's bootstrap handshake completed
+    /// (fire-and-forget) so the daemon can freeze an eviction-proof preamble for
+    /// later adopts (T1.3). Sent once, by the client that opened the session, the
+    /// moment its terminal model becomes bootstrapped; `end_seq` is that client's
+    /// output cursor at that point. Returns whether the notification was enqueued
+    /// so the caller can retry rather than latch off on a lost send.
+    pub fn set_bootstrap_preamble(&self, session_id: String, end_seq: u64) -> bool {
+        let msg = ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::SetBootstrapPreamble(
+                SetBootstrapPreamble {
+                    session_id,
+                    end_seq,
+                },
+            )),
+        };
+        self.try_send_notification(msg)
     }
 
     /// Sends a `NavigatedToDirectory` request and awaits the response.
@@ -697,6 +716,9 @@ impl RemoteServerClient {
             message: Some(client_message::Message::AttachSession(AttachSession {
                 session_id,
                 last_seq,
+                // This client feeds `SessionAttached.bootstrap_preamble` on adopt
+                // (T1.3), so opt in to receiving it.
+                supports_bootstrap_preamble: true,
             })),
         };
         let response = self.send_request(request_id, msg).await?;
@@ -977,10 +999,21 @@ impl RemoteServerClient {
 
     /// Sends a message without registering a pending request (fire-and-forget).
     fn send_notification(&self, msg: ClientMessage) {
-        // Use try_send to avoid blocking; if the channel is full or closed,
-        // the notification is best-effort.
-        if let Err(e) = self.outbound_tx.try_send(msg) {
-            log::debug!("Failed to send notification (best-effort): {e}");
+        let _ = self.try_send_notification(msg);
+    }
+
+    /// Like [`Self::send_notification`] but reports whether the message was
+    /// enqueued, so a caller that latches off after a single send (e.g. the T1.3
+    /// bootstrap-boundary report) can retry when the channel is closed/full.
+    fn try_send_notification(&self, msg: ClientMessage) -> bool {
+        // Use try_send to avoid blocking; if the channel is full or closed, the
+        // notification is best-effort and the caller is told it did not go out.
+        match self.outbound_tx.try_send(msg) {
+            Ok(()) => true,
+            Err(e) => {
+                log::debug!("Failed to send notification (best-effort): {e}");
+                false
+            }
         }
     }
 

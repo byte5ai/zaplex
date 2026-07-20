@@ -49,6 +49,9 @@ message ClientMessage {
     // Session-less one-shot host command (Agent-Cockpit remote guardrails). See
     // the "Session-less Host Command" section at the end of this file.
     HostExec host_exec = 31;
+    // Reports where a session's bootstrap handshake completed so the daemon can
+    // freeze an eviction-proof preamble for later adopts (T1.3).
+    SetBootstrapPreamble set_bootstrap_preamble = 32;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -628,6 +631,12 @@ message AttachSession {
   // Highest output seq the client has already consumed; 0 means replay
   // everything available from the earliest point in the ring buffer.
   uint64 last_seq = 2;
+  // Whether this client understands `SessionAttached.bootstrap_preamble` (T1.3).
+  // Old clients omit this → it decodes as false → the daemon serves a plain
+  // replay from `last_seq` exactly as before (never shifting the replay past a
+  // preamble the client cannot consume), so new-daemon↔old-client stays
+  // wire-transparent.
+  bool supports_bootstrap_preamble = 3;
 }
 
 // Daemon → client: attach succeeded, with replay data and the current size.
@@ -638,6 +647,30 @@ message SessionAttached {
   uint64 base_seq = 3;
   // Historical PTY bytes from after last_seq up to now (may be empty).
   bytes replay = 4;
+  // The session's frozen bootstrap-handshake prefix: the raw captured output
+  // bytes [0, end_seq) up to where the opening client reported bootstrap complete
+  // (so it contains the InitShell…Bootstrapped DCS plus any interleaved banner /
+  // prompt output). Sent only for an opted-in fresh adopt whose ring has evicted
+  // its start (`base_seq() > 0`), when `replay` may no longer carry the handshake
+  // (T1.3). Empty otherwise: opt-out clients, a reconnect (`last_seq > 0`), a
+  // session with nothing evicted, or one whose capture was never frozen /was
+  // abandoned. The client feeds this through the normal parser path *before* the
+  // replay to arm bootstrap (no client-side state-machine surgery). `base_seq`
+  // already accounts for it: it points at the first replay byte at or after the
+  // preamble's end, so preamble and replay never overlap.
+  bytes bootstrap_preamble = 5;
+}
+
+// Client → daemon: report the byte boundary at which this session's Zaplexify
+// bootstrap handshake completed (notification, no response). Sent once, by the
+// client that *opened* the session, the moment its terminal model becomes
+// bootstrapped — `end_seq` is that client's output cursor at that point. The
+// daemon freezes the output bytes it accumulated from seq 0 up to `end_seq` as
+// the session's `bootstrap_preamble`, immune to later ring eviction, so a future
+// adopt can still arm bootstrap. Idempotent: ignored once the preamble is frozen.
+message SetBootstrapPreamble {
+  string session_id = 1;
+  uint64 end_seq = 2;
 }
 
 // Client → daemon: detach (notification, no response). The session keeps
