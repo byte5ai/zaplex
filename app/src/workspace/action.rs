@@ -699,6 +699,17 @@ pub enum WorkspaceAction {
         config_dir: Option<PathBuf>,
         /// Isolate the fork's file effects in a fresh sibling worktree.
         into_worktree: bool,
+        /// The source session's host (the inventory's Host column label), for a
+        /// toast when the host is unreachable.
+        host: String,
+        /// The host's live daemon identity (`None` for the local host). A remote
+        /// session forks *on its own host* — resolve this to the SSH node and run
+        /// the fork there — instead of wrongly opening a local tab at the remote
+        /// cwd.
+        host_id: Option<String>,
+        /// `true` when the source session runs on this machine — the inventory's
+        /// explicit marker, never a host-label comparison.
+        is_local: bool,
     },
     /// Adopt an idle CLI session in place (cockpit "open = focus" verb): opens a
     /// terminal tab in the session's cwd and *resumes the same session* (no
@@ -721,9 +732,10 @@ pub enum WorkspaceAction {
     /// zaplex-owned tab** (`agent.resume_command_pinned`, exactly like adopt)
     /// and prefill the slash command in that live PTY's input, ready to send.
     /// The command operates on the same session, and the human presses Enter
-    /// (in-the-loop, mirroring the review-loop verbs). Local + Claude only:
-    /// resume runs a local PTY at `cwd`, and `/compact`/`/clear` are Claude Code
-    /// commands.
+    /// (in-the-loop, mirroring the review-loop verbs). A local session resumes
+    /// into a local PTY at `cwd`; a remote one resumes *on its own host*
+    /// (`host_id` → SSH node) and prefills the command there. Claude only
+    /// (`/compact`/`/clear` are Claude Code commands).
     SlashCommandSession {
         agent: CLIAgent,
         session_id: String,
@@ -734,6 +746,14 @@ pub enum WorkspaceAction {
         config_dir: Option<PathBuf>,
         /// The literal slash command to prefill (e.g. `/compact`, `/clear`).
         command: String,
+        /// The source session's host label (for an unreachable-host toast).
+        host: String,
+        /// The host's live daemon identity (`None` for local). A remote session
+        /// resumes on its own host and prefills the command there, instead of
+        /// resuming locally at the remote cwd.
+        host_id: Option<String>,
+        /// `true` when the source session runs on this machine.
+        is_local: bool,
     },
     /// Open a session's conversation transcript (cockpit "log" verb): reads the
     /// session's `.jsonl`, renders it to Markdown, and opens it read-only in a

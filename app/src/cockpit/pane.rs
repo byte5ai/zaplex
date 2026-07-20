@@ -848,6 +848,12 @@ impl CockpitPaneView {
             // Non-default accounts pin the fork to the same subscription.
             config_dir: (!acct.account.is_default).then(|| acct.account.config_dir.clone()),
             into_worktree,
+            // The account pane's fork surface is local by contract (`acct.sessions`
+            // are this machine's), matching the `is_local = true` passed to
+            // `SessionCapabilities::of` above.
+            host: String::new(),
+            host_id: None,
+            is_local: true,
         };
         Some(icon_word_verb(
             state,
@@ -1322,7 +1328,17 @@ impl CockpitPaneView {
 
         let caps = SessionCapabilities::of(session, is_local);
         let agent = crate::cockpit::agent_of(session.provider);
-        let config_dir = CockpitModel::as_ref(app).config_dir_for_session(&session.session_id);
+        // The account config dir the fork/slash command pins to. A *remote*
+        // session's is the host-side path the daemon reported with the session
+        // (`session.config_dir`), replayed verbatim on the host — never the local
+        // `config_dir_for_session`, which is this machine's path and would resume
+        // the remote agent under the wrong (or a nonexistent) account. Local
+        // sessions keep the local lookup.
+        let config_dir: Option<PathBuf> = if is_local {
+            CockpitModel::as_ref(app).config_dir_for_session(&session.session_id)
+        } else {
+            session.config_dir.clone().map(PathBuf::from)
+        };
         let label = zaplex_cockpit::session_label(session);
         let rk = &menu.row_key;
         let k = |suffix: &str| format!("{rk}\u{0}{suffix}");
@@ -1368,18 +1384,27 @@ impl CockpitPaneView {
                         cwd: PathBuf::from(&session.cwd),
                         config_dir: config_dir.clone(),
                         into_worktree: false,
+                        host: host.clone().unwrap_or_default(),
+                        host_id: host_id.clone(),
+                        is_local,
                     },
                     appearance,
                 ),
                 &mut col,
             );
-            // Into a worktree only where there is a repo to branch — otherwise
-            // the fork would have nowhere to go.
-            if self
-                .session_in_repo
-                .get(&session.session_id)
-                .copied()
-                .unwrap_or(false)
+            // Into a worktree only for a *local* session that is in a repo.
+            // Worktree isolation is a local-git feature (the fork opens a fresh
+            // sibling worktree on this machine); `session_in_repo` is also probed
+            // against the local filesystem, so a remote session could only match
+            // via a session-id collision with a local repo session — gating on
+            // `is_local` closes that, so a remote fork is always the correct
+            // in-place run on its host.
+            if is_local
+                && self
+                    .session_in_repo
+                    .get(&session.session_id)
+                    .copied()
+                    .unwrap_or(false)
             {
                 push(
                     self.menu_item(
@@ -1392,6 +1417,9 @@ impl CockpitPaneView {
                             cwd: PathBuf::from(&session.cwd),
                             config_dir: config_dir.clone(),
                             into_worktree: true,
+                            host: host.clone().unwrap_or_default(),
+                            host_id: host_id.clone(),
+                            is_local,
                         },
                         appearance,
                     ),
@@ -1407,6 +1435,9 @@ impl CockpitPaneView {
                 cwd: PathBuf::from(&session.cwd),
                 config_dir: config_dir.clone(),
                 command: command.to_string(),
+                host: host.clone().unwrap_or_default(),
+                host_id: host_id.clone(),
+                is_local,
             };
             push(
                 self.menu_item(

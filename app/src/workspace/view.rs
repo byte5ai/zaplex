@@ -4293,6 +4293,7 @@ impl Workspace {
     /// With `into_worktree`, the fork instead runs in a fresh sibling git
     /// worktree of the session's repo (design §3/FW), so trying a second
     /// approach never touches the first approach's working tree.
+    #[allow(clippy::too_many_arguments)]
     fn fork_agent_session(
         &mut self,
         agent: CLIAgent,
@@ -4300,6 +4301,9 @@ impl Workspace {
         cwd: &Path,
         config_dir: Option<&Path>,
         into_worktree: bool,
+        host: &str,
+        host_id: Option<&str>,
+        is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(fork_cmd) = agent.fork_command_pinned(session_id, config_dir) else {
@@ -4307,6 +4311,29 @@ impl Workspace {
             // is the belt-and-braces guard (no fake fork).
             return;
         };
+        if !is_local {
+            // The source session runs on a remote host, so the fork must too —
+            // running it locally would open a tab at the *remote* cwd on this
+            // machine and address the wrong (or a non-existent) checkout. Run it
+            // on the session's own host. (Worktree isolation is a local-only
+            // feature — `into_worktree` is never offered for remote sessions,
+            // whose in-repo probe checks the local filesystem — so a remote fork
+            // is always in-place.)
+            #[cfg(all(unix, feature = "local_tty"))]
+            {
+                let _ = into_worktree;
+                self.run_agent_command_on_remote_host(host, host_id, cwd, &fork_cmd, ctx);
+            }
+            #[cfg(not(all(unix, feature = "local_tty")))]
+            {
+                // No daemon transport on this build — surface it instead of a
+                // silent no-op (and never fall through to the wrong local path).
+                let _ = (into_worktree, host_id, cwd, fork_cmd);
+                self.remote_agent_action_unavailable_toast(host, ctx);
+            }
+            return;
+        }
+        let _ = (host, host_id);
         #[cfg(feature = "local_fs")]
         if into_worktree {
             self.fork_into_worktree(&fork_cmd, cwd, ctx);
@@ -4314,6 +4341,84 @@ impl Workspace {
         }
         let _ = into_worktree;
         self.fork_agent_session_in_place(&fork_cmd, cwd, ctx);
+    }
+
+    /// Run `command` on a *remote* agent session's own host: resolve the daemon
+    /// `host_id` to its live SSH node and open a terminal there that runs the
+    /// command in `cwd` (the host's own CLI login, so remote account routing is
+    /// the host's, not a local config dir). The command is prepended with the
+    /// host's own startup command, exactly like [`Self::attach_fleet_session`]'s
+    /// remote resume. Returns `true` when a remote tab was opened; on a host with
+    /// no live daemon (or no matching server row) it shows an honest toast and
+    /// returns `false`, so the caller never silently falls back to the wrong
+    /// local path.
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn run_agent_command_on_remote_host(
+        &mut self,
+        host: &str,
+        host_id: Option<&str>,
+        cwd: &Path,
+        command: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let node_id = host_id.and_then(|hid| self.node_for_daemon_host(hid, &*ctx));
+        let Some(node_id) = node_id else {
+            self.toast_stack.update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::default(format!(
+                        "That agent runs on {host}, which isn't connected right now — open \
+                         that host first, then try again."
+                    )),
+                    ctx,
+                );
+            });
+            return false;
+        };
+        let full = format!(
+            "cd {} && {command}",
+            shell_words::quote(&cwd.to_string_lossy())
+        );
+        let server = warp_ssh_manager::with_conn(|conn| {
+            Ok(warp_ssh_manager::SshRepository::get_server(conn, &node_id)?)
+        });
+        match server {
+            Ok(Some(mut server)) => {
+                server.startup_command = Some(match server.startup_command {
+                    Some(existing) if !existing.trim().is_empty() => format!("{existing}; {full}"),
+                    _ => full,
+                });
+                self.open_ssh_terminal(node_id, server, false, ctx);
+                true
+            }
+            _ => {
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::error(format!(
+                            "Couldn't find host '{node_id}' to run the command on."
+                        )),
+                        ctx,
+                    );
+                });
+                false
+            }
+        }
+    }
+
+    /// Remote fork / slash landed on a build without the daemon transport
+    /// (`all(unix, feature = "local_tty")`). The cross-host inventory can still
+    /// surface these verbs there, so tell the user honestly instead of silently
+    /// no-op'ing — and never fall through to the wrong local path.
+    #[cfg(not(all(unix, feature = "local_tty")))]
+    fn remote_agent_action_unavailable_toast(&mut self, host: &str, ctx: &mut ViewContext<Self>) {
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::default(format!(
+                    "That agent runs on {host} — remote agent actions aren't available on \
+                     this platform."
+                )),
+                ctx,
+            );
+        });
     }
 
     /// Adopt an idle CLI session in place (`AdoptAgentSession`, cockpit
@@ -4345,6 +4450,7 @@ impl Workspace {
     /// zaplex-owned tab (identical to adopt) and prefill the slash command in
     /// that live PTY's input — the human presses Enter to send it (in-the-loop,
     /// like the review-loop verbs). The command then acts on the same session.
+    #[allow(clippy::too_many_arguments)]
     fn slash_command_session(
         &mut self,
         agent: CLIAgent,
@@ -4352,6 +4458,9 @@ impl Workspace {
         cwd: &Path,
         config_dir: Option<&Path>,
         command: &str,
+        host: &str,
+        host_id: Option<&str>,
+        is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(resume_cmd) = agent.resume_command_pinned(session_id, config_dir) else {
@@ -4359,15 +4468,54 @@ impl Workspace {
             // the surface stays disabled, this is the belt-and-braces guard.
             return;
         };
-        // Resume the session into a fresh local tab (owns the PTY) …
+        if !is_local {
+            // Remote session: resume it *on its own host* (not locally at the
+            // remote cwd). We do NOT prefill the new tab's input as the local path
+            // does: `open_ssh_terminal` runs a fresh preflight + handshake, and
+            // either can replace the daemon tab with a classic-SSH fallback tab
+            // mid-connect, silently dropping a prefilled command. Instead, once
+            // the resume tab opened, surface the command for the user to send —
+            // honest, and never lost. The resume itself rides the daemon startup
+            // command, so it survives a fallback too.
+            #[cfg(all(unix, feature = "local_tty"))]
+            {
+                if self.run_agent_command_on_remote_host(host, host_id, cwd, &resume_cmd, ctx) {
+                    let command = command.to_string();
+                    self.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::default(format!(
+                                "Resumed on {host} — send {command} in the new tab to run it."
+                            )),
+                            ctx,
+                        );
+                    });
+                }
+            }
+            #[cfg(not(all(unix, feature = "local_tty")))]
+            {
+                // No daemon transport on this build — surface it, don't no-op.
+                let _ = (host_id, cwd, resume_cmd, command);
+                self.remote_agent_action_unavailable_toast(host, ctx);
+            }
+            return;
+        }
+        let _ = (host, host_id);
+        // Local: resume the session into a fresh local tab (owns the PTY) …
         self.fork_agent_session_in_place(&resume_cmd, cwd, ctx);
         // … then prefill the slash command, ready for the human to send.
-        let command = command.to_string();
+        self.prefill_active_tab_input(command, ctx);
+    }
+
+    /// Prefill `text` into the active tab's focused session input box and focus
+    /// it — stages a slash command (`/compact`, `/clear`) for the human to send
+    /// after a resume (local or remote).
+    fn prefill_active_tab_input(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        let text = text.to_string();
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
                 terminal_view.update(ctx, |terminal_view, ctx| {
                     terminal_view.input().update(ctx, |input, ctx| {
-                        input.replace_buffer_content(&command, ctx);
+                        input.replace_buffer_content(&text, ctx);
                         input.focus_input_box(ctx);
                     });
                 });
@@ -22168,6 +22316,9 @@ impl TypedActionView for Workspace {
                 cwd,
                 config_dir,
                 into_worktree,
+                host,
+                host_id,
+                is_local,
             } => {
                 self.fork_agent_session(
                     *agent,
@@ -22175,6 +22326,9 @@ impl TypedActionView for Workspace {
                     cwd,
                     config_dir.as_deref(),
                     *into_worktree,
+                    host,
+                    host_id.as_deref(),
+                    *is_local,
                     ctx,
                 );
             }
@@ -22195,6 +22349,9 @@ impl TypedActionView for Workspace {
                 cwd,
                 config_dir,
                 command,
+                host,
+                host_id,
+                is_local,
             } => {
                 self.slash_command_session(
                     *agent,
@@ -22202,6 +22359,9 @@ impl TypedActionView for Workspace {
                     cwd,
                     config_dir.as_deref(),
                     command,
+                    host,
+                    host_id.as_deref(),
+                    *is_local,
                     ctx,
                 );
             }
