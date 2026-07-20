@@ -46,23 +46,23 @@ struct MenuItem {
 fn build_file_menu_items(entry_index: usize) -> Vec<MenuItem> {
     vec![
         MenuItem {
-            label: String::from("Open"),
+            label: crate::t!("sftp-context-menu-open"),
             action: SftpBrowserAction::OpenEntry(entry_index),
         },
         MenuItem {
-            label: String::from("Download"),
+            label: crate::t!("sftp-context-menu-download"),
             action: SftpBrowserAction::DownloadEntry(entry_index),
         },
         MenuItem {
-            label: String::from("Rename"),
+            label: crate::t!("sftp-context-menu-rename"),
             action: SftpBrowserAction::RenameEntry(entry_index),
         },
         MenuItem {
-            label: String::from("Delete"),
+            label: crate::t!("sftp-context-menu-delete"),
             action: SftpBrowserAction::DeleteEntry(entry_index),
         },
         MenuItem {
-            label: String::from("Details"),
+            label: crate::t!("sftp-context-menu-details"),
             action: SftpBrowserAction::DetailsEntry(entry_index),
         },
     ]
@@ -258,13 +258,19 @@ mod tests {
         assert_eq!(items.len(), 5, "should have 5 menu items");
     }
 
-    /// Test menu item labels are correct
+    /// Every menu item resolves to a non-empty label from its i18n key. The exact
+    /// text is order-dependent on the process-global Fluent loader (the raw key
+    /// when uninitialized, localized text once another test in the same process
+    /// initializes it), so this asserts only that a label is present — the exact
+    /// English/German strings live in the .ftl files (compile-validated by `fl!`),
+    /// and the label↔action mapping is covered by
+    /// `test_build_file_menu_items_actions_index`.
     #[test]
     fn test_build_file_menu_items_labels() {
         let items = build_file_menu_items(0);
-        let expected_labels = ["Open", "Download", "Rename", "Delete", "Details"];
-        for (item, expected) in items.iter().zip(expected_labels.iter()) {
-            assert_eq!(&item.label.as_str(), expected, "label should be {}", expected);
+        assert_eq!(items.len(), 5, "should have 5 menu items");
+        for item in &items {
+            assert!(!item.label.is_empty(), "menu item must have a non-empty label");
         }
     }
 
