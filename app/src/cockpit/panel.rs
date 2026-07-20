@@ -78,6 +78,10 @@ pub struct CockpitPanel {
     /// Hover state of the „KI-KONTEN" header's fleet total — the cross-account
     /// spend figure doubles as the entry point to the fleet pane (spec v3 §S1).
     fleet_total_btn: MouseStateHandle,
+    /// Hover/click state for the account-zone "try again" retry (the loading /
+    /// scan-failed / empty placeholder). A **stable** handle: `Hoverable` tracks
+    /// mouse-down in it, so a fresh one each render would drop the click.
+    rescan_btn: MouseStateHandle,
     /// Hover/click state of each **project group header** (the collapsible
     /// Host → Projekt → Session level), keyed by `project_key`. Clicking the
     /// header folds/unfolds that project's sessions.
@@ -150,6 +154,7 @@ impl CockpitPanel {
             conductor_row_star_states: HashMap::new(),
             zone_gear_btn: MouseStateHandle::default(),
             fleet_total_btn: MouseStateHandle::default(),
+            rescan_btn: MouseStateHandle::default(),
             conductor_project_states: HashMap::new(),
             expanded_projects: HashMap::new(),
         };
@@ -238,6 +243,56 @@ impl CockpitPanel {
         color: ColorU,
     ) -> Box<dyn Element> {
         Text::new_inline(s, family, size).with_color(color).finish()
+    }
+
+    /// The account-zone placeholder, disambiguated by scan health so an empty
+    /// account list no longer reads the same whether the first scan is still
+    /// running, a config/dir failed to load, or there genuinely are no accounts.
+    /// The failed and genuine-empty cases offer a retry (re-run the scan).
+    fn render_scan_placeholder(
+        &self,
+        health: &zaplex_cockpit::ScanHealth,
+        enabled: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        use zaplex_cockpit::ScanHealth;
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let accent = theme.accent().into_solid();
+        // A deliberately-disabled cockpit is neither "empty" nor "loading" — say so,
+        // and offer no retry (re-scanning cannot help while it is off).
+        if !enabled {
+            return Self::text(crate::t!("cockpit-disabled").to_string(), family, body, muted);
+        }
+        let (msg, retry) = match health {
+            ScanHealth::Pending => (crate::t!("cockpit-loading").to_string(), false),
+            ScanHealth::Degraded(_) => (crate::t!("cockpit-scan-failed").to_string(), true),
+            ScanHealth::Loaded => {
+                (crate::t!("workspace-left-panel-cockpit-empty").to_string(), true)
+            }
+        };
+        let msg_el = Self::text(msg, family, body, muted);
+        if !retry {
+            return msg_el;
+        }
+        let retry_el = Hoverable::new(self.rescan_btn.clone(), move |mouse| {
+            let c = if mouse.is_hovered() { muted } else { accent };
+            Text::new_inline(crate::t!("cockpit-retry").to_string(), family, body)
+                .with_color(c)
+                .finish()
+        })
+        .with_cursor(warpui::platform::Cursor::PointingHand)
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(CockpitPanelAction::Rescan))
+        .finish();
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(8.0)
+            .with_child(msg_el)
+            .with_child(retry_el)
+            .finish()
     }
 
     /// A labelled heat bar: `5h [▓▓▓░░] 62%`, coloured by band. Estimate-driven
@@ -1038,9 +1093,9 @@ impl View for CockpitPanel {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let muted = theme.sub_text_color(theme.background()).into_solid();
+        // A disabled cockpit clears its snapshot to empty; the placeholder must say
+        // "disabled", not "no accounts" (spec: the empty state is only for the real one).
+        let enabled = *crate::cockpit::settings::CockpitSettings::as_ref(app).enabled;
 
         let snapshot = CockpitModel::as_ref(app).snapshot().clone();
         let inventory = CockpitModel::as_ref(app).inventory().clone();
@@ -1061,6 +1116,20 @@ impl View for CockpitPanel {
         if let Some(conductor) = self.render_conductor(&inventory, &favorites, appearance) {
             cards = cards.with_child(
                 zone_card(conductor, appearance)
+                    .with_uniform_padding(CARD_PADDING)
+                    .with_margin_bottom(CARD_SPACING * 2.0)
+                    .finish(),
+            );
+        }
+
+        // A degraded scan with some accounts present: the list may be missing others
+        // (e.g. a broken Codex sign-in). Warn above the accounts; the empty case shows
+        // this in its own placeholder instead.
+        if !snapshot.accounts.is_empty()
+            && matches!(snapshot.health, zaplex_cockpit::ScanHealth::Degraded(_))
+        {
+            cards = cards.with_child(
+                Container::new(self.render_scan_placeholder(&snapshot.health, enabled, appearance))
                     .with_uniform_padding(CARD_PADDING)
                     .with_margin_bottom(CARD_SPACING * 2.0)
                     .finish(),
@@ -1088,12 +1157,7 @@ impl View for CockpitPanel {
                     .with_margin_bottom(CARD_SPACING * 2.0)
                     .finish(),
                 )
-                .with_child(Self::text(
-                    crate::t!("workspace-left-panel-cockpit-empty"),
-                    family,
-                    body,
-                    muted,
-                ));
+                .with_child(self.render_scan_placeholder(&snapshot.health, enabled, appearance));
             cards = cards.with_child(
                 Container::new(empty.finish())
                     .with_uniform_padding(CARD_PADDING)
@@ -1160,6 +1224,9 @@ pub enum CockpitPanelAction {
     /// own pane and carry a stable highlight in the sidebar. A second click
     /// focuses the pane; it does not de-select.
     SelectAccount(String),
+    /// Re-run the account scan — the retry on the loading/scan-failed/empty
+    /// placeholder.
+    Rescan,
 }
 
 impl TypedActionView for CockpitPanel {
@@ -1185,6 +1252,9 @@ impl TypedActionView for CockpitPanel {
                 CockpitModel::handle(ctx)
                     .update(ctx, |model, ctx| model.select_account(key.clone(), ctx));
                 ctx.emit(CockpitPanelEvent::OpenCockpitPane(Some(key)));
+            }
+            CockpitPanelAction::Rescan => {
+                CockpitModel::handle(ctx).update(ctx, |model, ctx| model.rescan(ctx));
             }
         }
     }

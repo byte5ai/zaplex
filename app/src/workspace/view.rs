@@ -8219,7 +8219,7 @@ impl Workspace {
         // resolved once here (needs ctx), reused for every flow row.
         let flow_config_dir = {
             let snapshot = crate::cockpit::CockpitModel::as_ref(ctx).snapshot();
-            zaplex_cockpit::pick_freest(zaplex_cockpit::Provider::Claude, &snapshot.accounts)
+            zaplex_cockpit::pick_freest_checked(zaplex_cockpit::Provider::Claude, snapshot)
                 .map(|f| f.account.config_dir.clone())
         };
 
@@ -18177,7 +18177,7 @@ impl Workspace {
         {
             opts.accounts.push(Self::spawn_card_account_option(a));
         }
-        if let Some(f) = zaplex_cockpit::pick_freest(provider, &snapshot.accounts) {
+        if let Some(f) = zaplex_cockpit::pick_freest_checked(provider, snapshot) {
             opts.freest = Some(Self::spawn_card_account_option(f));
             opts.freest_label = Some(format!(
                 "{} ({})",

@@ -225,15 +225,38 @@ pub fn parse_transcript(path: &Path) -> Vec<UsageEntry> {
 
 /// All usage entries for an account with a transcript mtime at or after `since`
 /// (widest window cutoff). Walks `<config_dir>/projects/**/*.jsonl`.
-pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> Vec<UsageEntry> {
+///
+/// The returned bool is `true` when the directory walk hit an I/O error *other than*
+/// a missing `projects/` dir (a permission error on a subdir, etc.) — the usage totals
+/// may then be incomplete. Callers mark the snapshot degraded so a silently-truncated
+/// scan is not mistaken for "never used" (which would also look maximally free to the
+/// launcher's freest-account routing).
+pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> (Vec<UsageEntry>, bool) {
     let projects = account.config_dir.join("projects");
     let mut entries = Vec::new();
-    for file in WalkDir::new(&projects)
-        .into_iter()
-        .flatten()
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("jsonl"))
-    {
+    let mut io_error = false;
+    for result in WalkDir::new(&projects) {
+        let file = match result {
+            Ok(f) => f,
+            Err(e) => {
+                // A missing `projects/` ROOT (depth 0, NotFound) is the "account never
+                // used" case and fine. A NotFound below the root, or any other error
+                // (permission on a subdir, etc.), means the walk was truncated and the
+                // numbers may be incomplete.
+                let missing_root = e.depth() == 0
+                    && e.io_error().map(std::io::Error::kind)
+                        == Some(std::io::ErrorKind::NotFound);
+                if !missing_root {
+                    io_error = true;
+                }
+                continue;
+            }
+        };
+        if !file.file_type().is_file()
+            || file.path().extension().and_then(|x| x.to_str()) != Some("jsonl")
+        {
+            continue;
+        }
         // Cheap mtime prefilter: skip transcripts untouched since the cutoff.
         if let Ok(meta) = file.metadata() {
             if let Ok(modified) = meta.modified() {
@@ -249,7 +272,7 @@ pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> Vec<UsageEn
                 .filter(|e| e.ts >= since),
         );
     }
-    entries
+    (entries, io_error)
 }
 
 #[cfg(test)]

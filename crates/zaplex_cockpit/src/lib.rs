@@ -63,9 +63,10 @@ pub use routing::{is_over_budget, pick_freest, rank_by_freeness, OVER_BUDGET_HEA
 pub use transcript::{
     format_transcript_markdown, parse_transcript, ToolCall, TranscriptTurn, TurnRole, TurnUsage,
 };
+pub use routing::pick_freest_checked;
 pub use types::{
-    Account, AccountStatus, AccountUsage, CockpitSnapshot, Provider, SessionSnapshot, SessionState,
-    UsageEntry, UsageProvenance, WindowTotals,
+    Account, AccountStatus, AccountUsage, CockpitSnapshot, Provider, ScanHealth, SessionSnapshot,
+    SessionState, UsageEntry, UsageProvenance, WindowTotals,
 };
 pub use windows::{
     build_account_usage, window_5h, window_week, with_idle_sessions, with_sessions,
@@ -108,9 +109,29 @@ pub fn build_snapshot(
 ) -> CockpitSnapshot {
     let since = now - window_week();
     let mut accounts = Vec::new();
+    // Reasons the scan degraded (a present-but-unreadable config/dir), collected so an
+    // empty/short accounts list is reported as "load failed" rather than "genuinely
+    // empty" — and excluded from freest-account routing. Re-probing the exact dirs the
+    // discovery/usage helpers walk keeps their signatures (and the daemon callers in
+    // server_model.rs) untouched. Messages are English technical detail for logs; the
+    // UI shows its own plain message, not these strings.
+    let mut degraded: Vec<String> = Vec::new();
+    // discover_accounts silently skips sibling `.claude*` account dirs when home is
+    // unreadable, so a real account can go missing. `try_exists()` distinguishes
+    // "definitely absent" (Ok(false)) from "cannot tell — permission/other" (Err); a
+    // bare `exists()` reports an inaccessible home as absent and would miss the failure.
+    if !matches!(home.try_exists(), Ok(false)) && std::fs::read_dir(home).is_err() {
+        degraded.push("Claude accounts: home directory unreadable".to_string());
+    }
 
     for account in claude::discover_accounts(home, claude_config_dir_env) {
-        let entries = claude::usage_for_account(&account, since);
+        // The walk reports its own I/O errors now (permission on any subdir, not just
+        // the projects/ root) — a silently-truncated scan reads as "never used" and
+        // would win freest-account routing.
+        let (entries, io_error) = claude::usage_for_account(&account, since);
+        if io_error {
+            degraded.push(format!("{}: usage history unreadable", account.label));
+        }
         // One scan: live and dormant are decided by the same pid probe, so a
         // session cannot show up as both because it exited between two passes.
         let scan = sessions::scan_sessions(
@@ -144,8 +165,22 @@ pub fn build_snapshot(
             idle,
         ));
     }
-    for account in codex::discover_accounts(codex_home) {
-        let entries = codex::usage_for_account(&account, since);
+    let codex_accounts = codex::discover_accounts(codex_home);
+    // An unreadable/malformed `auth.json` makes discover return no account at all —
+    // bit-for-bit identical to "Codex was never set up". A present-but-readable, valid
+    // auth.json always yields one account, so an empty result with the file present
+    // (Ok(true)) or inaccessible (Err) means it failed to load; only a definite absence
+    // (Ok(false)) is a genuine "no Codex".
+    if codex_accounts.is_empty()
+        && !matches!(codex_home.join("auth.json").try_exists(), Ok(false))
+    {
+        degraded.push("Codex account: sign-in file unreadable".to_string());
+    }
+    for account in codex_accounts {
+        let (entries, io_error) = codex::usage_for_account(&account, since);
+        if io_error {
+            degraded.push(format!("{}: usage history unreadable", account.label));
+        }
         let b5h = if budget_5h > 0 {
             budget_5h
         } else {
@@ -179,8 +214,77 @@ pub fn build_snapshot(
         ));
     }
 
+    let health = if degraded.is_empty() {
+        ScanHealth::Loaded
+    } else {
+        ScanHealth::Degraded(degraded.join("; "))
+    };
     CockpitSnapshot {
         accounts,
         generated_at: now,
+        health,
+    }
+}
+
+#[cfg(test)]
+mod build_snapshot_health_tests {
+    use super::*;
+    use chrono::Utc;
+    use std::fs;
+
+    /// A present-but-unreadable `auth.json` makes codex discovery return no account —
+    /// identical in shape to "Codex was never set up". The snapshot must report this
+    /// as *degraded* so the UI can say "couldn't read your account" (and offer a
+    /// retry) instead of the misleading "no accounts".
+    #[test]
+    fn a_malformed_codex_auth_json_degrades_the_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let codex_home = tmp.path().join("codex");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&codex_home).unwrap();
+        fs::write(codex_home.join("auth.json"), "{ this is not valid json").unwrap();
+
+        let snap = build_snapshot(
+            &home,
+            &codex_home,
+            None,
+            Utc::now(),
+            0,
+            0,
+            &PricingTable::default(),
+        );
+        assert!(
+            matches!(snap.health, ScanHealth::Degraded(_)),
+            "a present-but-unreadable codex auth.json must degrade, not read as empty: {:?}",
+            snap.health,
+        );
+    }
+
+    /// A clean setup with genuinely no accounts is authoritative — an empty list that
+    /// the UI may present as a real "no accounts" (with a sign-in prompt), not a
+    /// failure.
+    #[test]
+    fn a_clean_empty_setup_is_loaded_not_degraded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let codex_home = tmp.path().join("codex");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&codex_home).unwrap();
+
+        let snap = build_snapshot(
+            &home,
+            &codex_home,
+            None,
+            Utc::now(),
+            0,
+            0,
+            &PricingTable::default(),
+        );
+        assert_eq!(
+            snap.health,
+            ScanHealth::Loaded,
+            "a clean, genuinely-empty setup is authoritative-empty",
+        );
     }
 }

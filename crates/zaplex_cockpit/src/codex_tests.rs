@@ -103,7 +103,8 @@ fn usage_for_account_walks_sessions_tree() {
     let since = DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
-    let entries = usage_for_account(&account, since);
+    let (entries, io_error) = usage_for_account(&account, since);
+    assert!(!io_error, "a readable rollout tree is not an I/O error");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].input, 10);
     assert_eq!(entries[0].provider, Provider::Codex);

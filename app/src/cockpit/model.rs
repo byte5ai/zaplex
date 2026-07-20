@@ -24,7 +24,7 @@ use watcher::HomeDirectoryWatcher;
 use zaplex_cockpit::HostNode;
 use zaplex_cockpit::{
     apply_oauth_usage, build_snapshot, fold_inventory, host_key, AccountOverrides, CockpitSnapshot,
-    FleetTree, PricingTable, Provider, RemoteHost, SessionSnapshot,
+    FleetTree, PricingTable, Provider, RemoteHost, ScanHealth, SessionSnapshot,
 };
 // Cross-host daemon fold is a native-only concern: the `agent_session` module
 // (and the whole remote-daemon layer it lives in) is `#[cfg(not(wasm))]`, and a
@@ -122,6 +122,8 @@ impl CockpitModel {
             snapshot: CockpitSnapshot {
                 accounts: Vec::new(),
                 generated_at: Utc::now(),
+                // No scan has run yet — the UI must show "loading", not "no accounts".
+                health: ScanHealth::Pending,
             },
             inventory: FleetTree::default(),
             pricing: PricingTable::default(),
@@ -138,6 +140,12 @@ impl CockpitModel {
     /// The latest snapshot (empty until the first background scan completes).
     pub fn snapshot(&self) -> &CockpitSnapshot {
         &self.snapshot
+    }
+
+    /// User-triggered re-scan — the empty/degraded-state "try again" action. Re-runs
+    /// the same background scan the watchers and `new()` use.
+    pub fn rescan(&mut self, ctx: &mut ModelContext<Self>) {
+        self.spawn_refresh(ctx);
     }
 
     /// The account key the user has selected in the sidebar, if any (WS4 S5).
@@ -378,12 +386,21 @@ impl CockpitModel {
     /// disabled. Re-enabling resumes normally: the next `spawn_refresh` finds
     /// `enabled` true again and applies a live snapshot as usual.
     fn clear_for_disabled(&mut self, ctx: &mut ModelContext<Self>) {
-        if is_blank(&self.snapshot, &self.inventory) && self.selected_account.is_none() {
-            return; // already blank — nothing changed since the last disabled tick
+        // Skip only when already a *settled, authoritative* blank. The extra
+        // `health.is_loaded()` matters at startup: a cockpit disabled from the very
+        // first tick is blank but still `Pending` (its initial state), and returning
+        // early there would leave every open pane showing "loading…" forever.
+        if is_blank(&self.snapshot, &self.inventory)
+            && self.selected_account.is_none()
+            && self.snapshot.health.is_loaded()
+        {
+            return; // already a settled blank — nothing changed since the last disabled tick
         }
         self.snapshot = CockpitSnapshot {
             accounts: Vec::new(),
             generated_at: Utc::now(),
+            // Disabled is a deliberate, authoritative "nothing" — not a load in flight.
+            health: ScanHealth::Loaded,
         };
         self.inventory = FleetTree::default();
         self.selected_account = None;
@@ -562,6 +579,7 @@ mod tests {
         CockpitSnapshot {
             accounts: Vec::new(),
             generated_at: Utc::now(),
+            health: ScanHealth::Loaded,
         }
     }
 

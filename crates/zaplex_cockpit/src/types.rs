@@ -326,9 +326,38 @@ pub struct AccountUsage {
     pub provenance: UsageProvenance,
 }
 
+/// Load health of a [`CockpitSnapshot`]. Lets a reader tell "no accounts because
+/// the scan has not run / failed" apart from "no accounts because there genuinely
+/// are none" — an empty `accounts` list is otherwise ambiguous, which both misleads
+/// the empty-state UI and lets the launcher's freest-account pick silently choose an
+/// account whose usage merely failed to load (it looks maximally free).
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ScanHealth {
+    /// No disk scan has completed yet: `accounts` is "not loaded", not "empty".
+    #[default]
+    Pending,
+    /// The scan completed and `accounts` is authoritative.
+    Loaded,
+    /// The scan completed but hit a present-but-unreadable config/dir, so
+    /// `accounts` may be missing real accounts or usage. Carries a human reason.
+    Degraded(String),
+}
+
+impl ScanHealth {
+    /// The snapshot is authoritative — safe to route from, and an empty `accounts`
+    /// then means a genuine "no accounts".
+    pub fn is_loaded(&self) -> bool {
+        matches!(self, ScanHealth::Loaded)
+    }
+}
+
 /// A full cockpit snapshot: every discovered account with its usage.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CockpitSnapshot {
     pub accounts: Vec<AccountUsage>,
     pub generated_at: DateTime<Utc>,
+    /// Load health — distinguishes "still loading" / "scan failed" from "genuinely
+    /// empty". `#[serde(default)]` = `Pending` for snapshots written before this field.
+    #[serde(default)]
+    pub health: ScanHealth,
 }

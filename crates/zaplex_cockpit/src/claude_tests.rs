@@ -109,7 +109,8 @@ fn usage_for_account_respects_the_since_cutoff() {
     let since = DateTime::parse_from_rfc3339("2026-06-15T00:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
-    let entries = usage_for_account(&account, since);
+    let (entries, io_error) = usage_for_account(&account, since);
+    assert!(!io_error, "a readable transcript tree is not an I/O error");
     assert_eq!(entries.len(), 1, "only the 06-30 entry passes the cutoff");
     assert_eq!(entries[0].input, 2);
 }

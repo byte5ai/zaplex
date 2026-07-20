@@ -20,6 +20,10 @@ workspace-new-session-terminal = Terminal
 # ── Cockpit ──────────────────────────────────────────────────────────────────
 workspace-left-panel-cockpit = Cockpit
 workspace-left-panel-cockpit-empty = Keine Claude- oder Codex-Konten gefunden.
+cockpit-loading = Konten werden geladen …
+cockpit-scan-failed = Einige Konten ließen sich nicht lesen.
+cockpit-retry = Erneut versuchen
+cockpit-disabled = Das Cockpit ist ausgeschaltet.
 cockpit-open-dashboard-tooltip = Cockpit-Dashboard öffnen
 cockpit-pane-title = Cockpit
 cockpit-pane-col-today = Heute

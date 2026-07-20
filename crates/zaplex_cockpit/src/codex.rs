@@ -177,14 +177,33 @@ fn date_from_path(path: &Path) -> Option<DateTime<Utc>> {
 }
 
 /// All Codex usage entries newer than `since`, from `<config_dir>/sessions/**/rollout-*.jsonl`.
-pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> Vec<UsageEntry> {
+///
+/// The returned bool is `true` when the walk hit an I/O error other than a missing
+/// `sessions/` dir — see [`crate::claude::usage_for_account`] for why the caller then
+/// marks the snapshot degraded.
+pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> (Vec<UsageEntry>, bool) {
     let sessions = account.config_dir.join("sessions");
     let mut entries = Vec::new();
-    for file in WalkDir::new(&sessions)
-        .into_iter()
-        .flatten()
-        .filter(|e| e.file_type().is_file())
-    {
+    let mut io_error = false;
+    for result in WalkDir::new(&sessions) {
+        let file = match result {
+            Ok(f) => f,
+            Err(e) => {
+                // Only a missing `sessions/` root (depth 0, NotFound) is exempt; a
+                // NotFound below it or any other error truncates the walk. See
+                // `claude::usage_for_account`.
+                let missing_root = e.depth() == 0
+                    && e.io_error().map(std::io::Error::kind)
+                        == Some(std::io::ErrorKind::NotFound);
+                if !missing_root {
+                    io_error = true;
+                }
+                continue;
+            }
+        };
+        if !file.file_type().is_file() {
+            continue;
+        }
         let name = file.file_name().to_str().unwrap_or("");
         if !(name.starts_with("rollout-") && name.ends_with(".jsonl")) {
             continue;
@@ -204,7 +223,7 @@ pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> Vec<UsageEn
                 .filter(|e| e.ts >= since),
         );
     }
-    entries
+    (entries, io_error)
 }
 
 #[cfg(test)]
