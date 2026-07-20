@@ -16222,26 +16222,35 @@ impl TerminalView {
         }
     }
 
-    /// Zaplex: if the session that owns the currently active block is a remote-server session, returns its `HostId`.
+    /// Zaplex: if `session_id` is a remote-server session, returns its `HostId`.
     ///
     /// Used when Ctrl/Cmd+clicking a file path in the terminal, to decide whether to take the local or remote buffer-sync
     /// open flow. Non-remote-server sessions return `None` (keeping local behavior unchanged).
     #[cfg(all(feature = "local_tty", feature = "local_fs"))]
-    fn active_session_remote_host_id(&self, ctx: &AppContext) -> Option<warp_core::HostId> {
+    fn remote_host_id_for_session(
+        &self,
+        session_id: SessionId,
+        ctx: &AppContext,
+    ) -> Option<warp_core::HostId> {
         #[cfg(not(target_family = "wasm"))]
         {
             if !FeatureFlag::SshRemoteServer.is_enabled() {
                 return None;
             }
-            let session_id = self.active_block_session_id()?;
             let mgr = RemoteServerManager::handle(ctx);
             mgr.as_ref(ctx).host_id_for_session(session_id).cloned()
         }
         #[cfg(target_family = "wasm")]
         {
-            let _ = ctx;
+            let _ = (session_id, ctx);
             None
         }
+    }
+
+    /// Zaplex: if the session that owns the currently active block is a remote-server session, returns its `HostId`.
+    #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+    fn active_session_remote_host_id(&self, ctx: &AppContext) -> Option<warp_core::HostId> {
+        self.remote_host_id_for_session(self.active_block_session_id()?, ctx)
     }
 
     /// Zaplex: treats the absolute path resolved from a terminal file link as a remote path and constructs a `RemotePath`.
@@ -16299,32 +16308,58 @@ impl TerminalView {
     }
 
     #[cfg(feature = "local_fs")]
+    /// Opens a file path clicked in the terminal. `clicked_session_id` is the
+    /// session owning the block the link was clicked in; the remote-vs-local
+    /// decision keys off *that* session, not the active block — clicking a file
+    /// link in a remote-session block while a *different* (e.g. local) block is
+    /// active must still open the remote file, not a same-named local one (B1).
+    /// `None` (e.g. an alt-screen link, or a non-grid caller) falls back to the
+    /// active block, preserving prior behavior.
     fn open_file_path(
         &mut self,
         path: PathBuf,
         line_and_column_num: Option<LineAndColumnArg>,
+        clicked_session_id: Option<SessionId>,
         ctx: &mut ViewContext<Self>,
     ) {
         ctx.notify();
 
         // Zaplex: remote SSH sessions open remote files via the buffer-sync protocol.
         #[cfg(all(feature = "local_tty", feature = "local_fs"))]
-        if let Some(host_id) = self.active_session_remote_host_id(ctx) {
-            // Remote directory click: do not open in the editor; instead `cd` into it in that remote session.
-            #[cfg(not(target_family = "wasm"))]
-            if let Some(session_id) = self.active_block_session_id() {
-                if self.remote_clicked_path_is_dir(session_id, &path) {
-                    self.cd_into_remote_directory(&path, ctx);
-                    return;
+        {
+            let target_session_id = clicked_session_id.or_else(|| self.active_block_session_id());
+            if let Some(host_id) =
+                target_session_id.and_then(|session_id| self.remote_host_id_for_session(session_id, ctx))
+            {
+                // Remote directory click: do not open in the editor; instead `cd`
+                // into it in that remote session.
+                #[cfg(not(target_family = "wasm"))]
+                if let Some(session_id) = target_session_id {
+                    if self.remote_clicked_path_is_dir(session_id, &path) {
+                        // `cd_into_remote_directory` runs the command through the
+                        // *active* input, so it only lands in the right shell when
+                        // the clicked block is the active session. A remote
+                        // directory clicked in a different (non-active) session
+                        // can't be entered from here — skip rather than `cd` the
+                        // wrong shell (B1).
+                        if Some(session_id) == self.active_block_session_id() {
+                            self.cd_into_remote_directory(&path, ctx);
+                        } else {
+                            log::debug!(
+                                "ignoring remote directory link clicked in a non-active session"
+                            );
+                        }
+                        return;
+                    }
                 }
+                if let Some(remote_path) = Self::remote_path_from_terminal_path(host_id, &path) {
+                    ctx.emit(Event::OpenRemoteFileFromTerminal {
+                        remote_path,
+                        line_col: line_and_column_num,
+                    });
+                }
+                return;
             }
-            if let Some(remote_path) = Self::remote_path_from_terminal_path(host_id, &path) {
-                ctx.emit(Event::OpenRemoteFileFromTerminal {
-                    remote_path,
-                    line_col: line_and_column_num,
-                });
-            }
-            return;
         }
 
         let settings = EditorSettings::as_ref(ctx);
@@ -16395,9 +16430,26 @@ impl TerminalView {
         match link {
             #[cfg(feature = "local_fs")]
             GridHighlightedLink::File(link) if link.contains(position) => {
-                let link = link.get_inner();
-                if let Some(path) = link.absolute_path() {
-                    self.open_file_path(path, link.line_and_column_num, ctx);
+                // Resolve the session owning the block this link sits in, so the
+                // remote-vs-local open decision follows the *clicked* block, not
+                // whichever block is active (B1). Alt-screen links have no block →
+                // `None` falls back to the active block.
+                let clicked_block_index = match link {
+                    WithinModel::BlockList(within_block) => Some(within_block.block_index),
+                    WithinModel::AltScreen(_) => None,
+                };
+                let inner = link.get_inner();
+                let path = inner.absolute_path();
+                let line_and_column_num = inner.line_and_column_num;
+                if let Some(path) = path {
+                    let clicked_session_id = clicked_block_index.and_then(|block_index| {
+                        self.model
+                            .lock()
+                            .block_list()
+                            .block_at(block_index)
+                            .and_then(|block| block.metadata().session_id())
+                    });
+                    self.open_file_path(path, line_and_column_num, clicked_session_id, ctx);
                 }
             }
             GridHighlightedLink::Url(url) if url.contains(position) => {
@@ -18134,7 +18186,13 @@ impl TerminalView {
                         ctx,
                     );
                 } else {
-                    self.open_file_path(absolute_path.to_path_buf(), *line_and_column_num, ctx);
+                    // AI-detected path (no grid click) → active-block session.
+                    self.open_file_path(
+                        absolute_path.to_path_buf(),
+                        *line_and_column_num,
+                        None,
+                        ctx,
+                    );
                 }
             }
             AIBlockEvent::ShowLinkTooltip(tooltip_info) => {
