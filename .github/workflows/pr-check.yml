@@ -57,7 +57,7 @@ env:
 jobs:
   changes:
     name: detect build-relevant changes
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 5
     outputs:
       needs_build: ${{ steps.detect.outputs.needs_build }}
@@ -86,7 +86,7 @@ jobs:
     if: needs.changes.outputs.needs_build == 'true'
     # Same runner as release_linux, glibc 2.35, to avoid deps differences that
     # only appear on ubuntu-latest.
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -117,7 +117,7 @@ jobs:
     if: needs.changes.outputs.needs_build == 'true'
     # Runs in parallel with cargo_check so it does not delay compile feedback.
     # Same runner as cargo_check for consistent glibc/deps.
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

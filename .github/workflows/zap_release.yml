@@ -44,7 +44,7 @@ env:
 jobs:
   prepare_metadata:
     name: Prepare metadata
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       release_tag: ${{ steps.compute_tag.outputs.tag }}
       release_branch: ${{ steps.compute_tag.outputs.branch }}
@@ -158,7 +158,7 @@ jobs:
             runner: macos-26 # Pro standard arm64 (M2 Pro)
           - arch: x86_64
             dmg_name_suffix: intel
-            runner: macos-26-intel # Pro standard Intel
+            runner: blacksmith-12vcpu-macos-latest # Pro standard Intel
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -244,7 +244,7 @@ jobs:
 
   release_windows:
     name: Build Release (Windows x64)
-    runs-on: windows-latest
+    runs-on: blacksmith-4vcpu-windows-2025
     needs: prepare_metadata
     timeout-minutes: 180
     steps:
@@ -283,7 +283,7 @@ jobs:
 
   release_linux:
     name: Build Release (Linux x86_64)
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     needs: prepare_metadata
     # Use 22.04 (glibc 2.35) instead of ubuntu-latest (24.04, glibc 2.39),
     # AppImage links against host glibc, 22.04 artifacts can run on more older distributions
@@ -510,7 +510,7 @@ jobs:
 
   publish_release:
     name: Publish GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # Must wait for all platforms to build successfully before publishing; if any fails → this job is skipped → no empty Release.
     needs:
       - prepare_metadata
