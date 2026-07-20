@@ -72,7 +72,12 @@ pub enum SshManagerPanelAction {
     /// Add-block button: discover Tailscale peers (`tailscale status --json`) and
     /// add the online ones as SSH servers (skipping hosts already saved).
     DiscoverTailscale,
+    /// Context menu "Delete": opens the confirmation overlay (does not delete).
     DeleteSelected,
+    /// Confirm the pending host/folder deletion (the actual, irreversible delete).
+    ConfirmDelete,
+    /// Dismiss the delete confirmation without deleting.
+    CancelDelete,
     Connect,
     Edit,
     CloneServer(String),
@@ -205,6 +210,20 @@ pub struct SshManagerPanel {
     context_menu_position: Option<Vector2F>,
     context_menu_target: Option<String>,
     context_menu_item_states: Vec<MouseStateHandle>,
+    /// The last context-menu anchor, kept even after the menu is dismissed. The
+    /// menu's click queues `<action>` then `DismissContextMenu`, and WarpUI runs
+    /// queued actions in reverse, so `DismissContextMenu` clears
+    /// `context_menu_position` *before* `on_request_delete` runs — this field
+    /// preserves the position for the delete-confirmation overlay.
+    context_menu_anchor: Option<Vector2F>,
+
+    /// A delete awaiting confirmation: `(node_id, anchor_position)`. Deleting a
+    /// host or folder wipes the DB node plus its three keychain secrets — and a
+    /// folder's whole subtree — with no undo, so it is gated behind an explicit
+    /// confirmation overlay rather than firing on a single context-menu click.
+    pending_delete: Option<(String, Vector2F)>,
+    delete_confirm_cancel_btn: MouseStateHandle,
+    delete_confirm_confirm_btn: MouseStateHandle,
 
     /// The node currently being renamed (editor + node_id).
     rename_state: Option<RenameState>,
@@ -268,6 +287,10 @@ impl SshManagerPanel {
             row_drag_states: HashMap::new(),
             context_menu_position: None,
             context_menu_target: None,
+            context_menu_anchor: None,
+            pending_delete: None,
+            delete_confirm_cancel_btn: MouseStateHandle::default(),
+            delete_confirm_confirm_btn: MouseStateHandle::default(),
             context_menu_item_states: (0..MAX_CONTEXT_MENU_ITEMS)
                 .map(|_| MouseStateHandle::default())
                 .collect(),
@@ -325,6 +348,13 @@ impl SshManagerPanel {
                 if let Some(rs) = self.rename_state.as_ref() {
                     if !self.nodes.iter().any(|n| n.id == rs.node_id) {
                         self.rename_state = None;
+                    }
+                }
+                // Likewise drop a pending delete whose target vanished, so no stale
+                // (empty) confirmation overlay lingers.
+                if let Some((id, _)) = self.pending_delete.as_ref() {
+                    if !self.nodes.iter().any(|n| n.id == *id) {
+                        self.pending_delete = None;
                     }
                 }
                 // Refresh which hosts have Zaplexify persistence enabled (mark).
@@ -697,10 +727,40 @@ impl SshManagerPanel {
         }
     }
 
-    fn on_delete_selected(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Context-menu "Delete": open the confirmation overlay anchored where the
+    /// menu was, instead of deleting immediately. A single misclick must not wipe
+    /// a host (or a folder's whole subtree) and its keychain secrets.
+    fn on_request_delete(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(id) = self.selected_id.clone() else {
             return;
         };
+        // Fail closed: never open an irreversible confirmation whose target we
+        // can't identify (e.g. the node vanished between menu-open and click).
+        if !self.nodes.iter().any(|n| n.id == id) {
+            return;
+        }
+        // Anchor the confirmation where the context menu was. `context_menu_anchor`
+        // (not `context_menu_position`) because the menu's `DismissContextMenu` has
+        // already cleared the latter by the time this runs (reverse dispatch).
+        let position = self.context_menu_anchor.unwrap_or_default();
+        self.pending_delete = Some((id, position));
+        ctx.notify();
+    }
+
+    fn on_cancel_delete(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.pending_delete.take().is_some() {
+            ctx.notify();
+        }
+    }
+
+    /// Perform the irreversible deletion the user just confirmed: the DB node
+    /// (and, for a folder, its whole subtree via the repository) plus the node's
+    /// three keychain secrets.
+    fn on_confirm_delete(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some((id, _)) = self.pending_delete.take() else {
+            return;
+        };
+        ctx.notify();
         let result = warp_ssh_manager::with_conn(|c| Ok(SshRepository::delete_node(c, &id)?));
         if let Err(e) = result {
             log::error!("ssh_manager: delete failed: {e:?}");
@@ -712,7 +772,9 @@ impl SshManagerPanel {
         let _ = store.delete(&id, SecretKind::Passphrase);
         let _ = store.delete(&id, SecretKind::RootPassword);
 
-        self.selected_id = None;
+        if self.selected_id.as_deref() == Some(id.as_str()) {
+            self.selected_id = None;
+        }
         self.refresh_tree(ctx);
         SshTreeChangedNotifier::handle(ctx).update(ctx, |_, ctx| {
             ctx.emit(SshTreeChangedEvent::TreeChanged);
@@ -1044,6 +1106,7 @@ impl SshManagerPanel {
         }
         self.context_menu_target = target;
         self.context_menu_position = Some(position);
+        self.context_menu_anchor = Some(position);
         ctx.notify();
     }
 
@@ -2447,6 +2510,139 @@ impl SshManagerPanel {
             })
             .finish()
     }
+
+    /// The delete-confirmation overlay for the host/folder in `pending_delete`.
+    /// A neutral Cancel and a destructive (red) Delete; clicking outside cancels.
+    fn render_delete_confirm(
+        &self,
+        node_id: &str,
+        appearance: &warp_core::ui::appearance::Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let text_color = theme.main_text_color(theme.background()).into();
+        // Fail closed: if the target vanished (deleted elsewhere while the dialog
+        // is open) render nothing rather than a nameless destructive confirmation.
+        let Some(node) = self.nodes.iter().find(|n| n.id == node_id) else {
+            return Empty::new().finish();
+        };
+        let name = node.name.clone();
+        let is_folder = matches!(node.kind, NodeKind::Folder);
+
+        let title = Text::new_inline(
+            format!("Delete \u{201c}{name}\u{201d}?"),
+            appearance.ui_font_family(),
+            appearance.ui_font_subheading(),
+        )
+        .with_color(text_color)
+        .finish();
+
+        let detail_str = if is_folder {
+            "This deletes the folder and everything inside it, and cannot be undone."
+        } else {
+            "This deletes the saved host and its stored credentials, and cannot be undone."
+        };
+        let detail = Container::new(
+            Text::new_inline(
+                detail_str.to_string(),
+                appearance.ui_font_family(),
+                appearance.ui_font_body(),
+            )
+            .with_color(text_color)
+            .finish(),
+        )
+        .with_padding_top(6.0)
+        .with_padding_bottom(12.0)
+        .finish();
+
+        // Cancel — neutral.
+        let cancel_label = Text::new_inline(
+            "Cancel".to_string(),
+            appearance.ui_font_family(),
+            appearance.ui_font_subheading(),
+        )
+        .with_color(text_color)
+        .finish();
+        let cancel_btn = Hoverable::new(self.delete_confirm_cancel_btn.clone(), move |mouse| {
+            let mut c = Container::new(cancel_label)
+                .with_padding_top(CONTEXT_MENU_ITEM_PADDING_V)
+                .with_padding_bottom(CONTEXT_MENU_ITEM_PADDING_V)
+                .with_padding_left(CONTEXT_MENU_ITEM_PADDING_H)
+                .with_padding_right(CONTEXT_MENU_ITEM_PADDING_H)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                .with_border(Border::all(1.0).with_border_color(theme.surface_3().into()));
+            if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_3(theme));
+            }
+            c.finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(SshManagerPanelAction::CancelDelete);
+        })
+        .finish();
+
+        // Delete — destructive; red label and red border.
+        let delete_label = Text::new_inline(
+            "Delete".to_string(),
+            appearance.ui_font_family(),
+            appearance.ui_font_subheading(),
+        )
+        .with_color(theme.ui_error_color())
+        .finish();
+        let delete_btn = Hoverable::new(self.delete_confirm_confirm_btn.clone(), move |mouse| {
+            let mut c = Container::new(delete_label)
+                .with_padding_top(CONTEXT_MENU_ITEM_PADDING_V)
+                .with_padding_bottom(CONTEXT_MENU_ITEM_PADDING_V)
+                .with_padding_left(CONTEXT_MENU_ITEM_PADDING_H)
+                .with_padding_right(CONTEXT_MENU_ITEM_PADDING_H)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                .with_border(Border::all(1.0).with_border_color(theme.ui_error_color()));
+            if mouse.is_hovered() {
+                c = c.with_background(internal_colors::fg_overlay_3(theme));
+            }
+            c.finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(SshManagerPanelAction::ConfirmDelete);
+        })
+        .finish();
+
+        let buttons = Flex::row()
+            .with_child(cancel_btn)
+            .with_child(Container::new(delete_btn).with_padding_left(8.0).finish())
+            .finish();
+
+        let col = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_child(title)
+            .with_child(detail)
+            .with_child(buttons)
+            .finish();
+
+        let dialog_inner = ConstrainedBox::new(
+            Container::new(col)
+                .with_background(theme.surface_2())
+                .with_border(Border::all(1.0).with_border_color(theme.surface_3().into()))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.0)))
+                .with_uniform_padding(16.0)
+                .finish(),
+        )
+        .with_width(300.0)
+        .finish();
+
+        Dismiss::new(dialog_inner)
+            // Modal: block clicks from passing through to the tree behind (so an
+            // outside click cancels cleanly and can't, e.g., open another context
+            // menu while a delete is pending). Matches the app's other
+            // destructive dialogs.
+            .prevent_interaction_with_other_elements()
+            .on_dismiss(|ctx, _| {
+                ctx.dispatch_typed_action(SshManagerPanelAction::CancelDelete);
+            })
+            .finish()
+    }
 }
 
 impl Entity for SshManagerPanel {
@@ -2466,7 +2662,9 @@ impl TypedActionView for SshManagerPanel {
             SshManagerPanelAction::ToggleAddMode => self.on_toggle_add_mode(ctx),
             SshManagerPanelAction::AddServer => self.on_add_server(ctx),
             SshManagerPanelAction::DiscoverTailscale => self.on_discover_tailscale(ctx),
-            SshManagerPanelAction::DeleteSelected => self.on_delete_selected(ctx),
+            SshManagerPanelAction::DeleteSelected => self.on_request_delete(ctx),
+            SshManagerPanelAction::ConfirmDelete => self.on_confirm_delete(ctx),
+            SshManagerPanelAction::CancelDelete => self.on_cancel_delete(ctx),
             SshManagerPanelAction::Connect => self.on_connect(ctx),
             SshManagerPanelAction::Edit => self.on_edit(ctx),
             SshManagerPanelAction::CloneServer(id) => self.on_clone_server(id, ctx),
@@ -2563,21 +2761,34 @@ impl View for SshManagerPanel {
 
         let positioned_panel = SavePosition::new(panel_content, SSH_PANEL_POSITION_ID).finish();
 
-        let Some(position) = self.context_menu_position else {
+        // Overlays: the context menu and/or the delete-confirmation dialog. With
+        // neither up, return the bare panel unchanged.
+        if self.context_menu_position.is_none() && self.pending_delete.is_none() {
             return positioned_panel;
-        };
-
-        let menu_el = self.render_context_menu(appearance);
-        let positioning = OffsetPositioning::offset_from_parent(
-            position,
-            ParentOffsetBounds::ParentByPosition,
-            ParentAnchor::TopLeft,
-            ChildAnchor::TopLeft,
-        );
+        }
 
         let mut stack = Stack::new();
         stack.add_child(positioned_panel);
-        stack.add_positioned_overlay_child(menu_el, positioning);
+        if let Some(position) = self.context_menu_position {
+            let menu_el = self.render_context_menu(appearance);
+            let positioning = OffsetPositioning::offset_from_parent(
+                position,
+                ParentOffsetBounds::ParentByPosition,
+                ParentAnchor::TopLeft,
+                ChildAnchor::TopLeft,
+            );
+            stack.add_positioned_overlay_child(menu_el, positioning);
+        }
+        if let Some((node_id, position)) = self.pending_delete.clone() {
+            let confirm_el = self.render_delete_confirm(&node_id, appearance);
+            let positioning = OffsetPositioning::offset_from_parent(
+                position,
+                ParentOffsetBounds::ParentByPosition,
+                ParentAnchor::TopLeft,
+                ChildAnchor::TopLeft,
+            );
+            stack.add_positioned_overlay_child(confirm_el, positioning);
+        }
         stack.finish()
     }
 }
