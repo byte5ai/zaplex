@@ -44,7 +44,9 @@ use super::kitty::{
 };
 use super::secrets::{RespectObfuscatedSecrets, SecretAndHandle};
 use super::selection::ScrollDelta;
-use super::session::{BootstrapSessionType, InBandCommandOutputReceiver, SessionId};
+use super::session::{
+    BootstrapSessionType, InBandCommandOutputReceiver, IsLegacySSHSession, SessionId,
+};
 use super::tmux::commands::TmuxCommand;
 use super::{
     super::{AltScreen, BlockList},
@@ -529,6 +531,21 @@ pub struct TerminalModel {
     /// the preamble's own `InitShell`, it can never be claimed by a different (e.g.
     /// live) `InitShell`, and the adopt path clears any residue afterwards.
     suppress_next_bootstrap_write: bool,
+
+    /// Persistent variant of the latch above: true for models driven by a
+    /// daemon-hosted session (set once by the daemon event loop at start). For
+    /// bash/zsh the daemon delivers the root shell's complete bootstrap
+    /// server-side — init at spawn plus the shell body as the session's first
+    /// input — so the client must never write that body into the PTY, for the
+    /// *live* `InitShell` of a fresh open just as for an adopt preamble.
+    /// Without this, the client re-types the ~90 KB body into the
+    /// already-bootstrapped shell, where it executes a second time — visibly,
+    /// as command blocks, after the server-side pass's `stty sane` restored
+    /// echo (RC acceptance 2026-07-21: the connect-time script dump on every
+    /// fresh daemon connect). `init_shell` scopes the stamp to what the daemon
+    /// actually delivers: subshells, fish/pwsh roots (daemon sends init-only)
+    /// and legacy-SSH sessions keep their client-side write.
+    bootstrap_delivered_server_side: bool,
 
     // This session's startup directory path. If None, the startup directory is treated as default
     // (the user's home directory).
@@ -1184,6 +1201,7 @@ impl TerminalModel {
             pending_session_info: None,
             ignore_bootstrapping_messages: false,
             suppress_next_bootstrap_write: false,
+            bootstrap_delivered_server_side: false,
             session_startup_path,
             is_receiving_in_band_command_output: IsReceivingInBandCommandOutput::No,
             #[cfg(windows)]
@@ -1551,6 +1569,17 @@ impl TerminalModel {
     /// write should be suppressed. Clears it so only a single write is affected.
     pub fn take_suppress_next_bootstrap_write(&mut self) -> bool {
         std::mem::take(&mut self.suppress_next_bootstrap_write)
+    }
+
+    /// Marks this model as backed by a daemon-hosted session, whose root-shell
+    /// bootstrap (init + body) is delivered entirely server-side. Every
+    /// non-subshell `InitShell` this model emits from then on is stamped
+    /// `suppress_bootstrap_write`, so the client never types the bootstrap body
+    /// into the live root shell. Set once by the daemon event loop at start;
+    /// never cleared — the backing of a pane does not change within a model's
+    /// lifetime. See the field docs.
+    pub fn mark_bootstrap_delivered_server_side(&mut self) {
+        self.bootstrap_delivered_server_side = true;
     }
 
     pub fn exit(&mut self, reason: ExitReason) {
@@ -2437,11 +2466,12 @@ pub enum CommandType {
 pub enum HandlerEvent {
     InitShell {
         pending_session_info: Box<SessionInfo>,
-        /// T1.3: this specific `InitShell` was re-fed from a daemon-session
-        /// adopt's captured preamble, so the client must NOT write the bootstrap
-        /// body back into the already-running shell. Set (once) from the model's
-        /// one-shot latch while parsing the preamble, so it is scoped to exactly
-        /// this event — never a later genuine `InitShell`.
+        /// The client must NOT write the bootstrap body into the shell for this
+        /// `InitShell`. Stamped from two sources while parsing the source bytes:
+        /// the one-shot adopt-preamble latch (T1.3 — scoped to exactly the
+        /// re-fed preamble event), and the persistent daemon-session flag (the
+        /// daemon delivers the full bootstrap server-side, so a fresh open's
+        /// live handshake must not trigger a client-side write either).
         suppress_bootstrap_write: bool,
     },
     Bootstrapped(BootstrappedEvent),
@@ -3001,9 +3031,33 @@ impl ansi::Handler for TerminalModel {
             // T1.3: consume the one-shot suppression latch here — synchronously,
             // while parsing the source bytes — so the decision rides on *this*
             // `InitShell` event and can never be claimed by a different (e.g.
-            // live) `InitShell`. Only an `InitShell` re-fed from an adopt preamble
-            // (which arms the latch just before feeding) is stamped.
-            let suppress_bootstrap_write = self.take_suppress_next_bootstrap_write();
+            // live) `InitShell`. An `InitShell` re-fed from an adopt preamble
+            // (which arms the latch just before feeding) is stamped — and so is
+            // the ROOT-shell `InitShell` of a daemon-backed model (persistent
+            // flag), but only for the shells whose *body* the daemon actually
+            // delivers server-side: bash and zsh (mirroring the daemon's
+            // delivery contract in `server_model.rs` / `spawn_session_pty`).
+            // Exempt from the persistent flag:
+            //   • subshells Zaplexified inside the tab — the daemon never
+            //     bootstraps nested shells, the client-side write is their only
+            //     mechanism;
+            //   • fish/pwsh roots — the daemon sends them init-only (their body
+            //     is unsafe to replay server-side), so the client write is
+            //     still what completes their bootstrap;
+            //   • legacy-SSH sessions — a daemon root handshake is never one,
+            //     so this can only be a nested `ssh` that still needs the
+            //     client-side bootstrap (reachable with the `SshRemoteServer`
+            //     flag disabled, where it is not rerouted to `SshInitShell`).
+            // The latch is always consumed first so it can never leak.
+            let latch = self.take_suppress_next_bootstrap_write();
+            let suppress_bootstrap_write = latch
+                || (self.bootstrap_delivered_server_side
+                    && pending_session_info.subshell_info.is_none()
+                    && matches!(shell_type, ShellType::Bash | ShellType::Zsh)
+                    && !matches!(
+                        pending_session_info.is_legacy_ssh_session,
+                        IsLegacySSHSession::Yes { .. }
+                    ));
             self.emit_handler_event(HandlerEvent::InitShell {
                 pending_session_info: Box::new(pending_session_info),
                 suppress_bootstrap_write,

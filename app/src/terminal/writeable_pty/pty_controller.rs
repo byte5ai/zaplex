@@ -127,16 +127,15 @@ impl<T: EventLoopSender> PtyController<T> {
                 pending_session_info,
                 suppress_bootstrap_write,
             }) => {
-                // T1.3: this `InitShell` was re-fed from a daemon-session adopt's
-                // captured preamble to arm bootstrap on this client. The daemon
-                // already bootstrapped the shell server-side, so skip writing the
-                // bootstrap body back into the already-running shell (a double-load
-                // for fish/pwsh). The flag rides on this exact event, so only the
-                // re-fed preamble `InitShell` is skipped — a later genuine one still
-                // initializes normally.
+                // This `InitShell` came from a daemon-hosted session — the fresh
+                // open's live handshake or an adopt's re-fed preamble (T1.3). The
+                // daemon already delivered the complete bootstrap server-side, so
+                // writing the body here would run it a second time, visibly, in
+                // the live shell (and double-load fish/pwsh). Skip the write; a
+                // genuine `InitShell` from a non-daemon pane still initializes.
                 if *suppress_bootstrap_write {
                     log::debug!(
-                        "PtyController: skipping bootstrap write for an adopted daemon session (T1.3)"
+                        "PtyController: skipping bootstrap write for a daemon-hosted session"
                     );
                 } else {
                     me.initialize_shell(pending_session_info.as_ref(), ctx);

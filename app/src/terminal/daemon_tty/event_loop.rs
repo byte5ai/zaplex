@@ -110,6 +110,22 @@ impl EventLoop {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let mut event_loop = Self::new(model, channel_event_listener, connection_session_id);
+        // Every session this loop drives is daemon-hosted; for bash/zsh the
+        // daemon delivers the root shell's complete bootstrap (init at spawn +
+        // body as first input) server-side. Mark the model before any byte is
+        // parsed so the root-shell `InitShell` it emits — the fresh open's live
+        // handshake as much as an adopt preamble — is stamped
+        // `suppress_bootstrap_write`. Without this, the client re-types the
+        // ~90 KB body into the already-bootstrapped shell, where it executes a
+        // second time visibly as command blocks (echo restored by the
+        // server-side pass's `stty sane`): the connect-time script dump on
+        // every fresh connect (RC 2026-07-21). `init_shell` scopes the stamp to
+        // what the daemon actually delivers — bash/zsh roots only; subshells,
+        // fish/pwsh roots and legacy-SSH sessions keep their client-side write.
+        event_loop
+            .terminal_model
+            .lock()
+            .mark_bootstrap_delivered_server_side();
         event_loop.host_label = host_label;
         // Name the tab from second 0: an OSC-0 title through the normal ANSI
         // path, so a connecting tab reads its host instead of sitting nameless
@@ -1406,6 +1422,220 @@ mod tests {
                 !model.lock().take_suppress_next_bootstrap_write(),
                 "a real InitShell must consume the armed latch (correlation)"
             );
+        });
+    }
+
+    /// Like [`test_listener`] but also keeps the terminal-events receiver, so a
+    /// test can observe the `HandlerEvent`s the model emits while parsing.
+    fn test_listener_with_events() -> (
+        ChannelEventListener,
+        async_channel::Receiver<()>,
+        async_channel::Receiver<crate::terminal::event::Event>,
+    ) {
+        let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
+        let (events_tx, events_rx) = async_channel::unbounded();
+        let (pty_reads_tx, _pty_reads_rx) = async_broadcast::broadcast(1);
+        (
+            ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx),
+            wakeups_rx,
+            events_rx,
+        )
+    }
+
+    /// Drains the events receiver and returns the stamp of the first emitted
+    /// `HandlerEvent::InitShell`, if any.
+    fn drained_initshell_stamp(
+        events_rx: &async_channel::Receiver<crate::terminal::event::Event>,
+    ) -> Option<bool> {
+        use crate::terminal::event::Event as TermEvent;
+        use crate::terminal::model::terminal_model::HandlerEvent;
+        while let Ok(event) = events_rx.try_recv() {
+            if let TermEvent::Handler(HandlerEvent::InitShell {
+                suppress_bootstrap_write,
+                ..
+            }) = event
+            {
+                return Some(suppress_bootstrap_write);
+            }
+        }
+        None
+    }
+
+    /// The regression this guards (RC acceptance 2026-07-21): a daemon
+    /// session's *live* `InitShell` handshake arrived unstamped — only the
+    /// adopt-preamble re-feed was covered (T1.3) — so the client typed the
+    /// ~90 KB bootstrap body into the shell the daemon had already bootstrapped
+    /// server-side. It executed a second time, visibly, as command blocks, on
+    /// every connect. A daemon-backed model must stamp its root-shell
+    /// `InitShell` regardless of how the bytes arrive (the stamp source is the
+    /// persistent mark set in `start`, identical for fresh opens and adopts —
+    /// this test drives the live-stream parse path).
+    #[test]
+    fn live_initshell_of_a_daemon_session_is_stamped_suppressed() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(61u64);
+            let _manager = app.add_singleton_model(RemoteServerManager::new);
+            let (listener, _wakeups_rx, events_rx) = test_listener_with_events();
+            let model = Arc::new(FairMutex::new(TerminalModel::mock_not_bootstrapped(Some(
+                listener.clone(),
+            ))));
+            let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+            let size = SizeInfo::new_without_font_metrics(24, 80);
+            let model_for_loop = model.clone();
+            let event_loop = app.add_model(|ctx| {
+                EventLoop::start(
+                    model_for_loop,
+                    event_loop_rx,
+                    listener,
+                    size,
+                    conn,
+                    OpenSessionParams::default(),
+                    Some(OUR_PTY.to_string()),
+                    None,
+                    "test-host".to_string(),
+                    ctx,
+                )
+            });
+            drain(&events_rx);
+
+            // The live handshake: the InitShell DCS arrives in the normal output
+            // stream of the daemon session — no adopt preamble, no armed latch.
+            let dcs = init_shell_dcs();
+            event_loop.update(&mut app, |me, _| me.process_pty_bytes(&dcs));
+
+            assert_eq!(
+                drained_initshell_stamp(&events_rx),
+                Some(true),
+                "a daemon-backed session's live InitShell must be stamped \
+                 suppress_bootstrap_write — the daemon already delivered the \
+                 bootstrap server-side; an unstamped event makes the client type \
+                 the body into the live shell (the connect-time script dump)"
+            );
+        });
+    }
+
+    /// The subshell boundary: a nested shell Zaplexified INSIDE a daemon tab
+    /// (`is_subshell` on the wire) is never bootstrapped by the daemon — the
+    /// client-side write is its only mechanism — so its `InitShell` must stay
+    /// unstamped even on a daemon-marked model.
+    #[test]
+    fn subshell_initshell_inside_a_daemon_tab_stays_unstamped() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(67u64);
+            let _manager = app.add_singleton_model(RemoteServerManager::new);
+            let (listener, _wakeups_rx, events_rx) = test_listener_with_events();
+            let model = Arc::new(FairMutex::new(TerminalModel::mock_not_bootstrapped(Some(
+                listener.clone(),
+            ))));
+            let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+            let size = SizeInfo::new_without_font_metrics(24, 80);
+            let model_for_loop = model.clone();
+            let event_loop = app.add_model(|ctx| {
+                EventLoop::start(
+                    model_for_loop,
+                    event_loop_rx,
+                    listener,
+                    size,
+                    conn,
+                    OpenSessionParams::default(),
+                    Some(OUR_PTY.to_string()),
+                    None,
+                    "test-host".to_string(),
+                    ctx,
+                )
+            });
+            drain(&events_rx);
+
+            let json = r#"{"hook":"InitShell","value":{"session_id":167303092612202,"shell":"zsh","is_subshell":true}}"#;
+            let mut dcs = vec![0x1b, 0x50, 0x24, 0x64]; // ESC P $ d
+            dcs.extend_from_slice(hex::encode(json).as_bytes());
+            dcs.push(0x9c); // ST
+            event_loop.update(&mut app, |me, _| me.process_pty_bytes(&dcs));
+
+            assert_eq!(
+                drained_initshell_stamp(&events_rx),
+                Some(false),
+                "a subshell InitShell inside a daemon tab must stay unstamped — \
+                 the daemon never bootstraps nested shells, so suppressing the \
+                 client-side write would leave them without integration"
+            );
+        });
+    }
+
+    /// The shell-contract boundary: the daemon delivers the bootstrap *body*
+    /// server-side only for bash/zsh. A fish (or pwsh) root in a daemon tab
+    /// gets init-only from the daemon — the client-side write is what completes
+    /// its bootstrap — so its `InitShell` must stay unstamped even on a
+    /// daemon-marked model.
+    #[test]
+    fn fish_root_initshell_in_a_daemon_tab_stays_unstamped() {
+        App::test((), |mut app| async move {
+            let conn = SessionId::from(71u64);
+            let _manager = app.add_singleton_model(RemoteServerManager::new);
+            let (listener, _wakeups_rx, events_rx) = test_listener_with_events();
+            let model = Arc::new(FairMutex::new(TerminalModel::mock_not_bootstrapped(Some(
+                listener.clone(),
+            ))));
+            let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+            let size = SizeInfo::new_without_font_metrics(24, 80);
+            let model_for_loop = model.clone();
+            let event_loop = app.add_model(|ctx| {
+                EventLoop::start(
+                    model_for_loop,
+                    event_loop_rx,
+                    listener,
+                    size,
+                    conn,
+                    OpenSessionParams::default(),
+                    Some(OUR_PTY.to_string()),
+                    None,
+                    "test-host".to_string(),
+                    ctx,
+                )
+            });
+            drain(&events_rx);
+
+            let json = r#"{"hook":"InitShell","value":{"session_id":167303092612203,"shell":"fish"}}"#;
+            let mut dcs = vec![0x1b, 0x50, 0x24, 0x64]; // ESC P $ d
+            dcs.extend_from_slice(hex::encode(json).as_bytes());
+            dcs.push(0x9c); // ST
+            event_loop.update(&mut app, |me, _| me.process_pty_bytes(&dcs));
+
+            assert_eq!(
+                drained_initshell_stamp(&events_rx),
+                Some(false),
+                "a fish root in a daemon tab must stay unstamped — the daemon \
+                 sends fish init-only, so suppressing the client-side write \
+                 would leave the session permanently unbootstrapped"
+            );
+        });
+    }
+
+    /// The counterpart boundary: a model NOT driven by a daemon event loop (a
+    /// local or legacy-SSH pane) must keep emitting unstamped `InitShell`s —
+    /// those panes rely on the client-side bootstrap write.
+    #[test]
+    fn initshell_of_a_non_daemon_model_stays_unstamped() {
+        App::test((), |mut app_| async move {
+            let (listener, _wakeups_rx, events_rx) = test_listener_with_events();
+            let model = Arc::new(FairMutex::new(TerminalModel::mock_not_bootstrapped(Some(
+                listener,
+            ))));
+            drain(&events_rx);
+
+            // Feed the same wire-form InitShell DCS straight through a parser —
+            // no daemon event loop ever touched this model.
+            let dcs = init_shell_dcs();
+            let mut parser = Processor::default();
+            parser.parse_bytes(&mut *model.lock(), &dcs, &mut io::sink());
+
+            assert_eq!(
+                drained_initshell_stamp(&events_rx),
+                Some(false),
+                "without a daemon backing, InitShell must stay unstamped so the \
+                 client-side bootstrap write still initializes local/legacy panes"
+            );
+            let _ = &mut app_;
         });
     }
 }
