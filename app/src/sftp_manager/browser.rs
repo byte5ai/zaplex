@@ -150,10 +150,6 @@ pub enum SftpBrowserAction {
     Refresh,
     /// Select the entry at the given index
     SelectEntry(usize),
-    /// Put the keyboard cursor on the `..` parent row (mouse parity: clicking
-    /// it selects it the way clicking any row does; opening is the double
-    /// click, which dispatches `NavigateUp`).
-    SelectParentRow,
     /// Toggle the multi-selection mark on the entry at the given index — the
     /// mouse counterpart of Insert/Space.
     ToggleMark(usize),
@@ -477,6 +473,24 @@ pub struct SftpBrowserView {
     // ---- File row mouse handles ----
     /// Mouse state handle for each file entry row
     row_mouse_handles: Vec<MouseStateHandle>,
+    /// Mouse state handle for the virtual `..` parent row. PERSISTENT, like
+    /// every other click target's: a `MouseStateHandle::default()` minted per
+    /// render records the mouse-down in a state the next render throws away,
+    /// so the mouse-up never finds it and the click never fires — the dead
+    /// `..` row of the RC acceptance 2026-07-21 (same failure as the T2.3
+    /// rescan button).
+    parent_row_handle: MouseStateHandle,
+    /// Open briefly after an *upward* navigation: row clicks aimed at the old
+    /// layout are swallowed until it closes. The `..` row navigates on a
+    /// SINGLE click, so the second click of a habitual double click is still
+    /// in flight when the rows swap — on a fast backend it lands on the new
+    /// listing, and at the root boundary (no `..` row there) the first entry
+    /// sits in exactly those pixels, so the stray click would open or mark a
+    /// row the user never aimed at. Only `NavigateUp` arms this: every other
+    /// row navigates on double click (no tail click exists), and breadcrumb /
+    /// toolbar targets are not over the rows. 250 ms is far below any
+    /// deliberate see-then-click reaction on a fresh listing.
+    suppress_row_clicks_until: Option<std::time::Instant>,
     // ---- Scrolling ----
     /// Scroll state handle
     scroll_state: ClippedScrollStateHandle,
@@ -611,6 +625,8 @@ impl SftpBrowserView {
             skip_all_btn: MouseStateHandle::default(),
             target_pick_btn_states: Vec::new(),
             row_mouse_handles: Vec::new(),
+            parent_row_handle: MouseStateHandle::default(),
+            suppress_row_clicks_until: None,
             scroll_state: ClippedScrollStateHandle::default(),
             connect_handle: None,
             refresh_handle: None,
@@ -1265,6 +1281,21 @@ impl SftpBrowserView {
             };
         }
         self.cursor = clamp_cursor(self.cursor, self.row_count());
+    }
+
+    /// True while the post-`NavigateUp` stray-click window is open. Row-level
+    /// mouse actions that *do* something (open, mark) check this; pure cursor
+    /// moves need not.
+    fn row_clicks_suppressed(&self) -> bool {
+        self.suppress_row_clicks_until
+            .is_some_and(|until| std::time::Instant::now() < until)
+    }
+
+    /// Test-only fast-forward past the stray-click window — tests dispatch
+    /// clicks faster than any human could.
+    #[cfg(test)]
+    pub(crate) fn expire_click_guard(&mut self) {
+        self.suppress_row_clicks_until = None;
     }
 
     /// Fixed page size for PageUp/PageDown. The model doesn't know the
@@ -2894,6 +2925,7 @@ impl SftpBrowserView {
             self.has_parent_row(),
             &self.row_mouse_handles,
             &self.mark_handles,
+            self.parent_row_handle.clone(),
             appearance,
         );
 
@@ -3493,13 +3525,10 @@ impl TypedActionView for SftpBrowserView {
             SftpBrowserAction::Refresh => {
                 self.refresh_dir(ctx);
             }
-            SftpBrowserAction::SelectParentRow => {
-                // Clicking `..` puts the cursor on it (double-click navigates,
-                // like every other row); a marked set is not disturbed.
-                self.cursor = 0;
-                ctx.notify();
-            }
             SftpBrowserAction::ToggleMark(index) => {
+                if self.row_clicks_suppressed() {
+                    return;
+                }
                 let index = *index;
                 // Mouse parity for Insert/Space. The cursor follows the click,
                 // so keyboard and mouse never disagree about "the current row".
@@ -3553,6 +3582,12 @@ impl TypedActionView for SftpBrowserView {
                 ctx.notify();
             }
             SftpBrowserAction::OpenEntry(index) => {
+                // Swallow a stray double-click tail aimed at the previous
+                // listing (see `suppress_row_clicks_until`). Keyboard opens go
+                // through `ActivateCursor`, not here.
+                if self.row_clicks_suppressed() {
+                    return;
+                }
                 let index = *index;
                 self.open_entry(index, ctx);
             }
@@ -3778,6 +3813,13 @@ impl TypedActionView for SftpBrowserView {
                 ctx.notify();
             }
             SftpBrowserAction::NavigateUp => {
+                // Arm the stray-click window BEFORE navigating: the `..` row
+                // navigates on a single click, so a habitual double click's
+                // second click is still in flight when the rows swap (see
+                // `suppress_row_clicks_until`).
+                self.suppress_row_clicks_until = Some(
+                    std::time::Instant::now() + std::time::Duration::from_millis(250),
+                );
                 self.go_up(ctx);
             }
             SftpBrowserAction::DeleteSelected => {

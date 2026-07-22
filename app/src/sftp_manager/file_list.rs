@@ -44,6 +44,11 @@ pub fn file_icon(entry_type: &FileEntryType) -> Icon {
 /// multi-selection. Mouse parity for MC's Insert/Space, which is the only way
 /// to offer marking here at all: the framework's click handlers carry no
 /// modifier state, so ctrl/shift-click cannot be implemented (2026-07-19).
+///
+/// A *marked* row keeps its file-type icon — recoloured in the accent, like
+/// the rest of its line (NC/MC's colour-marking; RC acceptance 2026-07-21:
+/// marks are colour, not a checkmark). The check glyph appears only under the
+/// pointer, as the toggle affordance.
 fn mark_cell(
     index: usize,
     entry_type: FileEntryType,
@@ -54,10 +59,12 @@ fn mark_cell(
     handle: MouseStateHandle,
 ) -> Box<dyn Element> {
     Hoverable::new(handle, move |mouse| {
-        let (icon, color) = if is_marked {
-            (Icon::Check, accent)
-        } else if mouse.is_hovered() {
-            (Icon::Check, muted)
+        let (icon, color) = if mouse.is_hovered() {
+            // The toggle affordance; accent when it would unmark, muted when
+            // it would mark.
+            (Icon::Check, if is_marked { accent } else { muted })
+        } else if is_marked {
+            (file_icon(&entry_type), accent)
         } else {
             (file_icon(&entry_type), icon_color)
         };
@@ -81,8 +88,10 @@ fn mark_cell(
 /// own vocabulary (polish audit FM.1) — an accent *tint* for the cursor, the
 /// shared neutral overlays for selection and hover — not MC's full accent slab
 /// with inverted text, which made the cursor row a foreign object in the theme.
-/// A marked row additionally carries its name in the accent colour, MC's
-/// yellow made theme-native, so marks read at a glance.
+/// A marked row carries its WHOLE line — icon, name, size, date — in the
+/// accent colour: NC/MC's colour-marking made theme-native (RC acceptance
+/// 2026-07-21: marks are colour, not a checkmark), so a marked set reads at a
+/// glance without replacing the file-type icon.
 pub fn render_file_row(
     entry: &FileEntry,
     index: usize,
@@ -104,7 +113,9 @@ pub fn render_file_row(
     } else {
         theme.active_ui_text_color()
     };
-    let sub_color = theme.sub_text_color(theme.background());
+    let muted = theme.sub_text_color(theme.background());
+    // Marked rows colour their WHOLE line (NC/MC), the numeric columns too.
+    let sub_color = if is_selected { theme.accent() } else { muted };
 
     let name = entry.name.clone();
     let file_type = entry.file_type;
@@ -113,7 +124,9 @@ pub fn render_file_row(
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
     let accent_fill: Fill = theme.accent().into();
-    let muted_fill: Fill = sub_color.into();
+    // The mark-affordance hover colour stays genuinely muted — `sub_color`
+    // turns accent on marked rows and must not bleed into it.
+    let muted_fill: Fill = muted.into();
     let icon_fill: Fill = icon_color.into();
 
     Hoverable::new(mouse_handle, move |mouse| {
@@ -229,6 +242,14 @@ pub fn render_file_row(
 /// complaint of 2026-07-19). It is a *virtual* row: it exists only here and in
 /// the cursor arithmetic, never in `entries`, so no destructive verb can
 /// address it.
+///
+/// A single click navigates up (RC acceptance 2026-07-21: "Klick auf `..`
+/// wechselt nicht eine Ebene höher") — the row is a pure navigation
+/// affordance, there is nothing else clicking it could mean. The double-click
+/// handler is a deliberate no-op, NOT missing: the framework fires the click
+/// handler on the first mouse-up of a double click and falls back to it on
+/// the second when no double-click handler is set — without the no-op, a
+/// habitual double click would navigate up TWO levels.
 pub fn render_parent_row(
     is_cursor: bool,
     mouse_handle: MouseStateHandle,
@@ -281,11 +302,11 @@ pub fn render_parent_row(
     })
     .with_cursor(Cursor::PointingHand)
     .on_click(move |ctx, _, _| {
-        ctx.dispatch_typed_action(SftpBrowserAction::SelectParentRow);
-    })
-    .on_double_click(move |ctx, _, _| {
         ctx.dispatch_typed_action(SftpBrowserAction::NavigateUp);
     })
+    // No-op on purpose — swallows the second mouse-up of a double click so it
+    // cannot navigate a second level (see the function doc).
+    .on_double_click(move |_, _, _| {})
     .finish()
 }
 
@@ -464,15 +485,18 @@ pub fn render_file_rows(
     has_parent_row: bool,
     mouse_handles: &[MouseStateHandle],
     mark_handles: &[MouseStateHandle],
+    parent_row_handle: MouseStateHandle,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let mut col = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
     if has_parent_row {
-        // The `..` row reuses no entry handle (it is not an entry); a
-        // dedicated one keeps its hover independent of the list.
-        let row = render_parent_row(cursor_row == 0, MouseStateHandle::default(), appearance);
+        // The `..` row's handle is a PERSISTENT one from the browser state —
+        // a handle minted per render records the mouse-down in a state the
+        // next render throws away, so the mouse-up never completes a click
+        // (the dead `..` row of the RC acceptance 2026-07-21).
+        let row = render_parent_row(cursor_row == 0, parent_row_handle, appearance);
         col.add_child(SavePosition::new(row, "sftp_row:parent").finish());
     }
 

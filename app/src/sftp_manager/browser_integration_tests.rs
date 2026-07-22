@@ -1717,6 +1717,63 @@ fn test_keyboard_navigate_up() {
     });
 }
 
+/// The post-`NavigateUp` stray-click window (RC acceptance 2026-07-21): the
+/// `..` row navigates on a SINGLE click, so the second click of a habitual
+/// double click is still in flight when the rows swap — at the root boundary
+/// the first entry sits in the `..` row's pixels and that stray click would
+/// open a row the user never aimed at. A row click right after `NavigateUp`
+/// must be swallowed; once the window passes, clicks work again.
+#[test]
+fn test_row_click_right_after_navigate_up_is_swallowed() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) = create_connected_view(&mut app, &[
+            ("level1/level2/file.txt", b"deep"),
+        ]);
+
+        // Descend into level1 — a plain open, no window arms here.
+        let l1_idx = view.read(&app, |v, _| {
+            v.entries.iter().position(|e| e.name == "level1").unwrap()
+        });
+        view.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::OpenEntry(l1_idx), ctx);
+        });
+        let in_level1 = view.read(&app, |v, _| v.current_path.clone());
+
+        // Navigate up (the single click on `..`) — arms the window — and let
+        // the double click's second click land on a row of the new listing.
+        view.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::NavigateUp, ctx);
+        });
+        let at_root = view.read(&app, |v, _| v.current_path.clone());
+        assert_ne!(at_root, in_level1, "NavigateUp itself must still navigate");
+        let l1_idx = view.read(&app, |v, _| {
+            v.entries.iter().position(|e| e.name == "level1").unwrap()
+        });
+        view.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::OpenEntry(l1_idx), ctx);
+        });
+        view.read(&app, |v, _| {
+            assert_eq!(
+                v.current_path, at_root,
+                "a row click within the stray-click window must be swallowed"
+            );
+        });
+
+        // Past the window, the same click works.
+        view.update(&mut app, |v, ctx| {
+            v.expire_click_guard();
+            v.handle_action(&SftpBrowserAction::OpenEntry(l1_idx), ctx);
+        });
+        view.read(&app, |v, _| {
+            assert_eq!(
+                v.current_path, in_level1,
+                "once the window passes, row clicks must work again"
+            );
+        });
+    });
+}
+
 /// Verifies that DeleteSelected triggers the delete confirmation
 #[test]
 fn test_keyboard_delete_selected() {
