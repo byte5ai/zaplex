@@ -4,6 +4,12 @@
 >
 > It is the companion to `WARP.md`: `WARP.md` is the engineer's handbook (commands, style, process), this file is the **code map**. Read `WARP.md` first, then use this file to locate the right crate / module. (Note: `WARP.md` is not currently present in this repo; references to it are historical.)
 
+> **Working on `rc/master-plan`? Read
+> [`docs/2026-07-22-rc-handoff.md`](docs/2026-07-22-rc-handoff.md) first.** It
+> carries the current RC state, the open items, and this sprint's traps
+> (double-run bootstrap, dead click targets), plus the binding build/release
+> rules. Remove it before merging to `main`.
+
 ---
 
 ## 1. Repository overview
