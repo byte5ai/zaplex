@@ -7,11 +7,12 @@
 //! date: 2026-05-30
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
-use warpui::TypedActionView;
+use warpui::{SingletonEntity, TypedActionView};
 
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -20,7 +21,9 @@ use pathfinder_geometry::vector::Vector2F;
 
 use super::browser::{SftpBrowserAction, SftpBrowserView};
 use super::sftp_backend::{InMemorySftpBackend, SftpBackend};
-use super::types::{ConnectionState, Dialog, FileEntryType, TransferDirection, TransferState};
+use super::types::{
+    ConnectionState, Dialog, FileEntry, FileEntryType, TransferDirection, TransferState,
+};
 
 /// Initializes the minimal set of singletons required by the tests
 fn initialize_app(app: &mut warpui::App) {
@@ -81,6 +84,162 @@ fn create_connected_view(
     });
 
     (win_id, view, temp_dir)
+}
+
+/// Test backend that records metadata and listing calls while delegating all
+/// filesystem behavior to the local test backend.
+struct TracingBackend {
+    inner: InMemorySftpBackend,
+    listed_paths: Mutex<Vec<PathBuf>>,
+    stat_paths: Mutex<Vec<PathBuf>>,
+    fail_copy: AtomicBool,
+}
+
+impl TracingBackend {
+    fn new(root: PathBuf) -> Self {
+        Self {
+            inner: InMemorySftpBackend::new(root),
+            listed_paths: Mutex::new(Vec::new()),
+            stat_paths: Mutex::new(Vec::new()),
+            fail_copy: AtomicBool::new(false),
+        }
+    }
+
+    fn fail_copies(&self) {
+        self.fail_copy.store(true, Ordering::SeqCst);
+    }
+}
+
+impl SftpBackend for TracingBackend {
+    fn list_dir(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Vec<super::types::FileEntry>, super::sftp_ops::SftpOpsError> {
+        self.listed_paths.lock().unwrap().push(path.to_path_buf());
+        self.inner.list_dir(path)
+    }
+
+    fn delete_file(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner.delete_file(path)
+    }
+
+    fn delete_dir_recursive(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner.delete_dir_recursive(path)
+    }
+
+    fn create_dir(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner.create_dir(path)
+    }
+
+    fn rename(
+        &self,
+        old_path: &std::path::Path,
+        new_path: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner.rename(old_path, new_path)
+    }
+
+    fn realpath(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<PathBuf, super::sftp_ops::SftpOpsError> {
+        self.inner.realpath(path)
+    }
+
+    fn stat(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<super::types::FileEntry, super::sftp_ops::SftpOpsError> {
+        self.stat_paths.lock().unwrap().push(path.to_path_buf());
+        self.inner.stat(path)
+    }
+
+    fn lstat(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<super::types::FileEntry, super::sftp_ops::SftpOpsError> {
+        self.inner.lstat(path)
+    }
+
+    fn upload_file(
+        &self,
+        local_path: &std::path::Path,
+        remote_path: &std::path::Path,
+        progress_cb: Option<&super::sftp_ops::ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner
+            .upload_file(local_path, remote_path, progress_cb, cancel_flag)
+    }
+
+    fn download_file(
+        &self,
+        remote_path: &std::path::Path,
+        local_path: &std::path::Path,
+        progress_cb: Option<&super::sftp_ops::ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner
+            .download_file(remote_path, local_path, progress_cb, cancel_flag)
+    }
+
+    fn copy_file(
+        &self,
+        src: &std::path::Path,
+        dst: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        if self.fail_copy.load(Ordering::SeqCst) {
+            return Err(super::sftp_ops::SftpOpsError::Operation(
+                "injected copy failure".to_string(),
+            ));
+        }
+        self.inner.copy_file(src, dst)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct NavigationSnapshot {
+    path: PathBuf,
+    history: Vec<PathBuf>,
+    history_index: usize,
+    title: String,
+    registry_path: PathBuf,
+    entry_names: Vec<String>,
+}
+
+fn navigation_snapshot(
+    view: &warpui::ViewHandle<SftpBrowserView>,
+    app: &warpui::App,
+) -> NavigationSnapshot {
+    view.read(app, |view, ctx| {
+        let registry_path = super::fm_registry::FileManagerRegistry::as_ref(ctx)
+            .panes()
+            .first()
+            .expect("the connected file-manager pane should be registered")
+            .current_path
+            .clone();
+        NavigationSnapshot {
+            path: view.current_path.clone(),
+            history: view.path_history.clone(),
+            history_index: view.history_index,
+            title: view.pane_configuration().as_ref(ctx).title().to_owned(),
+            registry_path,
+            entry_names: view
+                .entries
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect(),
+        }
+    })
 }
 
 // ============================================================
@@ -471,6 +630,203 @@ fn test_go_back_forward_restores_path() {
         view.read(&app, |v, _| {
             assert_eq!(v.current_path, alpha_path, "GoForward should return to alpha");
         });
+    });
+}
+
+/// A failed directory request must not leave the header, registry and rows
+/// describing different locations. The old implementation committed the path
+/// and history before asking the backend, then kept the previous rows on error.
+#[test]
+fn failed_navigation_keeps_the_entire_visible_location_unchanged() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("keep.txt", b"keep")]);
+        let before = navigation_snapshot(&view, &app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::NavigateTo(PathBuf::from("/missing-directory")),
+                ctx,
+            );
+        });
+
+        assert_eq!(navigation_snapshot(&view, &app), before);
+    });
+}
+
+/// History navigation is transactional too. A once-valid forward destination
+/// may disappear while the user is elsewhere; Forward must then leave the
+/// current location and history cursor untouched.
+#[test]
+fn failed_forward_navigation_keeps_the_current_history_position() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, temp) = create_connected_view(&mut app, &[("gone/file.txt", b"content")]);
+
+        let gone = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "gone")
+                .unwrap()
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::OpenEntry(gone), ctx);
+            view.handle_action(&SftpBrowserAction::GoBack, ctx);
+        });
+        std::fs::remove_dir_all(temp.path().join("gone")).unwrap();
+        let before = navigation_snapshot(&view, &app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::GoForward, ctx);
+        });
+
+        assert_eq!(navigation_snapshot(&view, &app), before);
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn file_symlink_opens_as_a_file_without_navigating() {
+    use std::os::unix::fs::symlink;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("target.txt", b"target")]);
+        symlink("target.txt", temp.path().join("link.txt")).unwrap();
+        let backend = Arc::new(TracingBackend::new(temp.path().to_path_buf()));
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            let trait_backend: Arc<dyn SftpBackend> = backend.clone();
+            view.set_backend_for_test(trait_backend, PathBuf::from("/"), ctx);
+        });
+        let link = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "link.txt")
+                .unwrap()
+        });
+        let before = navigation_snapshot(&view, &app);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::OpenEntry(link), ctx);
+        });
+
+        assert_eq!(navigation_snapshot(&view, &app), before);
+        assert_eq!(
+            backend.stat_paths.lock().unwrap().as_slice(),
+            &[PathBuf::from("/link.txt")],
+            "file-link activation must resolve the target type before choosing the open path"
+        );
+        assert_eq!(
+            backend.listed_paths.lock().unwrap().as_slice(),
+            &[PathBuf::from("/")],
+            "a file link must never be probed by attempting to list it as a directory"
+        );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn directory_symlink_navigates_to_its_directory_target() {
+    use std::os::unix::fs::symlink;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("target-dir/inside.txt", b"inside")]);
+        symlink("target-dir", temp.path().join("link-dir")).unwrap();
+        let backend = Arc::new(TracingBackend::new(temp.path().to_path_buf()));
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            let trait_backend: Arc<dyn SftpBackend> = backend.clone();
+            view.set_backend_for_test(trait_backend, PathBuf::from("/"), ctx);
+        });
+        let link = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "link-dir")
+                .unwrap()
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::OpenEntry(link), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/link-dir"));
+            assert_eq!(
+                view.entries
+                    .iter()
+                    .map(|entry| entry.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["inside.txt"]
+            );
+        });
+        assert_eq!(
+            backend.stat_paths.lock().unwrap().as_slice(),
+            &[PathBuf::from("/link-dir")],
+            "directory-link activation must resolve the target before navigating"
+        );
+        assert_eq!(
+            backend.listed_paths.lock().unwrap().as_slice(),
+            &[PathBuf::from("/"), PathBuf::from("/link-dir")],
+            "the link is listed only after stat established that its target is a directory"
+        );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn broken_symlink_reports_failure_without_changing_location() {
+    use std::os::unix::fs::symlink;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("keep.txt", b"keep")]);
+        symlink("missing-target", temp.path().join("broken-link")).unwrap();
+        let backend = Arc::new(TracingBackend::new(temp.path().to_path_buf()));
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            let trait_backend: Arc<dyn SftpBackend> = backend.clone();
+            view.set_backend_for_test(trait_backend, PathBuf::from("/"), ctx);
+        });
+        let link = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "broken-link")
+                .unwrap()
+        });
+        let before = navigation_snapshot(&view, &app);
+        let saw_error_toast = Arc::new(AtomicBool::new(false));
+        app.update(|ctx| {
+            let saw_error_toast = saw_error_toast.clone();
+            ctx.subscribe_to_model(
+                &crate::workspace::ToastStack::handle(ctx),
+                move |_, _, _| {
+                    saw_error_toast.store(true, Ordering::SeqCst);
+                },
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::OpenEntry(link), ctx);
+        });
+
+        assert_eq!(navigation_snapshot(&view, &app), before);
+        assert_eq!(
+            saw_error_toast.load(Ordering::SeqCst),
+            true,
+            "activating a broken symlink must surface an error toast"
+        );
+        assert_eq!(
+            backend.stat_paths.lock().unwrap().as_slice(),
+            &[PathBuf::from("/broken-link")],
+            "broken-link activation must fail during target resolution"
+        );
+        assert_eq!(
+            backend.listed_paths.lock().unwrap().as_slice(),
+            &[PathBuf::from("/")],
+            "a broken link must never be treated as a directory-listing request"
+        );
     });
 }
 
@@ -1508,14 +1864,11 @@ fn test_download_creates_transfer_task() {
             v.set_backend_for_test(backend, PathBuf::from("/"), ctx);
         });
 
-        let idx = view.read(&app, |v, _| {
-            v.entries.iter().position(|e| e.name == "download_me.txt").unwrap()
-        });
-
         view.update(&mut app, |v, ctx| {
             v.handle_action(
                 &SftpBrowserAction::DownloadSaveAs {
-                    index: idx,
+                    remote_path: PathBuf::from("/download_me.txt"),
+                    file_size: b"download content".len() as u64,
                     local_path: local_save.to_string_lossy().to_string(),
                 },
                 ctx,
@@ -1526,6 +1879,49 @@ fn test_download_creates_transfer_task() {
             assert_eq!(v.transfers.len(), 1, "should create download task");
             assert_eq!(v.transfers[0].direction, TransferDirection::Download);
         });
+    });
+}
+
+/// The native save dialog can remain open while a refresh or sort changes row
+/// indices. Completing it must still download the file originally chosen.
+#[test]
+fn save_as_resolves_same_entry_after_listing_reorders() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _remote) =
+            create_connected_view(&mut app, &[("a.txt", b"alpha"), ("b.txt", b"beta")]);
+        let local = tempfile::tempdir().expect("local temp");
+        let destination = local.path().join("saved.txt");
+
+        let selected_index = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "a.txt")
+                .unwrap()
+        });
+        let (remote_path, file_size) = view.read(&app, |view, _| {
+            let entry = &view.entries[selected_index];
+            (entry.path.clone(), entry.size)
+        });
+        view.update(&mut app, |view, _| {
+            view.entries.swap(0, 1);
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::DownloadSaveAs {
+                    remote_path,
+                    file_size,
+                    local_path: destination.to_string_lossy().to_string(),
+                },
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            std::fs::read(destination).unwrap(),
+            b"alpha",
+            "save-as must remain bound to the originally selected file"
+        );
     });
 }
 
@@ -2036,6 +2432,110 @@ fn test_render_after_multiple_operations() {
 // Cross-pane copy/move (MC F5/F6, increment B)
 // ============================================================
 
+#[cfg(unix)]
+struct RecordingDeleteBackend {
+    inner: InMemorySftpBackend,
+    file_deletes: std::sync::Mutex<Vec<PathBuf>>,
+    recursive_deletes: std::sync::Mutex<Vec<PathBuf>>,
+}
+
+#[cfg(unix)]
+impl RecordingDeleteBackend {
+    fn new(root: PathBuf) -> Self {
+        Self {
+            inner: InMemorySftpBackend::new(root),
+            file_deletes: std::sync::Mutex::new(Vec::new()),
+            recursive_deletes: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl SftpBackend for RecordingDeleteBackend {
+    fn list_dir(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Vec<super::types::FileEntry>, super::sftp_ops::SftpOpsError> {
+        self.inner.list_dir(path)
+    }
+
+    fn delete_file(&self, path: &std::path::Path) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.file_deletes.lock().unwrap().push(path.to_path_buf());
+        self.inner.delete_file(path)
+    }
+
+    fn delete_dir_recursive(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.recursive_deletes
+            .lock()
+            .unwrap()
+            .push(path.to_path_buf());
+        self.inner.delete_dir_recursive(path)
+    }
+
+    fn create_dir(&self, path: &std::path::Path) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner.create_dir(path)
+    }
+
+    fn rename(
+        &self,
+        old_path: &std::path::Path,
+        new_path: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner.rename(old_path, new_path)
+    }
+
+    fn realpath(&self, path: &std::path::Path) -> Result<PathBuf, super::sftp_ops::SftpOpsError> {
+        self.inner.realpath(path)
+    }
+
+    fn stat(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<super::types::FileEntry, super::sftp_ops::SftpOpsError> {
+        self.inner.stat(path)
+    }
+
+    fn lstat(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<super::types::FileEntry, super::sftp_ops::SftpOpsError> {
+        self.inner.lstat(path)
+    }
+
+    fn upload_file(
+        &self,
+        local_path: &std::path::Path,
+        remote_path: &std::path::Path,
+        progress_cb: Option<&super::sftp_ops::ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner
+            .upload_file(local_path, remote_path, progress_cb, cancel_flag)
+    }
+
+    fn download_file(
+        &self,
+        remote_path: &std::path::Path,
+        local_path: &std::path::Path,
+        progress_cb: Option<&super::sftp_ops::ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner
+            .download_file(remote_path, local_path, progress_cb, cancel_flag)
+    }
+
+    fn copy_file(
+        &self,
+        src: &std::path::Path,
+        dst: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner.copy_file(src, dst)
+    }
+}
+
 /// Two file-manager panes over one shared filesystem, at `/left` and `/right`.
 /// Returns both handles; keep `TempDir` alive for the test's duration.
 fn create_two_panes_sharing_fs(
@@ -2365,9 +2865,169 @@ fn test_f6_move_across_connections_starts_transfer() {
     });
 }
 
+/// A cross-connection directory move remains incomplete when any destination
+/// entry is skipped, so its complete source tree must remain available.
+#[test]
+fn cross_connection_dir_move_with_skip_conflict_preserves_source_tree() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("left/dir/conflict.txt", b"source-conflict"),
+            ("left/dir/new.txt", b"new"),
+            ("right/dir/conflict.txt", b"destination-conflict"),
+        ]);
+        let root = temp.path().to_path_buf();
+
+        let (_, source_view) = create_view_with_node(&mut app, "");
+        source_view.update(&mut app, |view, ctx| {
+            let backend =
+                Arc::new(InMemorySftpBackend::new(PathBuf::from("/"))) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, root.join("left"), ctx);
+        });
+        let (_, target_view) = create_view_with_node(&mut app, "host");
+        target_view.update(&mut app, |view, ctx| {
+            let backend =
+                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
+        });
+
+        source_view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::MoveToOtherPane, ctx);
+        });
+
+        assert_eq!(
+            std::fs::read(root.join("right/dir/conflict.txt")).unwrap(),
+            b"destination-conflict"
+        );
+        assert_eq!(
+            std::fs::read(root.join("right/dir/new.txt")).unwrap(),
+            b"new"
+        );
+        assert_eq!(
+            std::fs::read(root.join("left/dir/conflict.txt")).unwrap(),
+            b"source-conflict",
+            "a skipped source entry must remain after an incomplete move"
+        );
+        assert_eq!(
+            std::fs::read(root.join("left/dir/new.txt")).unwrap(),
+            b"new",
+            "an incomplete directory move keeps the entire source tree"
+        );
+    });
+}
+
 // ============================================================
 // Cross-connection directory transfers (FM backlog)
 // ============================================================
+
+struct StaticListingBackend {
+    entries: Vec<FileEntry>,
+}
+
+impl StaticListingBackend {
+    fn unsupported<T>() -> Result<T, super::sftp_ops::SftpOpsError> {
+        Err(super::sftp_ops::SftpOpsError::Operation(
+            "operation is not used by this test backend".to_string(),
+        ))
+    }
+}
+
+impl SftpBackend for StaticListingBackend {
+    fn list_dir(
+        &self,
+        _path: &std::path::Path,
+    ) -> Result<Vec<FileEntry>, super::sftp_ops::SftpOpsError> {
+        Ok(self.entries.clone())
+    }
+
+    fn delete_file(
+        &self,
+        _path: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn delete_dir_recursive(
+        &self,
+        _path: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn create_dir(
+        &self,
+        _path: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn rename(
+        &self,
+        _old_path: &std::path::Path,
+        _new_path: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn realpath(
+        &self,
+        _path: &std::path::Path,
+    ) -> Result<PathBuf, super::sftp_ops::SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn stat(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<FileEntry, super::sftp_ops::SftpOpsError> {
+        Ok(FileEntry {
+            name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: path.to_path_buf(),
+            file_type: FileEntryType::Directory,
+            size: 0,
+            modified: None,
+            permissions: None,
+        })
+    }
+
+    fn lstat(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<FileEntry, super::sftp_ops::SftpOpsError> {
+        self.stat(path)
+    }
+
+    fn upload_file(
+        &self,
+        _local_path: &std::path::Path,
+        _remote_path: &std::path::Path,
+        _progress_cb: Option<&super::sftp_ops::ProgressCallback>,
+        _cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn download_file(
+        &self,
+        _remote_path: &std::path::Path,
+        _local_path: &std::path::Path,
+        _progress_cb: Option<&super::sftp_ops::ProgressCallback>,
+        _cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        Self::unsupported()
+    }
+
+    fn copy_file(
+        &self,
+        _src: &std::path::Path,
+        _dst: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        Self::unsupported()
+    }
+}
 
 /// Uploading a directory: the local tree is walked, the remote target dirs are
 /// created, and every file is planned as an upload.
@@ -2422,6 +3082,142 @@ fn test_plan_dir_transfer_download_lists_files_and_makes_local_dirs() {
         assert!(local.starts_with(&dest), "target is under the local dest");
         assert!(remote.starts_with("/src"), "source is under /src");
     }
+}
+
+/// A remote server must not be able to return an entry outside the directory
+/// being downloaded and thereby choose an arbitrary local destination.
+#[test]
+fn recursive_download_rejects_path_outside_source_root() {
+    let backend: Arc<dyn SftpBackend> = Arc::new(StaticListingBackend {
+        entries: vec![FileEntry {
+            name: "escape.txt".to_string(),
+            path: PathBuf::from("/outside-source/escape.txt"),
+            file_type: FileEntryType::File,
+            size: 1,
+            modified: None,
+            permissions: None,
+        }],
+    });
+    let local_dest = tempfile::tempdir().expect("local temp");
+
+    let result = super::browser::plan_dir_transfer(
+        TransferDirection::Download,
+        backend,
+        std::path::Path::new("/expected-source"),
+        &local_dest.path().join("out"),
+    );
+
+    assert!(
+        result.is_err(),
+        "a listing entry outside the requested source root must abort the transfer plan"
+    );
+}
+
+/// Recursive download must classify links before scheduling file reads. A link
+/// is not a regular file and requires an explicit link policy.
+#[test]
+fn recursive_download_rejects_unhandled_symlink() {
+    let backend: Arc<dyn SftpBackend> = Arc::new(StaticListingBackend {
+        entries: vec![FileEntry {
+            name: "link".to_string(),
+            path: PathBuf::from("/src/link"),
+            file_type: FileEntryType::Symlink,
+            size: 0,
+            modified: None,
+            permissions: None,
+        }],
+    });
+    let local_dest = tempfile::tempdir().expect("local temp");
+
+    let result = super::browser::plan_dir_transfer(
+        TransferDirection::Download,
+        backend,
+        std::path::Path::new("/src"),
+        &local_dest.path().join("out"),
+    );
+
+    assert!(
+        result.is_err(),
+        "an unhandled symlink must never be scheduled as a regular-file download"
+    );
+}
+
+/// FIFOs, sockets and devices must never enter the streaming file path.
+#[test]
+fn recursive_download_rejects_special_file() {
+    let backend: Arc<dyn SftpBackend> = Arc::new(StaticListingBackend {
+        entries: vec![FileEntry {
+            name: "pipe".to_string(),
+            path: PathBuf::from("/src/pipe"),
+            file_type: FileEntryType::Other,
+            size: 0,
+            modified: None,
+            permissions: None,
+        }],
+    });
+    let local_dest = tempfile::tempdir().expect("local temp");
+
+    let result = super::browser::plan_dir_transfer(
+        TransferDirection::Download,
+        backend,
+        std::path::Path::new("/src"),
+        &local_dest.path().join("out"),
+    );
+
+    assert!(
+        result.is_err(),
+        "a special file must never be scheduled as a regular-file download"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn recursive_upload_rejects_unhandled_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let source = tempfile::tempdir().expect("source temp");
+    std::fs::write(source.path().join("target.txt"), b"target").unwrap();
+    symlink("target.txt", source.path().join("link.txt")).unwrap();
+    let remote = tempfile::tempdir().expect("remote temp");
+    let backend: Arc<dyn SftpBackend> =
+        Arc::new(InMemorySftpBackend::new(remote.path().to_path_buf()));
+
+    let result = super::browser::plan_dir_transfer(
+        TransferDirection::Upload,
+        backend,
+        source.path(),
+        std::path::Path::new("/dst"),
+    );
+
+    assert!(
+        result.is_err(),
+        "silently skipping a source symlink would make a later move destructive"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn recursive_upload_rejects_special_file() {
+    use nix::sys::stat::Mode;
+    use nix::unistd::mkfifo;
+
+    let source = tempfile::tempdir().expect("source temp");
+    mkfifo(&source.path().join("pipe"), Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
+    let remote = tempfile::tempdir().expect("remote temp");
+    let backend: Arc<dyn SftpBackend> =
+        Arc::new(InMemorySftpBackend::new(remote.path().to_path_buf()));
+
+    let result = super::browser::plan_dir_transfer(
+        TransferDirection::Upload,
+        backend,
+        source.path(),
+        std::path::Path::new("/dst"),
+    );
+
+    assert!(
+        result.is_err(),
+        "silently skipping a FIFO would make a later move destructive"
+    );
 }
 
 /// A same-named file already at the destination is skipped, not re-transferred.
@@ -2576,6 +3372,59 @@ fn test_f5_remote_to_remote_relays_directory() {
         assert!(
             root.join("b/dir/sub/deep.txt").exists(),
             "directory relayed recursively onto host B"
+        );
+    });
+}
+
+/// A directory move is incomplete when any destination entry is skipped. The
+/// source tree must remain intact even if every non-conflicting file transfers.
+#[test]
+fn remote_to_remote_move_with_skip_conflict_preserves_source_tree() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("a/dir/conflict.txt", b"source-conflict"),
+            ("a/dir/new.txt", b"new"),
+            ("b/dir/conflict.txt", b"destination-conflict"),
+        ]);
+        let root = temp.path().to_path_buf();
+
+        let (_, source_view) = create_view_with_node(&mut app, "hostA");
+        source_view.update(&mut app, |view, ctx| {
+            let backend =
+                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/a"), ctx);
+        });
+        let (_, target_view) = create_view_with_node(&mut app, "hostB");
+        target_view.update(&mut app, |view, ctx| {
+            let backend =
+                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/b"), ctx);
+        });
+
+        source_view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::MoveToOtherPane, ctx);
+        });
+
+        assert_eq!(
+            std::fs::read(root.join("b/dir/conflict.txt")).unwrap(),
+            b"destination-conflict",
+            "skip keeps the destination conflict untouched"
+        );
+        assert_eq!(
+            std::fs::read(root.join("b/dir/new.txt")).unwrap(),
+            b"new",
+            "the non-conflicting file may still transfer"
+        );
+        assert_eq!(
+            std::fs::read(root.join("a/dir/conflict.txt")).unwrap(),
+            b"source-conflict",
+            "a skipped source entry makes the move incomplete"
+        );
+        assert_eq!(
+            std::fs::read(root.join("a/dir/new.txt")).unwrap(),
+            b"new",
+            "an incomplete directory move keeps the entire source tree"
         );
     });
 }
@@ -2747,6 +3596,119 @@ fn test_copy_conflict_overwrites_on_confirm() {
             std::fs::read(root.join("right/dup.txt")).unwrap(),
             b"new",
             "target overwritten with source content"
+        );
+    });
+}
+
+/// Confirming an overwrite must not destroy the existing destination before
+/// the replacement is safely available. A failed copy leaves the old bytes
+/// exactly where the user had them.
+#[test]
+fn failed_copy_overwrite_keeps_existing_destination_intact() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("left/dup.txt", b"replacement"),
+            ("right/dup.txt", b"precious-original"),
+        ]);
+        let backend = Arc::new(TracingBackend::new(temp.path().to_path_buf()));
+        backend.fail_copies();
+
+        let (_, source_view) = create_view(&mut app);
+        source_view.update(&mut app, |view, ctx| {
+            let trait_backend: Arc<dyn SftpBackend> = backend.clone();
+            view.set_backend_for_test(trait_backend, PathBuf::from("/left"), ctx);
+        });
+        let (_, target_view) = create_view(&mut app);
+        target_view.update(&mut app, |view, ctx| {
+            let trait_backend: Arc<dyn SftpBackend> = backend.clone();
+            view.set_backend_for_test(trait_backend, PathBuf::from("/right"), ctx);
+        });
+
+        source_view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        source_view.read(&app, |view, _| {
+            assert!(matches!(view.dialog, Some(Dialog::CopyMoveConflict { .. })));
+        });
+        source_view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::OverwriteConflict { all: false }, ctx);
+        });
+
+        assert_eq!(
+            std::fs::read(temp.path().join("right/dup.txt")).unwrap(),
+            b"precious-original",
+            "a failed replacement must preserve the existing destination"
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("left/dup.txt")).unwrap(),
+            b"replacement",
+            "copy failure must not modify the source"
+        );
+    });
+}
+
+/// Overwriting a destination that is a symlink to a directory must unlink the
+/// symlink itself. Following it into recursive deletion would erase unrelated
+/// target contents outside the destination pane.
+#[cfg(unix)]
+#[test]
+fn test_copy_conflict_over_directory_symlink_never_recurses_into_target() {
+    use std::os::unix::fs::symlink;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("left/item", b"replacement"),
+            ("right/.keep", b""),
+            ("target-dir/precious.txt", b"precious"),
+        ]);
+        symlink("../target-dir", temp.path().join("right/item")).unwrap();
+        let backend = Arc::new(RecordingDeleteBackend::new(temp.path().to_path_buf()));
+
+        let (_, source_view) = create_view(&mut app);
+        source_view.update(&mut app, |view, ctx| {
+            let trait_backend: Arc<dyn SftpBackend> = backend.clone();
+            view.set_backend_for_test(trait_backend, PathBuf::from("/left"), ctx);
+        });
+        let (_, target_view) = create_view(&mut app);
+        target_view.update(&mut app, |view, ctx| {
+            let trait_backend: Arc<dyn SftpBackend> = backend.clone();
+            view.set_backend_for_test(trait_backend, PathBuf::from("/right"), ctx);
+        });
+
+        source_view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        source_view.read(&app, |view, _| {
+            assert!(matches!(view.dialog, Some(Dialog::CopyMoveConflict { .. })));
+        });
+        source_view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::OverwriteConflict { all: false }, ctx);
+        });
+
+        let file_deletes = backend.file_deletes.lock().unwrap();
+        assert_eq!(file_deletes.len(), 1, "overwrite must unlink one symlink backup");
+        let deleted_link = &file_deletes[0];
+        assert_eq!(deleted_link.parent(), Some(std::path::Path::new("/right")));
+        assert!(
+            deleted_link
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(".item.zaplex_backup-")),
+            "the original symlink must be retired through the recoverable backup path"
+        );
+        drop(file_deletes);
+        assert!(
+            backend.recursive_deletes.lock().unwrap().is_empty(),
+            "overwrite must never recursively delete through a directory symlink"
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("target-dir/precious.txt")).unwrap(),
+            b"precious"
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("right/item")).unwrap(),
+            b"replacement"
         );
     });
 }

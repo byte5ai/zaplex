@@ -6,7 +6,7 @@
 //! date: 2026-05-26
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -208,8 +208,14 @@ pub enum SftpBrowserAction {
     DragAndDropFiles(Vec<PathBuf>),
     /// Execute an upload
     ExecuteUpload(String),
-    /// Execute a save-as download (the user has chosen a path)
-    DownloadSaveAs { index: usize, local_path: String },
+    /// Execute a save-as download (the user has chosen a path). The remote
+    /// identity is captured before the native picker opens, because the
+    /// listing may refresh or reorder while that picker is visible.
+    DownloadSaveAs {
+        remote_path: PathBuf,
+        file_size: u64,
+        local_path: String,
+    },
     /// Confirm move
     ConfirmMove,
     // ---- MC-style keyboard cursor ----
@@ -342,6 +348,59 @@ struct PendingCrossConn {
     target_label: String,
 }
 
+/// State that becomes current only after the requested directory has been
+/// listed successfully. Keeping this candidate separate prevents a failed or
+/// superseded request from desynchronizing the breadcrumb/title from the rows.
+struct NavigationCommit {
+    path: PathBuf,
+    history: Vec<PathBuf>,
+    history_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SymlinkActivationIntent {
+    Open,
+    OpenInEditor,
+    EnterDirectoryOnly,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResolvedSymlinkAction {
+    Navigate,
+    OpenFile,
+    Ignore,
+    Unsupported,
+}
+
+/// Decide what an already-resolved symlink target means for the user's input.
+/// Resolution itself is fallible; a broken link never reaches this function.
+fn action_for_symlink_target(
+    target_type: FileEntryType,
+    intent: SymlinkActivationIntent,
+) -> ResolvedSymlinkAction {
+    match target_type {
+        FileEntryType::Directory => ResolvedSymlinkAction::Navigate,
+        FileEntryType::File => match intent {
+            SymlinkActivationIntent::Open | SymlinkActivationIntent::OpenInEditor => {
+                ResolvedSymlinkAction::OpenFile
+            }
+            SymlinkActivationIntent::EnterDirectoryOnly => ResolvedSymlinkAction::Ignore,
+        },
+        // Both production backends define `stat` as following links. Seeing a
+        // link here therefore means the backend could not resolve its target;
+        // do not guess that it is a directory.
+        FileEntryType::Other | FileEntryType::Symlink => ResolvedSymlinkAction::Unsupported,
+    }
+}
+
+fn symlink_target_unresolved_message(error: &str) -> String {
+    crate::t!("fm-toast-symlink-target-unresolved", err = error)
+}
+
+fn resolved_download_size(entry_size: u64, resolved_target_size: Option<u64>) -> u64 {
+    resolved_target_size.unwrap_or(entry_size)
+}
+
 /// SFTP browser view
 pub struct SftpBrowserView {
     /// ID of the associated SSH server node
@@ -402,6 +461,10 @@ pub struct SftpBrowserView {
     upload_btn: MouseStateHandle,
     /// New folder button
     new_folder_btn: MouseStateHandle,
+    /// Root breadcrumb button
+    root_breadcrumb_btn: MouseStateHandle,
+    /// Persistent click state for each non-root breadcrumb segment.
+    breadcrumb_mouse_handles: HashMap<PathBuf, MouseStateHandle>,
     /// Dialog confirm button
     dialog_confirm_btn: MouseStateHandle,
     /// Dialog cancel button
@@ -413,6 +476,8 @@ pub struct SftpBrowserView {
     transfer_panel_hidden: bool,
     /// Transfer panel close button
     transfer_panel_close_btn: MouseStateHandle,
+    /// Persistent cancel-button state keyed by transfer task id.
+    transfer_cancel_handles: HashMap<usize, MouseStateHandle>,
     // ---- Dialog editors ----
     /// Rename editor
     pub(crate) rename_editor: ViewHandle<EditorView>,
@@ -548,6 +613,27 @@ fn host_name_for_node(node_id: &str) -> Option<String> {
 }
 
 impl SftpBrowserView {
+    /// Keep one mouse state per visible breadcrumb target. Reusing these
+    /// handles across renders preserves a mouse-down until the matching
+    /// mouse-up arrives.
+    fn sync_breadcrumb_mouse_handles(&mut self) {
+        let mut accumulated = PathBuf::new();
+        let mut visible = HashSet::new();
+        for component in self
+            .current_path
+            .components()
+            .filter(|component| !matches!(component, Component::RootDir))
+        {
+            accumulated.push(component);
+            visible.insert(accumulated.clone());
+            self.breadcrumb_mouse_handles
+                .entry(accumulated.clone())
+                .or_default();
+        }
+        self.breadcrumb_mouse_handles
+            .retain(|path, _| visible.contains(path));
+    }
+
     /// Create a new SFTP browser view, opened at `start_path` (the remote
     /// shell's cwd) when known, else the host root `/`.
     pub fn new(
@@ -598,11 +684,14 @@ impl SftpBrowserView {
             forward_btn: MouseStateHandle::default(),
             upload_btn: MouseStateHandle::default(),
             new_folder_btn: MouseStateHandle::default(),
+            root_breadcrumb_btn: MouseStateHandle::default(),
+            breadcrumb_mouse_handles: HashMap::new(),
             dialog_confirm_btn: MouseStateHandle::default(),
             dialog_cancel_btn: MouseStateHandle::default(),
             dialog_close_btn: MouseStateHandle::default(),
             transfer_panel_hidden: false,
             transfer_panel_close_btn: MouseStateHandle::default(),
+            transfer_cancel_handles: HashMap::new(),
             rename_editor,
             new_folder_editor,
             search_editor,
@@ -639,6 +728,7 @@ impl SftpBrowserView {
             pick_btn: MouseStateHandle::default(),
             pick_resolved: false,
         };
+        me.sync_breadcrumb_mouse_handles();
 
         // Subscribe to rename editor events
         let rename_editor_handle = me.rename_editor.clone();
@@ -737,6 +827,7 @@ impl SftpBrowserView {
         me.current_path = start_path.clone();
         me.path_history = vec![start_path];
         me.history_index = 0;
+        me.sync_breadcrumb_mouse_handles();
         me.refresh_dir(ctx);
         me
     }
@@ -754,6 +845,7 @@ impl SftpBrowserView {
         self.current_path = start_path.clone();
         self.path_history = vec![start_path];
         self.history_index = 0;
+        self.sync_breadcrumb_mouse_handles();
         self.refresh_dir_sync(ctx);
     }
 
@@ -770,6 +862,7 @@ impl SftpBrowserView {
         self.current_path = start_path.clone();
         self.path_history = vec![start_path];
         self.history_index = 0;
+        self.sync_breadcrumb_mouse_handles();
         self.refresh_dir_sync(ctx);
     }
 
@@ -970,6 +1063,7 @@ impl SftpBrowserView {
                 .ok()
                 .map(|home| normalize_remote_path(&home))
         });
+        self.sync_breadcrumb_mouse_handles();
         self.path_history = vec![self.current_path.clone()];
         self.history_index = 0;
         // A freshly connected listing parks the cursor on the first real entry
@@ -1010,6 +1104,18 @@ impl SftpBrowserView {
 
     /// Refresh the current directory contents
     fn refresh_dir(&mut self, ctx: &mut ViewContext<Self>) {
+        self.load_directory(self.current_path.clone(), None, ctx);
+    }
+
+    /// Load `path`, optionally committing a navigation only after its listing
+    /// succeeds. The current view remains a coherent, fully actionable snapshot
+    /// while the request is in flight and after any error.
+    fn load_directory(
+        &mut self,
+        path: PathBuf,
+        navigation: Option<NavigationCommit>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         // Close any open context menu the moment a refresh is initiated —
         // navigation (Backspace/Left) or a post-op refresh changes the listing
         // under it, and its raw entry index would otherwise still address the
@@ -1041,11 +1147,12 @@ impl SftpBrowserView {
         self.refresh_generation = self.refresh_generation.wrapping_add(1);
         let generation = self.refresh_generation;
 
-        let path = self.current_path.clone();
         self.refresh_handle = self.run_blocking(
             ctx,
             move || sftp.list_dir(&path),
-            move |me, result, ctx| me.on_dir_listed(generation, result, ctx),
+            move |me, result, ctx| {
+                me.on_dir_listed_with_navigation(generation, navigation, result, ctx)
+            },
         );
     }
 
@@ -1060,14 +1167,30 @@ impl SftpBrowserView {
     pub(crate) fn on_dir_listed(
         &mut self,
         generation: u64,
-        result: Result<Result<Vec<FileEntry>, super::sftp_ops::SftpOpsError>, tokio::task::JoinError>,
+        result: Result<
+            Result<Vec<FileEntry>, super::sftp_ops::SftpOpsError>,
+            tokio::task::JoinError,
+        >,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.on_dir_listed_with_navigation(generation, None, result, ctx);
+    }
+
+    fn on_dir_listed_with_navigation(
+        &mut self,
+        generation: u64,
+        navigation: Option<NavigationCommit>,
+        result: Result<
+            Result<Vec<FileEntry>, super::sftp_ops::SftpOpsError>,
+            tokio::task::JoinError,
+        >,
         ctx: &mut ViewContext<Self>,
     ) {
         if generation != self.refresh_generation {
             return;
         }
         self.is_loading = false;
-        match result {
+        let installed = match result {
             Ok(Ok(mut entries)) => {
                 entries.sort_by(|a, b| match (a.file_type, b.file_type) {
                     (FileEntryType::Directory, FileEntryType::Directory) => {
@@ -1086,17 +1209,23 @@ impl SftpBrowserView {
                         FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other,
                     ) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
                 });
-                // A mark is on a *file*, not a row index. Carry the marked paths
-                // across the refresh and re-derive the index set from the new
-                // listing: a re-sort or an added/removed file then can't silently
-                // move a mark onto another file, and a file that vanished loses
-                // its mark. (The old code cleared every mark whenever a listing
-                // successfully loaded.)
-                let marked_paths: std::collections::HashSet<PathBuf> = self
-                    .selected
-                    .iter()
-                    .filter_map(|&i| self.entries.get(i).map(|e| e.path.clone()))
-                    .collect();
+                // Marks survive a refresh of the same directory, but never a
+                // successful navigation into another one.
+                let marked_paths: std::collections::HashSet<PathBuf> = if navigation.is_none() {
+                    self.selected
+                        .iter()
+                        .filter_map(|&i| self.entries.get(i).map(|e| e.path.clone()))
+                        .collect()
+                } else {
+                    std::collections::HashSet::new()
+                };
+                if let Some(navigation) = navigation {
+                    self.current_path = navigation.path;
+                    self.sync_breadcrumb_mouse_handles();
+                    self.path_history = navigation.history;
+                    self.history_index = navigation.history_index;
+                    self.cursor_reset_pending = true;
+                }
                 self.entries = entries;
                 self.selected = self
                     .entries
@@ -1112,19 +1241,26 @@ impl SftpBrowserView {
                 // A refresh may have shrunk the listing (files removed); keep the
                 // cursor in range rather than pointing past it.
                 self.clamp_cursor_to_visible();
+                true
             }
             Ok(Err(e)) => {
-                self.show_error_toast(crate::t!("fm-toast-list-dir-failed", err = e.to_string()), ctx);
+                self.show_error_toast(
+                    crate::t!("fm-toast-list-dir-failed", err = e.to_string()),
+                    ctx,
+                );
+                false
             }
-            Err(_) => {}
-        }
+            Err(_) => false,
+        };
 
-        let path = self.current_path.display();
-        let title = crate::t!("fm-title-sftp", path = path.to_string());
-        self.pane_configuration.update(ctx, |config, ctx| {
-            config.set_title(title, ctx);
-        });
-        self.publish_to_registry(ctx);
+        if installed {
+            let path = self.current_path.display();
+            let title = crate::t!("fm-title-sftp", path = path.to_string());
+            self.pane_configuration.update(ctx, |config, ctx| {
+                config.set_title(title, ctx);
+            });
+            self.publish_to_registry(ctx);
+        }
         ctx.notify();
     }
 
@@ -1172,14 +1308,8 @@ impl SftpBrowserView {
         let sort = self.sort;
         indices.sort_by(|&a, &b| {
             let (ea, eb) = (&self.entries[a], &self.entries[b]);
-            let dir_a = matches!(
-                ea.file_type,
-                FileEntryType::Directory | FileEntryType::Symlink
-            );
-            let dir_b = matches!(
-                eb.file_type,
-                FileEntryType::Directory | FileEntryType::Symlink
-            );
+            let dir_a = matches!(ea.file_type, FileEntryType::Directory);
+            let dir_b = matches!(eb.file_type, FileEntryType::Directory);
             if dir_a != dir_b {
                 return if dir_a {
                     std::cmp::Ordering::Less
@@ -1323,6 +1453,77 @@ impl SftpBrowserView {
         }
     }
 
+    /// Resolve a symlink target without changing the current location, then
+    /// perform the action appropriate for the resolved file type. `stat`
+    /// follows links; destructive operations continue to use the lstat-style
+    /// type from the directory listing and never call this helper.
+    fn resolve_and_activate_symlink(
+        &mut self,
+        index: usize,
+        intent: SymlinkActivationIntent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(entry) = self.entries.get(index) else {
+            return;
+        };
+        let path = entry.path.clone();
+        let sftp = match &self.sftp {
+            Some(sftp) => sftp.clone(),
+            None => {
+                self.show_error_toast(crate::t!("fm-toast-not-connected-server"), ctx);
+                return;
+            }
+        };
+        let stat_path = path.clone();
+        let _ = self.run_blocking(
+            ctx,
+            move || sftp.stat(&stat_path),
+            move |me, result, ctx| {
+                // A stat response can arrive after a refresh/navigation. Raw
+                // indices are not stable across listings, so act only if the
+                // same link is still at the same index.
+                let link_is_current = me.entries.get(index).is_some_and(|entry| {
+                    entry.path == path && entry.file_type == FileEntryType::Symlink
+                });
+                if !link_is_current {
+                    return;
+                }
+
+                match result {
+                    Ok(Ok(target)) => match action_for_symlink_target(target.file_type, intent) {
+                        ResolvedSymlinkAction::Navigate => me.navigate_to(path, ctx),
+                        ResolvedSymlinkAction::OpenFile => match intent {
+                            SymlinkActivationIntent::Open => {
+                                me.begin_download(index, Some(target.size), ctx)
+                            }
+                            SymlinkActivationIntent::OpenInEditor => {
+                                ctx.dispatch_typed_action(
+                                    &crate::WorkspaceAction::OpenFileInEditor {
+                                        node_id: me.node_id.clone(),
+                                        path,
+                                    },
+                                );
+                            }
+                            SymlinkActivationIntent::EnterDirectoryOnly => {}
+                        },
+                        ResolvedSymlinkAction::Ignore => {}
+                        ResolvedSymlinkAction::Unsupported => {
+                            me.show_error_toast(crate::t!("fm-toast-unsupported-file-type"), ctx)
+                        }
+                    },
+                    Ok(Err(error)) => me.show_error_toast(
+                        symlink_target_unresolved_message(&error.to_string()),
+                        ctx,
+                    ),
+                    Err(error) => me.show_error_toast(
+                        symlink_target_unresolved_message(&error.to_string()),
+                        ctx,
+                    ),
+                }
+            },
+        );
+    }
+
     /// F3/F4: open the row under the cursor in the code editor. A directory is
     /// entered; a file is opened in an editor pane (view + edit). The workspace
     /// resolves local vs remote (`node_id`).
@@ -1333,18 +1534,28 @@ impl SftpBrowserView {
         let Some(entry) = self.entries.get(index) else {
             return;
         };
-        if matches!(
-            entry.file_type,
-            FileEntryType::Directory | FileEntryType::Symlink
-        ) {
-            let path = entry.path.clone();
-            self.navigate_to(path, ctx);
-            return;
+        match entry.file_type {
+            FileEntryType::Directory => {
+                let path = entry.path.clone();
+                self.navigate_to(path, ctx);
+            }
+            FileEntryType::Symlink => {
+                self.resolve_and_activate_symlink(
+                    index,
+                    SymlinkActivationIntent::OpenInEditor,
+                    ctx,
+                );
+            }
+            FileEntryType::File => {
+                ctx.dispatch_typed_action(&crate::WorkspaceAction::OpenFileInEditor {
+                    node_id: self.node_id.clone(),
+                    path: entry.path.clone(),
+                });
+            }
+            FileEntryType::Other => {
+                self.show_error_toast(crate::t!("fm-toast-unsupported-file-type"), ctx);
+            }
         }
-        ctx.dispatch_typed_action(&crate::WorkspaceAction::OpenFileInEditor {
-            node_id: self.node_id.clone(),
-            path: entry.path.clone(),
-        });
     }
 
     /// Enter the directory under the cursor (Right arrow); a file is a no-op.
@@ -1355,11 +1566,14 @@ impl SftpBrowserView {
         }
         if let Some(index) = self.cursor_entry_index() {
             if let Some(entry) = self.entries.get(index) {
-                if matches!(
-                    entry.file_type,
-                    FileEntryType::Directory | FileEntryType::Symlink
-                ) {
-                    self.navigate_to(entry.path.clone(), ctx);
+                match entry.file_type {
+                    FileEntryType::Directory => self.navigate_to(entry.path.clone(), ctx),
+                    FileEntryType::Symlink => self.resolve_and_activate_symlink(
+                        index,
+                        SymlinkActivationIntent::EnterDirectoryOnly,
+                        ctx,
+                    ),
+                    FileEntryType::File | FileEntryType::Other => {}
                 }
             }
         }
@@ -1396,7 +1610,7 @@ impl SftpBrowserView {
         self.selected
             .iter()
             .filter_map(|&i| self.entries.get(i))
-            .filter(|e| !matches!(e.file_type, FileEntryType::Directory | FileEntryType::Symlink))
+            .filter(|e| !matches!(e.file_type, FileEntryType::Directory))
             .map(|e| e.size)
             .sum()
     }
@@ -1589,12 +1803,22 @@ impl SftpBrowserView {
             let Some(name) = source.file_name() else {
                 continue;
             };
-            let is_dir = self
+            let Some(source_type) = self
                 .entries
                 .iter()
                 .find(|e| &e.path == source)
-                .map(|e| matches!(e.file_type, FileEntryType::Directory))
-                .unwrap_or(false);
+                .map(|entry| entry.file_type)
+            else {
+                continue;
+            };
+            let is_dir = match source_type {
+                FileEntryType::Directory => true,
+                FileEntryType::File => false,
+                FileEntryType::Symlink | FileEntryType::Other => {
+                    self.show_error_toast(crate::t!("fm-toast-unsupported-file-type"), ctx);
+                    continue;
+                }
+            };
             let dest = normalize_remote_path(&target_dir.join(name));
             let src_backend = source_backend.clone();
             let tgt_backend = target_backend.clone();
@@ -1709,7 +1933,7 @@ impl SftpBrowserView {
                 match pending.ops.front() {
                     None => Step::Done,
                     Some(op) => {
-                        let exists = pending.backend.stat(&op.dest).is_ok();
+                        let exists = pending.backend.lstat(&op.dest).is_ok();
                         if !exists {
                             Step::Execute { overwrite: false }
                         } else {
@@ -1760,9 +1984,8 @@ impl SftpBrowserView {
     }
 
     /// Perform one copy/move op (the op is already popped off the queue).
-    /// `overwrite` means the destination existed and must be replaced — remove
-    /// it first so a rename over a non-empty dir (or a copy into an existing
-    /// tree) behaves as "replace".
+    /// Existing destinations are only retired after a complete replacement is
+    /// ready, and are restored if the final rename fails.
     fn execute_copy_move_op(&mut self, op: &CopyMoveOp, overwrite: bool) {
         let Some(pending) = self.pending_copy_move.as_mut() else {
             return;
@@ -1770,30 +1993,14 @@ impl SftpBrowserView {
         let backend = pending.backend.clone();
         let is_move = pending.is_move;
 
-        if overwrite {
-            let dest_is_dir = backend
-                .stat(&op.dest)
-                .map(|e| matches!(e.file_type, FileEntryType::Directory))
-                .unwrap_or(false);
-            let remove = if dest_is_dir {
-                backend.delete_dir_recursive(&op.dest)
-            } else {
-                backend.delete_file(&op.dest)
-            };
-            if let Err(e) = remove {
-                log::warn!("fm overwrite: could not remove existing {:?}: {e}", op.dest);
-                pending.errors += 1;
-                return;
-            }
-        }
-
-        let result = if is_move {
-            backend.rename(&op.source, &op.dest)
-        } else if op.is_dir {
-            backend.copy_dir_recursive(&op.source, &op.dest)
-        } else {
-            backend.copy_file(&op.source, &op.dest)
-        };
+        let result = execute_backend_copy_move(
+            backend.as_ref(),
+            &op.source,
+            &op.dest,
+            op.is_dir,
+            is_move,
+            overwrite,
+        );
         match result {
             Ok(()) => pending.done += 1,
             Err(e) => {
@@ -1918,12 +2125,22 @@ impl SftpBrowserView {
             let Some(name) = source.file_name() else {
                 continue;
             };
-            let is_dir = self
+            let Some(source_type) = self
                 .entries
                 .iter()
                 .find(|e| &e.path == source)
-                .map(|e| matches!(e.file_type, FileEntryType::Directory))
-                .unwrap_or(false);
+                .map(|entry| entry.file_type)
+            else {
+                continue;
+            };
+            let is_dir = match source_type {
+                FileEntryType::Directory => true,
+                FileEntryType::File => false,
+                FileEntryType::Symlink | FileEntryType::Other => {
+                    self.show_error_toast(crate::t!("fm-toast-unsupported-file-type"), ctx);
+                    continue;
+                }
+            };
             let dest = normalize_remote_path(&target_dir.join(name));
             if is_dir {
                 // Recursively copy/move the directory across the connection: the
@@ -1943,7 +2160,7 @@ impl SftpBrowserView {
                 continue;
             }
             let exists = match direction {
-                TransferDirection::Upload => backend.stat(&dest).is_ok(),
+                TransferDirection::Upload => backend.lstat(&dest).is_ok(),
                 TransferDirection::Download => std::fs::metadata(&dest).is_ok(),
             };
             let (local_path, remote_path) = match direction {
@@ -2124,7 +2341,10 @@ impl SftpBrowserView {
                         me.pending_dir_move_cleanups.push(PendingDirMoveCleanup {
                             id,
                             remaining: plan.files.len(),
-                            any_failed: false,
+                            // A skipped destination means the requested move is
+                            // incomplete even if every scheduled file succeeds.
+                            // Keep the complete source tree in that case.
+                            any_failed: plan.skipped_existing > 0,
                             source_backend: source_backend.clone(),
                             source_dir: source_dir.clone(),
                             label: label.clone(),
@@ -2247,6 +2467,8 @@ impl SftpBrowserView {
         self.next_transfer_id += 1;
         let task_id = task.id;
         let cancel_flag = task.cancel_flag.clone();
+        self.transfer_cancel_handles
+            .insert(task_id, MouseStateHandle::default());
         self.transfers.push(task);
         if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
             t.state = TransferState::InProgress;
@@ -2349,21 +2571,25 @@ impl SftpBrowserView {
         });
     }
 
-    /// Navigate to the given path and update the history
+    /// Request a path and commit it to the view/history only after listing it.
     fn navigate_to(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {
         let path = normalize_remote_path(&path);
         if path == self.current_path {
             return;
         }
-        self.current_path = path;
-        // A new directory listing parks the cursor on its first real entry.
-        self.cursor = 0;
-        self.cursor_reset_pending = true;
-        // Truncate the forward history
-        self.path_history.truncate(self.history_index + 1);
-        self.path_history.push(self.current_path.clone());
-        self.history_index = self.path_history.len() - 1;
-        self.refresh_dir(ctx);
+        let mut history = self.path_history.clone();
+        history.truncate(self.history_index + 1);
+        history.push(path.clone());
+        let history_index = history.len() - 1;
+        self.load_directory(
+            path.clone(),
+            Some(NavigationCommit {
+                path,
+                history,
+                history_index,
+            }),
+            ctx,
+        );
     }
 
     /// Go up to the parent directory
@@ -2379,18 +2605,34 @@ impl SftpBrowserView {
     /// Go back to the previous path in the history
     fn go_back(&mut self, ctx: &mut ViewContext<Self>) {
         if self.history_index > 0 {
-            self.history_index -= 1;
-            self.current_path = self.path_history[self.history_index].clone();
-            self.refresh_dir(ctx);
+            let history_index = self.history_index - 1;
+            let path = self.path_history[history_index].clone();
+            self.load_directory(
+                path.clone(),
+                Some(NavigationCommit {
+                    path,
+                    history: self.path_history.clone(),
+                    history_index,
+                }),
+                ctx,
+            );
         }
     }
 
     /// Go forward to the next path in the history
     fn go_forward(&mut self, ctx: &mut ViewContext<Self>) {
         if self.history_index < self.path_history.len() - 1 {
-            self.history_index += 1;
-            self.current_path = self.path_history[self.history_index].clone();
-            self.refresh_dir(ctx);
+            let history_index = self.history_index + 1;
+            let path = self.path_history[history_index].clone();
+            self.load_directory(
+                path.clone(),
+                Some(NavigationCommit {
+                    path,
+                    history: self.path_history.clone(),
+                    history_index,
+                }),
+                ctx,
+            );
         }
     }
 
@@ -2398,11 +2640,17 @@ impl SftpBrowserView {
     fn open_entry(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         if let Some(entry) = self.entries.get(index) {
             match entry.file_type {
-                FileEntryType::Directory | FileEntryType::Symlink => {
+                FileEntryType::Directory => {
                     self.navigate_to(entry.path.clone(), ctx);
                 }
-                FileEntryType::File | FileEntryType::Other => {
+                FileEntryType::Symlink => {
+                    self.resolve_and_activate_symlink(index, SymlinkActivationIntent::Open, ctx)
+                }
+                FileEntryType::File => {
                     self.download_entry(index, ctx);
+                }
+                FileEntryType::Other => {
+                    self.show_error_toast(crate::t!("fm-toast-unsupported-file-type"), ctx);
                 }
             }
         }
@@ -2502,16 +2750,40 @@ impl SftpBrowserView {
         );
     }
 
-    /// Create a download transfer task
+    /// Resolve link targets and reject non-regular special files before a
+    /// download picker can start a potentially blocking read.
     fn download_entry(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        let Some(entry) = self.entries.get(index) else {
+            return;
+        };
+        match entry.file_type {
+            FileEntryType::File => self.begin_download(index, None, ctx),
+            FileEntryType::Symlink => {
+                self.resolve_and_activate_symlink(index, SymlinkActivationIntent::Open, ctx)
+            }
+            FileEntryType::Directory | FileEntryType::Other => {
+                self.show_error_toast(crate::t!("fm-toast-unsupported-file-type"), ctx);
+            }
+        }
+    }
+
+    /// Open the save picker for an entry already proven to be a regular file.
+    fn begin_download(
+        &mut self,
+        index: usize,
+        resolved_target_size: Option<u64>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if let Some(entry) = self.entries.get(index) {
             let default_name = entry.name.clone();
-            let idx = index;
+            let remote_path = entry.path.clone();
+            let file_size = resolved_download_size(entry.size, resolved_target_size);
             ctx.open_save_file_picker(
                 move |path_opt: Option<String>, _me: &mut Self, _ctx: &mut ViewContext<Self>| {
                     if let Some(path) = path_opt {
                         _ctx.dispatch_typed_action_deferred(SftpBrowserAction::DownloadSaveAs {
-                            index: idx,
+                            remote_path: remote_path.clone(),
+                            file_size,
                             local_path: path,
                         });
                     }
@@ -2712,8 +2984,11 @@ impl SftpBrowserView {
         let theme = appearance.theme();
         let text_color = theme.sub_text_color(theme.background());
 
-        let parts: Vec<Box<dyn Element>> =
-            super::breadcrumb::render_breadcrumb(&self.current_path, appearance);
+        let parts: Vec<Box<dyn Element>> = super::breadcrumb::render_breadcrumb(
+            &self.current_path,
+            &self.breadcrumb_mouse_handles,
+            appearance,
+        );
 
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -2721,7 +2996,7 @@ impl SftpBrowserView {
 
         // Add the root directory "/" as a clickable entry point
         let root_text_color = text_color;
-        let root_hoverable = Hoverable::new(Default::default(), move |_| {
+        let root_hoverable = Hoverable::new(self.root_breadcrumb_btn.clone(), move |_| {
             let t = Text::new_inline(
                 "/".to_string(),
                 appearance.ui_font_family(),
@@ -2948,6 +3223,7 @@ impl SftpBrowserView {
     fn render_transfers(&self, appearance: &Appearance) -> Box<dyn Element> {
         super::transfer_panel::render_transfer_panel(
             &self.transfers,
+            &self.transfer_cancel_handles,
             appearance,
             self.transfer_panel_close_btn.clone(),
         )
@@ -2959,6 +3235,12 @@ impl SftpBrowserView {
     /// if so, opens an overwrite confirmation dialog, and after the user confirms,
     /// performs the actual upload via `execute_upload_confirmed`.
     fn execute_upload(&mut self, local_path: &Path, ctx: &mut ViewContext<Self>) {
+        if std::fs::symlink_metadata(local_path)
+            .is_ok_and(|metadata| !metadata.is_file() || metadata.file_type().is_symlink())
+        {
+            self.show_error_toast(crate::t!("fm-toast-unsupported-file-type"), ctx);
+            return;
+        }
         let file_name = local_path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -3028,6 +3310,8 @@ impl SftpBrowserView {
         self.next_transfer_id += 1;
         let task_id = task.id;
         let cancel_flag = task.cancel_flag.clone();
+        self.transfer_cancel_handles
+            .insert(task_id, MouseStateHandle::default());
         self.transfers.push(task);
 
         if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
@@ -3124,6 +3408,8 @@ impl SftpBrowserView {
         self.next_transfer_id += 1;
         let task_id = task.id;
         let cancel_flag = task.cancel_flag.clone();
+        self.transfer_cancel_handles
+            .insert(task_id, MouseStateHandle::default());
         self.transfers.push(task);
 
         if let Some(t) = self.transfers.iter_mut().find(|t| t.id == task_id) {
@@ -3273,6 +3559,82 @@ pub(super) struct DirTransferPlan {
     pub(super) skipped_existing: usize,
 }
 
+fn validated_relative_path(path: &Path) -> Result<PathBuf, String> {
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!("unsafe relative transfer path: {}", path.display()));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn validated_listing_relative_path(
+    listed_dir: &Path,
+    source_root: &Path,
+    entry: &FileEntry,
+) -> Result<PathBuf, String> {
+    let name_path = Path::new(&entry.name);
+    validated_relative_path(name_path)?;
+    let expected_path = normalize_remote_path(&listed_dir.join(name_path));
+    if entry.path != expected_path {
+        return Err(format!(
+            "directory listing returned unexpected path {} for {}",
+            entry.path.display(),
+            expected_path.display()
+        ));
+    }
+    let relative = entry
+        .path
+        .strip_prefix(source_root)
+        .map_err(|_| {
+            format!(
+                "directory listing escaped source root {}: {}",
+                source_root.display(),
+                entry.path.display()
+            )
+        })?;
+    validated_relative_path(relative)
+}
+
+fn ensure_remote_directory(
+    backend: &dyn SftpBackend,
+    path: &Path,
+) -> Result<(), String> {
+    match backend.lstat(path) {
+        Ok(entry) if matches!(entry.file_type, FileEntryType::Directory) => Ok(()),
+        Ok(_) => Err(format!(
+            "remote directory target is not a directory: {}",
+            path.display()
+        )),
+        Err(_) => backend.create_dir(path).map_err(|error| error.to_string()),
+    }
+}
+
+fn ensure_local_directory(path: &Path, create_parents: bool) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "local directory target is a symbolic link: {}",
+            path.display()
+        )),
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => Err(format!(
+            "local directory target is not a directory: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let result = if create_parents {
+                std::fs::create_dir_all(path)
+            } else {
+                std::fs::create_dir(path)
+            };
+            result.map_err(|error| error.to_string())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 /// Enumerate `source_dir` and create the destination directory structure for a
 /// cross-connection transfer, returning the per-file work. `remote_backend` is
 /// the SFTP side — the *target* for an upload, the *source* for a download; the
@@ -3289,49 +3651,137 @@ pub(super) fn plan_dir_transfer(
     let mut skipped_existing = 0usize;
     match direction {
         TransferDirection::Upload => {
-            // Local source → remote dest: walk the local tree (parents before
-            // children), mkdir on the remote, collect the files to upload.
-            let _ = remote_backend.create_dir(dest_dir); // ignore "already exists"
-            // WalkDir yields a directory before its contents, so each parent is
-            // created before the files that go into it.
+            let source_metadata =
+                std::fs::symlink_metadata(source_dir).map_err(|error| error.to_string())?;
+            if source_metadata.file_type().is_symlink() || !source_metadata.is_dir() {
+                return Err(format!(
+                    "upload source is not a regular directory: {}",
+                    source_dir.display()
+                ));
+            }
+
+            // Validate the complete local tree before creating anything on the
+            // destination. A late symlink/FIFO must not leave a partial plan
+            // that a move could mistake for success.
+            let mut directories = Vec::new();
+            let mut regular_files = Vec::new();
             for entry in walkdir::WalkDir::new(source_dir).min_depth(1) {
                 let entry = entry.map_err(|e| e.to_string())?;
-                let rel = entry
+                let relative = entry
                     .path()
                     .strip_prefix(source_dir)
                     .map_err(|e| e.to_string())?;
-                let remote_target = normalize_remote_path(&dest_dir.join(rel));
+                let relative = validated_relative_path(relative)?;
+                let remote_target = normalize_remote_path(&dest_dir.join(&relative));
                 if entry.file_type().is_dir() {
-                    let _ = remote_backend.create_dir(&remote_target); // ignore exists
+                    directories.push(remote_target);
                 } else if entry.file_type().is_file() {
-                    if remote_backend.stat(&remote_target).is_ok() {
+                    regular_files.push((entry.path().to_path_buf(), remote_target));
+                } else if entry.file_type().is_symlink() {
+                    return Err(format!(
+                        "refusing to recursively upload symbolic link {}",
+                        entry.path().display()
+                    ));
+                } else {
+                    return Err(format!(
+                        "refusing to recursively upload special file {}",
+                        entry.path().display()
+                    ));
+                }
+            }
+
+            ensure_remote_directory(remote_backend.as_ref(), dest_dir)?;
+            for directory in directories {
+                ensure_remote_directory(remote_backend.as_ref(), &directory)?;
+            }
+            for (local_path, remote_path) in regular_files {
+                match remote_backend.lstat(&remote_path) {
+                    Ok(entry) if matches!(entry.file_type, FileEntryType::File) => {
                         skipped_existing += 1;
-                        continue;
                     }
-                    files.push((entry.path().to_path_buf(), remote_target));
+                    Ok(_) => {
+                        return Err(format!(
+                            "remote file target is not a regular file: {}",
+                            remote_path.display()
+                        ));
+                    }
+                    Err(_) => files.push((local_path, remote_path)),
                 }
             }
         }
         TransferDirection::Download => {
-            // Remote source → local dest: walk the remote tree via `list_dir`,
-            // create local directories, collect the files to download.
-            std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
-            let mut stack = vec![source_dir.to_path_buf()];
+            let source_root = normalize_remote_path(source_dir);
+            let source_metadata = remote_backend
+                .lstat(&source_root)
+                .map_err(|error| error.to_string())?;
+            if !matches!(source_metadata.file_type, FileEntryType::Directory) {
+                return Err(format!(
+                    "download source is not a regular directory: {}",
+                    source_root.display()
+                ));
+            }
+
+            // First enumerate and validate every server-provided path and type.
+            // Only after the complete tree is trusted may local directories be
+            // created.
+            let mut stack = vec![source_root.clone()];
+            let mut visited = HashSet::new();
+            let mut directories = Vec::new();
+            let mut regular_files = Vec::new();
             while let Some(dir) = stack.pop() {
+                if !visited.insert(dir.clone()) {
+                    return Err(format!(
+                        "directory listing repeated path {}",
+                        dir.display()
+                    ));
+                }
                 let entries = remote_backend.list_dir(&dir).map_err(|e| e.to_string())?;
                 for entry in entries {
-                    let rel = entry.path.strip_prefix(source_dir).unwrap_or(&entry.path);
-                    let local_target = dest_dir.join(rel);
-                    if matches!(entry.file_type, FileEntryType::Directory) {
-                        std::fs::create_dir_all(&local_target).map_err(|e| e.to_string())?;
-                        stack.push(entry.path.clone());
-                    } else {
-                        if std::fs::metadata(&local_target).is_ok() {
-                            skipped_existing += 1;
-                            continue;
+                    let relative =
+                        validated_listing_relative_path(&dir, &source_root, &entry)?;
+                    let local_target = dest_dir.join(&relative);
+                    match entry.file_type {
+                        FileEntryType::Directory => {
+                            directories.push(local_target);
+                            stack.push(entry.path);
                         }
-                        files.push((local_target, entry.path.clone()));
+                        FileEntryType::File => {
+                            regular_files.push((local_target, entry.path));
+                        }
+                        FileEntryType::Symlink => {
+                            return Err(format!(
+                                "refusing to recursively download symbolic link {}",
+                                entry.path.display()
+                            ));
+                        }
+                        FileEntryType::Other => {
+                            return Err(format!(
+                                "refusing to recursively download special file {}",
+                                entry.path.display()
+                            ));
+                        }
                     }
+                }
+            }
+
+            ensure_local_directory(dest_dir, true)?;
+            directories.sort_by_key(|path| path.components().count());
+            for directory in directories {
+                ensure_local_directory(&directory, false)?;
+            }
+            for (local_path, remote_path) in regular_files {
+                match std::fs::symlink_metadata(&local_path) {
+                    Ok(metadata) if metadata.is_file() => skipped_existing += 1,
+                    Ok(_) => {
+                        return Err(format!(
+                            "local file target is not a regular file: {}",
+                            local_path.display()
+                        ));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        files.push((local_path, remote_path));
+                    }
+                    Err(error) => return Err(error.to_string()),
                 }
             }
         }
@@ -3340,6 +3790,150 @@ pub(super) fn plan_dir_transfer(
         files,
         skipped_existing,
     })
+}
+
+fn remove_backend_entry(
+    backend: &dyn SftpBackend,
+    path: &Path,
+) -> Result<(), sftp_ops::SftpOpsError> {
+    match backend.lstat(path)?.file_type {
+        FileEntryType::Directory => backend.delete_dir_recursive(path),
+        FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other => {
+            backend.delete_file(path)
+        }
+    }
+}
+
+fn unique_backend_sibling(
+    backend: &dyn SftpBackend,
+    destination: &Path,
+    marker: &str,
+) -> Result<PathBuf, sftp_ops::SftpOpsError> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let name = destination
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "entry".to_string());
+    for _ in 0..1024 {
+        let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let candidate = destination.with_file_name(format!(
+            ".{name}.{marker}-{}-{sequence}",
+            std::process::id()
+        ));
+        if backend.lstat(&candidate).is_err() {
+            return Ok(candidate);
+        }
+    }
+    Err(sftp_ops::SftpOpsError::Operation(format!(
+        "Could not reserve a temporary sibling for {}",
+        destination.display()
+    )))
+}
+
+fn replace_backend_entry(
+    backend: &dyn SftpBackend,
+    replacement: &Path,
+    destination: &Path,
+) -> Result<(), sftp_ops::SftpOpsError> {
+    let backup = unique_backend_sibling(backend, destination, "zaplex_backup")?;
+    backend.rename(destination, &backup)?;
+    if let Err(replace_error) = backend.rename(replacement, destination) {
+        let restore_result = backend.rename(&backup, destination);
+        let restore_detail = restore_result
+            .err()
+            .map(|error| format!("; restoring the original failed: {error}"))
+            .unwrap_or_default();
+        return Err(sftp_ops::SftpOpsError::Operation(format!(
+            "Failed to install replacement for {}: {replace_error}{restore_detail}",
+            destination.display()
+        )));
+    }
+    if let Err(error) = remove_backend_entry(backend, &backup) {
+        log::warn!(
+            "replacement succeeded, but backup cleanup failed at {}: {error}",
+            backup.display()
+        );
+    }
+    Ok(())
+}
+
+fn execute_backend_copy_move(
+    backend: &dyn SftpBackend,
+    source: &Path,
+    destination: &Path,
+    is_dir: bool,
+    is_move: bool,
+    overwrite: bool,
+) -> Result<(), sftp_ops::SftpOpsError> {
+    let source_type = backend.lstat(source)?.file_type;
+    match (is_dir, source_type) {
+        (true, FileEntryType::Directory) | (false, FileEntryType::File) => {}
+        (_, FileEntryType::Symlink) => {
+            return Err(sftp_ops::SftpOpsError::Operation(format!(
+                "Refusing to copy or move symbolic link {}",
+                source.display()
+            )));
+        }
+        (_, FileEntryType::Other) => {
+            return Err(sftp_ops::SftpOpsError::Operation(format!(
+                "Refusing to copy or move special file {}",
+                source.display()
+            )));
+        }
+        (true, FileEntryType::File) | (false, FileEntryType::Directory) => {
+            return Err(sftp_ops::SftpOpsError::Operation(format!(
+                "Source type changed before transfer: {}",
+                source.display()
+            )));
+        }
+    }
+
+    if !is_move && is_dir {
+        let staged = unique_backend_sibling(backend, destination, "zaplex_staged")?;
+        if let Err(error) = backend.copy_dir_recursive(source, &staged) {
+            if backend.lstat(&staged).is_ok() {
+                let _ = remove_backend_entry(backend, &staged);
+            }
+            return Err(error);
+        }
+        let result = if overwrite {
+            match backend.lstat(destination) {
+                Ok(_) => replace_backend_entry(backend, &staged, destination),
+                Err(error) => Err(error),
+            }
+        } else {
+            backend.rename(&staged, destination)
+        };
+        if result.is_err() && backend.lstat(&staged).is_ok() {
+            let _ = remove_backend_entry(backend, &staged);
+        }
+        return result;
+    }
+
+    if !overwrite {
+        return if is_move {
+            backend.rename(source, destination)
+        } else {
+            backend.copy_file(source, destination)
+        };
+    }
+
+    backend.lstat(destination)?;
+    if is_move {
+        return replace_backend_entry(backend, source, destination);
+    }
+    let staged = unique_backend_sibling(backend, destination, "zaplex_staged")?;
+    if let Err(error) = backend.copy_file(source, &staged) {
+        if backend.lstat(&staged).is_ok() {
+            let _ = remove_backend_entry(backend, &staged);
+        }
+        return Err(error);
+    }
+    let result = replace_backend_entry(backend, &staged, destination);
+    if result.is_err() && backend.lstat(&staged).is_ok() {
+        let _ = remove_backend_entry(backend, &staged);
+    }
+    result
 }
 
 /// A unique local temp path for one remote↔remote relay (file or directory).
@@ -3375,6 +3969,9 @@ fn relay_one(
                 source_path,
                 temp,
             )?;
+            if download.skipped_existing > 0 {
+                return Err("relay download skipped an existing temporary entry".to_string());
+            }
             for (local, remote) in &download.files {
                 source_backend
                     .download_file(remote, local, None, None)
@@ -3391,6 +3988,12 @@ fn relay_one(
                 target_backend
                     .upload_file(local, remote, None, None)
                     .map_err(|e| e.to_string())?;
+            }
+            if upload.skipped_existing > 0 {
+                return Err(format!(
+                    "relay upload skipped {} existing destination entries",
+                    upload.skipped_existing
+                ));
             }
         } else {
             source_backend
@@ -3953,6 +4556,7 @@ impl TypedActionView for SftpBrowserView {
                     self.dialog = Some(Dialog::CloseTransferPanelConfirm);
                 } else {
                     self.transfers.clear();
+                    self.transfer_cancel_handles.clear();
                     self.transfer_panel_hidden = true;
                 }
                 ctx.notify();
@@ -3965,6 +4569,7 @@ impl TypedActionView for SftpBrowserView {
                     handle.abort();
                 }
                 self.transfers.clear();
+                self.transfer_cancel_handles.clear();
                 self.transfer_panel_hidden = true;
                 self.dialog = None;
                 ctx.notify();
@@ -3987,15 +4592,14 @@ impl TypedActionView for SftpBrowserView {
                 let local_path = PathBuf::from(local_path_str);
                 self.execute_upload(&local_path, ctx);
             }
-            SftpBrowserAction::DownloadSaveAs { index, local_path } => {
+            SftpBrowserAction::DownloadSaveAs {
+                remote_path,
+                file_size,
+                local_path,
+            } => {
                 let local_path = PathBuf::from(local_path);
-                let (remote_path, file_size) = self
-                    .entries
-                    .get(*index)
-                    .map(|e| (e.path.clone(), e.size))
-                    .unzip();
-                if let (Some(remote_path), Some(file_size)) = (remote_path, file_size) {
-                    self.execute_download(&remote_path, &local_path, file_size, ctx);
+                if self.sftp.is_some() {
+                    self.execute_download(remote_path, &local_path, *file_size, ctx);
                 }
             }
         }
@@ -4360,6 +4964,49 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    #[test]
+    fn resolved_symlink_target_selects_file_open_or_navigation_explicitly() {
+        assert_eq!(
+            action_for_symlink_target(FileEntryType::File, SymlinkActivationIntent::Open),
+            ResolvedSymlinkAction::OpenFile
+        );
+        assert_eq!(
+            action_for_symlink_target(FileEntryType::Directory, SymlinkActivationIntent::Open,),
+            ResolvedSymlinkAction::Navigate
+        );
+        assert_eq!(
+            action_for_symlink_target(
+                FileEntryType::File,
+                SymlinkActivationIntent::EnterDirectoryOnly,
+            ),
+            ResolvedSymlinkAction::Ignore
+        );
+        assert_eq!(
+            action_for_symlink_target(FileEntryType::Other, SymlinkActivationIntent::Open),
+            ResolvedSymlinkAction::Unsupported,
+            "devices, sockets and FIFOs must never enter the file-open path"
+        );
+    }
+
+    #[test]
+    fn broken_symlink_uses_the_specific_resolution_error() {
+        let message = symlink_target_unresolved_message("missing target");
+        assert_eq!(
+            message,
+            crate::t!("fm-toast-symlink-target-unresolved", err = "missing target")
+        );
+        assert_ne!(
+            message,
+            crate::t!("fm-toast-list-dir-failed", err = "missing target")
+        );
+    }
+
+    #[test]
+    fn resolved_symlink_download_uses_target_size() {
+        assert_eq!(resolved_download_size(0, Some(4096)), 4096);
+        assert_eq!(resolved_download_size(512, None), 512);
+    }
+
     // ============================================================
     // normalize_remote_path tests
     // ============================================================
@@ -4593,12 +5240,17 @@ mod tests {
     #[test]
     fn test_action_download_save_as() {
         let action = SftpBrowserAction::DownloadSaveAs {
-            index: 3,
+            remote_path: PathBuf::from("/remote/file.txt"),
+            file_size: 42,
             local_path: "/tmp/file.txt".into(),
         };
         assert!(matches!(
             action,
-            SftpBrowserAction::DownloadSaveAs { index: 3, .. }
+            SftpBrowserAction::DownloadSaveAs {
+                remote_path,
+                file_size: 42,
+                ..
+            } if remote_path == PathBuf::from("/remote/file.txt")
         ));
     }
 }

@@ -8,13 +8,93 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use dunce;
 
 use super::sftp_ops::{self, ProgressCallback, SftpOpsError};
 use super::types::{FileEntry, FileEntryType};
+
+fn validated_child_path(parent: &Path, entry: &FileEntry) -> Result<PathBuf, SftpOpsError> {
+    let mut components = Path::new(&entry.name).components();
+    let is_single_name = matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none();
+    let expected = parent.join(&entry.name);
+    if !is_single_name || entry.path != expected {
+        return Err(SftpOpsError::Operation(format!(
+            "Refusing unsafe directory entry {} at {}",
+            entry.name,
+            entry.path.display()
+        )));
+    }
+    Ok(expected)
+}
+
+fn validate_copy_tree<B: SftpBackend + ?Sized>(
+    backend: &B,
+    source: &Path,
+) -> Result<(), SftpOpsError> {
+    for entry in backend.list_dir(source)? {
+        validated_child_path(source, &entry)?;
+        let actual_type = backend.lstat(&entry.path)?.file_type;
+        if actual_type != entry.file_type {
+            return Err(SftpOpsError::Operation(format!(
+                "Source type changed during validation at {}",
+                entry.path.display()
+            )));
+        }
+        match entry.file_type {
+            FileEntryType::Directory => validate_copy_tree(backend, &entry.path)?,
+            FileEntryType::File => {}
+            FileEntryType::Symlink => {
+                return Err(SftpOpsError::Operation(format!(
+                    "Refusing to recursively copy symbolic link {}",
+                    entry.path.display()
+                )));
+            }
+            FileEntryType::Other => {
+                return Err(SftpOpsError::Operation(format!(
+                    "Refusing to recursively copy special file {}",
+                    entry.path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn copy_validated_tree<B: SftpBackend + ?Sized>(
+    backend: &B,
+    source: &Path,
+    destination: &Path,
+) -> Result<(), SftpOpsError> {
+    backend.create_dir(destination)?;
+    for entry in backend.list_dir(source)? {
+        validated_child_path(source, &entry)?;
+        let actual_type = backend.lstat(&entry.path)?.file_type;
+        if actual_type != entry.file_type {
+            return Err(SftpOpsError::Operation(format!(
+                "Source type changed after validation at {}",
+                entry.path.display()
+            )));
+        }
+        let child_destination = destination.join(&entry.name);
+        match entry.file_type {
+            FileEntryType::Directory => {
+                copy_validated_tree(backend, &entry.path, &child_destination)?
+            }
+            FileEntryType::File => backend.copy_file(&entry.path, &child_destination)?,
+            FileEntryType::Symlink | FileEntryType::Other => {
+                return Err(SftpOpsError::Operation(format!(
+                    "Source tree changed after validation at {}",
+                    entry.path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// SFTP backend operation abstraction to decouple the UI layer from the protocol layer.
 pub trait SftpBackend: Send + Sync {
@@ -36,8 +116,15 @@ pub trait SftpBackend: Send + Sync {
     /// Resolves the real path.
     fn realpath(&self, path: &Path) -> Result<PathBuf, SftpOpsError>;
 
-    /// Gets file/directory details.
+    /// Gets file/directory details, following symbolic links to their target.
+    /// Directory listings retain link metadata so destructive callers never
+    /// mistake a link to a directory for the directory itself.
     fn stat(&self, path: &Path) -> Result<FileEntry, SftpOpsError>;
+
+    /// Gets metadata for the path itself without following symbolic links.
+    /// Use this for existence checks and every decision that may delete or
+    /// overwrite the path.
+    fn lstat(&self, path: &Path) -> Result<FileEntry, SftpOpsError>;
 
     /// Uploads a local file to remote via streaming.
     fn upload_file(
@@ -59,22 +146,23 @@ pub trait SftpBackend: Send + Sync {
 
     /// Copies a single file *within this backend* (same filesystem namespace),
     /// e.g. between two local file-manager panes or two panes on the same host.
-    /// Cross-connection copy (local↔remote) is a separate transfer path.
+    /// The operation must publish transactionally: a failure leaves an existing
+    /// destination unchanged. Cross-connection copy (local↔remote) is a
+    /// separate transfer path.
     fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError>;
 
     /// Recursively copies a directory within this backend. The default walks
     /// with `list_dir` + `create_dir` + `copy_file`; backends may override with
     /// a native recursive copy.
     fn copy_dir_recursive(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
-        self.create_dir(dst)?;
-        for entry in self.list_dir(src)? {
-            let child_dst = dst.join(&entry.name);
-            match entry.file_type {
-                FileEntryType::Directory => self.copy_dir_recursive(&entry.path, &child_dst)?,
-                _ => self.copy_file(&entry.path, &child_dst)?,
-            }
+        if !matches!(self.lstat(src)?.file_type, FileEntryType::Directory) {
+            return Err(SftpOpsError::Operation(format!(
+                "Recursive copy source is not a directory: {}",
+                src.display()
+            )));
         }
-        Ok(())
+        validate_copy_tree(self, src)?;
+        copy_validated_tree(self, src, dst)
     }
 }
 
@@ -96,6 +184,36 @@ impl LiveSftpBackend {
     /// Gets a reference to the internal Sftp instance (used for realpath calls in connect_to_server).
     pub fn inner(&self) -> &zap_sftp::Sftp {
         &self.sftp
+    }
+
+    fn metadata_to_entry(path: &Path, metadata: zap_sftp::types::Metadata) -> FileEntry {
+        let file_type = match metadata.file_type {
+            zap_sftp::types::FileType::Dir => FileEntryType::Directory,
+            zap_sftp::types::FileType::File => FileEntryType::File,
+            zap_sftp::types::FileType::Symlink => FileEntryType::Symlink,
+            zap_sftp::types::FileType::Other => FileEntryType::Other,
+        };
+        let modified = metadata.modified.map(|t| {
+            let datetime: chrono::DateTime<chrono::Local> = t.into();
+            datetime.format("%Y-%m-%d %H:%M").to_string()
+        });
+        let perms = &metadata.permissions;
+        let owner = sftp_ops::bool_to_rwx(perms.owner_read, perms.owner_write, perms.owner_exec);
+        let group = sftp_ops::bool_to_rwx(perms.group_read, perms.group_write, perms.group_exec);
+        let other = sftp_ops::bool_to_rwx(perms.other_read, perms.other_write, perms.other_exec);
+        let permissions = Some(format!("{owner}{group}{other}"));
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        FileEntry {
+            name,
+            path: path.to_path_buf(),
+            file_type,
+            size: metadata.size,
+            modified,
+            permissions,
+        }
     }
 }
 
@@ -126,33 +244,12 @@ impl SftpBackend for LiveSftpBackend {
 
     fn stat(&self, path: &Path) -> Result<FileEntry, SftpOpsError> {
         let metadata = self.sftp.stat(path)?;
-        let file_type = match metadata.file_type {
-            zap_sftp::types::FileType::Dir => FileEntryType::Directory,
-            zap_sftp::types::FileType::File => FileEntryType::File,
-            zap_sftp::types::FileType::Symlink => FileEntryType::Symlink,
-            zap_sftp::types::FileType::Other => FileEntryType::Other,
-        };
-        let modified = metadata.modified.map(|t| {
-            let datetime: chrono::DateTime<chrono::Local> = t.into();
-            datetime.format("%Y-%m-%d %H:%M").to_string()
-        });
-        let perms = &metadata.permissions;
-        let owner = sftp_ops::bool_to_rwx(perms.owner_read, perms.owner_write, perms.owner_exec);
-        let group = sftp_ops::bool_to_rwx(perms.group_read, perms.group_write, perms.group_exec);
-        let other = sftp_ops::bool_to_rwx(perms.other_read, perms.other_write, perms.other_exec);
-        let permissions = Some(format!("{owner}{group}{other}"));
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        Ok(FileEntry {
-            name,
-            path: path.to_path_buf(),
-            file_type,
-            size: metadata.size,
-            modified,
-            permissions,
-        })
+        Ok(Self::metadata_to_entry(path, metadata))
+    }
+
+    fn lstat(&self, path: &Path) -> Result<FileEntry, SftpOpsError> {
+        let metadata = self.sftp.lstat(path)?;
+        Ok(Self::metadata_to_entry(path, metadata))
     }
 
     fn upload_file(
@@ -257,8 +354,10 @@ impl InMemorySftpBackend {
             FileEntryType::Symlink
         } else if meta.is_dir() {
             FileEntryType::Directory
-        } else {
+        } else if meta.is_file() {
             FileEntryType::File
+        } else {
+            FileEntryType::Other
         };
         let modified = meta.modified().ok().map(|t| {
             let datetime: chrono::DateTime<chrono::Local> = t.into();
@@ -360,9 +459,24 @@ impl SftpBackend for InMemorySftpBackend {
     fn stat(&self, path: &Path) -> Result<FileEntry, SftpOpsError> {
         let local = self.to_local(path);
         let p = path.display();
-        let meta = fs::symlink_metadata(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("Failed to get file info {p}: {e}"))
-        })?;
+        // Match the live SFTP backend: `stat` follows links, while `list_dir`
+        // deliberately uses `symlink_metadata` (lstat semantics). Keeping
+        // those operations distinct lets activation discover the target type
+        // without ever making delete/copy recurse through a directory link.
+        let meta = fs::metadata(&local)
+            .map_err(|e| SftpOpsError::Operation(format!("Failed to get file info {p}: {e}")))?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        Ok(self.metadata_to_entry(name, &local, &meta))
+    }
+
+    fn lstat(&self, path: &Path) -> Result<FileEntry, SftpOpsError> {
+        let local = self.to_local(path);
+        let p = path.display();
+        let meta = fs::symlink_metadata(&local)
+            .map_err(|e| SftpOpsError::Operation(format!("Failed to get file info {p}: {e}")))?;
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -399,15 +513,20 @@ impl SftpBackend for InMemorySftpBackend {
     }
 }
 
-/// Sibling temp path for an in-progress copy: `.<name>.zaplex_partial` next to
+/// Unique sibling temp path for an in-progress copy next to
 /// the destination, so the finalizing rename stays on the same filesystem (and
 /// is therefore atomic) and a leftover partial is obviously ours.
 fn temp_sibling(dest: &Path) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let name = dest
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "file".to_string());
-    dest.with_file_name(format!(".{name}.zaplex_partial"))
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    dest.with_file_name(format!(
+        ".{name}.zaplex_partial-{}-{sequence}",
+        std::process::id()
+    ))
 }
 
 /// Copy `src` onto `dest` the way the REMOTE backend already does: stream into
@@ -572,5 +691,103 @@ mod data_safety_tests {
         )
         .expect("copy should succeed");
         assert_eq!(fs::read(dir.path().join("dest.bin")).unwrap(), b"NEW-CONTENT");
+    }
+
+    /// Independent transfers targeting the same final name must never share
+    /// their in-progress file. Otherwise either transfer can truncate, rename
+    /// or clean up the other transfer's bytes.
+    #[test]
+    fn concurrent_copies_reserve_distinct_temporary_paths() {
+        let destination = Path::new("/tmp/destination.bin");
+
+        let first = temp_sibling(destination);
+        let second = temp_sibling(destination);
+
+        assert_ne!(
+            first, second,
+            "each transfer needs an exclusive temporary sibling"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stat_follows_a_symlink_to_a_file() {
+        use std::os::unix::fs::symlink;
+
+        let (be, dir) = backend();
+        fs::write(dir.path().join("target.txt"), b"target").unwrap();
+        symlink("target.txt", dir.path().join("link.txt")).unwrap();
+
+        let entry = be
+            .stat(Path::new("/link.txt"))
+            .expect("a valid file symlink should resolve");
+
+        assert_eq!(entry.file_type, FileEntryType::File);
+        assert_eq!(entry.size, 6);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stat_follows_a_symlink_to_a_directory() {
+        use std::os::unix::fs::symlink;
+
+        let (be, dir) = backend();
+        fs::create_dir(dir.path().join("target-dir")).unwrap();
+        symlink("target-dir", dir.path().join("link-dir")).unwrap();
+
+        let entry = be
+            .stat(Path::new("/link-dir"))
+            .expect("a valid directory symlink should resolve");
+
+        assert_eq!(entry.file_type, FileEntryType::Directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stat_rejects_a_broken_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let (be, dir) = backend();
+        symlink("missing-target", dir.path().join("broken-link")).unwrap();
+
+        assert_eq!(
+            be.lstat(Path::new("/broken-link")).unwrap().file_type,
+            FileEntryType::Symlink,
+            "lstat must still see a broken link for overwrite/delete checks"
+        );
+        be.stat(Path::new("/broken-link"))
+            .expect_err("a broken symlink must not masquerade as a usable entry");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleting_a_directory_symlink_never_deletes_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let (be, dir) = backend();
+        fs::create_dir(dir.path().join("target-dir")).unwrap();
+        fs::write(dir.path().join("target-dir/keep.txt"), b"keep").unwrap();
+        symlink("target-dir", dir.path().join("link-dir")).unwrap();
+
+        let listed = be.list_dir(Path::new("/")).unwrap();
+        let link = listed
+            .iter()
+            .find(|entry| entry.name == "link-dir")
+            .expect("the symlink should be listed");
+        assert_eq!(
+            link.file_type,
+            FileEntryType::Symlink,
+            "directory listings must retain lstat semantics for destructive decisions"
+        );
+
+        be.delete_file(Path::new("/link-dir"))
+            .expect("deleting the link should succeed");
+
+        assert_eq!(dir.path().join("link-dir").exists(), false);
+        assert_eq!(
+            fs::read(dir.path().join("target-dir/keep.txt")).unwrap(),
+            b"keep",
+            "deleting the symlink must not recurse into its directory target"
+        );
     }
 }

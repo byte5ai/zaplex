@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use warp_ssh_manager::SshRepository;
 use warp_ssh_manager::secrets::SshSecretStore;
 use warp_ssh_manager::types::{AuthType, ResolvedSshAuth, SshServerInfo};
-use zap_sftp::Sftp;
+use warp_ssh_manager::SshRepository;
 use zap_sftp::session::{AuthMethod, SftpSession};
 use zap_sftp::types::OpenOptions;
+use zap_sftp::Sftp;
 
 use super::types::{FileEntry, FileEntryType};
 
@@ -63,6 +63,58 @@ pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send>;
 
 /// Connection timeout duration
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn unique_transfer_sibling(path: &Path, marker: &str) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string());
+    path.with_file_name(format!(".{name}.{marker}-{}", uuid::Uuid::new_v4()))
+}
+
+fn open_new_local_transfer_file(path: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+fn create_unique_local_transfer_file(
+    path: &Path,
+    marker: &str,
+) -> Result<(PathBuf, fs::File), SftpOpsError> {
+    for _ in 0..128 {
+        let candidate = unique_transfer_sibling(path, marker);
+        match open_new_local_transfer_file(&candidate) {
+            Ok(file) => return Ok((candidate, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(SftpOpsError::LocalIo(error.to_string())),
+        }
+    }
+    Err(SftpOpsError::LocalIo(format!(
+        "Could not create a unique temporary sibling for {}",
+        path.display()
+    )))
+}
+
+fn create_unique_remote_transfer_file(
+    sftp: &Sftp,
+    path: &Path,
+    marker: &str,
+) -> Result<(PathBuf, zap_sftp::File), SftpOpsError> {
+    for _ in 0..128 {
+        let candidate = unique_transfer_sibling(path, marker);
+        match sftp.open(&candidate, OpenOptions::create_new()) {
+            Ok(file) => return Ok((candidate, file)),
+            Err(_) if sftp.lstat(&candidate).is_ok() => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(SftpOpsError::Operation(format!(
+        "Could not create a unique temporary sibling for {}",
+        path.display()
+    )))
+}
 
 /// Establish SFTP connection using server configuration
 pub fn connect_from_server(
@@ -178,10 +230,10 @@ pub fn upload_file_streaming(
         fs::File::open(local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
     let total_size = local_file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    // Use temporary path to upload, avoiding file truncation
-    let remote_display = remote_path.display();
-    let temp_remote_path = PathBuf::from(format!("{remote_display}.sftp_partial"));
-    let mut remote_file = sftp.open(&temp_remote_path, OpenOptions::write())?;
+    // Each in-flight transfer owns its temporary path. Two writes to the same
+    // destination must never truncate, finalize, or clean up each other's data.
+    let (temp_remote_path, mut remote_file) =
+        create_unique_remote_transfer_file(sftp, remote_path, "sftp_partial")?;
 
     const CHUNK_SIZE: usize = 32 * 1024;
     let mut buf = vec![0u8; CHUNK_SIZE];
@@ -206,6 +258,7 @@ pub fn upload_file_streaming(
         remote_file.flush()?;
         Ok(())
     })();
+    drop(remote_file);
 
     match &result {
         Ok(()) => {
@@ -224,8 +277,7 @@ pub fn upload_file_streaming(
             let rename_result = match rename_result {
                 Ok(()) => Ok(()),
                 Err(_) => {
-                    let remote_display = remote_path.display();
-                    let backup_path = PathBuf::from(format!("{remote_display}.sftp_backup"));
+                    let backup_path = unique_transfer_sibling(remote_path, "sftp_backup");
                     let backup_created = sftp
                         .rename(
                             remote_path,
@@ -273,10 +325,9 @@ pub fn upload_file_streaming(
             };
 
             if let Err(e) = rename_result {
-                // On rename failure, preserve remote temporary file to avoid data loss
-                let temp_display = temp_remote_path.display();
+                let _ = sftp.remove_file(&temp_remote_path);
                 return Err(SftpOpsError::Operation(format!(
-                    "Failed to rename remote temporary file: {e}. Temporary file: {temp_display}"
+                    "Failed to finalize remote temporary file: {e}"
                 )));
             }
         }
@@ -309,11 +360,10 @@ pub fn download_file_streaming(
         fs::create_dir_all(parent).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
     }
 
-    // Use temporary path to download, avoiding file truncation
-    let local_display = local_path.display();
-    let temp_local_path = PathBuf::from(format!("{local_display}.sftp_partial"));
-    let mut local_file =
-        fs::File::create(&temp_local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
+    // Use a transfer-owned sibling so parallel downloads to the same final
+    // path cannot corrupt or remove each other's temporary data.
+    let (temp_local_path, mut local_file) =
+        create_unique_local_transfer_file(local_path, "sftp_partial")?;
 
     const CHUNK_SIZE: usize = 32 * 1024;
     let mut buf = vec![0u8; CHUNK_SIZE];
@@ -341,15 +391,15 @@ pub fn download_file_streaming(
             .map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
         Ok(())
     })();
+    drop(local_file);
 
     match &result {
         Ok(()) => {
             // Download successful: rename temporary file to target path
             if let Err(e) = fs::rename(&temp_local_path, local_path) {
-                // On rename failure, preserve local temporary file to avoid data loss
-                let temp_display = temp_local_path.display();
+                let _ = fs::remove_file(&temp_local_path);
                 return Err(SftpOpsError::LocalIo(format!(
-                    "Rename failed: {e}. Downloaded temporary file preserved at: {temp_display}"
+                    "Failed to finalize downloaded temporary file: {e}"
                 )));
             }
         }
@@ -393,8 +443,18 @@ pub fn upload_dir_recursive(
 
         if file_type.is_dir() {
             upload_dir_recursive(sftp, &entry.path(), &remote_path, progress_cb, cancel_flag)?;
-        } else {
+        } else if file_type.is_file() {
             upload_file_streaming(sftp, &entry.path(), &remote_path, progress_cb, cancel_flag)?;
+        } else if file_type.is_symlink() {
+            return Err(SftpOpsError::Operation(format!(
+                "Refusing to recursively upload symbolic link {}",
+                entry.path().display()
+            )));
+        } else {
+            return Err(SftpOpsError::Operation(format!(
+                "Refusing to recursively upload special file {}",
+                entry.path().display()
+            )));
         }
     }
 
@@ -430,7 +490,10 @@ pub fn download_dir_recursive(
             || entry.name.contains('/')
             || entry.name.contains('\\')
         {
-            continue;
+            return Err(SftpOpsError::Operation(format!(
+                "Refusing unsafe remote directory entry: {}",
+                entry.name
+            )));
         }
 
         let safe_remote_path = normalize_remote_path(&remote_dir.join(&entry.name));
@@ -446,9 +509,7 @@ pub fn download_dir_recursive(
                     cancel_flag,
                 )?;
             }
-            zap_sftp::types::FileType::File
-            | zap_sftp::types::FileType::Symlink
-            | zap_sftp::types::FileType::Other => {
+            zap_sftp::types::FileType::File => {
                 download_file_streaming(
                     sftp,
                     &safe_remote_path,
@@ -456,6 +517,18 @@ pub fn download_dir_recursive(
                     progress_cb,
                     cancel_flag,
                 )?;
+            }
+            zap_sftp::types::FileType::Symlink => {
+                return Err(SftpOpsError::Operation(format!(
+                    "Refusing to recursively download symbolic link {}",
+                    safe_remote_path.display()
+                )));
+            }
+            zap_sftp::types::FileType::Other => {
+                return Err(SftpOpsError::Operation(format!(
+                    "Refusing to recursively download special file {}",
+                    safe_remote_path.display()
+                )));
             }
         }
     }
@@ -475,7 +548,10 @@ fn build_auth_method(
                 .get(&resolved_auth.secret_lookup_id, resolved_auth.secret_kind)
                 .map_err(|e| SftpOpsError::NoCredentials(format!("Failed to read password: {e}")))?
                 .ok_or_else(|| {
-                    SftpOpsError::NoCredentials(format!("No password stored for server {}", server.host))
+                    SftpOpsError::NoCredentials(format!(
+                        "No password stored for server {}",
+                        server.host
+                    ))
                 })?;
             Ok(AuthMethod::Password {
                 password: password.to_string(),
@@ -528,14 +604,34 @@ pub(crate) fn bool_to_rwx(read: bool, write: bool, exec: bool) -> String {
 /// Normalize remote path by converting Windows backslashes to forward slashes
 ///
 /// Remote servers (Linux) only accept forward slash path separators.
-/// On Windows, PathBuf::join produces backslashes, which must be converted.
-pub(crate) fn normalize_remote_path(path: &PathBuf) -> PathBuf {
+/// On Windows, path joins produce backslashes, which must be converted.
+pub(crate) fn normalize_remote_path(path: &Path) -> PathBuf {
     PathBuf::from(path.to_string_lossy().replace('\\', "/"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn local_transfer_temp_creation_never_follows_existing_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let protected = temp.path().join("protected");
+        let candidate = temp.path().join("partial");
+        fs::write(&protected, b"must survive").unwrap();
+        symlink(&protected, &candidate).unwrap();
+
+        let result = open_new_local_transfer_file(&candidate);
+
+        assert!(
+            matches!(result, Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists),
+            "an existing temporary path must be rejected"
+        );
+        assert_eq!(fs::read(&protected).unwrap(), b"must survive");
+    }
 
     /// Test SftpOpsError::Connection Display output
     #[test]

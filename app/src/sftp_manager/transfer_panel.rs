@@ -6,8 +6,9 @@
 
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
-    Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-    MainAxisSize, MainAxisAlignment, MouseStateHandle, ParentElement, Radius, SavePosition, Shrinkable, Text,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
+    Shrinkable, Text,
 };
 use warpui::platform::Cursor;
 use warpui::Element;
@@ -127,7 +128,11 @@ fn render_progress_bar(progress: u8, appearance: &Appearance) -> Box<dyn Element
 }
 
 /// Render single transfer row
-fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn Element> {
+fn render_transfer_row(
+    task: &TransferTask,
+    cancel_btn_state: Option<MouseStateHandle>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     // Direction icon
     let dir_icon = render_direction_icon(&task.direction, appearance);
 
@@ -157,14 +162,16 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
         .with_child(state_el);
 
     // Tasks in progress show cancel button
-    if matches!(task.state, TransferState::InProgress) {
+    if let (TransferState::InProgress, Some(cancel_btn_state)) =
+        (&task.state, cancel_btn_state)
+    {
         let task_id = task.id;
         let icon_color = appearance
             .theme()
             .sub_text_color(appearance.theme().background());
         let position_id = format!("sftp_btn:cancel_transfer:{task_id}");
 
-        let cancel_el = Hoverable::new(Default::default(), move |_| {
+        let cancel_el = Hoverable::new(cancel_btn_state, move |_| {
             let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(icon_color).finish())
                 .with_width(12.0)
                 .with_height(12.0)
@@ -177,8 +184,12 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
         })
         .finish();
 
-        let positioned = SavePosition::new(cancel_el, &position_id).finish();
-        top_row = top_row.with_child(Clipped::new(positioned).finish());
+        let hit_target = ConstrainedBox::new(cancel_el)
+            .with_width(16.0)
+            .with_height(16.0)
+            .finish();
+        let positioned = SavePosition::new(hit_target, &position_id).finish();
+        top_row = top_row.with_child(positioned);
     }
 
     let mut col = Flex::column()
@@ -203,6 +214,7 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
 /// Always display the transfer task list, with close button on the right of the title bar.
 pub fn render_transfer_panel(
     transfers: &[TransferTask],
+    cancel_btn_states: &std::collections::HashMap<usize, MouseStateHandle>,
     appearance: &Appearance,
     close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
@@ -256,7 +268,11 @@ pub fn render_transfer_panel(
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(4.0);
         for task in transfers {
-            let row = render_transfer_row(task, appearance);
+            let row = render_transfer_row(
+                task,
+                cancel_btn_states.get(&task.id).cloned(),
+                appearance,
+            );
             inner.add_child(row);
         }
         inner.finish()
@@ -280,6 +296,7 @@ mod tests {
     use std::rc::Rc;
 
     use pathfinder_geometry::vector::vec2f;
+    use warpui::elements::Stack;
     use warpui::platform::WindowStyle;
     use warpui::{
         App, AppContext, Entity, Event, Presenter, SingletonEntity, TypedActionView, View,
@@ -288,7 +305,9 @@ mod tests {
 
     struct TransferPanelTestView {
         transfers: Vec<TransferTask>,
+        cancel_btn_states: std::collections::HashMap<usize, MouseStateHandle>,
         close_btn_state: MouseStateHandle,
+        cancelled_ids: Vec<usize>,
     }
 
     impl TransferPanelTestView {
@@ -296,7 +315,12 @@ mod tests {
         fn new() -> Self {
             Self {
                 transfers: vec![make_transfer_task(1)],
+                cancel_btn_states: std::collections::HashMap::from([(
+                    1,
+                    MouseStateHandle::default(),
+                )]),
                 close_btn_state: MouseStateHandle::default(),
+                cancelled_ids: Vec::new(),
             }
         }
     }
@@ -310,7 +334,8 @@ mod tests {
 
         /// Handle test actions dispatched by transfer panel
         fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
-            if matches!(action, SftpBrowserAction::CancelTransfer(_)) {
+            if let SftpBrowserAction::CancelTransfer(id) = action {
+                self.cancelled_ids.push(*id);
                 ctx.notify();
             }
         }
@@ -324,7 +349,14 @@ mod tests {
         /// Render transfer panel for testing
         fn render(&self, app: &AppContext) -> Box<dyn Element> {
             let appearance = Appearance::as_ref(app);
-            render_transfer_panel(&self.transfers, appearance, self.close_btn_state.clone())
+            Stack::new()
+                .with_child(render_transfer_panel(
+                    &self.transfers,
+                    &self.cancel_btn_states,
+                    appearance,
+                    self.close_btn_state.clone(),
+                ))
+                .finish()
         }
     }
 
@@ -335,13 +367,15 @@ mod tests {
 
     /// Create a test transfer task
     fn make_transfer_task(id: usize) -> TransferTask {
-        TransferTask::new(
+        let mut task = TransferTask::new(
             id,
             PathBuf::from(format!("/remote/file_{id}.txt")),
             PathBuf::from(format!("/local/file_{id}.txt")),
             TransferDirection::Download,
             1024,
-        )
+        );
+        task.state = TransferState::InProgress;
+        task
     }
 
     /// Verify clicking transfer panel background does not affect transfer content display
@@ -392,6 +426,91 @@ mod tests {
                     view.transfers.len(),
                     1,
                     "transfer content should remain displayed after clicking transfer panel background"
+                );
+            });
+        });
+    }
+
+    /// Mouse-down can trigger a rerender before mouse-up. The cancel button
+    /// must retain its pressed state across that frame boundary and fire once.
+    #[test]
+    fn cancel_click_survives_rerender_between_mouse_down_and_up() {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let (window_id, view) =
+                app.add_window(WindowStyle::NotStealFocus, |_| TransferPanelTestView::new());
+            let root_view_id = app
+                .root_view_id(window_id)
+                .expect("test window should contain root view");
+            let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+            let invalidation = WindowInvalidation {
+                updated: HashSet::from([root_view_id]),
+                ..Default::default()
+            };
+
+            let click_position = app.update({
+                let presenter = presenter.clone();
+                let invalidation = invalidation.clone();
+                move |ctx| {
+                    presenter.borrow_mut().invalidate(invalidation, ctx);
+                    presenter
+                        .borrow_mut()
+                        .build_scene(vec2f(320., 120.), 1., None, ctx);
+                    let cancel_bounds = presenter
+                        .borrow()
+                        .position_cache()
+                        .get_position("sftp_btn:cancel_transfer:1")
+                        .expect("cancel button should be positioned");
+                    cancel_bounds.center()
+                }
+            });
+
+            app.update({
+                let presenter = presenter.clone();
+                move |ctx| {
+                    ctx.simulate_window_event(
+                        Event::LeftMouseDown {
+                            position: click_position,
+                            modifiers: Default::default(),
+                            click_count: 1,
+                            is_first_mouse: false,
+                        },
+                        window_id,
+                        presenter,
+                    );
+                }
+            });
+
+            app.update({
+                let presenter = presenter.clone();
+                let invalidation = invalidation.clone();
+                move |ctx| {
+                    presenter.borrow_mut().invalidate(invalidation, ctx);
+                    presenter
+                        .borrow_mut()
+                        .build_scene(vec2f(320., 120.), 1., None, ctx);
+                }
+            });
+
+            app.update({
+                let presenter = presenter.clone();
+                move |ctx| {
+                    ctx.simulate_window_event(
+                        Event::LeftMouseUp {
+                            position: click_position,
+                            modifiers: Default::default(),
+                        },
+                        window_id,
+                        presenter,
+                    );
+                }
+            });
+
+            view.read(&app, |view, _| {
+                assert_eq!(
+                    view.cancelled_ids,
+                    vec![1],
+                    "cancel should fire exactly once across a rerender"
                 );
             });
         });

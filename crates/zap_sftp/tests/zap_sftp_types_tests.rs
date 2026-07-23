@@ -122,6 +122,7 @@ fn test_open_options_read() {
     assert!(opts.read, "read should be true");
     assert!(opts.write.is_none(), "write should be None");
     assert!(!opts.create, "create should be false");
+    assert!(!opts.exclusive, "read should not be exclusive");
     assert!(!opts.truncate, "truncate should be false");
     assert_eq!(opts.file_type, OpenFileType::File);
 }
@@ -133,6 +134,7 @@ fn test_open_options_write() {
     assert!(!opts.read, "read should be false");
     assert_eq!(opts.write, Some(WriteMode::Write), "write should be Some(Write)");
     assert!(opts.create, "create should be true");
+    assert!(!opts.exclusive, "write should not be exclusive");
     assert!(opts.truncate, "truncate should be true");
     assert_eq!(opts.mode, Some(0o644), "mode should be Some(0o644)");
     assert_eq!(opts.file_type, OpenFileType::File);
@@ -145,6 +147,7 @@ fn test_open_options_append() {
     assert!(!opts.read, "read should be false");
     assert_eq!(opts.write, Some(WriteMode::Append), "write should be Some(Append)");
     assert!(opts.create, "create should be true");
+    assert!(!opts.exclusive, "append should not be exclusive");
     assert!(!opts.truncate, "truncate should be false");
 }
 
@@ -155,6 +158,7 @@ fn test_open_options_create_new() {
     assert!(!opts.read, "read should be false");
     assert_eq!(opts.write, Some(WriteMode::Write), "write should be Some(Write)");
     assert!(opts.create, "create should be true");
+    assert!(opts.exclusive, "create_new should be exclusive");
     assert!(!opts.truncate, "truncate should be false");
 }
 

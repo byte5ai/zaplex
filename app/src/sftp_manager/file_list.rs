@@ -34,7 +34,8 @@ const ROW_SPACING: f32 = 8.0;
 /// Return appropriate icon based on file entry type
 pub fn file_icon(entry_type: &FileEntryType) -> Icon {
     match entry_type {
-        FileEntryType::Directory | FileEntryType::Symlink => Icon::Folder,
+        FileEntryType::Directory => Icon::Folder,
+        FileEntryType::Symlink => Icon::LinkHorizontal,
         FileEntryType::File | FileEntryType::Other => Icon::File,
     }
 }
@@ -102,7 +103,7 @@ pub fn render_file_row(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let is_dir = matches!(entry.file_type, FileEntryType::Directory | FileEntryType::Symlink);
+    let is_dir = matches!(entry.file_type, FileEntryType::Directory);
     let icon_color = if is_dir {
         theme.accent().into_solid()
     } else {
@@ -152,7 +153,7 @@ pub fn render_file_row(
         .finish();
 
         // Size — right-aligned in its fixed column, like every numeric column.
-        let size_text = if matches!(file_type, FileEntryType::Directory | FileEntryType::Symlink) {
+        let size_text = if matches!(file_type, FileEntryType::Directory) {
             String::from("--")
         } else {
             format_size(size)

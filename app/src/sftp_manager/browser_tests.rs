@@ -865,9 +865,9 @@ fn test_navigate_to_same_path() {
     });
 }
 
-/// Verifies that NavigateTo updates correctly for a deep path
+/// A disconnected browser cannot verify a deep path, so it must not commit it.
 #[test]
-fn test_navigate_to_deep_path() {
+fn test_navigate_to_deep_path_without_backend_does_not_commit() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
@@ -880,15 +880,15 @@ fn test_navigate_to_deep_path() {
         });
 
         view.read(&app, |view, _| {
-            assert_eq!(view.current_path, PathBuf::from("/a/b/c/d"));
-            assert_eq!(view.path_history.len(), 2);
+            assert_eq!(view.current_path, PathBuf::from("/"));
+            assert_eq!(view.path_history.len(), 1);
         });
     });
 }
 
-/// Verifies that NavigateTo normalizes backslashes to forward slashes
+/// Normalization does not make an unverified disconnected path current.
 #[test]
-fn test_navigate_to_backslash_path() {
+fn test_navigate_to_backslash_path_without_backend_does_not_commit() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
@@ -901,7 +901,8 @@ fn test_navigate_to_backslash_path() {
         });
 
         view.read(&app, |view, _| {
-            assert_eq!(view.current_path, PathBuf::from("home/user"));
+            assert_eq!(view.current_path, PathBuf::from("/"));
+            assert_eq!(view.path_history, vec![PathBuf::from("/")]);
         });
     });
 }
@@ -957,9 +958,9 @@ fn test_go_up_from_root_via_action() {
     });
 }
 
-/// Verifies that GoBack/GoForward history tracking is correct after multi-step navigation
+/// Repeated unverified navigation attempts do not create fictitious history.
 #[test]
-fn test_multiple_navigate_then_back_forward() {
+fn test_multiple_failed_navigations_leave_history_unchanged() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
@@ -970,9 +971,9 @@ fn test_multiple_navigate_then_back_forward() {
         });
 
         view.read(&app, |view, _| {
-            assert_eq!(view.current_path, PathBuf::from("/var"));
-            assert_eq!(view.path_history.len(), 3);
-            assert_eq!(view.history_index, 2);
+            assert_eq!(view.current_path, PathBuf::from("/"));
+            assert_eq!(view.path_history, vec![PathBuf::from("/")]);
+            assert_eq!(view.history_index, 0);
         });
 
         view.update(&mut app, |view, ctx| {
@@ -980,8 +981,8 @@ fn test_multiple_navigate_then_back_forward() {
         });
 
         view.read(&app, |view, _| {
-            assert_eq!(view.current_path, PathBuf::from("/home"));
-            assert_eq!(view.history_index, 1);
+            assert_eq!(view.current_path, PathBuf::from("/"));
+            assert_eq!(view.history_index, 0);
         });
 
         view.update(&mut app, |view, ctx| {
@@ -989,8 +990,8 @@ fn test_multiple_navigate_then_back_forward() {
         });
 
         view.read(&app, |view, _| {
-            assert_eq!(view.current_path, PathBuf::from("/var"));
-            assert_eq!(view.history_index, 2);
+            assert_eq!(view.current_path, PathBuf::from("/"));
+            assert_eq!(view.history_index, 0);
         });
     });
 }
@@ -1137,9 +1138,9 @@ fn test_cancel_transfer_zero_id() {
     });
 }
 
-/// Verifies that DownloadSaveAs does not panic for an out-of-range index and does not create an orphaned task
+/// A stale save dialog completion after disconnect must not create an orphaned task.
 #[test]
-fn test_download_save_as_out_of_range() {
+fn test_download_save_as_after_disconnect() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
@@ -1147,7 +1148,8 @@ fn test_download_save_as_out_of_range() {
         view.update(&mut app, |view, ctx| {
             view.handle_action(
                 &SftpBrowserAction::DownloadSaveAs {
-                    index: 100,
+                    remote_path: PathBuf::from("/remote/out-of-range.txt"),
+                    file_size: 0,
                     local_path: "/tmp/out.txt".to_string(),
                 },
                 ctx,
@@ -1161,9 +1163,9 @@ fn test_download_save_as_out_of_range() {
     });
 }
 
-/// Verifies that DownloadSaveAs does not panic for index=0 with an empty entry list
+/// Save-as uses its captured path and remains harmless without a live backend.
 #[test]
-fn test_download_save_as_zero_index_empty() {
+fn test_download_save_as_without_backend() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
@@ -1171,7 +1173,8 @@ fn test_download_save_as_zero_index_empty() {
         view.update(&mut app, |view, ctx| {
             view.handle_action(
                 &SftpBrowserAction::DownloadSaveAs {
-                    index: 0,
+                    remote_path: PathBuf::from("/remote/empty-list.txt"),
+                    file_size: 0,
                     local_path: "/tmp/out.txt".to_string(),
                 },
                 ctx,
@@ -1748,9 +1751,9 @@ fn test_filter_clamps_cursor_into_range() {
     });
 }
 
-/// Activating the cursor on a directory navigates into it (path set synchronously).
+/// A seeded directory row without a backend cannot be committed as navigable.
 #[test]
-fn test_activate_cursor_on_directory_navigates() {
+fn test_activate_cursor_on_directory_without_backend_does_not_commit() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
@@ -1760,7 +1763,8 @@ fn test_activate_cursor_on_directory_navigates() {
             view.handle_action(&SftpBrowserAction::ActivateCursor, ctx);
         });
         view.read(&app, |view, _| {
-            assert_eq!(view.current_path, PathBuf::from("/subdir"));
+            assert_eq!(view.current_path, PathBuf::from("/"));
+            assert_eq!(view.path_history, vec![PathBuf::from("/")]);
         });
     });
 }
