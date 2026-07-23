@@ -102,7 +102,7 @@ jobs:
         shell: bash
 
       # Focused app-crate unit tests: the FM-toggle + spawn-card launch payload,
-      # plus the real boot/open smoke gate. Targeted by name so only these run —
+      # catalog copy guard, plus the real boot/open smoke gate. Targeted by name so only these run —
       # the app crate's full test suite has known harness/env-dependent failures
       # unrelated to this gate.
       #
@@ -111,7 +111,7 @@ jobs:
       # graph, so it constructs a workspace window headless and runs the binding
       # registration path — catching both the keymap-crash class and "does the UI
       # wiring survive construction", the thing `cargo check` cannot.
-      - name: cargo test (FM toggle + spawn-card + boot/open smoke gate)
+      - name: cargo test (FM toggle + spawn-card + catalog + boot/open smoke gate)
         run: >
           cargo test --locked -p warp --lib --
           file_manager_start_path_uses_session_cwd
@@ -119,5 +119,8 @@ jobs:
           confirm_payload_carries_local_selection
           confirm_payload_routes_remote_launch_to_node_id
           confirm_payload_none_when_nothing_installed
+          ui_copy_has_no_space_before_ellipsis
+          spaced_ellipsis_detection_covers_catalog_whitespace_and_punctuation
+          spaced_ellipsis_detection_ignores_comments_and_leading_ellipses
           test_boot_registers_all_keybindings_without_panicking
         shell: bash
