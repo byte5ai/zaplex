@@ -22,6 +22,7 @@ fn sample(state: SessionState, provider: Provider, effort: Option<String>) -> Se
         worktree: Some("wt-rc".to_string()),
         config_dir: Some("/home/me/.codex-work".to_string()),
         account_email: Some("me@example.de".to_string()),
+        process_fingerprint: Some("linux-v1:boot-id:12345".to_string()),
         // Millisecond-precise so the epoch-millis round-trip is exact.
         last_activity: Utc
             .timestamp_millis_opt(1_720_000_000_123)
@@ -46,6 +47,7 @@ fn snapshot_round_trips_through_proto() {
     assert_eq!(proto.state, "waiting");
     assert_eq!(proto.provider, "codex");
     assert_eq!(proto.effort, "high");
+    assert_eq!(proto.process_fingerprint, "linux-v1:boot-id:12345");
     assert_eq!(proto.last_activity_epoch_millis, 1_720_000_000_123);
 
     let back = proto_to_snapshot(&proto);
@@ -123,6 +125,14 @@ fn a_daemon_that_sends_no_account_decodes_as_unknown() {
     let mut proto = snapshot_to_proto(&sample(SessionState::Active, Provider::Claude, None));
     proto.account_email = String::new();
     assert_eq!(proto_to_snapshot(&proto).account_email, None);
+}
+
+#[test]
+fn a_daemon_that_sends_no_process_fingerprint_decodes_as_unsignalable() {
+    let mut proto = snapshot_to_proto(&sample(SessionState::Active, Provider::Claude, None));
+    proto.process_fingerprint = String::new();
+
+    assert_eq!(proto_to_snapshot(&proto).process_fingerprint, None);
 }
 
 /// The routing pin and the identity are different questions: a session can name

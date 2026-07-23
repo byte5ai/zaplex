@@ -10,16 +10,19 @@ use futures::io::{AsyncRead, AsyncWrite};
 use warpui::r#async::{executor, FutureExt as _};
 
 use crate::proto::{
-    client_message, read_file_chunk_response, server_message, Abort, AgentSessionList,
-    AttachSession, Authenticate, BufferEdit, ClientMessage, CloseBuffer, CreateDirectory,
-    CreateDirectoryResponse, DeleteFile, DetachSession, ErrorCode, HostExec, HostExecResult,
-    Initialize, InitializeResponse, ListAgentSessions, ListDirectory, ListDirectoryResponse,
-    ListSessions, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, OpenBuffer,
-    OpenBufferResponse, OpenSession, ReadFileChunk, ReadFileChunkResponse, ReadFileContextRequest,
-    ReadFileContextResponse, ResizeSession, ResolveConflict, ResolveConflictResponse, ResolvePath,
-    ResolvePathResponse, RunCommandRequest, RunCommandResponse, SaveBuffer, SaveBufferResponse,
-    ServerMessage, SessionAttached, SessionBootstrapped, SessionInput, SessionList, SessionOpened,
-    SessionSize, SetBootstrapPreamble, TextEdit, WriteFile, WriteFileChunk, WriteFileChunkResponse,
+    client_message, read_file_chunk_response, server_message, Abort, AgentProcessSignal,
+    AgentProcessSignalRequest, AgentProcessSignalResponse, AgentProcessSignalStatus,
+    AgentSessionList, AttachSession, Authenticate, BufferEdit, ClientMessage, CloseBuffer,
+    CreateDirectory, CreateDirectoryResponse, DeleteFile, DetachSession, ErrorCode, HostExec,
+    HostExecResult, Initialize, InitializeResponse, ListAgentSessions, ListDirectory,
+    ListDirectoryResponse, ListSessions, LoadRepoMetadataDirectoryResponse,
+    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, OpenSession, ReadFileChunk,
+    ReadFileChunkResponse, ReadFileContextRequest, ReadFileContextResponse, ResizeSession,
+    ResolveConflict, ResolveConflictResponse, ResolvePath, ResolvePathResponse, RunCommandRequest,
+    RunCommandResponse, SaveBuffer, SaveBufferResponse, ServerMessage, SessionAttached,
+    SessionBootstrapped, SessionInput, SessionList, SessionOpened, SessionSize,
+    SetBootstrapPreamble, StartupCommandAck, TextEdit, WriteFile, WriteFileChunk,
+    WriteFileChunkResponse,
 };
 
 use crate::protocol::{self, ProtocolError, RequestId};
@@ -786,12 +789,46 @@ impl RemoteServerClient {
             message: Some(client_message::Message::SessionInput(SessionInput {
                 session_id,
                 bytes,
+                startup_command_id: String::new(),
             })),
         };
         self.outbound_tx.try_send(msg).map_err(|e| {
             log::error!("Failed to enqueue session input: {e}");
             ClientError::Disconnected
         })
+    }
+
+    /// Delivers a startup command through the daemon's retry-safe input path.
+    ///
+    /// `startup_command_id` identifies the logical command across transport
+    /// retries and reconnects. The future resolves only after the daemon says
+    /// whether its ordered PTY writer accepted the bytes.
+    pub async fn send_startup_command(
+        &self,
+        session_id: String,
+        startup_command_id: String,
+        bytes: Vec<u8>,
+    ) -> Result<StartupCommandAck, ClientError> {
+        if startup_command_id.is_empty() {
+            return Err(ClientError::UnexpectedResponse);
+        }
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::SessionInput(SessionInput {
+                session_id,
+                bytes,
+                startup_command_id,
+            })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::StartupCommandAck(ack)) => Ok(ack),
+            other => {
+                log::error!("Unexpected response variant for startup SessionInput: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
     }
 
     /// Resizes a session's PTY (notification).
@@ -902,16 +939,64 @@ impl RemoteServerClient {
         }
     }
 
+    /// Sends one of the two supported guardrail signals to the exact remote
+    /// process identity discovered for an agent session.
+    ///
+    /// Capability-gated: callers must require
+    /// [`FEATURE_AGENT_PROCESS_SIGNAL_V1`](zaplex_remote_session::types::FEATURE_AGENT_PROCESS_SIGNAL_V1).
+    /// An older daemon must fail closed; there is deliberately no HostExec or
+    /// shell-command fallback.
+    pub async fn send_verified_process_signal(
+        &self,
+        session_id: String,
+        pid: u32,
+        expected_process_fingerprint: String,
+        signal: AgentProcessSignal,
+    ) -> Result<AgentProcessSignalResponse, ClientError> {
+        let expected_session_id = session_id.clone();
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::AgentProcessSignal(
+                AgentProcessSignalRequest {
+                    session_id,
+                    pid,
+                    expected_process_fingerprint,
+                    signal: signal.into(),
+                },
+            )),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::AgentProcessSignalResponse(response))
+                if response.session_id == expected_session_id
+                    && response.pid == pid
+                    && matches!(
+                        AgentProcessSignalStatus::try_from(response.status),
+                        Ok(AgentProcessSignalStatus::Sent
+                            | AgentProcessSignalStatus::StaleIdentity
+                            | AgentProcessSignalStatus::IdentityUnverifiable
+                            | AgentProcessSignalStatus::InvalidRequest
+                            | AgentProcessSignalStatus::SignalFailed)
+                    ) =>
+            {
+                Ok(response)
+            }
+            other => {
+                log::error!("Unexpected response for AgentProcessSignal: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
     /// Runs a **session-less** one-shot command on the daemon host and returns
     /// its output. Unlike [`Self::run_command`], no bootstrapped session is
     /// required: the daemon runs it in its default user shell (see the daemon's
-    /// `handle_host_exec`). This is the cross-host guardrail path — e.g.
-    /// `kill -<SIG> <pid>` against a remote agent.
+    /// `handle_host_exec`).
     ///
     /// Capability-gated: callers must only invoke this against a daemon that
     /// advertises [`FEATURE_HOST_EXEC`](zaplex_remote_session::types::FEATURE_HOST_EXEC)
-    /// in its `InitializeResponse.features`. An old daemon without it must not be
-    /// sent `HostExec`; the caller falls back with an honest message.
+    /// in its `InitializeResponse.features`.
     ///
     /// A daemon-side failure to even spawn the command comes back as a
     /// [`ClientError::ServerError`] (the daemon maps it to an `ErrorResponse`);

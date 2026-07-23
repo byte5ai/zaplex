@@ -222,6 +222,12 @@ pub struct SessionSnapshot {
     /// simply joins no account, rather than being guessed onto one.
     #[serde(default)]
     pub account_email: Option<String>,
+    /// Opaque identity of the exact operating-system process observed during
+    /// discovery. A pid can be recycled after that scan; Stop/Kill is safe only
+    /// when an immediate re-probe yields this same fingerprint. `None` means
+    /// the process could not be proven and must remain unsignalable.
+    #[serde(default)]
+    pub process_fingerprint: Option<String>,
     pub last_activity: DateTime<Utc>,
     pub pid: u32,
 }

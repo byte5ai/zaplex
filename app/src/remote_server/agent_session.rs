@@ -9,9 +9,9 @@
 //! The `state`/`provider` enums travel as lowercase strings so the wire stays
 //! forward-compatible: an unknown future `state` folds to [`SessionState::Idle`]
 //! (never "needs me"), and an unknown `provider` folds to [`Provider::Claude`].
-//! An empty `effort` / `worktree` / `branch` / `config_dir` / `account_email`
-//! string round-trips to `None` (honestly unknown), so an older daemon that
-//! omits these fields still decodes cleanly.
+//! An empty optional string field round-trips to `None` (honestly unknown), so
+//! an older daemon that omits newer identity fields still decodes cleanly and
+//! remains unsignalable without a process fingerprint.
 
 use chrono::{TimeZone, Utc};
 use zaplex_cockpit::types::{Provider, SessionSnapshot, SessionState};
@@ -71,6 +71,7 @@ pub fn snapshot_to_proto(s: &SessionSnapshot) -> AgentSessionInfo {
         account_email: s.account_email.clone().unwrap_or_default(),
         last_activity_epoch_millis: s.last_activity.timestamp_millis() as u64,
         pid: s.pid,
+        process_fingerprint: s.process_fingerprint.clone().unwrap_or_default(),
     }
 }
 
@@ -105,6 +106,8 @@ pub fn proto_to_snapshot(p: &AgentSessionInfo) -> SessionSnapshot {
         // Empty ⇒ None: an older daemon simply doesn't say, and a session that
         // names no account joins none rather than being guessed onto one.
         account_email: (!p.account_email.is_empty()).then(|| p.account_email.clone()),
+        process_fingerprint: (!p.process_fingerprint.is_empty())
+            .then(|| p.process_fingerprint.clone()),
         last_activity,
         pid: p.pid,
     }

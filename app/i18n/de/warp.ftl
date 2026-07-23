@@ -20,7 +20,7 @@ workspace-new-session-terminal = Terminal
 # ── Cockpit ──────────────────────────────────────────────────────────────────
 workspace-left-panel-cockpit = Cockpit
 workspace-left-panel-cockpit-empty = Keine Claude- oder Codex-Konten gefunden.
-cockpit-loading = Konten werden geladen …
+cockpit-loading = Konten werden geladen…
 cockpit-scan-failed = Einige Konten ließen sich nicht lesen.
 cockpit-retry = Erneut versuchen
 cockpit-disabled = Das Cockpit ist ausgeschaltet.
@@ -72,6 +72,8 @@ cockpit-session-is-reviewed = ✓ Geprüft
 cockpit-session-redirect = ↻ Umlenken
 cockpit-session-compact = ⚙ /compact
 cockpit-session-clear = ⌫ /clear
+cockpit-session-live-unavailable = „{ $session }“ läuft noch auf { $host }, aber das Terminal ist in Zaplex nicht verfügbar. Es wurde keine zweite Sitzung gestartet.
+cockpit-session-no-longer-available = Diese Sitzung ist auf { $host } nicht mehr verfügbar. Es wurde nichts gestartet.
 
 # GitHub-Flows auf der freiesten Instanz
 cockpit-flow-quick-issue = GitHub-Issue entwerfen (freieste)

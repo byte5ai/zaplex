@@ -5,11 +5,12 @@ use crate::terminal::{
 };
 use async_channel::Receiver;
 use parking_lot::FairMutex;
-use remote_server::client::RemoteServerClient;
+use remote_server::client::{ClientError, RemoteServerClient};
 use std::io;
 use std::sync::Arc;
 use warp_core::SessionId;
 use warpui::{Entity, ModelContext, SingletonEntity};
+use zaplex_remote_session::types::FEATURE_STARTUP_COMMAND_ACK;
 
 use super::terminal_manager::OpenSessionParams;
 
@@ -63,9 +64,25 @@ pub(super) struct EventLoop {
     /// (once) by `try_open`. `None` after the session has been opened.
     pending_open: Option<(OpenSessionParams, SizeInfo)>,
     /// The host's startup command, captured from `OpenSessionParams` and run once
-    /// (taken) when the session opens — the daemon-path analog of the local-PTY
-    /// SSH startup-command injector. `None` for adopted sessions.
+    /// (taken) only after the terminal model confirms that shell bootstrap has
+    /// completed — the daemon-path analog of the local-PTY SSH startup-command
+    /// injector. `None` for adopted sessions.
     startup_command: Option<String>,
+    /// Stable logical delivery id for `startup_command`. It survives transport
+    /// retries and reconnects so the daemon can acknowledge a lost-Ack retry
+    /// without executing the command again.
+    startup_command_id: Option<String>,
+    /// Monotonic local attempt token currently awaiting a daemon Ack. An attempt
+    /// token prevents a late callback from an old transport from clearing the
+    /// state of a newer reconnect attempt.
+    startup_command_in_flight: Option<u64>,
+    next_startup_command_attempt: u64,
+    /// A negative or malformed Ack indicates that retrying on the same live
+    /// transport would only create a tight loop. Reconnect clears this latch.
+    startup_retry_requires_reconnect: bool,
+    /// Avoids repeating the same actionable compatibility notice on every
+    /// output chunk from an older daemon.
+    startup_capability_notice_shown: bool,
     /// Byte offset just past the last `SessionOutput` byte we've rendered. Sent
     /// as `last_seq` on re-attach so the daemon replays only what we missed.
     last_seq: u64,
@@ -182,6 +199,7 @@ impl EventLoop {
                     me.process_pty_bytes(bytes);
                     me.last_seq = *seq + bytes.len() as u64;
                     me.maybe_report_bootstrap_boundary(ctx);
+                    me.maybe_dispatch_startup_command(ctx);
                 } else if me.pty_session_id.is_none() && *session_id == me.connection_session_id {
                     // Output for our connection before `OpenSession` resolved — the
                     // daemon auto-attaches and starts the shell/bootstrap before the
@@ -212,6 +230,10 @@ impl EventLoop {
             RemoteServerManagerEvent::SessionReconnected { session_id, .. }
                 if *session_id == me.connection_session_id =>
             {
+                // The old transport cannot complete its request anymore. Keep
+                // the logical command and id, but let the reconnected client
+                // issue a new correlated attempt after attach.
+                me.allow_startup_command_retry();
                 me.reattach(ctx);
             }
             RemoteServerManagerEvent::SessionConnectionFailed {
@@ -288,6 +310,11 @@ impl EventLoop {
             pending_output: Vec::new(),
             pending_open: None,
             startup_command: None,
+            startup_command_id: None,
+            startup_command_in_flight: None,
+            next_startup_command_attempt: 0,
+            startup_retry_requires_reconnect: false,
+            startup_capability_notice_shown: false,
             last_seq: 0,
             host_label: String::new(),
             welcomed: false,
@@ -323,6 +350,7 @@ impl EventLoop {
                 // live-output path never saw the flip, so report the boundary here
                 // too (a no-op for adopted sessions and once already reported).
                 me.maybe_report_bootstrap_boundary(ctx);
+                me.maybe_dispatch_startup_command(ctx);
                 // Stage the payoff moment: an adopt's first attach welcomes the
                 // user into their running session; a reconnect after a drop
                 // states plainly that nothing was lost.
@@ -364,6 +392,26 @@ impl EventLoop {
         })
     }
 
+    /// Resolves both the live client and the negotiated retry-safe startup
+    /// capability from the same manager state snapshot.
+    fn startup_client(
+        &self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<(Arc<RemoteServerClient>, bool)> {
+        let session_id = self.connection_session_id;
+        let manager = RemoteServerManager::handle(ctx);
+        manager.read(ctx, |manager, _ctx| {
+            manager
+                .client_for_session(session_id)
+                .cloned()
+                .map(|client| {
+                    let supported =
+                        manager.session_supports_feature(session_id, FEATURE_STARTUP_COMMAND_ACK);
+                    (client, supported)
+                })
+        })
+    }
+
     /// Opens the daemon session if the transport is connected and a pending
     /// request is still outstanding. Idempotent: a no-op once opened, and a
     /// no-op (leaving the request pending) while the transport is not yet
@@ -399,8 +447,13 @@ impl EventLoop {
             ring_ceiling_bytes,
             startup_command,
         } = open_params;
-        // Run once when the session opens (see `on_session_opened`).
-        self.startup_command = startup_command;
+        // Run once after this shell reaches the real bootstrap boundary (see
+        // `maybe_dispatch_startup_command`).
+        self.startup_command = startup_command.filter(|command| !command.is_empty());
+        self.startup_command_id = self
+            .startup_command
+            .as_ref()
+            .map(|_| uuid::Uuid::new_v4().to_string());
         let rows = size_info.rows as u32;
         let cols = size_info.columns as u32;
         log::info!("daemon_tty: issuing OpenSession (cwd={cwd:?}, shell={shell:?}, {rows}x{cols}, ring_ceiling={ring_ceiling_bytes:?})");
@@ -456,21 +509,9 @@ impl EventLoop {
         // (the daemon auto-attaches and starts the shell before this response
         // lands), so report the boundary now if so (T1.3).
         self.maybe_report_bootstrap_boundary(ctx);
-        // Run the host's startup command once, after the session is open — the
-        // daemon-path analog of the local-PTY SSH startup-command injector. Sent
-        // as input + newline (bash/zsh execute byte), the same way the daemon
-        // injects its own bootstrap. `take()` ensures it never re-runs on reattach.
-        if let Some(cmd) = self.startup_command.take() {
-            if !cmd.is_empty() {
-                let mut bytes = cmd.into_bytes();
-                bytes.push(b'\n');
-                self.dispatch_message(
-                    &pty_session_id,
-                    EventLoopMessage::Input(std::borrow::Cow::Owned(bytes)),
-                    ctx,
-                );
-            }
-        }
+        // The pending burst can already contain the full shell handshake. If it
+        // does, start now; otherwise live output will retry at the exact boundary.
+        self.maybe_dispatch_startup_command(ctx);
         // Flush any input that arrived before the session was addressable.
         self.flush_pending_input(ctx);
     }
@@ -694,6 +735,171 @@ impl EventLoop {
     /// Whether the terminal model has completed the Zaplexify bootstrap.
     fn is_bootstrapped(&self) -> bool {
         self.terminal_model.lock().block_list().is_bootstrapped()
+    }
+
+    /// Dispatches the host's startup command exactly once, but only after the
+    /// shell has completed its real bootstrap boundary. `SessionOpened` merely
+    /// means the PTY is addressable, and `InitShell` is still too early for
+    /// fish/pwsh roots because their bootstrap body is delivered client-side.
+    /// Waiting on the model's `Bootstrapped` state therefore preserves both the
+    /// daemon-delivered bash/zsh path and the documented fish/pwsh exceptions.
+    fn maybe_dispatch_startup_command(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.startup_command.is_none()
+            || self.startup_command_in_flight.is_some()
+            || self.startup_retry_requires_reconnect
+            || !self.is_bootstrapped()
+        {
+            return;
+        }
+        let Some((client, supports_retry_safe_startup)) = self.startup_client(ctx) else {
+            return; // Transport down; reconnect will retry with the same id.
+        };
+        if !supports_retry_safe_startup {
+            if !self.startup_capability_notice_shown {
+                self.write_notice(
+                    "this host needs a newer Zaplex helper before it can start the requested \
+                     command safely. Update the host helper and reconnect.",
+                );
+                self.startup_capability_notice_shown = true;
+            }
+            return;
+        }
+        self.startup_capability_notice_shown = false;
+
+        let Some((pty_session_id, command_id, bytes, attempt)) =
+            self.prepare_startup_command_delivery()
+        else {
+            return;
+        };
+        let future = async move {
+            client
+                .send_startup_command(pty_session_id, command_id, bytes)
+                .await
+        };
+        ctx.spawn(future, move |me, result, ctx| {
+            if me.startup_command_in_flight != Some(attempt) {
+                return; // A newer reconnect attempt owns the state now.
+            }
+            match result {
+                Ok(ack)
+                    if ack.accepted
+                        && me.pty_session_id.as_deref() == Some(ack.session_id.as_str())
+                        && me.startup_command_id.as_deref()
+                            == Some(ack.startup_command_id.as_str()) =>
+                {
+                    me.acknowledge_startup_command(&ack.startup_command_id);
+                }
+                Ok(ack)
+                    if me.pty_session_id.as_deref() == Some(ack.session_id.as_str())
+                        && me.startup_command_id.as_deref()
+                            == Some(ack.startup_command_id.as_str()) =>
+                {
+                    me.startup_command_in_flight = None;
+                    me.startup_retry_requires_reconnect = true;
+                    log::warn!(
+                        "daemon_tty: daemon rejected startup command {} for session {}",
+                        ack.startup_command_id,
+                        ack.session_id
+                    );
+                    me.write_notice(
+                        "the requested startup command was not accepted and remains pending. \
+                         Reconnect after the session helper recovers to retry it safely.",
+                    );
+                }
+                Ok(ack) => {
+                    me.startup_command_in_flight = None;
+                    me.startup_retry_requires_reconnect = true;
+                    log::error!(
+                        "daemon_tty: mismatched startup Ack: session={}, command_id={}",
+                        ack.session_id,
+                        ack.startup_command_id
+                    );
+                    me.write_notice(
+                        "the host returned an invalid startup confirmation; the requested \
+                         command remains pending.",
+                    );
+                }
+                Err(err) => {
+                    me.startup_command_in_flight = None;
+                    log::warn!(
+                        "daemon_tty: startup command delivery attempt failed; retaining it for \
+                         retry: {err:?}"
+                    );
+                    // A timeout is exactly the lost-Ack case: retry immediately
+                    // with the same logical id so the daemon can return its
+                    // cached positive Ack. Disconnect errors wait for the
+                    // manager's SessionReconnected event to avoid spinning on a
+                    // dead client.
+                    if matches!(err, ClientError::Timeout(_)) {
+                        me.maybe_dispatch_startup_command(ctx);
+                    }
+                }
+            }
+        });
+    }
+
+    /// Claims one local delivery attempt while preserving the logical command
+    /// and id until a matching positive daemon Ack arrives.
+    fn prepare_startup_command_delivery(&mut self) -> Option<(String, String, Vec<u8>, u64)> {
+        if self.startup_command_in_flight.is_some()
+            || self.startup_retry_requires_reconnect
+            || !self.is_bootstrapped()
+        {
+            return None;
+        }
+        let pty_session_id = self.pty_session_id.clone()?;
+        let command = self.startup_command.as_ref()?;
+        let command_id = self
+            .startup_command_id
+            .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+            .clone();
+        let mut bytes = command.as_bytes().to_vec();
+        bytes.push(b'\n');
+        self.next_startup_command_attempt = self
+            .next_startup_command_attempt
+            .checked_add(1)
+            .unwrap_or(1);
+        let attempt = self.next_startup_command_attempt;
+        self.startup_command_in_flight = Some(attempt);
+        Some((pty_session_id, command_id, bytes, attempt))
+    }
+
+    /// Testable synchronous transport seam. A local enqueue error releases only
+    /// the attempt latch; the command and stable id stay pending.
+    fn try_dispatch_startup_command_with<E>(
+        &mut self,
+        dispatch: impl FnOnce(&str, &str, &[u8]) -> Result<(), E>,
+    ) {
+        let Some((pty_session_id, command_id, bytes, attempt)) =
+            self.prepare_startup_command_delivery()
+        else {
+            return;
+        };
+        if dispatch(&pty_session_id, &command_id, &bytes).is_err()
+            && self.startup_command_in_flight == Some(attempt)
+        {
+            self.startup_command_in_flight = None;
+        }
+    }
+
+    /// Completes the logical startup delivery only for its exact stable id.
+    fn acknowledge_startup_command(&mut self, command_id: &str) {
+        if self.startup_command_id.as_deref() != Some(command_id) {
+            return;
+        }
+        self.startup_command = None;
+        self.startup_command_id = None;
+        self.startup_command_in_flight = None;
+        self.startup_retry_requires_reconnect = false;
+    }
+
+    /// Releases an attempt tied to a dead transport without changing the
+    /// logical command id. The next connected transport can safely retry it.
+    fn allow_startup_command_retry(&mut self) {
+        if self.startup_command.is_some() {
+            self.startup_command_in_flight = None;
+            self.startup_retry_requires_reconnect = false;
+        }
     }
 
     /// Resets the ANSI parser to its ground state without touching the terminal
@@ -1002,17 +1208,21 @@ mod tests {
         });
     }
 
-    /// The host's startup command runs once when the session opens — the
-    /// daemon-path analog of the local-PTY SSH startup-command injector. With no
-    /// live client the queued command lands in `pending_input` (sent for real on
-    /// reattach), so we assert it was queued as `command + "\n"`.
+    /// A daemon session becoming addressable is not proof that its shell is
+    /// ready for input. The startup command must stay queued through `InitShell`
+    /// (fish/pwsh still need their client-side bootstrap at that point), run only
+    /// after the real `Bootstrapped` boundary. With no live client it remains
+    /// pending; the synchronous transport seam then verifies the exact request
+    /// bytes and positive-Ack completion independently.
     #[test]
-    fn startup_command_is_queued_as_input_on_open() {
+    fn startup_command_waits_for_bootstrap_and_runs_exactly_once() {
         App::test((), |mut app| async move {
-            let _manager = app.add_singleton_model(RemoteServerManager::new);
+            let manager = app.add_singleton_model(RemoteServerManager::new);
             let conn = SessionId::from(17u64);
             let (listener, _wakeups_rx) = test_listener();
-            let model = Arc::new(FairMutex::new(TerminalModel::mock(None, Some(listener.clone()))));
+            let model = Arc::new(FairMutex::new(TerminalModel::mock_not_bootstrapped(Some(
+                listener.clone(),
+            ))));
             let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
             let size = SizeInfo::new_without_font_metrics(24, 80);
             let model_for_loop = model.clone();
@@ -1037,16 +1247,281 @@ mod tests {
             });
 
             event_loop.read(&app, |me, _| {
-                assert!(me.startup_command.is_none(), "startup command must be taken (run once)");
-                assert_eq!(me.pending_input.len(), 1, "startup command queued as input");
-                match &me.pending_input[0] {
-                    EventLoopMessage::Input(bytes) => {
-                        assert_eq!(&**bytes, b"tmux attach\n", "command + execute newline");
-                    }
-                    other => panic!("expected Input, got {other:?}"),
-                }
+                assert_eq!(
+                    me.startup_command.as_deref(),
+                    Some("tmux attach"),
+                    "SessionOpened alone must not consume the startup command"
+                );
+                assert!(
+                    me.pending_input.is_empty(),
+                    "SessionOpened alone must not send input into a bootstrapping shell"
+                );
+            });
+
+            let init_shell = init_shell_dcs();
+            manager.update(&mut app, |_manager, ctx| {
+                ctx.emit(output_event(conn, "pty-x", 0, &init_shell));
+            });
+            event_loop.read(&app, |me, _| {
+                assert_eq!(
+                    me.startup_command.as_deref(),
+                    Some("tmux attach"),
+                    "InitShell is not readiness: fish/pwsh still bootstrap client-side"
+                );
+                assert!(me.pending_input.is_empty());
+            });
+
+            let bootstrapped = bootstrapped_dcs();
+            manager.update(&mut app, |_manager, ctx| {
+                ctx.emit(output_event(
+                    conn,
+                    "pty-x",
+                    init_shell.len() as u64,
+                    &bootstrapped,
+                ));
+            });
+            event_loop.read(&app, |me, _| {
+                assert_eq!(
+                    me.startup_command.as_deref(),
+                    Some("tmux attach"),
+                    "without a connected retry-safe client the ready command remains pending"
+                );
+                assert!(me.pending_input.is_empty());
+            });
+
+            let mut dispatched = None;
+            event_loop.update(&mut app, |me, _ctx| {
+                me.try_dispatch_startup_command_with(
+                    |pty_session_id, command_id, bytes| -> Result<(), ()> {
+                        dispatched = Some((
+                            pty_session_id.to_string(),
+                            command_id.to_string(),
+                            bytes.to_vec(),
+                        ));
+                        Ok(())
+                    },
+                );
+            });
+            let (pty_session_id, command_id, bytes) =
+                dispatched.expect("bootstrapped startup command dispatched");
+            assert_eq!(pty_session_id, "pty-x");
+            assert_eq!(bytes, b"tmux attach\n");
+            event_loop.update(&mut app, |me, _ctx| {
+                me.acknowledge_startup_command(&command_id)
+            });
+            event_loop.read(&app, |me, _| {
+                assert!(
+                    me.startup_command.is_none(),
+                    "matching positive Ack completes the startup command"
+                );
+            });
+
+            manager.update(&mut app, |_manager, ctx| {
+                ctx.emit(output_event(
+                    conn,
+                    "pty-x",
+                    (init_shell.len() + bootstrapped.len()) as u64,
+                    b"later output",
+                ));
+            });
+            event_loop.read(&app, |me, _| {
+                assert!(me.startup_command.is_none());
+                assert!(me.startup_command_in_flight.is_none());
             });
         });
+    }
+
+    /// A startup command is not ordinary terminal input: losing it leaves the
+    /// newly opened tab at a shell prompt instead of starting the requested
+    /// agent. A failed client enqueue must therefore keep the command pending
+    /// under the same delivery id for a later reconnect retry.
+    ///
+    /// `try_dispatch_startup_command_with` is the transport seam required by
+    /// this contract. Production dispatch uses the real daemon client; the test
+    /// supplies the precise failure that was previously only logged.
+    #[test]
+    fn startup_command_is_retained_when_daemon_enqueue_fails() {
+        let mut event_loop = ready_event_loop_with_startup("codex resume session-1");
+        let mut attempted = None;
+
+        event_loop.try_dispatch_startup_command_with(
+            |pty_session_id, command_id, bytes| -> Result<(), ()> {
+                attempted = Some((
+                    pty_session_id.to_string(),
+                    command_id.to_string(),
+                    bytes.to_vec(),
+                ));
+                Err(())
+            },
+        );
+
+        let (pty_session_id, command_id, bytes) = attempted.expect("dispatch was attempted");
+        assert_eq!(pty_session_id, OUR_PTY);
+        assert!(!command_id.is_empty(), "every startup delivery needs a stable id");
+        assert_eq!(bytes, b"codex resume session-1\n");
+        assert_eq!(
+            event_loop.startup_command.as_deref(),
+            Some("codex resume session-1"),
+            "an enqueue error must not consume the startup command"
+        );
+    }
+
+    /// Successfully placing a frame on the client channel is not proof that the
+    /// daemon received or executed it. The command remains pending until an ack
+    /// carrying its exact delivery id arrives; a stale or foreign ack is ignored.
+    #[test]
+    fn startup_command_remains_pending_until_daemon_ack() {
+        let mut event_loop = ready_event_loop_with_startup("claude --resume session-2");
+        let mut command_id = None;
+
+        event_loop.try_dispatch_startup_command_with(
+            |_pty_session_id, id, _bytes| -> Result<(), ()> {
+                command_id = Some(id.to_string());
+                Ok(())
+            },
+        );
+
+        let command_id = command_id.expect("successful enqueue exposes its delivery id");
+        assert_eq!(
+            event_loop.startup_command.as_deref(),
+            Some("claude --resume session-2"),
+            "local enqueue must not clear an unacknowledged startup command"
+        );
+
+        event_loop.acknowledge_startup_command("ack-for-another-command");
+        assert!(
+            event_loop.startup_command.is_some(),
+            "a mismatched ack must not clear the pending startup command"
+        );
+
+        event_loop.acknowledge_startup_command(&command_id);
+        assert!(
+            event_loop.startup_command.is_none(),
+            "only the matching daemon ack completes startup delivery"
+        );
+    }
+
+    /// If the daemon executed a command but its ack was lost, reconnect retries
+    /// the same logical delivery. Reusing the id is what lets the daemon return
+    /// its cached ack instead of executing the command a second time.
+    #[test]
+    fn lost_ack_retry_reuses_stable_startup_command_id() {
+        let mut event_loop = ready_event_loop_with_startup("codex resume session-3");
+        let mut attempts = Vec::new();
+
+        for _ in 0..2 {
+            event_loop.try_dispatch_startup_command_with(
+                |_pty_session_id, command_id, bytes| -> Result<(), ()> {
+                    attempts.push((command_id.to_string(), bytes.to_vec()));
+                    Ok(())
+                },
+            );
+            event_loop.allow_startup_command_retry();
+        }
+
+        assert_eq!(attempts.len(), 2, "lost ack causes one retry");
+        assert_eq!(
+            attempts[0].0, attempts[1].0,
+            "retry must reuse the original id so the daemon can deduplicate it"
+        );
+        assert_eq!(attempts[0].1, attempts[1].1);
+        assert!(
+            event_loop.startup_command.is_some(),
+            "without an ack the command is still pending after retry"
+        );
+    }
+
+    #[test]
+    fn startup_command_in_flight_suppresses_duplicate_local_attempts() {
+        let mut event_loop = ready_event_loop_with_startup("codex resume session-in-flight");
+        let mut attempts = 0;
+
+        for _ in 0..2 {
+            event_loop.try_dispatch_startup_command_with(
+                |_pty_session_id, _command_id, _bytes| -> Result<(), ()> {
+                    attempts += 1;
+                    Ok(())
+                },
+            );
+        }
+
+        assert_eq!(
+            attempts, 1,
+            "output bursts must not create parallel startup requests"
+        );
+        assert!(event_loop.startup_command_in_flight.is_some());
+    }
+
+    /// User keystrokes may be dropped oldest-first after a prolonged outage, but
+    /// an unacknowledged startup command is control state, not disposable input.
+    /// Buffer pressure must neither remove it nor mint a different delivery id.
+    #[test]
+    fn pending_buffer_never_evicts_unacknowledged_startup() {
+        let mut event_loop = ready_event_loop_with_startup("codex resume session-4");
+        let mut command_ids = Vec::new();
+        event_loop.try_dispatch_startup_command_with(
+            |_pty_session_id, command_id, _bytes| -> Result<(), ()> {
+                command_ids.push(command_id.to_string());
+                Ok(())
+            },
+        );
+        let original_command_id = event_loop
+            .startup_command_id
+            .clone()
+            .expect("first attempt creates a stable id");
+
+        for _ in 0..5 {
+            event_loop.buffer_pending(EventLoopMessage::Input(Cow::Owned(vec![
+                b'x';
+                100 * 1024
+            ])));
+        }
+
+        assert_eq!(
+            event_loop.startup_command.as_deref(),
+            Some("codex resume session-4"),
+            "ordinary input eviction must never remove pending startup control state"
+        );
+
+        event_loop.allow_startup_command_retry();
+        event_loop.try_dispatch_startup_command_with(
+            |_pty_session_id, command_id, _bytes| -> Result<(), ()> {
+                command_ids.push(command_id.to_string());
+                Ok(())
+            },
+        );
+        assert_eq!(
+            original_command_id, command_ids[1],
+            "buffer pressure must not replace the startup delivery identity"
+        );
+
+        let buffered_input_bytes: usize = event_loop
+            .pending_input
+            .iter()
+            .map(|message| match message {
+                EventLoopMessage::Input(bytes) => bytes.len(),
+                EventLoopMessage::Resize(_)
+                | EventLoopMessage::Shutdown
+                | EventLoopMessage::ChildExited => 0,
+            })
+            .sum();
+        assert!(
+            buffered_input_bytes <= MAX_PENDING_INPUT_BYTES,
+            "normal input remains bounded independently of startup delivery"
+        );
+    }
+
+    fn ready_event_loop_with_startup(command: &str) -> EventLoop {
+        let conn = SessionId::from(18u64);
+        let (listener, _wakeups_rx) = test_listener();
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(
+            None,
+            Some(listener.clone()),
+        )));
+        let mut event_loop = EventLoop::new(model, listener, conn);
+        event_loop.pty_session_id = Some(OUR_PTY.to_string());
+        event_loop.startup_command = Some(command.to_string());
+        event_loop
     }
 
     /// During a long outage the buffered input must stay bounded: consecutive
@@ -1382,6 +1857,42 @@ mod tests {
     /// `TerminalModel::init_shell` (not just plain-text rendering).
     fn init_shell_dcs() -> Vec<u8> {
         let json = r#"{"hook":"InitShell","value":{"session_id":167303092612201,"shell":"zsh"}}"#;
+        let mut out = vec![0x1b, 0x50, 0x24, 0x64]; // ESC P $ d
+        out.extend_from_slice(hex::encode(json).as_bytes());
+        out.push(0x9c); // ST
+        out
+    }
+
+    /// The real completion boundary emitted after the shell has finished the
+    /// bootstrap body. `InitShell` alone is deliberately insufficient.
+    fn bootstrapped_dcs() -> Vec<u8> {
+        // Fields with custom deserializers must be present even when empty.
+        let json = r#"{
+            "hook":"Bootstrapped",
+            "value":{
+                "histfile":"",
+                "shell":"zsh",
+                "home_dir":"",
+                "path":"",
+                "editor":"",
+                "aliases":"",
+                "abbreviations":"",
+                "function_names":"",
+                "env_var_names":"",
+                "builtins":"",
+                "keywords":"",
+                "shell_version":"",
+                "shell_options":"",
+                "rcfiles_start_time":"",
+                "rcfiles_end_time":"",
+                "shell_plugins":"",
+                "vi_mode_enabled":"",
+                "os_category":"",
+                "linux_distribution":"",
+                "wsl_name":"",
+                "shell_path":""
+            }
+        }"#;
         let mut out = vec![0x1b, 0x50, 0x24, 0x64]; // ESC P $ d
         out.extend_from_slice(hex::encode(json).as_bytes());
         out.push(0x9c); // ST

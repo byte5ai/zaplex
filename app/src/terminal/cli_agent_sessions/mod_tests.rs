@@ -5,6 +5,8 @@ use super::{
 };
 use crate::ai::blocklist::{InputConfig, InputType};
 use crate::terminal::CLIAgent;
+use std::collections::HashMap;
+use warpui::{App, EntityId};
 
 #[test]
 fn parse_stop_notification() {
@@ -275,6 +277,283 @@ fn apply_event_preserves_input_session() {
     session.apply_event(&event);
 
     assert_eq!(session.input_state, input_state);
+}
+
+#[test]
+fn terminal_view_lookup_matches_provider_session_and_exact_host() {
+    let local_claude_view = EntityId::new();
+    let remote_a_claude_view = EntityId::new();
+    let remote_b_claude_view = EntityId::new();
+    let codex_view = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    let tracked_session = |agent, session_id: &str, remote_host: Option<&str>| CLIAgentSession {
+        agent,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext {
+            session_id: Some(session_id.to_string()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: remote_host.map(str::to_string),
+        draft_text: None,
+        custom_command_prefix: None,
+    };
+    model.sessions.insert(
+        local_claude_view,
+        tracked_session(CLIAgent::Claude, "same-id", None),
+    );
+    model.sessions.insert(
+        remote_a_claude_view,
+        tracked_session(CLIAgent::Claude, "same-id", Some("user@remote-a")),
+    );
+    model.sessions.insert(
+        remote_b_claude_view,
+        tracked_session(CLIAgent::Claude, "same-id", Some("user@remote-b")),
+    );
+    model.sessions.insert(
+        codex_view,
+        tracked_session(CLIAgent::Codex, "same-id", None),
+    );
+    let terminal_hosts = HashMap::from([
+        (local_claude_view, None),
+        (remote_a_claude_view, Some("remote-a")),
+        (remote_b_claude_view, Some("remote-b")),
+        (codex_view, None),
+    ]);
+
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Claude,
+            "same-id",
+            None,
+            |terminal_view_id, session| {
+                !session.is_remote() && terminal_hosts[&terminal_view_id].is_none()
+            },
+        ),
+        Some(local_claude_view)
+    );
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Claude,
+            "same-id",
+            None,
+            |terminal_view_id, session| {
+                session.is_remote() && terminal_hosts[&terminal_view_id] == Some("remote-a")
+            },
+        ),
+        Some(remote_a_claude_view)
+    );
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Claude,
+            "same-id",
+            None,
+            |terminal_view_id, session| {
+                session.is_remote() && terminal_hosts[&terminal_view_id] == Some("remote-b")
+            },
+        ),
+        Some(remote_b_claude_view)
+    );
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Codex,
+            "same-id",
+            None,
+            |terminal_view_id, _| terminal_view_id == codex_view,
+        ),
+        Some(codex_view)
+    );
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Claude,
+            "missing",
+            None,
+            |_, _| true,
+        ),
+        None
+    );
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Claude,
+            "same-id",
+            None,
+            |_, _| false,
+        ),
+        None,
+        "a provider/session match must still honor the exact-host predicate"
+    );
+}
+
+/// Keep the provider coordinate independently testable. The broader lookup
+/// fixture contains a matching Codex row, and its `HashMap` iteration order can
+/// accidentally hide a removed provider predicate. With only a Claude row, a
+/// Codex lookup must deterministically return `None` even when the host callback
+/// would accept every terminal.
+#[test]
+fn provider_mismatch_never_reaches_terminal_predicate() {
+    let claude_view = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    model.sessions.insert(
+        claude_view,
+        CLIAgentSession {
+            agent: CLIAgent::Claude,
+            status: CLIAgentSessionStatus::InProgress,
+            session_context: CLIAgentSessionContext {
+                session_id: Some("same-id".to_string()),
+                ..Default::default()
+            },
+            input_state: CLIAgentInputState::Closed,
+            should_auto_toggle_input: false,
+            listener: None,
+            plugin_version: None,
+            remote_host: None,
+            draft_text: None,
+            custom_command_prefix: None,
+        },
+    );
+    let mut predicate_calls = 0;
+
+    let found = model.terminal_view_id_for_agent_session_matching(
+        CLIAgent::Codex,
+        "same-id",
+        None,
+        |_, _| {
+            predicate_calls += 1;
+            true
+        },
+    );
+
+    assert_eq!(found, None);
+    assert_eq!(
+        predicate_calls, 0,
+        "wrong-provider sessions must be rejected before host matching"
+    );
+}
+
+#[test]
+fn stale_account_a_never_focuses_account_b() {
+    let account_a_view = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    model.sessions.insert(
+        account_a_view,
+        CLIAgentSession {
+            agent: CLIAgent::Claude,
+            status: CLIAgentSessionStatus::InProgress,
+            session_context: CLIAgentSessionContext {
+                session_id: Some("copied-id".to_string()),
+                ..Default::default()
+            },
+            input_state: CLIAgentInputState::Closed,
+            should_auto_toggle_input: false,
+            listener: None,
+            plugin_version: None,
+            remote_host: None,
+            draft_text: None,
+            custom_command_prefix: None,
+        },
+    );
+    model.bind_account_identity(
+        account_a_view,
+        CLIAgent::Claude,
+        None,
+        Some("account-a@example.com".to_string()),
+    );
+    let mut host_predicate_calls = 0;
+
+    let found = model.terminal_view_id_for_agent_session_matching(
+        CLIAgent::Claude,
+        "copied-id",
+        Some("account-b@example.com"),
+        |_, _| {
+            host_predicate_calls += 1;
+            true
+        },
+    );
+
+    assert_eq!(found, None);
+    assert_eq!(
+        host_predicate_calls, 0,
+        "the wrong account must be rejected before host matching"
+    );
+}
+
+#[test]
+fn known_default_account_identity_is_not_unknown() {
+    let known_default_view = EntityId::new();
+    let unknown_manual_view = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    model.bind_account_identity(
+        known_default_view,
+        CLIAgent::Claude,
+        None,
+        Some("default@example.com".to_string()),
+    );
+
+    assert!(model.account_identity_matches(
+        known_default_view,
+        CLIAgent::Claude,
+        Some("default@example.com")
+    ));
+    assert!(!model.account_identity_matches(known_default_view, CLIAgent::Claude, None));
+    assert!(!model.account_identity_matches(
+        unknown_manual_view,
+        CLIAgent::Claude,
+        Some("default@example.com")
+    ));
+}
+
+#[test]
+fn account_binding_before_later_detection_is_preserved() {
+    App::test((), |mut app| async move {
+        let terminal_view_id = EntityId::new();
+        let model = app.add_model(|_| CLIAgentSessionsModel::new());
+
+        model.update(&mut app, |model, ctx| {
+            model.bind_account_identity(
+                terminal_view_id,
+                CLIAgent::Claude,
+                None,
+                Some("default@example.com".to_string()),
+            );
+            model.set_session(
+                terminal_view_id,
+                CLIAgentSession {
+                    agent: CLIAgent::Claude,
+                    status: CLIAgentSessionStatus::InProgress,
+                    session_context: CLIAgentSessionContext {
+                        session_id: Some("detected-later".to_string()),
+                        ..Default::default()
+                    },
+                    input_state: CLIAgentInputState::Closed,
+                    should_auto_toggle_input: false,
+                    listener: None,
+                    plugin_version: None,
+                    remote_host: None,
+                    draft_text: None,
+                    custom_command_prefix: None,
+                },
+                ctx,
+            );
+        });
+
+        model.read(&app, |model, _| {
+            assert!(
+                model.session(terminal_view_id).is_some(),
+                "the detected session is tracked"
+            );
+            let identity = model
+                .account_identity(terminal_view_id)
+                .expect("the pre-bound account identity is preserved");
+            assert_eq!(identity.config_dir, None);
+            assert_eq!(
+                identity.account_email.as_deref(),
+                Some("default@example.com")
+            );
+        });
+    });
 }
 
 #[test]

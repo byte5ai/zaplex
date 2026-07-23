@@ -42,6 +42,8 @@ struct RegEntry {
     started_at: i64,
     updated_at: i64,
     pid: u32,
+    /// OS process-start marker written by Claude Code alongside the pid.
+    proc_start: Option<String>,
 }
 
 fn read_registry(config_dir: &Path) -> Vec<RegEntry> {
@@ -78,6 +80,10 @@ fn read_registry(config_dir: &Path) -> Vec<RegEntry> {
                 if u > 0 { u } else { int_of("statusUpdatedAt") }
             },
             pid: v.get("pid").and_then(Value::as_u64).unwrap_or(0) as u32,
+            proc_start: v
+                .get("procStart")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         };
         match by_id.get(&reg.session_id) {
             Some(prev) if reg.updated_at < prev.updated_at => {}
@@ -95,26 +101,6 @@ fn is_real_reg(r: &RegEntry) -> bool {
         return false;
     }
     !(r.status == "shell" || r.status.is_empty())
-}
-
-/// Is a pid still running? (EPERM means it exists but isn't ours — alive.)
-/// Unknown pid (0) → don't hide the session.
-#[cfg(unix)]
-fn pid_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return true;
-    }
-    // SAFETY: kill with signal 0 only performs the permission/existence check.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if rc == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-#[cfg(not(unix))]
-fn pid_alive(_pid: u32) -> bool {
-    true
 }
 
 /// Signals derived from a transcript's tail.
@@ -269,6 +255,7 @@ fn snapshot_of(
     transcript: &Path,
     now: DateTime<Utc>,
     force_state: Option<SessionState>,
+    process_fingerprint: Option<String>,
 ) -> SessionSnapshot {
     let tail = read_transcript_tail(transcript);
     let updated = reg_updated(&r, now);
@@ -295,6 +282,7 @@ fn snapshot_of(
         // reads a transcript, which knows nothing about the account above it.
         config_dir: None,
         account_email: None,
+        process_fingerprint,
         last_activity,
         pid: r.pid,
     }
@@ -345,9 +333,12 @@ pub struct SessionScan {
 /// of twice.
 ///
 /// The dormant half is deliberately conservative and bounded:
-/// - A pid of `0` means *unknown*, not dead ([`pid_alive`] reports it alive), so
+/// - A pid of `0` means *unknown*, not dead (the process probe reports it alive), so
 ///   such an entry stays live and is never claimed dormant — we don't assert
 ///   "resumable" where we cannot show the process is gone.
+/// - A live pid is signalable only when its exact process start matches Claude's
+///   registry `procStart`. Missing/mismatching identity keeps the row visible
+///   with no fingerprint, so Stop/Kill fails closed without hiding the session.
 /// - Only the last `max_age` counts; older conversations are not usefully
 ///   resumable and would only be noise.
 /// - At most `limit`, most-recent first.
@@ -369,7 +360,7 @@ pub fn scan_sessions(
     let transcripts = transcripts_by_id(config_dir);
     let cutoff = now - max_age;
 
-    let mut live_entries: Vec<(RegEntry, PathBuf)> = Vec::new();
+    let mut live_entries: Vec<(RegEntry, PathBuf, Option<String>)> = Vec::new();
     let mut idle_candidates: Vec<(DateTime<Utc>, RegEntry, PathBuf)> = Vec::new();
 
     for r in read_registry(config_dir) {
@@ -380,9 +371,15 @@ pub fn scan_sessions(
             // No transcript → a helper process, not a session.
             continue;
         };
-        // The single probe that decides which half this entry belongs to.
-        if pid_alive(r.pid) {
-            live_entries.push((r, path));
+        // The single probe decides both liveness and whether this exact process
+        // is safely bound to Claude's registry entry.
+        let process = crate::process_identity::probe_registered_process(
+            r.pid,
+            r.proc_start.as_deref(),
+            r.started_at,
+        );
+        if process.alive {
+            live_entries.push((r, path, process.fingerprint));
         } else if limit > 0 {
             let est = recency_estimate(&r, &path, now);
             if est >= cutoff {
@@ -393,7 +390,7 @@ pub fn scan_sessions(
 
     let mut live: Vec<SessionSnapshot> = live_entries
         .into_iter()
-        .map(|(r, path)| snapshot_of(r, &path, now, None))
+        .map(|(r, path, fingerprint)| snapshot_of(r, &path, now, None, fingerprint))
         .collect();
     // Waiting first (they need the user), then by recency.
     live.sort_by(|a, b| {
@@ -412,7 +409,7 @@ pub fn scan_sessions(
     idle_candidates.truncate(limit);
     let mut idle: Vec<SessionSnapshot> = idle_candidates
         .into_iter()
-        .map(|(_, r, path)| snapshot_of(r, &path, now, Some(SessionState::Idle)))
+        .map(|(_, r, path)| snapshot_of(r, &path, now, Some(SessionState::Idle), None))
         .collect();
     idle.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
 

@@ -43,6 +43,7 @@ fn session_in(
         worktree: None,
         config_dir: None,
         account_email: None,
+        process_fingerprint: None,
         last_activity: at(activity),
         pid: 0,
     }

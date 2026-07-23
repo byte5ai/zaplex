@@ -19,6 +19,7 @@ fn session(name: &str, cwd: &str, pid: u32) -> SessionSnapshot {
         worktree: None,
         config_dir: None,
         account_email: None,
+        process_fingerprint: None,
         last_activity: Utc::now(),
         pid,
     }
@@ -76,6 +77,13 @@ fn guardrail_target_label_collision_does_not_route_local() {
 fn pid_zero_is_never_signalable() {
     assert!(!pid_signalable(0));
     assert!(pid_signalable(1234));
+}
+
+#[test]
+fn pid_must_fit_the_positive_signed_process_id_range() {
+    assert!(pid_signalable(i32::MAX as u32));
+    assert!(!pid_signalable(i32::MAX as u32 + 1));
+    assert!(!pid_signalable(u32::MAX));
 }
 
 #[test]

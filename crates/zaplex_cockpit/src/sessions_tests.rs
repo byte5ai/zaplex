@@ -1,5 +1,6 @@
-use chrono::{DateTime, Duration, Utc};
 use std::time::SystemTime;
+
+use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 
 use super::*;
@@ -50,6 +51,7 @@ fn fake_account_at(
         "startedAt": updated.timestamp_millis(),
         "updatedAt": updated.timestamp_millis(),
         "pid": pid,
+        "procStart": crate::process_identity::registry_start_for_process(pid),
     });
     std::fs::write(
         sessions.join(format!("{session_id}.json")),
@@ -89,6 +91,14 @@ fn dead_pid() -> u32 {
     pid
 }
 
+#[cfg(unix)]
+#[test]
+fn pid_outside_the_signed_process_id_range_is_not_alive() {
+    assert!(
+        !crate::process_identity::probe_registered_process(u32::MAX, None, 0).alive
+    );
+}
+
 fn assistant_line(stop_reason: &str) -> serde_json::Value {
     json!({
         "type": "assistant",
@@ -123,6 +133,85 @@ fn busy_session_is_active() {
     assert_eq!(sessions[0].effort, None);
     assert_eq!(sessions[0].project_root, "/tmp/proj");
     assert_eq!(sessions[0].project_name, "proj");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    assert!(
+        sessions[0].process_fingerprint.is_some(),
+        "a matching Claude procStart must bind the live process"
+    );
+}
+
+fn replace_registry_proc_start(dir: &Path, session_id: &str, proc_start: Option<&str>) {
+    let path = dir.join("sessions").join(format!("{session_id}.json"));
+    let mut entry: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    match proc_start {
+        Some(proc_start) => {
+            entry["procStart"] = serde_json::Value::String(proc_start.to_string());
+        }
+        None => {
+            entry.as_object_mut().unwrap().remove("procStart");
+        }
+    }
+    std::fs::write(path, serde_json::to_vec(&entry).unwrap()).unwrap();
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn mismatching_registry_process_start_keeps_the_session_visible_but_unsignalable() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "recycled",
+        "busy",
+        "",
+        &[assistant_line("tool_use")],
+    );
+    replace_registry_proc_start(tmp.path(), "recycled", Some("not-this-process"));
+
+    let sessions = live_sessions(tmp.path(), Utc::now());
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id, "recycled");
+    assert_eq!(sessions[0].process_fingerprint, None);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn missing_registry_process_start_keeps_the_session_visible_but_unsignalable() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "unproven",
+        "busy",
+        "",
+        &[assistant_line("tool_use")],
+    );
+    replace_registry_proc_start(tmp.path(), "unproven", None);
+
+    let sessions = live_sessions(tmp.path(), Utc::now());
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id, "unproven");
+    assert_eq!(sessions[0].process_fingerprint, None);
+}
+
+#[test]
+fn legacy_session_snapshot_without_a_fingerprint_deserializes_as_unverified() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "legacy-wire",
+        "busy",
+        "",
+        &[assistant_line("tool_use")],
+    );
+    let snapshot = live_sessions(tmp.path(), Utc::now()).remove(0);
+    let mut encoded = serde_json::to_value(snapshot).unwrap();
+    encoded
+        .as_object_mut()
+        .unwrap()
+        .remove("process_fingerprint");
+
+    let decoded: crate::types::SessionSnapshot = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded.process_fingerprint, None);
 }
 
 #[test]

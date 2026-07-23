@@ -28,6 +28,15 @@ fn supported_features_advertises_session_host_on_unix() {
     assert!(has_feature(&supported_features(), FEATURE_SESSION_HOST));
 }
 
+#[cfg(unix)]
+#[test]
+fn supported_features_advertises_retry_safe_startup_delivery_on_unix() {
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_STARTUP_COMMAND_ACK
+    ));
+}
+
 #[test]
 fn supported_features_advertises_agent_inventory_on_all_platforms() {
     // Agent-session inventory is filesystem-based (no PTY), so it is advertised
@@ -38,8 +47,26 @@ fn supported_features_advertises_agent_inventory_on_all_platforms() {
 #[test]
 fn supported_features_advertises_host_exec_on_all_platforms() {
     // Session-less host-exec runs in a forked subshell (no PTY), so it is
-    // advertised regardless of platform — the cross-host guardrails depend on it.
+    // advertised regardless of platform for its non-guardrail callers.
     assert!(has_feature(&supported_features(), FEATURE_HOST_EXEC));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn supported_features_advertises_verified_agent_process_signals() {
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_AGENT_PROCESS_SIGNAL_V1
+    ));
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[test]
+fn supported_features_omits_verified_agent_process_signals_when_unsupported() {
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_AGENT_PROCESS_SIGNAL_V1
+    ));
 }
 
 #[cfg(not(unix))]
@@ -48,4 +75,8 @@ fn supported_features_omits_session_host_on_non_unix() {
     // Non-unix daemons own no PTYs, so they do not advertise the session host —
     // but they still report agent inventory.
     assert!(!has_feature(&supported_features(), FEATURE_SESSION_HOST));
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_STARTUP_COMMAND_ACK
+    ));
 }

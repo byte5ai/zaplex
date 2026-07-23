@@ -2510,3 +2510,98 @@ fn node_for_daemon_host_in_translates_daemon_id_to_ssh_node() {
         None
     );
 }
+
+#[test]
+fn invalid_pid_never_reaches_local_signal_backend() {
+    let mut signal_calls = 0;
+    let _ = send_verified_guardrail_signal_with(
+        u32::MAX,
+        Some("birth-1"),
+        Some("birth-1"),
+        zaplex_cockpit::GuardrailSignal::Interrupt,
+        |_, _| {
+            signal_calls += 1;
+            GuardrailSendOutcome::Sent
+        },
+    );
+
+    assert_eq!(signal_calls, 0);
+}
+
+#[test]
+fn recycled_pid_never_reaches_local_signal_backend() {
+    let mut signal_calls = 0;
+    let _ = send_verified_guardrail_signal_with(
+        4242,
+        Some("original-process"),
+        Some("recycled-process"),
+        zaplex_cockpit::GuardrailSignal::Kill,
+        |_, _| {
+            signal_calls += 1;
+            GuardrailSendOutcome::Sent
+        },
+    );
+
+    assert_eq!(signal_calls, 0);
+}
+
+#[test]
+fn unprovable_process_identity_never_reaches_local_signal_backend() {
+    for (expected, observed) in [(None, Some("live")), (Some("expected"), None), (None, None)] {
+        let mut signal_calls = 0;
+        let _ = send_verified_guardrail_signal_with(
+            4242,
+            expected,
+            observed,
+            zaplex_cockpit::GuardrailSignal::Interrupt,
+            |_, _| {
+                signal_calls += 1;
+                GuardrailSendOutcome::Sent
+            },
+        );
+
+        assert_eq!(
+            signal_calls, 0,
+            "expected={expected:?}, observed={observed:?} must fail closed"
+        );
+    }
+}
+
+#[test]
+fn recycled_remote_pid_is_rejected_before_remote_request() {
+    let mut remote_request_calls = 0;
+    let _ = send_verified_guardrail_signal_with(
+        4242,
+        Some("inventory-process"),
+        Some("current-process"),
+        zaplex_cockpit::GuardrailSignal::Interrupt,
+        |_, _| {
+            remote_request_calls += 1;
+            GuardrailSendOutcome::Sent
+        },
+    );
+
+    assert_eq!(
+        remote_request_calls, 0,
+        "a stale remote row must be rejected before sending a remote signal request"
+    );
+}
+
+#[test]
+fn matching_process_identity_reaches_signal_backend_once() {
+    let mut signal_calls = 0;
+    let _ = send_verified_guardrail_signal_with(
+        4242,
+        Some("same-process"),
+        Some("same-process"),
+        zaplex_cockpit::GuardrailSignal::Interrupt,
+        |pid, signal| {
+            signal_calls += 1;
+            assert_eq!(pid, 4242);
+            assert_eq!(signal, zaplex_cockpit::GuardrailSignal::Interrupt);
+            GuardrailSendOutcome::Sent
+        },
+    );
+
+    assert_eq!(signal_calls, 1);
+}

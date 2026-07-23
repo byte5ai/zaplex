@@ -7,17 +7,17 @@
 //!
 //! It is deliberately an *inbox you clear without dread*, not an alarm: neutral
 //! copy, no red, the same calm `✋` glyph the cockpit's Conductor uses.
-//! Selecting a row **jumps to that agent** by reusing the cockpit's existing
-//! "open = focus" verb — [`WorkspaceAction::AdoptAgentSession`] — which resumes
-//! the same session in a live local tab. Remote-host agents (whose sessions are
-//! not locally resumable) are still listed for awareness, just not clickable.
+//! Selecting a row **jumps to that agent** through the cockpit's shared,
+//! state-aware [`WorkspaceAction::AttachFleetSession`] route. A known live pane
+//! is focused, a dormant session is resumed, and an unlocated live session is
+//! reported honestly instead of being duplicated. The same rule applies to
+//! local and remote rows.
 //!
 //! Surfaced from the workspace via `WorkspaceAction::OpenAttentionInbox`
 //! (default binding `cmd/ctrl-shift-o`); closed with `escape` or its close
 //! button.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use pathfinder_color::ColorU;
 use warp_core::ui::theme::{phenomenon::PhenomenonStyle, Fill};
@@ -32,12 +32,11 @@ use warpui::platform::Cursor;
 use warpui::{
     AppContext, Entity, SingletonEntity as _, TypedActionView, View, ViewContext, ViewHandle,
 };
-use zaplex_cockpit::SessionState;
+use zaplex_cockpit::{session_key, SessionState};
 
 use crate::appearance::Appearance;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{attention_coloru, glyph_cell};
-use crate::terminal::cli_agent::CLIAgent;
 use crate::ui_components::modal_frame;
 use crate::view_components::action_button::ActionButton;
 use crate::WorkspaceAction;
@@ -64,29 +63,13 @@ pub enum AttentionInboxEvent {
     Close,
 }
 
-/// Everything needed to reuse the existing "open = focus" adopt verb for one
-/// waiting session — precomputed from the cockpit snapshot so `render` never
-/// touches account state. Only *local* sessions get one (remote sessions are
-/// not locally resumable); its absence is exactly what makes a row
-/// non-clickable.
-#[derive(Clone)]
-struct AdoptTarget {
-    agent: CLIAgent,
-    cwd: PathBuf,
-    /// `Some` for a non-default account (pins the resume to that subscription),
-    /// `None` for the provider's default login.
-    config_dir: Option<PathBuf>,
-}
-
 pub struct AttentionInbox {
     close_button: ViewHandle<ActionButton>,
     scroll_state: ClippedScrollStateHandle,
-    /// Stable hover handle per waiting row, keyed `"{host}\u{1f}{session_id}"`
-    /// (session ids are unique only within a host). Synced against the cockpit
-    /// inventory so handles persist across renders.
+    /// Stable hover handle per waiting row, keyed by complete [`session_key`]
+    /// identity so copied ids on one host remain separate. Synced against the
+    /// cockpit inventory so handles persist across renders.
     row_states: HashMap<String, MouseStateHandle>,
-    /// Adopt data for locally-resumable sessions, keyed by session id.
-    adopt_targets: HashMap<String, AdoptTarget>,
 }
 
 impl AttentionInbox {
@@ -106,42 +89,15 @@ impl AttentionInbox {
             close_button,
             scroll_state: ClippedScrollStateHandle::default(),
             row_states: HashMap::new(),
-            adopt_targets: HashMap::new(),
         };
         me.sync_rows(ctx);
         me
     }
 
-    /// Keep one stable hover handle per currently-waiting row and refresh the
-    /// per-session adopt targets from the cockpit snapshot. Dropping stale
+    /// Keep one stable hover handle per currently-waiting row. Dropping stale
     /// handles keeps the map bounded as the fleet churns.
     fn sync_rows(&mut self, ctx: &mut ViewContext<Self>) {
         let model = CockpitModel::as_ref(ctx);
-
-        // Adopt targets: only local sessions (the snapshot's accounts) are
-        // resumable in place; capability-gate on the provider's resume command.
-        let mut adopt_targets = HashMap::new();
-        for acct in &model.snapshot().accounts {
-            let agent = crate::cockpit::agent_of(acct.account.provider);
-            for session in &acct.sessions {
-                if session.state != SessionState::Waiting {
-                    continue;
-                }
-                if agent.resume_command(&session.session_id).is_none() {
-                    continue;
-                }
-                adopt_targets.insert(
-                    session.session_id.clone(),
-                    AdoptTarget {
-                        agent,
-                        cwd: PathBuf::from(&session.cwd),
-                        config_dir: (!acct.account.is_default)
-                            .then(|| acct.account.config_dir.clone()),
-                    },
-                );
-            }
-        }
-        self.adopt_targets = adopt_targets;
 
         // Hover handles for every waiting row across the whole fleet.
         let waiting_keys: Vec<String> = model
@@ -153,7 +109,7 @@ impl AttentionInbox {
                     p.sessions
                         .iter()
                         .filter(|s| s.state == SessionState::Waiting)
-                        .map(move |s| row_key(&h.host, &s.session_id))
+                        .map(move |s| session_key(h.is_local, h.host_id.as_deref(), s))
                 })
             })
             .collect();
@@ -178,11 +134,13 @@ impl AttentionInbox {
         )
     }
 
-    /// One waiting-agent row. Clickable (jumps via adopt) when the session is
-    /// locally resumable; a calm, static line otherwise.
+    /// One waiting-agent row. Every row uses the shared state-aware attach route:
+    /// it focuses a known pane, resumes only a dormant session, and never starts
+    /// a second copy of a live agent.
     fn render_row(
         &self,
         host: &str,
+        host_id: Option<&str>,
         is_local: bool,
         project: &str,
         session: &zaplex_cockpit::SessionSnapshot,
@@ -203,20 +161,7 @@ impl AttentionInbox {
         let disp_model =
             zaplex_cockpit::model_effort_label(&session.model, session.effort.as_deref());
 
-        let key = row_key(host, &session.session_id);
-        // The adopt target (present only for locally-resumable sessions on the
-        // local host). Gate on the inventory's authoritative `is_local` bit, NOT
-        // a `host == local_label` comparison: a remote daemon whose display label
-        // equals the local hostname (SSH alias / matching `gethostname()`) must
-        // never resolve to a *local* adopt — its host-scoped `session_id` could
-        // collide with a genuinely-local one and adopt the wrong session/cwd. A
-        // remote row stays non-clickable (awareness only), matching the inbox's
-        // "open that host's tab to attach" behavior. Its absence makes the row
-        // non-clickable.
-        let adopt = is_local
-            .then(|| self.adopt_targets.get(&session.session_id))
-            .flatten()
-            .cloned();
+        let key = session_key(is_local, host_id, session);
 
         let build_content = move |hovered: bool| -> Box<dyn Element> {
             let name_color = if hovered { accent } else { main };
@@ -251,20 +196,18 @@ impl AttentionInbox {
                 .finish()
         };
 
-        let Some(adopt) = adopt else {
-            // Non-clickable awareness row (remote / non-resumable).
-            return plain_row(build_content(false));
-        };
-
         let Some(state) = self.row_states.get(&key).cloned() else {
             return plain_row(build_content(false));
         };
 
-        let action = WorkspaceAction::AdoptAgentSession {
-            agent: adopt.agent,
+        let action = WorkspaceAction::AttachFleetSession {
+            host: host.to_string(),
+            host_id: host_id.map(str::to_string),
             session_id: session.session_id.clone(),
-            cwd: adopt.cwd.clone(),
-            config_dir: adopt.config_dir.clone(),
+            provider: session.provider,
+            config_dir: session.config_dir.clone(),
+            account_email: session.account_email.clone(),
+            is_local,
         };
         Hoverable::new(state, move |mouse| {
             let hovered = mouse.is_hovered();
@@ -280,8 +223,8 @@ impl AttentionInbox {
             container.finish()
         })
         .with_cursor(Cursor::PointingHand)
-        // Reuses the cockpit's existing "open = focus" verb; the workspace's
-        // AdoptAgentSession handler also closes this inbox.
+        // Reuses the cockpit's state-aware "open = focus" verb; the workspace
+        // handler also closes this inbox.
         .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
         .finish()
     }
@@ -324,6 +267,7 @@ impl AttentionInbox {
                         }
                         list = list.with_child(self.render_row(
                             &host.host,
+                            host.host_id.as_deref(),
                             host.is_local,
                             &project.name,
                             session,
@@ -349,10 +293,6 @@ impl AttentionInbox {
             .with_max_height(MODAL_MAX_LIST_HEIGHT)
             .finish()
     }
-}
-
-fn row_key(host: &str, session_id: &str) -> String {
-    format!("{host}\u{1f}{session_id}")
 }
 
 fn text_inline(s: String, family: FamilyId, size: f32, color: ColorU) -> Box<dyn Element> {

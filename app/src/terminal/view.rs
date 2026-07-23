@@ -16222,9 +16222,10 @@ impl TerminalView {
 
     /// Zaplex: if `session_id` is a remote-server session, returns its `HostId`.
     ///
-    /// Used when Ctrl/Cmd+clicking a file path in the terminal, to decide whether to take the local or remote buffer-sync
-    /// open flow. Non-remote-server sessions return `None` (keeping local behavior unchanged).
-    #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+    /// Used by remote file opening and fleet-session focus routing. A stable
+    /// daemon id prevents a same-named or copied session on another host from
+    /// being selected. Non-remote-server sessions return `None`.
+    #[cfg(feature = "local_tty")]
     fn remote_host_id_for_session(
         &self,
         session_id: SessionId,
@@ -16245,9 +16246,13 @@ impl TerminalView {
         }
     }
 
-    /// Zaplex: if the session that owns the currently active block is a remote-server session, returns its `HostId`.
-    #[cfg(all(feature = "local_tty", feature = "local_fs"))]
-    fn active_session_remote_host_id(&self, ctx: &AppContext) -> Option<warp_core::HostId> {
+    /// Zaplex: if the session that owns the currently active block is a
+    /// remote-server session, returns its stable `HostId`.
+    #[cfg(feature = "local_tty")]
+    pub(crate) fn active_session_remote_host_id(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<warp_core::HostId> {
         self.remote_host_id_for_session(self.active_block_session_id()?, ctx)
     }
 

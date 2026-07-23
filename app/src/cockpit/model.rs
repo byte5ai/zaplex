@@ -23,8 +23,8 @@ use watcher::HomeDirectoryWatcher;
 #[cfg(test)]
 use zaplex_cockpit::HostNode;
 use zaplex_cockpit::{
-    apply_oauth_usage, build_snapshot, fold_inventory, host_key, AccountOverrides, CockpitSnapshot,
-    FleetTree, PricingTable, Provider, RemoteHost, ScanHealth, SessionSnapshot,
+    apply_oauth_usage, build_snapshot, fold_inventory, session_key, AccountOverrides,
+    CockpitSnapshot, FleetTree, PricingTable, Provider, RemoteHost, ScanHealth, SessionSnapshot,
 };
 // Cross-host daemon fold is a native-only concern: the `agent_session` module
 // (and the whole remote-daemon layer it lives in) is `#[cfg(not(wasm))]`, and a
@@ -461,24 +461,6 @@ impl CockpitModel {
         &self.local_label
     }
 
-    /// Resolve the account `config_dir` that owns a given **local** session id,
-    /// so the Conductor can pin an in-place adopt/fork to the right subscription
-    /// (the folded inventory drops the session→account link). Returns `None` for
-    /// the default account or a session not found locally (remote sessions are
-    /// never in the local snapshot) — `None` means "resume under the default
-    /// login", which is the correct fallback.
-    pub fn config_dir_for_session(&self, session_id: &str) -> Option<PathBuf> {
-        self.snapshot.accounts.iter().find_map(|a| {
-            if a.account.is_default {
-                return None;
-            }
-            a.sessions
-                .iter()
-                .any(|s| s.session_id == session_id)
-                .then(|| a.account.config_dir.clone())
-        })
-    }
-
     /// Periodic reconcile: re-scan on a fixed interval for the model's lifetime.
     fn start_reconcile_timer(&self, ctx: &mut ModelContext<Self>) {
         let spawner = ctx.spawner();
@@ -511,14 +493,10 @@ fn is_blank(snapshot: &CockpitSnapshot, inventory: &FleetTree) -> bool {
 /// flipped to Waiting from Active/Monitor. Sessions first seen already-waiting
 /// don't fire (no old state).
 ///
-/// Sessions are keyed by the **stable host identity**
-/// ([`host_key`]`(is_local, host_id, session_id)`), never the display `host`
-/// label. Session ids are unique only within a host, and two remote daemons can
-/// advertise the same label (SSH alias / matching `gethostname()`); a label key
-/// would alias two such hosts' same-id sessions into one map entry, so one
-/// host's old state could overwrite the other's and a waiting-transition would
-/// be missed or misattributed. The identity (`is_local` + `host_id`, carried
-/// explicitly on each `HostNode`) keeps them distinct.
+/// Sessions are keyed by their complete [`session_key`], never the display
+/// `host` label or raw conversation id. The same id can exist on several hosts
+/// and can be copied between provider accounts; either collision could otherwise
+/// overwrite an old state and hide or misattribute a waiting transition.
 fn fleet_transitions_to_waiting(old: &FleetTree, new: &FleetTree) -> Vec<String> {
     use std::collections::HashMap;
     use zaplex_cockpit::SessionState;
@@ -528,12 +506,10 @@ fn fleet_transitions_to_waiting(old: &FleetTree, new: &FleetTree) -> Vec<String>
         .flat_map(|h| {
             let is_local = h.is_local;
             let host_id = h.host_id.clone();
-            h.projects.iter().flat_map(|p| &p.sessions).map(move |s| {
-                (
-                    host_key(is_local, host_id.as_deref(), &s.session_id),
-                    s.state,
-                )
-            })
+            h.projects
+                .iter()
+                .flat_map(|p| &p.sessions)
+                .map(move |s| (session_key(is_local, host_id.as_deref(), s), s.state))
         })
         .collect();
     let mut became_waiting = Vec::new();
@@ -542,10 +518,10 @@ fn fleet_transitions_to_waiting(old: &FleetTree, new: &FleetTree) -> Vec<String>
             if session.state != SessionState::Waiting {
                 continue;
             }
-            match old_states.get(&host_key(
+            match old_states.get(&session_key(
                 host.is_local,
                 host.host_id.as_deref(),
-                &session.session_id,
+                session,
             )) {
                 Some(SessionState::Active) | Some(SessionState::Monitor) => {
                     let place = if session.name.is_empty() {
@@ -636,6 +612,7 @@ mod tests {
             worktree: None,
             config_dir: None,
             account_email: None,
+            process_fingerprint: None,
             last_activity: Utc::now(),
             pid: 0,
         }
@@ -700,6 +677,48 @@ mod tests {
         assert_eq!(
             fleet_transitions_to_waiting(&old, &new_b),
             vec!["box — job".to_string()]
+        );
+    }
+
+    #[test]
+    fn same_host_and_session_id_in_different_accounts_do_not_mask_waiting_transition() {
+        use zaplex_cockpit::SessionState;
+
+        let mut old_personal = session("copied", SessionState::Active);
+        old_personal.account_email = Some("personal@example.com".to_string());
+        let mut old_work = session("copied", SessionState::Waiting);
+        old_work.account_email = Some("work@example.com".to_string());
+
+        let mut new_personal = old_personal.clone();
+        new_personal.state = SessionState::Waiting;
+        let new_work = old_work.clone();
+
+        let host = |sessions| HostNode {
+            host: "box".to_string(),
+            is_local: false,
+            host_id: Some("host-A".to_string()),
+            registry_node_id: None,
+            projects: vec![zaplex_cockpit::ProjectNode {
+                root: "/w".to_string(),
+                name: "proj".to_string(),
+                needs_me: 0,
+                sessions,
+            }],
+            needs_me: 0,
+        };
+        let old = FleetTree {
+            hosts: vec![host(vec![old_personal, old_work])],
+            needs_me: 1,
+        };
+        let new = FleetTree {
+            hosts: vec![host(vec![new_personal, new_work])],
+            needs_me: 2,
+        };
+
+        assert_eq!(
+            fleet_transitions_to_waiting(&old, &new),
+            vec!["box — job".to_string()],
+            "the already-waiting account must not overwrite the other account's old state"
         );
     }
 }

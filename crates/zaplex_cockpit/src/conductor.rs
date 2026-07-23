@@ -238,13 +238,34 @@ pub fn host_ident(is_local: bool, host_id: Option<&str>) -> String {
     }
 }
 
-/// Composite `(host-identity, id)` key for per-`(host, session)` or
-/// `(host, project)` UI state. Session and project ids are unique only within a
-/// host, so they are scoped by the **stable** host identity — never the display
-/// label. Use for every seed / lookup / retain of such maps so labels can never
-/// key UI state again.
+/// Composite `(host-identity, id)` key for project UI state and legacy favorite
+/// compatibility. The id is scoped by the **stable** host identity — never the
+/// display label. Session rows must use [`session_key`] instead because a
+/// conversation id can also collide between provider accounts on one host.
 pub fn host_key(is_local: bool, host_id: Option<&str>, id: &str) -> String {
     format!("{}\u{0}{id}", host_ident(is_local, host_id))
+}
+
+/// Complete identity of one agent session for UI state and action routing.
+///
+/// A session id is not globally unique: a transcript can be copied to another
+/// provider account, and the same id can exist on several hosts. Keying a row by
+/// host plus id therefore lets two account rows share hover/menu state and can
+/// make a menu act on whichever row happens to be found first. Provider and the
+/// stamped account email close that gap. `config_dir` is deliberately excluded:
+/// it is a host-local launch route, not account identity. An absent email stays
+/// honestly unknown rather than being guessed from that route.
+pub fn session_key(is_local: bool, host_id: Option<&str>, session: &SessionSnapshot) -> String {
+    let account = match session.account_email.as_deref() {
+        Some(email) => format!("email:{email}"),
+        None => "unknown".to_string(),
+    };
+    format!(
+        "{}\u{0}{}\u{0}{account}\u{0}{}",
+        host_ident(is_local, host_id),
+        session.provider.as_str(),
+        session.session_id
+    )
 }
 
 /// Inverse of [`host_key`]: split a key back into `(host_ident, id)`. The
@@ -263,11 +284,9 @@ pub fn host_key_is_local(key: &str) -> bool {
 
 /// A stable, host-identity-carrying pointer to one Waiting agent — the `w`-jump
 /// target and cursor. It keeps the display `host_label` for the attach dispatch,
-/// but **identity** is the stable `(is_local, host_id)` pair plus the
-/// host-scoped `session_id`, never the label. Two remote daemons can advertise
-/// the same label (SSH alias / matching `gethostname()`) and even share a
-/// host-scoped `session_id`, yet stay distinct here because their `host_id`
-/// differs — so the jump cycle visits both and never collapses them.
+/// but **identity** is the stable `(is_local, host_id)` pair plus provider,
+/// account email, and `session_id`, never the label or host-local account route.
+/// This also keeps two local accounts carrying a copied conversation id distinct.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WaitingTarget {
     /// Human host label (for display + the attach dispatch), not for identity.
@@ -280,16 +299,25 @@ pub struct WaitingTarget {
     pub is_local: bool,
     /// The host-scoped session id (unique only within one host).
     pub session_id: String,
+    /// Provider and account email complete the identity within a host: session
+    /// ids can survive a copy between accounts.
+    pub provider: crate::types::Provider,
+    pub account_email: Option<String>,
+    /// Host-local launch route carried for the eventual attach dispatch. It is
+    /// data about how to reach the account, not part of account identity.
+    pub config_dir: Option<String>,
 }
 
 impl WaitingTarget {
     /// Same waiting agent? Compared by **stable** host identity `(is_local,
-    /// host_id)` + `session_id` — never the display label, so a label collision
-    /// between two remote daemons can't alias two distinct agents into one.
+    /// host_id)` plus provider, account email, and `session_id` — never the
+    /// display label or host-local account route.
     fn same_agent(&self, host: &HostNode, session: &SessionSnapshot) -> bool {
         host.is_local == self.is_local
             && host.host_id == self.host_id
             && session.session_id == self.session_id
+            && session.provider == self.provider
+            && session.account_email == self.account_email
     }
 }
 
@@ -315,9 +343,9 @@ pub fn waiting_sessions(tree: &FleetTree) -> Vec<(&HostNode, &SessionSnapshot)> 
 /// no longer waiting / no longer present, starts at the first waiting agent.
 ///
 /// `current` and the returned [`WaitingTarget`] key on the **stable** host
-/// identity `(is_local, host_id)` + `session_id`, never the display label: two
-/// hosts sharing a label (and even a host-scoped `session_id`) stay distinct, so
-/// the cycle visits both. `None` when nothing is waiting.
+/// identity `(is_local, host_id)` plus provider, account email, and session id,
+/// never the display label or host-local account route. Host-label and account
+/// collisions therefore stay distinct. `None` when nothing is waiting.
 pub fn next_waiting(tree: &FleetTree, current: Option<&WaitingTarget>) -> Option<WaitingTarget> {
     let waiting = waiting_sessions(tree);
     if waiting.is_empty() {
@@ -334,6 +362,9 @@ pub fn next_waiting(tree: &FleetTree, current: Option<&WaitingTarget>) -> Option
         host_id: h.host_id.clone(),
         is_local: h.is_local,
         session_id: s.session_id.clone(),
+        provider: s.provider,
+        account_email: s.account_email.clone(),
+        config_dir: s.config_dir.clone(),
     })
 }
 

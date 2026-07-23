@@ -33,6 +33,7 @@ fn session(id: &str, cwd: &str, state: SessionState, activity: i64) -> SessionSn
         worktree: None,
         config_dir: None,
         account_email: None,
+        process_fingerprint: None,
         last_activity: at(activity),
         pid: 0,
     }
@@ -317,10 +318,47 @@ fn next_waiting_from_stale_cursor_restarts_at_first() {
         host_id: None,
         is_local: false,
         session_id: "gone".to_string(),
+        provider: Provider::Claude,
+        account_email: None,
+        config_dir: None,
     };
     let got = next_waiting(&tree, Some(&stale)).expect("restarts at first");
     assert_eq!(got.host_label, "h1");
     assert_eq!(got.session_id, "a");
+}
+
+#[test]
+fn next_waiting_distinguishes_a_copied_session_id_between_accounts() {
+    let mut default = session("copied", "/p/default", SessionState::Waiting, 2);
+    default.account_email = Some("personal@example.com".to_string());
+    let mut work = session("copied", "/p/work", SessionState::Waiting, 1);
+    work.account_email = Some("work@example.com".to_string());
+    work.config_dir = Some("/accounts/claude-work".to_string());
+    let tree = build_fleet_tree(vec![host("local", vec![default, work])]);
+
+    let first = next_waiting(&tree, None).expect("first account");
+    let second = next_waiting(&tree, Some(&first)).expect("second account");
+    assert_ne!(first, second);
+    assert_eq!(first.session_id, second.session_id);
+    assert_ne!(first.account_email, second.account_email);
+    assert_eq!(next_waiting(&tree, Some(&second)), Some(first));
+}
+
+#[test]
+fn next_waiting_distinguishes_accounts_when_the_route_stamp_is_missing() {
+    let mut personal = session("copied", "/p/personal", SessionState::Waiting, 2);
+    personal.account_email = Some("personal@example.com".to_string());
+    let mut work = session("copied", "/p/work", SessionState::Waiting, 1);
+    work.account_email = Some("work@example.com".to_string());
+    let tree = build_fleet_tree(vec![host("legacy", vec![personal, work])]);
+
+    let first = next_waiting(&tree, None).expect("first account");
+    let second = next_waiting(&tree, Some(&first)).expect("second account");
+    assert_ne!(
+        first, second,
+        "a missing config-dir stamp must not collapse two known accounts"
+    );
+    assert_eq!(next_waiting(&tree, Some(&second)), Some(first));
 }
 
 #[test]
@@ -353,5 +391,36 @@ fn host_key_scopes_session_id_by_stable_host_identity() {
     assert_ne!(
         host_key(true, None, "s1"),
         host_key(false, Some("id-a"), "s1")
+    );
+}
+
+#[test]
+fn session_key_scopes_a_copied_id_by_provider_and_account() {
+    let mut default = session("copied", "/p/default", SessionState::Waiting, 1);
+    default.account_email = Some("personal@example.com".to_string());
+    let mut work = default.clone();
+    work.account_email = Some("work@example.com".to_string());
+    work.config_dir = Some("/accounts/claude-work".to_string());
+    let mut codex = default.clone();
+    codex.provider = Provider::Codex;
+
+    let default_key = session_key(true, None, &default);
+    assert_ne!(default_key, session_key(true, None, &work));
+    assert_ne!(default_key, session_key(true, None, &codex));
+    assert_ne!(default_key, session_key(false, Some("remote-a"), &default));
+    assert_eq!(default_key, session_key(true, None, &default));
+}
+
+#[test]
+fn session_key_uses_account_identity_when_the_route_stamp_is_missing() {
+    let mut personal = session("copied", "/p/personal", SessionState::Waiting, 1);
+    personal.account_email = Some("personal@example.com".to_string());
+    let mut work = personal.clone();
+    work.account_email = Some("work@example.com".to_string());
+
+    assert_ne!(
+        session_key(true, None, &personal),
+        session_key(true, None, &work),
+        "config_dir is a route, not the account identity"
     );
 }

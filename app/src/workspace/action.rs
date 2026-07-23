@@ -697,6 +697,9 @@ pub enum WorkspaceAction {
         /// Non-default account config dir for subscription pinning
         /// (`None` = the provider's default login).
         config_dir: Option<PathBuf>,
+        /// Stable account identity. Unlike `config_dir`, this also distinguishes
+        /// a known default account from an unknown manually started session.
+        account_email: Option<String>,
         /// Isolate the fork's file effects in a fresh sibling worktree.
         into_worktree: bool,
         /// The source session's host (the inventory's Host column label), for a
@@ -723,27 +726,27 @@ pub enum WorkspaceAction {
         /// Non-default account config dir for subscription pinning
         /// (`None` = the provider's default login).
         config_dir: Option<PathBuf>,
+        /// Stable account identity for exact terminal reuse.
+        account_email: Option<String>,
     },
     /// Run a Claude Code slash command (`/compact`, `/clear`) against a
     /// discovered agent-session (cockpit model-lever, step 8).
     ///
-    /// Cockpit sessions are *external* processes — zaplex does not own their
-    /// stdin — so the honest mechanism is: **resume the same conversation into a
-    /// zaplex-owned tab** (`agent.resume_command_pinned`, exactly like adopt)
-    /// and prefill the slash command in that live PTY's input, ready to send.
-    /// The command operates on the same session, and the human presses Enter
-    /// (in-the-loop, mirroring the review-loop verbs). A local session resumes
-    /// into a local PTY at `cwd`; a remote one resumes *on its own host*
-    /// (`host_id` → SSH node) and prefills the command there. Claude only
-    /// (`/compact`/`/clear` are Claude Code commands).
+    /// A known live pane is focused and receives the command directly. A
+    /// dormant conversation resumes first; a live session with no reliable
+    /// pane/PTY locator is left untouched. The human presses Enter to send the
+    /// staged command (in-the-loop, mirroring the review-loop verbs). Claude
+    /// only (`/compact`/`/clear` are Claude Code commands).
     SlashCommandSession {
-        agent: CLIAgent,
+        provider: zaplex_cockpit::Provider,
         session_id: String,
         /// The session's working directory.
         cwd: PathBuf,
         /// Non-default account config dir for subscription pinning
         /// (`None` = the provider's default login).
         config_dir: Option<PathBuf>,
+        /// Stable account identity for exact terminal reuse.
+        account_email: Option<String>,
         /// The literal slash command to prefill (e.g. `/compact`, `/clear`).
         command: String,
         /// The source session's host label (for an unreachable-host toast).
@@ -812,6 +815,8 @@ pub enum WorkspaceAction {
         /// (`None` = the provider's default login). Local launches only —
         /// a remote host uses its own default account (config dirs are local).
         config_dir: Option<PathBuf>,
+        /// Stable identity of the selected local account.
+        account_email: Option<String>,
         /// Working directory for the new agent (`None` = the default dir).
         cwd: Option<PathBuf>,
         /// SSH host node to launch on (`None` = local). When set, the routed
@@ -855,12 +860,10 @@ pub enum WorkspaceAction {
         error_description: String,
     },
     /// Attach to a specific agent from the unified Conductor inventory, keyed by
-    /// `(host, session_id)` (session ids are unique only within a host). A local
-    /// host adopts the session in place (resume, no fork); a remote host's agent
-    /// lives on that host, so it's handled honestly (see the workspace handler).
-    /// The workspace resolves provider / cwd / config_dir from the live
-    /// inventory, so the action stays tiny and is shared by the Conductor
-    /// row-click and the `w`-jump.
+    /// host, provider, account route, and session id. A known local or remote
+    /// pane is focused; only a dormant session is resumed. A live session with
+    /// no reliable pane mapping is reported rather than duplicated. The
+    /// workspace resolves cwd and current state from the live inventory.
     AttachFleetSession {
         host: String,
         /// Stable per-daemon `host_id` from the inventory node
@@ -869,6 +872,10 @@ pub enum WorkspaceAction {
         /// daemon by id rather than by the collidable `host` label.
         host_id: Option<String>,
         session_id: String,
+        provider: zaplex_cockpit::Provider,
+        config_dir: Option<String>,
+        /// Stable account identity; session ids are not unique across accounts.
+        account_email: Option<String>,
         /// Whether `host` is *this* machine, taken from the inventory's explicit
         /// [`zaplex_cockpit::HostNode::is_local`] marker — never re-derived from
         /// `host` label equality. Drives local adopt-in-place vs. the remote
@@ -897,6 +904,10 @@ pub enum WorkspaceAction {
         host_id: Option<String>,
         session_id: String,
         pid: u32,
+        /// Opaque identity of the exact process selected by the user. The
+        /// signal path must re-probe and compare this value; it must never
+        /// replace it with a fingerprint from a later inventory refresh.
+        process_fingerprint: Option<String>,
         /// Whether `host` is *this* machine, from the inventory's explicit
         /// [`zaplex_cockpit::HostNode::is_local`] marker. Drives local
         /// `libc::kill` vs. the daemon path — `pid` is host-local, so this
@@ -920,6 +931,9 @@ pub enum WorkspaceAction {
         host_id: Option<String>,
         session_id: String,
         pid: u32,
+        /// Process identity captured with the selected row and carried through
+        /// the confirmation dialog unchanged.
+        process_fingerprint: Option<String>,
         /// Whether `host` is *this* machine, from the inventory's explicit
         /// [`zaplex_cockpit::HostNode::is_local`] marker (see [`Self::StopAgent`]).
         /// Threaded through the confirm dialog so the eventual SIGKILL routes

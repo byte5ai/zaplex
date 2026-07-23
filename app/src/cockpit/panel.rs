@@ -19,9 +19,8 @@ use warpui::platform::Cursor;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 use zaplex_cockpit::{
     fleet_is_large, format_cost, heat_fill, heat_pct_label_with_provenance,
-    host_auto_collapsed, host_ident, host_key, host_session_count, session_glyph, AccountUsage,
-    Favorite,
-    FavoriteKind, FleetTree, HostNode, SessionSnapshot, SessionState, UsageProvenance,
+    host_auto_collapsed, host_ident, host_session_count, session_glyph, session_key, AccountUsage,
+    Favorite, FavoriteKind, FleetTree, HostNode, SessionSnapshot, SessionState, UsageProvenance,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
@@ -52,9 +51,9 @@ pub enum CockpitPanelEvent {
 
 pub struct CockpitPanel {
     scroll_state: ClippedScrollStateHandle,
-    /// Hover/click state per Conductor session row (key = `host_ident\0id`,
-    /// stable host identity — never the display label), synced against the
-    /// unified inventory. Clicking a row attaches the agent.
+    /// Hover/click state per Conductor session row (complete host + provider +
+    /// account + conversation identity), synced against the unified inventory.
+    /// Clicking a row attaches the agent.
     conductor_row_states: HashMap<String, MouseStateHandle>,
     /// Hover state per account card (key = account `key`). The whole card is a
     /// click target that opens the roomy dashboard pane.
@@ -70,7 +69,7 @@ pub struct CockpitPanel {
     /// `node_id`. Opens the SSH-manager editor for the host (design §10 folds
     /// the SSH-manager add/edit function onto the host nodes).
     conductor_host_manage_states: HashMap<String, MouseStateHandle>,
-    /// Hover/click state per session ★ (favorite toggle), keyed by `host_key`.
+    /// Hover/click state per session ★ (favorite toggle), keyed by [`session_key`].
     conductor_row_star_states: HashMap<String, MouseStateHandle>,
     /// Hover state of the „VERBINDUNGEN" zone-header gear (opens the SSH manager,
     /// which owns host add/edit — spec v3 §S1/§S2).
@@ -173,7 +172,7 @@ impl CockpitPanel {
                 h.projects.iter().flat_map(move |p| {
                     p.sessions
                         .iter()
-                        .map(move |s| host_key(h.is_local, h.host_id.as_deref(), &s.session_id))
+                        .map(move |s| session_key(h.is_local, h.host_id.as_deref(), s))
                 })
             })
             .collect();
@@ -815,13 +814,16 @@ impl CockpitPanel {
 
         // The whole glance line attaches on click — BOTH local and remote (remote
         // in-place adopt is wired via `attach_fleet_session`).
-        let key = host_key(is_local, host_id, &session.session_id);
+        let key = session_key(is_local, host_id, session);
         let glance_el = match self.conductor_row_states.get(&key).cloned() {
             Some(state) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
                     host_id: host_id.map(str::to_string),
                     session_id: session.session_id.clone(),
+                    provider: session.provider,
+                    config_dir: session.config_dir.clone(),
+                    account_email: session.account_email.clone(),
                     is_local,
                 };
                 // Same full-span hover grammar as the host rows (`hover_row`).
@@ -840,7 +842,7 @@ impl CockpitPanel {
         // The one trailing affordance: the ★ favourite (design §10). Review + the
         // model levers are a pane concern — keeping them off the glance rows is
         // what makes the list read as a calm column. The favourite target is the
-        // host-scoped `host_key` (session ids are unique only within a host).
+        // complete `session_key` (copied ids can also collide between accounts).
         let star = self.conductor_row_star_states.get(&key).cloned().map(|st| {
             let is_fav = favorites
                 .iter()

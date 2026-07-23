@@ -22,6 +22,7 @@ pub mod guardrails;
 pub mod oauth;
 pub mod overrides;
 pub mod pricing;
+pub mod process_identity;
 pub mod project;
 pub mod review;
 pub mod reviewed;
@@ -34,7 +35,7 @@ pub mod windows;
 pub use conductor::{
     fleet_is_large, fleet_session_count, host_auto_collapsed, host_ident, host_key,
     host_key_is_local, host_session_count, host_summary, model_effort_label, next_waiting,
-    session_attr_line, session_attrs, session_glyph, split_host_key, state_word,
+    session_attr_line, session_attrs, session_glyph, session_key, split_host_key, state_word,
     waiting_sessions, SessionAttrs,
     WaitingTarget, GLYPH_IDLE, GLYPH_WAITING, GLYPH_WORKING,
 };
@@ -56,6 +57,10 @@ pub use guardrails::{
 pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
 pub use overrides::{set_label_override, AccountOverride, AccountOverrides};
 pub use pricing::{ModelPrice, PricingTable};
+pub use process_identity::{
+    current_process_fingerprint, probe_registered_process, send_verified_process_signal,
+    ProcessProbe, ProcessSignalError,
+};
 pub use project::{resolve_project, ResolvedProject};
 pub use review::{git_commit_all_cmd, git_diff_cmd, render_review_markdown, WorkingChanges};
 pub use reviewed::{ReviewedSessions, REVIEWED_LIMIT};

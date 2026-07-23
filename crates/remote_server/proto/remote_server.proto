@@ -52,6 +52,10 @@ message ClientMessage {
     // Reports where a session's bootstrap handshake completed so the daemon can
     // freeze an eviction-proof preamble for later adopts (T1.3).
     SetBootstrapPreamble set_bootstrap_preamble = 32;
+    // Narrow, identity-verified Agent-Cockpit process signalling. This is
+    // deliberately separate from HostExec: callers can request only Interrupt
+    // or Kill and must provide the process identity discovered for the session.
+    AgentProcessSignalRequest agent_process_signal = 33;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -94,6 +98,11 @@ message ServerMessage {
     // Session-less one-shot host command result. See the "Session-less Host
     // Command" section at the end of this file.
     HostExecResult host_exec_result = 30;
+    // Correlated acceptance result for retry-safe startup input. Ordinary
+    // SessionInput notifications do not produce this response.
+    StartupCommandAck startup_command_ack = 31;
+    // Correlated, typed result for AgentProcessSignalRequest.
+    AgentProcessSignalResponse agent_process_signal_response = 32;
   }
 }
 
@@ -679,11 +688,25 @@ message DetachSession {
   string session_id = 1;
 }
 
-// Client → daemon: write keyboard/mouse bytes into the PTY (notification, no
-// response).
+// Client → daemon: write bytes into the PTY. Ordinary keyboard/mouse input has
+// an empty startup_command_id and remains a notification with no response.
+// Startup commands carry a stable non-empty id and a non-empty envelope
+// request_id; the daemon responds with StartupCommandAck and deduplicates
+// retries by this id after the ordered writer has accepted the bytes.
 message SessionInput {
   string session_id = 1;
   bytes bytes = 2;
+  string startup_command_id = 3;
+}
+
+// Daemon → client: correlated acceptance result for startup SessionInput.
+// accepted=true means the bytes were accepted by the ordered writer, or the
+// same startup_command_id had already been accepted earlier. accepted=false
+// means no bytes were accepted and the id remains retryable.
+message StartupCommandAck {
+  string session_id = 1;
+  string startup_command_id = 2;
+  bool accepted = 3;
 }
 
 // Client → daemon: resize the PTY window (notification, no response);
@@ -823,11 +846,56 @@ message AgentSessionInfo {
   // its own project_root, i.e. the old worktree-per-project split. Degraded, not
   // mis-grouped.
   string repo_root = 17;
+  // Opaque identity of the exact process observed during discovery. Empty means
+  // unknown and therefore unsignalable. Additive so older daemons decode as the
+  // safe empty value.
+  string process_fingerprint = 18;
 }
 
 // Daemon → client: result of ListAgentSessions.
 message AgentSessionList {
   repeated AgentSessionInfo sessions = 1;
+}
+
+// ── Verified Agent Process Signal ─────────────────────────────────────────
+//
+// This is the only remote guardrail boundary. It accepts no command text and
+// exposes only the two intentional process signals. The daemon re-verifies the
+// opaque process fingerprint immediately before signalling, so a recycled pid
+// cannot redirect Stop/Kill to a different process.
+//
+// Capability: gated behind "agent-process-signal-v1". A client talking to an
+// older daemon must not fall back to HostExec or any shell command; it must
+// report the guardrail as unsupported.
+
+enum AgentProcessSignal {
+  AGENT_PROCESS_SIGNAL_UNSPECIFIED = 0;
+  AGENT_PROCESS_SIGNAL_INTERRUPT = 1;
+  AGENT_PROCESS_SIGNAL_KILL = 2;
+}
+
+message AgentProcessSignalRequest {
+  string session_id = 1;
+  uint32 pid = 2;
+  string expected_process_fingerprint = 3;
+  AgentProcessSignal signal = 4;
+}
+
+enum AgentProcessSignalStatus {
+  AGENT_PROCESS_SIGNAL_STATUS_UNSPECIFIED = 0;
+  AGENT_PROCESS_SIGNAL_STATUS_SENT = 1;
+  AGENT_PROCESS_SIGNAL_STATUS_STALE_IDENTITY = 2;
+  AGENT_PROCESS_SIGNAL_STATUS_IDENTITY_UNVERIFIABLE = 3;
+  AGENT_PROCESS_SIGNAL_STATUS_INVALID_REQUEST = 4;
+  AGENT_PROCESS_SIGNAL_STATUS_SIGNAL_FAILED = 5;
+}
+
+message AgentProcessSignalResponse {
+  string session_id = 1;
+  uint32 pid = 2;
+  AgentProcessSignalStatus status = 3;
+  // Empty on success; human-readable diagnostic for a typed failure.
+  string error_message = 4;
 }
 
 // ── Session-less Host Command ──────────────────────────────────────────────
@@ -836,8 +904,8 @@ message AgentSessionList {
 // LocalCommandExecutor (looked up by session_id) — HostExec runs one ad-hoc
 // command on the daemon host WITHOUT any bound session. It is the general
 // session-less host-command path, used by callers that hold a daemon
-// connection but no interactive session on that host (e.g. the Agent-Cockpit
-// remote guardrails, which send `kill -<SIG> <pid>` to a remote agent's pid).
+// connection but no interactive session on that host. Agent-Cockpit process
+// guardrails must use AgentProcessSignalRequest instead.
 //
 // The daemon runs it in its default user shell (`$SHELL`, falling back to
 // `/bin/bash`) rooted at the daemon's home directory, with no session state.
@@ -845,8 +913,7 @@ message AgentSessionList {
 // Capability: gated behind the "host-exec" feature in
 // InitializeResponse.features (zaplex_remote_session::types::FEATURE_HOST_EXEC).
 // A client talking to an OLD daemon that does not advertise it must NOT send
-// HostExec; it falls back with an honest "needs a newer daemon" message rather
-// than a misleading failure.
+// HostExec.
 
 // Client → daemon: run one command session-lessly on the daemon host.
 message HostExec {

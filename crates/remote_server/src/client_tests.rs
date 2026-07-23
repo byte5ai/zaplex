@@ -3,11 +3,13 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::proto::{
     client_message, read_file_chunk_response, resolve_path_response, run_command_response,
-    server_message, write_file_chunk_response, AgentSessionInfo, AgentSessionList, ClientMessage,
-    ErrorCode, FileSystemEntryKind, HostExecResult, InitializeResponse, ReadFileChunkResponse,
-    ReadFileChunkSuccess, ResolvePathResponse, ResolvePathSuccess, RunCommandResponse,
-    RunCommandSuccess, ServerMessage, SessionAttached, SessionExited, SessionInfo, SessionList,
-    SessionOpened, SessionOutput, SessionSize, WriteFileChunkResponse, WriteFileChunkSuccess,
+    server_message, write_file_chunk_response, AgentProcessSignal, AgentProcessSignalRequest,
+    AgentProcessSignalResponse, AgentProcessSignalStatus, AgentSessionInfo, AgentSessionList,
+    ClientMessage, ErrorCode, FileSystemEntryKind, HostExecResult, InitializeResponse,
+    ReadFileChunkResponse, ReadFileChunkSuccess, ResolvePathResponse, ResolvePathSuccess,
+    RunCommandResponse, RunCommandSuccess, ServerMessage, SessionAttached, SessionExited,
+    SessionInfo, SessionList, SessionOpened, SessionOutput, SessionSize, StartupCommandAck,
+    WriteFileChunkResponse, WriteFileChunkSuccess,
 };
 use crate::protocol;
 use warp_core::SessionId;
@@ -603,6 +605,65 @@ async fn send_session_input_sends_frame() {
 }
 
 #[tokio::test]
+async fn send_startup_command_carries_identity_and_waits_for_ack() {
+    let (client, _event_rx, _executor) = setup_mock_client(|msg| {
+        assert!(
+            !msg.request_id.is_empty(),
+            "startup delivery must be a correlated request"
+        );
+        match &msg.message {
+            Some(client_message::Message::SessionInput(input)) => {
+                assert_eq!(input.session_id, "sess-1");
+                assert_eq!(input.startup_command_id, "stable-command-id");
+                assert_eq!(input.bytes, b"codex resume exact-session\n");
+            }
+            other => panic!("expected startup SessionInput, got {other:?}"),
+        }
+        server_message::Message::StartupCommandAck(StartupCommandAck {
+            session_id: "sess-1".to_string(),
+            startup_command_id: "stable-command-id".to_string(),
+            accepted: true,
+        })
+    });
+
+    let ack = client
+        .send_startup_command(
+            "sess-1".to_string(),
+            "stable-command-id".to_string(),
+            b"codex resume exact-session\n".to_vec(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(ack.session_id, "sess-1");
+    assert_eq!(ack.startup_command_id, "stable-command-id");
+    assert!(ack.accepted);
+}
+
+#[tokio::test]
+async fn send_startup_command_surfaces_mismatched_ack_for_reconnect_handling() {
+    let (client, _event_rx, _executor) = setup_mock_client(|_| {
+        server_message::Message::StartupCommandAck(StartupCommandAck {
+            session_id: "wrong-session".to_string(),
+            startup_command_id: "wrong-command".to_string(),
+            accepted: true,
+        })
+    });
+
+    let ack = client
+        .send_startup_command(
+            "sess-1".to_string(),
+            "stable-command-id".to_string(),
+            b"codex resume exact-session\n".to_vec(),
+        )
+        .await
+        .expect("the event loop must receive and validate the mismatched acknowledgement");
+
+    assert_eq!(ack.session_id, "wrong-session");
+    assert_eq!(ack.startup_command_id, "wrong-command");
+}
+
+#[tokio::test]
 async fn send_resize_session_sends_frame() {
     let (client_stream, server_stream) = tokio::io::duplex(4096);
     let (server_read, _server_write) = tokio::io::split(server_stream);
@@ -720,6 +781,7 @@ async fn list_agent_sessions_round_trip() {
                     // which repo the worktree belongs to.
                     account_email: "me@example.com".to_string(),
                     repo_root: "/home/me/proj".to_string(),
+                    process_fingerprint: "linux-v1:boot-id:12345".to_string(),
                 },
                 AgentSessionInfo {
                     session_id: "a2".to_string(),
@@ -745,6 +807,7 @@ async fn list_agent_sessions_round_trip() {
                     // its own project_root (the degraded, not mis-grouped path).
                     account_email: String::new(),
                     repo_root: String::new(),
+                    process_fingerprint: String::new(),
                 },
             ],
         })
@@ -766,14 +829,78 @@ async fn list_agent_sessions_round_trip() {
 }
 
 #[tokio::test]
+async fn verified_agent_process_signal_round_trip_is_narrow_and_correlated() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        match &msg.message {
+            Some(client_message::Message::AgentProcessSignal(req)) => {
+                assert_eq!(
+                    req,
+                    &AgentProcessSignalRequest {
+                        session_id: "agent-session-1".to_string(),
+                        pid: 4242,
+                        expected_process_fingerprint: "linux-v1:boot-id:12345".to_string(),
+                        signal: AgentProcessSignal::Interrupt.into(),
+                    }
+                );
+            }
+            other => panic!("expected AgentProcessSignal, got {other:?}"),
+        }
+        server_message::Message::AgentProcessSignalResponse(AgentProcessSignalResponse {
+            session_id: "agent-session-1".to_string(),
+            pid: 4242,
+            status: AgentProcessSignalStatus::Sent.into(),
+            error_message: String::new(),
+        })
+    });
+
+    let response = client
+        .send_verified_process_signal(
+            "agent-session-1".to_string(),
+            4242,
+            "linux-v1:boot-id:12345".to_string(),
+            AgentProcessSignal::Interrupt,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        AgentProcessSignalStatus::try_from(response.status),
+        Ok(AgentProcessSignalStatus::Sent)
+    );
+}
+
+#[tokio::test]
+async fn verified_agent_process_signal_rejects_mismatched_response_identity() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|_| {
+        server_message::Message::AgentProcessSignalResponse(AgentProcessSignalResponse {
+            session_id: "different-session".to_string(),
+            pid: 4242,
+            status: AgentProcessSignalStatus::Sent.into(),
+            error_message: String::new(),
+        })
+    });
+
+    let result = client
+        .send_verified_process_signal(
+            "agent-session-1".to_string(),
+            4242,
+            "linux-v1:boot-id:12345".to_string(),
+            AgentProcessSignal::Kill,
+        )
+        .await;
+
+    assert!(matches!(result, Err(ClientError::UnexpectedResponse)));
+}
+
+#[tokio::test]
 async fn host_exec_round_trip() {
-    // The session-less host-command path the cross-host guardrails use: the
-    // request carries just a command string; the response carries the captured
-    // output and exit code.
+    // The generic session-less host-command path remains available to its
+    // non-guardrail callers: the request carries a command string and the
+    // response carries the captured output and exit code.
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
         match &msg.message {
             Some(client_message::Message::HostExec(req)) => {
-                assert_eq!(req.command, "kill -INT 4242");
+                assert_eq!(req.command, "printf ready");
             }
             other => panic!("expected HostExec, got {other:?}"),
         }
@@ -784,10 +911,7 @@ async fn host_exec_round_trip() {
         })
     });
 
-    let resp = client
-        .host_exec("kill -INT 4242".to_string())
-        .await
-        .unwrap();
+    let resp = client.host_exec("printf ready".to_string()).await.unwrap();
     assert_eq!(resp.stdout, b"done");
     assert!(resp.stderr.is_empty());
     assert_eq!(resp.exit_code, Some(0));

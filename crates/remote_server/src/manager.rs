@@ -1179,6 +1179,24 @@ impl RemoteServerManager {
         }
     }
 
+    /// Returns whether the connected daemon for `session_id` advertised
+    /// `feature`. Disconnected and pre-handshake states never imply support.
+    pub fn session_supports_feature(&self, session_id: SessionId, feature: &str) -> bool {
+        match self.sessions.get(&session_id) {
+            Some(RemoteSessionState::Connected { features, .. }) => {
+                features.iter().any(|advertised| advertised == feature)
+            }
+            Some(
+                RemoteSessionState::Connecting
+                | RemoteSessionState::Initializing { .. }
+                | RemoteSessionState::Disconnected,
+            ) => false,
+            #[cfg(not(target_family = "wasm"))]
+            Some(RemoteSessionState::Reconnecting { .. }) => false,
+            None => false,
+        }
+    }
+
     /// Rotates the daemon-wide auth credential on each connected remote host.
     ///
     /// Only sessions whose stored `identity_key` matches the current identity

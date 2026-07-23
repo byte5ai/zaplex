@@ -30,7 +30,7 @@ use warpui::{
 use zaplex_cockpit::{
     fleet_is_large, format_cost, format_relative, format_reset, format_tokens, heat_fill,
     heat_pct_label_with_provenance, host_auto_collapsed, host_ident, host_key,
-    session_glyph, AccountStatus, AccountUsage, FleetTree, HeatLevel, HostNode,
+    session_glyph, session_key, AccountStatus, AccountUsage, FleetTree, HeatLevel, HostNode,
     Provider, SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
 };
 
@@ -160,8 +160,8 @@ fn group_key(row: &(SessionSnapshot, Option<String>, Option<String>, bool)) -> S
 
 /// The open ⋯ drive: which row, and where it was clicked (P5).
 pub struct RowMenu {
-    /// `host_key(is_local, host_id, session_id)` — the row's identity. Never the
-    /// session id alone: two hosts can hold the same one.
+    /// `session_key(is_local, host_id, session)` — the row's complete host,
+    /// provider, account, and conversation identity.
     pub row_key: String,
     pub position: Vector2F,
 }
@@ -246,6 +246,38 @@ enum TableRow {
     },
 }
 
+/// The session row selected by a complete [`session_key`]. Kept as a pure
+/// lookup so the menu cannot silently fall back to the first account carrying a
+/// copied conversation id.
+struct MatchedSessionRow<'a> {
+    session: &'a SessionSnapshot,
+    host: &'a Option<String>,
+    host_id: &'a Option<String>,
+    is_local: bool,
+}
+
+fn matching_session_row<'a>(rows: &'a [TableRow], row_key: &str) -> Option<MatchedSessionRow<'a>> {
+    let mut matches = rows.iter().filter_map(|row| match row {
+        TableRow::Session {
+            session,
+            host,
+            host_id,
+            is_local,
+            ..
+        } if session_key(*is_local, host_id.as_deref(), session) == row_key => {
+            Some(MatchedSessionRow {
+                session,
+                host,
+                host_id,
+                is_local: *is_local,
+            })
+        }
+        TableRow::Group { .. } | TableRow::Session { .. } => None,
+    });
+    let matched = matches.next()?;
+    matches.next().is_none().then_some(matched)
+}
+
 pub struct CockpitPaneView {
     scroll_state: ClippedScrollStateHandle,
     pane_configuration: ModelHandle<PaneConfiguration>,
@@ -263,8 +295,8 @@ pub struct CockpitPaneView {
     /// Hover state per group's "+" (a new agent scoped to that repo), keyed by
     /// repo root.
     table_plus_states: HashMap<String, MouseStateHandle>,
-    /// Hover/click state per table row, keyed by `host_key(host, session_id)` —
-    /// never the session id alone: two hosts can hold the same id.
+    /// Hover/click state per table row, keyed by complete [`session_key`] so
+    /// copied ids in two accounts never share a click/menu target.
     table_row_states: HashMap<String, MouseStateHandle>,
     /// Hover state per filter chip.
     filter_chip_states: HashMap<&'static str, MouseStateHandle>,
@@ -304,7 +336,7 @@ pub struct CockpitPaneView {
     /// whole point of running several subscriptions (spec v3 §4.1 P1).
     account_key: Option<String>,
     focus_handle: Option<PaneFocusHandle>,
-    /// Hover state of each session row's "fork" action (key = session_id).
+    /// Hover state of each session row's "fork" action (key = [`session_key`]).
     /// Synced against the snapshot on every cockpit update so handles persist
     /// across renders (hover needs a stable handle).
     session_fork_states: HashMap<String, MouseStateHandle>,
@@ -315,16 +347,14 @@ pub struct CockpitPaneView {
     session_adopt_states: HashMap<String, MouseStateHandle>,
     /// Hover state of each session row's "log" action (open transcript).
     session_transcript_states: HashMap<String, MouseStateHandle>,
-    /// Whether a session's cwd sits inside a git repo (key = session_id) —
+    /// Whether a session's cwd sits inside a git repo (key = [`session_key`]) —
     /// precomputed on cockpit updates so render never touches the filesystem.
     /// Non-repo cwds simply don't get the worktree action (design §3: toggle
     /// disabled, never a broken session).
     session_in_repo: HashMap<String, bool>,
-    /// Hover/click state of each Conductor session row (key = `host_ident\0id`:
-    /// the stable host identity — never the display label — since session ids are
-    /// unique only within a host). Clicking the row attaches the agent (adopt in
-    /// place for a local host). Synced against the unified inventory on every
-    /// update.
+    /// Hover/click state of each Conductor session row (complete host, provider,
+    /// account, and conversation identity). Clicking the row attaches the agent.
+    /// Synced against the unified inventory on every update.
     conductor_row_states: HashMap<String, MouseStateHandle>,
     /// Hover state of each Conductor host collapse toggle (key = stable host
     /// identity `host_ident`, not the display label).
@@ -347,7 +377,7 @@ pub struct CockpitPaneView {
     /// Absent = expanded (projects default open; collapse is opt-in per project).
     collapsed_projects: HashMap<String, bool>,
     /// Hover state of each Conductor session row's review-loop verbs (step 6),
-    /// keyed `"{verb}\0{host_ident}\0{id}"` (verb ∈
+    /// keyed `"{verb}\0{session_key}"` (verb ∈
     /// review/mark/redirect/commit/pr). One combined map (rather than five)
     /// keeps the sync/retain cheap; hover still needs a stable handle per (verb,
     /// session) across renders.
@@ -618,7 +648,7 @@ impl CockpitPaneView {
             .sessions
             .iter()
             .chain(acct.idle_sessions.iter())
-            .map(|s| host_key(true, None, &s.session_id))
+            .map(|s| session_key(true, None, s))
             .collect();
         // Group handles key exactly like the rows do (`group_key`), or a group
         // would render without its chevron and its "+".
@@ -629,11 +659,7 @@ impl CockpitPaneView {
             .map(|s| group_key(&(s.clone(), None, None, true)))
             .collect();
         for row in zaplex_cockpit::sessions_of_account(&tree, &acct.account) {
-            row_keys.insert(host_key(
-                row.is_local,
-                row.host_id,
-                &row.session.session_id,
-            ));
+            row_keys.insert(session_key(row.is_local, row.host_id, row.session));
             group_keys.insert(group_key(&(
                 row.session.clone(),
                 (!row.is_local).then(|| row.host.to_string()),
@@ -680,7 +706,7 @@ impl CockpitPaneView {
             .accounts
             .iter()
             .flat_map(|a| a.sessions.iter())
-            .map(|s| (s.session_id.clone(), s.cwd.clone()))
+            .map(|s| (session_key(true, None, s), s.cwd.clone()))
             .collect();
         let live: std::collections::HashSet<&String> = sessions.iter().map(|(id, _)| id).collect();
         self.session_fork_states.retain(|id, _| live.contains(id));
@@ -689,24 +715,23 @@ impl CockpitPaneView {
         self.session_transcript_states
             .retain(|id, _| live.contains(id));
         self.session_in_repo.retain(|id, _| live.contains(id));
-        for (id, cwd) in sessions {
+        for (key, cwd) in sessions {
             // `.git` may be a dir (repo root) or a file (linked worktree) —
             // `exists()` covers both, so forking from inside a worktree chains.
             let in_repo = Path::new(&cwd).ancestors().any(|p| p.join(".git").exists());
-            self.session_in_repo.insert(id.clone(), in_repo);
-            self.session_fork_states.entry(id.clone()).or_default();
-            self.session_forkwt_states.entry(id.clone()).or_default();
-            self.session_adopt_states.entry(id.clone()).or_default();
-            self.session_transcript_states.entry(id).or_default();
+            self.session_in_repo.insert(key.clone(), in_repo);
+            self.session_fork_states.entry(key.clone()).or_default();
+            self.session_forkwt_states.entry(key.clone()).or_default();
+            self.session_adopt_states.entry(key.clone()).or_default();
+            self.session_transcript_states.entry(key).or_default();
         }
 
         // Conductor maps: keyed off the unified cross-host inventory (which
         // includes remote sessions the local `accounts` list never sees), by the
-        // **stable host identity** (`host_ident`) — `(host-identity, id)` for
-        // sessions/projects, bare host identity for hosts — never the display
-        // label (two remote daemons can share a label and would then alias each
-        // other's UI state). Retain live keys, drop the rest, and prune stale
-        // collapse overrides so a disconnected host doesn't leak.
+        // complete `session_key` for rows, `host_key` for projects, and bare
+        // stable `host_ident` for hosts — never the display label or raw session
+        // id. Retain live keys, drop the rest, and prune stale collapse overrides
+        // so a disconnected host/account doesn't leak UI state.
         let inv = CockpitModel::as_ref(ctx).inventory();
         let live_rows: std::collections::HashSet<String> = inv
             .hosts
@@ -715,7 +740,7 @@ impl CockpitPaneView {
                 h.projects.iter().flat_map(move |p| {
                     p.sessions
                         .iter()
-                        .map(move |s| host_key(h.is_local, h.host_id.as_deref(), &s.session_id))
+                        .map(move |s| session_key(h.is_local, h.host_id.as_deref(), s))
                 })
             })
             .collect();
@@ -735,8 +760,8 @@ impl CockpitPaneView {
             .collect();
         self.conductor_row_states
             .retain(|k, _| live_rows.contains(k));
-        // Review-loop maps: keyed `"{verb}\0{host_ident}\0{id}"`; the tail after the
-        // first `\0` is the row's `host_key`. Retain live rows, drop the rest.
+        // Review-loop maps: keyed `"{verb}\0{session_key}"`; the tail after the
+        // first `\0` is the complete row key. Retain live rows, drop the rest.
         self.conductor_review_states.retain(|k, _| {
             k.split_once('\u{0}')
                 .map(|(_, rest)| live_rows.contains(rest))
@@ -785,7 +810,7 @@ impl CockpitPaneView {
                     .entry(format!("proj:{pkey}"))
                     .or_default();
                 for session in &project.sessions {
-                    let rk = host_key(host.is_local, host.host_id.as_deref(), &session.session_id);
+                    let rk = session_key(host.is_local, host.host_id.as_deref(), session);
                     self.conductor_row_states.entry(rk.clone()).or_default();
                     for verb in REVIEW_VERB_KEYS {
                         self.conductor_review_states
@@ -820,6 +845,7 @@ impl CockpitPaneView {
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         let agent = crate::cockpit::agent_of(acct.account.provider);
+        let key = session_key(true, None, session);
         // Disabled-by-absence: an agent with no fork mechanism gets no surface.
         // `acct.sessions` is local by contract (see `AccountUsage::sessions`),
         // which is what `is_local` states here; when the table starts showing
@@ -830,7 +856,7 @@ impl CockpitPaneView {
         if into_worktree
             && !self
                 .session_in_repo
-                .get(&session.session_id)
+                .get(&key)
                 .copied()
                 .unwrap_or(false)
         {
@@ -841,7 +867,7 @@ impl CockpitPaneView {
         } else {
             &self.session_fork_states
         };
-        let state = states.get(&session.session_id).cloned()?;
+        let state = states.get(&key).cloned()?;
 
         let label = if into_worktree {
             crate::t!("cockpit-session-fork-worktree")
@@ -855,6 +881,7 @@ impl CockpitPaneView {
             cwd: PathBuf::from(&session.cwd),
             // Non-default accounts pin the fork to the same subscription.
             config_dir: (!acct.account.is_default).then(|| acct.account.config_dir.clone()),
+            account_email: acct.account.email.clone(),
             into_worktree,
             // The account pane's fork surface is local by contract (`acct.sessions`
             // are this machine's), matching the `is_local = true` passed to
@@ -884,6 +911,7 @@ impl CockpitPaneView {
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         let agent = crate::cockpit::agent_of(acct.account.provider);
+        let key = session_key(true, None, session);
         // Disabled-by-absence: an agent with no resume mechanism gets no
         // surface. `acct.sessions` is local by contract — see the fork verb.
         if !SessionCapabilities::of(session, true).can_resume {
@@ -891,7 +919,7 @@ impl CockpitPaneView {
         }
         let state = self
             .session_adopt_states
-            .get(&session.session_id)
+            .get(&key)
             .cloned()?;
 
         let action = WorkspaceAction::AdoptAgentSession {
@@ -900,6 +928,7 @@ impl CockpitPaneView {
             cwd: PathBuf::from(&session.cwd),
             // Non-default accounts resume on the same subscription.
             config_dir: (!acct.account.is_default).then(|| acct.account.config_dir.clone()),
+            account_email: acct.account.email.clone(),
         };
         Some(verb_button(
             state,
@@ -924,9 +953,10 @@ impl CockpitPaneView {
         if acct.account.provider != Provider::Claude {
             return None;
         }
+        let key = session_key(true, None, session);
         let state = self
             .session_transcript_states
-            .get(&session.session_id)
+            .get(&key)
             .cloned()?;
 
         let action = WorkspaceAction::ViewTranscript {
@@ -1173,7 +1203,7 @@ impl CockpitPaneView {
         // only place the dormant ones exist — the fleet tree holds live work.
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for s in acct.sessions.iter().chain(acct.idle_sessions.iter()) {
-            if seen.insert(host_key(true, None, &s.session_id)) {
+            if seen.insert(session_key(true, None, s)) {
                 all.push((s.clone(), None, None, true));
             }
         }
@@ -1184,7 +1214,7 @@ impl CockpitPaneView {
         // but relying on that would mean a session appears twice the day it stops
         // being true — and a set costs nothing to be sure.
         for row in zaplex_cockpit::sessions_of_account(tree, &acct.account) {
-            let key = host_key(row.is_local, row.host_id, &row.session.session_id);
+            let key = session_key(row.is_local, row.host_id, row.session);
             if !seen.insert(key) {
                 continue;
             }
@@ -1371,32 +1401,19 @@ impl CockpitPaneView {
         let menu = self.row_menu.as_ref()?;
         // Find the row again — the inventory may have moved on since the click.
         let rows = self.build_table_rows(acct, tree, app);
-        let (session, host, host_id, is_local) = rows.iter().find_map(|r| match r {
-            TableRow::Session {
-                session,
-                host,
-                host_id,
-                is_local,
-                ..
-            } if host_key(*is_local, host_id.as_deref(), &session.session_id) == menu.row_key => {
-                Some((session, host, host_id, *is_local))
-            }
-            _ => None,
-        })?;
+        let MatchedSessionRow {
+            session,
+            host,
+            host_id,
+            is_local,
+        } = matching_session_row(&rows, &menu.row_key)?;
 
         let caps = SessionCapabilities::of(session, is_local);
         let agent = crate::cockpit::agent_of(session.provider);
-        // The account config dir the fork/slash command pins to. A *remote*
-        // session's is the host-side path the daemon reported with the session
-        // (`session.config_dir`), replayed verbatim on the host — never the local
-        // `config_dir_for_session`, which is this machine's path and would resume
-        // the remote agent under the wrong (or a nonexistent) account. Local
-        // sessions keep the local lookup.
-        let config_dir: Option<PathBuf> = if is_local {
-            CockpitModel::as_ref(app).config_dir_for_session(&session.session_id)
-        } else {
-            session.config_dir.clone().map(PathBuf::from)
-        };
+        // The stamped account route pins fork/resume/slash to the subscription
+        // that owns this exact session. For a remote session it is a host-side
+        // path and is replayed verbatim there; for local it is the local path.
+        let config_dir = session.config_dir.clone().map(PathBuf::from);
         let label = zaplex_cockpit::session_label(session);
         let rk = &menu.row_key;
         let k = |suffix: &str| format!("{rk}\u{0}{suffix}");
@@ -1423,6 +1440,9 @@ impl CockpitPaneView {
                         host: host.clone().unwrap_or_default(),
                         host_id: host_id.clone(),
                         session_id: session.session_id.clone(),
+                        provider: session.provider,
+                        config_dir: session.config_dir.clone(),
+                        account_email: session.account_email.clone(),
                         is_local,
                     },
                     appearance,
@@ -1441,6 +1461,7 @@ impl CockpitPaneView {
                         session_id: session.session_id.clone(),
                         cwd: PathBuf::from(&session.cwd),
                         config_dir: config_dir.clone(),
+                        account_email: session.account_email.clone(),
                         into_worktree: false,
                         host: host.clone().unwrap_or_default(),
                         host_id: host_id.clone(),
@@ -1460,7 +1481,7 @@ impl CockpitPaneView {
             if is_local
                 && self
                     .session_in_repo
-                    .get(&session.session_id)
+                    .get(&session_key(is_local, host_id.as_deref(), session))
                     .copied()
                     .unwrap_or(false)
             {
@@ -1474,6 +1495,7 @@ impl CockpitPaneView {
                             session_id: session.session_id.clone(),
                             cwd: PathBuf::from(&session.cwd),
                             config_dir: config_dir.clone(),
+                            account_email: session.account_email.clone(),
                             into_worktree: true,
                             host: host.clone().unwrap_or_default(),
                             host_id: host_id.clone(),
@@ -1488,10 +1510,11 @@ impl CockpitPaneView {
         if caps.can_slash {
             // `t!` wants a literal, so these are spelled out rather than looped.
             let slash = |command: &str| WorkspaceAction::SlashCommandSession {
-                agent,
+                provider: session.provider,
                 session_id: session.session_id.clone(),
                 cwd: PathBuf::from(&session.cwd),
                 config_dir: config_dir.clone(),
+                account_email: session.account_email.clone(),
                 command: command.to_string(),
                 host: host.clone().unwrap_or_default(),
                 host_id: host_id.clone(),
@@ -1613,6 +1636,7 @@ impl CockpitPaneView {
                         host_id: host_id.clone(),
                         session_id: session.session_id.clone(),
                         pid: session.pid,
+                        process_fingerprint: session.process_fingerprint.clone(),
                         is_local,
                         agent_label: label.clone(),
                     },
@@ -1630,6 +1654,7 @@ impl CockpitPaneView {
                         host_id: host_id.clone(),
                         session_id: session.session_id.clone(),
                         pid: session.pid,
+                        process_fingerprint: session.process_fingerprint.clone(),
                         is_local,
                         agent_label: label,
                         project_name: session.project_name.clone(),
@@ -1957,13 +1982,16 @@ impl CockpitPaneView {
                         .with_main_axis_size(MainAxisSize::Max)
                         .finish();
 
-                    let rk = host_key(*is_local, host_id.as_deref(), &session.session_id);
+                    let rk = session_key(*is_local, host_id.as_deref(), session);
                     let sess_cell: Box<dyn Element> = match row_states.get(&rk).cloned() {
                         Some(state) => {
                             let action = WorkspaceAction::AttachFleetSession {
                                 host: host.clone().unwrap_or_default(),
                                 host_id: host_id.clone(),
                                 session_id: session.session_id.clone(),
+                                provider: session.provider,
+                                config_dir: session.config_dir.clone(),
+                                account_email: session.account_email.clone(),
                                 is_local: *is_local,
                             };
                             Hoverable::new(state, move |_m| sess)
@@ -3007,7 +3035,74 @@ impl BackingView for CockpitPaneView {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_hex_color;
+    use chrono::Utc;
+    use zaplex_cockpit::{Provider, SessionSnapshot, SessionState};
+
+    use super::{matching_session_row, parse_hex_color, session_key, TableRow};
+
+    fn session(config_dir: Option<&str>, account_email: Option<&str>) -> SessionSnapshot {
+        SessionSnapshot {
+            session_id: "copied-session".to_string(),
+            cwd: "/work/project".to_string(),
+            name: "job".to_string(),
+            state: SessionState::Idle,
+            provider: Provider::Claude,
+            model: String::new(),
+            effort: None,
+            ctx_tokens: 0,
+            project_root: "/work/project".to_string(),
+            repo_root: "/work/project".to_string(),
+            project_name: "project".to_string(),
+            branch: None,
+            worktree: None,
+            config_dir: config_dir.map(str::to_string),
+            account_email: account_email.map(str::to_string),
+            process_fingerprint: None,
+            last_activity: Utc::now(),
+            pid: 0,
+        }
+    }
+
+    fn row(session: SessionSnapshot) -> TableRow {
+        TableRow::Session {
+            session,
+            host: None,
+            host_id: None,
+            is_local: true,
+            today_cost: None,
+        }
+    }
+
+    #[test]
+    fn row_menu_resolves_a_copied_session_id_to_the_exact_account() {
+        let default = session(None, Some("personal@example.com"));
+        let work = session(
+            Some("/accounts/claude-work"),
+            Some("work@example.com"),
+        );
+        let work_key = session_key(true, None, &work);
+        let rows = vec![row(default), row(work)];
+
+        let matched = matching_session_row(&rows, &work_key).expect("work-account row");
+        assert_eq!(
+            matched.session.config_dir.as_deref(),
+            Some("/accounts/claude-work"),
+            "the menu must not take the first same-id row from another account"
+        );
+    }
+
+    #[test]
+    fn row_menu_refuses_duplicate_unknown_account_identity() {
+        let first_unknown = session(None, None);
+        let second_unknown = session(None, None);
+        let ambiguous_key = session_key(true, None, &first_unknown);
+        let rows = vec![row(first_unknown), row(second_unknown)];
+
+        assert!(
+            matching_session_row(&rows, &ambiguous_key).is_none(),
+            "ambiguous legacy rows must fail closed instead of selecting the first account"
+        );
+    }
 
     #[test]
     fn parses_six_digit_hex() {

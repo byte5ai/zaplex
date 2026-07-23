@@ -920,69 +920,106 @@ enum GuardrailSendOutcome {
     /// — the honest degradation for the remote path (see guardrails design
     /// step 7 §1): reported, never silently skipped.
     NoRemoteConnection(String),
-    /// The target host is reachable, but its daemon is too old to run a
-    /// session-less host command (no `host-exec` capability). Reported honestly
-    /// as "update the daemon", never a misleading "could not kill" — carries the
-    /// host label.
+    /// The target host is reachable, but its daemon is too old to verify and
+    /// signal an agent process safely. Reported honestly as "update the daemon",
+    /// never a misleading "could not kill" — carries the host label.
     RemoteUnsupported(String),
 }
 
-/// Send `signal` to a **local** process. `EPERM`/`ESRCH` and any other errno
-/// are reported (never swallowed) via [`std::io::Error::last_os_error`].
-#[cfg(unix)]
-fn send_local_guardrail_signal(pid: u32, signal: zaplex_cockpit::GuardrailSignal) -> GuardrailSendOutcome {
-    // SAFETY: `kill(2)` with a real signal on a pid we discovered from the
-    // Claude Code session registry; the syscall itself can't cause UB — worst
-    // case it fails with ESRCH (already exited) or EPERM (not ours).
-    let rc = unsafe { libc::kill(pid as libc::pid_t, signal.signal_number()) };
-    if rc == 0 {
-        GuardrailSendOutcome::Sent
-    } else {
-        GuardrailSendOutcome::Failed(std::io::Error::last_os_error().to_string())
+/// Runs a signal backend only when pid and process identity are both proven.
+///
+/// Kept as a small injected seam so regression tests can assert that invalid,
+/// missing, or recycled identities never reach the irreversible backend.
+fn send_verified_guardrail_signal_with(
+    pid: u32,
+    expected_fingerprint: Option<&str>,
+    observed_fingerprint: Option<&str>,
+    signal: zaplex_cockpit::GuardrailSignal,
+    send: impl FnOnce(u32, zaplex_cockpit::GuardrailSignal) -> GuardrailSendOutcome,
+) -> GuardrailSendOutcome {
+    if !zaplex_cockpit::pid_signalable(pid) {
+        return GuardrailSendOutcome::Failed("invalid process id".to_string());
+    }
+    match (expected_fingerprint, observed_fingerprint) {
+        (Some(expected), Some(observed)) if !expected.is_empty() && expected == observed => {
+            send(pid, signal)
+        }
+        (Some(_), Some(_)) => GuardrailSendOutcome::Failed(
+            "the process ended or its id was reused".to_string(),
+        ),
+        (Some(_), None) | (None, Some(_)) | (None, None) => GuardrailSendOutcome::Failed(
+            "the process identity could not be verified".to_string(),
+        ),
     }
 }
 
-#[cfg(not(unix))]
+/// Send `signal` to the exact **local** process observed during discovery.
+///
+/// The initial re-probe rejects stale UI state before entering the backend.
+/// The backend then repeats the check while holding a Linux pidfd (or
+/// immediately before macOS `kill`), so pid reuse cannot redirect the signal.
 fn send_local_guardrail_signal(
-    _pid: u32,
-    _signal: zaplex_cockpit::GuardrailSignal,
-) -> GuardrailSendOutcome {
-    GuardrailSendOutcome::Failed("signal sending is not supported on this platform".to_string())
-}
-
-/// Attempt `signal` on a **remote** host's pid via the daemon's session-less
-/// `HostExec` path (`kill -<SIG> <pid>`), reusing the same client the
-/// Agent-Inventory fold already holds a connection to
-/// (`RemoteServerManager::connected_daemons`).
-///
-/// `HostExec` runs the command in the daemon's default user shell with **no**
-/// bootstrapped session — the correct mechanism here, because the cockpit holds
-/// a daemon connection to the host but no bound interactive session on it (the
-/// earlier `RunCommandRequest` path looked up a per-session executor by id and
-/// always returned `SessionNotFound`, so remote Stop/Kill never actually
-/// reached `kill`). A command that runs but exits non-zero (e.g. the pid is
-/// already gone) surfaces its stderr as a `Failed` toast; a daemon-side spawn
-/// failure surfaces as `Failed` too — never a silent no-op.
-///
-/// Capability: the caller must have already confirmed the daemon advertises
-/// `host-exec` (see [`FEATURE_HOST_EXEC`](zaplex_remote_session::types::FEATURE_HOST_EXEC));
-/// an old daemon without it is reported as `RemoteUnsupported` before this is
-/// ever called.
-async fn run_remote_guardrail_signal(
-    client: &std::sync::Arc<remote_server::client::RemoteServerClient>,
     pid: u32,
+    expected_fingerprint: Option<&str>,
     signal: zaplex_cockpit::GuardrailSignal,
 ) -> GuardrailSendOutcome {
-    let command = signal.remote_kill_command(pid);
-    match client.host_exec(command).await {
-        Ok(result) if result.exit_code.unwrap_or(1) == 0 => GuardrailSendOutcome::Sent,
-        Ok(result) => {
-            let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
-            GuardrailSendOutcome::Failed(if stderr.is_empty() {
-                format!("exited with status {}", result.exit_code.unwrap_or(-1))
-            } else {
-                stderr
-            })
+    let observed_fingerprint = zaplex_cockpit::current_process_fingerprint(pid);
+    send_verified_guardrail_signal_with(
+        pid,
+        expected_fingerprint,
+        observed_fingerprint.as_deref(),
+        signal,
+        |pid, signal| {
+            let expected = expected_fingerprint
+                .expect("the verified seam calls the backend only with an expected fingerprint");
+            match zaplex_cockpit::send_verified_process_signal(pid, expected, signal) {
+                Ok(()) => GuardrailSendOutcome::Sent,
+                Err(error) => GuardrailSendOutcome::Failed(error.to_string()),
+            }
+        },
+    )
+}
+
+/// Ask a remote daemon to signal the exact process identity discovered for one
+/// agent session.
+///
+/// The request carries no shell text and can express only Interrupt or Kill.
+/// The daemon re-verifies the opaque process fingerprint immediately before
+/// signalling. A stale inventory row therefore fails closed instead of
+/// targeting a process that later reused the same numeric pid.
+async fn run_remote_guardrail_signal(
+    client: &std::sync::Arc<remote_server::client::RemoteServerClient>,
+    session_id: &str,
+    pid: u32,
+    expected_fingerprint: &str,
+    signal: zaplex_cockpit::GuardrailSignal,
+) -> GuardrailSendOutcome {
+    use remote_server::proto::{AgentProcessSignal, AgentProcessSignalStatus};
+
+    let signal = match signal {
+        zaplex_cockpit::GuardrailSignal::Interrupt => AgentProcessSignal::Interrupt,
+        zaplex_cockpit::GuardrailSignal::Kill => AgentProcessSignal::Kill,
+    };
+    match client
+        .send_verified_process_signal(
+            session_id.to_string(),
+            pid,
+            expected_fingerprint.to_string(),
+            signal,
+        )
+        .await
+    {
+        Ok(response) => match AgentProcessSignalStatus::try_from(response.status) {
+            Ok(AgentProcessSignalStatus::Sent) => GuardrailSendOutcome::Sent,
+            Ok(
+                AgentProcessSignalStatus::StaleIdentity
+                | AgentProcessSignalStatus::IdentityUnverifiable
+                | AgentProcessSignalStatus::InvalidRequest
+                | AgentProcessSignalStatus::SignalFailed,
+            ) => GuardrailSendOutcome::Failed(response.error_message),
+            Ok(AgentProcessSignalStatus::Unspecified) | Err(_) => {
+                GuardrailSendOutcome::Failed("the host returned an invalid signal result".to_string())
+            }
         }
         Err(e) => GuardrailSendOutcome::Failed(format!("{e:#}")),
     }
@@ -4285,6 +4322,33 @@ impl Workspace {
         });
     }
 
+    /// Stamps the selected account onto the active terminal before CLI command
+    /// detection catches up. The route starts the process; the email is the
+    /// identity used for safe later focus/reuse.
+    fn bind_active_terminal_account(
+        &mut self,
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        account_email: Option<&str>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let config_dir = config_dir.map(|dir| dir.to_string_lossy().into_owned());
+        let account_email = account_email.map(str::to_owned);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            if let Some(terminal_view) = pane_group.active_session_view(ctx) {
+                let terminal_view_id = terminal_view.as_ref(ctx).view_id();
+                CLIAgentSessionsModel::handle(ctx).update(ctx, |model, _| {
+                    model.bind_account_identity(
+                        terminal_view_id,
+                        agent,
+                        config_dir.clone(),
+                        account_email.clone(),
+                    );
+                });
+            }
+        });
+    }
+
     /// Fork an agent conversation into a NEW session (fork/worktree design §2):
     /// a new tab in the source session's cwd runs the provider's fork command —
     /// same history, divergent future; the original session stays untouched.
@@ -4298,6 +4362,7 @@ impl Workspace {
         session_id: &str,
         cwd: &Path,
         config_dir: Option<&Path>,
+        account_email: Option<&str>,
         into_worktree: bool,
         host: &str,
         host_id: Option<&str>,
@@ -4320,7 +4385,16 @@ impl Workspace {
             #[cfg(all(unix, feature = "local_tty"))]
             {
                 let _ = into_worktree;
-                self.run_agent_command_on_remote_host(host, host_id, cwd, &fork_cmd, ctx);
+                self.run_agent_command_on_remote_host(
+                    host,
+                    host_id,
+                    cwd,
+                    &fork_cmd,
+                    agent,
+                    config_dir,
+                    account_email,
+                    ctx,
+                );
             }
             #[cfg(not(all(unix, feature = "local_tty")))]
             {
@@ -4334,11 +4408,11 @@ impl Workspace {
         let _ = (host, host_id);
         #[cfg(feature = "local_fs")]
         if into_worktree {
-            self.fork_into_worktree(&fork_cmd, cwd, ctx);
+            self.fork_into_worktree(&fork_cmd, cwd, agent, config_dir, account_email, ctx);
             return;
         }
         let _ = into_worktree;
-        self.fork_agent_session_in_place(&fork_cmd, cwd, ctx);
+        self.fork_agent_session_in_place(&fork_cmd, cwd, agent, config_dir, account_email, ctx);
     }
 
     /// Run `command` on a *remote* agent session's own host: resolve the daemon
@@ -4357,6 +4431,9 @@ impl Workspace {
         host_id: Option<&str>,
         cwd: &Path,
         command: &str,
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        account_email: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let node_id = host_id.and_then(|hid| self.node_for_daemon_host(hid, &*ctx));
@@ -4386,6 +4463,7 @@ impl Workspace {
                     _ => full,
                 });
                 self.open_ssh_terminal(node_id, server, false, ctx);
+                self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
                 true
             }
             _ => {
@@ -4430,6 +4508,7 @@ impl Workspace {
         session_id: &str,
         cwd: &Path,
         config_dir: Option<&Path>,
+        account_email: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(resume_cmd) = agent.resume_command_pinned(session_id, config_dir) else {
@@ -4437,30 +4516,126 @@ impl Workspace {
             // is the belt-and-braces guard (no fake resume).
             return;
         };
-        self.fork_agent_session_in_place(&resume_cmd, cwd, ctx);
+        self.fork_agent_session_in_place(&resume_cmd, cwd, agent, config_dir, account_email, ctx);
+    }
+
+    /// Resolves one fleet session with the inventory's explicit local marker or
+    /// a remote daemon's stable id. Display labels never route remote actions.
+    fn inventory_agent_session(
+        host_id: Option<&str>,
+        session_id: &str,
+        provider: zaplex_cockpit::Provider,
+        config_dir: Option<&str>,
+        account_email: Option<&str>,
+        is_local: bool,
+        ctx: &AppContext,
+    ) -> Option<zaplex_cockpit::SessionSnapshot> {
+        use crate::cockpit::capabilities::session_identity_matches;
+
+        let model = crate::cockpit::CockpitModel::as_ref(ctx);
+        let live = model
+            .inventory()
+            .hosts
+            .iter()
+            .filter(|host| {
+                if is_local {
+                    host.is_local
+                } else {
+                    host_id.is_some_and(|id| host.host_id.as_deref() == Some(id))
+                }
+            })
+            .flat_map(|host| &host.projects)
+            .flat_map(|project| &project.sessions)
+            .find(|session| {
+                session.session_id == session_id
+                    && session_identity_matches(session, provider, config_dir, account_email)
+            })
+            .cloned();
+        if live.is_some() || !is_local {
+            return live;
+        }
+
+        // Local dormant sessions deliberately live outside the fleet tree: the
+        // tree is a live-work navigator, while account snapshots retain the
+        // transcript-only rows. They still need the safe ResumeDormant route.
+        model
+            .snapshot()
+            .accounts
+            .iter()
+            .flat_map(|account| account.sessions.iter().chain(&account.idle_sessions))
+            .find(|session| {
+                session.session_id == session_id
+                    && session_identity_matches(session, provider, config_dir, account_email)
+            })
+            .cloned()
     }
 
     /// Run a Claude Code slash command against a discovered session
     /// (`SlashCommandSession`, cockpit model-levers `/compact` · `/clear`).
     ///
-    /// Cockpit sessions are external processes whose stdin zaplex does not own,
-    /// so the honest path is to **resume the same conversation** into a
-    /// zaplex-owned tab (identical to adopt) and prefill the slash command in
-    /// that live PTY's input — the human presses Enter to send it (in-the-loop,
-    /// like the review-loop verbs). The command then acts on the same session.
+    /// A known pane receives the command in place. A dormant session first
+    /// resumes into a Zaplex-owned tab. A live session without a reliable pane
+    /// locator is left untouched rather than duplicated.
     #[allow(clippy::too_many_arguments)]
     fn slash_command_session(
         &mut self,
-        agent: CLIAgent,
+        provider: zaplex_cockpit::Provider,
         session_id: &str,
         cwd: &Path,
         config_dir: Option<&Path>,
+        account_email: Option<&str>,
         command: &str,
         host: &str,
         host_id: Option<&str>,
         is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        use crate::cockpit::capabilities::{plan_session_open, SessionOpenPlan};
+
+        let agent = crate::cockpit::agent_of(provider);
+        let config_identity = config_dir.map(|dir| dir.to_string_lossy().into_owned());
+        let Some(session) = Self::inventory_agent_session(
+            host_id,
+            session_id,
+            provider,
+            config_identity.as_deref(),
+            account_email,
+            is_local,
+            &*ctx,
+        ) else {
+            self.session_not_found_toast(host, ctx);
+            return;
+        };
+        let terminal_view_id = Self::terminal_view_id_for_agent_session(
+            agent,
+            session_id,
+            account_email,
+            host_id,
+            is_local,
+            &*ctx,
+        );
+        match plan_session_open(&session, terminal_view_id.is_some()) {
+            SessionOpenPlan::FocusExistingTerminal => {
+                let terminal_view_id = terminal_view_id
+                    .expect("the open plan only focuses when a terminal id is present");
+                if self.focus_terminal_view_anywhere(terminal_view_id, ctx) {
+                    // Preserve the existing in-the-loop behavior: stage the slash
+                    // command in the live pane and let the user submit it.
+                    if !Self::prefill_terminal_view_input(terminal_view_id, command, ctx) {
+                        self.live_session_unavailable_toast(&session, host, ctx);
+                    }
+                } else {
+                    self.live_session_unavailable_toast(&session, host, ctx);
+                }
+                return;
+            }
+            SessionOpenPlan::ResumeDormant => {}
+            SessionOpenPlan::LiveSessionUnavailable => {
+                self.live_session_unavailable_toast(&session, host, ctx);
+                return;
+            }
+        }
+
         let Some(resume_cmd) = agent.resume_command_pinned(session_id, config_dir) else {
             // No resume mechanism → no way to reach the session's PTY honestly;
             // the surface stays disabled, this is the belt-and-braces guard.
@@ -4477,7 +4652,16 @@ impl Workspace {
             // command, so it survives a fallback too.
             #[cfg(all(unix, feature = "local_tty"))]
             {
-                if self.run_agent_command_on_remote_host(host, host_id, cwd, &resume_cmd, ctx) {
+                if self.run_agent_command_on_remote_host(
+                    host,
+                    host_id,
+                    cwd,
+                    &resume_cmd,
+                    agent,
+                    config_dir,
+                    account_email,
+                    ctx,
+                ) {
                     let command = command.to_string();
                     self.toast_stack.update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
@@ -4499,7 +4683,7 @@ impl Workspace {
         }
         let _ = (host, host_id);
         // Local: resume the session into a fresh local tab (owns the PTY) …
-        self.fork_agent_session_in_place(&resume_cmd, cwd, ctx);
+        self.fork_agent_session_in_place(&resume_cmd, cwd, agent, config_dir, account_email, ctx);
         // … then prefill the slash command, ready for the human to send.
         self.prefill_active_tab_input(command, ctx);
     }
@@ -4521,85 +4705,212 @@ impl Workspace {
         });
     }
 
-    /// Attach to a fleet agent identified by `(host, session_id)` from the
-    /// unified Conductor inventory (`AttachFleetSession`) — the shared target of
-    /// the Conductor row-click and the `w`-jump. Everything is resolved from the
-    /// live [`CockpitModel::inventory`] so callers pass only the identity:
-    /// - **local host** → adopt the session in place (resume, no fork), pinned to
-    ///   the owning account's subscription when it isn't the default login.
-    /// - **remote host** → resolve the inventory host to its live SSH node and
-    ///   open a remote terminal that **resumes** the same session on that host
-    ///   (its own CLI login, the session's cwd) — the remote analogue of the
-    ///   local adopt. Falls back to an honest toast when the host has no live
-    ///   daemon connection to resume through.
+    fn terminal_view_handle(
+        terminal_view_id: EntityId,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<TerminalView>> {
+        ctx.window_ids().find_map(|window_id| {
+            ctx.views_of_type::<TerminalView>(window_id)
+                .and_then(|terminal_views| {
+                    terminal_views.iter().find_map(|terminal_view| {
+                        (terminal_view.as_ref(ctx).view_id() == terminal_view_id)
+                            .then(|| terminal_view.clone())
+                    })
+                })
+        })
+    }
+
+    /// Resolves a CLI conversation to the terminal on the exact fleet host.
+    /// Provider/session ids alone are insufficient: copied sessions may retain
+    /// the same id on local and multiple remote hosts.
+    fn terminal_view_id_for_agent_session(
+        agent: CLIAgent,
+        session_id: &str,
+        account_email: Option<&str>,
+        host_id: Option<&str>,
+        is_local: bool,
+        ctx: &AppContext,
+    ) -> Option<EntityId> {
+        use crate::cockpit::capabilities::session_host_matches;
+
+        CLIAgentSessionsModel::as_ref(ctx).terminal_view_id_for_agent_session_matching(
+            agent,
+            session_id,
+            account_email,
+            |terminal_view_id, session| {
+                if (is_local && session.is_remote()) || (!is_local && !session.is_remote()) {
+                    return false;
+                }
+                let Some(terminal_view) = Self::terminal_view_handle(terminal_view_id, ctx) else {
+                    return false;
+                };
+                #[cfg(feature = "local_tty")]
+                let remote_host_id = terminal_view
+                    .as_ref(ctx)
+                    .active_session_remote_host_id(ctx);
+                #[cfg(not(feature = "local_tty"))]
+                let remote_host_id: Option<warp_core::HostId> = None;
+                session_host_matches(
+                    is_local,
+                    host_id,
+                    remote_host_id.as_ref().map(warp_core::HostId::as_str),
+                )
+            },
+        )
+    }
+
+    /// Prefills one known terminal directly, including a terminal owned by a
+    /// different Zaplex window. This keeps session actions on the pane that
+    /// already owns the CLI process instead of creating a second resume.
+    fn prefill_terminal_view_input(
+        terminal_view_id: EntityId,
+        text: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(terminal_view) = Self::terminal_view_handle(terminal_view_id, &*ctx) else {
+            return false;
+        };
+
+        let text = text.to_string();
+        terminal_view.update(ctx, |terminal_view, ctx| {
+            terminal_view.input().update(ctx, |input, ctx| {
+                input.replace_buffer_content(&text, ctx);
+                input.focus_input_box(ctx);
+            });
+        });
+        true
+    }
+
+    fn session_display_name(session: &zaplex_cockpit::SessionSnapshot) -> String {
+        if !session.name.is_empty() {
+            return session.name.clone();
+        }
+        Path::new(&session.cwd)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| session.cwd.clone())
+    }
+
+    /// Reports a live session for which Zaplex has no reliable pane/PTY locator.
+    /// Starting a second `resume` would be worse than declining the action.
+    fn live_session_unavailable_toast(
+        &mut self,
+        session: &zaplex_cockpit::SessionSnapshot,
+        host: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let session = Self::session_display_name(session);
+        let host = if host.is_empty() {
+            crate::t!("cockpit-table-host-local").to_string()
+        } else {
+            host.to_string()
+        };
+        let message = crate::t!(
+            "cockpit-session-live-unavailable",
+            session = session,
+            host = host
+        )
+        .to_string();
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(DismissibleToast::default(message), ctx);
+        });
+    }
+
+    /// A row can outlive one inventory refresh. Report that calm, expected race
+    /// instead of making a click appear broken or falling back to a new process.
+    fn session_not_found_toast(&mut self, host: &str, ctx: &mut ViewContext<Self>) {
+        let host = if host.is_empty() {
+            crate::t!("cockpit-table-host-local").to_string()
+        } else {
+            host.to_string()
+        };
+        let message = crate::t!("cockpit-session-no-longer-available", host = host).to_string();
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(DismissibleToast::default(message), ctx);
+        });
+    }
+
+    /// Attach to a fleet agent identified by host, provider, account route, and
+    /// session id from the unified Conductor inventory
+    /// (`AttachFleetSession`) — the shared target of the Conductor row-click and
+    /// the `w`-jump. Current state and cwd are resolved from the live inventory:
+    /// A pane already hosting the session is focused, regardless of whether it
+    /// is local or remote. Only a dormant (`Idle`) session starts a resume
+    /// command. A live session without a reliable pane/PTY locator is reported
+    /// as unavailable rather than duplicated.
     fn attach_fleet_session(
         &mut self,
         host: &str,
         host_id: Option<&str>,
         session_id: &str,
+        provider: zaplex_cockpit::Provider,
+        config_dir: Option<&str>,
+        account_email: Option<&str>,
         is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::cockpit::CockpitModel;
+        use crate::cockpit::capabilities::{plan_session_open, SessionOpenPlan};
 
-        // `is_local` is the inventory's explicit marker for this host — never a
-        // `local_label() == host` comparison, which a colliding remote label
-        // would defeat (routing a remote adopt to a local one).
-        // Resolve everything up front, then drop the model borrow before the
-        // mutable adopt call / toast.
-        //
-        // Match the inventory node by the stable `host_id` when the row carried
-        // one (every remote node has one), falling back to the `host` label only
-        // for the local node (`host_id == None`). This keeps two remotes sharing
-        // a label distinct, so a remote adopt resolves the right host's session.
-        let model = CockpitModel::as_ref(ctx);
-        let resolved = model
-            .inventory()
-            .hosts
-            .iter()
-            .filter(|h| match host_id {
-                Some(id) => h.host_id.as_deref() == Some(id),
-                None => h.host == host && h.host_id.is_none(),
-            })
-            .flat_map(|h| &h.projects)
-            .flat_map(|p| &p.sessions)
-            .find(|s| s.session_id == session_id)
-            .map(|s| (s.provider, s.cwd.clone(), s.name.clone(), s.config_dir.clone()));
-        let config_dir = if is_local {
-            model.config_dir_for_session(session_id)
-        } else {
-            None
-        };
+        // Resolve everything up front, then drop model borrows before focusing,
+        // resuming, or showing a toast.
+        let resolved = Self::inventory_agent_session(
+            host_id,
+            session_id,
+            provider,
+            config_dir,
+            account_email,
+            is_local,
+            &*ctx,
+        );
 
-        let Some((provider, cwd, name, session_config_dir)) = resolved else {
+        let Some(session) = resolved else {
             // The inventory moved on (session ended between render and click).
+            self.session_not_found_toast(host, ctx);
             return;
         };
+        let agent = crate::cockpit::agent_of(session.provider);
+        let terminal_view_id = Self::terminal_view_id_for_agent_session(
+            agent,
+            session_id,
+            account_email,
+            host_id,
+            is_local,
+            &*ctx,
+        );
+        match plan_session_open(&session, terminal_view_id.is_some()) {
+            SessionOpenPlan::FocusExistingTerminal => {
+                let terminal_view_id = terminal_view_id
+                    .expect("the open plan only focuses when a terminal id is present");
+                if !self.focus_terminal_view_anywhere(terminal_view_id, ctx) {
+                    // The model can briefly retain a terminal that closed between
+                    // lookup and focus. Never turn that race into a duplicate.
+                    self.live_session_unavailable_toast(&session, host, ctx);
+                }
+                return;
+            }
+            SessionOpenPlan::ResumeDormant => {}
+            SessionOpenPlan::LiveSessionUnavailable => {
+                self.live_session_unavailable_toast(&session, host, ctx);
+                return;
+            }
+        }
 
         if is_local {
-            let agent = crate::cockpit::agent_of(provider);
             self.adopt_agent_session(
                 agent,
                 session_id,
-                Path::new(&cwd),
-                config_dir.as_deref(),
+                Path::new(&session.cwd),
+                config_dir.map(Path::new),
+                account_email,
                 ctx,
             );
         } else {
-            // Remote in-place adopt: resume the same agent session on its host.
+            // Remote dormant-session resume: start the same conversation on its host.
             // Resolve the inventory host to a live SSH node, build the agent's
             // resume command, and open a remote terminal that runs it in the
             // session's cwd (the host's own CLI login — remote account routing is
             // the host's, not a local config dir).
-            let agent = crate::cockpit::agent_of(provider);
-            let place = if name.is_empty() {
-                Path::new(&cwd)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| cwd.clone())
-            } else {
-                name
-            };
+            let place = Self::session_display_name(&session);
             // Inventory host id (daemon `HostId`) → the SSH `node_id` whose live
             // daemon carries it. `None` when the host has no live connection.
             let node_id: Option<String> = {
@@ -4633,12 +4944,12 @@ impl Workspace {
             // is the host's; it's replayed verbatim inside the daemon's
             // `startup_command`, so it must not be canonicalized against the local
             // filesystem.
-            let pinned_dir = session_config_dir.as_deref().map(Path::new);
+            let pinned_dir = session.config_dir.as_deref().map(Path::new);
             let Some(resume_cmd) = agent.resume_command_pinned(session_id, pinned_dir) else {
                 // No resume mechanism for this agent → nothing honest to do.
                 return;
             };
-            let full = format!("cd {} && {resume_cmd}", shell_words::quote(&cwd));
+            let full = format!("cd {} && {resume_cmd}", shell_words::quote(&session.cwd));
             let server = warp_ssh_manager::with_conn(|conn| {
                 Ok(warp_ssh_manager::SshRepository::get_server(conn, &node_id)?)
             });
@@ -4652,6 +4963,7 @@ impl Workspace {
                         _ => full,
                     });
                     self.open_ssh_terminal(node_id, server, false, ctx);
+                    self.bind_active_terminal_account(agent, pinned_dir, account_email, ctx);
                 }
                 _ => {
                     self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -4687,6 +4999,9 @@ impl Workspace {
                     &target.host_label,
                     target.host_id.as_deref(),
                     &target.session_id,
+                    target.provider,
+                    target.config_dir.as_deref(),
+                    target.account_email.as_deref(),
                     target.is_local,
                     ctx,
                 );
@@ -4945,7 +5260,15 @@ impl Workspace {
     /// add` fails (dirty repo, existing branch), the error is the session's
     /// first output — visible in the block, never swallowed (design §3).
     #[cfg(feature = "local_fs")]
-    fn fork_into_worktree(&mut self, fork_cmd: &str, cwd: &Path, ctx: &mut ViewContext<Self>) {
+    fn fork_into_worktree(
+        &mut self,
+        fork_cmd: &str,
+        cwd: &Path,
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        account_email: Option<&str>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         // git resolves worktree paths against the repo; the session's cwd may
         // be a subdirectory, so anchor the sibling `.worktrees` dir at the
         // repo root (= nearest ancestor with a `.git`; a file counts, so
@@ -4960,7 +5283,7 @@ impl Workspace {
             // UI already hides the worktree action for non-repo cwds; this
             // covers races (repo deleted between render and click).
             log::warn!("fork into worktree: no git repo above cwd, forking in place");
-            self.fork_agent_session_in_place(fork_cmd, cwd, ctx);
+            self.fork_agent_session_in_place(fork_cmd, cwd, agent, config_dir, account_email, ctx);
             return;
         };
         let repo_str = repo.to_string_lossy().into_owned();
@@ -4988,6 +5311,7 @@ impl Workspace {
             Ok(tab_config) => {
                 let param_values = tab_config.default_param_values();
                 self.open_tab_config_with_params(tab_config, param_values, Some(&branch_hint), ctx);
+                self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
             }
             Err(e) => {
                 log::warn!("fork into worktree: generated config failed to parse: {e:?}");
@@ -5001,16 +5325,19 @@ impl Workspace {
         &mut self,
         fork_cmd: &str,
         cwd: &Path,
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        account_email: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let options =
-            NewTerminalOptions::default().with_initial_directory(cwd.to_path_buf());
+        let options = NewTerminalOptions::default().with_initial_directory(cwd.to_path_buf());
         self.add_tab_with_pane_layout(
             PanesLayout::SingleTerminal(Box::new(options)),
             Arc::new(HashMap::new()),
             None,
             ctx,
         );
+        self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                 terminal_view.update(ctx, |view, ctx| {
@@ -5031,6 +5358,7 @@ impl Workspace {
         &mut self,
         agent: CLIAgent,
         config_dir: Option<&Path>,
+        account_email: Option<&str>,
         cwd: Option<&Path>,
         node_id: Option<&str>,
         model: Option<&str>,
@@ -5094,10 +5422,7 @@ impl Workspace {
         if let Some(node_id) = node_id {
             let cmd = agent.launch_command_routed_with(None, model, effort);
             let full = match cwd {
-                Some(dir) => format!(
-                    "cd {} && {cmd}",
-                    shell_words::quote(&dir.to_string_lossy())
-                ),
+                Some(dir) => format!("cd {} && {cmd}", shell_words::quote(&dir.to_string_lossy())),
                 None => cmd,
             };
             let server = warp_ssh_manager::with_conn(|conn| {
@@ -5114,6 +5439,9 @@ impl Workspace {
                         _ => full,
                     });
                     self.open_ssh_terminal(node_id.to_string(), server, false, ctx);
+                    // Remote launches intentionally use that host's own default
+                    // login; no local account identity can be asserted here.
+                    self.bind_active_terminal_account(agent, None, None, ctx);
                 }
                 _ => {
                     self.toast_stack.update(ctx, |view, ctx| {
@@ -5141,6 +5469,7 @@ impl Workspace {
             None,
             ctx,
         );
+        self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                 terminal_view.update(ctx, |view, ctx| {
@@ -6089,7 +6418,7 @@ impl Workspace {
         &self,
         terminal_view_id: EntityId,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
         let current_window = ctx.window_id();
         let result = WorkspaceRegistry::as_ref(ctx)
             .all_workspaces(ctx)
@@ -6119,8 +6448,20 @@ impl Workspace {
                     "root_view:handle_pane_navigation_event",
                     &locator,
                 );
+                return true;
             }
         }
+        false
+    }
+
+    /// Focuses an existing terminal regardless of which Zaplex window owns it.
+    fn focus_terminal_view_anywhere(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        self.focus_terminal_view_locally(terminal_view_id, ctx)
+            || self.focus_terminal_view_in_other_window(terminal_view_id, ctx)
     }
 
     /// Shows the notification error in the specific pane.
@@ -8182,8 +8523,6 @@ impl Workspace {
     /// (favorite a host, no regression). Curation also happens via the ★ on a
     /// Conductor tree node in the sidebar.
     fn favorites_menu_items(&self, ctx: &mut ViewContext<Self>) -> Vec<MenuItem<WorkspaceAction>> {
-        use zaplex_cockpit::FavoriteKind;
-
         // Registered hosts (node_id -> label), read once from the SSH registry —
         // used to resolve host favorites and to populate the add picker.
         let host_nodes: Vec<(String, String)> = warp_ssh_manager::with_conn(|c| {
@@ -8321,34 +8660,76 @@ impl Workspace {
                     None => self.stale_favorite_item(fav),
                 }
             }
-            // Session → attach, resolving host identity from the live inventory by
-            // the host-scoped `host_key` (the favorite target), so the raw
-            // session id is never matched across hosts.
+            // Session → attach by the complete host/provider/account/session
+            // identity. Legacy RC favorites used only host + conversation id;
+            // keep those working when they resolve uniquely, but never guess
+            // between two copied account sessions.
             FavoriteKind::Session => {
-                let resolved = inventory.hosts.iter().find_map(|h| {
-                    h.projects.iter().flat_map(|p| p.sessions.iter()).find_map(|s| {
-                        (zaplex_cockpit::host_key(
+                let exact = inventory.hosts.iter().find_map(|h| {
+                    h.projects.iter().flat_map(|p| &p.sessions).find_map(|s| {
+                        (zaplex_cockpit::session_key(
                             h.is_local,
                             h.host_id.as_deref(),
-                            &s.session_id,
+                            s,
                         ) == fav.target)
                             .then(|| {
                                 (
                                     h.host.clone(),
                                     h.host_id.clone(),
                                     s.session_id.clone(),
+                                    s.provider,
+                                    s.config_dir.clone(),
+                                    s.account_email.clone(),
                                     h.is_local,
                                 )
                             })
                     })
                 });
+                let resolved = exact.or_else(|| {
+                    let mut legacy_matches = inventory.hosts.iter().flat_map(|h| {
+                        h.projects
+                            .iter()
+                            .flat_map(|p| p.sessions.iter())
+                            .filter_map(|s| {
+                                (zaplex_cockpit::host_key(
+                                    h.is_local,
+                                    h.host_id.as_deref(),
+                                    &s.session_id,
+                                ) == fav.target)
+                                    .then(|| {
+                                        (
+                                            h.host.clone(),
+                                            h.host_id.clone(),
+                                            s.session_id.clone(),
+                                            s.provider,
+                                            s.config_dir.clone(),
+                                            s.account_email.clone(),
+                                            h.is_local,
+                                        )
+                                    })
+                            })
+                    });
+                    let first = legacy_matches.next();
+                    first.filter(|_| legacy_matches.next().is_none())
+                });
                 match resolved {
-                    Some((host, host_id, session_id, is_local)) => {
+                    Some((
+                        host,
+                        host_id,
+                        session_id,
+                        provider,
+                        config_dir,
+                        account_email,
+                        is_local,
+                    )) => {
                         MenuItemFields::new(fav.display_label().to_string())
                             .with_on_select_action(WorkspaceAction::AttachFleetSession {
                                 host,
                                 host_id,
                                 session_id,
+                                provider,
+                                config_dir,
+                                account_email,
                                 is_local,
                             })
                             .with_icon(icons::Icon::Terminal)
@@ -12015,17 +12396,21 @@ impl Workspace {
                 AgentGuardrailKind::KillAgent {
                     host,
                     host_id,
+                    session_id,
                     pid,
+                    process_fingerprint,
                     is_local,
                     agent_label,
-                    ..
+                    project_name: _,
                 } => {
                     self.send_guardrail_signal(
                         host,
                         host_id.as_deref(),
+                        session_id,
                         *is_local,
                         agent_label.clone(),
                         *pid,
+                        process_fingerprint.as_deref(),
                         zaplex_cockpit::GuardrailSignal::Kill,
                         ctx,
                     );
@@ -12039,24 +12424,28 @@ impl Workspace {
     }
 
     /// Guardrails (step 7): send `signal` to one Conductor session's pid, off
-    /// the UI thread. A local host (`host == CockpitModel::local_label()`)
-    /// calls `libc::kill` directly; a remote host attempts the daemon's
-    /// `RunCommandRequest` (`kill -<SIG> <pid>`) on the matching connected
-    /// daemon (see [`run_remote_guardrail_signal`] for the remote path's
-    /// honest limits). Always reports the outcome as a toast — an
+    /// the UI thread. A local host uses the platform's verified process API; a
+    /// remote host asks the matching daemon to perform the same identity check
+    /// before signalling (see [`run_remote_guardrail_signal`]). Always reports
+    /// the outcome as a toast — an
     /// unknown/dead pid, a failed local kill, and an unreachable remote host
     /// all surface rather than silently no-op'ing.
     fn send_guardrail_signal(
         &mut self,
         host: &str,
         host_id: Option<&str>,
+        session_id: &str,
         is_local: bool,
         agent_label: String,
         pid: u32,
+        expected_fingerprint: Option<&str>,
         signal: zaplex_cockpit::GuardrailSignal,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !zaplex_cockpit::pid_signalable(pid) {
+        let expected_fingerprint = expected_fingerprint.map(str::to_owned);
+        if !zaplex_cockpit::pid_signalable(pid)
+            || expected_fingerprint.is_none()
+        {
             self.toast_stack.update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
                     DismissibleToast::error(zaplex_cockpit::unsignalable_toast(&agent_label)),
@@ -12088,24 +12477,38 @@ impl Workspace {
             zaplex_cockpit::GuardrailTarget::Local => None,
         };
         let host_owned = host.to_string();
+        let session_id = session_id.to_string();
 
         ctx.spawn(
             async move {
                 match target {
                     zaplex_cockpit::GuardrailTarget::Local => {
-                        send_local_guardrail_signal(pid, signal)
+                        send_local_guardrail_signal(
+                            pid,
+                            expected_fingerprint.as_deref(),
+                            signal,
+                        )
                     }
                     zaplex_cockpit::GuardrailTarget::Remote(_) => match daemon {
                         Some(daemon)
                             if zaplex_remote_session::types::has_feature(
                                 &daemon.features,
-                                zaplex_remote_session::types::FEATURE_HOST_EXEC,
+                                zaplex_remote_session::types::FEATURE_AGENT_PROCESS_SIGNAL_V1,
                             ) =>
                         {
-                            run_remote_guardrail_signal(&daemon.client, pid, signal).await
+                            run_remote_guardrail_signal(
+                                &daemon.client,
+                                &session_id,
+                                pid,
+                                expected_fingerprint
+                                    .as_deref()
+                                    .expect("missing fingerprints return before remote dispatch"),
+                                signal,
+                            )
+                            .await
                         }
-                        // Reachable, but the daemon predates the session-less
-                        // host-command path — honest "update the daemon".
+                        // Reachable, but the daemon predates verified process
+                        // signalling — honest "update the daemon".
                         Some(_) => GuardrailSendOutcome::RemoteUnsupported(host_owned),
                         None => GuardrailSendOutcome::NoRemoteConnection(host_owned),
                     },
@@ -12152,7 +12555,7 @@ impl Workspace {
         // Each target carries its host's stable `host_id` (None for local) so the
         // remote path below resolves the exact daemon by id, never by the
         // collidable label.
-        let targets: Vec<(String, Option<String>, bool, u32)> =
+        let targets: Vec<(String, Option<String>, bool, String, u32, Option<String>)> =
             crate::cockpit::CockpitModel::as_ref(ctx)
                 .inventory()
                 .hosts
@@ -12161,10 +12564,21 @@ impl Workspace {
                     h.projects.iter().flat_map(move |p| {
                         p.sessions
                             .iter()
-                            .map(move |s| (h.host.clone(), h.host_id.clone(), h.is_local, s.pid))
+                            .map(move |s| {
+                                (
+                                    h.host.clone(),
+                                    h.host_id.clone(),
+                                    h.is_local,
+                                    s.session_id.clone(),
+                                    s.pid,
+                                    s.process_fingerprint.clone(),
+                                )
+                            })
                     })
                 })
-                .filter(|(_, _, _, pid)| zaplex_cockpit::pid_signalable(*pid))
+                .filter(|(_, _, _, _, pid, fingerprint)| {
+                    zaplex_cockpit::pid_signalable(*pid) && fingerprint.is_some()
+                })
                 .collect();
 
         if targets.is_empty() {
@@ -12181,11 +12595,12 @@ impl Workspace {
             async move {
                 let mut sent = 0usize;
                 let mut failed = 0usize;
-                for (host, host_id, is_local, pid) in targets {
+                for (host, host_id, is_local, session_id, pid, expected_fingerprint) in targets {
                     let target = zaplex_cockpit::guardrail_target(is_local, &host);
                     let outcome = match target {
                         zaplex_cockpit::GuardrailTarget::Local => send_local_guardrail_signal(
                             pid,
+                            expected_fingerprint.as_deref(),
                             zaplex_cockpit::GuardrailSignal::Interrupt,
                         ),
                         zaplex_cockpit::GuardrailTarget::Remote(_) => {
@@ -12197,12 +12612,16 @@ impl Workspace {
                                 Some(daemon)
                                     if zaplex_remote_session::types::has_feature(
                                         &daemon.features,
-                                        zaplex_remote_session::types::FEATURE_HOST_EXEC,
+                                        zaplex_remote_session::types::FEATURE_AGENT_PROCESS_SIGNAL_V1,
                                     ) =>
                                 {
                                     run_remote_guardrail_signal(
                                         &daemon.client,
+                                        &session_id,
                                         pid,
+                                        expected_fingerprint.as_deref().expect(
+                                            "filtered stop-all targets always have a fingerprint",
+                                        ),
                                         zaplex_cockpit::GuardrailSignal::Interrupt,
                                     )
                                     .await
@@ -18150,6 +18569,32 @@ impl Workspace {
         }
     }
 
+    fn account_email_for_route(
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        ctx: &AppContext,
+    ) -> Option<String> {
+        let provider = if agent == CLIAgent::Claude {
+            zaplex_cockpit::Provider::Claude
+        } else if agent == CLIAgent::Codex {
+            zaplex_cockpit::Provider::Codex
+        } else {
+            return None;
+        };
+        crate::cockpit::CockpitModel::as_ref(ctx)
+            .snapshot()
+            .accounts
+            .iter()
+            .find(|usage| {
+                usage.account.provider == provider
+                    && match config_dir {
+                        Some(dir) => usage.account.config_dir == dir,
+                        None => usage.account.is_default,
+                    }
+            })
+            .and_then(|usage| usage.account.email.clone())
+    }
+
     fn spawn_card_provider_options(
         &self,
         provider: zaplex_cockpit::Provider,
@@ -18314,9 +18759,15 @@ impl Workspace {
                 prompt,
             } => {
                 self.current_workspace_state.is_spawn_card_open = false;
+                let account_email = if node_id.is_none() {
+                    Self::account_email_for_route(*agent, config_dir.as_deref(), &*ctx)
+                } else {
+                    None
+                };
                 self.launch_routed_agent(
                     *agent,
                     config_dir.as_deref(),
+                    account_email.as_deref(),
                     cwd.as_deref(),
                     node_id.as_deref(),
                     model.as_deref(),
@@ -22309,6 +22760,7 @@ impl TypedActionView for Workspace {
                 session_id,
                 cwd,
                 config_dir,
+                account_email,
                 into_worktree,
                 host,
                 host_id,
@@ -22319,6 +22771,7 @@ impl TypedActionView for Workspace {
                     session_id,
                     cwd,
                     config_dir.as_deref(),
+                    account_email.as_deref(),
                     *into_worktree,
                     host,
                     host_id.as_deref(),
@@ -22331,27 +22784,37 @@ impl TypedActionView for Workspace {
                 session_id,
                 cwd,
                 config_dir,
+                account_email,
             } => {
                 // Jumping to an agent clears it from the "Offene Punkte" inbox
                 // surface (harmless no-op when the inbox wasn't open).
                 self.current_workspace_state.is_attention_inbox_open = false;
-                self.adopt_agent_session(*agent, session_id, cwd, config_dir.as_deref(), ctx);
+                self.adopt_agent_session(
+                    *agent,
+                    session_id,
+                    cwd,
+                    config_dir.as_deref(),
+                    account_email.as_deref(),
+                    ctx,
+                );
             }
             SlashCommandSession {
-                agent,
+                provider,
                 session_id,
                 cwd,
                 config_dir,
+                account_email,
                 command,
                 host,
                 host_id,
                 is_local,
             } => {
                 self.slash_command_session(
-                    *agent,
+                    *provider,
                     session_id,
                     cwd,
                     config_dir.as_deref(),
+                    account_email.as_deref(),
                     command,
                     host,
                     host_id.as_deref(),
@@ -22363,9 +22826,24 @@ impl TypedActionView for Workspace {
                 host,
                 host_id,
                 session_id,
+                provider,
+                config_dir,
+                account_email,
                 is_local,
             } => {
-                self.attach_fleet_session(host, host_id.as_deref(), session_id, *is_local, ctx);
+                // Jumping to an agent clears the "Offene Punkte" inbox surface
+                // (harmless no-op when the inbox wasn't open).
+                self.current_workspace_state.is_attention_inbox_open = false;
+                self.attach_fleet_session(
+                    host,
+                    host_id.as_deref(),
+                    session_id,
+                    *provider,
+                    config_dir.as_deref(),
+                    account_email.as_deref(),
+                    *is_local,
+                    ctx,
+                );
             }
             JumpToNextWaiting => {
                 self.jump_to_next_waiting(ctx);
@@ -22393,17 +22871,20 @@ impl TypedActionView for Workspace {
             StopAgent {
                 host,
                 host_id,
-                session_id: _,
+                session_id,
                 pid,
+                process_fingerprint,
                 is_local,
                 agent_label,
             } => {
                 self.send_guardrail_signal(
                     host,
                     host_id.as_deref(),
+                    session_id,
                     *is_local,
                     agent_label.clone(),
                     *pid,
+                    process_fingerprint.as_deref(),
                     zaplex_cockpit::GuardrailSignal::Interrupt,
                     ctx,
                 );
@@ -22413,6 +22894,7 @@ impl TypedActionView for Workspace {
                 host_id,
                 session_id,
                 pid,
+                process_fingerprint,
                 is_local,
                 agent_label,
                 project_name,
@@ -22423,6 +22905,7 @@ impl TypedActionView for Workspace {
                         host_id: host_id.clone(),
                         session_id: session_id.clone(),
                         pid: *pid,
+                        process_fingerprint: process_fingerprint.clone(),
                         is_local: *is_local,
                         agent_label: agent_label.clone(),
                         project_name: project_name.clone(),
@@ -22437,7 +22920,10 @@ impl TypedActionView for Workspace {
                     .iter()
                     .flat_map(|h| h.projects.iter())
                     .flat_map(|p| p.sessions.iter())
-                    .filter(|s| zaplex_cockpit::pid_signalable(s.pid))
+                    .filter(|s| {
+                        zaplex_cockpit::pid_signalable(s.pid)
+                            && s.process_fingerprint.is_some()
+                    })
                     .count();
                 if count == 0 {
                     self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -22459,6 +22945,7 @@ impl TypedActionView for Workspace {
             LaunchAgent {
                 agent,
                 config_dir,
+                account_email,
                 cwd,
                 node_id,
                 model,
@@ -22467,6 +22954,7 @@ impl TypedActionView for Workspace {
                 self.launch_routed_agent(
                     *agent,
                     config_dir.as_deref(),
+                    account_email.as_deref(),
                     cwd.as_deref(),
                     node_id.as_deref(),
                     model.as_deref(),

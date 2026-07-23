@@ -17037,6 +17037,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "sysinfo",
  "tempfile",
  "walkdir",
 ]

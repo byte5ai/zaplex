@@ -18,13 +18,16 @@ use warp_util::file::FileId;
 
 use super::proto::{
     client_message, delete_file_response, run_command_response, server_message,
-    write_file_response, Abort, AgentSessionList, Authenticate, ClientMessage, DeleteFile,
-    DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse, FailedFileRead,
-    FileContextProto, FileOperationError, HostExec, HostExecResult, Initialize, InitializeResponse,
-    NavigatedToDirectory, NavigatedToDirectoryResponse, ReadFileContextResponse, RunCommandError,
-    RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess, ServerMessage,
-    SessionBootstrapped, WriteFile, WriteFileResponse, WriteFileSuccess,
+    write_file_response, Abort, AgentProcessSignal, AgentProcessSignalRequest,
+    AgentProcessSignalResponse, AgentProcessSignalStatus, AgentSessionList, Authenticate,
+    ClientMessage, DeleteFile, DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse,
+    FailedFileRead, FileContextProto, FileOperationError, HostExec, HostExecResult, Initialize,
+    InitializeResponse, NavigatedToDirectory, NavigatedToDirectoryResponse,
+    ReadFileContextResponse, RunCommandError, RunCommandErrorCode, RunCommandRequest,
+    RunCommandResponse, RunCommandSuccess, ServerMessage, SessionBootstrapped, StartupCommandAck,
+    WriteFile, WriteFileResponse, WriteFileSuccess,
 };
+use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
 use zaplex_remote_session::types::supported_features;
 #[cfg(unix)]
 use super::proto::{
@@ -109,6 +112,77 @@ impl HandlerOutcome {
         match self {
             HandlerOutcome::Sync(message) => message,
             HandlerOutcome::Async(_) => panic!("expected synchronous handler outcome"),
+        }
+    }
+}
+
+fn execute_agent_process_signal_with<F>(
+    req: AgentProcessSignalRequest,
+    send: F,
+) -> AgentProcessSignalResponse
+where
+    F: FnOnce(u32, &str, GuardrailSignal) -> Result<(), ProcessSignalError>,
+{
+    let AgentProcessSignalRequest {
+        session_id,
+        pid,
+        expected_process_fingerprint,
+        signal,
+    } = req;
+
+    let failure = |status: AgentProcessSignalStatus, error_message: String| {
+        AgentProcessSignalResponse {
+            session_id: session_id.clone(),
+            pid,
+            status: status.into(),
+            error_message,
+        }
+    };
+
+    if session_id.trim().is_empty() {
+        return failure(
+            AgentProcessSignalStatus::InvalidRequest,
+            "agent session id is empty".to_string(),
+        );
+    }
+    if expected_process_fingerprint.is_empty() {
+        return failure(
+            AgentProcessSignalStatus::IdentityUnverifiable,
+            "expected process fingerprint is empty".to_string(),
+        );
+    }
+
+    let signal = match AgentProcessSignal::try_from(signal) {
+        Ok(AgentProcessSignal::Interrupt) => GuardrailSignal::Interrupt,
+        Ok(AgentProcessSignal::Kill) => GuardrailSignal::Kill,
+        Ok(AgentProcessSignal::Unspecified) | Err(_) => {
+            return failure(
+                AgentProcessSignalStatus::InvalidRequest,
+                "unsupported agent process signal".to_string(),
+            );
+        }
+    };
+
+    match send(pid, &expected_process_fingerprint, signal) {
+        Ok(()) => AgentProcessSignalResponse {
+            session_id: session_id.clone(),
+            pid,
+            status: AgentProcessSignalStatus::Sent.into(),
+            error_message: String::new(),
+        },
+        Err(error) => {
+            let status = match &error {
+                ProcessSignalError::InvalidPid => AgentProcessSignalStatus::InvalidRequest,
+                ProcessSignalError::IdentityUnavailable(_) => {
+                    AgentProcessSignalStatus::IdentityUnverifiable
+                }
+                ProcessSignalError::IdentityChanged => AgentProcessSignalStatus::StaleIdentity,
+                ProcessSignalError::SignalFailed(_) => AgentProcessSignalStatus::SignalFailed,
+                ProcessSignalError::UnsupportedPlatform => {
+                    AgentProcessSignalStatus::IdentityUnverifiable
+                }
+            };
+            failure(status, error.to_string())
         }
     }
 }
@@ -665,6 +739,9 @@ impl ServerModel {
             Some(client_message::Message::RunCommand(req)) => {
                 self.handle_run_command(req, &request_id, conn_id, ctx)
             }
+            Some(client_message::Message::AgentProcessSignal(req)) => {
+                self.handle_agent_process_signal(req)
+            }
             Some(client_message::Message::HostExec(req)) => {
                 self.handle_host_exec(req, &request_id, conn_id, ctx)
             }
@@ -725,8 +802,12 @@ impl ServerModel {
             }
             #[cfg(unix)]
             Some(client_message::Message::SessionInput(msg)) => {
-                self.handle_session_input(msg);
-                return;
+                match self.handle_session_input(msg) {
+                    Some(ack) => {
+                        HandlerOutcome::Sync(server_message::Message::StartupCommandAck(ack))
+                    }
+                    None => return,
+                }
             }
             #[cfg(unix)]
             Some(client_message::Message::ResizeSession(msg)) => {
@@ -1090,14 +1171,30 @@ impl ServerModel {
         HandlerOutcome::Async(Some(handle))
     }
 
+    /// Handles the narrow Agent-Cockpit process-signal RPC.
+    ///
+    /// No command text reaches a shell or `HostExec`: the daemon maps the
+    /// protocol enum to [`GuardrailSignal`] and delegates only to
+    /// [`zaplex_cockpit::send_verified_process_signal`], which re-verifies the
+    /// process identity immediately before signalling.
+    fn handle_agent_process_signal(
+        &mut self,
+        req: AgentProcessSignalRequest,
+    ) -> HandlerOutcome {
+        HandlerOutcome::Sync(server_message::Message::AgentProcessSignalResponse(
+            execute_agent_process_signal_with(
+                req,
+                zaplex_cockpit::send_verified_process_signal,
+            ),
+        ))
+    }
+
     /// Handles `HostExec` — a **session-less** one-shot host command. Unlike
     /// [`Self::handle_run_command`], it does not look up a per-session
     /// `LocalCommandExecutor`; it builds an ad-hoc executor over the daemon's
     /// default user shell (`$SHELL`, falling back to `/bin/bash`) rooted at the
-    /// daemon's home directory and runs the command there. This is the path the
-    /// Agent-Cockpit cross-host guardrails use to deliver `kill -<SIG> <pid>` to
-    /// a remote agent when the app holds a daemon connection but no bound
-    /// interactive session on that host.
+    /// daemon's home directory and runs the command there. Agent process
+    /// guardrails must use [`Self::handle_agent_process_signal`] instead.
     ///
     /// On success returns a `HandlerOutcome::Async` resolving a `HostExecResult`;
     /// a failure to even spawn the command surfaces as a top-level
@@ -2208,6 +2305,7 @@ impl ServerModel {
                 cols,
                 attached: conn_id,
                 input_tx,
+                accepted_startup_commands: HashMap::new(),
                 cwd,
                 shell: shell.clone(),
                 last_attached_ms: now_epoch_millis(),
@@ -2322,12 +2420,76 @@ impl ServerModel {
     }
 
     /// Queues input bytes for the session's ordered writer task.
-    fn handle_session_input(&mut self, msg: SessionInput) {
-        if let Some(session) = self.sessions.get(&msg.session_id) {
-            if let Err(e) = session.input_tx.try_send(msg.bytes) {
-                log::warn!("Daemon: dropping input for session {}: {e}", msg.session_id);
+    ///
+    /// Ordinary input has no startup id and remains a fire-and-forget
+    /// notification. Startup input is a correlated request: the id is recorded
+    /// only after `try_send` succeeds, duplicate retries receive the same
+    /// positive acknowledgement without a second enqueue, and a writer failure
+    /// leaves the id retryable.
+    fn handle_session_input(&mut self, msg: SessionInput) -> Option<StartupCommandAck> {
+        let SessionInput {
+            session_id,
+            bytes,
+            startup_command_id,
+        } = msg;
+        if startup_command_id.is_empty() {
+            if let Some(session) = self.sessions.get(&session_id) {
+                if let Err(e) = session.input_tx.try_send(bytes) {
+                    log::warn!("Daemon: dropping input for session {session_id}: {e}");
+                }
             }
+            return None;
         }
+
+        let accepted = if let Some(session) = self.sessions.get_mut(&session_id) {
+            if let Some(accepted_bytes) = session.accepted_startup_commands.get(&startup_command_id)
+            {
+                if accepted_bytes == &bytes {
+                    true
+                } else {
+                    log::warn!(
+                        "Daemon: startup command id {startup_command_id} was reused with \
+                         different bytes for session {session_id}"
+                    );
+                    false
+                }
+            } else if session.accepted_startup_commands.len()
+                >= super::session_host::MAX_ACCEPTED_STARTUP_COMMANDS
+            {
+                log::warn!(
+                    "Daemon: startup command ledger is full for session {session_id}; \
+                     rejecting new id {startup_command_id}"
+                );
+                false
+            } else {
+                match session.input_tx.try_send(bytes.clone()) {
+                    Ok(()) => {
+                        session
+                            .accepted_startup_commands
+                            .insert(startup_command_id.clone(), bytes);
+                        true
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Daemon: failed to enqueue startup command {startup_command_id} \
+                             for session {session_id}: {e}"
+                        );
+                        false
+                    }
+                }
+            }
+        } else {
+            log::warn!(
+                "Daemon: startup command {startup_command_id} targeted unknown session {session_id}"
+            );
+            false
+        };
+
+        Some(StartupCommandAck {
+            session_id,
+            startup_command_id,
+            accepted,
+        })
     }
 
     /// Re-attaches a (possibly reconnected) connection to a still-running

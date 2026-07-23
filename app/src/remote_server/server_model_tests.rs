@@ -4,13 +4,15 @@ use std::fs;
 
 use super::super::proto::{
     list_directory_response, read_file_chunk_response, resolve_path_response, server_message,
-    write_file_chunk_response, Authenticate, CreateDirectory, Initialize, ListDirectory,
+    write_file_chunk_response, AgentProcessSignal, AgentProcessSignalRequest,
+    AgentProcessSignalStatus, Authenticate, CreateDirectory, Initialize, ListDirectory,
     ReadFileChunk, ResolvePath, WriteFileChunk,
 };
 use super::super::protocol::RequestId;
 #[cfg(feature = "local_fs")]
 use super::super::server_buffer_tracker::ServerBufferTracker;
-use super::{PendingFileOps, ServerModel};
+use super::{execute_agent_process_signal_with, PendingFileOps, ServerModel};
+use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
 
 fn test_model() -> ServerModel {
     ServerModel {
@@ -106,6 +108,102 @@ fn empty_authenticate_preserves_existing_auth_token() {
     });
 
     assert_eq!(model.auth_token(), Some("initial-token"));
+}
+
+fn process_signal_request(signal: AgentProcessSignal) -> AgentProcessSignalRequest {
+    AgentProcessSignalRequest {
+        session_id: "agent-session-1".to_string(),
+        pid: 4242,
+        expected_process_fingerprint: "linux-v1:boot-id:12345".to_string(),
+        signal: signal.into(),
+    }
+}
+
+#[test]
+fn verified_agent_process_signal_calls_only_the_typed_backend() {
+    let response = execute_agent_process_signal_with(
+        process_signal_request(AgentProcessSignal::Interrupt),
+        |pid, fingerprint, signal| {
+            assert_eq!(pid, 4242);
+            assert_eq!(fingerprint, "linux-v1:boot-id:12345");
+            assert_eq!(signal, GuardrailSignal::Interrupt);
+            Ok(())
+        },
+    );
+
+    assert_eq!(
+        AgentProcessSignalStatus::try_from(response.status),
+        Ok(AgentProcessSignalStatus::Sent)
+    );
+    assert_eq!(response.session_id, "agent-session-1");
+    assert_eq!(response.pid, 4242);
+    assert!(response.error_message.is_empty());
+}
+
+#[test]
+fn verified_agent_process_signal_rejects_unknown_signal_before_backend() {
+    let mut request = process_signal_request(AgentProcessSignal::Kill);
+    request.signal = 999;
+    let response = execute_agent_process_signal_with(request, |_, _, _| {
+        panic!("invalid signal must never reach the process backend")
+    });
+
+    assert_eq!(
+        AgentProcessSignalStatus::try_from(response.status),
+        Ok(AgentProcessSignalStatus::InvalidRequest)
+    );
+}
+
+#[test]
+fn verified_agent_process_signal_fails_closed_without_identity() {
+    let mut request = process_signal_request(AgentProcessSignal::Interrupt);
+    request.expected_process_fingerprint = String::new();
+    let response = execute_agent_process_signal_with(request, |_, _, _| {
+        panic!("missing identity must never reach the process backend")
+    });
+
+    assert_eq!(
+        AgentProcessSignalStatus::try_from(response.status),
+        Ok(AgentProcessSignalStatus::IdentityUnverifiable)
+    );
+}
+
+#[test]
+fn verified_agent_process_signal_returns_typed_failure_reasons() {
+    let cases = [
+        (
+            ProcessSignalError::IdentityChanged,
+            AgentProcessSignalStatus::StaleIdentity,
+        ),
+        (
+            ProcessSignalError::IdentityUnavailable("unreadable".to_string()),
+            AgentProcessSignalStatus::IdentityUnverifiable,
+        ),
+        (
+            ProcessSignalError::InvalidPid,
+            AgentProcessSignalStatus::InvalidRequest,
+        ),
+        (
+            ProcessSignalError::SignalFailed("permission denied".to_string()),
+            AgentProcessSignalStatus::SignalFailed,
+        ),
+        (
+            ProcessSignalError::UnsupportedPlatform,
+            AgentProcessSignalStatus::IdentityUnverifiable,
+        ),
+    ];
+
+    for (error, expected_status) in cases {
+        let response = execute_agent_process_signal_with(
+            process_signal_request(AgentProcessSignal::Kill),
+            |_, _, _| Err(error.clone()),
+        );
+        assert_eq!(
+            AgentProcessSignalStatus::try_from(response.status),
+            Ok(expected_status)
+        );
+        assert!(!response.error_message.is_empty());
+    }
 }
 
 #[cfg(feature = "local_fs")]
@@ -378,6 +476,7 @@ mod daemon_session {
                         message: Some(client_message::Message::SessionInput(SessionInput {
                             session_id: session_id.clone(),
                             bytes: b"echo D4''EM0N\n".to_vec(),
+                            startup_command_id: String::new(),
                         })),
                     },
                     ctx,
@@ -414,8 +513,326 @@ mod daemon_session {
             message: Some(client_message::Message::SessionInput(SessionInput {
                 session_id: session_id.to_string(),
                 bytes: bytes.to_vec(),
+                startup_command_id: String::new(),
             })),
         }
+    }
+
+    fn startup_input_msg(
+        request_id: &str,
+        session_id: &str,
+        startup_command_id: &str,
+        bytes: &[u8],
+    ) -> ClientMessage {
+        assert!(
+            !startup_command_id.is_empty(),
+            "startup delivery requires a stable non-empty command id"
+        );
+        ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::SessionInput(SessionInput {
+                session_id: session_id.to_string(),
+                bytes: bytes.to_vec(),
+                startup_command_id: startup_command_id.to_string(),
+            })),
+        }
+    }
+
+    /// Returns the next correlated startup-command acknowledgement, skipping
+    /// unrelated session output that may still be arriving from shell bootstrap.
+    async fn recv_startup_command_ack(
+        rx: &async_channel::Receiver<ServerMessage>,
+    ) -> Option<(String, String, String, bool)> {
+        for _ in 0..100 {
+            match recv_deadline(rx, Duration::from_secs(2)).await {
+                Some(message) => {
+                    let request_id = message.request_id;
+                    if let Some(server_message::Message::StartupCommandAck(ack)) = message.message {
+                        return Some((
+                            request_id,
+                            ack.session_id,
+                            ack.startup_command_id,
+                            ack.accepted,
+                        ));
+                    }
+                }
+                None => return None,
+            }
+        }
+        None
+    }
+
+    /// Startup input is a retryable request, not an ordinary fire-and-forget
+    /// keystroke. The daemon acknowledges every accepted request while using
+    /// the stable command id to enqueue identical retries exactly once.
+    #[test]
+    fn duplicate_startup_command_is_acknowledged_but_enqueued_once() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
+            let session_id = recv_session_opened(&conn_rx).await.expect("session opened");
+
+            // Replace only the ordered writer queue with a probe. This keeps the
+            // real server routing and per-session state while making the number
+            // and exact contents of accepted writes deterministic.
+            let (writer_tx, writer_rx) = async_channel::unbounded::<Vec<u8>>();
+            model.update(&mut app, |m, _ctx| {
+                m.sessions.get_mut(&session_id).unwrap().input_tx = writer_tx;
+            });
+
+            let bytes = b"codex resume stable-session\n";
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id,
+                    startup_input_msg("startup-1", &session_id, "command-1", bytes),
+                    ctx,
+                )
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id,
+                    startup_input_msg("startup-1-retry", &session_id, "command-1", bytes),
+                    ctx,
+                )
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id,
+                    startup_input_msg(
+                        "startup-2",
+                        &session_id,
+                        "command-2",
+                        b"claude --resume another-session\n",
+                    ),
+                    ctx,
+                )
+            });
+
+            assert_eq!(
+                recv_startup_command_ack(&conn_rx).await,
+                Some((
+                    "startup-1".to_string(),
+                    session_id.clone(),
+                    "command-1".to_string(),
+                    true,
+                )),
+                "the first accepted delivery receives a positive acknowledgement"
+            );
+            assert_eq!(
+                recv_startup_command_ack(&conn_rx).await,
+                Some((
+                    "startup-1-retry".to_string(),
+                    session_id.clone(),
+                    "command-1".to_string(),
+                    true,
+                )),
+                "an already accepted command id is acknowledged again"
+            );
+            assert_eq!(
+                recv_startup_command_ack(&conn_rx).await,
+                Some((
+                    "startup-2".to_string(),
+                    session_id.clone(),
+                    "command-2".to_string(),
+                    true,
+                )),
+                "a different command id is accepted independently"
+            );
+
+            assert_eq!(writer_rx.recv().await.unwrap(), bytes);
+            assert_eq!(
+                writer_rx.recv().await.unwrap(),
+                b"claude --resume another-session\n"
+            );
+            assert!(
+                writer_rx.try_recv().is_err(),
+                "the duplicate command id must not enqueue its bytes twice"
+            );
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, close_msg(&session_id), ctx)
+            });
+        });
+    }
+
+    /// A command id becomes complete only after the ordered writer accepted its
+    /// bytes. Recording it before `try_send` succeeds would turn a transient
+    /// queue failure into permanent command loss on retry.
+    #[test]
+    fn failed_startup_enqueue_is_not_acknowledged_or_deduplicated() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
+            let session_id = recv_session_opened(&conn_rx).await.expect("session opened");
+
+            let (failed_tx, failed_rx) = async_channel::unbounded::<Vec<u8>>();
+            drop(failed_rx);
+            model.update(&mut app, |m, _ctx| {
+                m.sessions.get_mut(&session_id).unwrap().input_tx = failed_tx;
+            });
+            let bytes = b"codex resume retry-after-writer-failure\n";
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id,
+                    startup_input_msg("failed-attempt", &session_id, "command-retry", bytes),
+                    ctx,
+                )
+            });
+
+            assert_eq!(
+                recv_startup_command_ack(&conn_rx).await,
+                Some((
+                    "failed-attempt".to_string(),
+                    session_id.clone(),
+                    "command-retry".to_string(),
+                    false,
+                )),
+                "a failed writer enqueue must never receive a positive acknowledgement"
+            );
+
+            // Repair the writer and retry the same stable command id. Acceptance
+            // proves the failed attempt did not poison the deduplication ledger.
+            let (healthy_tx, healthy_rx) = async_channel::unbounded::<Vec<u8>>();
+            model.update(&mut app, |m, _ctx| {
+                m.sessions.get_mut(&session_id).unwrap().input_tx = healthy_tx;
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id,
+                    startup_input_msg("successful-retry", &session_id, "command-retry", bytes),
+                    ctx,
+                )
+            });
+
+            assert_eq!(
+                recv_startup_command_ack(&conn_rx).await,
+                Some((
+                    "successful-retry".to_string(),
+                    session_id.clone(),
+                    "command-retry".to_string(),
+                    true,
+                ))
+            );
+            assert_eq!(healthy_rx.recv().await.unwrap(), bytes);
+            assert!(
+                healthy_rx.try_recv().is_err(),
+                "the successful retry is enqueued exactly once"
+            );
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, close_msg(&session_id), ctx)
+            });
+        });
+    }
+
+    #[test]
+    fn startup_command_ledger_is_bounded_without_breaking_known_id_deduplication() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
+            let session_id = recv_session_opened(&conn_rx).await.expect("session opened");
+
+            let (writer_tx, writer_rx) = async_channel::unbounded::<Vec<u8>>();
+            model.update(&mut app, |m, _ctx| {
+                m.sessions.get_mut(&session_id).unwrap().input_tx = writer_tx;
+            });
+
+            for index in 0..crate::remote_server::session_host::MAX_ACCEPTED_STARTUP_COMMANDS {
+                let request_id = format!("bounded-request-{index}");
+                let command_id = format!("bounded-command-{index}");
+                let bytes = format!("command-{index}\n");
+                model.update(&mut app, |m, ctx| {
+                    m.handle_message(
+                        conn_id,
+                        startup_input_msg(
+                            &request_id,
+                            &session_id,
+                            &command_id,
+                            bytes.as_bytes(),
+                        ),
+                        ctx,
+                    )
+                });
+            }
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id,
+                    startup_input_msg(
+                        "overflow-request",
+                        &session_id,
+                        "overflow-command",
+                        b"must-not-run\n",
+                    ),
+                    ctx,
+                )
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id,
+                    startup_input_msg(
+                        "known-retry",
+                        &session_id,
+                        "bounded-command-0",
+                        b"command-0\n",
+                    ),
+                    ctx,
+                )
+            });
+
+            for index in 0..crate::remote_server::session_host::MAX_ACCEPTED_STARTUP_COMMANDS {
+                assert_eq!(
+                    recv_startup_command_ack(&conn_rx).await,
+                    Some((
+                        format!("bounded-request-{index}"),
+                        session_id.clone(),
+                        format!("bounded-command-{index}"),
+                        true,
+                    ))
+                );
+                assert_eq!(
+                    writer_rx.try_recv().unwrap(),
+                    format!("command-{index}\n").into_bytes()
+                );
+            }
+            assert_eq!(
+                recv_startup_command_ack(&conn_rx).await,
+                Some((
+                    "overflow-request".to_string(),
+                    session_id.clone(),
+                    "overflow-command".to_string(),
+                    false,
+                )),
+                "a new id beyond the fixed ledger ceiling is rejected"
+            );
+            assert_eq!(
+                recv_startup_command_ack(&conn_rx).await,
+                Some((
+                    "known-retry".to_string(),
+                    session_id.clone(),
+                    "bounded-command-0".to_string(),
+                    true,
+                )),
+                "a known id remains positively deduplicated after the ledger is full"
+            );
+            assert!(
+                writer_rx.try_recv().is_err(),
+                "neither the overflow id nor the known retry may enqueue more bytes"
+            );
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, close_msg(&session_id), ctx)
+            });
+        });
     }
 
     fn attach_msg(session_id: &str, last_seq: u64) -> ClientMessage {

@@ -218,6 +218,18 @@ impl CLIAgentSession {
     }
 }
 
+/// Account identity bound to a terminal independently of CLI session detection.
+///
+/// `config_dir` selects the account route used to start or resume the agent.
+/// `account_email` is the durable identity coordinate used to distinguish
+/// conversations whose provider-local session ids were copied between accounts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CLIAgentAccountIdentity {
+    agent: CLIAgent,
+    pub config_dir: Option<String>,
+    pub account_email: Option<String>,
+}
+
 /// Events emitted by `CLIAgentSessionsModel` for subscribers (e.g., `AgentNotificationsModel`).
 #[allow(dead_code)] // `agent` fields on Started/InputSessionChanged/Ended are used for logging and future subscribers.
 #[derive(Debug, Clone)]
@@ -278,6 +290,7 @@ impl CLIAgentSessionsModelEvent {
 /// Singleton model that tracks pane-scoped CLI agent state and plugin-enriched session context.
 pub struct CLIAgentSessionsModel {
     sessions: HashMap<EntityId, CLIAgentSession>,
+    account_identities: HashMap<EntityId, CLIAgentAccountIdentity>,
     /// Tracks (agent, remote_host) pairs where an auto plugin operation (install or update) has failed.
     /// Shared across all views so failure in one tab is reflected everywhere.
     plugin_auto_failures: HashSet<(CLIAgent, Option<String>)>,
@@ -293,12 +306,74 @@ impl CLIAgentSessionsModel {
     pub fn new() -> Self {
         Self {
             sessions: HashMap::new(),
+            account_identities: HashMap::new(),
             plugin_auto_failures: HashSet::new(),
         }
     }
 
     pub fn session(&self, terminal_view_id: EntityId) -> Option<&CLIAgentSession> {
         self.sessions.get(&terminal_view_id)
+    }
+
+    pub fn account_identity(&self, terminal_view_id: EntityId) -> Option<&CLIAgentAccountIdentity> {
+        self.account_identities.get(&terminal_view_id)
+    }
+
+    /// Binds the account selected for a started, resumed, forked, or adopted
+    /// agent before command detection can report its CLI session.
+    pub fn bind_account_identity(
+        &mut self,
+        terminal_view_id: EntityId,
+        agent: CLIAgent,
+        config_dir: Option<String>,
+        account_email: Option<String>,
+    ) {
+        self.account_identities.insert(
+            terminal_view_id,
+            CLIAgentAccountIdentity {
+                agent,
+                config_dir,
+                account_email,
+            },
+        );
+    }
+
+    pub fn account_identity_matches(
+        &self,
+        terminal_view_id: EntityId,
+        agent: CLIAgent,
+        account_email: Option<&str>,
+    ) -> bool {
+        match self.account_identities.get(&terminal_view_id) {
+            Some(identity) => {
+                identity.agent == agent && identity.account_email.as_deref() == account_email
+            }
+            None => account_email.is_none(),
+        }
+    }
+
+    /// Finds the terminal currently hosting one provider-owned agent session.
+    /// Session ids are only meaningful within their provider, so both values
+    /// must match. Remote panes are intentionally included: callers use this to
+    /// focus an already-open session instead of starting a duplicate resume.
+    /// `matches_terminal` supplies the host check because the same conversation
+    /// id may exist locally and on several remote hosts after a copy.
+    pub fn terminal_view_id_for_agent_session_matching(
+        &self,
+        agent: CLIAgent,
+        session_id: &str,
+        account_email: Option<&str>,
+        mut matches_terminal: impl FnMut(EntityId, &CLIAgentSession) -> bool,
+    ) -> Option<EntityId> {
+        self.sessions
+            .iter()
+            .find_map(|(terminal_view_id, session)| {
+                (session.agent == agent
+                    && session.session_context.session_id.as_deref() == Some(session_id)
+                    && self.account_identity_matches(*terminal_view_id, agent, account_email)
+                    && matches_terminal(*terminal_view_id, session))
+                .then_some(*terminal_view_id)
+            })
     }
 
     /// Returns `true` if the rich input editor is currently open for this terminal.
@@ -374,6 +449,7 @@ impl CLIAgentSessionsModel {
     }
 
     pub fn remove_session(&mut self, terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) {
+        self.account_identities.remove(&terminal_view_id);
         if let Some(session) = self.sessions.remove(&terminal_view_id) {
             ctx.emit(CLIAgentSessionsModelEvent::Ended {
                 terminal_view_id,
@@ -477,6 +553,13 @@ impl CLIAgentSessionsModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let agent = session.agent;
+        if self
+            .account_identities
+            .get(&terminal_view_id)
+            .is_some_and(|identity| identity.agent != agent)
+        {
+            self.account_identities.remove(&terminal_view_id);
+        }
         // Close any open rich input before replacing, so subscribers can
         // restore input config before the session ends.
         self.close_input(terminal_view_id, false, ctx);

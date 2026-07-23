@@ -104,6 +104,7 @@ mod session_effort_tests {
             worktree: None,
             config_dir: None,
             account_email: None,
+            process_fingerprint: None,
             last_activity: Utc::now(),
             pid: 0,
         }

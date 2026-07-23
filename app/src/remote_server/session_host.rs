@@ -10,6 +10,7 @@
 //! `server_model.rs` (where the model internals are in scope). See
 //! `docs/superpowers/specs/2026-06-24-stage1-session-host-design.md`.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::sync::Arc;
 
@@ -32,6 +33,11 @@ pub(super) const RING_CEILING_BYTES: usize = 4 * 1024 * 1024;
 /// a chatty pre-prompt), capture is abandoned rather than growing unbounded.
 pub(super) const BOOTSTRAP_PREAMBLE_CAP_BYTES: usize = 512 * 1024;
 
+/// Maximum retry-safe startup deliveries remembered for one PTY session.
+/// Legitimate sessions normally use one; the small fixed ceiling prevents a
+/// client from growing the deduplication ledger for the session lifetime.
+pub(super) const MAX_ACCEPTED_STARTUP_COMMANDS: usize = 64;
+
 /// Read chunk size for the per-session PTY reader.
 const READ_CHUNK: usize = 64 * 1024;
 
@@ -51,6 +57,11 @@ pub(super) struct Session {
     pub(super) attached: ConnectionId,
     /// Ordered keyboard/mouse input → the writer task → the PTY.
     pub(super) input_tx: async_channel::Sender<Vec<u8>>,
+    /// Retry-safe startup commands already accepted by the ordered writer,
+    /// keyed by their stable client-generated delivery id. The bytes are kept
+    /// with the id so an accidental id reuse with different content is rejected
+    /// rather than acknowledged as if it had executed.
+    pub(super) accepted_startup_commands: HashMap<String, Vec<u8>>,
     /// Working directory the session was opened in (for `ListSessions`).
     pub(super) cwd: Option<String>,
     /// Login shell the session runs (for `ListSessions` titles).
