@@ -62,8 +62,8 @@ fn windows_bucket_correctly_with_fixed_now() {
     assert_eq!(u.block5h.input, 3000);
     assert_eq!(u.block5h.output, 300);
     assert_eq!(u.reset5h, Some(ts("2026-06-30T15:00:00Z")));
-    // opus: (3000*15 + 300*75)/1e6
-    approx(u.block5h.cost_usd, 0.0675);
+    // Opus 4.8: (3000*5 + 300*25)/1e6
+    approx(u.block5h.cost_usd, 0.0225);
 
     // today (UTC) = same as the 5h block here.
     assert_eq!(u.today.messages, 2);

@@ -1,9 +1,9 @@
 //! Per-model pricing table for deriving cost from token counts.
 //!
 //! **Approximation, by design.** LLM prices drift; this table is centralized and
-//! overridable, and unknown models fall back to a *logged* zero (never silently
-//! mispriced). Rates are USD per 1,000,000 tokens. Verify/refresh against current
-//! Anthropic + OpenAI pricing when models change (see the Increment 1 design doc §5).
+//! overridable. It contains only bundled list prices, never values fetched from a
+//! remote endpoint at runtime. Unknown models are unpriced rather than represented
+//! as a real zero cost. Rates are USD per 1,000,000 tokens.
 
 use serde::{Deserialize, Serialize};
 
@@ -18,17 +18,61 @@ pub struct ModelPrice {
     pub cache_read: f64,
 }
 
+/// Where a local price estimate came from. The cockpit deliberately keeps this
+/// separate from actual account billing: transcript tokens plus a static list
+/// price are an estimate, not an invoice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PricingSource {
+    /// Bundled API list price, verified on 2026-07-24 from the vendor's public
+    /// pricing page. It is intentionally static: Zaplex never invents or fetches
+    /// a runtime price for an unknown model.
+    ///
+    /// OpenAI: <https://developers.openai.com/api/docs/models/gpt-5-codex>
+    /// Anthropic: <https://docs.anthropic.com/en/docs/about-claude/pricing>
+    BundledListPrice,
+    /// A caller-supplied static table. It is still an estimate, but Zaplex does
+    /// not claim a vendor source for it.
+    CustomStatic,
+}
+
+/// A local calculation from one transcript turn and a static price table.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CostEstimate {
+    pub usd: f64,
+    pub source: PricingSource,
+}
+
+impl CostEstimate {
+    pub fn is_estimate(self) -> bool {
+        true
+    }
+}
+
 /// A model-name-substring → price table, matched case-insensitively, first match
 /// wins (order entries specific → general).
 #[derive(Clone, Debug)]
 pub struct PricingTable {
-    entries: Vec<(String, ModelPrice)>,
+    entries: Vec<(String, ModelPrice, PricingSource)>,
 }
 
 impl PricingTable {
     /// Build a table from `(substring, price)` pairs (already ordered specific→general).
     pub fn new(entries: Vec<(String, ModelPrice)>) -> Self {
-        Self { entries }
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|(key, price)| (key, price, PricingSource::CustomStatic))
+                .collect(),
+        }
+    }
+
+    fn bundled(entries: Vec<(String, ModelPrice)>) -> Self {
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|(key, price)| (key, price, PricingSource::BundledListPrice))
+                .collect(),
+        }
     }
 
     /// Look up the price whose key is a case-insensitive substring of `model`.
@@ -36,12 +80,39 @@ impl PricingTable {
         let m = model.to_ascii_lowercase();
         self.entries
             .iter()
-            .find(|(key, _)| m.contains(key.as_str()))
-            .map(|(_, price)| *price)
+            .find(|(key, _, _)| m.contains(key.as_str()))
+            .map(|(_, price, _)| *price)
     }
 
-    /// Cost in USD for one turn's tokens. Reasoning tokens (Codex) bill as output.
-    /// Unknown models cost 0 and are logged at debug level (never silently mispriced).
+    /// Estimate one turn's API-list-price cost. Reasoning tokens (Codex) bill as
+    /// output. `None` means the model is unpriced, never that it costs zero.
+    pub fn estimate_for(
+        &self,
+        model: &str,
+        input: u64,
+        output: u64,
+        cache_create: u64,
+        cache_read: u64,
+        reasoning: u64,
+    ) -> Option<CostEstimate> {
+        let m = model.to_ascii_lowercase();
+        let (_, p, source) = self
+            .entries
+            .iter()
+            .find(|(key, _, _)| m.contains(key.as_str()))?;
+        let usd = (input as f64 * p.input
+            + output as f64 * p.output
+            + reasoning as f64 * p.output
+            + cache_create as f64 * p.cache_write
+            + cache_read as f64 * p.cache_read)
+            / 1_000_000.0;
+        Some(CostEstimate {
+            usd,
+            source: *source,
+        })
+    }
+
+    /// The numeric part of [`Self::estimate_for`]. `None` is an unpriced model.
     pub fn cost_for(
         &self,
         model: &str,
@@ -50,16 +121,9 @@ impl PricingTable {
         cache_create: u64,
         cache_read: u64,
         reasoning: u64,
-    ) -> f64 {
-        let Some(p) = self.price_for(model) else {
-            log::debug!("zaplex_cockpit: no pricing for model {model:?}; costing as $0");
-            return 0.0;
-        };
-        (input as f64 * p.input
-            + (output + reasoning) as f64 * p.output
-            + cache_create as f64 * p.cache_write
-            + cache_read as f64 * p.cache_read)
-            / 1_000_000.0
+    ) -> Option<f64> {
+        self.estimate_for(model, input, output, cache_create, cache_read, reasoning)
+            .map(|estimate| estimate.usd)
     }
 }
 
@@ -76,20 +140,21 @@ impl Default for PricingTable {
             cache_write,
             cache_read,
         };
-        // Order matters: more specific keys first.
-        Self::new(vec![
+        // Exact supported model IDs (plus their dated transcript suffixes) only.
+        // A broad family key would make a new model appear priced using an older
+        // sibling's rate, which is less honest than reporting it as unpriced.
+        Self::bundled(vec![
             // --- Anthropic (Claude) ---
-            ("opus".into(), m(15.0, 75.0, 18.75, 1.50)),
-            ("sonnet".into(), m(3.0, 15.0, 3.75, 0.30)),
-            ("haiku".into(), m(1.0, 5.0, 1.25, 0.10)),
+            ("claude-opus-4-8".into(), m(5.0, 25.0, 6.25, 0.50)),
+            ("claude-opus-4-7".into(), m(5.0, 25.0, 6.25, 0.50)),
+            ("claude-opus-4-6".into(), m(5.0, 25.0, 6.25, 0.50)),
+            ("claude-opus-4-5".into(), m(5.0, 25.0, 6.25, 0.50)),
+            ("claude-sonnet-4-6".into(), m(3.0, 15.0, 3.75, 0.30)),
+            ("claude-haiku-4-5".into(), m(1.0, 5.0, 1.25, 0.10)),
             // --- OpenAI (Codex / GPT-5 family) ---
             // Codex transcripts report `cached_input_tokens` (→ cache_read); no
             // separate cache-write concept, so cache_write mirrors input.
             ("gpt-5-codex".into(), m(1.25, 10.0, 1.25, 0.125)),
-            ("codex".into(), m(1.25, 10.0, 1.25, 0.125)),
-            ("gpt-5".into(), m(1.25, 10.0, 1.25, 0.125)),
-            ("o4".into(), m(1.10, 4.40, 1.10, 0.275)),
-            ("o3".into(), m(2.0, 8.0, 2.0, 0.50)),
         ])
     }
 }

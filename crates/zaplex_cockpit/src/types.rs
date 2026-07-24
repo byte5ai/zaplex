@@ -9,6 +9,13 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// A JSON-safe sentinel for an aggregated window containing unpriced usage.
+/// It stays negative under ordinary fleet sums; real token costs cannot be
+/// negative, and [`crate::format::format_cost`] renders every negative value as
+/// `unpriced`. The explicit [`WindowTotals::has_unpriced_usage`] flag remains
+/// the semantic source of truth.
+const UNPRICED_COST_USD: f64 = -1.0e300;
+
 /// The LLM CLI providers the cockpit understands.
 ///
 /// A minimal enum owned by this (pure) crate; the app's richer `CLIAgent` maps onto
@@ -106,6 +113,12 @@ pub struct WindowTotals {
     pub work: u64,
     /// All billable tokens: `work + cache_read`.
     pub total: u64,
+    /// `true` if at least one turn's model had no static price. In that case
+    /// `cost_usd` is a JSON-safe negative sentinel, which
+    /// [`crate::format::format_cost`] renders as `unpriced` instead of
+    /// pretending the unknown spend is `$0.00`.
+    #[serde(default)]
+    pub has_unpriced_usage: bool,
     pub cost_usd: f64,
     /// Number of assistant messages/turns counted.
     pub messages: u64,
@@ -114,24 +127,41 @@ pub struct WindowTotals {
 impl WindowTotals {
     /// Fold one usage entry into the running totals, adding its cost via `pricing`.
     pub fn add(&mut self, e: &UsageEntry, pricing: &crate::pricing::PricingTable) {
-        self.input += e.input;
-        self.output += e.output;
-        self.cache_create += e.cache_create;
-        self.cache_read += e.cache_read;
-        self.reasoning += e.reasoning;
-        self.work += e.input + e.output + e.cache_create + e.reasoning;
-        self.total += e.input + e.output + e.cache_create + e.cache_read + e.reasoning;
-        self.cost_usd += pricing.cost_for(
+        self.input = self.input.saturating_add(e.input);
+        self.output = self.output.saturating_add(e.output);
+        self.cache_create = self.cache_create.saturating_add(e.cache_create);
+        self.cache_read = self.cache_read.saturating_add(e.cache_read);
+        self.reasoning = self.reasoning.saturating_add(e.reasoning);
+        let work = e
+            .input
+            .saturating_add(e.output)
+            .saturating_add(e.cache_create)
+            .saturating_add(e.reasoning);
+        let total = work.saturating_add(e.cache_read);
+        self.work = self.work.saturating_add(work);
+        self.total = self.total.saturating_add(total);
+        match pricing.cost_for(
             &e.model,
             e.input,
             e.output,
             e.cache_create,
             e.cache_read,
             e.reasoning,
-        );
-        self.messages += 1;
+        ) {
+            Some(cost) if !self.has_unpriced_usage => self.cost_usd += cost,
+            Some(_) => {}
+            None => {
+                self.has_unpriced_usage = true;
+                self.cost_usd = UNPRICED_COST_USD;
+            }
+        }
+        self.messages = self.messages.saturating_add(1);
     }
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;
 
 /// Live-session state, waiting-first semantics (see `sessions.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

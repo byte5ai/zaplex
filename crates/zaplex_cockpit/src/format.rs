@@ -149,9 +149,16 @@ pub fn model_family(model: &str) -> &str {
     model
 }
 
-/// USD cost with 2 decimals: 4.2 -> "$4.20".
+/// A bundled-list-price estimate with 2 decimals: 4.2 -> "~$4.20".
+///
+/// Negative values mark a window containing an unpriced model and are never
+/// rendered as a fictional zero cost.
 pub fn format_cost(usd: f64) -> String {
-    format!("${usd:.2}")
+    if usd < 0.0 {
+        "unpriced".to_string()
+    } else {
+        format!("~${usd:.2}")
+    }
 }
 
 /// Humanized token count: 42 -> "42", 3400 -> "3.4k", 300000 -> "300k",
