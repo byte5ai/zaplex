@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn breadcrumb_click_survives_rerender_between_mouse_down_and_up() {
+    fn breadcrumb_click_survives_rerender() {
         App::test((), |mut app| async move {
             app.add_singleton_model(|_| Appearance::mock());
             let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| {

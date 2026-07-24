@@ -16,6 +16,100 @@ use dunce;
 use super::sftp_ops::{self, ProgressCallback, SftpOpsError};
 use super::types::{FileEntry, FileEntryType};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn path_cstring(path: &Path) -> std::io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+
+    std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+}
+
+#[cfg(target_os = "linux")]
+fn rename_noreplace(old_path: &Path, new_path: &Path) -> std::io::Result<()> {
+    let old_path = path_cstring(old_path)?;
+    let new_path = path_cstring(new_path)?;
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            old_path.as_ptr(),
+            libc::AT_FDCWD,
+            new_path.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_noreplace(old_path: &Path, new_path: &Path) -> std::io::Result<()> {
+    let old_path = path_cstring(old_path)?;
+    let new_path = path_cstring(new_path)?;
+    let result =
+        unsafe { libc::renamex_np(old_path.as_ptr(), new_path.as_ptr(), libc::RENAME_EXCL) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(windows)]
+fn rename_noreplace(old_path: &Path, new_path: &Path) -> std::io::Result<()> {
+    fs::rename(old_path, new_path)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn rename_noreplace(old_path: &Path, new_path: &Path) -> std::io::Result<()> {
+    let metadata = fs::symlink_metadata(old_path)?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "atomic no-replace directory rename is unsupported on this platform",
+        ));
+    }
+    fs::hard_link(old_path, new_path)?;
+    fs::remove_file(old_path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn rename_noreplace(_old_path: &Path, _new_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic no-replace rename is unsupported on this platform",
+    ))
+}
+
+#[cfg(not(windows))]
+fn replace_atomic_local(old_path: &Path, new_path: &Path) -> std::io::Result<()> {
+    fs::rename(old_path, new_path)
+}
+
+#[cfg(windows)]
+fn replace_atomic_local(old_path: &Path, new_path: &Path) -> std::io::Result<()> {
+    use std::iter;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let old_path: Vec<u16> = old_path.as_os_str().encode_wide().chain(iter::once(0)).collect();
+    let new_path: Vec<u16> = new_path.as_os_str().encode_wide().chain(iter::once(0)).collect();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(old_path.as_ptr()),
+            PCWSTR(new_path.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(std::io::Error::other)
+}
+
 fn validated_child_path(parent: &Path, entry: &FileEntry) -> Result<PathBuf, SftpOpsError> {
     let mut components = Path::new(&entry.name).components();
     let is_single_name = matches!(components.next(), Some(std::path::Component::Normal(_)))
@@ -113,6 +207,18 @@ pub trait SftpBackend: Send + Sync {
     /// Renames a remote file or directory.
     fn rename(&self, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError>;
 
+    /// Atomically installs `old_path` over an existing `new_path`.
+    ///
+    /// The safe default refuses the operation. Backends must opt in only when
+    /// they can preserve the old destination on every reported failure.
+    fn replace(&self, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
+        Err(SftpOpsError::Operation(format!(
+            "Atomic replacement is unsupported for {} -> {}",
+            old_path.display(),
+            new_path.display()
+        )))
+    }
+
     /// Resolves the real path.
     fn realpath(&self, path: &Path) -> Result<PathBuf, SftpOpsError>;
 
@@ -143,6 +249,38 @@ pub trait SftpBackend: Send + Sync {
         progress_cb: Option<&ProgressCallback>,
         cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), SftpOpsError>;
+
+    fn upload_file_no_replace(
+        &self,
+        local_path: &Path,
+        remote_path: &Path,
+        progress_cb: Option<&ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), SftpOpsError> {
+        if self.lstat(remote_path).is_ok() {
+            return Err(SftpOpsError::Operation(format!(
+                "{} already exists",
+                remote_path.display()
+            )));
+        }
+        self.upload_file(local_path, remote_path, progress_cb, cancel_flag)
+    }
+
+    fn download_file_no_replace(
+        &self,
+        remote_path: &Path,
+        local_path: &Path,
+        progress_cb: Option<&ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), SftpOpsError> {
+        if std::fs::symlink_metadata(local_path).is_ok() {
+            return Err(SftpOpsError::Operation(format!(
+                "{} already exists",
+                local_path.display()
+            )));
+        }
+        self.download_file(remote_path, local_path, progress_cb, cancel_flag)
+    }
 
     /// Copies a single file *within this backend* (same filesystem namespace),
     /// e.g. between two local file-manager panes or two panes on the same host.
@@ -238,6 +376,10 @@ impl SftpBackend for LiveSftpBackend {
         sftp_ops::rename(&self.sftp, old_path, new_path)
     }
 
+    fn replace(&self, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
+        sftp_ops::replace_atomic(&self.sftp, old_path, new_path)
+    }
+
     fn realpath(&self, path: &Path) -> Result<PathBuf, SftpOpsError> {
         self.sftp.realpath(path).map_err(|e| SftpOpsError::Operation(e.to_string()))
     }
@@ -276,6 +418,42 @@ impl SftpBackend for LiveSftpBackend {
         sftp_ops::download_file_streaming(&self.sftp, remote_path, local_path, progress_cb, flag)
     }
 
+    fn upload_file_no_replace(
+        &self,
+        local_path: &Path,
+        remote_path: &Path,
+        progress_cb: Option<&ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), SftpOpsError> {
+        static NEVER_CANCEL: AtomicBool = AtomicBool::new(false);
+        let flag = cancel_flag.unwrap_or(&NEVER_CANCEL);
+        sftp_ops::upload_file_streaming_no_replace(
+            &self.sftp,
+            local_path,
+            remote_path,
+            progress_cb,
+            flag,
+        )
+    }
+
+    fn download_file_no_replace(
+        &self,
+        remote_path: &Path,
+        local_path: &Path,
+        progress_cb: Option<&ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), SftpOpsError> {
+        static NEVER_CANCEL: AtomicBool = AtomicBool::new(false);
+        let flag = cancel_flag.unwrap_or(&NEVER_CANCEL);
+        sftp_ops::download_file_streaming_no_replace(
+            &self.sftp,
+            remote_path,
+            local_path,
+            progress_cb,
+            flag,
+        )
+    }
+
     fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
         // SFTP has no server-side copy, so round-trip the bytes through a local
         // temp file using the proven streaming primitives. Same-host only (the
@@ -308,17 +486,29 @@ fn unique_temp_path(prefix: &str) -> PathBuf {
 pub struct InMemorySftpBackend {
     /// Root directory that simulates the remote filesystem root.
     root: PathBuf,
+    #[cfg(test)]
+    before_rename: Option<Arc<dyn Fn(&Path) + Send + Sync>>,
 }
 
 impl InMemorySftpBackend {
     /// Creates a new in-memory backend using the specified directory as root.
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            #[cfg(test)]
+            before_rename: None,
+        }
     }
 
     /// Gets the root directory path.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    #[cfg(test)]
+    fn with_before_rename(mut self, hook: impl Fn(&Path) + Send + Sync + 'static) -> Self {
+        self.before_rename = Some(Arc::new(hook));
+        self
     }
 
     /// Maps a "remote" path to a local absolute path.
@@ -428,19 +618,28 @@ impl SftpBackend for InMemorySftpBackend {
     fn rename(&self, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
         let old_local = self.to_local(old_path);
         let new_local = self.to_local(new_path);
-        // `fs::rename` silently replaces an existing target on Unix, so renaming
-        // onto a name that already existed destroyed that file without a word.
-        // The remote path has always refused this (`overwrite: false`); the
-        // local one now does too, and the caller surfaces the conflict.
-        if fs::symlink_metadata(&new_local).is_ok() {
-            return Err(SftpOpsError::Operation(format!(
-                "{} already exists",
-                new_path.display()
-            )));
+        #[cfg(test)]
+        if let Some(hook) = &self.before_rename {
+            hook(&new_local);
         }
-        fs::rename(&old_local, &new_local).map_err(|e| {
+        rename_noreplace(&old_local, &new_local).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                return SftpOpsError::Operation(format!("{} already exists", new_path.display()));
+            }
             SftpOpsError::Operation(format!(
                 "Failed to rename {} -> {}: {e}",
+                old_path.display(),
+                new_path.display()
+            ))
+        })
+    }
+
+    fn replace(&self, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
+        let old_local = self.to_local(old_path);
+        let new_local = self.to_local(new_path);
+        replace_atomic_local(&old_local, &new_local).map_err(|error| {
+            SftpOpsError::Operation(format!(
+                "Failed to atomically replace {} -> {}: {error}",
                 old_path.display(),
                 new_path.display()
             ))
@@ -506,6 +705,28 @@ impl SftpBackend for InMemorySftpBackend {
         copy_into_place(&src, local_path, progress_cb, cancel_flag)
     }
 
+    fn upload_file_no_replace(
+        &self,
+        local_path: &Path,
+        remote_path: &Path,
+        progress_cb: Option<&ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), SftpOpsError> {
+        let dest = self.to_local(remote_path);
+        copy_into_place_no_replace(local_path, &dest, progress_cb, cancel_flag)
+    }
+
+    fn download_file_no_replace(
+        &self,
+        remote_path: &Path,
+        local_path: &Path,
+        progress_cb: Option<&ProgressCallback>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<(), SftpOpsError> {
+        let src = self.to_local(remote_path);
+        copy_into_place_no_replace(&src, local_path, progress_cb, cancel_flag)
+    }
+
     fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
         let src_local = self.to_local(src);
         let dst_local = self.to_local(dst);
@@ -516,17 +737,44 @@ impl SftpBackend for InMemorySftpBackend {
 /// Unique sibling temp path for an in-progress copy next to
 /// the destination, so the finalizing rename stays on the same filesystem (and
 /// is therefore atomic) and a leftover partial is obviously ours.
+static COPY_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn temp_sibling(dest: &Path) -> PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let name = dest
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "file".to_string());
-    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let sequence = COPY_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     dest.with_file_name(format!(
         ".{name}.zaplex_partial-{}-{sequence}",
         std::process::id()
     ))
+}
+
+fn create_copy_temp(dest: &Path) -> Result<(PathBuf, fs::File), SftpOpsError> {
+    const MAX_ATTEMPTS: usize = 128;
+
+    for _ in 0..MAX_ATTEMPTS {
+        let temp = temp_sibling(dest);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => return Ok((temp, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(SftpOpsError::LocalIo(format!(
+                    "Failed to create temp file: {error}"
+                )))
+            }
+        }
+    }
+
+    Err(SftpOpsError::LocalIo(format!(
+        "Failed to reserve a temporary file for {}",
+        dest.display()
+    )))
 }
 
 /// Copy `src` onto `dest` the way the REMOTE backend already does: stream into
@@ -544,19 +792,36 @@ fn copy_into_place(
     progress_cb: Option<&ProgressCallback>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(), SftpOpsError> {
+    copy_into_place_with_mode(src, dest, progress_cb, cancel_flag, true)
+}
+
+fn copy_into_place_no_replace(
+    src: &Path,
+    dest: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(), SftpOpsError> {
+    copy_into_place_with_mode(src, dest, progress_cb, cancel_flag, false)
+}
+
+fn copy_into_place_with_mode(
+    src: &Path,
+    dest: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: Option<&AtomicBool>,
+    overwrite_destination: bool,
+) -> Result<(), SftpOpsError> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| SftpOpsError::LocalIo(format!("Failed to create directory: {e}")))?;
     }
 
     let total = fs::metadata(src).map(|m| m.len()).unwrap_or(0);
-    let temp = temp_sibling(dest);
+    let (temp, mut temp_file) = create_copy_temp(dest)?;
 
     let result = (|| -> Result<(), SftpOpsError> {
         let mut src_file = fs::File::open(src)
             .map_err(|e| SftpOpsError::LocalIo(format!("Failed to open source: {e}")))?;
-        let mut temp_file = fs::File::create(&temp)
-            .map_err(|e| SftpOpsError::LocalIo(format!("Failed to create temp file: {e}")))?;
 
         const CHUNK_SIZE: usize = 32 * 1024;
         let mut buf = vec![0u8; CHUNK_SIZE];
@@ -589,8 +854,18 @@ fn copy_into_place(
             .map_err(|e| SftpOpsError::LocalIo(format!("Sync failed: {e}")))?;
         drop(temp_file);
 
-        fs::rename(&temp, dest)
-            .map_err(|e| SftpOpsError::LocalIo(format!("Failed to finalize copy: {e}")))
+        if overwrite_destination {
+            fs::rename(&temp, dest)
+                .map_err(|e| SftpOpsError::LocalIo(format!("Failed to finalize copy: {e}")))
+        } else {
+            fs::hard_link(&temp, dest)
+                .and_then(|()| fs::remove_file(&temp))
+                .map_err(|e| {
+                    SftpOpsError::LocalIo(format!(
+                        "Failed to finalize copy without replacement: {e}"
+                    ))
+                })
+        }
     })();
 
     if result.is_err() {
@@ -622,7 +897,7 @@ mod data_safety_tests {
     /// `fs::rename` overwrites on Unix; the remote backend has always used
     /// `overwrite: false`, and this is the local path catching up (RC audit).
     #[test]
-    fn rename_refuses_to_clobber_an_existing_file() {
+    fn local_rename_never_replaces_existing_destination() {
         let (be, dir) = backend();
         fs::write(dir.path().join("victim.txt"), b"PRECIOUS").unwrap();
         fs::write(dir.path().join("source.txt"), b"new").unwrap();
@@ -641,10 +916,61 @@ mod data_safety_tests {
         );
     }
 
+    /// A destination created after the initial lookup is still a conflict.
+    /// The commit itself must be no-replace; a check followed by plain rename
+    /// loses this race on Unix.
+    #[test]
+    fn local_rename_never_replaces_concurrently_created_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("source.txt"), b"source").unwrap();
+        let backend =
+            InMemorySftpBackend::new(dir.path().to_path_buf()).with_before_rename(|destination| {
+                fs::write(destination, b"CONCURRENT").unwrap();
+            });
+
+        backend
+            .rename(Path::new("/source.txt"), Path::new("/destination.txt"))
+            .expect_err("an atomically created destination must block rename");
+
+        assert_eq!(
+            fs::read(dir.path().join("destination.txt")).unwrap(),
+            b"CONCURRENT",
+            "rename must not replace the destination created in the race window"
+        );
+        assert!(
+            dir.path().join("source.txt").exists(),
+            "failed rename must preserve its source"
+        );
+    }
+
+    /// Exercise the concrete platform replace primitive on a failure that the
+    /// OS itself reports: a regular file cannot replace a non-empty directory.
+    #[test]
+    fn local_atomic_replace_failure_preserves_source_and_destination() {
+        let (be, dir) = backend();
+        fs::write(dir.path().join("source.txt"), b"replacement").unwrap();
+        fs::create_dir(dir.path().join("destination")).unwrap();
+        fs::write(dir.path().join("destination/precious.txt"), b"PRECIOUS").unwrap();
+
+        be.replace(Path::new("/source.txt"), Path::new("/destination"))
+            .expect_err("the platform replace primitive must reject a type mismatch");
+
+        assert_eq!(
+            fs::read(dir.path().join("source.txt")).unwrap(),
+            b"replacement",
+            "a failed atomic replace must preserve its source"
+        );
+        assert_eq!(
+            fs::read(dir.path().join("destination/precious.txt")).unwrap(),
+            b"PRECIOUS",
+            "a failed atomic replace must preserve the existing destination"
+        );
+    }
+
     /// A cancelled copy must leave the destination exactly as it was — the old
     /// code wrote straight into it, so a cancel truncated a good file.
     #[test]
-    fn cancelled_copy_leaves_the_destination_intact() {
+    fn local_copy_failure_keeps_existing_destination_intact() {
         let (be, dir) = backend();
         let dest = dir.path().join("dest.bin");
         fs::write(&dest, b"ORIGINAL-CONTENT").unwrap();
@@ -707,6 +1033,63 @@ mod data_safety_tests {
             first, second,
             "each transfer needs an exclusive temporary sibling"
         );
+    }
+
+    #[test]
+    fn local_no_replace_copy_preserves_existing_destination() {
+        let (backend, dir) = backend();
+        let source = dir.path().join("source.bin");
+        fs::write(&source, b"NEW").unwrap();
+        fs::write(dir.path().join("destination.bin"), b"EXISTING").unwrap();
+
+        backend
+            .upload_file_no_replace(
+                &source,
+                Path::new("/destination.bin"),
+                None,
+                None,
+            )
+            .expect_err("an unconfirmed copy must not replace its destination");
+
+        assert_eq!(
+            fs::read(dir.path().join("destination.bin")).unwrap(),
+            b"EXISTING"
+        );
+    }
+
+    /// Exclusive temp creation must reject symlink collisions instead of
+    /// truncating the symlink target through `File::create`.
+    #[cfg(unix)]
+    #[test]
+    fn local_copy_temp_creation_never_follows_existing_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let (backend, dir) = backend();
+        let source = dir.path().join("source.bin");
+        let destination = dir.path().join("destination.bin");
+        let victim = dir.path().join("victim.bin");
+        fs::write(&source, b"NEW").unwrap();
+        fs::write(&victim, b"PRECIOUS").unwrap();
+
+        let first_sequence = COPY_TEMP_COUNTER.load(Ordering::Relaxed);
+        for sequence in first_sequence..first_sequence + 32 {
+            let candidate = destination.with_file_name(format!(
+                ".destination.bin.zaplex_partial-{}-{sequence}",
+                std::process::id()
+            ));
+            symlink(&victim, candidate).unwrap();
+        }
+
+        backend
+            .upload_file(&source, Path::new("/destination.bin"), None, None)
+            .expect("copy should retry after colliding with symlinks");
+
+        assert_eq!(
+            fs::read(&victim).unwrap(),
+            b"PRECIOUS",
+            "temporary-file creation must never follow a symlink"
+        );
+        assert_eq!(fs::read(destination).unwrap(), b"NEW");
     }
 
     #[cfg(unix)]

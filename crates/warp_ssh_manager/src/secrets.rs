@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 
 const SERVICE: &str = "zap.ssh";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SecretKind {
     Password,
     Passphrase,

@@ -260,3 +260,9 @@ fn missing_lookup_id_returns_none_when_editor_empty() {
     let store = MockSecretStore::new();
     assert!(resolve_test_password(None, SecretKind::OneKeyPassword, "", &store).is_none());
 }
+
+#[test]
+fn stale_test_cannot_replace_current_state() {
+    assert!(should_apply_connection_test_result(7, 7));
+    assert!(!should_apply_connection_test_result(8, 7));
+}

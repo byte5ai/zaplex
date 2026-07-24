@@ -25,8 +25,30 @@ use std::process::Stdio;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
+pub trait WorkspaceCommandFactory: Send + Sync {
+    fn async_command(&self, program: &str) -> command::r#async::Command;
+    fn blocking_command(&self, program: &str) -> command::blocking::Command;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DefaultWorkspaceCommandFactory;
+
+impl WorkspaceCommandFactory for DefaultWorkspaceCommandFactory {
+    fn async_command(&self, program: &str) -> command::r#async::Command {
+        command::r#async::Command::new(program)
+    }
+
+    fn blocking_command(&self, program: &str) -> command::blocking::Command {
+        command::blocking::Command::new(program)
+    }
+}
+
 pub fn build_ssh_args(server: &SshServerInfo) -> Vec<String> {
-    let mut args: Vec<String> = vec!["ssh".into()];
+    let mut args: Vec<String> = vec![
+        "ssh".into(),
+        "-o".into(),
+        "StrictHostKeyChecking=ask".into(),
+    ];
     if server.port != 22 {
         args.push("-p".into());
         args.push(server.port.to_string());
@@ -44,6 +66,7 @@ pub fn build_ssh_args(server: &SshServerInfo) -> Vec<String> {
     } else {
         format!("{}@{}", server.username, server.host)
     };
+    args.push("--".into());
     args.push(target);
     args
 }
@@ -62,20 +85,98 @@ pub struct ConnectionTestResult {
     pub status: ConnectionStatus,
     pub latency_ms: Option<u64>,
     pub error_message: Option<String>,
+    pub unknown_host_key: Option<UnknownHostKey>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnknownHostKey {
+    pub host: String,
+    pub port: u16,
+    pub fingerprint: String,
 }
 
 pub async fn test_connection(
     server: &SshServerInfo,
     password: Option<Zeroizing<String>>,
 ) -> ConnectionTestResult {
+    test_connection_with_factory_policy(server, password, None, &DefaultWorkspaceCommandFactory)
+        .await
+}
+
+pub async fn test_connection_confirm_host_key(
+    server: &SshServerInfo,
+    password: Option<Zeroizing<String>>,
+    expected_host_key: &UnknownHostKey,
+) -> ConnectionTestResult {
+    test_connection_with_factory_policy(
+        server,
+        password,
+        Some(expected_host_key),
+        &DefaultWorkspaceCommandFactory,
+    )
+    .await
+}
+
+pub async fn test_connection_with_factory(
+    server: &SshServerInfo,
+    password: Option<Zeroizing<String>>,
+    command_factory: &dyn WorkspaceCommandFactory,
+) -> ConnectionTestResult {
+    test_connection_with_factory_policy(server, password, None, command_factory).await
+}
+
+async fn test_connection_with_factory_policy(
+    server: &SshServerInfo,
+    password: Option<Zeroizing<String>>,
+    expected_host_key: Option<&UnknownHostKey>,
+    command_factory: &dyn WorkspaceCommandFactory,
+) -> ConnectionTestResult {
     let start = instant::Instant::now();
+    let pinned_host_key = if let Some(expected_host_key) = expected_host_key {
+        match pin_confirmed_host_key(server, expected_host_key, command_factory).await {
+            Ok(pinned_host_key) => Some(pinned_host_key),
+            Err(error) => {
+                return ConnectionTestResult {
+                    status: ConnectionStatus::Offline,
+                    latency_ms: Some(start.elapsed().as_millis() as u64),
+                    error_message: Some(error),
+                    unknown_host_key: None,
+                };
+            }
+        }
+    } else {
+        match probe_host_key(server, command_factory).await {
+            Ok(HostKeyProbeOutcome::Verified) => {}
+            Ok(HostKeyProbeOutcome::Unknown(unknown_host_key)) => {
+                return ConnectionTestResult {
+                    status: ConnectionStatus::Unknown,
+                    latency_ms: Some(start.elapsed().as_millis() as u64),
+                    error_message: None,
+                    unknown_host_key: Some(unknown_host_key),
+                };
+            }
+            Err(error) => {
+                return ConnectionTestResult {
+                    status: ConnectionStatus::Offline,
+                    latency_ms: Some(start.elapsed().as_millis() as u64),
+                    error_message: Some(error),
+                    unknown_host_key: None,
+                };
+            }
+        }
+        None
+    };
 
     let result = match server.auth_type {
         // Key auth also carries a secret: the *passphrase* of an encrypted
         // private key (resolved by the caller into the same `password` slot). It
         // must reach ssh, or testing an encrypted key always fails.
-        AuthType::Key => test_key_auth(server, password).await,
-        AuthType::Password | AuthType::OneKey => test_password_auth(server, password).await,
+        AuthType::Key => {
+            test_key_auth(server, password, pinned_host_key.as_ref(), command_factory).await
+        }
+        AuthType::Password | AuthType::OneKey => {
+            test_password_auth(server, password, pinned_host_key.as_ref(), command_factory).await
+        }
     };
 
     let latency = start.elapsed().as_millis() as u64;
@@ -85,18 +186,231 @@ pub async fn test_connection(
             status: ConnectionStatus::Online,
             latency_ms: Some(latency),
             error_message: None,
+            unknown_host_key: None,
         },
         Err(e) => ConnectionTestResult {
             status: ConnectionStatus::Offline,
             latency_ms: Some(latency),
             error_message: Some(e),
+            unknown_host_key: None,
         },
     }
+}
+
+#[derive(Debug)]
+enum HostKeyProbeOutcome {
+    Verified,
+    Unknown(UnknownHostKey),
+}
+
+async fn probe_host_key(
+    server: &SshServerInfo,
+    command_factory: &dyn WorkspaceCommandFactory,
+) -> Result<HostKeyProbeOutcome, String> {
+    let args = build_host_key_probe_args(server);
+    let output = tokio::time::timeout(
+        TEST_TIMEOUT,
+        run_ssh_test_capture(&args, None, command_factory),
+    )
+    .await
+    .map_err(|_| "Connection timeout".to_string())??;
+    match classify_host_key_probe(server, &output)? {
+        HostKeyProbeOutcome::Verified => Ok(HostKeyProbeOutcome::Verified),
+        HostKeyProbeOutcome::Unknown(_) => {
+            let (_, fingerprint) = capture_host_key(server, "yes", command_factory).await?;
+            Ok(HostKeyProbeOutcome::Unknown(UnknownHostKey {
+                host: server.host.clone(),
+                port: server.port,
+                fingerprint,
+            }))
+        }
+    }
+}
+
+fn build_host_key_probe_args(server: &SshServerInfo) -> Vec<String> {
+    let mut args: Vec<String> = build_ssh_args(server).into_iter().skip(1).collect();
+    if let Some(strict_host_key_checking) = args
+        .iter_mut()
+        .find(|arg| arg.starts_with("StrictHostKeyChecking="))
+    {
+        *strict_host_key_checking = "StrictHostKeyChecking=yes".to_string();
+    }
+    let target = args.pop().expect("SSH args always contain a destination");
+    assert_eq!(args.pop().as_deref(), Some("--"));
+    args.extend([
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        "PreferredAuthentications=none".into(),
+        "-o".into(),
+        "ConnectTimeout=5".into(),
+        "-o".into(),
+        "LogLevel=VERBOSE".into(),
+    ]);
+    args.push("--".into());
+    args.push(target);
+    args.push("true".into());
+    args
+}
+
+fn classify_host_key_probe(
+    server: &SshServerInfo,
+    output: &std::process::Output,
+) -> Result<HostKeyProbeOutcome, String> {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
+        return Err("SSH host key changed; connection blocked".to_string());
+    }
+    if stderr.contains("Host key verification failed")
+        || stderr.contains("authenticity of host")
+        || stderr.contains("can't be established")
+    {
+        let fingerprint = regex::Regex::new(r"(?i)fingerprint is ([^\s.]+)")
+            .expect("valid host-key fingerprint regex")
+            .captures(&stderr)
+            .and_then(|captures| captures.get(1))
+            .map(|fingerprint| fingerprint.as_str().to_string())
+            .unwrap_or_else(|| "unavailable".to_string());
+        return Ok(HostKeyProbeOutcome::Unknown(UnknownHostKey {
+            host: server.host.clone(),
+            port: server.port,
+            fingerprint,
+        }));
+    }
+    Ok(HostKeyProbeOutcome::Verified)
+}
+
+#[cfg(test)]
+fn host_key_fingerprint_matches(expected: &str, ssh_keygen_output: &[u8]) -> bool {
+    String::from_utf8_lossy(ssh_keygen_output)
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .any(|fingerprint| fingerprint == expected)
+}
+
+async fn pin_confirmed_host_key(
+    server: &SshServerInfo,
+    expected: &UnknownHostKey,
+    command_factory: &dyn WorkspaceCommandFactory,
+) -> Result<KnownHostsSession, String> {
+    if expected.host != server.host || expected.port != server.port {
+        return Err("SSH endpoint changed before host-key confirmation".to_string());
+    }
+
+    let (pinned_host_key, fingerprint) =
+        capture_host_key(server, &expected.fingerprint, command_factory).await?;
+    if fingerprint == expected.fingerprint {
+        return Ok(pinned_host_key);
+    }
+
+    Err("SSH host key changed before confirmation; connection blocked".to_string())
+}
+
+async fn capture_host_key(
+    server: &SshServerInfo,
+    response: &str,
+    command_factory: &dyn WorkspaceCommandFactory,
+) -> Result<(KnownHostsSession, String), String> {
+    let pinned_host_key = KnownHostsSession::new("")
+        .map_err(|error| format!("Failed to prepare SSH host-key pin: {error}"))?;
+    let response = Zeroizing::new(response.to_string());
+    let askpass = AskpassSession::new(&response)
+        .map_err(|error| format!("Failed to prepare host-key response: {error}"))?;
+    let mut args = build_host_key_probe_args(server);
+    if let Some(strict_host_key_checking) = args
+        .iter_mut()
+        .find(|arg| arg.starts_with("StrictHostKeyChecking="))
+    {
+        *strict_host_key_checking = "StrictHostKeyChecking=ask".to_string();
+    }
+    if let Some(batch_mode) = args.iter_mut().find(|arg| arg.starts_with("BatchMode=")) {
+        *batch_mode = "BatchMode=no".to_string();
+    }
+    apply_host_key_file(&mut args, &pinned_host_key, false);
+    let output = tokio::time::timeout(
+        TEST_TIMEOUT,
+        run_ssh_test_capture(&args, Some(&askpass), command_factory),
+    )
+    .await
+    .map_err(|_| "SSH host-key capture timed out".to_string())??;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
+        return Err("SSH host key changed; connection blocked".to_string());
+    }
+
+    let fingerprint_args = vec![
+        "-lf".to_string(),
+        pinned_host_key.path.display().to_string(),
+        "-E".to_string(),
+        "sha256".to_string(),
+    ];
+    let fingerprint_output = tokio::time::timeout(
+        TEST_TIMEOUT,
+        run_command_capture("ssh-keygen", &fingerprint_args, command_factory),
+    )
+    .await
+    .map_err(|_| "SSH host-key fingerprint timed out".to_string())??;
+    let fingerprint = String::from_utf8_lossy(&fingerprint_output.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .next()
+        .filter(|fingerprint| fingerprint.starts_with("SHA256:"))
+        .map(str::to_string)
+        .ok_or_else(|| "SSH host key was not captured; connection blocked".to_string())?;
+    Ok((pinned_host_key, fingerprint))
+}
+
+async fn run_command_capture(
+    program: &str,
+    args: &[String],
+    command_factory: &dyn WorkspaceCommandFactory,
+) -> Result<std::process::Output, String> {
+    let mut command = command_factory.async_command(program);
+    let child = command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("Failed to spawn {program}: {error}"))?;
+    child
+        .output()
+        .await
+        .map_err(|error| format!("Failed to read {program} output: {error}"))
+}
+
+fn apply_host_key_file(
+    args: &mut Vec<String>,
+    pinned_host_key: &KnownHostsSession,
+    require_exact_match: bool,
+) {
+    if require_exact_match {
+        if let Some(setting) = args
+            .iter_mut()
+            .find(|arg| arg.starts_with("StrictHostKeyChecking="))
+        {
+            *setting = "StrictHostKeyChecking=yes".to_string();
+        }
+    }
+    let delimiter_index = args
+        .iter()
+        .position(|arg| arg == "--")
+        .expect("SSH test args delimit the destination");
+    args.splice(
+        delimiter_index..delimiter_index,
+        [
+            "-o".to_string(),
+            format!("UserKnownHostsFile={}", pinned_host_key.path.display()),
+        ],
+    );
 }
 
 async fn test_key_auth(
     server: &SshServerInfo,
     passphrase: Option<Zeroizing<String>>,
+    pinned_host_key: Option<&KnownHostsSession>,
+    command_factory: &dyn WorkspaceCommandFactory,
 ) -> Result<(), String> {
     // A non-empty passphrase means the private key is encrypted. ssh reads a key
     // passphrase the same way it reads a login password — from the controlling
@@ -107,7 +421,10 @@ async fn test_key_auth(
     // secret is needed. Same auth double-path the file manager had — the test path
     // now pulls even.
     let passphrase = passphrase.filter(|secret| !secret.is_empty());
-    let cmd_args = build_key_auth_cmd_args(server, passphrase.is_some());
+    let mut cmd_args = build_key_auth_cmd_args(server, passphrase.is_some());
+    if let Some(pinned_host_key) = pinned_host_key {
+        apply_host_key_file(&mut cmd_args, pinned_host_key, true);
+    }
 
     let askpass = match &passphrase {
         Some(secret) => Some(
@@ -118,7 +435,7 @@ async fn test_key_auth(
 
     let output = match tokio::time::timeout(
         TEST_TIMEOUT,
-        run_ssh_test_capture(&cmd_args, askpass.as_ref()),
+        run_ssh_test_capture(&cmd_args, askpass.as_ref(), command_factory),
     )
     .await
     {
@@ -147,11 +464,16 @@ async fn test_key_auth(
 async fn test_password_auth(
     server: &SshServerInfo,
     password: Option<Zeroizing<String>>,
+    pinned_host_key: Option<&KnownHostsSession>,
+    command_factory: &dyn WorkspaceCommandFactory,
 ) -> Result<(), String> {
     let password = password.ok_or("Password not provided")?;
 
     // Build the ssh command args (note: -o options must be inserted before the destination, see that function's comment)
-    let cmd_args = build_password_auth_cmd_args(server);
+    let mut cmd_args = build_password_auth_cmd_args(server);
+    if let Some(pinned_host_key) = pinned_host_key {
+        apply_host_key_file(&mut cmd_args, pinned_host_key, true);
+    }
 
     // ssh never reads the password from the pipe stdin for the `password` auth
     // method — it uses the controlling tty or SSH_ASKPASS. A GUI app launched from
@@ -165,7 +487,7 @@ async fn test_password_auth(
 
     let output = match tokio::time::timeout(
         TEST_TIMEOUT,
-        run_ssh_test_capture(&cmd_args, Some(&askpass)),
+        run_ssh_test_capture(&cmd_args, Some(&askpass), command_factory),
     )
     .await
     {
@@ -187,8 +509,9 @@ async fn test_password_auth(
 async fn run_ssh_test_capture(
     cmd_args: &[String],
     askpass: Option<&AskpassSession>,
+    command_factory: &dyn WorkspaceCommandFactory,
 ) -> Result<std::process::Output, String> {
-    let mut cmd = command::r#async::Command::new("ssh");
+    let mut cmd = command_factory.async_command("ssh");
     cmd.args(cmd_args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -219,7 +542,9 @@ fn finalize_password_test_result(output: &std::process::Output) -> Result<(), St
 
     // Success decision: strictly match the output of `echo ok`. The previous `ends_with("ok")` fallback
     // would falsely report success when a banner / motd happened to end in "ok"; that is removed here.
-    if output.status.success() && stdout.trim() == "ok" {
+    if stderr_trimmed.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
+        Err("SSH host key changed; connection blocked".to_string())
+    } else if output.status.success() && stdout.trim() == "ok" {
         Ok(())
     } else if stderr_trimmed.contains("Permission denied")
         || stderr_trimmed.contains("Authentication failed")
@@ -262,8 +587,7 @@ fn finalize_password_test_result(output: &std::process::Output) -> Result<(), St
 ///   of the password sub-method; kbd-int can still proceed. Setting both switches is defense in depth.
 /// - `NumberOfPasswordPrompts=1`: the password sub-method is allowed only 1 retry.
 /// - `ConnectTimeout=5`: timeout for a single TCP connection.
-/// - `StrictHostKeyChecking=no`: don't block on known_hosts (in test scenarios this avoids false errors from host key
-///   changes; real terminal connections take a different path).
+/// - `StrictHostKeyChecking=ask`: unknown keys require explicit confirmation and changed keys are blocked.
 /// - `LogLevel=ERROR`: suppress noise like host key prompts / banners.
 ///
 /// `echo ok` is the remote command; success is decided by strictly matching stdout (avoiding the false positive
@@ -277,6 +601,7 @@ fn build_password_auth_cmd_args(server: &SshServerInfo) -> Vec<String> {
     // otherwise SSH treats -o as part of the remote command rather than its own option.
     let mut args: Vec<String> = build_ssh_args(server).into_iter().skip(1).collect();
     let target = args.pop().unwrap();
+    assert_eq!(args.pop().as_deref(), Some("--"));
     args.extend([
         "-o".into(),
         "BatchMode=no".into(),
@@ -289,10 +614,9 @@ fn build_password_auth_cmd_args(server: &SshServerInfo) -> Vec<String> {
         "-o".into(),
         "ConnectTimeout=5".into(),
         "-o".into(),
-        "StrictHostKeyChecking=no".into(),
-        "-o".into(),
         "LogLevel=ERROR".into(),
     ]);
+    args.push("--".into());
     args.push(target);
     args.push("echo ok".into());
     args
@@ -314,6 +638,7 @@ fn build_password_auth_cmd_args(server: &SshServerInfo) -> Vec<String> {
 fn build_key_auth_cmd_args(server: &SshServerInfo, has_passphrase: bool) -> Vec<String> {
     let mut args: Vec<String> = build_ssh_args(server).into_iter().skip(1).collect();
     let target = args.pop().unwrap();
+    assert_eq!(args.pop().as_deref(), Some("--"));
     if has_passphrase {
         args.extend([
             "-o".into(),
@@ -337,13 +662,53 @@ fn build_key_auth_cmd_args(server: &SshServerInfo, has_passphrase: bool) -> Vec<
         "-o".into(),
         "ConnectTimeout=5".into(),
         "-o".into(),
-        "StrictHostKeyChecking=no".into(),
-        "-o".into(),
         "LogLevel=ERROR".into(),
     ]);
+    args.push("--".into());
     args.push(target);
     args.push("echo ok".into());
     args
+}
+
+struct KnownHostsSession {
+    path: std::path::PathBuf,
+}
+
+impl KnownHostsSession {
+    fn new(host_key: &str) -> std::io::Result<Self> {
+        use std::io::Write as _;
+        #[cfg(unix)]
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let dir = std::env::temp_dir();
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let path = dir.join(format!("zaplex-ssh-known-host-{pid}-{nanos}"));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&path)?;
+        if let Err(error) = file
+            .write_all(host_key.as_bytes())
+            .and_then(|()| file.write_all(b"\n"))
+            .and_then(|()| file.sync_all())
+        {
+            let _ = std::fs::remove_file(&path);
+            return Err(error);
+        }
+        drop(file);
+        Ok(Self { path })
+    }
+}
+
+impl Drop for KnownHostsSession {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// A cross-platform askpass session: writes the secret (login password or the
@@ -431,6 +796,8 @@ impl AskpassSession {
             let _ = std::fs::remove_file(&script_path);
             return Err(e);
         }
+        drop(pw);
+        drop(script);
 
         Ok(Self {
             password_path,
@@ -498,6 +865,8 @@ impl AskpassSession {
             let _ = std::fs::remove_file(&script_path);
             return Err(e);
         }
+        drop(secret);
+        drop(script);
 
         Ok(Self {
             password_path,

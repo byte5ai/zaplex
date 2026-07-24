@@ -135,6 +135,38 @@ const PANEL_PADDING: f32 = 8.0;
 /// SFTP panel position ID (used by SavePosition to position the context menu)
 pub(crate) const SFTP_PANEL_POSITION_ID: &str = "sftp_browser_panel_root";
 
+fn render_toolbar_button(
+    icon: Icon,
+    handle: MouseStateHandle,
+    action: SftpBrowserAction,
+    appearance: &Appearance,
+    position_id: &'static str,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let icon_color = theme.sub_text_color(theme.background());
+    let icon_el = ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
+        .with_width(TOOLBAR_ICON_SIZE)
+        .with_height(TOOLBAR_ICON_SIZE)
+        .finish();
+    let button = Hoverable::new(handle, move |_| {
+        Container::new(
+            ConstrainedBox::new(Container::new(icon_el).with_uniform_padding(6.0).finish())
+                .with_width(TOOLBAR_BTN_SIZE)
+                .with_height(TOOLBAR_BTN_SIZE)
+                .finish(),
+        )
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+        .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(action.clone());
+    })
+    .finish();
+
+    SavePosition::new(button, position_id).finish()
+}
+
 /// SFTP browser action
 #[derive(Debug, Clone)]
 pub enum SftpBrowserAction {
@@ -310,8 +342,66 @@ struct PendingDirMoveCleanup {
     source_backend: Arc<dyn SftpBackend>,
     /// The source directory to remove once every file has transferred.
     source_dir: PathBuf,
+    /// Original path to restore on an incomplete move. `None` is used only by
+    /// focused cleanup tests that seed an already-in-place source.
+    original_source_dir: Option<PathBuf>,
     /// Human label for the completion toast, e.g. `sub → host:/var/www`.
     label: String,
+}
+
+struct QuarantinedDirSource {
+    backend: Arc<dyn SftpBackend>,
+    original: PathBuf,
+    quarantine: PathBuf,
+    restore_on_drop: bool,
+}
+
+impl QuarantinedDirSource {
+    fn new(
+        backend: Arc<dyn SftpBackend>,
+        original: PathBuf,
+    ) -> Result<Self, sftp_ops::SftpOpsError> {
+        let quarantine = unique_backend_sibling(&original, "zaplex_move");
+        backend.rename(&original, &quarantine)?;
+        Ok(Self {
+            backend,
+            original,
+            quarantine,
+            restore_on_drop: true,
+        })
+    }
+
+    fn disarm(mut self) -> PathBuf {
+        self.restore_on_drop = false;
+        self.quarantine.clone()
+    }
+
+    fn restore(mut self) -> Result<(), (sftp_ops::SftpOpsError, PathBuf)> {
+        match self.backend.rename(&self.quarantine, &self.original) {
+            Ok(()) => {
+                self.restore_on_drop = false;
+                Ok(())
+            }
+            Err(error) => {
+                self.restore_on_drop = false;
+                Err((error, self.quarantine.clone()))
+            }
+        }
+    }
+}
+
+impl Drop for QuarantinedDirSource {
+    fn drop(&mut self) {
+        if self.restore_on_drop {
+            if let Err(error) = self.backend.rename(&self.quarantine, &self.original) {
+                log::error!(
+                    "fm move recovery required: source remains at {} because restoring {} failed: {error}",
+                    self.quarantine.display(),
+                    self.original.display()
+                );
+            }
+        }
+    }
 }
 
 /// F5/F6 with more than one other file-manager pane open: the sources and the
@@ -503,10 +593,9 @@ pub struct SftpBrowserView {
     /// exactly the "no overview" complaint. Toggled from the toolbar.
     pub(crate) show_hidden: bool,
     /// Hover/click state per row **mark zone** (the leading icon cell, which
-    /// toggles the multi-selection). Parallel to `row_mouse_handles`; a second
-    /// handle is needed because the zone is its own click target inside the
-    /// row.
-    mark_handles: Vec<MouseStateHandle>,
+    /// toggles the multi-selection), keyed by path so a refresh cannot reuse
+    /// an in-flight click for a different entry.
+    mark_handles: HashMap<PathBuf, MouseStateHandle>,
     /// Hover/click state per sortable column header.
     header_handles: HashMap<SortColumn, MouseStateHandle>,
     /// Hover state of the show-hidden toolbar toggle.
@@ -536,8 +625,9 @@ pub struct SftpBrowserView {
     /// the picker opens), so each pane row hovers/presses independently.
     target_pick_btn_states: Vec<MouseStateHandle>,
     // ---- File row mouse handles ----
-    /// Mouse state handle for each file entry row
-    row_mouse_handles: Vec<MouseStateHandle>,
+    /// Mouse state for each entry path. Path identity prevents a mouse-up after
+    /// refresh from completing a click on a replacement at the same row index.
+    row_mouse_handles: HashMap<PathBuf, MouseStateHandle>,
     /// Mouse state handle for the virtual `..` parent row. PERSISTENT, like
     /// every other click target's: a `MouseStateHandle::default()` minted per
     /// render records the mouse-down in a state the next render throws away,
@@ -698,7 +788,7 @@ impl SftpBrowserView {
             cursor: 0,
             sort: SortState::default(),
             show_hidden: false,
-            mark_handles: Vec::new(),
+            mark_handles: HashMap::new(),
             header_handles: [SortColumn::Name, SortColumn::Size, SortColumn::Modified]
                 .into_iter()
                 .map(|c| (c, MouseStateHandle::default()))
@@ -713,7 +803,7 @@ impl SftpBrowserView {
             overwrite_all_btn: MouseStateHandle::default(),
             skip_all_btn: MouseStateHandle::default(),
             target_pick_btn_states: Vec::new(),
-            row_mouse_handles: Vec::new(),
+            row_mouse_handles: HashMap::new(),
             parent_row_handle: MouseStateHandle::default(),
             suppress_row_clicks_until: None,
             scroll_state: ClippedScrollStateHandle::default(),
@@ -1264,18 +1354,19 @@ impl SftpBrowserView {
         ctx.notify();
     }
 
-    /// Keep the number of row mouse handles in sync with the number of entries
+    /// Rebuild row mouse state for each accepted listing generation.
+    ///
+    /// Ordinary rerenders keep these handles, but a refresh invalidates every
+    /// pending press. A path may disappear and be recreated as a different
+    /// object while the refresh is in flight; reusing its old handle would let
+    /// the original mouse-up act on that replacement.
     fn sync_row_mouse_handles(&mut self) {
-        while self.row_mouse_handles.len() < self.entries.len() {
-            self.row_mouse_handles.push(MouseStateHandle::default());
+        self.row_mouse_handles.clear();
+        self.mark_handles.clear();
+        for path in self.entries.iter().map(|entry| entry.path.clone()) {
+            self.row_mouse_handles.entry(path.clone()).or_default();
+            self.mark_handles.entry(path).or_default();
         }
-        self.row_mouse_handles.truncate(self.entries.len());
-        // The mark zone is its own click target inside each row, so it needs
-        // its own hover state — kept in lockstep with the row handles.
-        while self.mark_handles.len() < self.entries.len() {
-            self.mark_handles.push(MouseStateHandle::default());
-        }
-        self.mark_handles.truncate(self.entries.len());
     }
 
     /// Entry indices currently visible (after the search filter), in display
@@ -2184,6 +2275,7 @@ impl SftpBrowserView {
                 remote_path,
                 backend.clone(),
                 direction,
+                false,
                 delete_after,
                 None,
                 ctx,
@@ -2270,6 +2362,7 @@ impl SftpBrowserView {
                 file.remote_path,
                 pending.backend.clone(),
                 pending.direction,
+                true,
                 delete_after,
                 None,
                 ctx,
@@ -2311,31 +2404,121 @@ impl SftpBrowserView {
             return;
         };
         let plan_backend = remote_backend.clone();
-        let src = source_dir.clone();
+        let original_source_dir = source_dir.clone();
         let dst = dest_dir.clone();
+        let planning_source_backend = source_backend.clone();
+        let planning_original_source = original_source_dir.clone();
         self.run_blocking(
             ctx,
-            move || plan_dir_transfer(direction, plan_backend, &src, &dst),
+            move || -> Result<(DirTransferPlan, Option<QuarantinedDirSource>), String> {
+                let quarantine = if is_move {
+                    Some(
+                        QuarantinedDirSource::new(
+                            planning_source_backend,
+                            planning_original_source.clone(),
+                        )
+                        .map_err(|error| error.to_string())?,
+                    )
+                } else {
+                    None
+                };
+                let planned_source = quarantine
+                    .as_ref()
+                    .map(|source| source.quarantine.as_path())
+                    .unwrap_or(planning_original_source.as_path());
+                match plan_dir_transfer(direction, plan_backend, planned_source, &dst) {
+                    Ok(plan) => Ok((plan, quarantine)),
+                    Err(error) => {
+                        if let Some(quarantine) = quarantine {
+                            if let Err((restore_error, recovery_path)) = quarantine.restore() {
+                                return Err(format!(
+                                    "{error}; restoring the source failed: {restore_error}; source recovery path: {}",
+                                    recovery_path.display()
+                                ));
+                            }
+                        }
+                        Err(error)
+                    }
+                }
+            },
             move |me, result, ctx| match result {
-                Ok(Ok(plan)) => {
+                Ok(Ok((plan, mut quarantine))) => {
                     if plan.files.is_empty() {
-                        me.show_info_toast(
-                            if plan.skipped_existing > 0 {
-                                crate::t!(
-                                    "fm-toast-dir-nothing-to-transfer-existing",
-                                    label = label.clone(),
-                                    count = plan.skipped_existing
-                                )
-                            } else {
-                                crate::t!("fm-toast-dir-nothing-to-transfer", label = label.clone())
-                            },
-                            ctx,
-                        );
+                        if is_move && plan.skipped_existing == 0 {
+                            let quarantined_source = quarantine
+                                .take()
+                                .expect("move planning returns a quarantine");
+                            let planned_source_dir = quarantined_source.quarantine.clone();
+                            let cleanup =
+                                delete_quarantined_dir_source(&*source_backend, &planned_source_dir);
+                            quarantined_source.disarm();
+                            match cleanup {
+                                Ok(()) => {
+                                    me.show_info_toast(
+                                        crate::t!("fm-toast-moved", label = label.clone()),
+                                        ctx,
+                                    );
+                                }
+                                Err(error) => me.show_error_toast(
+                                    crate::t!(
+                                        "fm-toast-copied-source-remove-failed",
+                                        label = label.clone(),
+                                        err = error.to_string()
+                                    ),
+                                    ctx,
+                                ),
+                            }
+                            me.refresh_dir(ctx);
+                        } else {
+                            let mut restore_failed = false;
+                            if is_move {
+                                if let Err((error, recovery_path)) = quarantine
+                                    .take()
+                                    .expect("move planning returns a quarantine")
+                                    .restore()
+                                {
+                                    restore_failed = true;
+                                    me.show_error_toast(
+                                        crate::t!(
+                                            "fm-toast-dir-prepare-failed",
+                                            label = label.clone(),
+                                            err = format!(
+                                                "{error}; source recovery path: {}",
+                                                recovery_path.display()
+                                            )
+                                        ),
+                                        ctx,
+                                    );
+                                }
+                                me.refresh_dir(ctx);
+                            }
+                            if !restore_failed {
+                                me.show_info_toast(
+                                if plan.skipped_existing > 0 {
+                                    crate::t!(
+                                        "fm-toast-dir-nothing-to-transfer-existing",
+                                        label = label.clone(),
+                                        count = plan.skipped_existing
+                                    )
+                                } else {
+                                    crate::t!(
+                                        "fm-toast-dir-nothing-to-transfer",
+                                        label = label.clone()
+                                    )
+                                },
+                                ctx,
+                                );
+                            }
+                        }
                         return;
                     }
                     // Register the move batch *before* spawning so a synchronous
                     // (test-mode) completion still counts down correctly.
                     let batch_id = if is_move {
+                        let planned_source_dir = quarantine
+                            .take()
+                            .expect("move planning returns a quarantine")
+                            .disarm();
                         let id = me.next_dir_move_batch_id;
                         me.next_dir_move_batch_id += 1;
                         me.pending_dir_move_cleanups.push(PendingDirMoveCleanup {
@@ -2346,7 +2529,8 @@ impl SftpBrowserView {
                             // Keep the complete source tree in that case.
                             any_failed: plan.skipped_existing > 0,
                             source_backend: source_backend.clone(),
-                            source_dir: source_dir.clone(),
+                            source_dir: planned_source_dir,
+                            original_source_dir: Some(source_dir.clone()),
                             label: label.clone(),
                         });
                         Some(id)
@@ -2360,6 +2544,7 @@ impl SftpBrowserView {
                             remote_path,
                             remote_backend.clone(),
                             direction,
+                            false,
                             None,
                             batch_id,
                             ctx,
@@ -2374,15 +2559,29 @@ impl SftpBrowserView {
                                 skipped = plan.skipped_existing
                             )
                         } else {
-                            crate::t!("fm-toast-dir-files-started", label = label.clone(), count = count)
+                            crate::t!(
+                                "fm-toast-dir-files-started",
+                                label = label.clone(),
+                                count = count
+                            )
                         },
                         ctx,
                     );
                 }
-                Ok(Err(e)) => {
-                    me.show_error_toast(crate::t!("fm-toast-dir-prepare-failed", label = label.clone(), err = e.to_string()), ctx)
+                Ok(Err(e)) => me.show_error_toast(
+                    crate::t!(
+                        "fm-toast-dir-prepare-failed",
+                        label = label.clone(),
+                        err = e.to_string()
+                    ),
+                    ctx,
+                ),
+                Err(_) => {
+                    me.show_error_toast(
+                        crate::t!("fm-toast-dir-prepare-cancelled", label = label.clone()),
+                        ctx,
+                    )
                 }
-                Err(_) => me.show_error_toast(crate::t!("fm-toast-dir-prepare-cancelled", label = label.clone()), ctx),
             },
         );
     }
@@ -2390,7 +2589,12 @@ impl SftpBrowserView {
     /// A file that belonged to a cross-connection directory move has finished.
     /// Count it down; when the whole batch is done, remove the source tree (only
     /// if every file succeeded — otherwise keep it and report).
-    fn note_dir_move_progress(&mut self, batch_id: u64, succeeded: bool, ctx: &mut ViewContext<Self>) {
+    fn note_dir_move_progress(
+        &mut self,
+        batch_id: u64,
+        succeeded: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let Some(pos) = self
             .pending_dir_move_cleanups
             .iter()
@@ -2410,15 +2614,50 @@ impl SftpBrowserView {
         }
         let batch = self.pending_dir_move_cleanups.remove(pos);
         if batch.any_failed {
-            self.show_error_toast(
-                crate::t!("fm-toast-move-source-kept", label = batch.label.clone()),
-                ctx,
-            );
+            let mut restore_failure = None;
+            if let Some(original_source_dir) = &batch.original_source_dir {
+                if let Err(error) = batch
+                    .source_backend
+                    .rename(&batch.source_dir, original_source_dir)
+                {
+                    log::error!(
+                        "fm move: restoring {} to {} failed: {error}",
+                        batch.source_dir.display(),
+                        original_source_dir.display()
+                    );
+                    restore_failure = Some(error);
+                }
+            }
+            if let Some(error) = restore_failure {
+                self.show_error_toast(
+                    crate::t!(
+                        "fm-toast-dir-prepare-failed",
+                        label = batch.label.clone(),
+                        err = format!(
+                            "{error}; source recovery path: {}",
+                            batch.source_dir.display()
+                        )
+                    ),
+                    ctx,
+                );
+            } else {
+                self.show_error_toast(
+                    crate::t!("fm-toast-move-source-kept", label = batch.label.clone()),
+                    ctx,
+                );
+            }
         } else {
-            match batch.source_backend.delete_dir_recursive(&batch.source_dir) {
-                Ok(()) => self.show_info_toast(crate::t!("fm-toast-moved", label = batch.label.clone()), ctx),
-                Err(e) => self.show_error_toast(
-                    crate::t!("fm-toast-copied-source-remove-failed", label = batch.label.clone(), err = e.to_string()),
+            match delete_quarantined_dir_source(&*batch.source_backend, &batch.source_dir) {
+                Ok(()) => self.show_info_toast(
+                    crate::t!("fm-toast-moved", label = batch.label.clone()),
+                    ctx,
+                ),
+                Err(error) => self.show_error_toast(
+                    crate::t!(
+                        "fm-toast-copied-source-remove-failed",
+                        label = batch.label.clone(),
+                        err = error.to_string()
+                    ),
                     ctx,
                 ),
             }
@@ -2445,6 +2684,7 @@ impl SftpBrowserView {
         remote_path: PathBuf,
         backend: Arc<dyn SftpBackend>,
         direction: TransferDirection,
+        overwrite_destination: bool,
         delete_after: Option<(Arc<dyn SftpBackend>, PathBuf)>,
         dir_move_batch: Option<u64>,
         ctx: &mut ViewContext<Self>,
@@ -2453,9 +2693,7 @@ impl SftpBrowserView {
             TransferDirection::Upload => {
                 std::fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0)
             }
-            TransferDirection::Download => {
-                backend.stat(&remote_path).map(|e| e.size).unwrap_or(0)
-            }
+            TransferDirection::Download => backend.stat(&remote_path).map(|e| e.size).unwrap_or(0),
         };
         let task = TransferTask::new(
             self.next_transfer_id,
@@ -2484,14 +2722,75 @@ impl SftpBrowserView {
         let work_backend = backend.clone();
         let lp = local_path.clone();
         let rp = remote_path.clone();
+        let move_source = delete_after.clone();
         if let Some(handle) = self.run_blocking(
             ctx,
-            move || match direction {
-                TransferDirection::Upload => {
-                    work_backend.upload_file(&lp, &rp, Some(&progress_cb), Some(&cancel_flag))
-                }
-                TransferDirection::Download => {
-                    work_backend.download_file(&rp, &lp, Some(&progress_cb), Some(&cancel_flag))
+            move || {
+                let mut transfer_local_path = lp;
+                let mut transfer_remote_path = rp;
+                let quarantined_source =
+                    if let Some((source_backend, original_source)) = &move_source {
+                        let quarantine =
+                            unique_backend_sibling(original_source, "zaplex_move");
+                        source_backend.rename(original_source, &quarantine)?;
+                        match direction {
+                            TransferDirection::Upload => {
+                                transfer_local_path = quarantine.clone()
+                            }
+                            TransferDirection::Download => {
+                                transfer_remote_path = quarantine.clone()
+                            }
+                        }
+                        Some((source_backend, original_source, quarantine))
+                    } else {
+                        None
+                    };
+                let result = match (direction, overwrite_destination) {
+                    (TransferDirection::Upload, true) => work_backend.upload_file(
+                        &transfer_local_path, &transfer_remote_path, Some(&progress_cb), Some(&cancel_flag),
+                    ),
+                    (TransferDirection::Upload, false) => work_backend.upload_file_no_replace(
+                        &transfer_local_path, &transfer_remote_path, Some(&progress_cb), Some(&cancel_flag),
+                    ),
+                    (TransferDirection::Download, true) => work_backend.download_file(
+                        &transfer_remote_path, &transfer_local_path, Some(&progress_cb), Some(&cancel_flag),
+                    ),
+                    (TransferDirection::Download, false) => work_backend.download_file_no_replace(
+                        &transfer_remote_path, &transfer_local_path, Some(&progress_cb), Some(&cancel_flag),
+                    ),
+                };
+                if let Some((source_backend, original_source, quarantine)) =
+                    quarantined_source
+                {
+                    match result {
+                        Ok(()) => {
+                            if let Err(error) = source_backend.delete_file(&quarantine) {
+                                let restore = source_backend.rename(&quarantine, original_source);
+                                let restore_detail = restore
+                                    .err()
+                                    .map(|restore_error| {
+                                        format!("; restoring the source failed: {restore_error}")
+                                    })
+                                    .unwrap_or_default();
+                                return Err(sftp_ops::SftpOpsError::Operation(format!(
+                                    "Transfer completed, but removing the source failed: {error}{restore_detail}"
+                                )));
+                            }
+                            Ok(())
+                        }
+                        Err(error) => {
+                            let restore = source_backend.rename(&quarantine, original_source);
+                            if let Err(restore_error) = restore {
+                                return Err(sftp_ops::SftpOpsError::Operation(format!(
+                                    "{error}; restoring the source failed: {restore_error}; source recovery path: {}",
+                                    quarantine.display()
+                                )));
+                            }
+                            Err(error)
+                        }
+                    }
+                } else {
+                    result
                 }
             },
             move |me, result, ctx| {
@@ -2518,17 +2817,6 @@ impl SftpBrowserView {
                 me.transfer_handles.remove(&task_id);
                 match &result {
                     Ok(Ok(())) => {
-                        // Copy-then-delete: only remove the source once the
-                        // transfer has fully succeeded (never on error/cancel).
-                        if let Some((source_backend, source_path)) = &delete_after {
-                            if let Err(e) = source_backend.delete_file(source_path) {
-                                log::warn!("fm move: source delete failed: {e}");
-                                me.show_error_toast(
-                                    crate::t!("fm-toast-copied-source-delete-failed", err = e.to_string()),
-                                    ctx,
-                                );
-                            }
-                        }
                         me.refresh_dir(ctx);
                     }
                     Ok(Err(e)) => {
@@ -2827,31 +3115,7 @@ impl SftpBrowserView {
         appearance: &Appearance,
         position_id: &'static str,
     ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let icon_color = theme.sub_text_color(theme.background());
-
-        let icon_el = ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
-            .with_width(TOOLBAR_ICON_SIZE)
-            .with_height(TOOLBAR_ICON_SIZE)
-            .finish();
-
-        let btn_el = Hoverable::new(handle, move |_| {
-            Container::new(
-                ConstrainedBox::new(Container::new(icon_el).with_uniform_padding(6.0).finish())
-                    .with_width(TOOLBAR_BTN_SIZE)
-                    .with_height(TOOLBAR_BTN_SIZE)
-                    .finish(),
-            )
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-            .finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(action.clone());
-        })
-        .finish();
-
-        SavePosition::new(btn_el, position_id).finish()
+        render_toolbar_button(icon, handle, action, appearance, position_id)
     }
 
     /// A toolbar button that carries an on/off state: `active` tints the icon
@@ -3804,30 +4068,24 @@ fn remove_backend_entry(
     }
 }
 
-fn unique_backend_sibling(
+fn delete_quarantined_dir_source(
     backend: &dyn SftpBackend,
-    destination: &Path,
-    marker: &str,
-) -> Result<PathBuf, sftp_ops::SftpOpsError> {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    quarantine: &Path,
+) -> Result<(), sftp_ops::SftpOpsError> {
+    backend.delete_dir_recursive(quarantine).map_err(|error| {
+        sftp_ops::SftpOpsError::Operation(format!(
+            "{error}; source cleanup may be incomplete; remaining source recovery path: {}",
+            quarantine.display()
+        ))
+    })
+}
+
+fn unique_backend_sibling(destination: &Path, marker: &str) -> PathBuf {
     let name = destination
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "entry".to_string());
-    for _ in 0..1024 {
-        let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let candidate = destination.with_file_name(format!(
-            ".{name}.{marker}-{}-{sequence}",
-            std::process::id()
-        ));
-        if backend.lstat(&candidate).is_err() {
-            return Ok(candidate);
-        }
-    }
-    Err(sftp_ops::SftpOpsError::Operation(format!(
-        "Could not reserve a temporary sibling for {}",
-        destination.display()
-    )))
+    destination.with_file_name(format!(".{name}.{marker}-{}", uuid::Uuid::new_v4()))
 }
 
 fn replace_backend_entry(
@@ -3835,26 +4093,7 @@ fn replace_backend_entry(
     replacement: &Path,
     destination: &Path,
 ) -> Result<(), sftp_ops::SftpOpsError> {
-    let backup = unique_backend_sibling(backend, destination, "zaplex_backup")?;
-    backend.rename(destination, &backup)?;
-    if let Err(replace_error) = backend.rename(replacement, destination) {
-        let restore_result = backend.rename(&backup, destination);
-        let restore_detail = restore_result
-            .err()
-            .map(|error| format!("; restoring the original failed: {error}"))
-            .unwrap_or_default();
-        return Err(sftp_ops::SftpOpsError::Operation(format!(
-            "Failed to install replacement for {}: {replace_error}{restore_detail}",
-            destination.display()
-        )));
-    }
-    if let Err(error) = remove_backend_entry(backend, &backup) {
-        log::warn!(
-            "replacement succeeded, but backup cleanup failed at {}: {error}",
-            backup.display()
-        );
-    }
-    Ok(())
+    backend.replace(replacement, destination)
 }
 
 fn execute_backend_copy_move(
@@ -3889,7 +4128,7 @@ fn execute_backend_copy_move(
     }
 
     if !is_move && is_dir {
-        let staged = unique_backend_sibling(backend, destination, "zaplex_staged")?;
+        let staged = unique_backend_sibling(destination, "zaplex_staged");
         if let Err(error) = backend.copy_dir_recursive(source, &staged) {
             if backend.lstat(&staged).is_ok() {
                 let _ = remove_backend_entry(backend, &staged);
@@ -3911,18 +4150,28 @@ fn execute_backend_copy_move(
     }
 
     if !overwrite {
-        return if is_move {
-            backend.rename(source, destination)
-        } else {
-            backend.copy_file(source, destination)
-        };
+        if is_move {
+            return backend.rename(source, destination);
+        }
+        let staged = unique_backend_sibling(destination, "zaplex_staged");
+        if let Err(error) = backend.copy_file(source, &staged) {
+            if backend.lstat(&staged).is_ok() {
+                let _ = remove_backend_entry(backend, &staged);
+            }
+            return Err(error);
+        }
+        let result = backend.rename(&staged, destination);
+        if result.is_err() && backend.lstat(&staged).is_ok() {
+            let _ = remove_backend_entry(backend, &staged);
+        }
+        return result;
     }
 
     backend.lstat(destination)?;
     if is_move {
         return replace_backend_entry(backend, source, destination);
     }
-    let staged = unique_backend_sibling(backend, destination, "zaplex_staged")?;
+    let staged = unique_backend_sibling(destination, "zaplex_staged");
     if let Err(error) = backend.copy_file(source, &staged) {
         if backend.lstat(&staged).is_ok() {
             let _ = remove_backend_entry(backend, &staged);
@@ -3960,13 +4209,23 @@ fn relay_one(
     is_move: bool,
     temp: &Path,
 ) -> Result<(), String> {
+    let quarantined_source = if is_move {
+        let quarantine = unique_backend_sibling(source_path, "zaplex_move");
+        source_backend
+            .rename(source_path, &quarantine)
+            .map_err(|error| error.to_string())?;
+        Some(quarantine)
+    } else {
+        None
+    };
+    let transfer_source = quarantined_source.as_deref().unwrap_or(source_path);
     let transfer = (|| -> Result<(), String> {
         if is_dir {
             // Download the source tree from host A into a local temp directory…
             let download = plan_dir_transfer(
                 TransferDirection::Download,
                 source_backend.clone(),
-                source_path,
+                transfer_source,
                 temp,
             )?;
             if download.skipped_existing > 0 {
@@ -3986,7 +4245,7 @@ fn relay_one(
             )?;
             for (local, remote) in &upload.files {
                 target_backend
-                    .upload_file(local, remote, None, None)
+                    .upload_file_no_replace(local, remote, None, None)
                     .map_err(|e| e.to_string())?;
             }
             if upload.skipped_existing > 0 {
@@ -3997,10 +4256,10 @@ fn relay_one(
             }
         } else {
             source_backend
-                .download_file(source_path, temp, None, None)
+                .download_file(transfer_source, temp, None, None)
                 .map_err(|e| e.to_string())?;
             target_backend
-                .upload_file(temp, dest_path, None, None)
+                .upload_file_no_replace(temp, dest_path, None, None)
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -4012,23 +4271,83 @@ fn relay_one(
     } else {
         let _ = std::fs::remove_file(temp);
     }
-    transfer?;
+    if let Err(error) = transfer {
+        if let Some(quarantine) = &quarantined_source {
+            source_backend
+                .rename(quarantine, source_path)
+                .map_err(|restore_error| {
+                    format!(
+                        "{error}; restoring the source failed: {restore_error}; source recovery path: {}",
+                        quarantine.display()
+                    )
+                })?;
+        }
+        return Err(error);
+    }
 
-    // Move: remove the source on the origin host, but only after a fully
-    // successful relay (the `transfer?` above returned early on any failure).
+    // Move: remove the quarantined source object on the origin host, but only
+    // after a fully successful relay.
     if is_move {
         let removed = if is_dir {
-            source_backend.delete_dir_recursive(source_path)
+            source_backend.delete_dir_recursive(transfer_source)
         } else {
-            source_backend.delete_file(source_path)
+            source_backend.delete_file(transfer_source)
         };
-        removed.map_err(|e| format!("relayed, but removing the source failed: {e}"))?;
+        if let Err(error) = removed {
+            if let Some(quarantine) = &quarantined_source {
+                source_backend
+                    .rename(quarantine, source_path)
+                    .map_err(|restore_error| {
+                        format!(
+                            "relayed, but removing the source failed: {error}; restoring it also failed: {restore_error}; source recovery path: {}",
+                            quarantine.display()
+                        )
+                    })?;
+            }
+            return Err(format!("relayed, but removing the source failed: {error}"));
+        }
     }
     Ok(())
 }
 
 #[cfg(test)]
 impl SftpBrowserView {
+    pub(super) fn render_refresh_button_for_test(
+        handle: MouseStateHandle,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        render_toolbar_button(
+            Icon::Refresh,
+            handle,
+            SftpBrowserAction::Refresh,
+            appearance,
+            "sftp_btn:refresh",
+        )
+    }
+
+    /// Test wrapper around the private [`Self::spawn_dir_transfer`].
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn spawn_dir_transfer_for_test(
+        &mut self,
+        source_dir: PathBuf,
+        dest_dir: PathBuf,
+        direction: TransferDirection,
+        remote_backend: Arc<dyn SftpBackend>,
+        is_move: bool,
+        label: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.spawn_dir_transfer(
+            source_dir,
+            dest_dir,
+            direction,
+            remote_backend,
+            is_move,
+            label,
+            ctx,
+        );
+    }
+
     /// Seed a pending directory-move cleanup (as `spawn_dir_transfer` would) so
     /// [`Self::note_dir_move_progress`] can be exercised without a live transfer.
     /// Returns the batch id.
@@ -4046,6 +4365,28 @@ impl SftpBrowserView {
             any_failed: false,
             source_backend,
             source_dir,
+            original_source_dir: None,
+            label: "test-dir".to_string(),
+        });
+        id
+    }
+
+    pub(super) fn seed_quarantined_dir_move_cleanup_for_test(
+        &mut self,
+        remaining: usize,
+        source_backend: Arc<dyn SftpBackend>,
+        source_dir: PathBuf,
+        original_source_dir: PathBuf,
+    ) -> u64 {
+        let id = self.next_dir_move_batch_id;
+        self.next_dir_move_batch_id += 1;
+        self.pending_dir_move_cleanups.push(PendingDirMoveCleanup {
+            id,
+            remaining,
+            any_failed: false,
+            source_backend,
+            source_dir,
+            original_source_dir: Some(original_source_dir),
             label: "test-dir".to_string(),
         });
         id
@@ -4059,6 +4400,10 @@ impl SftpBrowserView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.note_dir_move_progress(batch_id, succeeded, ctx);
+    }
+
+    pub(super) fn close_for_test(&mut self, ctx: &mut ViewContext<Self>) {
+        <Self as BackingView>::close(self, ctx);
     }
 
     /// Whether any directory-move cleanup is still pending (for assertions).
@@ -4542,10 +4887,6 @@ impl TypedActionView for SftpBrowserView {
                 if let Some(t) = self.transfers.iter().find(|t| t.id == task_id) {
                     t.cancel();
                 }
-                // Structured cancellation: abort the spawned future
-                if let Some(handle) = self.transfer_handles.remove(&task_id) {
-                    handle.abort();
-                }
                 ctx.notify();
             }
             SftpBrowserAction::ToggleTransferPanel => {
@@ -4564,9 +4905,6 @@ impl TypedActionView for SftpBrowserView {
             SftpBrowserAction::ConfirmCloseTransferPanel => {
                 for task in &self.transfers {
                     task.cancel();
-                }
-                for (_, handle) in self.transfer_handles.drain() {
-                    handle.abort();
                 }
                 self.transfers.clear();
                 self.transfer_cancel_handles.clear();
@@ -4885,9 +5223,20 @@ impl BackingView for SftpBrowserView {
         for task in &self.transfers {
             task.cancel();
         }
-        // Structured cancellation: abort the spawned futures
-        for (_, handle) in self.transfer_handles.drain() {
-            handle.abort();
+        // Restore directory-move sources while this view still owns the backend.
+        for batch in self.pending_dir_move_cleanups.drain(..) {
+            if let Some(original_source_dir) = batch.original_source_dir {
+                if let Err(error) = batch
+                    .source_backend
+                    .rename(&batch.source_dir, &original_source_dir)
+                {
+                    log::error!(
+                        "fm close recovery required: source remains at {} because restoring {} failed: {error}",
+                        batch.source_dir.display(),
+                        original_source_dir.display()
+                    );
+                }
+            }
         }
         self.pending_uploads.clear();
         self.connect_handle = None;
@@ -4963,6 +5312,72 @@ fn make_editor(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn dropped_directory_move_preparation_restores_quarantined_source() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("source")).unwrap();
+        std::fs::write(root.path().join("source/file.txt"), b"source").unwrap();
+        let backend = Arc::new(super::super::sftp_backend::InMemorySftpBackend::new(
+            root.path().to_path_buf(),
+        )) as Arc<dyn SftpBackend>;
+
+        {
+            let quarantine =
+                QuarantinedDirSource::new(backend, PathBuf::from("/source")).unwrap();
+            assert!(!root.path().join("source").exists());
+            assert!(root.path().join(
+                quarantine
+                    .quarantine
+                    .file_name()
+                    .expect("quarantine has a file name")
+            ).exists());
+        }
+
+        assert_eq!(
+            std::fs::read(root.path().join("source/file.txt")).unwrap(),
+            b"source"
+        );
+    }
+
+    #[test]
+    fn remote_relay_conflict_preserves_destination_and_move_source() {
+        let source_root = tempfile::tempdir().unwrap();
+        let destination_root = tempfile::tempdir().unwrap();
+        std::fs::write(source_root.path().join("file.txt"), b"SOURCE").unwrap();
+        std::fs::write(destination_root.path().join("file.txt"), b"DESTINATION").unwrap();
+        let source_backend = Arc::new(
+            super::super::sftp_backend::InMemorySftpBackend::new(
+                source_root.path().to_path_buf(),
+            ),
+        ) as Arc<dyn SftpBackend>;
+        let destination_backend = Arc::new(
+            super::super::sftp_backend::InMemorySftpBackend::new(
+                destination_root.path().to_path_buf(),
+            ),
+        ) as Arc<dyn SftpBackend>;
+        let relay_temp = source_root.path().join("relay.tmp");
+
+        relay_one(
+            &source_backend,
+            &destination_backend,
+            Path::new("/file.txt"),
+            Path::new("/file.txt"),
+            false,
+            true,
+            &relay_temp,
+        )
+        .expect_err("an existing relay destination must reject an unconfirmed overwrite");
+
+        assert_eq!(
+            std::fs::read(destination_root.path().join("file.txt")).unwrap(),
+            b"DESTINATION"
+        );
+        assert_eq!(
+            std::fs::read(source_root.path().join("file.txt")).unwrap(),
+            b"SOURCE"
+        );
+    }
 
     #[test]
     fn resolved_symlink_target_selects_file_open_or_navigation_explicitly() {

@@ -214,6 +214,25 @@ pub fn rename(sftp: &Sftp, old_path: &Path, new_path: &Path) -> Result<(), SftpO
     Ok(())
 }
 
+/// Atomically replaces an existing remote entry.
+///
+/// Servers that do not support atomic replacement must reject the operation;
+/// falling back to a remove or backup dance would leave the destination absent
+/// across a crash boundary.
+pub fn replace_atomic(
+    sftp: &Sftp,
+    old_path: &Path,
+    new_path: &Path,
+) -> Result<(), SftpOpsError> {
+    let opts = zap_sftp::types::RenameOptions {
+        overwrite: true,
+        atomic: true,
+        native: false,
+    };
+    sftp.rename(old_path, new_path, opts)?;
+    Ok(())
+}
+
 /// Stream-upload local file to remote
 ///
 /// Uses temporary file pattern: first uploads to a temporary path with .sftp_partial suffix,
@@ -225,6 +244,41 @@ pub fn upload_file_streaming(
     remote_path: &Path,
     progress_cb: Option<&ProgressCallback>,
     cancel_flag: &AtomicBool,
+) -> Result<(), SftpOpsError> {
+    upload_file_streaming_with_mode(
+        sftp,
+        local_path,
+        remote_path,
+        progress_cb,
+        cancel_flag,
+        true,
+    )
+}
+
+pub fn upload_file_streaming_no_replace(
+    sftp: &Sftp,
+    local_path: &Path,
+    remote_path: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: &AtomicBool,
+) -> Result<(), SftpOpsError> {
+    upload_file_streaming_with_mode(
+        sftp,
+        local_path,
+        remote_path,
+        progress_cb,
+        cancel_flag,
+        false,
+    )
+}
+
+fn upload_file_streaming_with_mode(
+    sftp: &Sftp,
+    local_path: &Path,
+    remote_path: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: &AtomicBool,
+    overwrite_destination: bool,
 ) -> Result<(), SftpOpsError> {
     let mut local_file =
         fs::File::open(local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
@@ -262,72 +316,37 @@ pub fn upload_file_streaming(
 
     match &result {
         Ok(()) => {
-            // Upload successful: rename temporary file to target path
-            let rename_result = sftp.rename(
+            if !overwrite_destination {
+                if let Err(error) = sftp.rename(
+                    &temp_remote_path,
+                    remote_path,
+                    zap_sftp::types::RenameOptions {
+                        overwrite: false,
+                        atomic: false,
+                        native: false,
+                    },
+                ) {
+                    let _ = sftp.remove_file(&temp_remote_path);
+                    return Err(SftpOpsError::Operation(format!(
+                        "Failed to commit remote file without replacement: {error}"
+                    )));
+                }
+                return Ok(());
+            }
+            // Publish in one atomic replacement. If the server cannot provide
+            // that guarantee, fail safely and keep the existing destination.
+            if let Err(error) = sftp.rename(
                 &temp_remote_path,
                 remote_path,
                 zap_sftp::types::RenameOptions {
                     overwrite: true,
-                    atomic: false,
+                    atomic: true,
                     native: false,
                 },
-            );
-
-            // Some servers do not support OVERWRITE flag; use backup rename strategy to avoid data loss
-            let rename_result = match rename_result {
-                Ok(()) => Ok(()),
-                Err(_) => {
-                    let backup_path = unique_transfer_sibling(remote_path, "sftp_backup");
-                    let backup_created = sftp
-                        .rename(
-                            remote_path,
-                            &backup_path,
-                            zap_sftp::types::RenameOptions {
-                                overwrite: false,
-                                atomic: false,
-                                native: false,
-                            },
-                        )
-                        .is_ok();
-
-                    match sftp.rename(
-                        &temp_remote_path,
-                        remote_path,
-                        zap_sftp::types::RenameOptions {
-                            overwrite: false,
-                            atomic: false,
-                            native: false,
-                        },
-                    ) {
-                        Ok(()) => {
-                            if backup_created {
-                                let _ = sftp.remove_file(&backup_path);
-                            }
-                            Ok(())
-                        }
-                        Err(e) => {
-                            // Rename failed: restore backup
-                            if backup_created {
-                                let _ = sftp.rename(
-                                    &backup_path,
-                                    remote_path,
-                                    zap_sftp::types::RenameOptions {
-                                        overwrite: false,
-                                        atomic: false,
-                                        native: false,
-                                    },
-                                );
-                            }
-                            Err(e)
-                        }
-                    }
-                }
-            };
-
-            if let Err(e) = rename_result {
+            ) {
                 let _ = sftp.remove_file(&temp_remote_path);
                 return Err(SftpOpsError::Operation(format!(
-                    "Failed to finalize remote temporary file: {e}"
+                    "Failed to atomically replace remote file: {error}"
                 )));
             }
         }
@@ -351,6 +370,41 @@ pub fn download_file_streaming(
     local_path: &Path,
     progress_cb: Option<&ProgressCallback>,
     cancel_flag: &AtomicBool,
+) -> Result<(), SftpOpsError> {
+    download_file_streaming_with_mode(
+        sftp,
+        remote_path,
+        local_path,
+        progress_cb,
+        cancel_flag,
+        true,
+    )
+}
+
+pub fn download_file_streaming_no_replace(
+    sftp: &Sftp,
+    remote_path: &Path,
+    local_path: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: &AtomicBool,
+) -> Result<(), SftpOpsError> {
+    download_file_streaming_with_mode(
+        sftp,
+        remote_path,
+        local_path,
+        progress_cb,
+        cancel_flag,
+        false,
+    )
+}
+
+fn download_file_streaming_with_mode(
+    sftp: &Sftp,
+    remote_path: &Path,
+    local_path: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: &AtomicBool,
+    overwrite_destination: bool,
 ) -> Result<(), SftpOpsError> {
     let mut remote_file = sftp.open(remote_path, OpenOptions::read())?;
     let metadata = remote_file.stat()?;
@@ -396,7 +450,13 @@ pub fn download_file_streaming(
     match &result {
         Ok(()) => {
             // Download successful: rename temporary file to target path
-            if let Err(e) = fs::rename(&temp_local_path, local_path) {
+            let finalize = if overwrite_destination {
+                fs::rename(&temp_local_path, local_path)
+            } else {
+                fs::hard_link(&temp_local_path, local_path)
+                    .and_then(|()| fs::remove_file(&temp_local_path))
+            };
+            if let Err(e) = finalize {
                 let _ = fs::remove_file(&temp_local_path);
                 return Err(SftpOpsError::LocalIo(format!(
                     "Failed to finalize downloaded temporary file: {e}"

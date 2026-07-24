@@ -13,6 +13,7 @@
 //! row padding 4×8).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::theme::color::internal_colors;
@@ -30,8 +31,9 @@ use warpui::{
 };
 
 use warp_ssh_manager::{
-    AuthType, KeychainSecretStore, NodeKind, SecretKind, SshNode, SshRepository, SshSecretStore,
-    SshServerInfo,
+    AuthType, DefaultWorkspaceCommandFactory, EndpointUse, KeychainSecretStore, NodeKind, SshNode,
+    SshRepository, SshServerInfo, WorkspaceCommandFactory, clone_server_with_secrets,
+    delete_node_and_secrets, validate_ssh_endpoint,
 };
 
 use remote_server::proto::SessionInfo;
@@ -43,7 +45,10 @@ use crate::editor::{
 };
 use crate::settings::SshSettings;
 use crate::ssh_manager::candidates::{CandidateRow, CandidatesViewModel};
-use crate::ssh_manager::{SshTreeChangedEvent, SshTreeChangedNotifier};
+use crate::ssh_manager::{
+    SshTreeChangedEvent, SshTreeChangedNotifier, credential_operation_message,
+    endpoint_validation_message,
+};
 
 // ---- visual constants (see Drive) ----
 const TOOLBAR_BUTTON_SIZE: f32 = 26.0;
@@ -272,10 +277,18 @@ pub struct SshManagerPanel {
     sessions_error: HashMap<String, String>,
     /// Hover/click state per session row (key = "<node_id>:<pty_session_id>").
     session_row_states: HashMap<String, MouseStateHandle>,
+    command_factory: Arc<dyn WorkspaceCommandFactory>,
 }
 
 impl SshManagerPanel {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
+        Self::new_with_command_factory(Arc::new(DefaultWorkspaceCommandFactory), ctx)
+    }
+
+    fn new_with_command_factory(
+        command_factory: Arc<dyn WorkspaceCommandFactory>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         let candidates = ctx.add_model(|_| CandidatesViewModel::new());
 
         let mut me = Self {
@@ -313,6 +326,7 @@ impl SshManagerPanel {
             resilient_hosts: std::collections::HashSet::new(),
             sessions_error: HashMap::new(),
             session_row_states: HashMap::new(),
+            command_factory,
         };
         // `~/.ssh/config` is read on-demand only when the user opens the "Add a
         // host" block (`on_toggle_add_mode`) — never unsolicited on mount, so the
@@ -610,7 +624,9 @@ impl SshManagerPanel {
     /// explicit, reversible action — the button is the user's intent.
     fn on_discover_tailscale(&mut self, ctx: &mut ViewContext<Self>) {
         self.adding_mode = false;
-        let output = std::process::Command::new("tailscale")
+        let output = self
+            .command_factory
+            .blocking_command("tailscale")
             .args(["status", "--json"])
             .output();
         let json = match output {
@@ -702,18 +718,15 @@ impl SshManagerPanel {
                 &format!("{} (copy)", source_node.name),
             )?;
 
-            let new_node = SshRepository::create_server(c, parent.as_deref(), &name, &cloned_info)?;
-
-            // The source server was already verified to exist above; copy its keychain password / key passphrase directly to the new node.
             let store = KeychainSecretStore;
-            if let Ok(Some(password)) = store.get(&source_id, SecretKind::Password) {
-                let _ = store.set(&new_node.id, SecretKind::Password, &password);
-            }
-            if let Ok(Some(passphrase)) = store.get(&source_id, SecretKind::Passphrase) {
-                let _ = store.set(&new_node.id, SecretKind::Passphrase, &passphrase);
-            }
-
-            Ok(new_node)
+            Ok(clone_server_with_secrets(
+                c,
+                &store,
+                &source_id,
+                parent.as_deref(),
+                &name,
+                &cloned_info,
+            )?)
         });
         match result {
             Ok(node) => {
@@ -724,7 +737,9 @@ impl SshManagerPanel {
             }
             Err(e) => {
                 log::error!("ssh_manager: clone server failed: {e:?}");
-                ctx.emit(SshManagerPanelEvent::PersistenceError(e.to_string()));
+                ctx.emit(SshManagerPanelEvent::PersistenceError(
+                    credential_operation_message(&e),
+                ));
             }
         }
     }
@@ -763,17 +778,16 @@ impl SshManagerPanel {
             return;
         };
         ctx.notify();
-        let result = warp_ssh_manager::with_conn(|c| Ok(SshRepository::delete_node(c, &id)?));
+        let result = warp_ssh_manager::with_conn(|c| {
+            Ok(delete_node_and_secrets(c, &KeychainSecretStore, &id)?)
+        });
         if let Err(e) = result {
             log::error!("ssh_manager: delete failed: {e:?}");
-            ctx.emit(SshManagerPanelEvent::PersistenceError(e.to_string()));
+            ctx.emit(SshManagerPanelEvent::PersistenceError(
+                credential_operation_message(&e),
+            ));
             return;
         }
-        let store = KeychainSecretStore;
-        let _ = store.delete(&id, SecretKind::Password);
-        let _ = store.delete(&id, SecretKind::Passphrase);
-        let _ = store.delete(&id, SecretKind::RootPassword);
-
         if self.selected_id.as_deref() == Some(id.as_str()) {
             self.selected_id = None;
         }
@@ -825,6 +839,14 @@ impl SshManagerPanel {
             .ok()
             .flatten();
         if let Some(server) = server {
+            if let Err(error) =
+                validate_ssh_endpoint(EndpointUse::Connect, &server.host, &server.port.to_string())
+            {
+                ctx.emit(SshManagerPanelEvent::PersistenceError(
+                    endpoint_validation_message(error),
+                ));
+                return;
+            }
             self.connecting.insert(id.to_string());
             ctx.notify();
             // Bounded self-clear: the preflight resolves (tab or fallback) well
@@ -1989,8 +2011,9 @@ impl SshManagerPanel {
         // Align the session title under the host *name*: the tree row places its
         // label after the depth indent + chevron + icon (each ITEM_ICON_SIZE) with
         // ITEM_ICON_TEXT_SPACING between, so a child session lines up on that grid.
-        let indent =
-            depth as f32 * FOLDER_DEPTH_INDENT + 2.0 * ITEM_ICON_SIZE + 2.0 * ITEM_ICON_TEXT_SPACING;
+        let indent = depth as f32 * FOLDER_DEPTH_INDENT
+            + 2.0 * ITEM_ICON_SIZE
+            + 2.0 * ITEM_ICON_TEXT_SPACING;
 
         let message = |text: String, color: pathfinder_color::ColorU| -> Box<dyn Element> {
             Container::new(
