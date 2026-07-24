@@ -38,12 +38,19 @@ fn server() -> SshServerInfo {
 #[test]
 fn default_port_omitted() {
     let s = server();
-    assert_eq!(build_ssh_args(&s), vec!["ssh", "alice@1.2.3.4"]);
-    // shell-escape conservatively wraps user@host in single quotes, which is legal and
-    // shell-equivalent — we don't require the unquoted form.
+    assert_eq!(
+        build_ssh_args(&s),
+        vec![
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=ask",
+            "--",
+            "alice@1.2.3.4"
+        ]
+    );
     let line = build_ssh_command_line(&s);
     assert!(
-        line == "ssh alice@1.2.3.4" || line == "ssh 'alice@1.2.3.4'",
+        line.contains("StrictHostKeyChecking=ask") && line.contains("alice@1.2.3.4"),
         "unexpected: {line}"
     );
 }
@@ -54,7 +61,15 @@ fn custom_port_uses_dash_p() {
     s.port = 2222;
     assert_eq!(
         build_ssh_args(&s),
-        vec!["ssh", "-p", "2222", "alice@1.2.3.4"]
+        vec![
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=ask",
+            "-p",
+            "2222",
+            "--",
+            "alice@1.2.3.4"
+        ]
     );
 }
 
@@ -65,7 +80,15 @@ fn key_auth_emits_dash_i() {
     s.key_path = Some("/home/u/.ssh/id_ed25519".into());
     assert_eq!(
         build_ssh_args(&s),
-        vec!["ssh", "-i", "/home/u/.ssh/id_ed25519", "alice@1.2.3.4"]
+        vec![
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=ask",
+            "-i",
+            "/home/u/.ssh/id_ed25519",
+            "--",
+            "alice@1.2.3.4"
+        ]
     );
 }
 
@@ -74,14 +97,41 @@ fn key_auth_without_path_is_skipped() {
     let mut s = server();
     s.auth_type = AuthType::Key;
     s.key_path = None;
-    assert_eq!(build_ssh_args(&s), vec!["ssh", "alice@1.2.3.4"]);
+    assert_eq!(
+        build_ssh_args(&s),
+        vec![
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=ask",
+            "--",
+            "alice@1.2.3.4"
+        ]
+    );
 }
 
 #[test]
 fn empty_username_yields_host_only() {
     let mut s = server();
     s.username = String::new();
-    assert_eq!(build_ssh_args(&s), vec!["ssh", "1.2.3.4"]);
+    assert_eq!(
+        build_ssh_args(&s),
+        vec!["ssh", "-o", "StrictHostKeyChecking=ask", "--", "1.2.3.4"]
+    );
+}
+
+#[test]
+fn option_like_username_is_delimited_from_ssh_options() {
+    let mut s = server();
+    s.username = "-oProxyCommand=malicious".to_string();
+    let args = build_ssh_args(&s);
+    let target = args
+        .iter()
+        .position(|arg| arg == "-oProxyCommand=malicious@1.2.3.4")
+        .unwrap();
+    assert_eq!(
+        args.get(target.wrapping_sub(1)).map(String::as_str),
+        Some("--")
+    );
 }
 
 #[test]
@@ -130,7 +180,15 @@ fn onekey_key_auth_emits_dash_i_when_key_path_is_resolved() {
 
     assert_eq!(
         build_ssh_args(&s),
-        vec!["ssh", "-i", "/home/u/.ssh/shared_ed25519", "alice@1.2.3.4"]
+        vec![
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=ask",
+            "-i",
+            "/home/u/.ssh/shared_ed25519",
+            "--",
+            "alice@1.2.3.4"
+        ]
     );
 }
 
@@ -172,7 +230,7 @@ fn unix_askpass_script_prints_the_secret() {
     let script = session.script_path.clone();
     let password_file = session.password_path.clone();
 
-    let output = std::process::Command::new(&script)
+    let output = command::blocking::Command::new(&script)
         .env("ZAPLEX_SSH_ASKPASS_FILE", &password_file)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -410,16 +468,18 @@ fn key_auth_args_destination_comes_after_options() {
     // Simulate test_key_auth construction logic
     let mut args = build_ssh_args(&s);
     let target = args.pop().unwrap();
+    assert_eq!(args.pop().as_deref(), Some("--"));
     args.extend([
         "-o".into(),
         "BatchMode=yes".into(),
         "-o".into(),
         "ConnectTimeout=5".into(),
         "-o".into(),
-        "StrictHostKeyChecking=no".into(),
+        "StrictHostKeyChecking=ask".into(),
         "-o".into(),
         "LogLevel=ERROR".into(),
     ]);
+    args.push("--".into());
     args.push(target);
     args.push("echo ok".into());
 
@@ -441,6 +501,417 @@ fn key_auth_args_destination_comes_after_options() {
     assert!(
         dest_pos < echo_pos,
         "destination must come before `echo ok`; got joined: {joined}"
+    );
+}
+
+#[test]
+fn test_never_disables_host_key_verification() {
+    let s = server();
+    for args in [
+        build_password_auth_cmd_args(&s),
+        build_key_auth_cmd_args(&s, false),
+        build_key_auth_cmd_args(&s, true),
+    ] {
+        assert!(
+            !args.iter().any(|arg| arg == "StrictHostKeyChecking=no"),
+            "connection test disabled host-key verification: {args:?}"
+        );
+    }
+}
+
+#[test]
+fn connection_test_options_are_well_formed() {
+    let s = server();
+    for args in [
+        build_password_auth_cmd_args(&s),
+        build_key_auth_cmd_args(&s, false),
+        build_key_auth_cmd_args(&s, true),
+    ] {
+        let destination = args
+            .iter()
+            .position(|arg| arg == "alice@1.2.3.4")
+            .expect("missing SSH destination");
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("echo ok"),
+            "remote command must be last: {args:?}"
+        );
+        assert_eq!(
+            args.iter()
+                .filter(|arg| arg.as_str() == "alice@1.2.3.4")
+                .count(),
+            1,
+            "there must be exactly one destination: {args:?}"
+        );
+        for option_index in 0..destination {
+            if args[option_index].contains('=') {
+                assert_eq!(
+                    args.get(option_index.wrapping_sub(1)).map(String::as_str),
+                    Some("-o"),
+                    "SSH option lacks -o prefix: {args:?}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn failed_output(stderr: &str) -> std::process::Output {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    std::process::Output {
+        status: std::process::ExitStatus::from_raw(255 << 8),
+        stdout: Vec::new(),
+        stderr: stderr.as_bytes().to_vec(),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn changed_key_is_hard_failure() {
+    let result = finalize_password_test_result(&failed_output(
+        "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!",
+    ));
+    assert_eq!(
+        result,
+        Err("SSH host key changed; connection blocked".to_string())
+    );
+    assert_eq!(
+        classify_host_key_probe(
+            &server(),
+            &failed_output("WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!"),
+        )
+        .err()
+        .as_deref(),
+        Some("SSH host key changed; connection blocked")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unknown_host_key_requires_explicit_confirmation() {
+    let output = failed_output(
+        "The authenticity of host '1.2.3.4' can't be established.\n\
+         ED25519 key fingerprint is SHA256:abc123.\n\
+         Are you sure you want to continue connecting (yes/no/[fingerprint])?",
+    );
+
+    match classify_host_key_probe(&server(), &output).unwrap() {
+        HostKeyProbeOutcome::Unknown(unknown) => {
+            assert_eq!(unknown.host, "1.2.3.4");
+            assert_eq!(unknown.port, 22);
+            assert_eq!(unknown.fingerprint, "SHA256:abc123");
+        }
+        HostKeyProbeOutcome::Verified => panic!("unknown host key was silently accepted"),
+    }
+}
+
+#[test]
+fn host_key_probe_rejects_unknown_without_prompting() {
+    let args = build_host_key_probe_args(&server());
+    assert!(args.iter().any(|arg| arg == "BatchMode=yes"));
+    assert!(args.iter().any(|arg| arg == "StrictHostKeyChecking=yes"));
+}
+
+#[test]
+fn confirmed_unknown_host_key_never_uses_accept_new() {
+    let pinned_host_key = KnownHostsSession::new("1.2.3.4 ssh-ed25519 AAAA").unwrap();
+    let mut args = build_password_auth_cmd_args(&server());
+    apply_host_key_file(&mut args, &pinned_host_key, true);
+    assert!(!args.iter().any(|arg| arg.contains("accept-new")));
+    assert!(args.iter().any(|arg| arg == "StrictHostKeyChecking=yes"));
+    assert!(
+        args.iter().any(|arg| {
+            arg == &format!("UserKnownHostsFile={}", pinned_host_key.path.display())
+        })
+    );
+    assert!(!args.iter().any(|arg| arg == "StrictHostKeyChecking=no"));
+}
+
+#[test]
+fn confirmed_host_key_rejects_a_different_fingerprint() {
+    assert!(host_key_fingerprint_matches(
+        "SHA256:confirmed",
+        b"256 SHA256:confirmed host (ED25519)\n"
+    ));
+    assert!(!host_key_fingerprint_matches(
+        "SHA256:confirmed",
+        b"256 SHA256:replacement host (ED25519)\n"
+    ));
+}
+
+fn source_uses_direct_std_process_command(source: &str) -> bool {
+    let direct_or_imported =
+        regex::Regex::new(r"std\s*::\s*process\s*::\s*(?:Command\b|\{[^}]*\bCommand\b)").unwrap();
+    if direct_or_imported.is_match(source) {
+        return true;
+    }
+    let nested_import =
+        regex::Regex::new(r"std\s*::\s*\{[^}]*\bprocess\s*::\s*(?:Command\b|\{[^}]*\bCommand\b)")
+            .unwrap();
+    if nested_import.is_match(source) {
+        return true;
+    }
+    let process_import =
+        regex::Regex::new(r"use\s+std\s*::\s*process(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;")
+            .unwrap();
+    if process_import.captures_iter(source).any(|captures| {
+        let alias = captures.get(1).map_or("process", |alias| alias.as_str());
+        regex::Regex::new(&format!(r"\b{}\s*::\s*Command\b", regex::escape(alias)))
+            .unwrap()
+            .is_match(source)
+    }) {
+        return true;
+    }
+    let grouped_process_import = regex::Regex::new(
+        r"use\s+std\s*::\s*\{[^}]*\bprocess(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?[^}]*\}\s*;",
+    )
+    .unwrap();
+    grouped_process_import
+        .captures_iter(source)
+        .any(|captures| {
+            let alias = captures.get(1).map_or("process", |alias| alias.as_str());
+            regex::Regex::new(&format!(r"\b{}\s*::\s*Command\b", regex::escape(alias)))
+                .unwrap()
+                .is_match(source)
+        })
+}
+
+#[test]
+fn ssh_workspace_has_no_direct_std_process_command() {
+    fn inspect(path: &std::path::Path, violations: &mut Vec<String>) {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                inspect(&path, violations);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs")
+                && !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with("_tests.rs"))
+            {
+                let source = std::fs::read_to_string(&path).unwrap();
+                if source_uses_direct_std_process_command(&source) {
+                    violations.push(path.display().to_string());
+                }
+            }
+        }
+    }
+
+    let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_dir = crate_dir.parent().unwrap().parent().unwrap();
+    let mut violations = Vec::new();
+    inspect(&crate_dir.join("src"), &mut violations);
+    inspect(&repo_dir.join("app/src/ssh_manager"), &mut violations);
+    assert_eq!(violations, Vec::<String>::new());
+}
+
+#[test]
+fn process_guard_rejects_aliased_std_command() {
+    assert!(source_uses_direct_std_process_command(
+        "use std::process::Command as ProcessCommand;\nfn run() { ProcessCommand::new(\"ssh\"); }"
+    ));
+    assert!(source_uses_direct_std_process_command(
+        "use std::process as process;\nfn run() { process::Command::new(\"ssh\"); }"
+    ));
+    assert!(source_uses_direct_std_process_command(
+        "use std::process;\nfn run() { process::Command::new(\"ssh\"); }"
+    ));
+    assert!(source_uses_direct_std_process_command(
+        "use std::{process as p};\nfn run() { p::Command::new(\"ssh\"); }"
+    ));
+}
+
+#[cfg(unix)]
+struct RecordingCommandFactory {
+    script: std::path::PathBuf,
+    programs: std::sync::Mutex<Vec<String>>,
+}
+
+#[cfg(unix)]
+impl WorkspaceCommandFactory for RecordingCommandFactory {
+    fn async_command(&self, program: &str) -> command::r#async::Command {
+        self.programs.lock().unwrap().push(program.to_string());
+        let mut command = command::r#async::Command::new(&self.script);
+        command.arg(program);
+        command
+    }
+
+    fn blocking_command(&self, program: &str) -> command::blocking::Command {
+        self.programs.lock().unwrap().push(program.to_string());
+        let mut command = command::blocking::Command::new(&self.script);
+        command.arg(program);
+        command
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_ssh_uses_injected_command_factory() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake-ssh");
+    let mut file = std::fs::File::create(&script).unwrap();
+    file.write_all(b"#!/bin/sh\nprintf ok\n").unwrap();
+    let mut permissions = file.metadata().unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    drop(file);
+    let factory = RecordingCommandFactory {
+        script,
+        programs: std::sync::Mutex::new(Vec::new()),
+    };
+
+    let result = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(test_connection_with_factory(
+            &server(),
+            Some(Zeroizing::new("password".to_string())),
+            &factory,
+        ));
+
+    assert_eq!(
+        result.status,
+        ConnectionStatus::Online,
+        "{:?}",
+        result.error_message
+    );
+    assert_eq!(factory.programs.lock().unwrap().as_slice(), ["ssh", "ssh"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn confirmed_host_key_reuses_ssh_transport_and_exact_fingerprint() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake-ssh-tools");
+    let mut file = std::fs::File::create(&script).unwrap();
+    file.write_all(
+        b"#!/bin/sh\ncase \"$1\" in\n\
+          ssh-keygen)\n\
+            grep -q 'ssh-' \"$3\" || exit 1\n\
+            printf '256 SHA256:confirmed host (ED25519)\\n' ;;\n\
+          ssh)\n\
+            for arg in \"$@\"; do\n\
+              case \"$arg\" in\n\
+                UserKnownHostsFile=*) path=${arg#UserKnownHostsFile=} ;;\n\
+                StrictHostKeyChecking=*) strict=${arg#StrictHostKeyChecking=} ;;\n\
+                BatchMode=*) batch=${arg#BatchMode=} ;;\n\
+              esac\n\
+            done\n\
+            if [ \"$strict\" = ask ] && [ \"$batch\" = no ]; then\n\
+              printf '1.2.3.4 ssh-ed25519 AAAA\\n' > \"$path\"\n\
+            else\n\
+              printf ok\n\
+            fi ;;\n\
+          *) exit 2 ;;\n\
+          esac\n",
+    )
+    .unwrap();
+    let mut permissions = file.metadata().unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    drop(file);
+    let factory = RecordingCommandFactory {
+        script,
+        programs: std::sync::Mutex::new(Vec::new()),
+    };
+    let expected = UnknownHostKey {
+        host: "1.2.3.4".to_string(),
+        port: 22,
+        fingerprint: "SHA256:confirmed".to_string(),
+    };
+
+    let result =
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(test_connection_with_factory_policy(
+                &server(),
+                Some(Zeroizing::new("password".to_string())),
+                Some(&expected),
+                &factory,
+            ));
+
+    assert_eq!(
+        result.status,
+        ConnectionStatus::Online,
+        "{:?}",
+        result.error_message
+    );
+    assert_eq!(
+        factory.programs.lock().unwrap().as_slice(),
+        ["ssh", "ssh-keygen", "ssh"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unknown_host_key_is_captured_from_the_probe_transport() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake-ssh-probe");
+    let mut file = std::fs::File::create(&script).unwrap();
+    file.write_all(
+        b"#!/bin/sh\ncase \"$1\" in\n\
+          ssh-keygen)\n\
+            grep -q 'ssh-' \"$3\" || exit 1\n\
+            printf '256 SHA256:captured host (ED25519)\\n' ;;\n\
+          ssh)\n\
+            for arg in \"$@\"; do\n\
+              case \"$arg\" in\n\
+                UserKnownHostsFile=*) path=${arg#UserKnownHostsFile=} ;;\n\
+                StrictHostKeyChecking=*) strict=${arg#StrictHostKeyChecking=} ;;\n\
+                BatchMode=*) batch=${arg#BatchMode=} ;;\n\
+              esac\n\
+            done\n\
+            if [ \"$strict\" = yes ]; then\n\
+              printf 'Host key verification failed.\\n' >&2\n\
+              exit 255\n\
+            fi\n\
+            if [ \"$strict\" = ask ] && [ \"$batch\" = no ]; then\n\
+              printf '1.2.3.4 ssh-ed25519 AAAA\\n' > \"$path\"\n\
+              exit 255\n\
+            fi\n\
+            exit 2 ;;\n\
+          *) exit 2 ;;\n\
+          esac\n",
+    )
+    .unwrap();
+    let mut permissions = file.metadata().unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    drop(file);
+    let factory = RecordingCommandFactory {
+        script,
+        programs: std::sync::Mutex::new(Vec::new()),
+    };
+
+    let result = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(test_connection_with_factory(
+            &server(),
+            Some(Zeroizing::new("password".to_string())),
+            &factory,
+        ));
+
+    assert_eq!(result.status, ConnectionStatus::Unknown);
+    assert_eq!(
+        result.unknown_host_key,
+        Some(UnknownHostKey {
+            host: "1.2.3.4".to_string(),
+            port: 22,
+            fingerprint: "SHA256:captured".to_string(),
+        })
+    );
+    assert_eq!(
+        factory.programs.lock().unwrap().as_slice(),
+        ["ssh", "ssh", "ssh-keygen"]
     );
 }
 
@@ -491,7 +962,7 @@ fn windows_askpass_script_is_spawnable() {
     // Spawn the askpass script using CreateProcessW to follow the same code path as ssh.
     // CREATE_NO_WINDOW simulates the environment when ssh spawns askpass (no console).
     // Must set ZAPLEX_SSH_ASKPASS_FILE env var; the script uses it to locate the password file.
-    let output = std::process::Command::new("cmd.exe")
+    let output = command::blocking::Command::new("cmd.exe")
         .raw_arg(format!("/c \"{}\"", script.display()))
         .env("ZAPLEX_SSH_ASKPASS_FILE", &password_file)
         .stdin(Stdio::null())

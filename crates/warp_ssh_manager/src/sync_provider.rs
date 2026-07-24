@@ -11,6 +11,7 @@ use diesel::connection::{Connection, SimpleConnection};
 use diesel::{QueryDsl, RunQueryDsl};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 use zap_sync::crypto;
 use zap_sync::{SyncDataProvider, SyncEngineError, SyncVersionStore};
 use zeroize::Zeroizing;
@@ -90,15 +91,19 @@ pub struct SshSyncData {
 
 /// SSH data synchronization provider
 pub struct SshSyncProvider {
-    secret_store: KeychainSecretStore,
+    secret_store: Arc<dyn SshSecretStore>,
 }
 
 impl SshSyncProvider {
     /// Create a new SshSyncProvider instance
     pub fn new() -> Self {
         Self {
-            secret_store: KeychainSecretStore::default(),
+            secret_store: Arc::new(KeychainSecretStore),
         }
+    }
+
+    pub fn with_secret_store(secret_store: Arc<dyn SshSecretStore>) -> Self {
+        Self { secret_store }
     }
 }
 
@@ -120,7 +125,7 @@ impl SyncDataProvider for SshSyncProvider {
                 .map_err(|e| SyncEngineError::Provider(e.to_string()))?;
         for credential in onekey_credentials {
             let secret_kind = onekey_secret_kind(credential.kind);
-            let password = read_secret(&self.secret_store, &credential.id, secret_kind)?;
+            let password = read_secret(self.secret_store.as_ref(), &credential.id, secret_kind)?;
             sync_onekey_credentials.push(SyncOneKeyCredential {
                 id: credential.id,
                 label: credential.label,
@@ -151,11 +156,15 @@ impl SyncDataProvider for SshSyncProvider {
                     // - Ok(None) = user indeed didn't set it, write None to field
                     // - Err = abort entire upload to avoid serializing transient keychain failure as
                     //   "no password" and overwriting real passwords on other devices (PR #161 review #5)
-                    let password = read_secret(&self.secret_store, &node.id, SecretKind::Password)?;
+                    let password =
+                        read_secret(self.secret_store.as_ref(), &node.id, SecretKind::Password)?;
                     let passphrase =
-                        read_secret(&self.secret_store, &node.id, SecretKind::Passphrase)?;
-                    let root_password =
-                        read_secret(&self.secret_store, &node.id, SecretKind::RootPassword)?;
+                        read_secret(self.secret_store.as_ref(), &node.id, SecretKind::Passphrase)?;
+                    let root_password = read_secret(
+                        self.secret_store.as_ref(),
+                        &node.id,
+                        SecretKind::RootPassword,
+                    )?;
 
                     sync_servers.push(SyncServer {
                         node_id: server.node_id.clone(),
@@ -249,7 +258,7 @@ impl SyncDataProvider for SshSyncProvider {
         // insert as root nodes to avoid SQLite FK violation rolling back entire transaction
         let sorted_nodes = topologically_sort_nodes(&ssh_data.nodes);
 
-        // ---- Phase 0.6 ---- Collect existing local keychain owner ids for subsequent orphan keychain cleanup
+        // ---- Phase 0.6 ---- Collect existing local keychain owner ids for orphan keychain cleanup
         let mut existing_secret_owner_ids: Vec<String> = with_conn(|conn| {
             Ok(persistence::schema::ssh_nodes::table
                 .select(persistence::schema::ssh_nodes::id)
@@ -264,12 +273,16 @@ impl SyncDataProvider for SshSyncProvider {
         .map_err(|e| SyncEngineError::Provider(e.to_string()))?;
         existing_secret_owner_ids.extend(existing_credential_ids);
 
-        // ---- Phase 1 ---- Write keychain first. Any failure → abort immediately, don't touch DB.
+        let cleanup_targets =
+            keychain_cleanup_targets(&ssh_data, explicit_clears, &existing_secret_owner_ids);
+
+        // ---- Phase 1 ---- Apply keychain writes and deletes first. Any failure → compensate
+        // all prior mutations and abort without touching the database.
         // Track (node_id, kind, prior_value) list; if DB phase fails:
         // - prior_value=Some(v) → restore to old value (avoid overwriting user's existing password)
         // - prior_value=None    → delete (avoid pollution)
         // True "atomic rollback" is based on idempotent override semantics of secret_store.set (PR #161 three-round review)
-        let mut written_secrets: Vec<WrittenSecret> = Vec::new();
+        let mut mutated_secrets: Vec<WrittenSecret> = Vec::new();
         for s in &pending_secrets {
             // Snapshot prior value before write so subsequent rollback can truly restore old value.
             // Real keychain errors abort entire flow, but NoBackend (headless Linux, etc.) treats as "no prior value".
@@ -279,27 +292,58 @@ impl SyncDataProvider for SshSyncProvider {
                 Ok(opt) => opt,
                 Err(e) => {
                     // Same rigor as read_secret: any keychain error aborts to allow rollback
-                    rollback_keychain_writes(&self.secret_store, &written_secrets);
+                    let rollback_failures =
+                        rollback_keychain_writes(self.secret_store.as_ref(), &mutated_secrets);
                     return Err(SyncEngineError::Provider(format!(
-                        "Failed to read prior keychain value ({}, {:?}): {e}. Rolled back {} items, please confirm keychain is available and retry download",
+                        "Failed to read prior keychain value ({}, {:?}): {e}. Rolled back {} items; {}; retry download",
                         s.node_id,
                         s.kind,
-                        written_secrets.len()
+                        mutated_secrets.len(),
+                        compensation_summary(&rollback_failures),
                     )));
                 }
             };
-            if let Err(e) = self.secret_store.set(&s.node_id, s.kind, &s.value) {
-                rollback_keychain_writes(&self.secret_store, &written_secrets);
-                return Err(SyncEngineError::Provider(format!(
-                    "Failed to write keychain ({}, {:?}): {e}, please check keychain permissions and retry download",
-                    s.node_id, s.kind
-                )));
-            }
-            written_secrets.push(WrittenSecret {
+            mutated_secrets.push(WrittenSecret {
                 node_id: s.node_id.clone(),
                 kind: s.kind,
                 prior_value,
             });
+            if let Err(e) = self.secret_store.set(&s.node_id, s.kind, &s.value) {
+                let rollback_failures =
+                    rollback_keychain_writes(self.secret_store.as_ref(), &mutated_secrets);
+                return Err(SyncEngineError::Provider(format!(
+                    "Failed to write keychain ({}, {:?}): {e}; {}; retry download",
+                    s.node_id,
+                    s.kind,
+                    compensation_summary(&rollback_failures),
+                )));
+            }
+        }
+        for (node_id, kind) in cleanup_targets {
+            let prior_value = match self.secret_store.get(&node_id, kind) {
+                Ok(value) => value,
+                Err(e) => {
+                    let rollback_failures =
+                        rollback_keychain_writes(self.secret_store.as_ref(), &mutated_secrets);
+                    return Err(SyncEngineError::Provider(format!(
+                        "Failed to read keychain value before cleanup ({node_id}, {kind:?}): {e}; {}; retry download",
+                        compensation_summary(&rollback_failures),
+                    )));
+                }
+            };
+            mutated_secrets.push(WrittenSecret {
+                node_id: node_id.clone(),
+                kind,
+                prior_value,
+            });
+            if let Err(e) = self.secret_store.delete(&node_id, kind) {
+                let rollback_failures =
+                    rollback_keychain_writes(self.secret_store.as_ref(), &mutated_secrets);
+                return Err(SyncEngineError::Provider(format!(
+                    "Failed to clean keychain ({node_id}, {kind:?}): {e}; {}; retry download",
+                    compensation_summary(&rollback_failures),
+                )));
+            }
         }
 
         // ---- Phase 2 ---- DB transaction: DELETE + INSERT in topological order
@@ -361,47 +405,15 @@ impl SyncDataProvider for SshSyncProvider {
             })
         });
         if let Err(e) = db_result {
-            // DB failure → rollback just-written keychain to avoid long-term stray keys pointing to non-existent nodes
-            let rolled = written_secrets.len();
-            rollback_keychain_writes(&self.secret_store, &written_secrets);
+            // DB failure → rollback all keychain mutations to preserve the pre-sync state.
+            let rolled = mutated_secrets.len();
+            let rollback_failures =
+                rollback_keychain_writes(self.secret_store.as_ref(), &mutated_secrets);
             return Err(SyncEngineError::Provider(format!(
-                "DB write failed ({e}); rolled back {rolled} keychain writes"
+                "DB write failed ({e}); rolled back {rolled} keychain mutations; {}",
+                compensation_summary(&rollback_failures),
             )));
         }
-
-        // ---- Phase 3a ---- Clean explicit-clear: node still exists but remote set corresponding *_encrypted to None
-        // User cleared a password on another device → must delete local keychain, otherwise connect will continue using old password,
-        // violating user's clear intent (PR #161 seven-round review)
-        for (node_id, kind) in &explicit_clears {
-            if let Err(e) = self.secret_store.delete(node_id, *kind) {
-                log::warn!(
-                    "Failed to clean explicit-clear keychain entry {node_id}/{:?}: {e}",
-                    kind
-                );
-            }
-        }
-
-        // ---- Phase 3b ---- Clean orphan keychain: passwords for owner ids that existed locally but are now deleted remotely,
-        // must explicitly delete, otherwise when same UUID node re-appears, it will read stale password (PR #161 review #4)
-        let mut new_secret_owner_ids: HashSet<&str> =
-            ssh_data.nodes.iter().map(|n| n.id.as_str()).collect();
-        new_secret_owner_ids.extend(
-            ssh_data
-                .onekey_credentials
-                .iter()
-                .map(|credential| credential.id.as_str()),
-        );
-        for old_id in &existing_secret_owner_ids {
-            if new_secret_owner_ids.contains(old_id.as_str()) {
-                continue;
-            }
-            for kind in ALL_SECRET_KINDS {
-                if let Err(e) = self.secret_store.delete(old_id, kind) {
-                    log::warn!("Failed to clean orphan keychain entry {old_id}/{:?}: {e}", kind);
-                }
-            }
-        }
-
         Ok(())
     }
 }
@@ -417,20 +429,31 @@ struct WrittenSecret {
 /// True "rollback": for each already-overwritten entry:
 /// - prior_value=Some → write back old value, avoid user's existing password being lost
 /// - prior_value=None → delete, avoid orphan
-/// Any step failure only logs, doesn't block caller (best-effort).
-fn rollback_keychain_writes<S: SshSecretStore + ?Sized>(store: &S, written: &[WrittenSecret]) {
-    for entry in written {
+fn rollback_keychain_writes<S: SshSecretStore + ?Sized>(
+    store: &S,
+    written: &[WrittenSecret],
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for entry in written.iter().rev() {
         let res = match &entry.prior_value {
             Some(v) => store.set(&entry.node_id, entry.kind, v.as_str()),
             None => store.delete(&entry.node_id, entry.kind),
         };
         if let Err(e) = res {
-            log::warn!(
-                "Failed to rollback keychain write {}/{:?}: {e}(secret may remain with new value or become orphan)",
-                entry.node_id,
-                entry.kind
-            );
+            failures.push(format!(
+                "rollback {}/{:?} failed: {e}",
+                entry.node_id, entry.kind
+            ));
         }
+    }
+    failures
+}
+
+fn compensation_summary(failures: &[String]) -> String {
+    if failures.is_empty() {
+        "compensation completed".to_string()
+    } else {
+        format!("compensation incomplete: {}", failures.join("; "))
     }
 }
 
@@ -481,6 +504,49 @@ fn onekey_secret_kind(kind: OneKeyCredentialKind) -> SecretKind {
         OneKeyCredentialKind::Password => SecretKind::OneKeyPassword,
         OneKeyCredentialKind::Key => SecretKind::Passphrase,
     }
+}
+
+fn obsolete_onekey_secret_kind(active_kind: SecretKind) -> SecretKind {
+    match active_kind {
+        SecretKind::OneKeyPassword => SecretKind::Passphrase,
+        SecretKind::Passphrase => SecretKind::OneKeyPassword,
+        SecretKind::Password | SecretKind::RootPassword => {
+            unreachable!("OneKey credentials only use password or passphrase slots")
+        }
+    }
+}
+
+fn keychain_cleanup_targets(
+    ssh_data: &SshSyncData,
+    explicit_clears: Vec<(String, SecretKind)>,
+    existing_secret_owner_ids: &[String],
+) -> HashSet<(String, SecretKind)> {
+    let mut new_secret_owner_ids: HashSet<&str> =
+        ssh_data.nodes.iter().map(|node| node.id.as_str()).collect();
+    new_secret_owner_ids.extend(
+        ssh_data
+            .onekey_credentials
+            .iter()
+            .map(|credential| credential.id.as_str()),
+    );
+    let mut cleanup_targets: HashSet<(String, SecretKind)> = explicit_clears.into_iter().collect();
+    for credential in &ssh_data.onekey_credentials {
+        let active_kind = onekey_secret_kind(
+            OneKeyCredentialKind::parse(&credential.kind).unwrap_or(OneKeyCredentialKind::Password),
+        );
+        cleanup_targets.insert((
+            credential.id.clone(),
+            obsolete_onekey_secret_kind(active_kind),
+        ));
+    }
+    for old_id in existing_secret_owner_ids {
+        if !new_secret_owner_ids.contains(old_id.as_str()) {
+            for kind in ALL_SECRET_KINDS {
+                cleanup_targets.insert((old_id.clone(), kind));
+            }
+        }
+    }
+    cleanup_targets
 }
 
 /// BFS topological sort: parent before child. Orphan nodes (parent_id references node outside dataset)
@@ -802,6 +868,34 @@ mod tests {
             onekey_secret_kind(OneKeyCredentialKind::Key),
             SecretKind::Passphrase
         );
+        assert_eq!(
+            obsolete_onekey_secret_kind(SecretKind::OneKeyPassword),
+            SecretKind::Passphrase
+        );
+        assert_eq!(
+            obsolete_onekey_secret_kind(SecretKind::Passphrase),
+            SecretKind::OneKeyPassword
+        );
+    }
+
+    #[test]
+    fn sync_onekey_kind_change_cleans_obsolete_slot() {
+        let data = SshSyncData {
+            onekey_credentials: vec![SyncOneKeyCredential {
+                id: "credential".into(),
+                label: "production".into(),
+                username: "root".into(),
+                kind: OneKeyCredentialKind::Key.as_db_str().into(),
+                key_path: Some("/keys/id_ed25519".into()),
+                password_encrypted: None,
+            }],
+            ..SshSyncData::default()
+        };
+
+        let cleanup_targets = keychain_cleanup_targets(&data, Vec::new(), &[]);
+
+        assert!(cleanup_targets.contains(&("credential".to_string(), SecretKind::OneKeyPassword,)));
+        assert!(!cleanup_targets.contains(&("credential".to_string(), SecretKind::Passphrase,)));
     }
 
     #[test]

@@ -28,6 +28,11 @@ pub enum SshRepositoryError {
     Db(#[from] DieselError),
     #[error("node not found: {0}")]
     NotFound(String),
+    #[error("OneKey credential {credential_id} is still referenced by {reference_count} server(s)")]
+    CredentialInUse {
+        credential_id: String,
+        reference_count: i64,
+    },
     #[error("invalid value in db column `{column}`: {value}")]
     InvalidEnum { column: &'static str, value: String },
 }
@@ -59,18 +64,20 @@ impl SshRepository {
         name: &str,
     ) -> Result<SshNode, SshRepositoryError> {
         let id = new_uuid();
-        let sort = next_sort_order(conn, parent_id)?;
-        diesel::insert_into(ssh_nodes::table)
-            .values(NewSshNode {
-                id: &id,
-                parent_id,
-                kind: NodeKind::Folder.as_db_str(),
-                name,
-                sort_order: sort,
-            })
-            .execute(conn)?;
-        let _ = Self::increment_sync_version(conn);
-        Self::get_node(conn, &id)
+        conn.transaction::<_, SshRepositoryError, _>(|conn| {
+            let sort = next_sort_order(conn, parent_id)?;
+            diesel::insert_into(ssh_nodes::table)
+                .values(NewSshNode {
+                    id: &id,
+                    parent_id,
+                    kind: NodeKind::Folder.as_db_str(),
+                    name,
+                    sort_order: sort,
+                })
+                .execute(conn)?;
+            Self::increment_sync_version(conn)?;
+            Self::get_node(conn, &id)
+        })
     }
 
     pub fn create_server(
@@ -80,8 +87,8 @@ impl SshRepository {
         info: &SshServerInfo,
     ) -> Result<SshNode, SshRepositoryError> {
         let id = new_uuid();
-        let sort = next_sort_order(conn, parent_id)?;
-        conn.transaction::<_, DieselError, _>(|conn| {
+        conn.transaction::<_, SshRepositoryError, _>(|conn| {
+            let sort = next_sort_order(conn, parent_id)?;
             diesel::insert_into(ssh_nodes::table)
                 .values(NewSshNode {
                     id: &id,
@@ -106,10 +113,9 @@ impl SshRepository {
                     ring_ceiling_mb: info.ring_ceiling_mb as i32,
                 })
                 .execute(conn)?;
-            Ok(())
-        })?;
-        let _ = Self::increment_sync_version(conn);
-        Self::get_node(conn, &id)
+            Self::increment_sync_version(conn)?;
+            Self::get_node(conn, &id)
+        })
     }
 
     pub fn rename_node(
@@ -117,45 +123,49 @@ impl SshRepository {
         node_id: &str,
         new_name: &str,
     ) -> Result<(), SshRepositoryError> {
-        let n = diesel::update(ssh_nodes::table.find(node_id))
-            .set((
-                ssh_nodes::name.eq(new_name),
-                ssh_nodes::updated_at.eq(Utc::now().naive_utc()),
-            ))
-            .execute(conn)?;
-        if n == 0 {
-            return Err(SshRepositoryError::NotFound(node_id.to_string()));
-        }
-        let _ = Self::increment_sync_version(conn);
-        Ok(())
+        conn.transaction::<_, SshRepositoryError, _>(|conn| {
+            let n = diesel::update(ssh_nodes::table.find(node_id))
+                .set((
+                    ssh_nodes::name.eq(new_name),
+                    ssh_nodes::updated_at.eq(Utc::now().naive_utc()),
+                ))
+                .execute(conn)?;
+            if n == 0 {
+                return Err(SshRepositoryError::NotFound(node_id.to_string()));
+            }
+            Self::increment_sync_version(conn)?;
+            Ok(())
+        })
     }
 
     pub fn update_server(
         conn: &mut SqliteConnection,
         info: &SshServerInfo,
     ) -> Result<(), SshRepositoryError> {
-        let n = diesel::update(ssh_servers::table.find(&info.node_id))
-            .set((
-                ssh_servers::host.eq(&info.host),
-                ssh_servers::port.eq(info.port as i32),
-                ssh_servers::username.eq(&info.username),
-                ssh_servers::auth_type.eq(info.auth_type.as_db_str()),
-                ssh_servers::key_path.eq(info.key_path.as_deref()),
-                ssh_servers::startup_command.eq(info.startup_command.as_deref()),
-                ssh_servers::notes.eq(info.notes.as_deref()),
-                ssh_servers::credential_id.eq(info.credential_id.as_deref()),
-                ssh_servers::session_resilience.eq(info.session_resilience.as_db_str()),
-                ssh_servers::ring_ceiling_mb.eq(info.ring_ceiling_mb as i32),
-            ))
-            .execute(conn)?;
-        if n == 0 {
-            return Err(SshRepositoryError::NotFound(info.node_id.clone()));
-        }
-        diesel::update(ssh_nodes::table.find(&info.node_id))
-            .set(ssh_nodes::updated_at.eq(Utc::now().naive_utc()))
-            .execute(conn)?;
-        let _ = Self::increment_sync_version(conn);
-        Ok(())
+        conn.transaction::<_, SshRepositoryError, _>(|conn| {
+            let n = diesel::update(ssh_servers::table.find(&info.node_id))
+                .set((
+                    ssh_servers::host.eq(&info.host),
+                    ssh_servers::port.eq(info.port as i32),
+                    ssh_servers::username.eq(&info.username),
+                    ssh_servers::auth_type.eq(info.auth_type.as_db_str()),
+                    ssh_servers::key_path.eq(info.key_path.as_deref()),
+                    ssh_servers::startup_command.eq(info.startup_command.as_deref()),
+                    ssh_servers::notes.eq(info.notes.as_deref()),
+                    ssh_servers::credential_id.eq(info.credential_id.as_deref()),
+                    ssh_servers::session_resilience.eq(info.session_resilience.as_db_str()),
+                    ssh_servers::ring_ceiling_mb.eq(info.ring_ceiling_mb as i32),
+                ))
+                .execute(conn)?;
+            if n == 0 {
+                return Err(SshRepositoryError::NotFound(info.node_id.clone()));
+            }
+            diesel::update(ssh_nodes::table.find(&info.node_id))
+                .set(ssh_nodes::updated_at.eq(Utc::now().naive_utc()))
+                .execute(conn)?;
+            Self::increment_sync_version(conn)?;
+            Ok(())
+        })
     }
 
     /// Delete node; ON DELETE CASCADE syncs deletion of children + ssh_servers rows.
@@ -164,12 +174,14 @@ impl SshRepository {
         conn: &mut SqliteConnection,
         node_id: &str,
     ) -> Result<(), SshRepositoryError> {
-        let n = diesel::delete(ssh_nodes::table.find(node_id)).execute(conn)?;
-        if n == 0 {
-            return Err(SshRepositoryError::NotFound(node_id.to_string()));
-        }
-        let _ = Self::increment_sync_version(conn);
-        Ok(())
+        conn.transaction::<_, SshRepositoryError, _>(|conn| {
+            let n = diesel::delete(ssh_nodes::table.find(node_id)).execute(conn)?;
+            if n == 0 {
+                return Err(SshRepositoryError::NotFound(node_id.to_string()));
+            }
+            Self::increment_sync_version(conn)?;
+            Ok(())
+        })
     }
 
     /// Support changing parent and order simultaneously. new_parent_id=None means move to root.
@@ -179,18 +191,20 @@ impl SshRepository {
         new_parent_id: Option<&str>,
         new_sort_order: i32,
     ) -> Result<(), SshRepositoryError> {
-        let n = diesel::update(ssh_nodes::table.find(node_id))
-            .set((
-                ssh_nodes::parent_id.eq(new_parent_id),
-                ssh_nodes::sort_order.eq(new_sort_order),
-                ssh_nodes::updated_at.eq(Utc::now().naive_utc()),
-            ))
-            .execute(conn)?;
-        if n == 0 {
-            return Err(SshRepositoryError::NotFound(node_id.to_string()));
-        }
-        let _ = Self::increment_sync_version(conn);
-        Ok(())
+        conn.transaction::<_, SshRepositoryError, _>(|conn| {
+            let n = diesel::update(ssh_nodes::table.find(node_id))
+                .set((
+                    ssh_nodes::parent_id.eq(new_parent_id),
+                    ssh_nodes::sort_order.eq(new_sort_order),
+                    ssh_nodes::updated_at.eq(Utc::now().naive_utc()),
+                ))
+                .execute(conn)?;
+            if n == 0 {
+                return Err(SshRepositoryError::NotFound(node_id.to_string()));
+            }
+            Self::increment_sync_version(conn)?;
+            Ok(())
+        })
     }
 
     /// Move node to the end of target parent (new_parent_id=None means move to root).
@@ -242,49 +256,74 @@ impl SshRepository {
         key_path: Option<&str>,
     ) -> Result<SshOneKeyCredential, SshRepositoryError> {
         let id = new_uuid();
-        diesel::insert_into(ssh_onekey_credentials::table)
-            .values(NewSshOneKeyCredential {
-                id: &id,
-                label,
-                username,
-                kind: kind.as_db_str(),
-                key_path,
-            })
-            .execute(conn)?;
-        let _ = Self::increment_sync_version(conn);
-        Self::get_onekey_credential(conn, &id)?.ok_or_else(|| SshRepositoryError::NotFound(id))
+        conn.transaction::<_, SshRepositoryError, _>(|conn| {
+            diesel::insert_into(ssh_onekey_credentials::table)
+                .values(NewSshOneKeyCredential {
+                    id: &id,
+                    label,
+                    username,
+                    kind: kind.as_db_str(),
+                    key_path,
+                })
+                .execute(conn)?;
+            Self::increment_sync_version(conn)?;
+            Self::get_onekey_credential(conn, &id)?
+                .ok_or_else(|| SshRepositoryError::NotFound(id.clone()))
+        })
     }
 
     pub fn update_onekey_credential(
         conn: &mut SqliteConnection,
         credential: &SshOneKeyCredential,
     ) -> Result<(), SshRepositoryError> {
-        let n = diesel::update(ssh_onekey_credentials::table.find(&credential.id))
-            .set((
-                ssh_onekey_credentials::label.eq(&credential.label),
-                ssh_onekey_credentials::username.eq(&credential.username),
-                ssh_onekey_credentials::kind.eq(credential.kind.as_db_str()),
-                ssh_onekey_credentials::key_path.eq(credential.key_path.as_deref()),
-                ssh_onekey_credentials::updated_at.eq(Utc::now().naive_utc()),
-            ))
-            .execute(conn)?;
-        if n == 0 {
-            return Err(SshRepositoryError::NotFound(credential.id.clone()));
-        }
-        let _ = Self::increment_sync_version(conn);
-        Ok(())
+        conn.transaction::<_, SshRepositoryError, _>(|conn| {
+            let n = diesel::update(ssh_onekey_credentials::table.find(&credential.id))
+                .set((
+                    ssh_onekey_credentials::label.eq(&credential.label),
+                    ssh_onekey_credentials::username.eq(&credential.username),
+                    ssh_onekey_credentials::kind.eq(credential.kind.as_db_str()),
+                    ssh_onekey_credentials::key_path.eq(credential.key_path.as_deref()),
+                    ssh_onekey_credentials::updated_at.eq(Utc::now().naive_utc()),
+                ))
+                .execute(conn)?;
+            if n == 0 {
+                return Err(SshRepositoryError::NotFound(credential.id.clone()));
+            }
+            Self::increment_sync_version(conn)?;
+            Ok(())
+        })
     }
 
     pub fn delete_onekey_credential(
         conn: &mut SqliteConnection,
         credential_id: &str,
     ) -> Result<(), SshRepositoryError> {
-        let n = diesel::delete(ssh_onekey_credentials::table.find(credential_id)).execute(conn)?;
-        if n == 0 {
-            return Err(SshRepositoryError::NotFound(credential_id.to_string()));
-        }
-        let _ = Self::increment_sync_version(conn);
-        Ok(())
+        conn.transaction::<_, SshRepositoryError, _>(|conn| {
+            let reference_count = Self::onekey_credential_reference_count(conn, credential_id)?;
+            if reference_count > 0 {
+                return Err(SshRepositoryError::CredentialInUse {
+                    credential_id: credential_id.to_string(),
+                    reference_count,
+                });
+            }
+            let n =
+                diesel::delete(ssh_onekey_credentials::table.find(credential_id)).execute(conn)?;
+            if n == 0 {
+                return Err(SshRepositoryError::NotFound(credential_id.to_string()));
+            }
+            Self::increment_sync_version(conn)?;
+            Ok(())
+        })
+    }
+
+    pub fn onekey_credential_reference_count(
+        conn: &mut SqliteConnection,
+        credential_id: &str,
+    ) -> Result<i64, SshRepositoryError> {
+        Ok(ssh_servers::table
+            .filter(ssh_servers::credential_id.eq(credential_id))
+            .count()
+            .get_result(conn)?)
     }
 
     pub fn resolve_server_auth(
@@ -800,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn deleting_onekey_credential_clears_server_reference() {
+    fn delete_onekey_is_blocked_while_referenced() {
         let mut conn = setup_in_memory();
         let credential = SshRepository::create_onekey_credential(
             &mut conn,
@@ -813,16 +852,12 @@ mod tests {
         let mut info = sample_server("edge");
         info.auth_type = AuthType::OneKey;
         info.credential_id = Some(credential.id.clone());
-        let node = SshRepository::create_server(&mut conn, None, "edge", &info).unwrap();
+        SshRepository::create_server(&mut conn, None, "edge", &info).unwrap();
 
-        SshRepository::delete_onekey_credential(&mut conn, &credential.id).unwrap();
-
-        let got = SshRepository::get_server(&mut conn, &node.id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(got.auth_type, AuthType::OneKey);
-        assert_eq!(got.credential_id, None);
-        assert!(SshRepository::resolve_server_auth(&mut conn, &got).is_err());
+        assert!(
+            SshRepository::delete_onekey_credential(&mut conn, &credential.id).is_err(),
+            "referenced OneKey credential was deleted"
+        );
     }
 
     #[test]
@@ -1023,6 +1058,23 @@ mod tests {
         assert_eq!(SyncMetaRepository::get_sync_version(&mut conn).unwrap(), 3);
     }
 
+    #[test]
+    fn sync_failure_preserves_recoverable_state() {
+        use diesel::connection::SimpleConnection as _;
+
+        let mut conn = setup_in_memory();
+        conn.batch_execute(
+            "CREATE TRIGGER reject_sync_version \
+             BEFORE INSERT ON sync_meta \
+             WHEN NEW.key = 'sync_version' \
+             BEGIN SELECT RAISE(FAIL, 'injected sync version failure'); END;",
+        )
+        .unwrap();
+
+        assert!(SshRepository::create_folder(&mut conn, None, "must-roll-back").is_err());
+        assert!(SshRepository::list_nodes(&mut conn).unwrap().is_empty());
+    }
+
     // ---- move_node_to_end tests ----
 
     #[test]
@@ -1039,7 +1091,10 @@ mod tests {
         let nodes = SshRepository::list_nodes(&mut conn).unwrap();
         let moved = nodes.iter().find(|n| n.id == srv.id).unwrap();
         assert_eq!(moved.parent_id.as_deref(), Some(b.id.as_str()));
-        assert_eq!(moved.sort_order, 0, "B has no other children, sort_order should be 0");
+        assert_eq!(
+            moved.sort_order, 0,
+            "B has no other children, sort_order should be 0"
+        );
     }
 
     #[test]
@@ -1106,7 +1161,10 @@ mod tests {
 
         let nodes = SshRepository::list_nodes(&mut conn).unwrap();
         let moved = nodes.iter().find(|n| n.id == srv.id).unwrap();
-        assert_eq!(moved.sort_order, 0, "sort_order should be 0 under empty folder");
+        assert_eq!(
+            moved.sort_order, 0,
+            "sort_order should be 0 under empty folder"
+        );
         assert_eq!(moved.parent_id.as_deref(), Some(folder.id.as_str()));
     }
 
