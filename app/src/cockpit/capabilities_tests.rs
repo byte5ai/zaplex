@@ -21,6 +21,9 @@ fn session(provider: Provider, state: SessionState, pid: u32) -> SessionSnapshot
         config_dir: None,
         account_email: None,
         process_fingerprint: None,
+        pty_session_id: None,
+        pty_session_generation: None,
+        pty_foreground: false,
         last_activity: Utc::now(),
         pid,
     }
@@ -191,6 +194,23 @@ fn open_plan_resumes_an_unlocated_dormant_session() {
         ),
         SessionOpenPlan::ResumeDormant,
     );
+}
+
+#[test]
+fn reattach_uses_id_without_cwd_guessing() {
+    let mut live = session(Provider::Codex, SessionState::Active, 0);
+    live.cwd = "/a/path/that/must/not-be-used-as-an-id".to_string();
+    live.pty_session_id = Some("daemon-pty-7".to_string());
+    live.pty_session_generation = Some(42);
+    live.pty_foreground = true;
+
+    assert_eq!(daemon_reattach_target(&live), Some(("daemon-pty-7", 42)));
+
+    live.pty_foreground = false;
+    assert_eq!(daemon_reattach_target(&live), None);
+    live.pty_foreground = true;
+    live.pty_session_generation = None;
+    assert_eq!(daemon_reattach_target(&live), None);
 }
 
 #[test]

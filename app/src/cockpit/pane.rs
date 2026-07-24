@@ -3058,6 +3058,9 @@ mod tests {
             config_dir: config_dir.map(str::to_string),
             account_email: account_email.map(str::to_string),
             process_fingerprint: None,
+            pty_session_id: None,
+            pty_session_generation: None,
+            pty_foreground: false,
             last_activity: Utc::now(),
             pid: 0,
         }

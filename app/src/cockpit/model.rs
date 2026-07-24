@@ -32,13 +32,27 @@ use zaplex_cockpit::{
 // local tree, so these imports — used only by the remote-fetch block below —
 // are gated to match.
 #[cfg(not(target_family = "wasm"))]
-use zaplex_remote_session::types::{has_feature, FEATURE_AGENT_INVENTORY};
+use zaplex_remote_session::types::{
+    has_feature, FEATURE_AGENT_INVENTORY, FEATURE_AGENT_PTY_BINDING,
+};
 
 use crate::cockpit::oauth::{self, CachedOauth};
 use crate::cockpit::settings::CockpitSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::agent_session::proto_to_snapshot;
 use crate::remote_server::manager::{ConnectedDaemon, RemoteServerManager};
+
+#[cfg(not(target_family = "wasm"))]
+fn retain_negotiated_agent_pty_routes(features: &[String], sessions: &mut [SessionSnapshot]) {
+    if has_feature(features, FEATURE_AGENT_PTY_BINDING) {
+        return;
+    }
+    for session in sessions {
+        session.pty_session_id = None;
+        session.pty_session_generation = None;
+        session.pty_foreground = false;
+    }
+}
 
 /// How often to re-scan transcripts even when no top-level home change fired.
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(45);
@@ -278,8 +292,9 @@ impl CockpitModel {
                         }
                         match daemon.client.list_agent_sessions().await {
                             Ok(list) => {
-                                let sessions: Vec<SessionSnapshot> =
+                                let mut sessions: Vec<SessionSnapshot> =
                                     list.sessions.iter().map(proto_to_snapshot).collect();
+                                retain_negotiated_agent_pty_routes(&daemon.features, &mut sessions);
                                 // Carry the daemon's stable `host_id` alongside its
                                 // display label so the folded inventory can route
                                 // guardrails/attach by id, not by a collidable label.
@@ -613,9 +628,42 @@ mod tests {
             config_dir: None,
             account_email: None,
             process_fingerprint: None,
+            pty_session_id: None,
+            pty_session_generation: None,
+            pty_foreground: false,
             last_activity: Utc::now(),
             pid: 0,
         }
+    }
+
+    #[test]
+    fn pty_routes_require_daemon_binding_capability() {
+        let mut legacy = session("legacy", zaplex_cockpit::SessionState::Active);
+        legacy.pty_session_id = Some("pty-1".to_string());
+        legacy.pty_session_generation = Some(7);
+        legacy.pty_foreground = true;
+        retain_negotiated_agent_pty_routes(
+            &["agent-inventory".to_string()],
+            std::slice::from_mut(&mut legacy),
+        );
+        assert!(legacy.pty_session_id.is_none());
+        assert!(legacy.pty_session_generation.is_none());
+        assert!(!legacy.pty_foreground);
+
+        let mut capable = session("capable", zaplex_cockpit::SessionState::Active);
+        capable.pty_session_id = Some("pty-2".to_string());
+        capable.pty_session_generation = Some(8);
+        capable.pty_foreground = true;
+        retain_negotiated_agent_pty_routes(
+            &[
+                "agent-inventory".to_string(),
+                "agent-pty-binding".to_string(),
+            ],
+            std::slice::from_mut(&mut capable),
+        );
+        assert_eq!(capable.pty_session_id.as_deref(), Some("pty-2"));
+        assert_eq!(capable.pty_session_generation, Some(8));
+        assert!(capable.pty_foreground);
     }
 
     /// One remote host with `host_id` carrying a single session in `state`,

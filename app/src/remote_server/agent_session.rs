@@ -16,7 +16,7 @@
 use chrono::{TimeZone, Utc};
 use zaplex_cockpit::types::{Provider, SessionSnapshot, SessionState};
 
-use super::proto::AgentSessionInfo;
+use super::proto::{AgentSessionIdentity, AgentSessionInfo};
 
 /// Lowercase wire string for a session state.
 pub fn state_to_str(state: SessionState) -> &'static str {
@@ -72,6 +72,19 @@ pub fn snapshot_to_proto(s: &SessionSnapshot) -> AgentSessionInfo {
         last_activity_epoch_millis: s.last_activity.timestamp_millis() as u64,
         pid: s.pid,
         process_fingerprint: s.process_fingerprint.clone().unwrap_or_default(),
+        pty_session_id: s.pty_session_id.clone().unwrap_or_default(),
+        pty_session_generation: s.pty_session_generation.unwrap_or_default(),
+        pty_foreground: s.pty_foreground,
+    }
+}
+
+/// Exact foreground-agent identity carried by a capability-gated adopt.
+pub fn snapshot_agent_identity(s: &SessionSnapshot) -> AgentSessionIdentity {
+    AgentSessionIdentity {
+        session_id: s.session_id.clone(),
+        provider: s.provider.as_str().to_string(),
+        account_email: s.account_email.clone().unwrap_or_default(),
+        config_dir: s.config_dir.clone().unwrap_or_default(),
     }
 }
 
@@ -108,6 +121,9 @@ pub fn proto_to_snapshot(p: &AgentSessionInfo) -> SessionSnapshot {
         account_email: (!p.account_email.is_empty()).then(|| p.account_email.clone()),
         process_fingerprint: (!p.process_fingerprint.is_empty())
             .then(|| p.process_fingerprint.clone()),
+        pty_session_id: (!p.pty_session_id.is_empty()).then(|| p.pty_session_id.clone()),
+        pty_session_generation: (p.pty_session_generation != 0).then_some(p.pty_session_generation),
+        pty_foreground: p.pty_foreground,
         last_activity,
         pid: p.pid,
     }

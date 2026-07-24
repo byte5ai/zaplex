@@ -56,6 +56,10 @@ message ClientMessage {
     // deliberately separate from HostExec: callers can request only Interrupt
     // or Kill and must provide the process identity discovered for the session.
     AgentProcessSignalRequest agent_process_signal = 33;
+    // Generation-checked association between a CLI-agent conversation and the
+    // daemon-owned PTY that currently hosts it.
+    BindAgentPty bind_agent_pty = 34;
+    UnbindAgentPty unbind_agent_pty = 35;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -103,6 +107,8 @@ message ServerMessage {
     StartupCommandAck startup_command_ack = 31;
     // Correlated, typed result for AgentProcessSignalRequest.
     AgentProcessSignalResponse agent_process_signal_response = 32;
+    // Correlated, typed result for BindAgentPty / UnbindAgentPty.
+    AgentPtyBindingResponse agent_pty_binding_response = 33;
   }
 }
 
@@ -114,6 +120,9 @@ message Initialize {
   // Empty means no credential was available and does not clear an existing
   // daemon credential.
   string auth_token = 1;
+  // Capabilities understood by this client. Old clients omit this field and
+  // therefore cannot mutate or trust generation-checked PTY bindings.
+  repeated string features = 2;
 }
 
 // Sent by the client when its bearer credential rotates after initialization.
@@ -631,6 +640,8 @@ message OpenSession {
 // persistent session id.
 message SessionOpened {
   string session_id = 1;
+  // Monotonic daemon-process generation used to reject stale PTY ids.
+  uint64 generation = 2;
 }
 
 // Client → daemon: attach to an existing session and start receiving live
@@ -646,6 +657,14 @@ message AttachSession {
   // preamble the client cannot consume), so new-daemon↔old-client stays
   // wire-transparent.
   bool supports_bootstrap_preamble = 3;
+  // When present, attach succeeds only for this exact PTY generation. Old
+  // clients omit it and retain their legacy id-only reconnect behavior.
+  optional uint64 expected_generation = 4;
+  // Optional foreground-agent identity captured from the same capability-gated
+  // inventory row. When present, attach succeeds only while this exact agent
+  // still owns the PTY foreground, preventing a stale row from opening a later
+  // handoff target. Legacy clients omit it.
+  AgentSessionIdentity expected_agent_binding = 5;
 }
 
 // Daemon → client: attach succeeded, with replay data and the current size.
@@ -668,6 +687,12 @@ message SessionAttached {
   // already accounts for it: it points at the first replay byte at or after the
   // preamble's end, so preamble and replay never overlap.
   bytes bootstrap_preamble = 5;
+  // Exact generation of the attached PTY.
+  uint64 generation = 6;
+  // Current foreground agent for capability-aware clients. This hydrates
+  // lifecycle routing after a generic sidebar adopt where no agent row was
+  // available at the callsite. Absent is the safe legacy/unbound default.
+  AgentSessionIdentity agent_binding = 7;
 }
 
 // Client → daemon: report the byte boundary at which this session's Zaplexify
@@ -738,6 +763,7 @@ message SessionInfo {
   // the daemon's memory governor accounts against the host cap. Surfaced so the
   // multi-session UI can show per-session RAM. 0 = unknown.
   uint64 ring_bytes = 6;
+  uint64 generation = 7;
 }
 
 // Daemon → client: result of ListSessions.
@@ -850,11 +876,65 @@ message AgentSessionInfo {
   // unknown and therefore unsignalable. Additive so older daemons decode as the
   // safe empty value.
   string process_fingerprint = 18;
+  // Present only for clients that negotiated "agent-pty-binding". Empty/zero
+  // values are the safe unbound defaults for old clients and daemons.
+  string pty_session_id = 19;
+  uint64 pty_session_generation = 20;
+  bool pty_foreground = 21;
 }
 
 // Daemon → client: result of ListAgentSessions.
 message AgentSessionList {
   repeated AgentSessionInfo sessions = 1;
+}
+
+// ── Agent-to-PTY Binding ──────────────────────────────────────────────────
+//
+// A PTY can contain several historical agent conversations but exactly one
+// live foreground agent. Switching foreground identity requires an explicit
+// handoff from the identity currently reported by the daemon.
+//
+// Capability: both peers must advertise "agent-pty-binding". Older clients
+// decode the additive inventory fields as unbound and never send these ops.
+
+message AgentSessionIdentity {
+  string session_id = 1;
+  string provider = 2;
+  string account_email = 3;
+  string config_dir = 4;
+}
+
+message BindAgentPty {
+  AgentSessionIdentity agent = 1;
+  string pty_session_id = 2;
+  uint64 pty_session_generation = 3;
+  AgentSessionIdentity handoff_from = 4;
+}
+
+message UnbindAgentPty {
+  AgentSessionIdentity agent = 1;
+  string pty_session_id = 2;
+  uint64 pty_session_generation = 3;
+}
+
+enum AgentPtyBindingStatus {
+  AGENT_PTY_BINDING_STATUS_UNSPECIFIED = 0;
+  AGENT_PTY_BINDING_STATUS_BOUND = 1;
+  AGENT_PTY_BINDING_STATUS_UNBOUND = 2;
+  AGENT_PTY_BINDING_STATUS_CAPABILITY_REQUIRED = 3;
+  AGENT_PTY_BINDING_STATUS_PTY_NOT_FOUND = 4;
+  AGENT_PTY_BINDING_STATUS_STALE_GENERATION = 5;
+  AGENT_PTY_BINDING_STATUS_FOREIGN_CONNECTION = 6;
+  AGENT_PTY_BINDING_STATUS_FOREGROUND_CONFLICT = 7;
+  AGENT_PTY_BINDING_STATUS_HANDOFF_MISMATCH = 8;
+  AGENT_PTY_BINDING_STATUS_IDENTITY_NOT_BOUND = 9;
+  AGENT_PTY_BINDING_STATUS_INVALID_REQUEST = 10;
+  AGENT_PTY_BINDING_STATUS_IDENTITY_ALREADY_BOUND = 11;
+}
+
+message AgentPtyBindingResponse {
+  AgentPtyBindingStatus status = 1;
+  string message = 2;
 }
 
 // ── Verified Agent Process Signal ─────────────────────────────────────────

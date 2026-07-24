@@ -11,7 +11,12 @@
 //! and has zero effect on existing behaviour. Later stages fill in the
 //! [`server`] and [`client`] modules.
 
+pub mod agent_binding;
 pub mod types;
+
+#[cfg(test)]
+#[path = "agent_binding_tests.rs"]
+mod agent_binding_tests;
 
 #[cfg(feature = "client")]
 pub mod client;

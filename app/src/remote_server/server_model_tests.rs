@@ -1,12 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use std::fs;
 
 use super::super::proto::{
     list_directory_response, read_file_chunk_response, resolve_path_response, server_message,
     write_file_chunk_response, AgentProcessSignal, AgentProcessSignalRequest,
-    AgentProcessSignalStatus, Authenticate, CreateDirectory, Initialize, ListDirectory,
-    ReadFileChunk, ResolvePath, WriteFileChunk,
+    AgentProcessSignalStatus, AgentPtyBindingStatus, AgentSessionIdentity, Authenticate,
+    BindAgentPty, CreateDirectory, Initialize, ListDirectory, ReadFileChunk, ResolvePath,
+    UnbindAgentPty, WriteFileChunk,
 };
 use super::super::protocol::RequestId;
 #[cfg(feature = "local_fs")]
@@ -17,6 +18,7 @@ use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
 fn test_model() -> ServerModel {
     ServerModel {
         connection_senders: HashMap::new(),
+        connection_features: HashMap::new(),
         snapshot_sent_roots_by_connection: HashMap::new(),
         grace_timer_cancel: None,
         in_progress: HashMap::new(),
@@ -28,6 +30,10 @@ fn test_model() -> ServerModel {
         auth_token: None,
         #[cfg(unix)]
         sessions: HashMap::new(),
+        #[cfg(unix)]
+        agent_pty_bindings: Default::default(),
+        #[cfg(unix)]
+        next_pty_generation: 1,
     }
 }
 
@@ -47,8 +53,10 @@ fn initialize_with_auth_token_stores_token() {
     let mut model = test_model();
 
     model.handle_initialize(
+        uuid::Uuid::nil(),
         Initialize {
             auth_token: "initial-token".to_string(),
+            features: vec![],
         },
         &request_id(),
     );
@@ -60,15 +68,19 @@ fn initialize_with_auth_token_stores_token() {
 fn empty_initialize_preserves_existing_auth_token() {
     let mut model = test_model();
     model.handle_initialize(
+        uuid::Uuid::nil(),
         Initialize {
             auth_token: "initial-token".to_string(),
+            features: vec![],
         },
         &request_id(),
     );
 
     model.handle_initialize(
+        uuid::Uuid::nil(),
         Initialize {
             auth_token: String::new(),
+            features: vec![],
         },
         &request_id(),
     );
@@ -80,8 +92,10 @@ fn empty_initialize_preserves_existing_auth_token() {
 fn authenticate_with_auth_token_replaces_auth_token() {
     let mut model = test_model();
     model.handle_initialize(
+        uuid::Uuid::nil(),
         Initialize {
             auth_token: "initial-token".to_string(),
+            features: vec![],
         },
         &request_id(),
     );
@@ -97,8 +111,10 @@ fn authenticate_with_auth_token_replaces_auth_token() {
 fn empty_authenticate_preserves_existing_auth_token() {
     let mut model = test_model();
     model.handle_initialize(
+        uuid::Uuid::nil(),
         Initialize {
             auth_token: "initial-token".to_string(),
+            features: vec![],
         },
         &request_id(),
     );
@@ -117,6 +133,127 @@ fn process_signal_request(signal: AgentProcessSignal) -> AgentProcessSignalReque
         expected_process_fingerprint: "linux-v1:boot-id:12345".to_string(),
         signal: signal.into(),
     }
+}
+
+#[cfg(unix)]
+fn binding_identity(session_id: &str) -> AgentSessionIdentity {
+    AgentSessionIdentity {
+        session_id: session_id.to_string(),
+        provider: "codex".to_string(),
+        account_email: "agent@example.com".to_string(),
+        config_dir: "/home/agent/.codex".to_string(),
+    }
+}
+
+#[cfg(unix)]
+fn binding_status(outcome: super::HandlerOutcome) -> AgentPtyBindingStatus {
+    let server_message::Message::AgentPtyBindingResponse(response) = outcome.into_message() else {
+        panic!("expected AgentPtyBindingResponse");
+    };
+    AgentPtyBindingStatus::try_from(response.status).unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_client_cannot_bind_agent_pty() {
+    let mut model = test_model();
+    let conn = uuid::Uuid::new_v4();
+    model
+        .agent_pty_bindings
+        .register_pty("pty-1", 7, conn.as_u128());
+
+    let status = binding_status(model.handle_bind_agent_pty(
+        conn,
+        BindAgentPty {
+            agent: Some(binding_identity("agent-1")),
+            pty_session_id: "pty-1".to_string(),
+            pty_session_generation: 7,
+            handoff_from: None,
+        },
+    ));
+
+    assert_eq!(status, AgentPtyBindingStatus::CapabilityRequired);
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_bind_and_unbind_preserve_historical_agent() {
+    let mut model = test_model();
+    let conn = uuid::Uuid::new_v4();
+    model
+        .connection_features
+        .insert(conn, HashSet::from(["agent-pty-binding".to_string()]));
+    model
+        .agent_pty_bindings
+        .register_pty("pty-1", 7, conn.as_u128());
+    let identity = binding_identity("agent-1");
+
+    assert_eq!(
+        binding_status(model.handle_bind_agent_pty(
+            conn,
+            BindAgentPty {
+                agent: Some(identity.clone()),
+                pty_session_id: "pty-1".to_string(),
+                pty_session_generation: 7,
+                handoff_from: None,
+            },
+        )),
+        AgentPtyBindingStatus::Bound
+    );
+    assert_eq!(
+        binding_status(model.handle_unbind_agent_pty(
+            conn,
+            UnbindAgentPty {
+                agent: Some(identity.clone()),
+                pty_session_id: "pty-1".to_string(),
+                pty_session_generation: 7,
+            },
+        )),
+        AgentPtyBindingStatus::Unbound
+    );
+    assert!(
+        !model
+            .agent_pty_bindings
+            .binding_for(&zaplex_remote_session::agent_binding::AgentIdentity {
+                provider: identity.provider,
+                session_id: identity.session_id,
+                account_email: Some(identity.account_email),
+                config_dir: Some(identity.config_dir),
+            })
+            .unwrap()
+            .foreground
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_rejects_stale_and_foreign_agent_pty_bindings() {
+    let mut model = test_model();
+    let owner = uuid::Uuid::new_v4();
+    let foreign = uuid::Uuid::new_v4();
+    for conn in [owner, foreign] {
+        model
+            .connection_features
+            .insert(conn, HashSet::from(["agent-pty-binding".to_string()]));
+    }
+    model
+        .agent_pty_bindings
+        .register_pty("pty-1", 7, owner.as_u128());
+
+    let request = |generation| BindAgentPty {
+        agent: Some(binding_identity("agent-1")),
+        pty_session_id: "pty-1".to_string(),
+        pty_session_generation: generation,
+        handoff_from: None,
+    };
+    assert_eq!(
+        binding_status(model.handle_bind_agent_pty(owner, request(6))),
+        AgentPtyBindingStatus::StaleGeneration
+    );
+    assert_eq!(
+        binding_status(model.handle_bind_agent_pty(foreign, request(7))),
+        AgentPtyBindingStatus::ForeignConnection
+    );
 }
 
 #[test]
@@ -344,10 +481,11 @@ fn create_directory_creates_nested_directories() {
 
 #[cfg(unix)]
 mod daemon_session {
-    use super::test_model;
+    use super::{binding_identity, binding_status, test_model};
     use crate::remote_server::proto::{
-        client_message, server_message, AttachSession, ClientMessage, CloseSession, DetachSession,
-        ListSessions, OpenSession, ServerMessage, SessionInput, SessionList, SessionSize,
+        client_message, server_message, AttachSession, BindAgentPty, ClientMessage, CloseSession,
+        DetachSession, ListSessions, OpenSession, ResizeSession, ServerMessage, SessionInput,
+        SessionList, SessionSize,
     };
     use futures::future::Either;
     use std::time::Duration;
@@ -842,8 +980,218 @@ mod daemon_session {
                 session_id: session_id.to_string(),
                 last_seq,
                 supports_bootstrap_preamble: true,
+                expected_generation: None,
+                expected_agent_binding: None,
             })),
         }
+    }
+
+    #[test]
+    fn generation_checked_attach_validates_agent_and_transfers_binding_authority() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (first_tx, first_rx) = async_channel::unbounded::<ServerMessage>();
+            let first = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(first, first_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(first, open_session_msg(), ctx)
+            });
+            let session_id = recv_session_opened(&first_rx)
+                .await
+                .expect("session opened");
+            let generation = model.read(&app, |m, _| m.sessions[&session_id].generation);
+
+            let (second_tx, _second_rx) = async_channel::unbounded::<ServerMessage>();
+            let second = uuid::Uuid::new_v4();
+            let (probe_tx, probe_rx) = async_channel::unbounded::<Vec<u8>>();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(second, second_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.sessions.get_mut(&session_id).unwrap().input_tx = probe_tx;
+                m.connection_features.insert(
+                    first,
+                    std::collections::HashSet::from(["agent-pty-binding".to_string()]),
+                );
+                m.connection_features.insert(
+                    second,
+                    std::collections::HashSet::from(["agent-pty-binding".to_string()]),
+                );
+                assert_eq!(
+                    binding_status(m.handle_bind_agent_pty(
+                        first,
+                        BindAgentPty {
+                            agent: Some(binding_identity("agent-1")),
+                            pty_session_id: session_id.clone(),
+                            pty_session_generation: generation,
+                            handoff_from: None,
+                        },
+                    )),
+                    super::AgentPtyBindingStatus::Bound
+                );
+                assert_eq!(
+                    m.handle_session_input(
+                        second,
+                        SessionInput {
+                            session_id: session_id.clone(),
+                            bytes: b"foreign".to_vec(),
+                            startup_command_id: String::new(),
+                        },
+                    ),
+                    None
+                );
+                m.handle_resize_session(
+                    second,
+                    ResizeSession {
+                        session_id: session_id.clone(),
+                        size: Some(SessionSize {
+                            rows: 90,
+                            cols: 120,
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        }),
+                    },
+                );
+                assert!(
+                    probe_rx.try_recv().is_err(),
+                    "a non-owning connection must not write to the foreground PTY"
+                );
+                assert_eq!(
+                    (m.sessions[&session_id].rows, m.sessions[&session_id].cols),
+                    (24, 80),
+                    "a non-owning connection must not resize the foreground PTY"
+                );
+                let live_conflict = m.handle_attach_session(
+                    second,
+                    AttachSession {
+                        session_id: session_id.clone(),
+                        last_seq: 0,
+                        supports_bootstrap_preamble: true,
+                        expected_generation: Some(generation),
+                        expected_agent_binding: Some(binding_identity("agent-1")),
+                    },
+                );
+                let server_message::Message::Error(error) = live_conflict.into_message() else {
+                    panic!("a second live connection must not steal PTY ownership");
+                };
+                assert!(error.message.contains("already attached"));
+                m.deregister_connection(first, ctx);
+                let downgraded = m.handle_attach_session(
+                    second,
+                    AttachSession {
+                        session_id: session_id.clone(),
+                        last_seq: 0,
+                        supports_bootstrap_preamble: true,
+                        expected_generation: None,
+                        expected_agent_binding: None,
+                    },
+                );
+                let server_message::Message::Error(error) = downgraded.into_message() else {
+                    panic!("a capable client must not downgrade to id-only attach");
+                };
+                assert!(error.message.contains("requires a PTY generation"));
+                let stale = m.handle_attach_session(
+                    second,
+                    AttachSession {
+                        session_id: session_id.clone(),
+                        last_seq: 0,
+                        supports_bootstrap_preamble: true,
+                        expected_generation: Some(generation),
+                        expected_agent_binding: Some(binding_identity("agent-stale")),
+                    },
+                );
+                let server_message::Message::Error(error) = stale.into_message() else {
+                    panic!("a stale agent row must fail before PTY ownership transfers");
+                };
+                assert!(error.message.contains("foreground agent changed"));
+                assert_eq!(
+                    m.sessions[&session_id].attached,
+                    first,
+                    "a rejected stale row must not transfer session ownership"
+                );
+                assert_eq!(
+                    binding_status(m.handle_bind_agent_pty(
+                        second,
+                        BindAgentPty {
+                            agent: Some(binding_identity("agent-1")),
+                            pty_session_id: session_id.clone(),
+                            pty_session_generation: generation,
+                            handoff_from: None,
+                        },
+                    )),
+                    super::AgentPtyBindingStatus::ForeignConnection,
+                    "a rejected stale row must not transfer PTY mutation authority"
+                );
+                let attached = m
+                    .handle_attach_session(
+                        second,
+                        AttachSession {
+                            session_id: session_id.clone(),
+                            last_seq: 0,
+                            supports_bootstrap_preamble: true,
+                            expected_generation: Some(generation),
+                            expected_agent_binding: Some(binding_identity("agent-1")),
+                        },
+                    )
+                    .into_message();
+                let server_message::Message::SessionAttached(attached) = attached else {
+                    panic!("expected SessionAttached");
+                };
+                assert_eq!(
+                    attached.agent_binding,
+                    Some(binding_identity("agent-1")),
+                    "a capability-aware generic adopt must hydrate the foreground identity"
+                );
+                assert_eq!(
+                    m.handle_session_input(
+                        second,
+                        SessionInput {
+                            session_id: session_id.clone(),
+                            bytes: b"owned".to_vec(),
+                            startup_command_id: String::new(),
+                        },
+                    ),
+                    None
+                );
+                assert_eq!(
+                    probe_rx.try_recv(),
+                    Ok(b"owned".to_vec()),
+                    "only the connection that completed attach may write to the PTY"
+                );
+            });
+
+            model.update(&mut app, |m, _ctx| {
+                m.connection_features.insert(
+                    first,
+                    std::collections::HashSet::from(["agent-pty-binding".to_string()]),
+                );
+            });
+            let bind_request = || BindAgentPty {
+                agent: Some(binding_identity("agent-1")),
+                pty_session_id: session_id.clone(),
+                pty_session_generation: generation,
+                handoff_from: None,
+            };
+            assert_eq!(
+                model.update(&mut app, |m, _ctx| {
+                    binding_status(m.handle_bind_agent_pty(first, bind_request()))
+                }),
+                super::AgentPtyBindingStatus::ForeignConnection,
+                "the old connection must lose mutation authority even after an id-only attach"
+            );
+            assert_eq!(
+                model.update(&mut app, |m, _ctx| {
+                    binding_status(m.handle_bind_agent_pty(second, bind_request()))
+                }),
+                super::AgentPtyBindingStatus::Bound
+            );
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(second, close_msg(&session_id), ctx)
+            });
+        });
     }
 
     fn close_msg(session_id: &str) -> ClientMessage {

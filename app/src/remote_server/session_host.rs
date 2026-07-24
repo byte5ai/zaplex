@@ -44,6 +44,8 @@ const READ_CHUNK: usize = 64 * 1024;
 /// A live daemon-hosted session: the PTY master, the shell child, the output
 /// ring, and the channel feeding the ordered input writer.
 pub(super) struct Session {
+    /// Monotonic daemon-process generation for stale-id rejection.
+    pub(super) generation: u64,
     /// PTY master, async-wrapped (non-blocking). Shared with the reader/writer
     /// tasks via `Arc`; keeping a clone here keeps the fd alive for resize.
     pub(super) leader: Arc<Async<File>>,

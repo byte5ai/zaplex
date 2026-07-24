@@ -23,6 +23,16 @@ fn has_feature_matches_advertised_capabilities() {
 
 #[cfg(unix)]
 #[test]
+fn capability_negotiation_gates_pty_binding() {
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_AGENT_PTY_BINDING
+    ));
+    assert!(!has_feature(&[], FEATURE_AGENT_PTY_BINDING));
+}
+
+#[cfg(unix)]
+#[test]
 fn supported_features_advertises_session_host_on_unix() {
     // Stage 1: unix daemons own PTYs and advertise the session host.
     assert!(has_feature(&supported_features(), FEATURE_SESSION_HOST));

@@ -11041,6 +11041,7 @@ dependencies = [
  "warp_core",
  "warp_util",
  "warpui",
+ "zaplex_remote_session",
 ]
 
 [[package]]

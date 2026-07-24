@@ -12,6 +12,7 @@ async fn round_trip_client_message() {
         request_id: "test-123".to_string(),
         message: Some(client_message::Message::Initialize(Initialize {
             auth_token: String::new(),
+            features: vec![],
         })),
     };
 
@@ -54,6 +55,80 @@ async fn round_trip_server_message() {
         }
         other => panic!("unexpected message variant: {other:?}"),
     }
+}
+
+#[test]
+fn real_legacy_client_fixture_interoperates() {
+    // Captured old ClientMessage { request_id: "legacy", initialize:
+    // Initialize { auth_token: "token" } }. This byte fixture predates the
+    // additive Initialize.features field and is deliberately not produced by
+    // the current encoder.
+    const LEGACY_CLIENT_INITIALIZE: &[u8] = &[
+        0x0a, 0x06, b'l', b'e', b'g', b'a', b'c', b'y', 0x12, 0x07, 0x0a, 0x05, b't', b'o', b'k',
+        b'e', b'n',
+    ];
+    let decoded = ClientMessage::decode(LEGACY_CLIENT_INITIALIZE).unwrap();
+    let client_message::Message::Initialize(initialize) = decoded.message.unwrap() else {
+        panic!("legacy fixture must decode as Initialize");
+    };
+    assert_eq!(initialize.auth_token, "token");
+    assert!(initialize.features.is_empty());
+}
+
+#[test]
+fn real_legacy_daemon_fixture_decodes_without_binding() {
+    // Captured old ServerMessage { request_id: "legacy", agent_session_list:
+    // [AgentSessionInfo { session_id: "agent-1", cwd: "/tmp" }] }. This full
+    // daemon envelope predates every PTY-binding field and is deliberately not
+    // produced by the current encoder.
+    const LEGACY_DAEMON_INVENTORY: &[u8] = &[
+        0x0a, 0x06, b'l', b'e', b'g', b'a', b'c', b'y', 0xea, 0x01, 0x11, 0x0a, 0x0f, 0x0a, 0x07,
+        b'a', b'g', b'e', b'n', b't', b'-', b'1', 0x12, 0x04, b'/', b't', b'm', b'p',
+    ];
+    let decoded = ServerMessage::decode(LEGACY_DAEMON_INVENTORY).unwrap();
+    assert_eq!(decoded.request_id, "legacy");
+    let Some(server_message::Message::AgentSessionList(list)) = decoded.message else {
+        panic!("legacy fixture must decode as AgentSessionList");
+    };
+    assert_eq!(list.sessions.len(), 1);
+    assert_eq!(list.sessions[0].session_id, "agent-1");
+    assert!(list.sessions[0].pty_session_id.is_empty());
+    assert_eq!(list.sessions[0].pty_session_generation, 0);
+    assert!(!list.sessions[0].pty_foreground);
+}
+
+#[test]
+fn real_legacy_session_attach_fixtures_use_id_only() {
+    // Captured old ServerMessage { request_id: "legacy", session_list:
+    // [SessionInfo { session_id: "pty-old", alive: true }] }. It predates
+    // SessionInfo.generation, which must decode to the legacy zero sentinel.
+    const LEGACY_SESSION_LIST: &[u8] = &[
+        0x0a, 0x06, b'l', b'e', b'g', b'a', b'c', b'y', 0xca, 0x01, 0x0d, 0x0a, 0x0b, 0x0a, 0x07,
+        b'p', b't', b'y', b'-', b'o', b'l', b'd', 0x20, 0x01,
+    ];
+    let decoded = ServerMessage::decode(LEGACY_SESSION_LIST).unwrap();
+    let Some(server_message::Message::SessionList(list)) = decoded.message else {
+        panic!("legacy fixture must decode as SessionList");
+    };
+    assert_eq!(list.sessions.len(), 1);
+    assert_eq!(list.sessions[0].session_id, "pty-old");
+    assert_eq!(list.sessions[0].generation, 0);
+
+    // Captured old ClientMessage { request_id: "legacy", attach_session:
+    // AttachSession { session_id: "pty-old" } }. The missing generation check
+    // stays absent, so a new client can deliberately retain this wire path when
+    // it consumes the zero-generation legacy listing above.
+    const LEGACY_ATTACH: &[u8] = &[
+        0x0a, 0x06, b'l', b'e', b'g', b'a', b'c', b'y', 0xc2, 0x01, 0x09, 0x0a, 0x07, b'p', b't',
+        b'y', b'-', b'o', b'l', b'd',
+    ];
+    let decoded = ClientMessage::decode(LEGACY_ATTACH).unwrap();
+    let Some(client_message::Message::AttachSession(attach)) = decoded.message else {
+        panic!("legacy fixture must decode as AttachSession");
+    };
+    assert_eq!(attach.session_id, "pty-old");
+    assert_eq!(attach.expected_generation, None);
+    assert_eq!(attach.expected_agent_binding, None);
 }
 
 #[tokio::test]
@@ -124,6 +199,7 @@ fn try_extract_request_id_from_valid_message() {
         request_id: "abc-123".to_string(),
         message: Some(client_message::Message::Initialize(Initialize {
             auth_token: String::new(),
+            features: vec![],
         })),
     };
     let buf = msg.encode_to_vec();

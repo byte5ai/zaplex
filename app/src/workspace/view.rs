@@ -1025,16 +1025,118 @@ async fn run_remote_guardrail_signal(
     }
 }
 
+type DaemonAdoptionKey = (String, String, u64);
+
+#[derive(Clone)]
+struct AdoptedDaemonSession {
+    pane_group_id: EntityId,
+    connection_session_id: SessionId,
+}
+
+#[cfg(unix)]
+fn daemon_adoption_key(
+    node_id: &str,
+    pty_session_id: &str,
+    generation: u64,
+) -> DaemonAdoptionKey {
+    (
+        node_id.to_string(),
+        pty_session_id.to_string(),
+        generation,
+    )
+}
+
+#[cfg(unix)]
+fn remove_adopted_daemon_session(
+    adopted_daemon_sessions: &mut std::collections::HashMap<
+        DaemonAdoptionKey,
+        AdoptedDaemonSession,
+    >,
+    connection_session_id: SessionId,
+) {
+    adopted_daemon_sessions
+        .retain(|_, adopted| adopted.connection_session_id != connection_session_id);
+}
+
+#[cfg(unix)]
+fn agent_inventory_confirms_binding(
+    inventory: &remote_server::proto::AgentSessionList,
+    pty_session_id: &str,
+    generation: u64,
+    expected: &remote_server::proto::AgentSessionIdentity,
+) -> bool {
+    inventory.sessions.iter().any(|session| {
+        session.pty_foreground
+            && session.pty_session_id == pty_session_id
+            && session.pty_session_generation == generation
+            && session.provider == expected.provider
+            && session.account_email == expected.account_email
+            && session.config_dir == expected.config_dir
+            && session.session_id == expected.session_id
+    })
+}
+
+#[cfg(unix)]
+fn remember_daemon_node_session(
+    daemon_node_sessions: &mut std::collections::HashMap<String, Vec<SessionId>>,
+    node_id: String,
+    session_id: SessionId,
+) {
+    let sessions = daemon_node_sessions.entry(node_id).or_default();
+    if !sessions.contains(&session_id) {
+        sessions.push(session_id);
+    }
+}
+
+#[cfg(unix)]
+fn forget_daemon_node_session(
+    daemon_node_sessions: &mut std::collections::HashMap<String, Vec<SessionId>>,
+    session_id: SessionId,
+) {
+    daemon_node_sessions.retain(|_, sessions| {
+        sessions.retain(|candidate| *candidate != session_id);
+        !sessions.is_empty()
+    });
+}
+
+#[cfg(unix)]
+fn apply_daemon_server_auth(
+    mut server: warp_ssh_manager::SshServerInfo,
+    auth: warp_ssh_manager::ResolvedSshAuth,
+) -> warp_ssh_manager::SshServerInfo {
+    server.username = auth.username;
+    server.key_path = auth.key_path;
+    server.auth_type = auth.auth_type;
+    server
+}
+
+#[cfg(unix)]
+fn resolved_daemon_server(node_id: &str) -> Option<warp_ssh_manager::SshServerInfo> {
+    warp_ssh_manager::with_conn(|conn| {
+        let Some(server) =
+            warp_ssh_manager::SshRepository::get_server(conn, node_id)?
+        else {
+            return Ok(None);
+        };
+        let auth =
+            warp_ssh_manager::SshRepository::resolve_server_auth(conn, &server)?;
+        Ok(Some(apply_daemon_server_auth(server, auth)))
+    })
+    .ok()
+    .flatten()
+}
+
 pub struct Workspace {
     window_id: WindowId,
     pub(crate) tabs: Vec<TabData>,
     active_tab_index: usize,
     /// Tracks which tab (by pane-group id) currently hosts each adopted daemon
-    /// `pty_session_id`, so adopting the same running session again focuses the
-    /// existing tab instead of opening a second view onto it (which would split
-    /// input/output across two tabs). Stale entries (tab since closed) are pruned
-    /// opportunistically on the next adopt.
-    adopted_daemon_sessions: std::collections::HashMap<String, EntityId>,
+    /// `(node_id, pty_session_id, generation, expected_agent_identity)`, so
+    /// adopting the same running session again focuses the existing tab without
+    /// conflating hosts, handoffs, accounts, or a reused stale id.
+    /// Stale entries (tab since closed) are pruned opportunistically.
+    adopted_daemon_sessions:
+        std::collections::HashMap<DaemonAdoptionKey, AdoptedDaemonSession>,
     /// SSH host node per tab (pane-group id → `ssh_servers.node_id`), recorded
     /// when a tab is opened for a host (daemon or classic). Lets pane-scoped
     /// actions resolve their host context — e.g. "Open file manager here" on a
@@ -1065,7 +1167,7 @@ pub struct Workspace {
     /// back. `SessionId`s are never reused, so an entry can only ever resolve to
     /// its own host or to nothing, never to a wrong host.
     #[cfg(all(unix, feature = "local_tty"))]
-    daemon_node_sessions: std::collections::HashMap<String, SessionId>,
+    daemon_node_sessions: std::collections::HashMap<String, Vec<SessionId>>,
     /// Remote files opened for editing over *classic* SSH (no daemon), keyed by
     /// their local working-copy path. On a `GlobalBufferModelEvent::FileSaved`
     /// for one of these paths, the working copy is uploaded back to the host
@@ -2947,31 +3049,53 @@ impl Workspace {
                 RemoteServerManagerEvent::SessionConnected { session_id, .. } => {
                     me.daemon_session_servers.remove(session_id);
                 }
+                RemoteServerManagerEvent::SessionExited { session_id, .. } => {
+                    remove_adopted_daemon_session(
+                        &mut me.adopted_daemon_sessions,
+                        *session_id,
+                    );
+                }
+                RemoteServerManagerEvent::SessionDisconnected { session_id, .. } => {
+                    remove_adopted_daemon_session(
+                        &mut me.adopted_daemon_sessions,
+                        *session_id,
+                    );
+                    forget_daemon_node_session(&mut me.daemon_node_sessions, *session_id);
+                }
                 // Session torn down (the user closed the tab, possibly mid-connect)
                 // — drop the fallback record so a *trailing* Initialize failure
                 // can't open an unwanted classic tab after the user cancelled.
                 RemoteServerManagerEvent::SessionDeregistered { session_id } => {
                     me.daemon_session_servers.remove(session_id);
+                    remove_adopted_daemon_session(&mut me.adopted_daemon_sessions, *session_id);
+                    forget_daemon_node_session(&mut me.daemon_node_sessions, *session_id);
                 }
                 RemoteServerManagerEvent::SessionConnectionFailed {
                     session_id, phase, ..
-                } => match phase {
-                    // The initialize handshake failed for a daemon session — often
-                    // a version mismatch, where a stale daemon of another release
-                    // answered our socket. The daemon tab already shows the error
-                    // via its connect-failed path; recover by opening a working
-                    // classic SSH session (the fallback the manager's mismatch
-                    // branch documents but that nothing was catching before).
-                    crate::remote_server::manager::RemoteServerInitPhase::Initialize => {
-                        me.fall_back_to_classic_after_daemon_handshake_failure(*session_id, ctx);
+                } => {
+                    remove_adopted_daemon_session(
+                        &mut me.adopted_daemon_sessions,
+                        *session_id,
+                    );
+                    forget_daemon_node_session(&mut me.daemon_node_sessions, *session_id);
+                    match phase {
+                        // The initialize handshake failed for a daemon session — often
+                        // a version mismatch, where a stale daemon of another release
+                        // answered our socket. The daemon tab already shows the error
+                        // via its connect-failed path; recover by opening a working
+                        // classic SSH session (the fallback the manager's mismatch
+                        // branch documents but that nothing was catching before).
+                        crate::remote_server::manager::RemoteServerInitPhase::Initialize => {
+                            me.fall_back_to_classic_after_daemon_handshake_failure(*session_id, ctx);
+                        }
+                        // Connect-phase failures are handled by the daemon-connect
+                        // preflight path; just drop the record so a later event can't
+                        // act on a stale entry.
+                        crate::remote_server::manager::RemoteServerInitPhase::Connect => {
+                            me.daemon_session_servers.remove(session_id);
+                        }
                     }
-                    // Connect-phase failures are handled by the daemon-connect
-                    // preflight path; just drop the record so a later event can't
-                    // act on a stale entry.
-                    crate::remote_server::manager::RemoteServerInitPhase::Connect => {
-                        me.daemon_session_servers.remove(session_id);
-                    }
-                },
+                }
                 _ => {}
             },
         );
@@ -4609,6 +4733,7 @@ impl Workspace {
         let terminal_view_id = Self::terminal_view_id_for_agent_session(
             agent,
             session_id,
+            config_identity.as_deref(),
             account_email,
             host_id,
             is_local,
@@ -4726,6 +4851,7 @@ impl Workspace {
     fn terminal_view_id_for_agent_session(
         agent: CLIAgent,
         session_id: &str,
+        config_dir: Option<&str>,
         account_email: Option<&str>,
         host_id: Option<&str>,
         is_local: bool,
@@ -4736,6 +4862,7 @@ impl Workspace {
         CLIAgentSessionsModel::as_ref(ctx).terminal_view_id_for_agent_session_matching(
             agent,
             session_id,
+            config_dir,
             account_email,
             |terminal_view_id, session| {
                 if (is_local && session.is_remote()) || (!is_local && !session.is_remote()) {
@@ -4872,6 +4999,7 @@ impl Workspace {
         let terminal_view_id = Self::terminal_view_id_for_agent_session(
             agent,
             session_id,
+            config_dir,
             account_email,
             host_id,
             is_local,
@@ -4890,6 +5018,30 @@ impl Workspace {
             }
             SessionOpenPlan::ResumeDormant => {}
             SessionOpenPlan::LiveSessionUnavailable => {
+                #[cfg(unix)]
+                if !is_local {
+                    if let Some((pty_session_id, generation)) =
+                        crate::cockpit::capabilities::daemon_reattach_target(&session)
+                    {
+                        let server = host_id
+                            .and_then(|host_id| self.node_for_daemon_host(host_id, &*ctx))
+                            .and_then(|node_id| resolved_daemon_server(&node_id));
+                        if let Some(server) = server {
+                            let expected_agent_binding =
+                                crate::remote_server::agent_session::snapshot_agent_identity(
+                                    &session,
+                                );
+                            self.adopt_daemon_session(
+                                server,
+                                pty_session_id.to_string(),
+                                generation,
+                                Some(expected_agent_binding),
+                                ctx,
+                            );
+                            return;
+                        }
+                    }
+                }
                 self.live_session_unavailable_toast(&session, host, ctx);
                 return;
             }
@@ -6943,12 +7095,19 @@ impl Workspace {
             LeftPanelEvent::AdoptDaemonSession {
                 server,
                 pty_session_id,
+                pty_generation,
             } => {
                 #[cfg(unix)]
-                self.adopt_daemon_session(server.clone(), pty_session_id.clone(), ctx);
+                self.adopt_daemon_session(
+                    server.clone(),
+                    pty_session_id.clone(),
+                    *pty_generation,
+                    None,
+                    ctx,
+                );
                 #[cfg(not(unix))]
                 {
-                    let _ = (server, pty_session_id);
+                    let _ = (server, pty_session_id, pty_generation);
                     log::warn!("AdoptDaemonSession ignored: daemon sessions are unix-only");
                 }
             }
@@ -7397,7 +7556,7 @@ impl Workspace {
     fn node_for_session(&self, session_id: SessionId) -> Option<String> {
         self.daemon_node_sessions
             .iter()
-            .find(|(_, sid)| **sid == session_id)
+            .find(|(_, sessions)| sessions.contains(&session_id))
             .map(|(node_id, _)| node_id.clone())
     }
 
@@ -7408,13 +7567,17 @@ impl Workspace {
     /// daemon hosts whose session has since dropped, so the caller falls back.
     #[cfg(all(unix, feature = "local_tty"))]
     fn daemon_host_for_node(&self, node_id: &str, ctx: &AppContext) -> Option<warp_core::HostId> {
-        let session_id = *self.daemon_node_sessions.get(node_id)?;
         let manager = crate::remote_server::manager::RemoteServerManager::as_ref(ctx);
-        let host_id = manager.host_id_for_session(session_id)?;
-        // Buffer-sync needs a live client for the host; if there is none the
-        // session is not usable and we fall back rather than open a dead editor.
-        manager.client_for_host(host_id)?;
-        Some(host_id.clone())
+        self.daemon_node_sessions
+            .get(node_id)?
+            .iter()
+            .find_map(|session_id| {
+                let host_id = manager.host_id_for_session(*session_id)?;
+                // Buffer-sync needs a live client for the host; if there is none
+                // try another connection for this node before falling back.
+                manager.client_for_host(host_id)?;
+                Some(host_id.clone())
+            })
     }
 
     /// Invert [`Self::daemon_host_for_node`]: given a daemon `HostId` (the
@@ -7452,7 +7615,7 @@ impl Workspace {
         if let Some(node_id) = self
             .daemon_node_sessions
             .iter()
-            .find(|(_, sid)| **sid == session_id)
+            .find(|(_, sessions)| sessions.contains(&session_id))
             .map(|(node_id, _)| node_id.clone())
         {
             crate::cockpit::launch_registry::rehost(&node_id, host_id);
@@ -7711,6 +7874,8 @@ impl Workspace {
                 ..Default::default()
             },
             adopt_pty_session_id: None,
+            adopt_pty_generation: None,
+            expected_agent_binding: None,
             install_progress_rx: Some(install_progress_rx),
             host_label: server.host.clone(),
         };
@@ -7820,9 +7985,11 @@ impl Workspace {
                 // the daemon is known to be reachable, as before the tab moved
                 // ahead of the preflight.
                 #[cfg(feature = "local_tty")]
-                workspace
-                    .daemon_node_sessions
-                    .insert(node_id_owned.clone(), session_id);
+                remember_daemon_node_session(
+                    &mut workspace.daemon_node_sessions,
+                    node_id_owned.clone(),
+                    session_id,
+                );
 
                 match preflight {
                     // Daemon already installed → connect right away. Dropping the
@@ -7873,11 +8040,10 @@ impl Workspace {
                                 });
                             if !pending_tab_alive {
                                 #[cfg(feature = "local_tty")]
-                                if workspace.daemon_node_sessions.get(&node_id_owned)
-                                    == Some(&session_id)
-                                {
-                                    workspace.daemon_node_sessions.remove(&node_id_owned);
-                                }
+                                forget_daemon_node_session(
+                                    &mut workspace.daemon_node_sessions,
+                                    session_id,
+                                );
                                 log::info!(
                                     "daemon connect [{host}]: pending tab closed during \
                                      install — cancelling the connect"
@@ -8045,6 +8211,92 @@ impl Workspace {
         self.open_ssh_terminal(node_id, server, true, ctx);
     }
 
+    /// Revalidates an agent row against a fresh daemon inventory snapshot before
+    /// focusing the one existing tab for its PTY.
+    #[cfg(unix)]
+    fn validate_and_focus_adopted_agent_session(
+        &mut self,
+        binding_key: DaemonAdoptionKey,
+        connection_session_id: SessionId,
+        pane_group_id: EntityId,
+        expected_agent_binding: remote_server::proto::AgentSessionIdentity,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let manager = crate::remote_server::manager::RemoteServerManager::as_ref(ctx);
+        if !manager.session_supports_feature(
+            connection_session_id,
+            zaplex_remote_session::types::FEATURE_AGENT_PTY_BINDING,
+        ) || !manager.session_supports_feature(
+            connection_session_id,
+            zaplex_remote_session::types::FEATURE_AGENT_INVENTORY,
+        ) {
+            self.toast_stack.update(ctx, |stack, ctx| {
+                stack.add_persistent_toast(
+                    DismissibleToast::error(
+                        "The daemon cannot validate this agent-to-PTY route.".to_string(),
+                    ),
+                    ctx,
+                );
+            });
+            return;
+        }
+        let Some(client) = manager.client_for_session(connection_session_id).cloned() else {
+            self.toast_stack.update(ctx, |stack, ctx| {
+                stack.add_persistent_toast(
+                    DismissibleToast::error(
+                        "The daemon connection is unavailable; refresh Agent Sessions.".to_string(),
+                    ),
+                    ctx,
+                );
+            });
+            return;
+        };
+        let pty_session_id = binding_key.1.clone();
+        let generation = binding_key.2;
+        let validation = async move { client.list_agent_sessions().await };
+
+        ctx.spawn(validation, move |workspace, result, ctx| {
+            let confirmed = result.as_ref().is_ok_and(|inventory| {
+                agent_inventory_confirms_binding(
+                    inventory,
+                    &pty_session_id,
+                    generation,
+                    &expected_agent_binding,
+                )
+            });
+            if !confirmed {
+                workspace.toast_stack.update(ctx, |stack, ctx| {
+                    stack.add_persistent_toast(
+                        DismissibleToast::error(
+                            "This PTY's foreground agent changed. Refresh Agent Sessions \
+                             before attaching again."
+                                .to_string(),
+                        ),
+                        ctx,
+                    );
+                });
+                return;
+            }
+            let still_same_tab = workspace
+                .adopted_daemon_sessions
+                .get(&binding_key)
+                .is_some_and(|adopted| {
+                    adopted.connection_session_id == connection_session_id
+                        && adopted.pane_group_id == pane_group_id
+                });
+            if !still_same_tab {
+                return;
+            }
+            if let Some(index) = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == pane_group_id)
+            {
+                workspace.activate_tab(index, ctx);
+            }
+        });
+    }
+
     /// Adopts an already-running daemon session in a new tab: attaches to
     /// `pty_session_id` (replay + live) instead of opening a fresh one. This is
     /// the entry point the multi-session sidebar calls when the user picks a
@@ -8054,6 +8306,8 @@ impl Workspace {
         &mut self,
         server: warp_ssh_manager::SshServerInfo,
         pty_session_id: String,
+        pty_generation: u64,
+        expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::remote_server::headless_connect;
@@ -8062,11 +8316,28 @@ impl Workspace {
         // already open in a tab, focus that tab instead of opening a second view
         // onto it (a second adopt would split input/output across two tabs).
         let live_pg_ids: Vec<EntityId> = self.tabs.iter().map(|t| t.pane_group.id()).collect();
-        self.adopted_daemon_sessions
-            .retain(|_, pg_id| live_pg_ids.contains(pg_id));
-        if let Some(pg_id) = self.adopted_daemon_sessions.get(&pty_session_id).copied() {
+        self.adopted_daemon_sessions.retain(|_, adopted| {
+            live_pg_ids.contains(&adopted.pane_group_id)
+        });
+        let binding_key =
+            daemon_adoption_key(&server.node_id, &pty_session_id, pty_generation);
+        if let Some(adopted) = self.adopted_daemon_sessions.get(&binding_key) {
+            let pg_id = adopted.pane_group_id;
+            let connection_session_id = adopted.connection_session_id;
             if let Some(index) = self.tabs.iter().position(|t| t.pane_group.id() == pg_id) {
-                log::info!("daemon adopt: session {pty_session_id} already open — focusing its tab");
+                if let Some(expected_agent_binding) = expected_agent_binding {
+                    self.validate_and_focus_adopted_agent_session(
+                        binding_key,
+                        connection_session_id,
+                        pg_id,
+                        expected_agent_binding,
+                        ctx,
+                    );
+                    return;
+                }
+                log::info!(
+                    "daemon adopt: session {pty_session_id} already open — focusing its tab"
+                );
                 self.activate_tab(index, ctx);
                 return;
             }
@@ -8077,6 +8348,8 @@ impl Workspace {
             connection_session_id: session_id,
             open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
             adopt_pty_session_id: Some(pty_session_id.clone()),
+            adopt_pty_generation: Some(pty_generation),
+            expected_agent_binding,
             install_progress_rx: None,
             host_label: server.host.clone(),
         };
@@ -8100,15 +8373,24 @@ impl Workspace {
             .map(|pane_group| pane_group.id())
         {
             self.adopted_daemon_sessions
-                .insert(pty_session_id, pane_group_id);
+                .insert(
+                    binding_key,
+                    AdoptedDaemonSession {
+                        pane_group_id,
+                        connection_session_id: session_id,
+                    },
+                );
             self.ssh_tab_nodes
                 .insert(pane_group_id, server.node_id.clone());
         }
         // Same node_id → daemon session mapping as the fresh-connect path, so the
         // file manager on an adopted host can open files natively too.
         #[cfg(feature = "local_tty")]
-        self.daemon_node_sessions
-            .insert(server.node_id.clone(), session_id);
+        remember_daemon_node_session(
+            &mut self.daemon_node_sessions,
+            server.node_id.clone(),
+            session_id,
+        );
 
         self.spawn_daemon_session_connect(server, session_id, ctx);
     }

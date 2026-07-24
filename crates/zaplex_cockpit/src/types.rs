@@ -228,6 +228,15 @@ pub struct SessionSnapshot {
     /// the process could not be proven and must remain unsignalable.
     #[serde(default)]
     pub process_fingerprint: Option<String>,
+    /// Generation-checked daemon PTY currently or historically associated with
+    /// this agent. Present only after capability negotiation.
+    #[serde(default)]
+    pub pty_session_id: Option<String>,
+    #[serde(default)]
+    pub pty_session_generation: Option<u64>,
+    /// Whether this is the single attachable foreground agent for that PTY.
+    #[serde(default)]
+    pub pty_foreground: bool,
     pub last_activity: DateTime<Utc>,
     pub pid: u32,
 }

@@ -230,6 +230,12 @@ pub struct CLIAgentAccountIdentity {
     pub account_email: Option<String>,
 }
 
+impl CLIAgentAccountIdentity {
+    pub fn agent(&self) -> CLIAgent {
+        self.agent
+    }
+}
+
 /// Events emitted by `CLIAgentSessionsModel` for subscribers (e.g., `AgentNotificationsModel`).
 #[allow(dead_code)] // `agent` fields on Started/InputSessionChanged/Ended are used for logging and future subscribers.
 #[derive(Debug, Clone)]
@@ -338,17 +344,24 @@ impl CLIAgentSessionsModel {
         );
     }
 
+    pub fn unbind_account_identity(&mut self, terminal_view_id: EntityId) {
+        self.account_identities.remove(&terminal_view_id);
+    }
+
     pub fn account_identity_matches(
         &self,
         terminal_view_id: EntityId,
         agent: CLIAgent,
+        config_dir: Option<&str>,
         account_email: Option<&str>,
     ) -> bool {
         match self.account_identities.get(&terminal_view_id) {
             Some(identity) => {
-                identity.agent == agent && identity.account_email.as_deref() == account_email
+                identity.agent == agent
+                    && identity.config_dir.as_deref() == config_dir
+                    && identity.account_email.as_deref() == account_email
             }
-            None => account_email.is_none(),
+            None => config_dir.is_none() && account_email.is_none(),
         }
     }
 
@@ -362,6 +375,7 @@ impl CLIAgentSessionsModel {
         &self,
         agent: CLIAgent,
         session_id: &str,
+        config_dir: Option<&str>,
         account_email: Option<&str>,
         mut matches_terminal: impl FnMut(EntityId, &CLIAgentSession) -> bool,
     ) -> Option<EntityId> {
@@ -370,7 +384,12 @@ impl CLIAgentSessionsModel {
             .find_map(|(terminal_view_id, session)| {
                 (session.agent == agent
                     && session.session_context.session_id.as_deref() == Some(session_id)
-                    && self.account_identity_matches(*terminal_view_id, agent, account_email)
+                    && self.account_identity_matches(
+                        *terminal_view_id,
+                        agent,
+                        config_dir,
+                        account_email,
+                    )
                     && matches_terminal(*terminal_view_id, session))
                 .then_some(*terminal_view_id)
             })
