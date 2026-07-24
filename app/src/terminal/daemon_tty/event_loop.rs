@@ -291,10 +291,7 @@ impl EventLoop {
                 // The old transport cannot complete its request anymore. Keep
                 // the logical command and id, but let the reconnected client
                 // issue a new correlated attempt after attach.
-                me.allow_startup_command_retry();
-                me.allow_agent_binding_retry();
-                me.allow_attach_retry();
-                me.awaiting_attach_snapshot = true;
+                me.begin_transport_reconnect();
                 me.reattach(ctx);
             }
             RemoteServerManagerEvent::SessionConnectionFailed {
@@ -1429,6 +1426,15 @@ impl EventLoop {
         }
     }
 
+    /// Invalidates operations owned by the dead transport before re-attaching
+    /// them through the replacement connection.
+    fn begin_transport_reconnect(&mut self) {
+        self.allow_startup_command_retry();
+        self.allow_agent_binding_retry();
+        self.allow_attach_retry();
+        self.awaiting_attach_snapshot = true;
+    }
+
     /// Resets the ANSI parser to its ground state without touching the terminal
     /// model. Used between a bootstrap preamble and a post-gap replay so a
     /// preamble that ended mid-sequence can't corrupt the replay (T1.3); the
@@ -1948,7 +1954,7 @@ mod tests {
     /// it remains pending; the synchronous transport seam then verifies the
     /// exact request bytes and positive-Ack completion independently.
     #[test]
-    fn startup_command_waits_for_bootstrap_and_runs_exactly_once() {
+    fn startup_command_waits_for_bootstrap_and_runs_once() {
         App::test((), |mut app| async move {
             let manager = app.add_singleton_model(RemoteServerManager::new);
             let conn = SessionId::from(17u64);
@@ -2066,6 +2072,50 @@ mod tests {
         });
     }
 
+    #[test]
+    fn does_not_run_on_session_opened_or_init_shell() {
+        let mut event_loop =
+            unbootstrapped_event_loop_with_startup("codex resume not-ready-session");
+
+        assert!(
+            event_loop.prepare_startup_command_delivery().is_none(),
+            "SessionOpened is only represented by the PTY id and is not readiness"
+        );
+        event_loop.process_pty_bytes(&init_shell_dcs());
+        assert!(
+            event_loop.prepare_startup_command_delivery().is_none(),
+            "InitShell must not release startup before the body reaches Bootstrapped"
+        );
+        assert_eq!(
+            event_loop.startup_command.as_deref(),
+            Some("codex resume not-ready-session")
+        );
+        assert!(event_loop.startup_command_id.is_none());
+    }
+
+    #[test]
+    fn survives_replay_then_live_bootstrap() {
+        let mut event_loop =
+            unbootstrapped_event_loop_with_startup("claude --resume replay-session");
+        let replay = init_shell_dcs();
+
+        event_loop.apply_attach(&[], 0, &replay);
+        assert!(
+            event_loop.prepare_startup_command_delivery().is_none(),
+            "an InitShell recovered from replay is still not readiness"
+        );
+        event_loop.process_pty_bytes(&bootstrapped_dcs());
+
+        let (pty_session_id, command_id, bytes, _attempt) = event_loop
+            .prepare_startup_command_delivery()
+            .expect("the live Bootstrapped boundary releases the retained startup");
+        assert_eq!(pty_session_id, OUR_PTY);
+        assert!(!command_id.is_empty());
+        assert_eq!(bytes, b"claude --resume replay-session\n");
+        event_loop.acknowledge_startup_command(&command_id);
+        assert!(event_loop.startup_command.is_none());
+    }
+
     /// A startup command is not ordinary terminal input: losing it leaves the
     /// newly opened tab at a shell prompt instead of starting the requested
     /// agent. A failed client enqueue must therefore keep the command pending
@@ -2143,19 +2193,27 @@ mod tests {
     /// the same logical delivery. Reusing the id is what lets the daemon return
     /// its cached ack instead of executing the command a second time.
     #[test]
-    fn lost_ack_retry_reuses_stable_startup_command_id() {
+    fn midflight_reconnect_reuses_command_id_and_runs_once() {
         let mut event_loop = ready_event_loop_with_startup("codex resume session-3");
         let mut attempts = Vec::new();
 
-        for _ in 0..2 {
-            event_loop.try_dispatch_startup_command_with(
-                |_pty_session_id, command_id, bytes| -> Result<(), ()> {
-                    attempts.push((command_id.to_string(), bytes.to_vec()));
-                    Ok(())
-                },
-            );
-            event_loop.allow_startup_command_retry();
-        }
+        event_loop.try_dispatch_startup_command_with(
+            |_pty_session_id, command_id, bytes| -> Result<(), ()> {
+                attempts.push((command_id.to_string(), bytes.to_vec()));
+                Ok(())
+            },
+        );
+        event_loop.begin_transport_reconnect();
+        assert!(
+            event_loop.awaiting_attach_snapshot,
+            "the production reconnect transition must require a fresh attach snapshot"
+        );
+        event_loop.try_dispatch_startup_command_with(
+            |_pty_session_id, command_id, bytes| -> Result<(), ()> {
+                attempts.push((command_id.to_string(), bytes.to_vec()));
+                Ok(())
+            },
+        );
 
         assert_eq!(attempts.len(), 2, "lost ack causes one retry");
         assert_eq!(
@@ -2166,6 +2224,18 @@ mod tests {
         assert!(
             event_loop.startup_command.is_some(),
             "without an ack the command is still pending after retry"
+        );
+        event_loop.acknowledge_startup_command(&attempts[1].0);
+        event_loop.try_dispatch_startup_command_with(
+            |_pty_session_id, command_id, bytes| -> Result<(), ()> {
+                attempts.push((command_id.to_string(), bytes.to_vec()));
+                Ok(())
+            },
+        );
+        assert_eq!(
+            attempts.len(),
+            2,
+            "after the reconnect retry is acknowledged, no third execution is dispatched"
         );
     }
 
@@ -2253,6 +2323,18 @@ mod tests {
             None,
             Some(listener.clone()),
         )));
+        let mut event_loop = EventLoop::new(model, listener, conn);
+        event_loop.pty_session_id = Some(OUR_PTY.to_string());
+        event_loop.startup_command = Some(command.to_string());
+        event_loop
+    }
+
+    fn unbootstrapped_event_loop_with_startup(command: &str) -> EventLoop {
+        let conn = SessionId::from(19u64);
+        let (listener, _wakeups_rx) = test_listener();
+        let model = Arc::new(FairMutex::new(TerminalModel::mock_not_bootstrapped(Some(
+            listener.clone(),
+        ))));
         let mut event_loop = EventLoop::new(model, listener, conn);
         event_loop.pty_session_id = Some(OUR_PTY.to_string());
         event_loop.startup_command = Some(command.to_string());

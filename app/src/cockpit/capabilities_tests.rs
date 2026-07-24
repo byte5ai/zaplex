@@ -134,7 +134,7 @@ fn a_remote_session_keeps_everything_that_does_not_need_this_machine() {
 }
 
 #[test]
-fn only_a_dormant_session_can_be_resumed() {
+fn only_dormant_session_can_resume() {
     for provider in [Provider::Claude, Provider::Codex] {
         for state in [
             SessionState::Active,
@@ -171,7 +171,7 @@ fn open_plan_focuses_a_known_terminal_for_every_session_state() {
 }
 
 #[test]
-fn open_plan_refuses_to_duplicate_an_unlocated_live_session() {
+fn open_plan_refuses_unlocated_live_duplicate() {
     for state in [
         SessionState::Active,
         SessionState::Waiting,
@@ -214,7 +214,7 @@ fn reattach_uses_id_without_cwd_guessing() {
 }
 
 #[test]
-fn terminal_host_matching_never_crosses_local_or_remote_host_boundaries() {
+fn host_matching_never_crosses_boundary() {
     assert!(session_host_matches(true, None, None));
     assert!(!session_host_matches(true, None, Some("remote-a")));
     assert!(session_host_matches(
@@ -233,7 +233,7 @@ fn terminal_host_matching_never_crosses_local_or_remote_host_boundaries() {
 }
 
 #[test]
-fn session_identity_matching_never_crosses_provider_or_account_boundaries() {
+fn identity_never_crosses_provider_or_account() {
     let mut claude_default = session(Provider::Claude, SessionState::Idle, 0);
     claude_default.config_dir = None;
     claude_default.account_email = Some("default@example.com".to_string());

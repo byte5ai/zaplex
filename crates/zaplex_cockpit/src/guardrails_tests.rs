@@ -83,7 +83,7 @@ fn pid_zero_is_never_signalable() {
 }
 
 #[test]
-fn pid_must_fit_the_positive_signed_process_id_range() {
+fn pid_must_fit_positive_signed_range() {
     assert!(pid_signalable(i32::MAX as u32));
     assert!(!pid_signalable(i32::MAX as u32 + 1));
     assert!(!pid_signalable(u32::MAX));

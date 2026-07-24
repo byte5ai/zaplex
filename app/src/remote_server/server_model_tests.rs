@@ -292,7 +292,7 @@ fn verified_agent_process_signal_rejects_unknown_signal_before_backend() {
 }
 
 #[test]
-fn verified_agent_process_signal_fails_closed_without_identity() {
+fn signal_fails_closed_without_provable_process_identity() {
     let mut request = process_signal_request(AgentProcessSignal::Interrupt);
     request.expected_process_fingerprint = String::new();
     let response = execute_agent_process_signal_with(request, |_, _, _| {
@@ -704,7 +704,7 @@ mod daemon_session {
     /// keystroke. The daemon acknowledges every accepted request while using
     /// the stable command id to enqueue identical retries exactly once.
     #[test]
-    fn duplicate_startup_command_is_acknowledged_but_enqueued_once() {
+    fn lost_ack_retry_is_deduplicated_by_command_id() {
         App::test((), |mut app| async move {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
