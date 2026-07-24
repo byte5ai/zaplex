@@ -1,5 +1,7 @@
 #[cfg(not(target_family = "wasm"))]
 mod bootstrap_file;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use bootstrap_file::{create_bootstrap_file, TempBootstrapFile};
 pub mod command_history;
 mod message;
 pub mod pty_controller;

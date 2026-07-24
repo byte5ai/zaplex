@@ -533,18 +533,19 @@ pub struct TerminalModel {
     suppress_next_bootstrap_write: bool,
 
     /// Persistent variant of the latch above: true for models driven by a
-    /// daemon-hosted session (set once by the daemon event loop at start). For
-    /// bash/zsh the daemon delivers the root shell's complete bootstrap
-    /// server-side — init at spawn plus the shell body as the session's first
-    /// input — so the client must never write that body into the PTY, for the
-    /// *live* `InitShell` of a fresh open just as for an adopt preamble.
+    /// daemon-hosted session (set once by the daemon event loop at start). The
+    /// daemon delivers every supported root shell's complete bootstrap
+    /// server-side — bash/zsh through ordered input and fish/PowerShell through
+    /// guarded body files — so the client must never write that body into the
+    /// PTY, for the *live* `InitShell` of a fresh open just as for an adopt
+    /// preamble.
     /// Without this, the client re-types the ~90 KB body into the
     /// already-bootstrapped shell, where it executes a second time — visibly,
     /// as command blocks, after the server-side pass's `stty sane` restored
     /// echo (RC acceptance 2026-07-21: the connect-time script dump on every
     /// fresh daemon connect). `init_shell` scopes the stamp to what the daemon
-    /// actually delivers: subshells, fish/pwsh roots (daemon sends init-only)
-    /// and legacy-SSH sessions keep their client-side write.
+    /// actually delivers: subshells and legacy-SSH sessions keep their
+    /// client-side write.
     bootstrap_delivered_server_side: bool,
 
     // This session's startup directory path. If None, the startup directory is treated as default
@@ -3034,16 +3035,12 @@ impl ansi::Handler for TerminalModel {
             // live) `InitShell`. An `InitShell` re-fed from an adopt preamble
             // (which arms the latch just before feeding) is stamped — and so is
             // the ROOT-shell `InitShell` of a daemon-backed model (persistent
-            // flag), but only for the shells whose *body* the daemon actually
-            // delivers server-side: bash and zsh (mirroring the daemon's
+            // flag) for every supported root shell (mirroring the daemon's
             // delivery contract in `server_model.rs` / `spawn_session_pty`).
             // Exempt from the persistent flag:
             //   • subshells Zaplexified inside the tab — the daemon never
             //     bootstraps nested shells, the client-side write is their only
             //     mechanism;
-            //   • fish/pwsh roots — the daemon sends them init-only (their body
-            //     is unsafe to replay server-side), so the client write is
-            //     still what completes their bootstrap;
             //   • legacy-SSH sessions — a daemon root handshake is never one,
             //     so this can only be a nested `ssh` that still needs the
             //     client-side bootstrap (reachable with the `SshRemoteServer`
@@ -3053,7 +3050,6 @@ impl ansi::Handler for TerminalModel {
             let suppress_bootstrap_write = latch
                 || (self.bootstrap_delivered_server_side
                     && pending_session_info.subshell_info.is_none()
-                    && matches!(shell_type, ShellType::Bash | ShellType::Zsh)
                     && !matches!(
                         pending_session_info.is_legacy_ssh_session,
                         IsLegacySSHSession::Yes { .. }

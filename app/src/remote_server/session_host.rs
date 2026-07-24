@@ -51,6 +51,9 @@ pub(super) struct Session {
     pub(super) leader: Arc<Async<File>>,
     /// The spawned login shell. Reaped on close / shell exit.
     pub(super) child: std::process::Child,
+    /// Keeps a fish/PowerShell bootstrap body file alive until the daemon
+    /// session ends. Their init hooks source this file exactly once.
+    pub(super) _bootstrap_file: Option<crate::terminal::TempBootstrapFile>,
     /// Replay buffer of recent output.
     pub(super) ring: OutputRing,
     pub(super) rows: usize,

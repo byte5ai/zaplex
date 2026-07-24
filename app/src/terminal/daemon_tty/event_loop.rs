@@ -170,8 +170,9 @@ impl EventLoop {
     ) -> Self {
         let mut event_loop = Self::new(model, channel_event_listener, connection_session_id);
         // Every session this loop drives is daemon-hosted; for bash/zsh the
-        // daemon delivers the root shell's complete bootstrap (init at spawn +
-        // body as first input) server-side. Mark the model before any byte is
+        // daemon delivers the root shell's complete bootstrap (bash/zsh through
+        // ordered input; fish/PowerShell through guarded body files) server-side.
+        // Mark the model before any byte is
         // parsed so the root-shell `InitShell` it emits — the fresh open's live
         // handshake as much as an adopt preamble — is stamped
         // `suppress_bootstrap_write`. Without this, the client re-types the
@@ -179,8 +180,8 @@ impl EventLoop {
         // second time visibly as command blocks (echo restored by the
         // server-side pass's `stty sane`): the connect-time script dump on
         // every fresh connect (RC 2026-07-21). `init_shell` scopes the stamp to
-        // what the daemon actually delivers — bash/zsh roots only; subshells,
-        // fish/pwsh roots and legacy-SSH sessions keep their client-side write.
+        // what the daemon actually delivers — root shells only; subshells and
+        // legacy-SSH sessions keep their client-side write.
         event_loop
             .terminal_model
             .lock()
@@ -1267,10 +1268,8 @@ impl EventLoop {
 
     /// Dispatches the host's startup command exactly once, but only after the
     /// shell has completed its real bootstrap boundary. `SessionOpened` merely
-    /// means the PTY is addressable, and `InitShell` is still too early for
-    /// fish/pwsh roots because their bootstrap body is delivered client-side.
-    /// Waiting on the model's `Bootstrapped` state therefore preserves both the
-    /// daemon-delivered bash/zsh path and the documented fish/pwsh exceptions.
+    /// means the PTY is addressable, and `InitShell` is still too early because
+    /// the daemon-delivered body has not yet emitted `Bootstrapped`.
     fn maybe_dispatch_startup_command(&mut self, ctx: &mut ModelContext<Self>) {
         if self.startup_command.is_none()
             || self.startup_command_in_flight.is_some()
@@ -1945,10 +1944,9 @@ mod tests {
 
     /// A daemon session becoming addressable is not proof that its shell is
     /// ready for input. The startup command must stay queued through `InitShell`
-    /// (fish/pwsh still need their client-side bootstrap at that point), run only
-    /// after the real `Bootstrapped` boundary. With no live client it remains
-    /// pending; the synchronous transport seam then verifies the exact request
-    /// bytes and positive-Ack completion independently.
+    /// and run only after the real `Bootstrapped` boundary. With no live client
+    /// it remains pending; the synchronous transport seam then verifies the
+    /// exact request bytes and positive-Ack completion independently.
     #[test]
     fn startup_command_waits_for_bootstrap_and_runs_exactly_once() {
         App::test((), |mut app| async move {
@@ -2003,7 +2001,7 @@ mod tests {
                 assert_eq!(
                     me.startup_command.as_deref(),
                     Some("tmux attach"),
-                    "InitShell is not readiness: fish/pwsh still bootstrap client-side"
+                    "InitShell is not readiness: the daemon body has not completed"
                 );
                 assert!(me.pending_input.is_empty());
             });
@@ -2972,6 +2970,45 @@ mod tests {
         None
     }
 
+    fn daemon_root_initshell_stamp(app: &mut App, conn: u64, shell: &str) -> Option<bool> {
+        let conn = SessionId::from(conn);
+        let _manager = app.add_singleton_model(RemoteServerManager::new);
+        let (listener, _wakeups_rx, events_rx) = test_listener_with_events();
+        let model = Arc::new(FairMutex::new(TerminalModel::mock_not_bootstrapped(Some(
+            listener.clone(),
+        ))));
+        let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+        let size = SizeInfo::new_without_font_metrics(24, 80);
+        let model_for_loop = model.clone();
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::start(
+                model_for_loop,
+                event_loop_rx,
+                listener,
+                size,
+                conn,
+                OpenSessionParams::default(),
+                Some(OUR_PTY.to_string()),
+                Some(7),
+                None,
+                None,
+                "test-host".to_string(),
+                ctx,
+            )
+        });
+        drain(&events_rx);
+
+        let json = format!(
+            r#"{{"hook":"InitShell","value":{{"session_id":167303092612203,"shell":"{shell}"}}}}"#
+        );
+        let mut dcs = vec![0x1b, 0x50, 0x24, 0x64]; // ESC P $ d
+        dcs.extend_from_slice(hex::encode(json).as_bytes());
+        dcs.push(0x9c); // ST
+        event_loop.update(app, |me, _| me.process_pty_bytes(&dcs));
+
+        drained_initshell_stamp(&events_rx)
+    }
+
     /// The regression this guards (RC acceptance 2026-07-21): a daemon
     /// session's *live* `InitShell` handshake arrived unstamped — only the
     /// adopt-preamble re-feed was covered (T1.3) — so the client typed the
@@ -3077,53 +3114,27 @@ mod tests {
         });
     }
 
-    /// The shell-contract boundary: the daemon delivers the bootstrap *body*
-    /// server-side only for bash/zsh. A fish (or pwsh) root in a daemon tab
-    /// gets init-only from the daemon — the client-side write is what completes
-    /// its bootstrap — so its `InitShell` must stay unstamped even on a
-    /// daemon-marked model.
+    /// Fish is bootstrapped from the daemon-owned guarded body file, so the
+    /// client must suppress its duplicate root-body write.
     #[test]
-    fn fish_root_initshell_in_a_daemon_tab_stays_unstamped() {
+    fn fish_root_initshell_in_a_daemon_tab_is_stamped_suppressed() {
         App::test((), |mut app| async move {
-            let conn = SessionId::from(71u64);
-            let _manager = app.add_singleton_model(RemoteServerManager::new);
-            let (listener, _wakeups_rx, events_rx) = test_listener_with_events();
-            let model = Arc::new(FairMutex::new(TerminalModel::mock_not_bootstrapped(Some(
-                listener.clone(),
-            ))));
-            let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
-            let size = SizeInfo::new_without_font_metrics(24, 80);
-            let model_for_loop = model.clone();
-            let event_loop = app.add_model(|ctx| {
-                EventLoop::start(
-                    model_for_loop,
-                    event_loop_rx,
-                    listener,
-                    size,
-                    conn,
-                    OpenSessionParams::default(),
-                    Some(OUR_PTY.to_string()),
-                    Some(7),
-                    None,
-                    None,
-                    "test-host".to_string(),
-                    ctx,
-                )
-            });
-            drain(&events_rx);
-
-            let json = r#"{"hook":"InitShell","value":{"session_id":167303092612203,"shell":"fish"}}"#;
-            let mut dcs = vec![0x1b, 0x50, 0x24, 0x64]; // ESC P $ d
-            dcs.extend_from_slice(hex::encode(json).as_bytes());
-            dcs.push(0x9c); // ST
-            event_loop.update(&mut app, |me, _| me.process_pty_bytes(&dcs));
-
             assert_eq!(
-                drained_initshell_stamp(&events_rx),
-                Some(false),
-                "a fish root in a daemon tab must stay unstamped — the daemon \
-                 sends fish init-only, so suppressing the client-side write \
-                 would leave the session permanently unbootstrapped"
+                daemon_root_initshell_stamp(&mut app, 71, "fish"),
+                Some(true),
+                "a daemon-backed fish root must not receive a second body from the client"
+            );
+        });
+    }
+
+    /// PowerShell follows the same guarded daemon-body contract as fish.
+    #[test]
+    fn pwsh_root_initshell_in_a_daemon_tab_is_stamped_suppressed() {
+        App::test((), |mut app| async move {
+            assert_eq!(
+                daemon_root_initshell_stamp(&mut app, 72, "pwsh"),
+                Some(true),
+                "a daemon-backed PowerShell root must not receive a second body from the client"
             );
         });
     }

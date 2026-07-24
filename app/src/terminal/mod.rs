@@ -81,6 +81,8 @@ pub mod view;
 pub mod zaplexify;
 mod waterfall_gap_element;
 mod writeable_pty;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use writeable_pty::TempBootstrapFile;
 #[cfg(windows)]
 pub mod wsl;
 

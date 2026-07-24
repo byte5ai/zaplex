@@ -1,3 +1,4 @@
+use crate::terminal::bootstrap::{daemon_bootstrap_delivery, DaemonBootstrapDelivery};
 use crate::terminal::shell::ShellType;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
@@ -2503,7 +2504,7 @@ impl ServerModel {
             .map(|b| (b as usize).min(HOST_RING_CAP_BYTES))
             .unwrap_or(super::session_host::RING_CEILING_BYTES);
 
-        let (leader_fd, child) = match crate::terminal::local_tty::spawn_session_pty(
+        let (leader_fd, child, bootstrap_file) = match crate::terminal::local_tty::spawn_session_pty(
             cwd.as_deref().map(std::path::Path::new),
             &shell,
             &msg.env,
@@ -2540,6 +2541,7 @@ impl ServerModel {
                 generation,
                 leader: async_leader.clone(),
                 child,
+                _bootstrap_file: bootstrap_file,
                 ring: zaplex_remote_session::server::output_ring::OutputRing::new(ring_ceiling),
                 rows,
                 cols,
@@ -2595,14 +2597,15 @@ impl ServerModel {
         // (`arguments_for_session_spawning_command` + `enqueue_init_script`):
         //   • zsh  — spawn args use `--no-rcs` (no embedded init) → init + body.
         //   • bash — init is embedded in `--rcfile <(echo …)>` at spawn → body only.
-        //   • fish/pwsh — spawned as a plain login shell (RC loads at launch);
-        //     init-only, no body (their full body lacks a top-level idempotency
-        //     guard, unsafe to replay on a re-attachable daemon session).
+        //   • fish/pwsh — their spawn-time InitShell hook sources an idempotent
+        //     body from the session-owned temporary file. Nothing is typed
+        //     through the PTY, avoiding fish long-paste and pwsh input loss.
         //   • unclassified $SHELL — plain login shell, no integration.
-        let bootstrap =
-            match crate::terminal::local_tty::shell::supported_shell_path_and_type(&shell)
-                .map(|(_, shell_type)| shell_type)
-            {
+        let shell_type = crate::terminal::local_tty::shell::supported_shell_path_and_type(&shell)
+            .map(|(_, shell_type)| shell_type);
+        let bootstrap_delivery = daemon_bootstrap_delivery(shell_type);
+        let bootstrap = match bootstrap_delivery {
+            DaemonBootstrapDelivery::OrderedPty => match shell_type {
                 Some(ShellType::Zsh) => {
                     let mut buf = crate::terminal::bootstrap::init_shell_script_for_shell(
                         ShellType::Zsh,
@@ -2620,23 +2623,12 @@ impl ServerModel {
                     crate::terminal::bootstrap::script_for_shell(ShellType::Bash, &crate::ASSETS)
                         .into_owned(),
                 ),
-                // fish / PowerShell: spawned as a plain login shell (see
-                // `spawn_session_pty`), so RC loads at launch. Deliver only the
-                // InitShell emitter (the prior behavior) — their full body lacks
-                // a top-level idempotency guard and would double-load RC under a
-                // login shell, so it is intentionally not sent.
-                Some(other) => {
-                    let mut buf = crate::terminal::bootstrap::init_shell_script_for_shell(
-                        other,
-                        &crate::ASSETS,
-                    )
-                    .into_bytes();
-                    buf.extend_from_slice(other.execute_command_bytes());
-                    Some(buf)
+                Some(ShellType::Fish | ShellType::PowerShell) | None => {
+                    unreachable!("ordered PTY delivery is only for bash/zsh")
                 }
-                // Unclassified $SHELL: plain login shell, no integration.
-                None => None,
-            };
+            },
+            DaemonBootstrapDelivery::GuardedFile | DaemonBootstrapDelivery::NoIntegration => None,
+        };
         match bootstrap {
             Some(bootstrap) => {
                 if let Some(session) = self.sessions.get(&session_id) {
@@ -2647,12 +2639,23 @@ impl ServerModel {
                     }
                 }
             }
-            None => {
-                log::info!(
-                    "Daemon: shell {shell:?} runs as a plain shell (no block integration); \
-                     session {session_id}"
-                );
-            }
+            None => match bootstrap_delivery {
+                DaemonBootstrapDelivery::GuardedFile => {
+                    log::info!(
+                        "Daemon: bootstrapped session {session_id} from a guarded body file \
+                             (shell={shell})"
+                    );
+                }
+                DaemonBootstrapDelivery::OrderedPty => {
+                    unreachable!("bash/zsh always enqueue a bootstrap body")
+                }
+                DaemonBootstrapDelivery::NoIntegration => {
+                    log::info!(
+                        "Daemon: shell {shell:?} runs as a plain shell (no block integration); \
+                             session {session_id}"
+                    );
+                }
+            },
         }
 
         log::info!("Daemon: opened session {session_id} ({rows}x{cols}, shell={shell})");

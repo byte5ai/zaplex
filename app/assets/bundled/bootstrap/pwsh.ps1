@@ -1,6 +1,7 @@
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseApprovedVerbs', '', Scope = 'Function', Target = 'Warp-*', Justification = 'Warp-* functions are ours')]
 param()
 
+if ($global:ZAPLEX_BOOTSTRAPPED -ne 1) {
 # Wrap things in a module to avoid cluttering the global scope. We assign it to '$null' to suppress
 # the console output from creating the module.
 # NOTE: If you do need a function to be global and also have access to variables in this scope, add
@@ -1010,4 +1011,5 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
     if ($global:_warp_PSProcessExecPolicy -ne $null) {
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy $global:_warp_PSProcessExecPolicy
     }
+}
 }
