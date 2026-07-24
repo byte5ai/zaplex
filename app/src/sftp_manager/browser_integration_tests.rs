@@ -14,13 +14,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use warp_core::ui::appearance::Appearance;
-use warpui::elements::{MouseStateHandle, ParentElement, Stack};
+use warpui::elements::{
+    ChildView, CrossAxisAlignment, Expanded, Flex, MainAxisSize, MouseStateHandle, ParentElement,
+    Stack,
+};
+use warpui::event::KeyEventDetails;
+use warpui::keymap::Keystroke;
 use warpui::platform::WindowStyle;
 use warpui::{
-    App, AppContext, Element, Entity, Event, Presenter, SingletonEntity, TypedActionView, View,
-    ViewContext, WindowInvalidation,
+    App, AppContext, Element, Entity, Event, Presenter, Scene, SingletonEntity, TypedActionView,
+    View, ViewContext, ViewHandle, WindowId, WindowInvalidation,
 };
 
+use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusState};
+use crate::pane_group::pane::PaneId;
+use crate::pane_group::BackingView;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 
@@ -97,13 +105,11 @@ fn presenter_for_window(
     app: &App,
     window_id: warpui::WindowId,
 ) -> (Rc<RefCell<Presenter>>, WindowInvalidation) {
-    let root_view_id = app
-        .root_view_id(window_id)
-        .expect("test window should contain root view");
+    let updated = app.read(|ctx| ctx.view_ids_for_window(window_id).into_iter().collect());
     (
         Rc::new(RefCell::new(Presenter::new(window_id))),
         WindowInvalidation {
-            updated: HashSet::from([root_view_id]),
+            updated,
             ..Default::default()
         },
     )
@@ -175,6 +181,351 @@ fn mouse_up(
             presenter,
         );
     });
+}
+
+fn mouse_move(
+    app: &mut App,
+    window_id: WindowId,
+    presenter: Rc<RefCell<Presenter>>,
+    position: Vector2F,
+) {
+    app.update(move |ctx| {
+        ctx.simulate_window_event(
+            Event::MouseMoved {
+                position,
+                cmd: false,
+                shift: false,
+                is_synthetic: false,
+            },
+            window_id,
+            presenter,
+        );
+    });
+}
+
+fn right_click(
+    app: &mut App,
+    window_id: WindowId,
+    presenter: Rc<RefCell<Presenter>>,
+    position: Vector2F,
+) {
+    app.update(move |ctx| {
+        ctx.simulate_window_event(
+            Event::RightMouseDown {
+                position,
+                cmd: false,
+                shift: false,
+                click_count: 1,
+            },
+            window_id,
+            presenter,
+        );
+    });
+}
+
+fn key_down(
+    app: &mut App,
+    window_id: WindowId,
+    presenter: Rc<RefCell<Presenter>>,
+    keystroke: &str,
+) -> bool {
+    let keystroke = Keystroke::parse(keystroke).expect("valid test keystroke");
+    let chars = match (keystroke.key.as_str(), keystroke.shift) {
+        ("tab", true) => "\u{19}".to_string(),
+        ("tab", false) => "\t".to_string(),
+        _ => keystroke.key.clone(),
+    };
+    app.update(move |ctx| {
+        ctx.simulate_window_event(
+            Event::KeyDown {
+                keystroke,
+                chars,
+                details: KeyEventDetails::default(),
+                is_composing: false,
+            },
+            window_id,
+            presenter,
+        )
+    })
+}
+
+struct DualSftpRoot {
+    left: ViewHandle<SftpBrowserView>,
+    right: ViewHandle<SftpBrowserView>,
+}
+
+impl Entity for DualSftpRoot {
+    type Event = ();
+}
+
+impl View for DualSftpRoot {
+    fn ui_name() -> &'static str {
+        "DualSftpRoot"
+    }
+
+    fn render(&self, _app: &AppContext) -> Box<dyn Element> {
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(Expanded::new(1.0, ChildView::new(&self.left).finish()).finish())
+            .with_child(Expanded::new(1.0, ChildView::new(&self.right).finish()).finish())
+            .finish()
+    }
+}
+
+impl TypedActionView for DualSftpRoot {
+    type Action = ();
+}
+
+struct WorkspaceActionCaptureRoot {
+    browser: ViewHandle<SftpBrowserView>,
+    actions: Vec<crate::WorkspaceAction>,
+}
+
+impl Entity for WorkspaceActionCaptureRoot {
+    type Event = ();
+}
+
+impl View for WorkspaceActionCaptureRoot {
+    fn ui_name() -> &'static str {
+        "WorkspaceActionCaptureRoot"
+    }
+
+    fn render(&self, _app: &AppContext) -> Box<dyn Element> {
+        ChildView::new(&self.browser).finish()
+    }
+}
+
+impl TypedActionView for WorkspaceActionCaptureRoot {
+    type Action = crate::WorkspaceAction;
+
+    fn handle_action(&mut self, action: &Self::Action, _ctx: &mut ViewContext<Self>) {
+        self.actions.push(action.clone());
+    }
+}
+
+fn create_workspace_action_capture_view(
+    app: &mut App,
+    files: &[(&str, &[u8])],
+) -> (
+    WindowId,
+    ViewHandle<WorkspaceActionCaptureRoot>,
+    ViewHandle<SftpBrowserView>,
+    tempfile::TempDir,
+) {
+    let temp_dir = create_temp_dir_with_files(files);
+    let backend = Arc::new(InMemorySftpBackend::new(temp_dir.path().to_path_buf()))
+        as Arc<dyn SftpBackend>;
+    let (window_id, root) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        let browser = ctx.add_typed_action_view(|ctx| {
+            SftpBrowserView::new("capture-node".to_string(), None, ctx)
+        });
+        WorkspaceActionCaptureRoot {
+            browser,
+            actions: Vec::new(),
+        }
+    });
+    let browser = app.read(|ctx| root.as_ref(ctx).browser.clone());
+    browser.update(app, |view, ctx| {
+        view.set_backend_for_test(backend, PathBuf::from("/"), ctx);
+    });
+
+    (window_id, root, browser, temp_dir)
+}
+
+fn create_dual_connected_view(
+    app: &mut App,
+) -> (
+    WindowId,
+    ViewHandle<DualSftpRoot>,
+    ViewHandle<SftpBrowserView>,
+    ViewHandle<SftpBrowserView>,
+    tempfile::TempDir,
+    tempfile::TempDir,
+) {
+    let left_temp = create_temp_dir_with_files(&[
+        ("a.txt", b"a"),
+        ("this-is-a-very-long-file-name.txt", b"long"),
+    ]);
+    let right_temp = create_temp_dir_with_files(&[
+        ("cursor.txt", b"cursor"),
+        ("selected.txt", b"selected"),
+    ]);
+    let left_backend = Arc::new(InMemorySftpBackend::new(left_temp.path().to_path_buf()))
+        as Arc<dyn SftpBackend>;
+    let right_backend = Arc::new(InMemorySftpBackend::new(right_temp.path().to_path_buf()))
+        as Arc<dyn SftpBackend>;
+
+    let (window_id, root) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        let left = ctx.add_typed_action_view(|ctx| {
+            SftpBrowserView::new("layout-left".to_string(), None, ctx)
+        });
+        let right = ctx.add_typed_action_view(|ctx| {
+            SftpBrowserView::new("layout-right".to_string(), None, ctx)
+        });
+        DualSftpRoot { left, right }
+    });
+    let (left, right) = app.read(|ctx| {
+        let root = root.as_ref(ctx);
+        (root.left.clone(), root.right.clone())
+    });
+    left.update(app, |view, ctx| {
+        view.set_backend_for_test(left_backend, PathBuf::from("/"), ctx);
+    });
+    right.update(app, |view, ctx| {
+        view.set_backend_for_test(right_backend, PathBuf::from("/"), ctx);
+    });
+
+    (window_id, root, left, right, left_temp, right_temp)
+}
+
+fn initialize_pane_group_app(app: &mut App) {
+    crate::test_util::terminal::initialize_app_for_terminal_view(app);
+    app.add_singleton_model(|_| crate::workspace::ToastStack);
+    app.add_singleton_model(|_| super::fm_registry::FileManagerRegistry::new());
+
+    let temp_db = std::env::temp_dir().join("warp_sftp_pane_group_test.sqlite");
+    let _ = warp_ssh_manager::set_database_path(temp_db);
+}
+
+fn create_three_pane_group(
+    app: &mut App,
+) -> (
+    WindowId,
+    ViewHandle<crate::pane_group::PaneGroup>,
+    [ViewHandle<SftpBrowserView>; 3],
+    [PaneId; 3],
+    [tempfile::TempDir; 3],
+) {
+    use crate::pane_group::pane::sftp_pane::SftpPane;
+    use crate::pane_group::{Direction, PaneContent, PaneGroup};
+
+    initialize_pane_group_app(app);
+    let resources = crate::GlobalResourceHandles::mock(app);
+    let temp_dirs = [
+        create_temp_dir_with_files(&[("left.txt", b"left")]),
+        create_temp_dir_with_files(&[("middle.txt", b"middle")]),
+        create_temp_dir_with_files(&[("right.txt", b"right")]),
+    ];
+
+    let first_browser = Rc::new(RefCell::new(None));
+    let first_pane_id = Rc::new(RefCell::new(None));
+    let first_browser_for_window = first_browser.clone();
+    let first_pane_id_for_window = first_pane_id.clone();
+    let first_path = temp_dirs[0].path().to_path_buf();
+    let tips_completed = resources.tips_completed.clone();
+    let unsupported_banner = resources
+        .user_default_shell_unsupported_banner_model_handle
+        .clone();
+    let model_event_sender = resources.model_event_sender.clone();
+    let (window_id, pane_group) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+        let pane = SftpPane::new_local(first_path, ctx);
+        *first_browser_for_window.borrow_mut() = Some(pane.browser_view(ctx));
+        *first_pane_id_for_window.borrow_mut() = Some(pane.id());
+        PaneGroup::new_from_existing_pane(
+            Box::new(pane),
+            tips_completed,
+            unsupported_banner,
+            model_event_sender,
+            ctx,
+        )
+    });
+
+    let mut browsers = vec![
+        first_browser
+            .borrow()
+            .clone()
+            .expect("first browser should be created"),
+    ];
+    let mut pane_ids = vec![
+        (*first_pane_id.borrow()).expect("first pane id should be created"),
+    ];
+    for temp_dir in &temp_dirs[1..] {
+        let pane_path = temp_dir.path().to_path_buf();
+        let added = Rc::new(RefCell::new(None));
+        let added_for_update = added.clone();
+        pane_group.update(app, move |group, ctx| {
+            let pane = SftpPane::new_local(pane_path, ctx);
+            let browser = pane.browser_view(ctx);
+            let pane_id = pane.id();
+            group.add_pane_with_direction(Direction::Right, pane, false, ctx);
+            *added_for_update.borrow_mut() = Some((browser, pane_id));
+        });
+        let (browser, pane_id) = added
+            .borrow()
+            .clone()
+            .expect("additional pane should be created");
+        browsers.push(browser);
+        pane_ids.push(pane_id);
+    }
+
+    (
+        window_id,
+        pane_group,
+        browsers.try_into().expect("three browser handles"),
+        pane_ids.try_into().expect("three pane ids"),
+        temp_dirs,
+    )
+}
+
+fn render_scene_at(
+    app: &mut App,
+    window_id: WindowId,
+    size: Vector2F,
+) -> (Rc<RefCell<Presenter>>, Rc<Scene>) {
+    let (presenter, invalidation) = presenter_for_window(app, window_id);
+    let presenter_for_render = presenter.clone();
+    let scene = app.update(move |ctx| {
+        presenter_for_render
+            .borrow_mut()
+            .invalidate(invalidation, ctx);
+        presenter_for_render
+            .borrow_mut()
+            .build_scene(size, 1.0, None, ctx)
+    });
+    (presenter, scene)
+}
+
+fn layout_id(view: &ViewHandle<SftpBrowserView>, app: &App, part: &str) -> String {
+    view.read(app, |view, _| view.layout_position_id_for_test(part))
+}
+
+fn position(
+    presenter: &Rc<RefCell<Presenter>>,
+    position_id: &str,
+) -> pathfinder_geometry::rect::RectF {
+    presenter
+        .borrow()
+        .position_cache()
+        .get_position(position_id)
+        .unwrap_or_else(|| panic!("{position_id} should be rendered"))
+}
+
+fn maybe_position(
+    presenter: &Rc<RefCell<Presenter>>,
+    position_id: &str,
+) -> Option<pathfinder_geometry::rect::RectF> {
+    presenter
+        .borrow()
+        .position_cache()
+        .get_position(position_id)
+}
+
+fn assert_approximately_equal(left: f32, right: f32) {
+    assert!(
+        (left - right).abs() < 0.5,
+        "expected {left} to approximately equal {right}"
+    );
+}
+
+fn rects_approximately_equal(
+    left: pathfinder_geometry::rect::RectF,
+    right: pathfinder_geometry::rect::RectF,
+) -> bool {
+    (left.min_x() - right.min_x()).abs() < 0.5
+        && (left.min_y() - right.min_y()).abs() < 0.5
+        && (left.width() - right.width()).abs() < 0.5
+        && (left.height() - right.height()).abs() < 0.5
 }
 
 /// Test backend that records metadata and listing calls while delegating all
@@ -1215,7 +1566,7 @@ fn file_row_click_survives_rerender() {
                 .position(|entry| entry.name == "clickable.txt")
                 .unwrap()
         });
-        let position_id = format!("sftp_row:{entry_index}");
+        let position_id = layout_id(&view, &app, &format!("row:{entry_index}"));
         let (presenter, invalidation) = presenter_for_window(&app, window_id);
         let position = render_position(
             &mut app,
@@ -1252,7 +1603,7 @@ fn removed_entry_aborts_pending_action() {
                 .position(|entry| entry.name == "a.txt")
                 .unwrap()
         });
-        let position_id = format!("sftp_row:{removed_index}");
+        let position_id = layout_id(&view, &app, &format!("row:{removed_index}"));
         let (presenter, invalidation) = presenter_for_window(&app, window_id);
         let position = render_position(
             &mut app,
@@ -1302,7 +1653,7 @@ fn replaced_entry_at_same_path_aborts_pending_action() {
                 .position(|entry| entry.name == "replace.txt")
                 .unwrap()
         });
-        let position_id = format!("sftp_row:{entry_index}");
+        let position_id = layout_id(&view, &app, &format!("row:{entry_index}"));
         let (presenter, invalidation) = presenter_for_window(&app, window_id);
         let position = render_position(
             &mut app,
@@ -2563,11 +2914,12 @@ fn parent_row_click_survives_rerender() {
         );
 
         let (presenter, invalidation) = presenter_for_window(&app, window_id);
+        let parent_position_id = layout_id(&view, &app, "row:parent");
         let position = render_position(
             &mut app,
             presenter.clone(),
             invalidation.clone(),
-            "sftp_row:parent",
+            &parent_position_id,
         );
         mouse_down(&mut app, window_id, presenter.clone(), position);
         rerender(&mut app, presenter.clone(), invalidation);
@@ -2606,6 +2958,382 @@ fn test_keyboard_delete_selected() {
                 matches!(v.dialog, Some(Dialog::DeleteConfirm { .. })),
                 "DeleteSelected should trigger delete confirmation"
             );
+        });
+    });
+}
+
+#[test]
+fn tab_cycles_fm_panes_clockwise_in_connected_browser() {
+    App::test((), |mut app| async move {
+        let (window_id, pane_group, browsers, pane_ids, _temp_dirs) =
+            create_three_pane_group(&mut app);
+        browsers[0].update(&mut app, |view, ctx| view.focus_contents(ctx));
+        assert_eq!(
+            pane_group.read(&app, |group, ctx| group.focused_pane_id(ctx)),
+            pane_ids[0]
+        );
+
+        let (presenter, _scene) =
+            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        assert!(key_down(&mut app, window_id, presenter, "tab"));
+        assert_eq!(
+            pane_group.read(&app, |group, ctx| group.focused_pane_id(ctx)),
+            pane_ids[1]
+        );
+    });
+}
+
+#[test]
+fn shift_tab_cycles_counterclockwise_in_connected_browser() {
+    App::test((), |mut app| async move {
+        let (window_id, pane_group, browsers, pane_ids, _temp_dirs) =
+            create_three_pane_group(&mut app);
+        browsers[0].update(&mut app, |view, ctx| view.focus_contents(ctx));
+        assert_eq!(
+            pane_group.read(&app, |group, ctx| group.focused_pane_id(ctx)),
+            pane_ids[0]
+        );
+
+        let (presenter, _scene) =
+            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        assert!(key_down(&mut app, window_id, presenter, "shift-tab"));
+        assert_eq!(
+            pane_group.read(&app, |group, ctx| group.focused_pane_id(ctx)),
+            pane_ids[2]
+        );
+    });
+}
+
+#[test]
+fn pane_function_legend_drops_captions_before_overlap_in_real_layout() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, _, left, right, _left_temp, _right_temp) =
+            create_dual_connected_view(&mut app);
+
+        let (wide_presenter, _scene) =
+            render_scene_at(&mut app, window_id, vec2f(2400.0, 800.0));
+        for view in [&left, &right] {
+            assert!(maybe_position(
+                &wide_presenter,
+                &layout_id(view, &app, "legend-full")
+            )
+            .is_some());
+            assert!(maybe_position(
+                &wide_presenter,
+                &layout_id(view, &app, "legend-compact")
+            )
+            .is_none());
+        }
+
+        let (compact_presenter, _scene) =
+            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        for view in [&left, &right] {
+            assert!(maybe_position(
+                &compact_presenter,
+                &layout_id(view, &app, "legend-full")
+            )
+            .is_none());
+            assert!(maybe_position(
+                &compact_presenter,
+                &layout_id(view, &app, "legend-compact")
+            )
+            .is_some());
+        }
+
+        let (narrow_presenter, _scene) =
+            render_scene_at(&mut app, window_id, vec2f(600.0, 800.0));
+        for view in [&left, &right] {
+            assert!(maybe_position(
+                &narrow_presenter,
+                &layout_id(view, &app, "legend-compact")
+            )
+            .is_none());
+            let hidden = position(
+                &narrow_presenter,
+                &layout_id(view, &app, "legend-hidden"),
+            );
+            assert_approximately_equal(hidden.height(), 0.0);
+        }
+    });
+}
+
+#[test]
+fn each_pane_owns_optional_compact_function_legend_in_real_layout() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, _, left, right, _left_temp, _right_temp) =
+            create_dual_connected_view(&mut app);
+        let (presenter, _scene) =
+            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+
+        let left_root = position(&presenter, &layout_id(&left, &app, "pane-root"));
+        let right_root = position(&presenter, &layout_id(&right, &app, "pane-root"));
+        let left_legend = position(&presenter, &layout_id(&left, &app, "legend-compact"));
+        let right_legend = position(&presenter, &layout_id(&right, &app, "legend-compact"));
+
+        assert!(left_legend.min_x() >= left_root.min_x());
+        assert!(left_legend.max_x() <= left_root.max_x());
+        assert!(right_legend.min_x() >= right_root.min_x());
+        assert!(right_legend.max_x() <= right_root.max_x());
+        assert!(left_legend.max_x() <= right_legend.min_x());
+    });
+}
+
+#[test]
+fn dual_pane_never_renders_global_function_bar() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, _, left, right, _left_temp, _right_temp) =
+            create_dual_connected_view(&mut app);
+        let (presenter, scene) =
+            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+
+        let left_root = position(&presenter, &layout_id(&left, &app, "pane-root"));
+        let right_root = position(&presenter, &layout_id(&right, &app, "pane-root"));
+        let left_legend = position(&presenter, &layout_id(&left, &app, "legend-compact"));
+        let right_legend = position(&presenter, &layout_id(&right, &app, "legend-compact"));
+        let combined_width = right_root.max_x() - left_root.min_x();
+
+        assert!(left_legend.width() < combined_width);
+        assert!(right_legend.width() < combined_width);
+        assert_approximately_equal(left_legend.width(), left_root.width());
+        assert_approximately_equal(right_legend.width(), right_root.width());
+        assert_approximately_equal(left_legend.max_x(), right_legend.min_x());
+
+        let (footer_background, footer_border) = app.read(|ctx| {
+            let theme = Appearance::as_ref(ctx).theme();
+            (
+                theme.background().into(),
+                theme.split_pane_border_color().into(),
+            )
+        });
+        let footer_rects = scene
+            .layers()
+            .flat_map(|layer| &layer.rects)
+            .filter(|rect| {
+                rect.background == footer_background
+                    && rect.border.color == footer_border
+                    && rect.border.width == 1.0
+                    && rect.border.top
+                    && !rect.border.left
+                    && !rect.border.right
+                    && !rect.border.bottom
+            })
+            .map(|rect| rect.bounds)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            footer_rects.len(),
+            2,
+            "exactly two pane-local function legends should be painted"
+        );
+        assert!(footer_rects
+            .iter()
+            .any(|bounds| rects_approximately_equal(*bounds, left_legend)));
+        assert!(footer_rects
+            .iter()
+            .any(|bounds| rects_approximately_equal(*bounds, right_legend)));
+    });
+}
+
+#[test]
+fn dual_pane_context_menu_uses_its_own_panel_origin() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, _, left, right, _left_temp, _right_temp) =
+            create_dual_connected_view(&mut app);
+        let (presenter, _scene) =
+            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+
+        let left_panel = position(&presenter, &layout_id(&left, &app, "panel"));
+        let right_panel = position(&presenter, &layout_id(&right, &app, "panel"));
+        let right_row = position(&presenter, &layout_id(&right, &app, "row:0"));
+        assert!(left_panel.max_x() <= right_panel.min_x());
+
+        let click_position = right_row.center();
+        right_click(
+            &mut app,
+            window_id,
+            presenter,
+            click_position,
+        );
+
+        right.read(&app, |view, _| {
+            let menu = view
+                .context_menu
+                .as_ref()
+                .expect("right-pane context menu should open");
+            assert_approximately_equal(
+                menu.position.x(),
+                click_position.x() - right_panel.min_x(),
+            );
+            assert_approximately_equal(
+                menu.position.y(),
+                click_position.y() - right_panel.min_y(),
+            );
+        });
+        left.read(&app, |view, _| {
+            assert!(
+                view.context_menu.is_none(),
+                "the left pane must not receive the right-pane click"
+            );
+        });
+    });
+}
+
+#[test]
+fn body_consumes_remaining_height() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view, _temp) =
+            create_connected_view(&mut app, &[("visible.txt", b"visible")]);
+        let (presenter, _scene) =
+            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+
+        let root = position(&presenter, &layout_id(&view, &app, "pane-root"));
+        let body = position(&presenter, &layout_id(&view, &app, "body"));
+        let footer = position(&presenter, &layout_id(&view, &app, "legend-full"));
+
+        assert!(body.height() > 0.0);
+        assert_approximately_equal(body.max_y(), footer.min_y());
+        assert_approximately_equal(footer.max_y(), root.max_y());
+    });
+}
+
+#[test]
+fn active_style_differs_from_selection() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, _, left, right, _left_temp, _right_temp) =
+            create_dual_connected_view(&mut app);
+        let left_pane_id = PaneId::dummy_pane_id();
+        let right_pane_id = PaneId::dummy_pane_id();
+        let focus_state =
+            app.add_model(|_| PaneGroupFocusState::new(left_pane_id, None, true));
+        left.update(&mut app, |view, ctx| {
+            view.set_focus_handle(PaneFocusHandle::new(left_pane_id, focus_state.clone()), ctx);
+        });
+        right.update(&mut app, |view, ctx| {
+            view.cursor = 0;
+            view.selected.insert(1);
+            view.set_focus_handle(PaneFocusHandle::new(right_pane_id, focus_state.clone()), ctx);
+        });
+
+        let (hover_presenter, _scene) =
+            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let hovered_row_id = layout_id(&left, &app, "row:1");
+        let hover_point = position(&hover_presenter, &hovered_row_id).center();
+        mouse_move(
+            &mut app,
+            window_id,
+            hover_presenter,
+            hover_point,
+        );
+
+        let (presenter, scene) =
+            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let left_root = position(&presenter, &layout_id(&left, &app, "pane-root"));
+        let right_root = position(&presenter, &layout_id(&right, &app, "pane-root"));
+        let selected_row = position(&presenter, &layout_id(&right, &app, "row:1"));
+        let hovered_row = position(&presenter, &hovered_row_id);
+        let (accent, selection_background, hover_background): (
+            warpui::elements::Fill,
+            warpui::elements::Fill,
+            warpui::elements::Fill,
+        ) = app.read(|ctx| {
+            let theme = Appearance::as_ref(ctx).theme();
+            (
+                theme.accent().into(),
+                warp_core::ui::theme::color::internal_colors::fg_overlay_2(theme).into(),
+                warp_core::ui::theme::color::internal_colors::fg_overlay_1(theme).into(),
+            )
+        });
+        let active_border = scene.layers().flat_map(|layer| &layer.rects).any(|rect| {
+            rects_approximately_equal(rect.bounds, left_root)
+                && rect.border.width == 2.0
+                && rect.border.color == accent
+        });
+        let inactive_border = scene.layers().flat_map(|layer| &layer.rects).any(|rect| {
+            rects_approximately_equal(rect.bounds, right_root)
+                && rect.border.width == 2.0
+                && rect.border.color == accent
+        });
+        let selection_fill = scene.layers().flat_map(|layer| &layer.rects).any(|rect| {
+            rects_approximately_equal(rect.bounds, selected_row)
+                && rect.background == selection_background
+        });
+        let hover_fill = scene.layers().flat_map(|layer| &layer.rects).any(|rect| {
+            rects_approximately_equal(rect.bounds, hovered_row)
+                && rect.background == hover_background
+        });
+        let row_impersonates_focus = scene.layers().flat_map(|layer| &layer.rects).any(|rect| {
+            (rects_approximately_equal(rect.bounds, selected_row)
+                || rects_approximately_equal(rect.bounds, hovered_row))
+                && rect.border.width == 2.0
+                && rect.border.color == accent
+        });
+
+        assert!(active_border, "the focused connected pane needs an accent border");
+        assert!(!inactive_border, "selection must not impersonate pane focus");
+        assert!(selection_fill, "the marked row needs its selection fill");
+        assert!(hover_fill, "the hovered row needs its distinct hover fill");
+        assert!(
+            !row_impersonates_focus,
+            "selection and hover must not use the pane-focus border"
+        );
+    });
+}
+
+#[test]
+fn columns_do_not_move_with_filename() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view, _temp) = create_connected_view(
+            &mut app,
+            &[
+                ("a.txt", b"a"),
+                ("this-is-a-very-long-file-name.txt", b"long"),
+            ],
+        );
+        let (presenter, _scene) =
+            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+
+        let short_size = position(&presenter, &layout_id(&view, &app, "row:0:size-column"));
+        let long_size = position(&presenter, &layout_id(&view, &app, "row:1:size-column"));
+        let short_date = position(&presenter, &layout_id(&view, &app, "row:0:date-column"));
+        let long_date = position(&presenter, &layout_id(&view, &app, "row:1:date-column"));
+
+        assert_approximately_equal(short_size.min_x(), long_size.min_x());
+        assert_approximately_equal(short_size.width(), long_size.width());
+        assert_approximately_equal(short_date.min_x(), long_date.min_x());
+        assert_approximately_equal(short_date.width(), long_date.width());
+    });
+}
+
+/// A multi-mark is the operation target even when the keyboard cursor rests
+/// on a different row. This protects F8/F5/F6 from silently using the cursor.
+#[test]
+fn marks_win_before_cursor() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[("cursor.txt", b"cursor"), ("marked.txt", b"marked")],
+        );
+
+        view.update(&mut app, |v, ctx| {
+            v.cursor = 0;
+            v.selected.clear();
+            v.selected.insert(1);
+            v.handle_action(&SftpBrowserAction::DeleteSelected, ctx);
+        });
+
+        view.read(&app, |v, _| match &v.dialog {
+            Some(Dialog::DeleteConfirm { paths, .. }) => {
+                assert_eq!(paths.len(), 1);
+                assert_eq!(paths[0].file_name().and_then(|name| name.to_str()), Some("marked.txt"));
+            }
+            _ => panic!("DeleteSelected should target the marked row"),
         });
     });
 }
@@ -4521,10 +5249,10 @@ fn test_copy_conflict_overwrite_all_applies_to_batch() {
 }
 
 // ============================================================
-// F3/F4 open-in-editor (FM Pflicht 2 — directory branch)
+// F4 open-in-editor (FM Pflicht 2 — directory branch)
 // ============================================================
 
-/// F3/F4 on a directory enters it (the file branch dispatches a workspace
+/// F4 on a directory enters it (the file branch dispatches a workspace
 /// action, which the file-manager harness can't observe here).
 #[test]
 fn test_open_in_editor_on_directory_navigates() {
@@ -4532,12 +5260,51 @@ fn test_open_in_editor_on_directory_navigates() {
         initialize_app(&mut app);
         let (_, view, _temp) = create_connected_view(&mut app, &[("subdir/inner.txt", b"x")]);
 
-        // /subdir is the only entry → cursor on it → F3/F4 enters it.
+        // /subdir is the only entry → cursor on it → F4 enters it.
         view.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::OpenCursorInEditor, ctx);
         });
         view.read(&app, |v, _| {
             assert_eq!(v.current_path, PathBuf::from("/subdir"));
+        });
+    });
+}
+
+#[test]
+fn f4_dispatches_file_to_workspace_editor() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, root, browser, _temp) =
+            create_workspace_action_capture_view(&mut app, &[("edit.txt", b"x")]);
+        browser.update(&mut app, |_, ctx| ctx.focus_self());
+
+        let (presenter, _scene) =
+            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        assert!(key_down(&mut app, window_id, presenter, "f4"));
+
+        root.read(&app, |root, _| {
+            assert!(matches!(
+                root.actions.as_slice(),
+                [crate::WorkspaceAction::OpenFileInEditor { node_id, path }]
+                    if node_id == "capture-node" && path == &PathBuf::from("/edit.txt")
+            ));
+        });
+    });
+}
+
+/// F3 is a metadata view, while F4 remains the editor/navigation action.
+#[test]
+fn f3_views_cursor_details_without_entering_editor() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("view.txt", b"x")]);
+
+        view.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::ViewCursorDetails, ctx);
+        });
+
+        view.read(&app, |v, _| {
+            assert!(matches!(v.dialog, Some(Dialog::FileDetails { .. })));
         });
     });
 }

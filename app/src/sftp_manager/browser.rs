@@ -18,9 +18,9 @@ use warp_ssh_manager::{KeychainSecretStore, SshRepository};
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Element,
-    EventHandler, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    EventHandler, Expanded, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-    ScrollbarWidth, Shrinkable, Stack, Text,
+    ScrollbarWidth, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
 use warpui::platform::{Cursor, FilePickerConfiguration, SaveFilePickerConfiguration};
 use warpui::{
@@ -58,7 +58,8 @@ use super::types::{
 /// from [`function_bar_caption`] — localized, not the raw English the bar
 /// used to carry in an otherwise localized app (polish audit FM.3).
 const FUNCTION_BAR: &[(&str, fn() -> SftpBrowserAction)] = &[
-    ("F3", || SftpBrowserAction::OpenCursorInEditor),
+    ("F2", || SftpBrowserAction::RenameCursor),
+    ("F3", || SftpBrowserAction::ViewCursorDetails),
     ("F4", || SftpBrowserAction::OpenCursorInEditor),
     ("F5", || SftpBrowserAction::CopyToOtherPane),
     ("F6", || SftpBrowserAction::MoveToOtherPane),
@@ -67,9 +68,25 @@ const FUNCTION_BAR: &[(&str, fn() -> SftpBrowserAction)] = &[
     ("F10", || SftpBrowserAction::CloseFileManager),
 ];
 
+fn function_key_action(key: &str) -> Option<SftpBrowserAction> {
+    FUNCTION_BAR
+        .iter()
+        .find(|(label, _)| label.eq_ignore_ascii_case(key))
+        .map(|(_, action)| action())
+}
+
+fn pane_cycle_action(key: &str, shift: bool) -> Option<crate::pane_group::PaneGroupAction> {
+    match (key, shift) {
+        ("tab", true) => Some(crate::pane_group::PaneGroupAction::NavigatePrev),
+        ("tab", false) => Some(crate::pane_group::PaneGroupAction::NavigateNext),
+        _ => None,
+    }
+}
+
 /// Localized caption for a [`FUNCTION_BAR`] key.
 fn function_bar_caption(key: &str) -> String {
     match key {
+        "F2" => crate::t!("fm-key-rename"),
         "F3" => crate::t!("fm-key-view"),
         "F4" => crate::t!("fm-key-edit"),
         "F5" => crate::t!("fm-key-copy"),
@@ -78,6 +95,61 @@ fn function_bar_caption(key: &str) -> String {
         "F8" => crate::t!("fm-key-delete"),
         _ => crate::t!("fm-key-quit"),
     }
+}
+
+/// A pane-local legend must never compete with file rows for horizontal space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FunctionLegendMode {
+    Full,
+    Compact,
+    Hidden,
+}
+
+impl FunctionLegendMode {
+    fn position_suffix(self) -> &'static str {
+        match self {
+            Self::Full => "legend-full",
+            Self::Compact => "legend-compact",
+            Self::Hidden => "legend-hidden",
+        }
+    }
+}
+
+const FUNCTION_LEGEND_KEYCAP_MIN_WIDTH: f32 = 44.0;
+// The widest localized caption is German "Verschieben". Reserve the keycap,
+// cell padding, caption, and inter-cell spacing before showing captions.
+const FUNCTION_LEGEND_CAPTION_MIN_WIDTH: f32 = 128.0;
+const FUNCTION_LEGEND_HORIZONTAL_PADDING: f32 = PANEL_PADDING * 2.0;
+
+fn function_legend_mode(pane_width: f32) -> FunctionLegendMode {
+    let (compact_width, full_width) = function_legend_widths();
+
+    if pane_width >= full_width {
+        FunctionLegendMode::Full
+    } else if pane_width >= compact_width {
+        FunctionLegendMode::Compact
+    } else {
+        FunctionLegendMode::Hidden
+    }
+}
+
+fn function_legend_widths() -> (f32, f32) {
+    (
+        FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_KEYCAP_MIN_WIDTH
+            + FUNCTION_LEGEND_HORIZONTAL_PADDING,
+        FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_CAPTION_MIN_WIDTH
+            + FUNCTION_LEGEND_HORIZONTAL_PADDING,
+    )
+}
+
+fn save_layout_position(child: Box<dyn Element>, position_id: &str) -> Box<dyn Element> {
+    let mut stack = Stack::new();
+    stack.add_child(
+        SavePosition::new(child, position_id)
+            .for_single_frame()
+            .finish(),
+    );
+    stack.finish()
 }
 
 /// A sortable list column (MC's Name/Size/Modified ordering).
@@ -132,8 +204,6 @@ const TOOLBAR_ICON_SIZE: f32 = 16.0;
 const TOOLBAR_SPACING: f32 = 4.0;
 /// Panel inner padding
 const PANEL_PADDING: f32 = 8.0;
-/// SFTP panel position ID (used by SavePosition to position the context menu)
-pub(crate) const SFTP_PANEL_POSITION_ID: &str = "sftp_browser_panel_root";
 
 fn render_toolbar_button(
     icon: Icon,
@@ -266,8 +336,10 @@ pub enum SftpBrowserAction {
     /// Activate the row under the cursor (Enter): a directory is entered, a
     /// file is downloaded.
     ActivateCursor,
-    /// Open the row under the cursor in the code editor (F3 View / F4 Edit): a
-    /// directory is entered; a file opens in an editor pane.
+    /// Show metadata for the row under the cursor (F3 View).
+    ViewCursorDetails,
+    /// Open the row under the cursor in the code editor (F4 Edit): a directory
+    /// is entered; a file opens in an editor pane.
     OpenCursorInEditor,
     /// Enter the directory under the cursor (Right arrow); no-op on a file.
     EnterCursorDir,
@@ -703,6 +775,15 @@ fn host_name_for_node(node_id: &str) -> Option<String> {
 }
 
 impl SftpBrowserView {
+    fn layout_position_id(&self, part: &str) -> String {
+        format!("sftp_layout:{}:{part}", self.fm_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn layout_position_id_for_test(&self, part: &str) -> String {
+        self.layout_position_id(part)
+    }
+
     /// Keep one mouse state per visible breadcrumb target. Reusing these
     /// handles across renders preserves a mouse-down until the matching
     /// mouse-up arrives.
@@ -1615,9 +1696,9 @@ impl SftpBrowserView {
         );
     }
 
-    /// F3/F4: open the row under the cursor in the code editor. A directory is
-    /// entered; a file is opened in an editor pane (view + edit). The workspace
-    /// resolves local vs remote (`node_id`).
+    /// F4: open the row under the cursor in the code editor. A directory is
+    /// entered; a file is opened in an editor pane. The workspace resolves
+    /// local vs remote (`node_id`).
     fn open_cursor_in_editor(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(index) = self.cursor_entry_index() else {
             return;
@@ -1646,6 +1727,14 @@ impl SftpBrowserView {
             FileEntryType::Other => {
                 self.show_error_toast(crate::t!("fm-toast-unsupported-file-type"), ctx);
             }
+        }
+    }
+
+    /// F3: view the stable entry currently under the cursor without entering
+    /// the editable code path used by F4.
+    fn view_cursor_details(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(index) = self.cursor_entry_index() {
+            self.show_details(index, ctx);
         }
     }
 
@@ -3292,6 +3381,24 @@ impl SftpBrowserView {
             .finish()
     }
 
+    fn render_responsive_function_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let (compact_width, full_width) = function_legend_widths();
+        SizeConstraintSwitch::new(
+            self.render_function_bar(appearance, FunctionLegendMode::Full),
+            vec![
+                (
+                    SizeConstraintCondition::WidthLessThan(compact_width),
+                    self.render_function_bar(appearance, FunctionLegendMode::Hidden),
+                ),
+                (
+                    SizeConstraintCondition::WidthLessThan(full_width),
+                    self.render_function_bar(appearance, FunctionLegendMode::Compact),
+                ),
+            ],
+        )
+        .finish()
+    }
+
     /// Render the connection state (when not connected)
     fn render_connection_state(&self, appearance: &Appearance) -> Box<dyn Element> {
         let (msg, icon) = match &self.connection {
@@ -3354,7 +3461,16 @@ impl SftpBrowserView {
     /// Render the MC-style function-key bar footer. Each cell shows `F<n>` in
     /// the accent colour followed by its caption, and clicking it dispatches
     /// the same action as the physical function key.
-    fn render_function_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_function_bar(
+        &self,
+        appearance: &Appearance,
+        mode: FunctionLegendMode,
+    ) -> Box<dyn Element> {
+        if mode == FunctionLegendMode::Hidden {
+            let position_id = self.layout_position_id(mode.position_suffix());
+            return save_layout_position(Flex::row().finish(), &position_id);
+        }
+
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_size();
@@ -3391,17 +3507,18 @@ impl SftpBrowserView {
                 )
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
                 .finish();
-                let content = Flex::row()
+                let mut content = Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_spacing(4.0)
-                    .with_child(keycap)
-                    .with_child(
+                    .with_child(keycap);
+                if mode == FunctionLegendMode::Full {
+                    content.add_child(
                         Text::new_inline(function_bar_caption(key), family, size)
                             .with_color(caption_color.into())
                             .finish(),
-                    )
-                    .finish();
-                let mut container = Container::new(content)
+                    );
+                }
+                let mut container = Container::new(content.finish())
                     .with_padding_left(6.0)
                     .with_padding_right(6.0)
                     .with_padding_top(2.0)
@@ -3415,19 +3532,21 @@ impl SftpBrowserView {
             .with_cursor(Cursor::PointingHand)
             .on_click(move |ctx, _, _| ctx.dispatch_typed_action(make_action()))
             .finish();
-            row.add_child(cell);
+            row.add_child(Expanded::new(1.0, cell).finish());
         }
 
         // A hairline seats the bar against the list above it — footer chrome,
         // not another list row.
-        Container::new(row.finish())
+        let bar = Container::new(row.finish())
             .with_padding_left(PANEL_PADDING)
             .with_padding_right(PANEL_PADDING)
             .with_padding_top(4.0)
             .with_padding_bottom(4.0)
             .with_background(theme.background())
             .with_border(Border::top(1.0).with_border_fill(theme.split_pane_border_color()))
-            .finish()
+            .finish();
+        let position_id = self.layout_position_id(mode.position_suffix());
+        save_layout_position(bar, &position_id)
     }
 
     /// Render the file list
@@ -3456,12 +3575,16 @@ impl SftpBrowserView {
         let header = super::file_list::render_header(self.sort, &self.header_handles, appearance);
 
         // File rows (the `..` row first, when there is a parent)
+        let row_position_prefix = self.layout_position_id("row");
+        let panel_position_id = self.layout_position_id("panel");
         let rows = super::file_list::render_file_rows(
             &self.entries,
             &filtered_indices,
             &self.selected,
             self.cursor,
             self.has_parent_row(),
+            &row_position_prefix,
+            &panel_position_id,
             &self.row_mouse_handles,
             &self.mark_handles,
             self.parent_row_handle.clone(),
@@ -4844,6 +4967,7 @@ impl TypedActionView for SftpBrowserView {
                 self.move_cursor(CursorMove::PageDown(page), ctx);
             }
             SftpBrowserAction::ActivateCursor => self.activate_cursor(ctx),
+            SftpBrowserAction::ViewCursorDetails => self.view_cursor_details(ctx),
             SftpBrowserAction::OpenCursorInEditor => self.open_cursor_in_editor(ctx),
             SftpBrowserAction::EnterCursorDir => self.enter_cursor_dir(ctx),
             SftpBrowserAction::ToggleSelectCursor => self.toggle_select_cursor(ctx),
@@ -4964,7 +5088,7 @@ impl View for SftpBrowserView {
         // the "Connecting…" state). The tight `Container` wrapper is the same
         // remedy `CodeView` uses.
         if !matches!(self.connection, ConnectionState::Connected) {
-            return Container::new(
+            let mut content = Container::new(
                 Flex::column()
                     .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                     .with_main_axis_size(MainAxisSize::Max)
@@ -4972,6 +5096,16 @@ impl View for SftpBrowserView {
                     .finish(),
             )
             .finish();
+            if self
+                .focus_handle
+                .as_ref()
+                .is_some_and(|handle| handle.is_focused(app))
+            {
+                content = Container::new(content)
+                    .with_border(Border::all(2.0).with_border_fill(theme.accent()))
+                    .finish();
+            }
+            return content;
         }
 
         let mut col = Flex::column()
@@ -5019,7 +5153,7 @@ impl View for SftpBrowserView {
 
         // 5. Loading indicator / file list
         if self.is_loading {
-            col.add_child(Shrinkable::new(1.0, self.render_loading(appearance)).finish());
+            col.add_child(Expanded::new(1.0, self.render_loading(appearance)).finish());
         } else {
             let file_list = self.render_file_list(appearance);
             let scrollbar_color = theme.disabled_text_color(theme.background()).into();
@@ -5033,11 +5167,15 @@ impl View for SftpBrowserView {
                 Fill::None,
             )
             .finish();
-            col.add_child(Shrinkable::new(1.0, scrollable).finish());
+            let body_position_id = self.layout_position_id("body");
+            let positioned_body = save_layout_position(scrollable, &body_position_id);
+            col.add_child(Expanded::new(1.0, positioned_body).finish());
         }
 
-        // 6. MC-style function-key bar (footer)
-        col.add_child(self.render_function_bar(appearance));
+        // 6. MC-style function-key footer. It belongs to this browser view,
+        // never to a shared pane-group container. Captions are dropped before
+        // a narrow split could overlap them.
+        col.add_child(self.render_responsive_function_bar(appearance));
 
         // 7. Transfer panel (floating at the bottom)
         // Wrap the `Flex(Max)` body in a tight `Container` before it becomes the
@@ -5045,6 +5183,17 @@ impl View for SftpBrowserView {
         // mounts this as a `Shrinkable` flex child, and a bare `Flex(Max)` root
         // would be measured with an infinite main axis and crash.
         let mut main_content = Container::new(col.finish()).finish();
+        if self
+            .focus_handle
+            .as_ref()
+            .is_some_and(|handle| handle.is_focused(app))
+        {
+            main_content = Container::new(main_content)
+                .with_border(Border::all(2.0).with_border_fill(theme.accent()))
+                .finish();
+        }
+        let root_position_id = self.layout_position_id("pane-root");
+        main_content = save_layout_position(main_content, &root_position_id);
 
         // 8. Transfer panel floating layer
         if !self.transfers.is_empty() && !self.transfer_panel_hidden {
@@ -5129,14 +5278,21 @@ impl View for SftpBrowserView {
         }
 
         // 11. Save the panel position (used for context menu position calculation)
-        let positioned_content =
-            SavePosition::new(main_content, SFTP_PANEL_POSITION_ID).finish();
+        let panel_position_id = self.layout_position_id("panel");
+        let positioned_content = save_layout_position(main_content, &panel_position_id);
 
         // 12. Keyboard event interception — MC-style navigation. A modifier
         // (other than Shift, used for range operations later) means the
         // keystroke belongs to a shortcut elsewhere; let it propagate.
+        let focus_handle = self.focus_handle.clone();
         let key_handler = EventHandler::new(positioned_content).on_keydown(
-            move |ctx, _app, keystroke| {
+            move |ctx, app, keystroke| {
+                if focus_handle
+                    .as_ref()
+                    .is_some_and(|handle| !handle.is_focused(app))
+                {
+                    return DispatchEventResult::PropagateToParent;
+                }
                 // FM pane-mode toggle: the same chord that opened the file manager
                 // (cmd-shift-E on mac, ctrl-alt-e elsewhere) closes it back to the
                 // terminal. Handled here, *before* the modifier guard below, since it
@@ -5160,34 +5316,30 @@ impl View for SftpBrowserView {
                 if keystroke.ctrl || keystroke.cmd || keystroke.alt || keystroke.meta {
                     return DispatchEventResult::PropagateToParent;
                 }
-                let action = match keystroke.key.as_str() {
-                    // Cursor movement
-                    "down" => Some(SftpBrowserAction::CursorDown),
-                    "up" => Some(SftpBrowserAction::CursorUp),
-                    "home" => Some(SftpBrowserAction::CursorFirst),
-                    "end" => Some(SftpBrowserAction::CursorLast),
-                    "pageup" => Some(SftpBrowserAction::CursorPageUp),
-                    "pagedown" => Some(SftpBrowserAction::CursorPageDown),
-                    // Directory traversal, MC-style: Enter/Right open, Left/Backspace go up.
-                    "enter" | "numpadenter" => Some(SftpBrowserAction::ActivateCursor),
-                    "right" => Some(SftpBrowserAction::EnterCursorDir),
-                    "left" | "backspace" => Some(SftpBrowserAction::NavigateUp),
-                    "space" => Some(SftpBrowserAction::ToggleSelectCursor),
-                    // MC's Insert: mark and step down. Space marks in place.
-                    "insert" => Some(SftpBrowserAction::MarkAndAdvance),
-                    // Rename (F2, the common file-manager convention; MC's F6
-                    // is repurposed here for the cross-pane move).
-                    "f2" => Some(SftpBrowserAction::RenameCursor),
-                    // Function-key bar (MC parity): F3 View / F4 Edit open the editor.
-                    "f3" | "f4" => Some(SftpBrowserAction::OpenCursorInEditor),
-                    "f5" => Some(SftpBrowserAction::CopyToOtherPane),
-                    "f6" => Some(SftpBrowserAction::MoveToOtherPane),
-                    "f7" => Some(SftpBrowserAction::CreateFolder),
-                    "f8" | "delete" => Some(SftpBrowserAction::DeleteSelected),
-                    "f10" => Some(SftpBrowserAction::CloseFileManager),
-                    "escape" => Some(SftpBrowserAction::CloseDialog),
-                    _ => None,
-                };
+                if let Some(action) = pane_cycle_action(&keystroke.key, keystroke.shift) {
+                    ctx.dispatch_typed_action(action);
+                    return DispatchEventResult::StopPropagation;
+                }
+                let action =
+                    function_key_action(&keystroke.key).or_else(|| match keystroke.key.as_str() {
+                        // Cursor movement
+                        "down" => Some(SftpBrowserAction::CursorDown),
+                        "up" => Some(SftpBrowserAction::CursorUp),
+                        "home" => Some(SftpBrowserAction::CursorFirst),
+                        "end" => Some(SftpBrowserAction::CursorLast),
+                        "pageup" => Some(SftpBrowserAction::CursorPageUp),
+                        "pagedown" => Some(SftpBrowserAction::CursorPageDown),
+                        // Directory traversal, MC-style: Enter/Right open, Left/Backspace go up.
+                        "enter" | "numpadenter" => Some(SftpBrowserAction::ActivateCursor),
+                        "right" => Some(SftpBrowserAction::EnterCursorDir),
+                        "left" | "backspace" => Some(SftpBrowserAction::NavigateUp),
+                        "space" => Some(SftpBrowserAction::ToggleSelectCursor),
+                        // MC's Insert: mark and step down. Space marks in place.
+                        "insert" => Some(SftpBrowserAction::MarkAndAdvance),
+                        "delete" => Some(SftpBrowserAction::DeleteSelected),
+                        "escape" => Some(SftpBrowserAction::CloseDialog),
+                        _ => None,
+                    });
                 match action {
                     Some(action) => {
                         ctx.dispatch_typed_action(action);
@@ -5195,8 +5347,7 @@ impl View for SftpBrowserView {
                     }
                     None => DispatchEventResult::PropagateToParent,
                 }
-            },
-        );
+            });
 
         // 13. Drag-and-drop event interception
         super::drop_target::SftpDropTargetElement::new(key_handler.finish()).finish()
@@ -5273,7 +5424,10 @@ impl BackingView for SftpBrowserView {
     }
 
     /// Set the focus handle
-    fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {
+    fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, ctx: &mut ViewContext<Self>) {
+        ctx.subscribe_to_model(focus_handle.focus_state_handle(), |_, _, _, ctx| {
+            ctx.notify()
+        });
         self.focus_handle = Some(focus_handle);
     }
 }
@@ -5617,6 +5771,81 @@ mod tests {
     fn test_initial_connect_path_none_no_home_uses_root() {
         let result = SftpBrowserView::initial_connect_path(&None, || None);
         assert_eq!(result, PathBuf::from("/"));
+    }
+
+    #[test]
+    fn tab_cycles_fm_panes_clockwise() {
+        assert!(matches!(
+            pane_cycle_action("tab", false),
+            Some(crate::pane_group::PaneGroupAction::NavigateNext)
+        ));
+    }
+
+    #[test]
+    fn shift_tab_cycles_counterclockwise() {
+        assert!(matches!(
+            pane_cycle_action("tab", true),
+            Some(crate::pane_group::PaneGroupAction::NavigatePrev)
+        ));
+    }
+
+    #[test]
+    fn function_keys_dispatch_documented_actions() {
+        assert!(matches!(
+            function_key_action("f2"),
+            Some(SftpBrowserAction::RenameCursor)
+        ));
+        assert!(matches!(
+            function_key_action("f3"),
+            Some(SftpBrowserAction::ViewCursorDetails)
+        ));
+        assert!(matches!(
+            function_key_action("f4"),
+            Some(SftpBrowserAction::OpenCursorInEditor)
+        ));
+        assert!(matches!(
+            function_key_action("f5"),
+            Some(SftpBrowserAction::CopyToOtherPane)
+        ));
+        assert!(matches!(
+            function_key_action("f6"),
+            Some(SftpBrowserAction::MoveToOtherPane)
+        ));
+        assert!(matches!(
+            function_key_action("f7"),
+            Some(SftpBrowserAction::CreateFolder)
+        ));
+        assert!(matches!(
+            function_key_action("f8"),
+            Some(SftpBrowserAction::DeleteSelected)
+        ));
+        assert!(matches!(
+            function_key_action("f10"),
+            Some(SftpBrowserAction::CloseFileManager)
+        ));
+    }
+
+    #[test]
+    fn pane_function_legend_drops_captions_before_overlap() {
+        let full_width = FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_CAPTION_MIN_WIDTH
+            + FUNCTION_LEGEND_HORIZONTAL_PADDING;
+        let compact_width = FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_KEYCAP_MIN_WIDTH
+            + FUNCTION_LEGEND_HORIZONTAL_PADDING;
+        assert_eq!(function_legend_mode(full_width), FunctionLegendMode::Full);
+        assert_eq!(
+            function_legend_mode(full_width - 1.0),
+            FunctionLegendMode::Compact
+        );
+        assert_eq!(
+            function_legend_mode(compact_width - 1.0),
+            FunctionLegendMode::Hidden
+        );
+    }
+
+    #[test]
+    fn each_pane_owns_optional_compact_function_legend() {
+        assert_eq!(function_legend_mode(400.0), FunctionLegendMode::Compact);
+        assert_eq!(function_legend_mode(200.0), FunctionLegendMode::Hidden);
     }
 
     // ============================================================

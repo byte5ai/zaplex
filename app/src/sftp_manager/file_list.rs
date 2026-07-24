@@ -97,6 +97,8 @@ fn mark_cell(
 pub fn render_file_row(
     entry: &FileEntry,
     index: usize,
+    position_prefix: &str,
+    panel_position_id: &str,
     is_selected: bool,
     is_cursor: bool,
     mouse_handle: MouseStateHandle,
@@ -126,6 +128,8 @@ pub fn render_file_row(
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
     let accent_fill: Fill = theme.accent().into();
+    let row_position_prefix = position_prefix.to_string();
+    let panel_position_id = panel_position_id.to_string();
     // The mark-affordance hover colour stays genuinely muted — `sub_color`
     // turns accent on marked rows and must not bleed into it.
     let muted_fill: Fill = muted.into();
@@ -172,6 +176,10 @@ pub fn render_file_row(
         )
         .with_width(FILE_SIZE_WIDTH)
         .finish();
+        let size_position_id = format!("{row_position_prefix}:{index}:size-column");
+        let size_el = SavePosition::new(size_el, &size_position_id)
+            .for_single_frame()
+            .finish();
 
         // Modified date
         let date_text = modified.clone().unwrap_or_else(|| String::from("--"));
@@ -182,6 +190,10 @@ pub fn render_file_row(
         )
         .with_width(FILE_DATE_WIDTH)
         .finish();
+        let date_position_id = format!("{row_position_prefix}:{index}:date-column");
+        let date_el = SavePosition::new(date_el, &date_position_id)
+            .for_single_frame()
+            .finish();
 
         // Assemble row content. `Max` is what pins Size/Modified into stable
         // columns — without it the row hugged its content and the columns
@@ -226,8 +238,7 @@ pub fn render_file_row(
         ctx.dispatch_typed_action(SftpBrowserAction::OpenEntry(index));
     })
     .on_right_click(move |ctx, _, position| {
-        use super::browser::SFTP_PANEL_POSITION_ID;
-        let offset = match ctx.element_position_by_id(SFTP_PANEL_POSITION_ID) {
+        let offset = match ctx.element_position_by_id(&panel_position_id) {
             Some(bounds) => position - bounds.origin(),
             None => position,
         };
@@ -485,6 +496,8 @@ pub fn render_file_rows(
     selected: &HashSet<usize>,
     cursor_row: usize,
     has_parent_row: bool,
+    position_prefix: &str,
+    panel_position_id: &str,
     mouse_handles: &HashMap<PathBuf, MouseStateHandle>,
     mark_handles: &HashMap<PathBuf, MouseStateHandle>,
     parent_row_handle: MouseStateHandle,
@@ -499,7 +512,12 @@ pub fn render_file_rows(
         // next render throws away, so the mouse-up never completes a click
         // (the dead `..` row of the RC acceptance 2026-07-21).
         let row = render_parent_row(cursor_row == 0, parent_row_handle, appearance);
-        col.add_child(SavePosition::new(row, "sftp_row:parent").finish());
+        let position_id = format!("{position_prefix}:parent");
+        col.add_child(
+            SavePosition::new(row, &position_id)
+                .for_single_frame()
+                .finish(),
+        );
     }
 
     let offset = usize::from(has_parent_row);
@@ -512,14 +530,18 @@ pub fn render_file_rows(
         let row = render_file_row(
             entry,
             index,
+            position_prefix,
+            panel_position_id,
             is_selected,
             is_cursor,
             mouse_handle,
             mark_handle,
             appearance,
         );
-        let position_id = format!("sftp_row:{index}");
-        let positioned = SavePosition::new(row, &position_id).finish();
+        let position_id = format!("{position_prefix}:{index}");
+        let positioned = SavePosition::new(row, &position_id)
+            .for_single_frame()
+            .finish();
         col.add_child(positioned);
     }
 

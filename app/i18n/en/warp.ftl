@@ -3887,6 +3887,7 @@ fm-rename-placeholder = New name
 fm-folder-name-placeholder = Folder name
 fm-key-view = View
 fm-key-edit = Edit
+fm-key-rename = Rename
 fm-key-copy = Copy
 fm-key-move = Move
 fm-key-mkdir = New folder

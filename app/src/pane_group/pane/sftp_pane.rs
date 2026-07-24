@@ -25,6 +25,14 @@ pub struct SftpPane {
 }
 
 impl SftpPane {
+    #[cfg(test)]
+    pub(crate) fn browser_view(
+        &self,
+        ctx: &warpui::AppContext,
+    ) -> ViewHandle<SftpBrowserView> {
+        self.view.as_ref(ctx).child(ctx)
+    }
+
     /// Creates a new SFTP browser pane, rooted at `start_path` (the remote
     /// shell's cwd) when known, else the host root `/`.
     pub fn new<V: View>(
