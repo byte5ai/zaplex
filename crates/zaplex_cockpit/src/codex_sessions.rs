@@ -256,6 +256,9 @@ fn snapshot_of(
         config_dir: None,
         account_email: None,
         process_fingerprint: None,
+        pty_session_id: None,
+        pty_session_generation: None,
+        pty_foreground: false,
         last_activity: info.last_ts.or(Some(mtime)).unwrap_or(now),
         // Codex records no pid — guardrail signalling can't target it.
         pid: 0,

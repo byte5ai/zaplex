@@ -2511,6 +2511,127 @@ fn node_for_daemon_host_in_translates_daemon_id_to_ssh_node() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn adopted_pty_deduplication_is_host_scoped() {
+    let first = super::daemon_adoption_key("node-a", "pty-1", 7);
+    let second = super::daemon_adoption_key("node-b", "pty-1", 7);
+
+    assert_ne!(
+        first, second,
+        "matching daemon-local PTY ids and generations on different hosts must open different tabs"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn pty_dedupe_uses_current_authoritative_agent_after_handoff() {
+    let identity = |session_id: &str| remote_server::proto::AgentSessionIdentity {
+        provider: "codex".to_string(),
+        account_email: "agent@example.com".to_string(),
+        config_dir: "/home/agent/.codex".to_string(),
+        session_id: session_id.to_string(),
+    };
+    let agent_a = identity("agent-a");
+    let agent_b = identity("agent-b");
+    let inventory = remote_server::proto::AgentSessionList {
+        sessions: vec![remote_server::proto::AgentSessionInfo {
+            session_id: agent_b.session_id.clone(),
+            provider: agent_b.provider.clone(),
+            config_dir: agent_b.config_dir.clone(),
+            account_email: agent_b.account_email.clone(),
+            pty_session_id: "pty-1".to_string(),
+            pty_session_generation: 7,
+            pty_foreground: true,
+            ..Default::default()
+        }],
+    };
+
+    assert!(
+        !super::agent_inventory_confirms_binding(&inventory, "pty-1", 7, &agent_a),
+        "a stale inventory row must not focus a PTY after its foreground handoff"
+    );
+    assert!(
+        super::agent_inventory_confirms_binding(&inventory, "pty-1", 7, &agent_b),
+        "the current foreground agent may reuse the one PTY tab"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rejected_adopt_cleanup_does_not_poison_retry_key() {
+    let rejected_connection = warp_core::SessionId::from(41u64);
+    let live_connection = warp_core::SessionId::from(42u64);
+    let rejected_key = super::daemon_adoption_key("node-a", "pty-1", 7);
+    let live_key = super::daemon_adoption_key("node-a", "pty-2", 8);
+    let mut adopted = std::collections::HashMap::from([
+        (
+            rejected_key.clone(),
+            super::AdoptedDaemonSession {
+                pane_group_id: warpui::EntityId::new(),
+                connection_session_id: rejected_connection,
+            },
+        ),
+        (
+            live_key.clone(),
+            super::AdoptedDaemonSession {
+                pane_group_id: warpui::EntityId::new(),
+                connection_session_id: live_connection,
+            },
+        ),
+    ]);
+
+    super::remove_adopted_daemon_session(&mut adopted, rejected_connection);
+
+    assert!(
+        !adopted.contains_key(&rejected_key),
+        "a rejected provisional tab must not intercept the next atomic attach attempt"
+    );
+    assert!(
+        adopted.contains_key(&live_key),
+        "cleaning one rejected connection must preserve unrelated live adopts"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_node_route_falls_back_to_surviving_connection() {
+    let first = warp_core::SessionId::from(51u64);
+    let rejected = warp_core::SessionId::from(52u64);
+    let mut routes = std::collections::HashMap::new();
+
+    super::remember_daemon_node_session(&mut routes, "node-a".to_string(), first);
+    super::remember_daemon_node_session(&mut routes, "node-a".to_string(), rejected);
+    super::forget_daemon_node_session(&mut routes, rejected);
+
+    assert_eq!(
+        routes.get("node-a"),
+        Some(&vec![first]),
+        "rejecting a provisional adopt must preserve an older live route for the node"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cockpit_daemon_adopt_uses_resolved_onekey_auth() {
+    let mut server = warp_ssh_manager::SshServerInfo::new_default("node-a".to_string());
+    server.username = "placeholder".to_string();
+    server.auth_type = warp_ssh_manager::AuthType::OneKey;
+    let resolved = warp_ssh_manager::ResolvedSshAuth {
+        username: "resolved-user".to_string(),
+        auth_type: warp_ssh_manager::AuthType::Key,
+        key_path: Some("/keys/resolved".to_string()),
+        secret_lookup_id: "credential-a".to_string(),
+        secret_kind: warp_ssh_manager::SecretKind::Passphrase,
+    };
+
+    let server = super::apply_daemon_server_auth(server, resolved);
+
+    assert_eq!(server.username, "resolved-user");
+    assert_eq!(server.auth_type, warp_ssh_manager::AuthType::Key);
+    assert_eq!(server.key_path.as_deref(), Some("/keys/resolved"));
+}
+
 #[test]
 fn invalid_pid_never_reaches_local_signal_backend() {
     let mut signal_calls = 0;

@@ -329,6 +329,7 @@ fn terminal_view_lookup_matches_provider_session_and_exact_host() {
             CLIAgent::Claude,
             "same-id",
             None,
+            None,
             |terminal_view_id, session| {
                 !session.is_remote() && terminal_hosts[&terminal_view_id].is_none()
             },
@@ -339,6 +340,7 @@ fn terminal_view_lookup_matches_provider_session_and_exact_host() {
         model.terminal_view_id_for_agent_session_matching(
             CLIAgent::Claude,
             "same-id",
+            None,
             None,
             |terminal_view_id, session| {
                 session.is_remote() && terminal_hosts[&terminal_view_id] == Some("remote-a")
@@ -351,6 +353,7 @@ fn terminal_view_lookup_matches_provider_session_and_exact_host() {
             CLIAgent::Claude,
             "same-id",
             None,
+            None,
             |terminal_view_id, session| {
                 session.is_remote() && terminal_hosts[&terminal_view_id] == Some("remote-b")
             },
@@ -362,6 +365,7 @@ fn terminal_view_lookup_matches_provider_session_and_exact_host() {
             CLIAgent::Codex,
             "same-id",
             None,
+            None,
             |terminal_view_id, _| terminal_view_id == codex_view,
         ),
         Some(codex_view)
@@ -371,6 +375,7 @@ fn terminal_view_lookup_matches_provider_session_and_exact_host() {
             CLIAgent::Claude,
             "missing",
             None,
+            None,
             |_, _| true,
         ),
         None
@@ -379,6 +384,7 @@ fn terminal_view_lookup_matches_provider_session_and_exact_host() {
         model.terminal_view_id_for_agent_session_matching(
             CLIAgent::Claude,
             "same-id",
+            None,
             None,
             |_, _| false,
         ),
@@ -419,6 +425,7 @@ fn provider_mismatch_never_reaches_terminal_predicate() {
     let found = model.terminal_view_id_for_agent_session_matching(
         CLIAgent::Codex,
         "same-id",
+        None,
         None,
         |_, _| {
             predicate_calls += 1;
@@ -466,6 +473,7 @@ fn stale_account_a_never_focuses_account_b() {
     let found = model.terminal_view_id_for_agent_session_matching(
         CLIAgent::Claude,
         "copied-id",
+        None,
         Some("account-b@example.com"),
         |_, _| {
             host_predicate_calls += 1;
@@ -477,6 +485,54 @@ fn stale_account_a_never_focuses_account_b() {
     assert_eq!(
         host_predicate_calls, 0,
         "the wrong account must be rejected before host matching"
+    );
+}
+
+#[test]
+fn copied_session_id_never_crosses_account_config_dir() {
+    let account_a_view = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    model.sessions.insert(
+        account_a_view,
+        CLIAgentSession {
+            agent: CLIAgent::Codex,
+            status: CLIAgentSessionStatus::InProgress,
+            session_context: CLIAgentSessionContext {
+                session_id: Some("copied-id".to_string()),
+                ..Default::default()
+            },
+            input_state: CLIAgentInputState::Closed,
+            should_auto_toggle_input: false,
+            listener: None,
+            plugin_version: None,
+            remote_host: None,
+            draft_text: None,
+            custom_command_prefix: None,
+        },
+    );
+    model.bind_account_identity(
+        account_a_view,
+        CLIAgent::Codex,
+        Some("/accounts/a".to_string()),
+        Some("shared@example.com".to_string()),
+    );
+    let mut host_predicate_calls = 0;
+
+    let found = model.terminal_view_id_for_agent_session_matching(
+        CLIAgent::Codex,
+        "copied-id",
+        Some("/accounts/b"),
+        Some("shared@example.com"),
+        |_, _| {
+            host_predicate_calls += 1;
+            true
+        },
+    );
+
+    assert_eq!(found, None);
+    assert_eq!(
+        host_predicate_calls, 0,
+        "the wrong config directory must be rejected before host matching"
     );
 }
 
@@ -495,12 +551,14 @@ fn known_default_account_identity_is_not_unknown() {
     assert!(model.account_identity_matches(
         known_default_view,
         CLIAgent::Claude,
+        None,
         Some("default@example.com")
     ));
-    assert!(!model.account_identity_matches(known_default_view, CLIAgent::Claude, None));
+    assert!(!model.account_identity_matches(known_default_view, CLIAgent::Claude, None, None));
     assert!(!model.account_identity_matches(
         unknown_manual_view,
         CLIAgent::Claude,
+        None,
         Some("default@example.com")
     ));
 }

@@ -93,6 +93,7 @@ pub enum SshManagerPanelAction {
     AdoptSession {
         node_id: String,
         pty_session_id: String,
+        pty_generation: u64,
     },
     /// Click a row; the handling depends on the node kind:
     /// - server: select + emit OpenSshTerminal (connect directly)
@@ -157,6 +158,7 @@ pub enum SshManagerPanelEvent {
     AdoptDaemonSession {
         server: SshServerInfo,
         pty_session_id: String,
+        pty_generation: u64,
     },
     PersistenceError(String),
 }
@@ -964,6 +966,7 @@ impl SshManagerPanel {
         &mut self,
         node_id: String,
         pty_session_id: String,
+        pty_generation: u64,
         ctx: &mut ViewContext<Self>,
     ) {
         // Resolve OneKey → effective auth so the adopt connects with the same
@@ -986,6 +989,7 @@ impl SshManagerPanel {
             ctx.emit(SshManagerPanelEvent::AdoptDaemonSession {
                 server,
                 pty_session_id,
+                pty_generation,
             });
         }
     }
@@ -2057,6 +2061,7 @@ impl SshManagerPanel {
                     .unwrap_or_default();
                 let node_id = node.id.clone();
                 let pty_session_id = session.session_id.clone();
+                let pty_generation = session.generation;
                 let title = if !session.title.is_empty() {
                     session.title.clone()
                 } else if !session.cwd.is_empty() {
@@ -2114,6 +2119,7 @@ impl SshManagerPanel {
                     ctx.dispatch_typed_action(SshManagerPanelAction::AdoptSession {
                         node_id: node_id.clone(),
                         pty_session_id: pty_session_id.clone(),
+                        pty_generation,
                     });
                 })
                 .finish()
@@ -2695,7 +2701,13 @@ impl TypedActionView for SshManagerPanel {
             SshManagerPanelAction::AdoptSession {
                 node_id,
                 pty_session_id,
-            } => self.on_adopt_session(node_id.clone(), pty_session_id.clone(), ctx),
+                pty_generation,
+            } => self.on_adopt_session(
+                node_id.clone(),
+                pty_session_id.clone(),
+                *pty_generation,
+                ctx,
+            ),
             SshManagerPanelAction::Click(id) => self.on_click(id.clone(), ctx),
             SshManagerPanelAction::StartRename(id) => self.enter_rename(id.clone(), false, ctx),
             SshManagerPanelAction::CommitRename => self.commit_rename(ctx),

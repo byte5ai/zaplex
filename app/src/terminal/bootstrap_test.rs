@@ -59,6 +59,128 @@ fn test_trims_powershell_specifics() {
     );
 }
 
+#[test]
+fn daemon_bootstrap_delivery_is_single_and_shell_specific() {
+    assert_eq!(
+        daemon_bootstrap_delivery(Some(ShellType::Bash)),
+        DaemonBootstrapDelivery::OrderedPty
+    );
+    assert_eq!(
+        daemon_bootstrap_delivery(Some(ShellType::Zsh)),
+        DaemonBootstrapDelivery::OrderedPty
+    );
+    assert_eq!(
+        daemon_bootstrap_delivery(Some(ShellType::Fish)),
+        DaemonBootstrapDelivery::GuardedFile
+    );
+    assert_eq!(
+        daemon_bootstrap_delivery(Some(ShellType::PowerShell)),
+        DaemonBootstrapDelivery::GuardedFile
+    );
+    assert_eq!(
+        daemon_bootstrap_delivery(None),
+        DaemonBootstrapDelivery::NoIntegration
+    );
+}
+
+#[test]
+fn test_asset_provider_cannot_poison_real_bootstrap_body() {
+    assert_eq!(
+        decode_script(&script_for_shell(ShellType::Fish, &TestAssetProvider)),
+        "this_is_a_command\n"
+    );
+    assert!(
+        decode_script(&script_for_shell(ShellType::Fish, &crate::ASSETS))
+            .starts_with("if test \"$ZAPLEX_BOOTSTRAPPED\" != 1\n"),
+        "a test provider must not populate the production asset cache"
+    );
+}
+
+#[test]
+fn fish_body_is_idempotent() {
+    let script = bundled_script("bundled/bootstrap/fish.sh");
+    let lines = significant_lines(&script);
+
+    assert_eq!(
+        lines.first().copied(),
+        Some(r#"if test "$ZAPLEX_BOOTSTRAPPED" != 1"#),
+        "the real fish body must fail closed before any bootstrap side effect"
+    );
+    assert_eq!(
+        lines.last().copied(),
+        Some("end"),
+        "the fish idempotency guard must enclose the complete body"
+    );
+
+    let init = bundled_script("bundled/bootstrap/fish_init_shell.sh");
+    let forget = init
+        .find("set -e ZAPLEX_DAEMON_BOOTSTRAP_FILE")
+        .expect("fish init must consume the one-shot body route");
+    let source = init
+        .find(r#"source "$_zaplex_daemon_bootstrap_file""#)
+        .expect("fish init must source the daemon body");
+    assert!(
+        forget < source,
+        "fish must consume the route before sourcing, so a failing body cannot replay"
+    );
+}
+
+#[test]
+fn pwsh_body_is_idempotent() {
+    let script = bundled_script("bundled/bootstrap/pwsh.ps1");
+    let lines = significant_lines(&script);
+    let param_index = lines
+        .iter()
+        .position(|line| *line == "param()")
+        .expect("the real PowerShell body must keep param() first");
+
+    assert_eq!(
+        lines.get(param_index + 1).copied(),
+        Some("if ($global:ZAPLEX_BOOTSTRAPPED -ne 1) {"),
+        "the real PowerShell body must fail closed before any bootstrap side effect"
+    );
+    assert_eq!(
+        lines.last().copied(),
+        Some("}"),
+        "the PowerShell idempotency guard must enclose the complete body"
+    );
+
+    let init = bundled_script("bundled/bootstrap/pwsh_init_shell.ps1");
+    let forget = init
+        .find("Remove-Item -Path env:ZAPLEX_DAEMON_BOOTSTRAP_FILE")
+        .expect("PowerShell init must consume the one-shot body route");
+    let source = init
+        .find(". $daemonBootstrapFile")
+        .expect("PowerShell init must source the daemon body");
+    assert!(
+        forget < source,
+        "PowerShell must consume the route before sourcing, so a failing body cannot replay"
+    );
+}
+
+fn bundled_script(path: &str) -> String {
+    String::from_utf8(
+        crate::ASSETS
+            .get(path)
+            .expect("bundled bootstrap asset")
+            .into_owned(),
+    )
+    .expect("bootstrap assets are UTF-8")
+}
+
+fn significant_lines(script: &str) -> Vec<&str> {
+    script
+        .trim_start_matches(BYTE_ORDER_MARK)
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with('#')
+                && !line.starts_with("[Diagnostics.CodeAnalysis.SuppressMessageAttribute")
+        })
+        .collect()
+}
+
 fn decode_script(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).expect("should not fail to decode")
 }

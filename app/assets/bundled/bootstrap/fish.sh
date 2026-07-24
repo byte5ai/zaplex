@@ -1,5 +1,6 @@
 # Note that ZAPLEX_SESSION_ID is expected to have been set when executing commands to
 # emit the InitShell payload, which includes the session ID.
+if test "$ZAPLEX_BOOTSTRAPPED" != 1
 begin
 # We wrap ourselves in a begin block because these are effectively injected
 # keystrokes, and we want to execute this whole script as a single command.
@@ -721,4 +722,5 @@ warp_bootstrapped
 
 set -g ZAPLEX_BOOTSTRAPPED 1
 set -g fish_private_mode $saved_fish_private_mode
+end
 end

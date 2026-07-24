@@ -54,6 +54,12 @@ pub const FEATURE_AGENT_INVENTORY: &str = "agent-inventory";
 /// to any other shell-command path.
 pub const FEATURE_AGENT_PROCESS_SIGNAL_V1: &str = "agent-process-signal-v1";
 
+/// Capability identifier for generation-checked agent-to-PTY binding.
+///
+/// Both peers must advertise this feature before the client may send binding
+/// operations or trust PTY ids returned in agent inventory.
+pub const FEATURE_AGENT_PTY_BINDING: &str = "agent-pty-binding";
+
 /// Capability identifier advertised by the daemon in `InitializeResponse.features`:
 /// it signals that the daemon can run a **session-less one-shot host command**
 /// via `HostExec` → `HostExecResult` — a command that needs no bootstrapped
@@ -128,6 +134,7 @@ pub fn supported_features() -> Vec<String> {
     {
         features.push(FEATURE_SESSION_HOST.to_string());
         features.push(FEATURE_STARTUP_COMMAND_ACK.to_string());
+        features.push(FEATURE_AGENT_PTY_BINDING.to_string());
     }
     features
 }

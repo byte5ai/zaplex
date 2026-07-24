@@ -696,6 +696,14 @@ fn launch_command_routed_with_model_and_effort_codex() {
 }
 
 #[test]
+fn codex_effort_reaches_cli_args() {
+    assert_eq!(
+        CLIAgent::Codex.launch_command_routed_with(None, None, Some("high")),
+        "unset OPENAI_API_KEY; codex -c 'model_reasoning_effort=\"high\"'"
+    );
+}
+
+#[test]
 fn launch_command_routed_with_none_is_verbatim_today() {
     // None/None must be byte-for-byte identical to the pre-existing bare launch.
     assert_eq!(

@@ -81,7 +81,7 @@ fn current_linux_process_has_a_boot_scoped_fingerprint() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn stale_fingerprint_is_rejected_after_pidfd_open() {
+fn recycled_pid_is_rejected_by_process_identity() {
     assert_eq!(
         send_verified_process_signal(
             std::process::id(),
@@ -90,4 +90,15 @@ fn stale_fingerprint_is_rejected_after_pidfd_open() {
         ),
         Err(ProcessSignalError::IdentityChanged),
     );
+}
+
+#[test]
+fn invalid_pid_never_reaches_signal_backend() {
+    for pid in [0, i32::MAX as u32 + 1, u32::MAX] {
+        assert_eq!(
+            send_verified_process_signal(pid, "unreachable-fingerprint", GuardrailSignal::Kill),
+            Err(ProcessSignalError::InvalidPid),
+            "pid {pid} must fail before any platform signal operation"
+        );
+    }
 }

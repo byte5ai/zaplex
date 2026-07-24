@@ -55,9 +55,10 @@ fn provenance_marks_estimates_only() {
 
 #[test]
 fn cost_format() {
-    assert_eq!(format_cost(4.2), "$4.20");
-    assert_eq!(format_cost(0.0), "$0.00");
-    assert_eq!(format_cost(19.005), "$19.00");
+    assert_eq!(format_cost(4.2), "~$4.20");
+    assert_eq!(format_cost(0.0), "~$0.00");
+    assert_eq!(format_cost(19.005), "~$19.00");
+    assert_eq!(format_cost(-1.0), "unpriced");
 }
 
 #[test]

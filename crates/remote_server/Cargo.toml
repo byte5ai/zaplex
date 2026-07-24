@@ -23,6 +23,7 @@ uuid.workspace = true
 warp_core.workspace = true
 warp_util.workspace = true
 warpui.workspace = true
+zaplex_remote_session.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 async-io.workspace = true

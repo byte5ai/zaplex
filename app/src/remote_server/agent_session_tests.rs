@@ -23,6 +23,9 @@ fn sample(state: SessionState, provider: Provider, effort: Option<String>) -> Se
         config_dir: Some("/home/me/.codex-work".to_string()),
         account_email: Some("me@example.de".to_string()),
         process_fingerprint: Some("linux-v1:boot-id:12345".to_string()),
+        pty_session_id: Some("pty-7".to_string()),
+        pty_session_generation: Some(42),
+        pty_foreground: true,
         // Millisecond-precise so the epoch-millis round-trip is exact.
         last_activity: Utc
             .timestamp_millis_opt(1_720_000_000_123)
@@ -48,10 +51,38 @@ fn snapshot_round_trips_through_proto() {
     assert_eq!(proto.provider, "codex");
     assert_eq!(proto.effort, "high");
     assert_eq!(proto.process_fingerprint, "linux-v1:boot-id:12345");
+    assert_eq!(proto.pty_session_id, "pty-7");
+    assert_eq!(proto.pty_session_generation, 42);
+    assert!(proto.pty_foreground);
     assert_eq!(proto.last_activity_epoch_millis, 1_720_000_000_123);
 
     let back = proto_to_snapshot(&proto);
     assert_eq!(back, original);
+}
+
+#[test]
+fn inventory_round_trips_pty_id() {
+    let original = sample(SessionState::Active, Provider::Codex, None);
+    let wire = snapshot_to_proto(&original);
+    let decoded = proto_to_snapshot(&wire);
+
+    assert_eq!(decoded.pty_session_id.as_deref(), Some("pty-7"));
+    assert_eq!(decoded.pty_session_generation, Some(42));
+    assert!(decoded.pty_foreground);
+}
+
+#[test]
+fn agent_row_attach_identity_keeps_all_routing_dimensions() {
+    let original = sample(SessionState::Active, Provider::Codex, None);
+    let identity = snapshot_agent_identity(&original);
+
+    assert_eq!(identity.session_id, original.session_id);
+    assert_eq!(identity.provider, "codex");
+    assert_eq!(
+        identity.account_email,
+        original.account_email.unwrap_or_default()
+    );
+    assert_eq!(identity.config_dir, original.config_dir.unwrap_or_default());
 }
 
 /// All four states map to their lowercase strings and back.

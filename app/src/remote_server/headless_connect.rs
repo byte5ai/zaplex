@@ -23,7 +23,9 @@ use remote_server::auth::RemoteServerAuthContext;
 use remote_server::proto::SessionInfo;
 use remote_server::transport::{Connection, RemoteTransport};
 use warp_core::SessionId;
-use warp_ssh_manager::{AuthType, SshServerInfo};
+use warp_ssh_manager::{
+    build_ssh_args, validate_ssh_endpoint, AuthType, EndpointUse, SshServerInfo,
+};
 use warpui::r#async::executor::Background;
 
 use super::ssh_transport::SshTransport;
@@ -94,11 +96,55 @@ async fn control_master_alive(socket_path: &Path) -> bool {
     )
 }
 
+fn control_master_args(server: &SshServerInfo, socket_path: &Path) -> Result<Vec<String>> {
+    let endpoint =
+        validate_ssh_endpoint(EndpointUse::Connect, &server.host, &server.port.to_string())
+            .map_err(|error| anyhow!(error))?;
+    let mut validated_server = server.clone();
+    validated_server.host = endpoint.host;
+    validated_server.port = endpoint.port;
+
+    let mut args: Vec<String> = build_ssh_args(&validated_server)
+        .into_iter()
+        .skip(1)
+        .collect();
+    let destination_delimiter = args
+        .iter()
+        .position(|arg| arg == "--")
+        .ok_or_else(|| anyhow!("SSH destination delimiter is missing"))?;
+    args.splice(
+        destination_delimiter..destination_delimiter,
+        [
+            "-f".into(), // background after authentication
+            "-N".into(), // no remote command — pure multiplexing master
+            "-o".into(),
+            "ControlMaster=auto".into(),
+            "-o".into(),
+            // Idle timeout, NOT `yes`: `yes` keeps the backgrounded master alive
+            // forever (it even survives app exit, since `-f` detaches it), and daemon
+            // sessions no longer stop it on tab close (it's a shared per-host master).
+            // A timeout lets it self-retire after the last client goes idle, while
+            // still being reused for reconnects / new tabs within the window. The
+            // remote daemon session is independent of the master and survives either way.
+            "ControlPersist=600".into(),
+            "-o".into(),
+            format!("ControlPath={}", socket_path.display()),
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "-o".into(),
+            "ConnectTimeout=10".into(),
+        ],
+    );
+    Ok(args)
+}
+
 /// Ensures a ControlMaster is up at `socket_path` (idempotent via
 /// `ControlMaster=auto` + `ControlPersist`). Spawns `ssh -f -N …`, which
 /// authenticates and then backgrounds itself; the master socket exists by the
 /// time the foreground process exits. Key/agent auth only (`BatchMode=yes`).
 pub async fn ensure_control_master(server: &SshServerInfo, socket_path: &Path) -> Result<()> {
+    let args = control_master_args(server, socket_path)?;
+
     if socket_path.exists() {
         // A socket file is present, but the master may have died on an SSH drop,
         // leaving a stale socket. Verify it's actually serving: reuse a live
@@ -114,44 +160,6 @@ pub async fn ensure_control_master(server: &SshServerInfo, socket_path: &Path) -
         );
         let _ = std::fs::remove_file(socket_path);
     }
-
-    let mut args: Vec<String> = Vec::new();
-    if server.port != 22 {
-        args.push("-p".into());
-        args.push(server.port.to_string());
-    }
-    if let Some(key) = server.key_path.as_deref().filter(|p| !p.is_empty()) {
-        args.push("-i".into());
-        args.push(key.to_string());
-    }
-    args.extend([
-        "-f".into(), // background after authentication
-        "-N".into(), // no remote command — pure multiplexing master
-        "-o".into(),
-        "ControlMaster=auto".into(),
-        "-o".into(),
-        // Idle timeout, NOT `yes`: `yes` keeps the backgrounded master alive
-        // forever (it even survives app exit, since `-f` detaches it), and daemon
-        // sessions no longer stop it on tab close (it's a shared per-host master).
-        // A timeout lets it self-retire after the last client goes idle, while
-        // still being reused for reconnects / new tabs within the window. The
-        // remote daemon session is independent of the master and survives either way.
-        "ControlPersist=600".into(),
-        "-o".into(),
-        format!("ControlPath={}", socket_path.display()),
-        "-o".into(),
-        "BatchMode=yes".into(),
-        "-o".into(),
-        "ConnectTimeout=10".into(),
-        "-o".into(),
-        "StrictHostKeyChecking=accept-new".into(),
-    ]);
-    let target = if server.username.is_empty() {
-        server.host.clone()
-    } else {
-        format!("{}@{}", server.username, server.host)
-    };
-    args.push(target);
 
     let output = tokio::time::timeout(
         Duration::from_secs(20),
@@ -353,5 +361,52 @@ mod tests {
         assert_ne!(a, b, "each allocation is unique");
         assert!(a.as_u64() >= DAEMON_SESSION_ID_BASE, "top-half id (no collision with shell ids)");
         assert!(b.as_u64() >= DAEMON_SESSION_ID_BASE);
+    }
+
+    #[test]
+    fn headless_control_master_rejects_invalid_endpoints_before_spawn() {
+        for (host, port) in [
+            ("", 22),
+            ("   ", 22),
+            ("-oProxyCommand=malicious", 22),
+            ("host with spaces", 22),
+            ("example.com", 0),
+        ] {
+            let mut invalid = server(AuthType::Key);
+            invalid.host = host.to_string();
+            invalid.port = port;
+            assert!(
+                control_master_args(&invalid, Path::new("/tmp/zaplex-test-control")).is_err(),
+                "headless ControlMaster must reject {host:?}:{port}"
+            );
+        }
+    }
+
+    #[test]
+    fn headless_control_master_uses_l2_host_key_and_argument_policy() {
+        let args = control_master_args(
+            &server(AuthType::Key),
+            Path::new("/tmp/zaplex-test-control"),
+        )
+        .expect("valid endpoint should produce arguments");
+        let destination_delimiter = args
+            .iter()
+            .position(|arg| arg == "--")
+            .expect("destination must be separated from options");
+
+        assert_eq!(
+            &args[destination_delimiter + 1..],
+            &["me@example.com".to_string()]
+        );
+        assert!(args[..destination_delimiter]
+            .iter()
+            .any(|arg| arg == "StrictHostKeyChecking=ask"));
+        assert!(!args
+            .iter()
+            .any(|arg| arg == "StrictHostKeyChecking=accept-new"
+                || arg == "StrictHostKeyChecking=no"));
+        assert!(args[..destination_delimiter]
+            .iter()
+            .any(|arg| arg == "ControlMaster=auto"));
     }
 }

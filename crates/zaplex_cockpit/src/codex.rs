@@ -96,10 +96,15 @@ pub fn discover_accounts(codex_home: &Path) -> Vec<Account> {
 /// `reasoning_output_tokens` from a token-usage object.
 fn tokens_from(obj: &Value) -> (u64, u64, u64, u64) {
     let n = |k: &str| obj.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    let input = n("input_tokens");
+    let cached = n("cached_input_tokens");
     (
-        n("input_tokens"),
+        // Codex reports cached input as part of `input_tokens`. Store only the
+        // uncached remainder here; `cache_read` owns the cached part so totals,
+        // work, and pricing each count every token once.
+        input.saturating_sub(cached),
         n("output_tokens"),
-        n("cached_input_tokens"),
+        cached,
         n("reasoning_output_tokens"),
     )
 }
@@ -142,7 +147,10 @@ pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry
         // Per-turn usage; ignore cumulative `total_token_usage` to avoid double counts.
         if let Some(usage) = find(&v, "last_token_usage") {
             let (input, output, cached, reasoning) = tokens_from(usage);
-            if input + output + cached + reasoning > 0 {
+            if [input, output, cached, reasoning]
+                .into_iter()
+                .any(|n| n > 0)
+            {
                 entries.push(UsageEntry {
                     ts: current_ts,
                     provider: Provider::Codex,

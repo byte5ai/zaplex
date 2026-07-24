@@ -12,17 +12,17 @@ use warpui::r#async::{executor, FutureExt as _};
 use crate::proto::{
     client_message, read_file_chunk_response, server_message, Abort, AgentProcessSignal,
     AgentProcessSignalRequest, AgentProcessSignalResponse, AgentProcessSignalStatus,
-    AgentSessionList, AttachSession, Authenticate, BufferEdit, ClientMessage, CloseBuffer,
-    CreateDirectory, CreateDirectoryResponse, DeleteFile, DetachSession, ErrorCode, HostExec,
-    HostExecResult, Initialize, InitializeResponse, ListAgentSessions, ListDirectory,
-    ListDirectoryResponse, ListSessions, LoadRepoMetadataDirectoryResponse,
-    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, OpenSession, ReadFileChunk,
-    ReadFileChunkResponse, ReadFileContextRequest, ReadFileContextResponse, ResizeSession,
-    ResolveConflict, ResolveConflictResponse, ResolvePath, ResolvePathResponse, RunCommandRequest,
-    RunCommandResponse, SaveBuffer, SaveBufferResponse, ServerMessage, SessionAttached,
-    SessionBootstrapped, SessionInput, SessionList, SessionOpened, SessionSize,
-    SetBootstrapPreamble, StartupCommandAck, TextEdit, WriteFile, WriteFileChunk,
-    WriteFileChunkResponse,
+    AgentPtyBindingResponse, AgentSessionIdentity, AgentSessionList, AttachSession, Authenticate,
+    BindAgentPty, BufferEdit, ClientMessage, CloseBuffer, CreateDirectory, CreateDirectoryResponse,
+    DeleteFile, DetachSession, ErrorCode, HostExec, HostExecResult, Initialize, InitializeResponse,
+    ListAgentSessions, ListDirectory, ListDirectoryResponse, ListSessions,
+    LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, OpenBuffer,
+    OpenBufferResponse, OpenSession, ReadFileChunk, ReadFileChunkResponse, ReadFileContextRequest,
+    ReadFileContextResponse, ResizeSession, ResolveConflict, ResolveConflictResponse, ResolvePath,
+    ResolvePathResponse, RunCommandRequest, RunCommandResponse, SaveBuffer, SaveBufferResponse,
+    ServerMessage, SessionAttached, SessionBootstrapped, SessionInput, SessionList, SessionOpened,
+    SessionSize, SetBootstrapPreamble, StartupCommandAck, TextEdit, UnbindAgentPty, WriteFile,
+    WriteFileChunk, WriteFileChunkResponse,
 };
 
 use crate::protocol::{self, ProtocolError, RequestId};
@@ -227,6 +227,7 @@ impl RemoteServerClient {
             request_id: request_id.to_string(),
             message: Some(client_message::Message::Initialize(Initialize {
                 auth_token: auth_token.unwrap_or_default().to_owned(),
+                features: zaplex_remote_session::types::supported_features(),
             })),
         };
 
@@ -713,6 +714,30 @@ impl RemoteServerClient {
         session_id: String,
         last_seq: u64,
     ) -> Result<SessionAttached, ClientError> {
+        self.attach_session_generation(session_id, last_seq, None)
+            .await
+    }
+
+    /// Attaches only if the daemon still owns the expected PTY generation.
+    pub async fn attach_session_generation(
+        &self,
+        session_id: String,
+        last_seq: u64,
+        expected_generation: Option<u64>,
+    ) -> Result<SessionAttached, ClientError> {
+        self.attach_session_generation_and_agent(session_id, last_seq, expected_generation, None)
+            .await
+    }
+
+    /// Attaches only while both the PTY generation and optional foreground
+    /// agent identity still match the capability-gated inventory row.
+    pub async fn attach_session_generation_and_agent(
+        &self,
+        session_id: String,
+        last_seq: u64,
+        expected_generation: Option<u64>,
+        expected_agent_binding: Option<AgentSessionIdentity>,
+    ) -> Result<SessionAttached, ClientError> {
         let request_id = RequestId::new();
         let msg = ClientMessage {
             request_id: request_id.to_string(),
@@ -722,6 +747,8 @@ impl RemoteServerClient {
                 // This client feeds `SessionAttached.bootstrap_preamble` on adopt
                 // (T1.3), so opt in to receiving it.
                 supports_bootstrap_preamble: true,
+                expected_generation,
+                expected_agent_binding,
             })),
         };
         let response = self.send_request(request_id, msg).await?;
@@ -729,6 +756,60 @@ impl RemoteServerClient {
             Some(server_message::Message::SessionAttached(resp)) => Ok(resp),
             other => {
                 log::error!("Unexpected response variant for AttachSession: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Binds a CLI-agent conversation to its generation-checked daemon PTY.
+    pub async fn bind_agent_pty(
+        &self,
+        agent: AgentSessionIdentity,
+        pty_session_id: String,
+        pty_session_generation: u64,
+        handoff_from: Option<AgentSessionIdentity>,
+    ) -> Result<AgentPtyBindingResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::BindAgentPty(BindAgentPty {
+                agent: Some(agent),
+                pty_session_id,
+                pty_session_generation,
+                handoff_from,
+            })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::AgentPtyBindingResponse(response)) => Ok(response),
+            other => {
+                log::error!("Unexpected response variant for BindAgentPty: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Unbinds one CLI-agent identity from its generation-checked daemon PTY.
+    pub async fn unbind_agent_pty(
+        &self,
+        agent: AgentSessionIdentity,
+        pty_session_id: String,
+        pty_session_generation: u64,
+    ) -> Result<AgentPtyBindingResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::UnbindAgentPty(UnbindAgentPty {
+                agent: Some(agent),
+                pty_session_id,
+                pty_session_generation,
+            })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::AgentPtyBindingResponse(response)) => Ok(response),
+            other => {
+                log::error!("Unexpected response variant for UnbindAgentPty: {other:?}");
                 Err(ClientError::UnexpectedResponse)
             }
         }

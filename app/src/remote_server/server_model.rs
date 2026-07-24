@@ -1,3 +1,4 @@
+use crate::terminal::bootstrap::{daemon_bootstrap_delivery, DaemonBootstrapDelivery};
 use crate::terminal::shell::ShellType;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
@@ -19,24 +20,28 @@ use warp_util::file::FileId;
 use super::proto::{
     client_message, delete_file_response, run_command_response, server_message,
     write_file_response, Abort, AgentProcessSignal, AgentProcessSignalRequest,
-    AgentProcessSignalResponse, AgentProcessSignalStatus, AgentSessionList, Authenticate,
-    ClientMessage, DeleteFile, DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse,
-    FailedFileRead, FileContextProto, FileOperationError, HostExec, HostExecResult, Initialize,
-    InitializeResponse, NavigatedToDirectory, NavigatedToDirectoryResponse,
-    ReadFileContextResponse, RunCommandError, RunCommandErrorCode, RunCommandRequest,
-    RunCommandResponse, RunCommandSuccess, ServerMessage, SessionBootstrapped, StartupCommandAck,
-    WriteFile, WriteFileResponse, WriteFileSuccess,
+    AgentProcessSignalResponse, AgentProcessSignalStatus, AgentPtyBindingResponse,
+    AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionList, Authenticate, ClientMessage,
+    DeleteFile, DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse, FailedFileRead,
+    FileContextProto, FileOperationError, HostExec, HostExecResult, Initialize, InitializeResponse,
+    NavigatedToDirectory, NavigatedToDirectoryResponse, ReadFileContextResponse, RunCommandError,
+    RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess, ServerMessage,
+    SessionBootstrapped, StartupCommandAck, WriteFile, WriteFileResponse, WriteFileSuccess,
 };
-use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
-use zaplex_remote_session::types::supported_features;
 #[cfg(unix)]
 use super::proto::{
-    AttachSession, CloseSession, DetachSession, OpenSession, ResizeSession, SessionAttached,
-    SessionExited, SessionInfo, SessionInput, SessionList, SessionNotice, SessionOpened,
-    SessionOutput, SessionSize, SetBootstrapPreamble,
+    AttachSession, BindAgentPty, CloseSession, DetachSession, OpenSession, ResizeSession,
+    SessionAttached, SessionExited, SessionInfo, SessionInput, SessionList, SessionNotice,
+    SessionOpened, SessionOutput, SessionSize, SetBootstrapPreamble, UnbindAgentPty,
 };
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
+#[cfg(unix)]
+use zaplex_remote_session::agent_binding::{
+    AgentIdentity, AgentPtyBindings, BindingError, BindingRequest,
+};
+use zaplex_remote_session::types::{supported_features, FEATURE_AGENT_PTY_BINDING};
 
 // Buffer-sync related: depends on GlobalBufferModel, which server-local operations are only
 // available under `local_fs`, so the entire server-side buffer handling is gated by `local_fs`.
@@ -270,6 +275,8 @@ pub struct ServerModel {
     /// a connection's `Uuid` to the channel the connection task drains to
     /// write `ServerMessage`s back to its proxy.
     connection_senders: HashMap<ConnectionId, async_channel::Sender<ServerMessage>>,
+    /// Capabilities advertised by each connected client during Initialize.
+    connection_features: HashMap<ConnectionId, HashSet<String>>,
     /// Per-connection set of repo roots for which we've already sent a
     /// snapshot in this connection's lifetime.
     ///
@@ -305,6 +312,12 @@ pub struct ServerModel {
     /// Live daemon-hosted terminal sessions, keyed by their daemon-assigned id.
     #[cfg(unix)]
     sessions: HashMap<String, super::session_host::Session>,
+    /// Generation-checked agent associations for live daemon PTYs.
+    #[cfg(unix)]
+    agent_pty_bindings: AgentPtyBindings,
+    /// Monotonic generation assigned to the next PTY opened by this daemon.
+    #[cfg(unix)]
+    next_pty_generation: u64,
 }
 
 impl Entity for ServerModel {
@@ -323,6 +336,7 @@ impl ServerModel {
         );
         let mut model = Self {
             connection_senders: HashMap::new(),
+            connection_features: HashMap::new(),
             snapshot_sent_roots_by_connection: HashMap::new(),
             grace_timer_cancel: None,
             in_progress: HashMap::new(),
@@ -334,6 +348,10 @@ impl ServerModel {
             auth_token: None,
             #[cfg(unix)]
             sessions: HashMap::new(),
+            #[cfg(unix)]
+            agent_pty_bindings: AgentPtyBindings::default(),
+            #[cfg(unix)]
+            next_pty_generation: 1,
         };
         // Subscribe to FileModel and RepoMetadataModel events
         // file operation results and repo metadata pushes are forwarded to all
@@ -636,6 +654,7 @@ impl ServerModel {
             handle.abort();
         }
         self.connection_senders.insert(conn_id, conn_tx);
+        self.connection_features.insert(conn_id, HashSet::new());
         self.snapshot_sent_roots_by_connection
             .insert(conn_id, HashSet::new());
         ctx.notify();
@@ -645,6 +664,7 @@ impl ServerModel {
     /// and starts the grace timer if no connections remain.
     pub fn deregister_connection(&mut self, conn_id: ConnectionId, ctx: &mut ModelContext<Self>) {
         self.snapshot_sent_roots_by_connection.remove(&conn_id);
+        self.connection_features.remove(&conn_id);
         // Guard against double-deregister (reader and writer tasks both call
         // this on connection close; the second call must be a safe no-op).
         if self.connection_senders.remove(&conn_id).is_none() {
@@ -722,7 +742,7 @@ impl ServerModel {
 
         let outcome = match msg.message {
             Some(client_message::Message::Initialize(msg)) => {
-                self.handle_initialize(msg, &request_id)
+                self.handle_initialize(conn_id, msg, &request_id)
             }
             Some(client_message::Message::Authenticate(msg)) => {
                 self.handle_authenticate(msg);
@@ -802,7 +822,7 @@ impl ServerModel {
             }
             #[cfg(unix)]
             Some(client_message::Message::SessionInput(msg)) => {
-                match self.handle_session_input(msg) {
+                match self.handle_session_input(conn_id, msg) {
                     Some(ack) => {
                         HandlerOutcome::Sync(server_message::Message::StartupCommandAck(ack))
                     }
@@ -811,7 +831,7 @@ impl ServerModel {
             }
             #[cfg(unix)]
             Some(client_message::Message::ResizeSession(msg)) => {
-                self.handle_resize_session(msg);
+                self.handle_resize_session(conn_id, msg);
                 return;
             }
             #[cfg(unix)]
@@ -840,6 +860,24 @@ impl ServerModel {
             // No session host off unix → nothing to capture; drop the notification.
             #[cfg(not(unix))]
             Some(client_message::Message::SetBootstrapPreamble(_)) => return,
+            #[cfg(unix)]
+            Some(client_message::Message::BindAgentPty(msg)) => {
+                self.handle_bind_agent_pty(conn_id, msg)
+            }
+            #[cfg(unix)]
+            Some(client_message::Message::UnbindAgentPty(msg)) => {
+                self.handle_unbind_agent_pty(conn_id, msg)
+            }
+            #[cfg(not(unix))]
+            Some(
+                client_message::Message::BindAgentPty(_)
+                | client_message::Message::UnbindAgentPty(_),
+            ) => HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                AgentPtyBindingResponse {
+                    status: AgentPtyBindingStatus::CapabilityRequired.into(),
+                    message: "agent-pty-binding requires a unix daemon".to_string(),
+                },
+            )),
             // Agent-session inventory (Agent-Cockpit): report this host's
             // Claude/Codex agent-sessions discovered on the daemon's filesystem.
             // Not PTY-bound, so available on every platform.
@@ -991,8 +1029,15 @@ impl ServerModel {
     /// deployed builds. The client treats an empty version as "unknown" and
     /// skips strict version enforcement, which keeps the
     /// `script/deploy_remote_server` developer workflow functional.
-    fn handle_initialize(&mut self, msg: Initialize, request_id: &RequestId) -> HandlerOutcome {
+    fn handle_initialize(
+        &mut self,
+        conn_id: ConnectionId,
+        msg: Initialize,
+        request_id: &RequestId,
+    ) -> HandlerOutcome {
         log::info!("Handling Initialize (request_id={request_id})");
+        self.connection_features
+            .insert(conn_id, msg.features.into_iter().collect());
         if !msg.auth_token.is_empty() {
             self.auth_token = Some(msg.auth_token);
         }
@@ -1007,6 +1052,12 @@ impl ServerModel {
                 features: supported_features(),
             },
         ))
+    }
+
+    fn client_supports_agent_pty_binding(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_AGENT_PTY_BINDING))
     }
 
     /// Handles `Authenticate` by replacing the daemon-wide credential.
@@ -2220,7 +2271,25 @@ impl ServerModel {
         let handle = self.spawn_request_handler(
             request_id.clone(),
             async move { collect_agent_sessions() },
-            move |me, sessions, _ctx| {
+            move |me, mut sessions, _ctx| {
+                #[cfg(unix)]
+                if me.client_supports_agent_pty_binding(conn_id_for_response) {
+                    for session in &mut sessions {
+                        let identity = AgentIdentity {
+                            provider: session.provider.clone(),
+                            session_id: session.session_id.clone(),
+                            account_email: (!session.account_email.is_empty())
+                                .then(|| session.account_email.clone()),
+                            config_dir: (!session.config_dir.is_empty())
+                                .then(|| session.config_dir.clone()),
+                        };
+                        if let Some(binding) = me.agent_pty_bindings.binding_for(&identity) {
+                            session.pty_session_id = binding.pty_session_id.clone();
+                            session.pty_session_generation = binding.pty_generation;
+                            session.pty_foreground = binding.foreground;
+                        }
+                    }
+                }
                 me.send_server_message(
                     Some(conn_id_for_response),
                     Some(&request_id_for_response),
@@ -2236,7 +2305,170 @@ impl ServerModel {
 /// Daemon-side session-host handlers (Stage 1). Unix-only: the daemon owns the
 /// PTYs. The per-session state and async tasks live in `super::session_host`.
 #[cfg(unix)]
+fn agent_identity_from_proto(
+    identity: Option<AgentSessionIdentity>,
+) -> Result<AgentIdentity, AgentPtyBindingResponse> {
+    let Some(identity) = identity else {
+        return Err(agent_pty_binding_response(
+            AgentPtyBindingStatus::InvalidRequest,
+            "agent identity is required",
+        ));
+    };
+    if identity.provider.is_empty() || identity.session_id.is_empty() {
+        return Err(agent_pty_binding_response(
+            AgentPtyBindingStatus::InvalidRequest,
+            "agent provider and session id are required",
+        ));
+    }
+    Ok(AgentIdentity {
+        provider: identity.provider,
+        session_id: identity.session_id,
+        account_email: (!identity.account_email.is_empty()).then_some(identity.account_email),
+        config_dir: (!identity.config_dir.is_empty()).then_some(identity.config_dir),
+    })
+}
+
+#[cfg(unix)]
+fn agent_identity_to_proto(identity: &AgentIdentity) -> AgentSessionIdentity {
+    AgentSessionIdentity {
+        session_id: identity.session_id.clone(),
+        provider: identity.provider.clone(),
+        account_email: identity.account_email.clone().unwrap_or_default(),
+        config_dir: identity.config_dir.clone().unwrap_or_default(),
+    }
+}
+
+#[cfg(unix)]
+fn agent_pty_binding_response(
+    status: AgentPtyBindingStatus,
+    message: impl Into<String>,
+) -> AgentPtyBindingResponse {
+    AgentPtyBindingResponse {
+        status: status.into(),
+        message: message.into(),
+    }
+}
+
+#[cfg(unix)]
+fn binding_error_response(error: BindingError) -> AgentPtyBindingResponse {
+    match error {
+        BindingError::PtyNotFound => agent_pty_binding_response(
+            AgentPtyBindingStatus::PtyNotFound,
+            "PTY session was not found",
+        ),
+        BindingError::StaleGeneration => agent_pty_binding_response(
+            AgentPtyBindingStatus::StaleGeneration,
+            "PTY generation is stale",
+        ),
+        BindingError::ForeignConnection => agent_pty_binding_response(
+            AgentPtyBindingStatus::ForeignConnection,
+            "PTY is attached to another connection",
+        ),
+        BindingError::ForegroundConflict => agent_pty_binding_response(
+            AgentPtyBindingStatus::ForegroundConflict,
+            "PTY already has a live foreground agent",
+        ),
+        BindingError::HandoffMismatch => agent_pty_binding_response(
+            AgentPtyBindingStatus::HandoffMismatch,
+            "explicit handoff does not match the foreground agent",
+        ),
+        BindingError::IdentityNotBound => agent_pty_binding_response(
+            AgentPtyBindingStatus::IdentityNotBound,
+            "agent identity is not bound to this PTY",
+        ),
+        BindingError::IdentityAlreadyBound => agent_pty_binding_response(
+            AgentPtyBindingStatus::IdentityAlreadyBound,
+            "agent identity is already bound to another PTY",
+        ),
+    }
+}
+
+#[cfg(unix)]
 impl ServerModel {
+    fn handle_bind_agent_pty(
+        &mut self,
+        conn_id: ConnectionId,
+        msg: BindAgentPty,
+    ) -> HandlerOutcome {
+        if !self.client_supports_agent_pty_binding(conn_id) {
+            return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                agent_pty_binding_response(
+                    AgentPtyBindingStatus::CapabilityRequired,
+                    "client did not negotiate agent-pty-binding",
+                ),
+            ));
+        }
+        let agent = match agent_identity_from_proto(msg.agent) {
+            Ok(agent) => agent,
+            Err(response) => {
+                return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                    response,
+                ));
+            }
+        };
+        let handoff_from = match msg.handoff_from {
+            Some(identity) => match agent_identity_from_proto(Some(identity)) {
+                Ok(identity) => Some(identity),
+                Err(response) => {
+                    return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                        response,
+                    ));
+                }
+            },
+            None => None,
+        };
+        let response = match self.agent_pty_bindings.bind(
+            conn_id.as_u128(),
+            BindingRequest {
+                pty_session_id: msg.pty_session_id,
+                pty_generation: msg.pty_session_generation,
+                agent,
+                handoff_from,
+            },
+        ) {
+            Ok(()) => {
+                agent_pty_binding_response(AgentPtyBindingStatus::Bound, "agent bound to PTY")
+            }
+            Err(error) => binding_error_response(error),
+        };
+        HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(response))
+    }
+
+    fn handle_unbind_agent_pty(
+        &mut self,
+        conn_id: ConnectionId,
+        msg: UnbindAgentPty,
+    ) -> HandlerOutcome {
+        if !self.client_supports_agent_pty_binding(conn_id) {
+            return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                agent_pty_binding_response(
+                    AgentPtyBindingStatus::CapabilityRequired,
+                    "client did not negotiate agent-pty-binding",
+                ),
+            ));
+        }
+        let agent = match agent_identity_from_proto(msg.agent) {
+            Ok(agent) => agent,
+            Err(response) => {
+                return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                    response,
+                ));
+            }
+        };
+        let response = match self.agent_pty_bindings.unbind(
+            conn_id.as_u128(),
+            &agent,
+            &msg.pty_session_id,
+            msg.pty_session_generation,
+        ) {
+            Ok(()) => {
+                agent_pty_binding_response(AgentPtyBindingStatus::Unbound, "agent unbound from PTY")
+            }
+            Err(error) => binding_error_response(error),
+        };
+        HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(response))
+    }
+
     /// Opens a new daemon-hosted session: allocates a PTY, spawns a login
     /// shell, registers the session, and starts its reader + writer tasks.
     fn handle_open_session(
@@ -2245,6 +2477,13 @@ impl ServerModel {
         msg: OpenSession,
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
+        let generation = self.next_pty_generation;
+        let Some(next_pty_generation) = generation.checked_add(1) else {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::Internal.into(),
+                message: "PTY generation counter exhausted".to_string(),
+            }));
+        };
         let (rows, cols) = msg
             .size
             .as_ref()
@@ -2265,7 +2504,7 @@ impl ServerModel {
             .map(|b| (b as usize).min(HOST_RING_CAP_BYTES))
             .unwrap_or(super::session_host::RING_CEILING_BYTES);
 
-        let (leader_fd, child) = match crate::terminal::local_tty::spawn_session_pty(
+        let (leader_fd, child, bootstrap_file) = match crate::terminal::local_tty::spawn_session_pty(
             cwd.as_deref().map(std::path::Path::new),
             &shell,
             &msg.env,
@@ -2293,13 +2532,16 @@ impl ServerModel {
         };
 
         let session_id = uuid::Uuid::new_v4().to_string();
+        self.next_pty_generation = next_pty_generation;
         let (input_tx, input_rx) = async_channel::unbounded::<Vec<u8>>();
         let shell_pid = child.id();
         self.sessions.insert(
             session_id.clone(),
             super::session_host::Session {
+                generation,
                 leader: async_leader.clone(),
                 child,
+                _bootstrap_file: bootstrap_file,
                 ring: zaplex_remote_session::server::output_ring::OutputRing::new(ring_ceiling),
                 rows,
                 cols,
@@ -2314,6 +2556,8 @@ impl ServerModel {
                 ),
             },
         );
+        self.agent_pty_bindings
+            .register_pty(session_id.clone(), generation, conn_id.as_u128());
 
         let spawner = ctx.spawner();
         let exec = ctx.background_executor();
@@ -2353,14 +2597,15 @@ impl ServerModel {
         // (`arguments_for_session_spawning_command` + `enqueue_init_script`):
         //   • zsh  — spawn args use `--no-rcs` (no embedded init) → init + body.
         //   • bash — init is embedded in `--rcfile <(echo …)>` at spawn → body only.
-        //   • fish/pwsh — spawned as a plain login shell (RC loads at launch);
-        //     init-only, no body (their full body lacks a top-level idempotency
-        //     guard, unsafe to replay on a re-attachable daemon session).
+        //   • fish/pwsh — their spawn-time InitShell hook sources an idempotent
+        //     body from the session-owned temporary file. Nothing is typed
+        //     through the PTY, avoiding fish long-paste and pwsh input loss.
         //   • unclassified $SHELL — plain login shell, no integration.
-        let bootstrap =
-            match crate::terminal::local_tty::shell::supported_shell_path_and_type(&shell)
-                .map(|(_, shell_type)| shell_type)
-            {
+        let shell_type = crate::terminal::local_tty::shell::supported_shell_path_and_type(&shell)
+            .map(|(_, shell_type)| shell_type);
+        let bootstrap_delivery = daemon_bootstrap_delivery(shell_type);
+        let bootstrap = match bootstrap_delivery {
+            DaemonBootstrapDelivery::OrderedPty => match shell_type {
                 Some(ShellType::Zsh) => {
                     let mut buf = crate::terminal::bootstrap::init_shell_script_for_shell(
                         ShellType::Zsh,
@@ -2378,23 +2623,12 @@ impl ServerModel {
                     crate::terminal::bootstrap::script_for_shell(ShellType::Bash, &crate::ASSETS)
                         .into_owned(),
                 ),
-                // fish / PowerShell: spawned as a plain login shell (see
-                // `spawn_session_pty`), so RC loads at launch. Deliver only the
-                // InitShell emitter (the prior behavior) — their full body lacks
-                // a top-level idempotency guard and would double-load RC under a
-                // login shell, so it is intentionally not sent.
-                Some(other) => {
-                    let mut buf = crate::terminal::bootstrap::init_shell_script_for_shell(
-                        other,
-                        &crate::ASSETS,
-                    )
-                    .into_bytes();
-                    buf.extend_from_slice(other.execute_command_bytes());
-                    Some(buf)
+                Some(ShellType::Fish | ShellType::PowerShell) | None => {
+                    unreachable!("ordered PTY delivery is only for bash/zsh")
                 }
-                // Unclassified $SHELL: plain login shell, no integration.
-                None => None,
-            };
+            },
+            DaemonBootstrapDelivery::GuardedFile | DaemonBootstrapDelivery::NoIntegration => None,
+        };
         match bootstrap {
             Some(bootstrap) => {
                 if let Some(session) = self.sessions.get(&session_id) {
@@ -2405,17 +2639,29 @@ impl ServerModel {
                     }
                 }
             }
-            None => {
-                log::info!(
-                    "Daemon: shell {shell:?} runs as a plain shell (no block integration); \
-                     session {session_id}"
-                );
-            }
+            None => match bootstrap_delivery {
+                DaemonBootstrapDelivery::GuardedFile => {
+                    log::info!(
+                        "Daemon: bootstrapped session {session_id} from a guarded body file \
+                             (shell={shell})"
+                    );
+                }
+                DaemonBootstrapDelivery::OrderedPty => {
+                    unreachable!("bash/zsh always enqueue a bootstrap body")
+                }
+                DaemonBootstrapDelivery::NoIntegration => {
+                    log::info!(
+                        "Daemon: shell {shell:?} runs as a plain shell (no block integration); \
+                             session {session_id}"
+                    );
+                }
+            },
         }
 
         log::info!("Daemon: opened session {session_id} ({rows}x{cols}, shell={shell})");
         HandlerOutcome::Sync(server_message::Message::SessionOpened(SessionOpened {
             session_id,
+            generation,
         }))
     }
 
@@ -2426,12 +2672,31 @@ impl ServerModel {
     /// only after `try_send` succeeds, duplicate retries receive the same
     /// positive acknowledgement without a second enqueue, and a writer failure
     /// leaves the id retryable.
-    fn handle_session_input(&mut self, msg: SessionInput) -> Option<StartupCommandAck> {
+    fn handle_session_input(
+        &mut self,
+        conn_id: ConnectionId,
+        msg: SessionInput,
+    ) -> Option<StartupCommandAck> {
         let SessionInput {
             session_id,
             bytes,
             startup_command_id,
         } = msg;
+        if !self
+            .sessions
+            .get(&session_id)
+            .is_some_and(|session| session.attached == conn_id)
+        {
+            log::warn!(
+                "Daemon: rejecting input for session {session_id} from non-owning connection \
+                 {conn_id}"
+            );
+            return (!startup_command_id.is_empty()).then_some(StartupCommandAck {
+                session_id,
+                startup_command_id,
+                accepted: false,
+            });
+        }
         if startup_command_id.is_empty() {
             if let Some(session) = self.sessions.get(&session_id) {
                 if let Err(e) = session.input_tx.try_send(bytes) {
@@ -2502,12 +2767,58 @@ impl ServerModel {
         conn_id: ConnectionId,
         msg: AttachSession,
     ) -> HandlerOutcome {
+        let client_supports_agent_pty_binding = self.client_supports_agent_pty_binding(conn_id);
+        if client_supports_agent_pty_binding && msg.expected_generation.is_none() {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "agent-pty-binding attach requires a PTY generation".to_string(),
+            }));
+        }
+        if msg.expected_agent_binding.is_some() && !client_supports_agent_pty_binding {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "agent-pty-binding capability was not negotiated".to_string(),
+            }));
+        }
+        let expected_agent_binding = match msg.expected_agent_binding.clone() {
+            Some(identity) => match agent_identity_from_proto(Some(identity)) {
+                Ok(identity) => Some(identity),
+                Err(response) => {
+                    return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: response.message,
+                    }));
+                }
+            },
+            None => None,
+        };
         let Some(session) = self.sessions.get_mut(&msg.session_id) else {
             return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                 code: ErrorCode::InvalidRequest.into(),
                 message: format!("no such session: {}", msg.session_id),
             }));
         };
+        if msg
+            .expected_generation
+            .is_some_and(|expected| expected != session.generation)
+        {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: format!("stale generation for session {}", msg.session_id),
+            }));
+        }
+        if session.attached != conn_id
+            && session.attached != uuid::Uuid::nil()
+            && self.connection_senders.contains_key(&session.attached)
+        {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: format!(
+                    "session {} is already attached to a live connection; detach it before handoff",
+                    msg.session_id
+                ),
+            }));
+        }
         // T1.3: on a *fresh adopt* (`last_seq == 0`) whose ring has already
         // evicted seq 0, the bootstrap handshake is gone from the replay and the
         // client could never arm bootstrap. `plan_attach` ships the frozen
@@ -2520,9 +2831,40 @@ impl ServerModel {
             msg.last_seq,
             msg.supports_bootstrap_preamble,
         );
+        let generation = session.generation;
+        if let Some(expected_agent_binding) = expected_agent_binding.as_ref() {
+            let foreground = self
+                .agent_pty_bindings
+                .foreground_for_pty(&msg.session_id, generation);
+            if foreground.map(|binding| &binding.agent) != Some(expected_agent_binding) {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: "foreground agent changed since inventory refresh".to_string(),
+                }));
+            }
+        }
+        match self
+            .agent_pty_bindings
+            .attach_pty(&msg.session_id, generation, conn_id.as_u128())
+        {
+            Ok(()) => {}
+            Err(error) => {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: binding_error_response(error).message,
+                }));
+            }
+        }
         // Route live output to the reconnected connection from now on.
         session.attached = conn_id;
         session.last_attached_ms = now_epoch_millis();
+        let agent_binding = if client_supports_agent_pty_binding {
+            self.agent_pty_bindings
+                .foreground_for_pty(&msg.session_id, generation)
+                .map(|binding| agent_identity_to_proto(&binding.agent))
+        } else {
+            None
+        };
         let size = SessionSize {
             rows: session.rows as u32,
             cols: session.cols as u32,
@@ -2542,6 +2884,8 @@ impl ServerModel {
             base_seq,
             replay,
             bootstrap_preamble,
+            generation,
+            agent_binding,
         }))
     }
 
@@ -2623,6 +2967,7 @@ impl ServerModel {
                     // Per-session output-ring footprint the memory governor
                     // accounts against the host cap (see `gc_sessions`).
                     ring_bytes: session.ring.len() as u64,
+                    generation: session.generation,
                 }
             })
             .collect();
@@ -2657,6 +3002,7 @@ impl ServerModel {
         };
         for id in aged {
             if let Some(mut session) = self.sessions.remove(&id) {
+                self.agent_pty_bindings.remove_pty(&id, session.generation);
                 let _ = session.child.kill();
                 let _ = session.child.wait();
                 reaped += 1;
@@ -2684,6 +3030,7 @@ impl ServerModel {
                     break;
                 }
                 if let Some(mut session) = self.sessions.remove(&id) {
+                    self.agent_pty_bindings.remove_pty(&id, session.generation);
                     over = over.saturating_sub(session.ring.len());
                     let _ = session.child.kill();
                     let _ = session.child.wait();
@@ -2752,10 +3099,17 @@ impl ServerModel {
     }
 
     /// Applies a window resize to the session's PTY (TIOCSWINSZ).
-    fn handle_resize_session(&mut self, msg: ResizeSession) {
+    fn handle_resize_session(&mut self, conn_id: ConnectionId, msg: ResizeSession) {
         let Some(session) = self.sessions.get_mut(&msg.session_id) else {
             return;
         };
+        if session.attached != conn_id {
+            log::warn!(
+                "Daemon: rejecting resize for session {} from non-owning connection {conn_id}",
+                msg.session_id
+            );
+            return;
+        }
         let Some(size) = msg.size else {
             return;
         };
@@ -2779,6 +3133,8 @@ impl ServerModel {
         let Some(mut session) = self.sessions.remove(&msg.session_id) else {
             return;
         };
+        self.agent_pty_bindings
+            .remove_pty(&msg.session_id, session.generation);
         let _ = session.child.kill();
         let exit_code = session.child.wait().ok().and_then(|s| s.code());
         let conn = session.attached;
@@ -2848,6 +3204,8 @@ impl ServerModel {
         let Some(mut session) = self.sessions.remove(session_id) else {
             return;
         };
+        self.agent_pty_bindings
+            .remove_pty(session_id, session.generation);
         let exit_code = session.child.wait().ok().and_then(|s| s.code());
         let conn = session.attached;
         self.send_server_message(

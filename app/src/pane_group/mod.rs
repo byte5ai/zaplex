@@ -4921,6 +4921,8 @@ impl PaneGroup {
                     request.connection_session_id,
                     request.open_params,
                     request.adopt_pty_session_id,
+                    request.adopt_pty_generation,
+                    request.expected_agent_binding,
                     request.install_progress_rx,
                     request.host_label,
                     ctx,

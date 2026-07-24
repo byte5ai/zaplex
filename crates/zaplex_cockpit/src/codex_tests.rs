@@ -67,7 +67,7 @@ fn parse_transcript_sums_per_turn_and_ignores_cumulative_envelope() {
     assert_eq!(entries.len(), 1, "only the per-turn usage line counts");
     let e = &entries[0];
     assert_eq!(e.model, "gpt-5-codex");
-    assert_eq!(e.input, 200);
+    assert_eq!(e.input, 185, "cached input is excluded from uncached input");
     assert_eq!(e.output, 40);
     assert_eq!(e.cache_read, 15);
     assert_eq!(e.reasoning, 30);
@@ -78,6 +78,92 @@ fn parse_transcript_sums_per_turn_and_ignores_cumulative_envelope() {
             .unwrap()
             .with_timezone(&Utc)
     );
+}
+
+#[test]
+fn usage_subtracts_cached_tokens() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("rollout-x.jsonl");
+    write(
+        &path,
+        r#"{"type":"event_msg","last_token_usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10,"reasoning_output_tokens":5}}"#,
+    );
+
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].input, 10, "input excludes cached input");
+    assert_eq!(entries[0].cache_read, 90);
+}
+
+#[test]
+fn fixture_reports_total_115_work_25() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("rollout-x.jsonl");
+    write(
+        &path,
+        r#"{"type":"event_msg","last_token_usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10,"reasoning_output_tokens":5}}"#,
+    );
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+    let mut totals = crate::types::WindowTotals::default();
+    for entry in entries {
+        totals.add(&entry, &crate::pricing::PricingTable::default());
+    }
+
+    assert_eq!(totals.input, 10);
+    assert_eq!(totals.cache_read, 90);
+    assert_eq!(totals.total, 115);
+    assert_eq!(totals.work, 25);
+}
+
+#[test]
+fn cached_input_larger_than_input_saturates_at_zero() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("rollout-x.jsonl");
+    write(
+        &path,
+        r#"{"type":"event_msg","last_token_usage":{"input_tokens":10,"cached_input_tokens":90}}"#,
+    );
+
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+    assert_eq!(entries[0].input, 0);
+    assert_eq!(entries[0].cache_read, 90);
+}
+
+#[test]
+fn missing_usage_fields_are_zero_without_dropping_present_tokens() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("rollout-x.jsonl");
+    write(
+        &path,
+        r#"{"type":"event_msg","last_token_usage":{"cached_input_tokens":90,"reasoning_output_tokens":5}}"#,
+    );
+
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].input, 0);
+    assert_eq!(entries[0].output, 0);
+    assert_eq!(entries[0].cache_read, 90);
+    assert_eq!(entries[0].reasoning, 5);
 }
 
 #[test]

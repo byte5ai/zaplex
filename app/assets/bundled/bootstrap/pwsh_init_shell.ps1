@@ -31,5 +31,10 @@ function prompt {
     $oscJsonMarker = 'd'
     $oscParameterSeparator = ';'
     Write-Host "${oscStart}${oscJsonMarker}${oscParameterSeparator}${encodedMsg}${oscEnd}"
+    $daemonBootstrapFile = $env:ZAPLEX_DAEMON_BOOTSTRAP_FILE
+    if (-not [String]::IsNullOrEmpty($daemonBootstrapFile)) {
+        Remove-Item -Path env:ZAPLEX_DAEMON_BOOTSTRAP_FILE
+        . $daemonBootstrapFile
+    }
     return $null
 }

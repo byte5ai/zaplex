@@ -44,11 +44,16 @@ const READ_CHUNK: usize = 64 * 1024;
 /// A live daemon-hosted session: the PTY master, the shell child, the output
 /// ring, and the channel feeding the ordered input writer.
 pub(super) struct Session {
+    /// Monotonic daemon-process generation for stale-id rejection.
+    pub(super) generation: u64,
     /// PTY master, async-wrapped (non-blocking). Shared with the reader/writer
     /// tasks via `Arc`; keeping a clone here keeps the fd alive for resize.
     pub(super) leader: Arc<Async<File>>,
     /// The spawned login shell. Reaped on close / shell exit.
     pub(super) child: std::process::Child,
+    /// Keeps a fish/PowerShell bootstrap body file alive until the daemon
+    /// session ends. Their init hooks source this file exactly once.
+    pub(super) _bootstrap_file: Option<crate::terminal::TempBootstrapFile>,
     /// Replay buffer of recent output.
     pub(super) ring: OutputRing,
     pub(super) rows: usize,

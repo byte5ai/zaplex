@@ -4,12 +4,13 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use crate::proto::{
     client_message, read_file_chunk_response, resolve_path_response, run_command_response,
     server_message, write_file_chunk_response, AgentProcessSignal, AgentProcessSignalRequest,
-    AgentProcessSignalResponse, AgentProcessSignalStatus, AgentSessionInfo, AgentSessionList,
-    ClientMessage, ErrorCode, FileSystemEntryKind, HostExecResult, InitializeResponse,
-    ReadFileChunkResponse, ReadFileChunkSuccess, ResolvePathResponse, ResolvePathSuccess,
-    RunCommandResponse, RunCommandSuccess, ServerMessage, SessionAttached, SessionExited,
-    SessionInfo, SessionList, SessionOpened, SessionOutput, SessionSize, StartupCommandAck,
-    WriteFileChunkResponse, WriteFileChunkSuccess,
+    AgentProcessSignalResponse, AgentProcessSignalStatus, AgentPtyBindingResponse,
+    AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo, AgentSessionList, ClientMessage,
+    ErrorCode, FileSystemEntryKind, HostExecResult, InitializeResponse, ReadFileChunkResponse,
+    ReadFileChunkSuccess, ResolvePathResponse, ResolvePathSuccess, RunCommandResponse,
+    RunCommandSuccess, ServerMessage, SessionAttached, SessionExited, SessionInfo, SessionList,
+    SessionOpened, SessionOutput, SessionSize, StartupCommandAck, WriteFileChunkResponse,
+    WriteFileChunkSuccess,
 };
 use crate::protocol;
 use warp_core::SessionId;
@@ -93,6 +94,11 @@ async fn initialize_sends_empty_auth_token_when_none() {
         match &msg.message {
             Some(client_message::Message::Initialize(init)) => {
                 assert!(init.auth_token.is_empty());
+                #[cfg(unix)]
+                assert!(init
+                    .features
+                    .iter()
+                    .any(|feature| feature == "agent-pty-binding"));
             }
             other => panic!("Expected Initialize, got {other:?}"),
         }
@@ -434,6 +440,7 @@ async fn open_session_round_trip() {
         }
         server_message::Message::SessionOpened(SessionOpened {
             session_id: "sess-1".to_string(),
+            generation: 7,
         })
     });
 
@@ -474,6 +481,8 @@ async fn attach_session_round_trip() {
             base_seq: 42,
             replay: b"replayed".to_vec(),
             bootstrap_preamble: Vec::new(),
+            generation: 7,
+            agent_binding: None,
         })
     });
 
@@ -483,6 +492,91 @@ async fn attach_session_round_trip() {
         .unwrap();
     assert_eq!(resp.base_seq, 42);
     assert_eq!(resp.replay, b"replayed");
+}
+
+#[tokio::test]
+async fn generation_checked_attach_reaches_wire() {
+    let expected_agent = AgentSessionIdentity {
+        session_id: "agent-1".to_string(),
+        provider: "codex".to_string(),
+        account_email: "agent@example.com".to_string(),
+        config_dir: "/home/agent/.codex".to_string(),
+    };
+    let expected_agent_for_wire = expected_agent.clone();
+    let (client, _disconnect_rx, _executor) = setup_mock_client(move |msg| {
+        let Some(client_message::Message::AttachSession(attach)) = &msg.message else {
+            panic!("expected AttachSession");
+        };
+        assert_eq!(attach.session_id, "sess-1");
+        assert_eq!(attach.expected_generation, Some(9));
+        assert_eq!(
+            attach.expected_agent_binding.as_ref(),
+            Some(&expected_agent_for_wire)
+        );
+        server_message::Message::SessionAttached(SessionAttached {
+            session_id: attach.session_id.clone(),
+            size: None,
+            base_seq: 0,
+            replay: vec![],
+            bootstrap_preamble: vec![],
+            generation: 9,
+            agent_binding: None,
+        })
+    });
+
+    let attached = client
+        .attach_session_generation_and_agent("sess-1".to_string(), 0, Some(9), Some(expected_agent))
+        .await
+        .unwrap();
+    assert_eq!(attached.generation, 9);
+}
+
+#[tokio::test]
+async fn agent_pty_bind_and_unbind_reach_wire() {
+    let identity = AgentSessionIdentity {
+        session_id: "agent-1".to_string(),
+        provider: "codex".to_string(),
+        account_email: "agent@example.com".to_string(),
+        config_dir: "/home/agent/.codex".to_string(),
+    };
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| match &msg.message {
+        Some(client_message::Message::BindAgentPty(bind)) => {
+            assert_eq!(bind.agent.as_ref().unwrap().session_id, "agent-1");
+            assert_eq!(bind.pty_session_id, "pty-1");
+            assert_eq!(bind.pty_session_generation, 9);
+            server_message::Message::AgentPtyBindingResponse(AgentPtyBindingResponse {
+                status: AgentPtyBindingStatus::Bound.into(),
+                message: String::new(),
+            })
+        }
+        Some(client_message::Message::UnbindAgentPty(unbind)) => {
+            assert_eq!(unbind.agent.as_ref().unwrap().session_id, "agent-1");
+            assert_eq!(unbind.pty_session_id, "pty-1");
+            assert_eq!(unbind.pty_session_generation, 9);
+            server_message::Message::AgentPtyBindingResponse(AgentPtyBindingResponse {
+                status: AgentPtyBindingStatus::Unbound.into(),
+                message: String::new(),
+            })
+        }
+        other => panic!("expected agent PTY binding request, got {other:?}"),
+    });
+
+    let bound = client
+        .bind_agent_pty(identity.clone(), "pty-1".to_string(), 9, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        AgentPtyBindingStatus::try_from(bound.status).unwrap(),
+        AgentPtyBindingStatus::Bound
+    );
+    let unbound = client
+        .unbind_agent_pty(identity, "pty-1".to_string(), 9)
+        .await
+        .unwrap();
+    assert_eq!(
+        AgentPtyBindingStatus::try_from(unbound.status).unwrap(),
+        AgentPtyBindingStatus::Unbound
+    );
 }
 
 #[tokio::test]
@@ -731,6 +825,7 @@ async fn list_sessions_round_trip() {
                     alive: true,
                     last_attached_epoch_millis: 123,
                     ring_bytes: 0,
+                    generation: 7,
                 },
                 SessionInfo {
                     session_id: "s2".to_string(),
@@ -739,6 +834,7 @@ async fn list_sessions_round_trip() {
                     alive: true,
                     last_attached_epoch_millis: 456,
                     ring_bytes: 0,
+                    generation: 8,
                 },
             ],
         })
@@ -782,6 +878,9 @@ async fn list_agent_sessions_round_trip() {
                     account_email: "me@example.com".to_string(),
                     repo_root: "/home/me/proj".to_string(),
                     process_fingerprint: "linux-v1:boot-id:12345".to_string(),
+                    pty_session_id: "pty-7".to_string(),
+                    pty_session_generation: 7,
+                    pty_foreground: true,
                 },
                 AgentSessionInfo {
                     session_id: "a2".to_string(),
@@ -808,6 +907,9 @@ async fn list_agent_sessions_round_trip() {
                     account_email: String::new(),
                     repo_root: String::new(),
                     process_fingerprint: String::new(),
+                    pty_session_id: String::new(),
+                    pty_session_generation: 0,
+                    pty_foreground: false,
                 },
             ],
         })

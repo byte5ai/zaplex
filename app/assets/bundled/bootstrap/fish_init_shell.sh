@@ -7,3 +7,4 @@ set ZAPLEX_USING_WINDOWS_CON_PTY @@USING_CON_PTY_BOOLEAN@@
 # We send the InitShell hook via OSCs when on Windows and via DCSs otherwise.
 if test "$ZAPLEX_USING_WINDOWS_CON_PTY" = true; if test "$ZAPLEX_IN_MSYS2" = true; printf "$_msg"; else; printf '\e]9278;d;%s\x07' "$_msg"; end; else; printf '\e\x50\x24\x64%s\x9c' "$_msg"; end
 set -e _hostname _user _msg
+if test -n "$ZAPLEX_DAEMON_BOOTSTRAP_FILE"; set -l _zaplex_daemon_bootstrap_file "$ZAPLEX_DAEMON_BOOTSTRAP_FILE"; set -e ZAPLEX_DAEMON_BOOTSTRAP_FILE; source "$_zaplex_daemon_bootstrap_file"; end

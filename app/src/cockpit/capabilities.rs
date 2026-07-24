@@ -74,6 +74,19 @@ pub fn plan_session_open(
     }
 }
 
+/// Returns the only daemon PTY locator that may be attached for this row.
+///
+/// All three binding facts must agree: an id, a nonzero generation, and the
+/// daemon's foreground marker. Historical rows stay visible but are never
+/// attachable, and partial/legacy inventory fails closed.
+pub fn daemon_reattach_target(session: &SessionSnapshot) -> Option<(&str, u64)> {
+    let pty_session_id = session.pty_session_id.as_deref()?;
+    let generation = session.pty_session_generation.filter(|value| *value != 0)?;
+    session
+        .pty_foreground
+        .then_some((pty_session_id, generation))
+}
+
 /// Whether a terminal belongs to the fleet host named by an action. Locality is
 /// explicit; remote hosts match only by the daemon's stable id, never by label.
 pub fn session_host_matches(

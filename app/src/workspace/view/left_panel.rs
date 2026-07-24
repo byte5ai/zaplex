@@ -20,6 +20,7 @@ use warpui::{
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::skills::{SkillManager, SkillOpenOrigin};
+use crate::cockpit::CockpitPanel;
 use crate::code::editor_management::CodeSource;
 #[cfg(feature = "local_fs")]
 use crate::code::file_tree::FileTreeEvent;
@@ -31,7 +32,6 @@ use crate::pane_group::{PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesMo
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
 use crate::server::telemetry::{FileTreeSource, WarpDriveSource};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
-use crate::cockpit::CockpitPanel;
 use crate::skill_manager::{SkillManagerPanel, SkillManagerPanelEvent};
 use crate::ssh_manager::SshManagerPanel;
 use crate::terminal::model::session::Session;
@@ -153,6 +153,7 @@ pub enum LeftPanelEvent {
     AdoptDaemonSession {
         server: warp_ssh_manager::SshServerInfo,
         pty_session_id: String,
+        pty_generation: u64,
     },
 }
 
@@ -312,10 +313,12 @@ impl LeftPanelView {
                 SshManagerPanelEvent::AdoptDaemonSession {
                     server,
                     pty_session_id,
+                    pty_generation,
                 } => {
                     ctx.emit(LeftPanelEvent::AdoptDaemonSession {
                         server: server.clone(),
                         pty_session_id: pty_session_id.clone(),
+                        pty_generation: *pty_generation,
                     });
                 }
                 SshManagerPanelEvent::PersistenceError(msg) => {

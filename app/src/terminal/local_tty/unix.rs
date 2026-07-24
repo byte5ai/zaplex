@@ -1,5 +1,8 @@
 //! TTY related functionality.
-use crate::terminal::bootstrap::raw_init_shell_script_for_shell;
+use crate::terminal::bootstrap::{
+    daemon_bootstrap_delivery, raw_init_shell_script_for_shell, script_for_shell,
+    DaemonBootstrapDelivery,
+};
 use crate::terminal::cli_agent_sessions::event::current_protocol_version;
 use crate::terminal::local_tty::docker_sandbox::{
     DockerSandboxShellStarter, DOCKER_SANDBOX_HOME_DIR,
@@ -9,6 +12,7 @@ use crate::terminal::local_tty::shell::{
 };
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
+use crate::terminal::writeable_pty::{create_bootstrap_file, TempBootstrapFile};
 use crate::ASSETS;
 use warp_core::features::FeatureFlag;
 
@@ -38,6 +42,7 @@ use std::{
     io,
     mem::MaybeUninit,
     os::unix::{
+        ffi::OsStringExt,
         fs::DirBuilderExt,
         io::{AsRawFd, FromRawFd, RawFd},
     },
@@ -509,47 +514,48 @@ fn spawn_command_in_pty(
     })
 }
 
-/// Spawns a login shell on a freshly-allocated PTY for a daemon-hosted remote
-/// session, reusing the shared `spawn_command_in_pty` fork/`pre_exec` setup
-/// (controlling tty, signal reset, fd hygiene). Returns the owned PTY leader
-/// (master) fd and the spawned shell child.
-///
-/// Unlike the interactive client path this skips the Warp shell-integration
-/// wrapper (`build_host_shell_command`): the daemon session host just needs a
-/// real login shell on a PTY it owns, so the session outlives the SSH channel.
-#[cfg(unix)]
-pub(crate) fn spawn_session_pty(
-    cwd: Option<&Path>,
+struct SessionSpawnCommand {
+    command: Command,
+    bootstrap_file: Option<TempBootstrapFile>,
+    bootstrap_delivery: DaemonBootstrapDelivery,
+}
+
+fn session_spawn_command(
     shell: &str,
     env: &HashMap<String, String>,
-    rows: usize,
-    cols: usize,
-) -> Result<(std::os::fd::OwnedFd, std::process::Child)> {
+) -> Result<SessionSpawnCommand> {
     // Match the LOCAL app's shell-integration launch contract
     // (`build_host_shell_command` → `arguments_for_session_spawning_command`)
-    // for the shells whose full body `handle_open_session` delivers — i.e.
-    // **bash and zsh only**. For those, start with RC loading SUPPRESSED (zsh
-    // `--no-rcs`; bash `--rcfile <(echo <init>)>`): the shell *body* (written as
-    // session input in `handle_open_session`) sources the user's login RC
-    // itself, so the shell must not also source it at launch — a plain `-l`
-    // would double-load the profile (duplicated PATH, re-run login side effects,
-    // .rc-launched multiplexers firing before the body runs).
-    //
-    // Every other shell (fish, PowerShell, or an unclassified `$SHELL`) stays on
-    // a plain login shell: fish/pwsh get NO body (their full scripts lack a
-    // top-level idempotency guard, unsafe on re-attachable sessions), so
-    // RC-suppressing them would leave their profile unloaded. They keep the
-    // prior behavior — `-l` + an init-only write in `handle_open_session`.
-    // Whether this shell gets the RC-suppressed contract — and therefore the
-    // shell *body* as session input. Only those may have ECHO cleared below:
-    // their body ends with `stty sane`, which restores it. A shell that gets no
-    // body would never restore it and would type blind forever.
-    let mut delivers_body = false;
-    let mut command = match super::shell::supported_shell_path_and_type(shell) {
-        Some((resolved_path, shell_type))
-            if matches!(shell_type, ShellType::Bash | ShellType::Zsh) =>
-        {
-            delivers_body = true;
+    // for every supported shell. Bash/zsh receive the body through the ordered
+    // PTY writer. Fish/PowerShell use a temporary body file: their spawn-time
+    // InitShell hook sources it exactly once, avoiding fish's long-paste
+    // formatting explosion and PowerShell's dropped-character PTY behavior.
+    let supported_shell = super::shell::supported_shell_path_and_type(shell);
+    let shell_type = supported_shell.as_ref().map(|(_, shell_type)| *shell_type);
+    let bootstrap_delivery = daemon_bootstrap_delivery(shell_type);
+    let bootstrap_file = match bootstrap_delivery {
+        DaemonBootstrapDelivery::GuardedFile => {
+            let guarded_shell_type = match shell_type {
+                Some(shell_type @ (ShellType::Fish | ShellType::PowerShell)) => shell_type,
+                Some(ShellType::Bash | ShellType::Zsh) | None => {
+                    unreachable!("guarded file delivery is only for fish/PowerShell")
+                }
+            };
+            Some(
+                create_bootstrap_file(
+                    script_for_shell(guarded_shell_type, &ASSETS),
+                    guarded_shell_type,
+                    None::<&str>,
+                )
+                .ok_or_else(|| {
+                    anyhow::anyhow!("failed to create daemon {guarded_shell_type:?} bootstrap file")
+                })?,
+            )
+        }
+        DaemonBootstrapDelivery::OrderedPty | DaemonBootstrapDelivery::NoIntegration => None,
+    };
+    let mut command = match supported_shell {
+        Some((resolved_path, shell_type)) => {
             let path_str = resolved_path.to_string_lossy();
             let args = super::shell::arguments_for_session_spawning_command(&path_str, shell_type);
             let mut command = Command::new(resolved_path.as_os_str());
@@ -571,20 +577,60 @@ pub(crate) fn spawn_session_pty(
             }
             command
         }
-        _ => {
-            // fish / PowerShell / unclassified $SHELL: plain login shell so the
-            // user's profile (PATH etc.) is still loaded at launch. No body is
-            // written for these in `handle_open_session`, so there is no
-            // double-load.
+        None => {
+            // Unclassified shells retain the plain login-shell contract and
+            // receive no Zaplex bootstrap body.
             let mut command = Command::new(shell);
             command.arg("-l");
             command
         }
     };
+    command.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    if let Some(file) = bootstrap_file.as_ref() {
+        let path = file
+            .path_as_bytes()
+            .ok_or_else(|| anyhow::anyhow!("daemon bootstrap path is not available"))?;
+        // This is an internal one-shot capability, not client-controlled
+        // session environment. Apply it last so a colliding OpenSession value
+        // cannot suppress the body or redirect the shell to another file.
+        command.env("ZAPLEX_DAEMON_BOOTSTRAP_FILE", OsString::from_vec(path));
+    }
+    Ok(SessionSpawnCommand {
+        command,
+        bootstrap_file,
+        bootstrap_delivery,
+    })
+}
+
+/// Spawns a login shell on a freshly-allocated PTY for a daemon-hosted remote
+/// session, reusing the shared `spawn_command_in_pty` fork/`pre_exec` setup
+/// (controlling tty, signal reset, fd hygiene). Returns the owned PTY leader
+/// (master) fd, the spawned shell child, and an optional fish/PowerShell
+/// bootstrap file that must remain alive with the session.
+///
+/// Unlike the interactive client path this skips the Warp shell-integration
+/// wrapper (`build_host_shell_command`): the daemon session host just needs a
+/// real login shell on a PTY it owns, so the session outlives the SSH channel.
+#[cfg(unix)]
+pub(crate) fn spawn_session_pty(
+    cwd: Option<&Path>,
+    shell: &str,
+    env: &HashMap<String, String>,
+    rows: usize,
+    cols: usize,
+) -> Result<(
+    std::os::fd::OwnedFd,
+    std::process::Child,
+    Option<TempBootstrapFile>,
+)> {
+    let SessionSpawnCommand {
+        mut command,
+        bootstrap_file,
+        bootstrap_delivery,
+    } = session_spawn_command(shell, env)?;
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    command.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     if !env.contains_key("TERM") {
         command.env("TERM", "xterm-256color");
     }
@@ -657,7 +703,7 @@ pub(crate) fn spawn_session_pty(
     // Only for shells that receive the body — it ends with `stty sane`, which
     // restores this. Clearing it for a shell that gets no body would leave the
     // user typing invisibly.
-    if delivers_body {
+    if bootstrap_delivery == DaemonBootstrapDelivery::OrderedPty {
         if let Ok(mut tio) = termios::tcgetattr(info.result.leader_fd) {
             tio.local_flags.remove(LocalFlags::ECHO);
             // TCSANOW: take effect before the first byte, not after the queue
@@ -667,7 +713,7 @@ pub(crate) fn spawn_session_pty(
     }
     // SAFETY: `leader_fd` is a freshly-opened PTY master fd that we now own.
     let leader = unsafe { std::os::fd::OwnedFd::from_raw_fd(info.result.leader_fd) };
-    Ok((leader, info.child))
+    Ok((leader, info.child, bootstrap_file))
 }
 
 impl Pty {
@@ -1073,15 +1119,108 @@ fn test_get_pw_entry() {
 
 #[cfg(test)]
 mod session_pty_tests {
-    use super::spawn_session_pty;
+    use super::{session_spawn_command, spawn_session_pty};
     use crate::terminal::shell::ShellType;
     use std::collections::HashMap;
+    use std::ffi::OsString;
+    use std::fs;
     use std::io::{ErrorKind, Read, Write};
     use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::PermissionsExt;
     use std::time::{Duration, Instant};
 
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
         haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    #[test]
+    fn daemon_fish_and_pwsh_launch_contract_is_one_shot() {
+        for (shell_type, shell_name) in [(ShellType::Fish, "fish"), (ShellType::PowerShell, "pwsh")]
+        {
+            let dir = tempfile::tempdir().expect("temporary executable directory");
+            let shell_path = dir.path().join(shell_name);
+            fs::write(&shell_path, b"#!/bin/sh\n").expect("fake shell executable");
+            let mut permissions = fs::metadata(&shell_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&shell_path, permissions).unwrap();
+
+            let mut env = HashMap::new();
+            env.insert(
+                "ZAPLEX_DAEMON_BOOTSTRAP_FILE".to_string(),
+                "/tmp/client-controlled-bootstrap".to_string(),
+            );
+            let prepared =
+                session_spawn_command(shell_path.to_str().unwrap(), &env).expect("spawn contract");
+            assert_eq!(
+                prepared.bootstrap_delivery,
+                crate::terminal::bootstrap::DaemonBootstrapDelivery::GuardedFile,
+                "fish/PowerShell must use the same guarded-file contract as the server"
+            );
+
+            let bootstrap_file = prepared
+                .bootstrap_file
+                .as_ref()
+                .expect("fish/PowerShell require a session-owned body file");
+            let expected_route =
+                OsString::from_vec(bootstrap_file.path_as_bytes().expect("bootstrap path"));
+            let actual_route = prepared
+                .command
+                .get_envs()
+                .find_map(|(key, value)| (key == "ZAPLEX_DAEMON_BOOTSTRAP_FILE").then_some(value))
+                .flatten();
+            assert_eq!(
+                actual_route,
+                Some(expected_route.as_os_str()),
+                "the daemon-owned route must override a colliding client environment value"
+            );
+            let body = String::from_utf8(fs::read(&expected_route).expect("bootstrap body file"))
+                .expect("bootstrap body is UTF-8");
+            assert!(
+                body.len() > 1_000,
+                "the body must be the real bundled script"
+            );
+            match shell_type {
+                ShellType::Fish => {
+                    assert!(body.starts_with("if test \"$ZAPLEX_BOOTSTRAPPED\" != 1\n"));
+                    assert!(body.contains("set -g ZAPLEX_BOOTSTRAPPED 1"));
+                }
+                ShellType::PowerShell => {
+                    assert!(body.starts_with("param()\nif ($global:ZAPLEX_BOOTSTRAPPED -ne 1) {"));
+                    assert!(body.contains("$global:ZAPLEX_BOOTSTRAPPED = 1"));
+                }
+                ShellType::Bash | ShellType::Zsh => unreachable!(),
+            }
+            assert_eq!(
+                std::path::Path::new(&expected_route)
+                    .extension()
+                    .and_then(|s| s.to_str()),
+                (shell_type == ShellType::PowerShell).then_some("ps1")
+            );
+
+            let args = prepared
+                .command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            match shell_type {
+                ShellType::Fish => {
+                    assert_eq!(args.first().map(String::as_str), Some("--no-config"));
+                    assert_eq!(args.get(1).map(String::as_str), Some("-c"));
+                    assert!(args.get(2).is_some_and(|arg| {
+                        arg.contains("--login --init-command")
+                            && arg.contains("ZAPLEX_DAEMON_BOOTSTRAP_FILE")
+                    }));
+                }
+                ShellType::PowerShell => {
+                    assert_eq!(&args[..4], ["-NoLogo", "-NoProfile", "-NoExit", "-Command"]);
+                    assert!(args
+                        .get(4)
+                        .is_some_and(|arg| arg.contains("ZAPLEX_DAEMON_BOOTSTRAP_FILE")));
+                }
+                ShellType::Bash | ShellType::Zsh => unreachable!(),
+            }
+        }
     }
 
     /// Spawns a real shell on a daemon-owned PTY, applies a resize via
@@ -1097,7 +1236,7 @@ mod session_pty_tests {
     #[test]
     fn spawn_session_pty_streams_and_resizes() {
         let env = HashMap::new();
-        let (leader, mut child) =
+        let (leader, mut child, _bootstrap_file) =
             spawn_session_pty(None, "/bin/sh", &env, 24, 80).expect("spawn_session_pty");
         let mut master = std::fs::File::from(leader);
 
@@ -1174,7 +1313,7 @@ mod session_pty_tests {
     #[test]
     fn spawn_session_pty_does_not_echo_the_bootstrap() {
         let env = HashMap::new();
-        let (leader, mut child) =
+        let (leader, mut child, _bootstrap_file) =
             match spawn_session_pty(None, "/bin/bash", &env, 24, 80) {
                 Ok(pair) => pair,
                 // No bash on this machine: nothing to assert about bash's
