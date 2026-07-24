@@ -434,7 +434,7 @@ mod tests {
     /// Mouse-down can trigger a rerender before mouse-up. The cancel button
     /// must retain its pressed state across that frame boundary and fire once.
     #[test]
-    fn cancel_click_survives_rerender_between_mouse_down_and_up() {
+    fn cancel_cancels_inflight_operation_exactly_once() {
         App::test((), |mut app| async move {
             initialize_app(&mut app);
             let (window_id, view) =

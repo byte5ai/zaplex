@@ -6,18 +6,25 @@
 //! author: logic
 //! date: 2026-05-30
 
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use warp_core::ui::appearance::Appearance;
+use warpui::elements::{MouseStateHandle, ParentElement, Stack};
 use warpui::platform::WindowStyle;
-use warpui::{SingletonEntity, TypedActionView};
+use warpui::{
+    App, AppContext, Element, Entity, Event, Presenter, SingletonEntity, TypedActionView, View,
+    ViewContext, WindowInvalidation,
+};
 
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 
-use pathfinder_geometry::vector::Vector2F;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 
 use super::browser::{SftpBrowserAction, SftpBrowserView};
 use super::sftp_backend::{InMemorySftpBackend, SftpBackend};
@@ -86,6 +93,90 @@ fn create_connected_view(
     (win_id, view, temp_dir)
 }
 
+fn presenter_for_window(
+    app: &App,
+    window_id: warpui::WindowId,
+) -> (Rc<RefCell<Presenter>>, WindowInvalidation) {
+    let root_view_id = app
+        .root_view_id(window_id)
+        .expect("test window should contain root view");
+    (
+        Rc::new(RefCell::new(Presenter::new(window_id))),
+        WindowInvalidation {
+            updated: HashSet::from([root_view_id]),
+            ..Default::default()
+        },
+    )
+}
+
+fn render_position(
+    app: &mut App,
+    presenter: Rc<RefCell<Presenter>>,
+    invalidation: WindowInvalidation,
+    position_id: &str,
+) -> Vector2F {
+    let position_id = position_id.to_string();
+    app.update(move |ctx| {
+        presenter.borrow_mut().invalidate(invalidation, ctx);
+        presenter
+            .borrow_mut()
+            .build_scene(vec2f(1200., 800.), 1., None, ctx);
+        presenter
+            .borrow()
+            .position_cache()
+            .get_position(&position_id)
+            .unwrap_or_else(|| panic!("{position_id} should be positioned"))
+            .center()
+    })
+}
+
+fn rerender(app: &mut App, presenter: Rc<RefCell<Presenter>>, invalidation: WindowInvalidation) {
+    app.update(move |ctx| {
+        presenter.borrow_mut().invalidate(invalidation, ctx);
+        presenter
+            .borrow_mut()
+            .build_scene(vec2f(1200., 800.), 1., None, ctx);
+    });
+}
+
+fn mouse_down(
+    app: &mut App,
+    window_id: warpui::WindowId,
+    presenter: Rc<RefCell<Presenter>>,
+    position: Vector2F,
+) {
+    app.update(move |ctx| {
+        ctx.simulate_window_event(
+            Event::LeftMouseDown {
+                position,
+                modifiers: Default::default(),
+                click_count: 1,
+                is_first_mouse: false,
+            },
+            window_id,
+            presenter,
+        );
+    });
+}
+
+fn mouse_up(
+    app: &mut App,
+    window_id: warpui::WindowId,
+    presenter: Rc<RefCell<Presenter>>,
+    position: Vector2F,
+) {
+    app.update(move |ctx| {
+        ctx.simulate_window_event(
+            Event::LeftMouseUp {
+                position,
+                modifiers: Default::default(),
+            },
+            window_id,
+            presenter,
+        );
+    });
+}
+
 /// Test backend that records metadata and listing calls while delegating all
 /// filesystem behavior to the local test backend.
 struct TracingBackend {
@@ -93,6 +184,8 @@ struct TracingBackend {
     listed_paths: Mutex<Vec<PathBuf>>,
     stat_paths: Mutex<Vec<PathBuf>>,
     fail_copy: AtomicBool,
+    fail_replace: AtomicBool,
+    create_after_next_list: Mutex<Option<(PathBuf, Vec<u8>)>>,
 }
 
 impl TracingBackend {
@@ -102,11 +195,21 @@ impl TracingBackend {
             listed_paths: Mutex::new(Vec::new()),
             stat_paths: Mutex::new(Vec::new()),
             fail_copy: AtomicBool::new(false),
+            fail_replace: AtomicBool::new(false),
+            create_after_next_list: Mutex::new(None),
         }
     }
 
     fn fail_copies(&self) {
         self.fail_copy.store(true, Ordering::SeqCst);
+    }
+
+    fn fail_replacements(&self) {
+        self.fail_replace.store(true, Ordering::SeqCst);
+    }
+
+    fn create_file_after_next_list(&self, path: PathBuf, contents: Vec<u8>) {
+        *self.create_after_next_list.lock().unwrap() = Some((path, contents));
     }
 }
 
@@ -116,7 +219,18 @@ impl SftpBackend for TracingBackend {
         path: &std::path::Path,
     ) -> Result<Vec<super::types::FileEntry>, super::sftp_ops::SftpOpsError> {
         self.listed_paths.lock().unwrap().push(path.to_path_buf());
-        self.inner.list_dir(path)
+        let entries = self.inner.list_dir(path)?;
+        if let Some((created_path, contents)) =
+            self.create_after_next_list.lock().unwrap().take()
+        {
+            let relative = created_path
+                .strip_prefix("/")
+                .unwrap_or(created_path.as_path());
+            let local_path = self.inner.root().join(relative);
+            std::fs::create_dir_all(local_path.parent().unwrap()).unwrap();
+            std::fs::write(local_path, contents).unwrap();
+        }
+        Ok(entries)
     }
 
     fn delete_file(
@@ -146,6 +260,19 @@ impl SftpBackend for TracingBackend {
         new_path: &std::path::Path,
     ) -> Result<(), super::sftp_ops::SftpOpsError> {
         self.inner.rename(old_path, new_path)
+    }
+
+    fn replace(
+        &self,
+        old_path: &std::path::Path,
+        new_path: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        if self.fail_replace.load(Ordering::SeqCst) {
+            return Err(super::sftp_ops::SftpOpsError::Operation(
+                "injected atomic replacement failure".to_string(),
+            ));
+        }
+        self.inner.replace(old_path, new_path)
     }
 
     fn realpath(
@@ -725,6 +852,51 @@ fn file_symlink_opens_as_a_file_without_navigating() {
     });
 }
 
+/// A local FIFO is a special file, not a regular file. Activating it must not
+/// enter the download path, which could otherwise block indefinitely.
+#[cfg(unix)]
+#[test]
+fn local_fifo_is_classified_as_other_and_never_opened() {
+    use nix::sys::stat::Mode;
+    use nix::unistd::mkfifo;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let root = tempfile::tempdir().expect("remote temp");
+        mkfifo(
+            &root.path().join("pipe"),
+            Mode::S_IRUSR | Mode::S_IWUSR,
+        )
+        .unwrap();
+        let backend =
+            Arc::new(InMemorySftpBackend::new(root.path().to_path_buf())) as Arc<dyn SftpBackend>;
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend, PathBuf::from("/"), ctx);
+        });
+        let fifo_index = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "pipe")
+                .expect("FIFO should be listed")
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.entries[fifo_index].file_type, FileEntryType::Other);
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::OpenEntry(fifo_index), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/"));
+            assert!(
+                view.transfers.is_empty(),
+                "activating a FIFO must not start a download"
+            );
+        });
+    });
+}
+
 #[cfg(unix)]
 #[test]
 fn directory_symlink_navigates_to_its_directory_target() {
@@ -961,6 +1133,204 @@ fn test_refresh_dir_reloads_entries() {
 
         view.read(&app, |v, _| {
             assert_eq!(v.entries.len(), 2, "should have 2 files after refresh");
+        });
+    });
+}
+
+struct RefreshButtonTestView {
+    mouse_handle: MouseStateHandle,
+    refreshes: usize,
+}
+
+impl Entity for RefreshButtonTestView {
+    type Event = ();
+}
+
+impl TypedActionView for RefreshButtonTestView {
+    type Action = SftpBrowserAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        if matches!(action, SftpBrowserAction::Refresh) {
+            self.refreshes += 1;
+            ctx.notify();
+        }
+    }
+}
+
+impl View for RefreshButtonTestView {
+    fn ui_name() -> &'static str {
+        "RefreshButtonTestView"
+    }
+
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        Stack::new()
+            .with_child(SftpBrowserView::render_refresh_button_for_test(
+                self.mouse_handle.clone(),
+                Appearance::as_ref(app),
+            ))
+            .finish()
+    }
+}
+
+/// A refresh click survives a render boundary and dispatches exactly once
+/// through the exact element builder used by the production toolbar.
+#[test]
+fn rescan_keeps_persistent_mouse_state() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view) =
+            app.add_window(WindowStyle::NotStealFocus, |_| RefreshButtonTestView {
+                mouse_handle: MouseStateHandle::default(),
+                refreshes: 0,
+            });
+        let (presenter, invalidation) = presenter_for_window(&app, window_id);
+        let position = render_position(
+            &mut app,
+            presenter.clone(),
+            invalidation.clone(),
+            "sftp_btn:refresh",
+        );
+        mouse_down(&mut app, window_id, presenter.clone(), position);
+        rerender(&mut app, presenter.clone(), invalidation);
+        mouse_up(&mut app, window_id, presenter, position);
+
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.refreshes, 1,
+                "the refresh action must fire exactly once across a rerender"
+            );
+        });
+    });
+}
+
+/// A normal file row keeps its click state across a render boundary.
+#[test]
+fn file_row_click_survives_rerender() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view, _root) = create_connected_view(&mut app, &[("clickable.txt", b"x")]);
+        let entry_index = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "clickable.txt")
+                .unwrap()
+        });
+        let position_id = format!("sftp_row:{entry_index}");
+        let (presenter, invalidation) = presenter_for_window(&app, window_id);
+        let position = render_position(
+            &mut app,
+            presenter.clone(),
+            invalidation.clone(),
+            &position_id,
+        );
+
+        mouse_down(&mut app, window_id, presenter.clone(), position);
+        rerender(&mut app, presenter.clone(), invalidation);
+        mouse_up(&mut app, window_id, presenter, position);
+
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.selected,
+                HashSet::from([entry_index]),
+                "the row click must fire exactly once after a rerender"
+            );
+        });
+    });
+}
+
+/// If a row disappears during the press, mouse-up must abort the pending row
+/// action instead of applying the old row index to the entry that replaced it.
+#[test]
+fn removed_entry_aborts_pending_action() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view, root) =
+            create_connected_view(&mut app, &[("a.txt", b"a"), ("b.txt", b"b")]);
+        let removed_index = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "a.txt")
+                .unwrap()
+        });
+        let position_id = format!("sftp_row:{removed_index}");
+        let (presenter, invalidation) = presenter_for_window(&app, window_id);
+        let position = render_position(
+            &mut app,
+            presenter.clone(),
+            invalidation.clone(),
+            &position_id,
+        );
+
+        mouse_down(&mut app, window_id, presenter.clone(), position);
+        std::fs::remove_file(root.path().join("a.txt")).unwrap();
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::Refresh, ctx);
+        });
+        rerender(&mut app, presenter.clone(), invalidation);
+        mouse_up(&mut app, window_id, presenter, position);
+
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.entries
+                    .iter()
+                    .map(|entry| entry.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["b.txt"]
+            );
+            assert!(
+                view.selected.is_empty(),
+                "a removed row's mouse-up must not select its replacement"
+            );
+            assert!(
+                view.dialog.is_none(),
+                "a removed row's pending action must be aborted"
+            );
+        });
+    });
+}
+
+/// Reusing the same path for a different filesystem object during a press must
+/// also abort. A path alone is not an object identity.
+#[test]
+fn replaced_entry_at_same_path_aborts_pending_action() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view, root) = create_connected_view(&mut app, &[("replace.txt", b"old")]);
+        let entry_index = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "replace.txt")
+                .unwrap()
+        });
+        let position_id = format!("sftp_row:{entry_index}");
+        let (presenter, invalidation) = presenter_for_window(&app, window_id);
+        let position = render_position(
+            &mut app,
+            presenter.clone(),
+            invalidation.clone(),
+            &position_id,
+        );
+
+        mouse_down(&mut app, window_id, presenter.clone(), position);
+        std::fs::remove_file(root.path().join("replace.txt")).unwrap();
+        std::fs::write(root.path().join("replace.txt"), b"replacement").unwrap();
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::Refresh, ctx);
+        });
+        rerender(&mut app, presenter.clone(), invalidation);
+        mouse_up(&mut app, window_id, presenter, position);
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.entries.len(), 1);
+            assert_eq!(view.entries[0].size, b"replacement".len() as u64);
+            assert!(
+                view.selected.is_empty(),
+                "mouse-up for the old object must not select its same-path replacement"
+            );
+            assert!(
+                view.dialog.is_none(),
+                "the old pending action must be aborted"
+            );
         });
     });
 }
@@ -1885,7 +2255,7 @@ fn test_download_creates_transfer_task() {
 /// The native save dialog can remain open while a refresh or sort changes row
 /// indices. Completing it must still download the file originally chosen.
 #[test]
-fn save_as_resolves_same_entry_after_listing_reorders() {
+fn save_as_resolves_same_entry_after_refresh() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view, _remote) =
@@ -2170,6 +2540,47 @@ fn test_row_click_right_after_navigate_up_is_swallowed() {
     });
 }
 
+/// The virtual parent row keeps its view-owned mouse handle across a re-render,
+/// so its click still navigates exactly one level up.
+#[test]
+fn parent_row_click_survives_rerender() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view, _temp) =
+            create_connected_view(&mut app, &[("subdir/file.txt", b"x")]);
+        let subdir_index = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "subdir")
+                .unwrap()
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::OpenEntry(subdir_index), ctx);
+        });
+        assert_eq!(
+            view.read(&app, |view, _| view.current_path.clone()),
+            PathBuf::from("/subdir")
+        );
+
+        let (presenter, invalidation) = presenter_for_window(&app, window_id);
+        let position = render_position(
+            &mut app,
+            presenter.clone(),
+            invalidation.clone(),
+            "sftp_row:parent",
+        );
+        mouse_down(&mut app, window_id, presenter.clone(), position);
+        rerender(&mut app, presenter.clone(), invalidation);
+        mouse_up(&mut app, window_id, presenter, position);
+
+        assert_eq!(
+            view.read(&app, |view, _| view.current_path.clone()),
+            PathBuf::from("/"),
+            "the parent-row click must survive a render between mouse-down and mouse-up"
+        );
+    });
+}
+
 /// Verifies that DeleteSelected triggers the delete confirmation
 #[test]
 fn test_keyboard_delete_selected() {
@@ -2437,6 +2848,7 @@ struct RecordingDeleteBackend {
     inner: InMemorySftpBackend,
     file_deletes: std::sync::Mutex<Vec<PathBuf>>,
     recursive_deletes: std::sync::Mutex<Vec<PathBuf>>,
+    fail_recursive_delete: AtomicBool,
 }
 
 #[cfg(unix)]
@@ -2446,7 +2858,12 @@ impl RecordingDeleteBackend {
             inner: InMemorySftpBackend::new(root),
             file_deletes: std::sync::Mutex::new(Vec::new()),
             recursive_deletes: std::sync::Mutex::new(Vec::new()),
+            fail_recursive_delete: AtomicBool::new(false),
         }
+    }
+
+    fn fail_recursive_deletes(&self) {
+        self.fail_recursive_delete.store(true, Ordering::SeqCst);
     }
 }
 
@@ -2472,6 +2889,24 @@ impl SftpBackend for RecordingDeleteBackend {
             .lock()
             .unwrap()
             .push(path.to_path_buf());
+        if self.fail_recursive_delete.load(Ordering::SeqCst) {
+            if let Some(entry) = self.inner.list_dir(path)?.into_iter().next() {
+                match entry.file_type {
+                    FileEntryType::Directory => {
+                        self.inner.delete_dir_recursive(&entry.path)?;
+                    }
+                    FileEntryType::File | FileEntryType::Symlink | FileEntryType::Other => {
+                        self.inner.delete_file(&entry.path)?;
+                    }
+                }
+            }
+            return Err(super::sftp_ops::SftpOpsError::Operation(
+                format!(
+                    "injected recursive delete failure after partial cleanup; source recovery path: {}",
+                    path.display()
+                ),
+            ));
+        }
         self.inner.delete_dir_recursive(path)
     }
 
@@ -2485,6 +2920,14 @@ impl SftpBackend for RecordingDeleteBackend {
         new_path: &std::path::Path,
     ) -> Result<(), super::sftp_ops::SftpOpsError> {
         self.inner.rename(old_path, new_path)
+    }
+
+    fn replace(
+        &self,
+        old_path: &std::path::Path,
+        new_path: &std::path::Path,
+    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner.replace(old_path, new_path)
     }
 
     fn realpath(&self, path: &std::path::Path) -> Result<PathBuf, super::sftp_ops::SftpOpsError> {
@@ -3239,8 +3682,183 @@ fn test_plan_dir_transfer_skips_existing_destination_files() {
     )
     .expect("plan ok");
 
-    assert_eq!(plan.files.len(), 1, "only the not-yet-present file is planned");
+    assert_eq!(
+        plan.files.len(),
+        1,
+        "only the not-yet-present file is planned"
+    );
     assert_eq!(plan.skipped_existing, 1, "the existing file was skipped");
+}
+
+/// A move containing only empty directories is complete once the destination
+/// tree exists. It must remove the source just like a move containing files.
+#[test]
+fn empty_directory_move_deletes_source_after_destination_is_verified() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = tempfile::tempdir().expect("source temp");
+        std::fs::create_dir_all(source.path().join("empty/nested")).unwrap();
+        let backend =
+            Arc::new(InMemorySftpBackend::new(source.path().to_path_buf())) as Arc<dyn SftpBackend>;
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend.clone(), PathBuf::from("/"), ctx);
+        });
+        let destination_root = tempfile::tempdir().expect("destination temp");
+        let destination = destination_root.path().join("moved-empty");
+
+        view.update(&mut app, |view, ctx| {
+            view.spawn_dir_transfer_for_test(
+                PathBuf::from("/empty"),
+                destination.clone(),
+                TransferDirection::Download,
+                backend,
+                true,
+                "empty".to_string(),
+                ctx,
+            );
+        });
+
+        assert!(
+            destination.join("nested").is_dir(),
+            "the complete empty destination tree must exist before source cleanup"
+        );
+        assert!(
+            !source.path().join("empty").exists(),
+            "a completed empty-directory move must remove its source"
+        );
+        view.read(&app, |view, _| {
+            assert!(
+                view.entries.iter().all(|entry| entry.name != "empty"),
+                "the source listing must refresh after the move"
+            );
+        });
+    });
+}
+
+/// A source path may be reused after a move captures its source object. Data
+/// created at that path after enumeration was never transferred and must never
+/// be swept up by recursive source cleanup.
+#[test]
+fn directory_move_never_deletes_data_created_after_source_enumeration() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = tempfile::tempdir().expect("source temp");
+        std::fs::create_dir(source.path().join("empty")).unwrap();
+        let backend = Arc::new(TracingBackend::new(source.path().to_path_buf()));
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend.clone(), PathBuf::from("/"), ctx);
+        });
+        backend.create_file_after_next_list(
+            PathBuf::from("/empty/late.txt"),
+            b"never transferred".to_vec(),
+        );
+        let destination_root = tempfile::tempdir().expect("destination temp");
+        let destination = destination_root.path().join("moved-empty");
+
+        view.update(&mut app, |view, ctx| {
+            view.spawn_dir_transfer_for_test(
+                PathBuf::from("/empty"),
+                destination,
+                TransferDirection::Download,
+                backend,
+                true,
+                "empty".to_string(),
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            std::fs::read(source.path().join("empty/late.txt")).unwrap(),
+            b"never transferred",
+            "data created after enumeration must remain at the original source path"
+        );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn move_never_deletes_untransferred_symlink() {
+    use std::os::unix::fs::symlink;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = tempfile::tempdir().expect("source temp");
+        std::fs::create_dir(source.path().join("tree")).unwrap();
+        std::fs::write(source.path().join("target.txt"), b"target").unwrap();
+        symlink("../target.txt", source.path().join("tree/link.txt")).unwrap();
+        let backend =
+            Arc::new(InMemorySftpBackend::new(source.path().to_path_buf())) as Arc<dyn SftpBackend>;
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend.clone(), PathBuf::from("/"), ctx);
+        });
+        let destination = tempfile::tempdir().expect("destination temp");
+
+        view.update(&mut app, |view, ctx| {
+            view.spawn_dir_transfer_for_test(
+                PathBuf::from("/tree"),
+                destination.path().join("tree"),
+                TransferDirection::Download,
+                backend,
+                true,
+                "tree".to_string(),
+                ctx,
+            );
+        });
+
+        assert!(
+            source
+                .path()
+                .join("tree/link.txt")
+                .symlink_metadata()
+                .is_ok(),
+            "an untransferred symlink must preserve the complete source tree"
+        );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn move_never_deletes_source_tree_with_untransferred_special_file() {
+    use nix::sys::stat::Mode;
+    use nix::unistd::mkfifo;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = tempfile::tempdir().expect("source temp");
+        std::fs::create_dir(source.path().join("tree")).unwrap();
+        mkfifo(
+            &source.path().join("tree/pipe"),
+            Mode::S_IRUSR | Mode::S_IWUSR,
+        )
+        .unwrap();
+        let backend =
+            Arc::new(InMemorySftpBackend::new(source.path().to_path_buf())) as Arc<dyn SftpBackend>;
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend.clone(), PathBuf::from("/"), ctx);
+        });
+        let destination = tempfile::tempdir().expect("destination temp");
+
+        view.update(&mut app, |view, ctx| {
+            view.spawn_dir_transfer_for_test(
+                PathBuf::from("/tree"),
+                destination.path().join("tree"),
+                TransferDirection::Download,
+                backend,
+                true,
+                "tree".to_string(),
+                ctx,
+            );
+        });
+
+        assert!(
+            source.path().join("tree/pipe").symlink_metadata().is_ok(),
+            "an untransferred special file must preserve the complete source tree"
+        );
+    });
 }
 
 /// A directory move removes the whole source tree once every file has landed
@@ -3253,21 +3871,100 @@ fn test_dir_move_cleanup_deletes_source_when_all_succeed() {
         let backend: Arc<dyn SftpBackend> =
             Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf()));
         let src_on_disk = temp.path().join("srcdir");
-        assert!(src_on_disk.exists(), "source dir exists before the move completes");
+        assert!(
+            src_on_disk.exists(),
+            "source dir exists before the move completes"
+        );
 
         view.update(&mut app, |v, ctx| {
             let id = v.seed_dir_move_cleanup_for_test(1, backend.clone(), PathBuf::from("/srcdir"));
             v.note_dir_move_progress_for_test(id, true, ctx);
         });
 
-        assert!(!src_on_disk.exists(), "source tree removed after a fully-successful move");
-        view.read(&app, |v, _| assert!(!v.has_pending_dir_move_cleanup(), "batch cleared"));
+        assert!(
+            !src_on_disk.exists(),
+            "source tree removed after a fully-successful move"
+        );
+        view.read(&app, |v, _| {
+            assert!(!v.has_pending_dir_move_cleanup(), "batch cleared")
+        });
+    });
+}
+
+/// If cleanup fails after deleting part of the quarantined tree, the remaining
+/// source stays at the reported recovery path and is never falsely restored.
+#[test]
+fn partial_directory_cleanup_failure_keeps_recovery_path() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, temp) = create_connected_view(&mut app, &[("srcdir/inner.txt", b"x")]);
+        let backend = Arc::new(RecordingDeleteBackend::new(temp.path().to_path_buf()));
+        let quarantined = PathBuf::from("/.srcdir.zaplex_move-test");
+        backend
+            .rename(std::path::Path::new("/srcdir"), &quarantined)
+            .unwrap();
+        backend.fail_recursive_deletes();
+
+        view.update(&mut app, |view, ctx| {
+            let trait_backend: Arc<dyn SftpBackend> = backend.clone();
+            view.set_backend_for_test(trait_backend.clone(), PathBuf::from("/"), ctx);
+            let id = view.seed_quarantined_dir_move_cleanup_for_test(
+                1,
+                trait_backend,
+                quarantined.clone(),
+                PathBuf::from("/srcdir"),
+            );
+            view.note_dir_move_progress_for_test(id, true, ctx);
+        });
+
+        assert!(
+            !temp.path().join("srcdir").exists(),
+            "a partially deleted quarantine must not be renamed back as a complete source"
+        );
+        assert!(
+            temp.path().join(".srcdir.zaplex_move-test").is_dir(),
+            "the remaining source must stay at the recovery path reported by the error"
+        );
+        assert!(!temp.path().join(".srcdir.zaplex_move-test/inner.txt").exists());
+    });
+}
+
+/// Closing a pane with a registered directory move restores the quarantined
+/// source before releasing its backend.
+#[test]
+fn closing_view_restores_pending_directory_move() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, temp) = create_connected_view(&mut app, &[("srcdir/inner.txt", b"x")]);
+        let backend =
+            Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf())) as Arc<dyn SftpBackend>;
+        let quarantined = PathBuf::from("/.srcdir.zaplex_move-close");
+        backend
+            .rename(std::path::Path::new("/srcdir"), &quarantined)
+            .unwrap();
+
+        view.update(&mut app, |view, ctx| {
+            view.seed_quarantined_dir_move_cleanup_for_test(
+                1,
+                backend.clone(),
+                quarantined.clone(),
+                PathBuf::from("/srcdir"),
+            );
+            view.close_for_test(ctx);
+        });
+
+        assert_eq!(
+            std::fs::read(temp.path().join("srcdir/inner.txt")).unwrap(),
+            b"x",
+            "pane close must restore the complete pending move source"
+        );
+        assert!(!temp.path().join(".srcdir.zaplex_move-close").exists());
     });
 }
 
 /// A directory move keeps the source if any file failed — never a partial loss.
 #[test]
-fn test_dir_move_cleanup_keeps_source_on_failure() {
+fn failed_move_never_deletes_source() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view, temp) = create_connected_view(&mut app, &[("srcdir/inner.txt", b"x")]);
@@ -3280,8 +3977,13 @@ fn test_dir_move_cleanup_keeps_source_on_failure() {
             v.note_dir_move_progress_for_test(id, false, ctx); // a file failed
         });
 
-        assert!(src_on_disk.exists(), "source kept when a file failed (no data loss)");
-        view.read(&app, |v, _| assert!(!v.has_pending_dir_move_cleanup(), "batch cleared"));
+        assert!(
+            src_on_disk.exists(),
+            "source kept when a file failed (no data loss)"
+        );
+        view.read(&app, |v, _| {
+            assert!(!v.has_pending_dir_move_cleanup(), "batch cleared")
+        });
     });
 }
 
@@ -3311,7 +4013,11 @@ fn test_f5_remote_to_remote_relays_file() {
         });
 
         assert!(root.join("b/foo.txt").exists(), "relayed onto host B");
-        assert_eq!(std::fs::read(root.join("b/foo.txt")).unwrap(), b"payload", "content matches");
+        assert_eq!(
+            std::fs::read(root.join("b/foo.txt")).unwrap(),
+            b"payload",
+            "content matches"
+        );
         assert!(root.join("a/foo.txt").exists(), "source kept after a copy");
     });
 }
@@ -3648,6 +4354,48 @@ fn failed_copy_overwrite_keeps_existing_destination_intact() {
     });
 }
 
+/// Even after a complete replacement has been staged, an atomic commit failure
+/// must leave the old destination at its original path.
+#[test]
+fn failed_atomic_replace_keeps_existing_destination_intact() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("left/dup.txt", b"replacement"),
+            ("right/dup.txt", b"precious-original"),
+        ]);
+        let backend = Arc::new(TracingBackend::new(temp.path().to_path_buf()));
+        backend.fail_replacements();
+
+        let (_, source_view) = create_view(&mut app);
+        source_view.update(&mut app, |view, ctx| {
+            let trait_backend: Arc<dyn SftpBackend> = backend.clone();
+            view.set_backend_for_test(trait_backend, PathBuf::from("/left"), ctx);
+        });
+        let (_, target_view) = create_view(&mut app);
+        target_view.update(&mut app, |view, ctx| {
+            let trait_backend: Arc<dyn SftpBackend> = backend.clone();
+            view.set_backend_for_test(trait_backend, PathBuf::from("/right"), ctx);
+        });
+
+        source_view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+            view.handle_action(&SftpBrowserAction::OverwriteConflict { all: false }, ctx);
+        });
+
+        assert_eq!(
+            std::fs::read(temp.path().join("right/dup.txt")).unwrap(),
+            b"precious-original",
+            "an atomic commit failure must preserve the existing destination"
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("left/dup.txt")).unwrap(),
+            b"replacement",
+            "an atomic commit failure must preserve the source"
+        );
+    });
+}
+
 /// Overwriting a destination that is a symlink to a directory must unlink the
 /// symlink itself. Following it into recursive deletion would erase unrelated
 /// target contents outside the destination pane.
@@ -3687,17 +4435,10 @@ fn test_copy_conflict_over_directory_symlink_never_recurses_into_target() {
             view.handle_action(&SftpBrowserAction::OverwriteConflict { all: false }, ctx);
         });
 
-        let file_deletes = backend.file_deletes.lock().unwrap();
-        assert_eq!(file_deletes.len(), 1, "overwrite must unlink one symlink backup");
-        let deleted_link = &file_deletes[0];
-        assert_eq!(deleted_link.parent(), Some(std::path::Path::new("/right")));
         assert!(
-            deleted_link
-                .file_name()
-                .is_some_and(|name| name.to_string_lossy().starts_with(".item.zaplex_backup-")),
-            "the original symlink must be retired through the recoverable backup path"
+            backend.file_deletes.lock().unwrap().is_empty(),
+            "atomic replacement must not need a separate unlink step"
         );
-        drop(file_deletes);
         assert!(
             backend.recursive_deletes.lock().unwrap().is_empty(),
             "overwrite must never recursively delete through a directory symlink"

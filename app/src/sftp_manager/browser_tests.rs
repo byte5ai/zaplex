@@ -2087,6 +2087,55 @@ fn test_sort_keeps_cursor_on_its_file() {
     });
 }
 
+/// A row action queued before a sort is still addressed to its original entry
+/// index, so the confirmation cannot silently retarget to the new visual row.
+#[test]
+fn queued_delete_never_retargets_after_sort() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, _| {
+            view.entries = vec![
+                sized_entry("a_small.txt", false, 10, None),
+                sized_entry("b_large.txt", false, 900, None),
+            ];
+        });
+        let small_index = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "a_small.txt")
+                .unwrap()
+        });
+        let expected_path = view.read(&app, |view, _| view.entries[small_index].path.clone());
+        let queued_delete = SftpBrowserAction::DeleteEntry(small_index);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SortBy(SortColumn::Size), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.visible_indices(),
+                vec![1, 0],
+                "the sort must actually move the queued entry to another visual row"
+            );
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&queued_delete, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            let Some(Dialog::DeleteConfirm { paths, .. }) = &view.dialog else {
+                panic!("delete must open a confirmation dialog");
+            };
+            assert_eq!(
+                paths,
+                &[expected_path],
+                "the queued action must remain bound to the original file"
+            );
+        });
+    });
+}
+
 // ============================================================
 // Refresh race + stale indices (T1.5)
 // ============================================================
@@ -2097,7 +2146,7 @@ fn test_sort_keeps_cursor_on_its_file() {
 /// (open/download/delete) hits the wrong file. Without the generation guard the
 /// stale listing overwrites the current one.
 #[test]
-fn stale_refresh_result_is_discarded() {
+fn refresh_generation_discards_older_completion() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);

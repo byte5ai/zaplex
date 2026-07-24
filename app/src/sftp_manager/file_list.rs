@@ -5,6 +5,7 @@
 //! date: 2026-05-26
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
@@ -484,8 +485,8 @@ pub fn render_file_rows(
     selected: &HashSet<usize>,
     cursor_row: usize,
     has_parent_row: bool,
-    mouse_handles: &[MouseStateHandle],
-    mark_handles: &[MouseStateHandle],
+    mouse_handles: &HashMap<PathBuf, MouseStateHandle>,
+    mark_handles: &HashMap<PathBuf, MouseStateHandle>,
     parent_row_handle: MouseStateHandle,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
@@ -506,8 +507,8 @@ pub fn render_file_rows(
         let entry = &entries[index];
         let is_selected = selected.contains(&index);
         let is_cursor = cursor_row == row_position + offset;
-        let mouse_handle = mouse_handles.get(index).cloned().unwrap_or_default();
-        let mark_handle = mark_handles.get(index).cloned().unwrap_or_default();
+        let mouse_handle = mouse_handles.get(&entry.path).cloned().unwrap_or_default();
+        let mark_handle = mark_handles.get(&entry.path).cloned().unwrap_or_default();
         let row = render_file_row(
             entry,
             index,
