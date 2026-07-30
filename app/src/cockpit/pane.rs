@@ -13,11 +13,11 @@ use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Border, ChildAnchor, ChildView, Dismiss, OffsetPositioning, ParentAnchor, ParentOffsetBounds,
-    Stack, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Empty, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, Rect, RowBackground, ScrollbarWidth,
-    Shrinkable, Table, TableColumnWidth, TableConfig, TableHeader, TableStateHandle,
+    Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Empty,
+    Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect, RowBackground,
+    ScrollbarWidth, Shrinkable, Stack, Table, TableColumnWidth, TableConfig, TableHeader, TableStateHandle,
     TableVerticalSizing, Text,
 };
 use pathfinder_geometry::vector::Vector2F;
@@ -56,6 +56,14 @@ const PANE_PADDING: f32 = 16.0;
 /// Columns in the session table (spec v3 §4.3). A group header fills the first
 /// and leaves the rest empty — the table is flat, so a group is a row.
 const TABLE_COLUMNS: usize = 9;
+const SESSION_TABLE_HEADER_HEIGHT: f32 = 32.0;
+const SESSION_TABLE_ROW_HEIGHT: f32 = 30.0;
+const SESSION_TABLE_MAX_VISIBLE_ROWS: usize = 8;
+
+fn session_table_viewport_height(row_count: usize) -> f32 {
+    let visible_rows = row_count.min(SESSION_TABLE_MAX_VISIBLE_ROWS);
+    SESSION_TABLE_HEADER_HEIGHT + visible_rows as f32 * SESSION_TABLE_ROW_HEIGHT
+}
 /// The search box's width. Fixed on purpose: an `EditorView` panics when it is
 /// measured against an infinite width constraint, which is what a flexible child
 /// of a row gets during the intrinsic pass.
@@ -313,6 +321,9 @@ pub struct CockpitPaneView {
     /// `Some` is the whole "am I editing" state — a separate bool could disagree
     /// with it.
     alias_editor: Option<ViewHandle<EditorView>>,
+    /// Visible write failure for the inline alias editor. The editor remains
+    /// open and the last good instances.json stays intact.
+    alias_persistence_error: Option<String>,
     /// Hover state for the detail card's ⋯.
     alias_dots_state: MouseStateHandle,
     /// Hover/click state for the account placeholder's "try again" retry. A **stable**
@@ -561,6 +572,7 @@ impl CockpitPaneView {
             row_dots_states: HashMap::new(),
             sort_header_states: HashMap::new(),
             alias_editor: None,
+            alias_persistence_error: None,
             alias_dots_state: MouseStateHandle::default(),
             rescan_btn: MouseStateHandle::default(),
             search,
@@ -1776,20 +1788,11 @@ impl CockpitPaneView {
 
     /// **P3/P4** — the account's sessions, every host, on the virtualised table.
     ///
-    /// `warpui::Table` rather than a hand-rolled flex grid — for the column model
-    /// and the sum-tree row store, **not** for virtualisation: this table is
-    /// `ExpandToContent`, which builds every row. The `Viewported` mode does
-    /// window them, but only when the table owns its viewport, and here the whole
-    /// pane scrolls as one so the detail card scrolls away with the rows.
-    ///
-    /// That is a deliberate trade, not an oversight, and it holds only because
-    /// the row count is already bounded: dormant discovery caps at
-    /// `IDLE_SESSION_LIMIT` (50) per account and live sessions are few, so a
-    /// pane shows tens of rows, not the "hundreds" the spec worried about — and
-    /// it is *per account*, which P1 made true. Lift that cap, or give one
-    /// account hundreds of live sessions, and this must move to `Viewported`
-    /// with the table taking the remaining height (a flexible child needs a
-    /// finite constraint — see the header note at `render_conductor_row`).
+    /// `warpui::Table` rather than a hand-rolled flex grid provides the shared
+    /// column model, sum-tree row store, and viewported row windowing. The card
+    /// gives the table a finite eight-row viewport so large session histories
+    /// stay clipped and scroll inside the account zone instead of growing over
+    /// adjacent cockpit content.
     fn render_sessions_table(
         &self,
         acct: &AccountUsage,
@@ -2094,7 +2097,7 @@ impl CockpitPaneView {
             }
         });
 
-        Table::new(self.table_state.clone(), 0.0, 0.0)
+        let table = Table::new(self.table_state.clone(), 0.0, 0.0)
             .with_headers(vec![
                 header("session", crate::t!("cockpit-table-col-session").to_string(), SortColumn::Session, false)
                     .with_width(TableColumnWidth::Flex(2.2)),
@@ -2139,9 +2142,13 @@ impl CockpitPaneView {
                     alternating: None,
                 },
                 fixed_header: true,
-                vertical_sizing: TableVerticalSizing::ExpandToContent,
+                vertical_sizing: TableVerticalSizing::Viewported,
                 measure_body_cells_for_intrinsic_widths: false,
             })
+            .finish();
+
+        ConstrainedBox::new(Clipped::new(table).finish())
+            .with_height(session_table_viewport_height(rows_len))
             .finish()
     }
 
@@ -2173,14 +2180,14 @@ impl CockpitPaneView {
                 // The file is watched: the snapshot reloads and the new name
                 // reaches the title, the card and the sidebar on its own.
                 self.alias_editor = None;
+                self.alias_persistence_error = None;
             }
             Err(e) => {
-                // The editor STAYS OPEN. A rename that quietly did nothing is the
-                // one unacceptable outcome, and the pane has no toast of its own —
-                // so the failure shows as the name refusing to settle, which is
-                // at least honest. (`set_label_override` refuses rather than
-                // clobbers, so the file is intact; it is the alias that is lost.)
                 log::warn!("cockpit: could not write alias for {key}: {e}");
+                self.alias_persistence_error = Some(crate::t!(
+                    "cockpit-account-alias-write-error",
+                    error = e.to_string()
+                ));
             }
         }
         ctx.notify();
@@ -2294,6 +2301,14 @@ impl CockpitPaneView {
             .with_child(ident.with_main_axis_size(MainAxisSize::Max).finish());
         if !sub_parts.is_empty() {
             col = col.with_child(Self::text(sub_parts.join(" · "), family, body, muted));
+        }
+        if let Some(error) = self.alias_persistence_error.as_ref() {
+            col = col.with_child(Self::text(
+                error.clone(),
+                family,
+                body,
+                theme.ui_error_color(),
+            ));
         }
 
         // The two meters. `heat_bar` carries the one utilisation rule (grey below
@@ -2881,6 +2896,7 @@ impl TypedActionView for CockpitPaneView {
                 // and the discovered label otherwise. Editing starts from what the
                 // user is looking at, not from an empty box that discards it.
                 let current = Self::pane_title(Some(&key), ctx);
+                self.alias_persistence_error = None;
                 let editor = ctx.add_typed_action_view(move |ctx| {
                     let appearance = Appearance::as_ref(ctx);
                     let theme = appearance.theme();
@@ -2913,6 +2929,7 @@ impl TypedActionView for CockpitPaneView {
                     }
                     EditorEvent::Escape => {
                         me.alias_editor = None;
+                        me.alias_persistence_error = None;
                         ctx.notify();
                     }
                     _ => {}
@@ -3039,7 +3056,27 @@ mod tests {
     use chrono::Utc;
     use zaplex_cockpit::{Provider, SessionSnapshot, SessionState};
 
-    use super::{matching_session_row, parse_hex_color, session_key, TableRow};
+    use super::{
+        matching_session_row, parse_hex_color, session_key, session_table_viewport_height,
+        TableRow, SESSION_TABLE_HEADER_HEIGHT, SESSION_TABLE_MAX_VISIBLE_ROWS,
+        SESSION_TABLE_ROW_HEIGHT,
+    };
+
+    #[test]
+    fn session_table_body_clips_to_zone_card() {
+        let capped = SESSION_TABLE_HEADER_HEIGHT
+            + SESSION_TABLE_MAX_VISIBLE_ROWS as f32 * SESSION_TABLE_ROW_HEIGHT;
+        assert_eq!(session_table_viewport_height(1), 62.0);
+        assert_eq!(session_table_viewport_height(100), capped);
+    }
+
+    #[test]
+    fn cockpit_table_clips_to_card() {
+        assert_eq!(
+            session_table_viewport_height(SESSION_TABLE_MAX_VISIBLE_ROWS + 20),
+            session_table_viewport_height(SESSION_TABLE_MAX_VISIBLE_ROWS)
+        );
+    }
 
     fn session(config_dir: Option<&str>, account_email: Option<&str>) -> SessionSnapshot {
         SessionSnapshot {

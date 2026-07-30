@@ -1114,7 +1114,11 @@ impl View for SpawnCard {
         // click-outside dismiss (Esc / Cancel / ✕ close it); this is the "modals
         // with unsaved input" arm of the unified dismiss policy.
         let card = modal_frame::modal_card(self.render_card(app), MODAL_WIDTH, appearance);
-        modal_frame::modal_overlay(card, None::<SpawnCardAction>, app)
+        modal_frame::modal_overlay(
+            card,
+            modal_frame::unsaved_input_dismiss_action::<SpawnCardAction>(),
+            app,
+        )
     }
 }
 

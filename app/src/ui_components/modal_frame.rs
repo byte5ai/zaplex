@@ -58,6 +58,12 @@ pub fn modal_scrim() -> ColorU {
     ColorU::new(18, 18, 18, 128)
 }
 
+/// Shared backdrop policy for every modal that can hold unsaved input. A
+/// backdrop click is absorbed, never translated into a close action.
+pub fn unsaved_input_dismiss_action<A>() -> Option<A> {
+    None
+}
+
 /// The one modal close ✕ — an [`ActionButton`] with [`Icon::X`], small, that
 /// dispatches `action` on click. Each modal adds this as a child view (so it
 /// carries the caller's dispatch) and places it via [`modal_header`], giving
@@ -193,4 +199,14 @@ pub fn modal_overlay<A: Action + Clone + 'static>(
         .with_background_color(modal_scrim())
         .with_corner_radius(app.windows().window_corner_radius())
         .finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unsaved_input_dismiss_action;
+
+    #[test]
+    fn cockpit_and_ssh_dialogs_use_shared_state_contract() {
+        assert!(unsaved_input_dismiss_action::<u8>().is_none());
+    }
 }

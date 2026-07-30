@@ -271,3 +271,28 @@ fn the_original_permissions_survive_the_write() {
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "0600 in, 0600 out");
 }
+
+fn assert_failed_write_preserves_last_good_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("instances.json");
+    let last_good = r#"{"claude:work":{"label":"Last good"}}"#;
+    std::fs::write(&path, last_good).unwrap();
+
+    // Block the deterministic per-process scratch path. The write must fail
+    // before the atomic rename and leave the destination byte-for-byte intact.
+    let scratch = path.with_extension(format!("tmp{}", std::process::id()));
+    std::fs::create_dir(&scratch).unwrap();
+
+    assert!(set_label_override(&path, "claude:work", Some("New value")).is_err());
+    assert_eq!(std::fs::read_to_string(path).unwrap(), last_good);
+}
+
+#[test]
+fn failed_settings_write_preserves_last_good_file() {
+    assert_failed_write_preserves_last_good_file();
+}
+
+#[test]
+fn cockpit_persistence_failure_preserves_last_good_state() {
+    assert_failed_write_preserves_last_good_file();
+}

@@ -250,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn checked_pick_only_routes_from_a_loaded_snapshot() {
+    fn failed_account_scan_is_excluded_from_freest_routing() {
         use crate::types::ScanHealth;
         let accts = vec![claude("claude:default", 0.3)];
         // Authoritative scan → auto-route works.

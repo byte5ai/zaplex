@@ -266,3 +266,75 @@ fn stale_test_cannot_replace_current_state() {
     assert!(should_apply_connection_test_result(7, 7));
     assert!(!should_apply_connection_test_result(8, 7));
 }
+
+#[test]
+fn dirty_onekey_dialog_requires_save_discard_or_cancel() {
+    assert_eq!(
+        dirty_onekey_dialog_actions(),
+        [
+            SshServerAction::SaveManagedOneKeyCredentialAndContinue,
+            SshServerAction::DiscardManagedOneKeyChanges,
+            SshServerAction::CancelManagedOneKeyTransition,
+        ]
+    );
+}
+
+#[test]
+fn dirty_dialog_requires_explicit_choice() {
+    assert_eq!(dirty_onekey_dialog_actions().len(), 3);
+}
+
+#[test]
+fn pending_selection_tracks_stable_credential_identity() {
+    let credentials = vec![
+        credential("first", "one", OneKeyCredentialKind::Password, None),
+        credential("second", "two", OneKeyCredentialKind::Password, None),
+    ];
+    assert_eq!(
+        onekey_selection_transition(Some(1), &credentials),
+        OneKeyTransition::Select(Some("second".to_string()))
+    );
+}
+
+#[test]
+fn outside_click_does_not_discard_dirty_changes() {
+    assert!(onekey_backdrop_dismiss_action().is_none());
+}
+
+#[test]
+fn ssh_persistence_failure_remains_visible() {
+    crate::i18n::init(Some("en"));
+    let status = StatusBanner::Error("keychain is locked".to_string());
+    assert_eq!(
+        status_banner_content(Some(&status)),
+        Some(("keychain is locked".to_string(), StatusTone::Error))
+    );
+}
+
+#[test]
+fn known_ssh_transport_errors_never_fall_through_to_raw_copy() {
+    crate::i18n::init(Some("en"));
+    let known = [
+        "Connection timeout",
+        "ssh: Could not resolve hostname devbox: Name or service not known",
+        "ssh: connect to host devbox port 22: Connection refused",
+        "Authentication failed: wrong password (Permission denied)",
+        "ssh: connect to host devbox port 22: No route to host",
+        "SSH host key changed; connection blocked",
+        "Failed to spawn ssh: executable not found",
+    ];
+
+    for raw in known {
+        assert_ne!(
+            classify_ssh_transport_error(raw),
+            SshTransportErrorKind::Other,
+            "{raw}"
+        );
+        let humanized = humanize_ssh_transport_error(Some(raw));
+        assert_ne!(humanized, raw);
+        assert!(
+            humanized.ends_with(raw),
+            "diagnostic detail must remain available: {humanized}"
+        );
+    }
+}

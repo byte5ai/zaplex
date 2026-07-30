@@ -73,8 +73,25 @@ fn instances_path(home: &std::path::Path) -> PathBuf {
     home.join(".zap").join("instances.json")
 }
 
+fn initial_snapshot() -> CockpitSnapshot {
+    CockpitSnapshot {
+        accounts: Vec::new(),
+        generated_at: Utc::now(),
+        // No scan has run yet — the UI must show "loading", not "no accounts".
+        health: ScanHealth::Pending,
+    }
+}
+
+fn should_apply_refresh_result(current_generation: u64, completed_generation: u64) -> bool {
+    current_generation == completed_generation
+}
+
 pub struct CockpitModel {
     snapshot: CockpitSnapshot,
+    /// Monotonic identity of the newest requested refresh. Background scans can
+    /// complete out of order; only the result matching this generation may
+    /// replace the current snapshot.
+    refresh_generation: u64,
     /// The unified cross-host Agent-Inventory: local sessions folded together
     /// with every connected daemon's sessions into one Host▸Project▸Session
     /// tree. Rebuilt on every refresh; equals the local-only tree when no
@@ -134,12 +151,8 @@ impl CockpitModel {
         });
 
         let mut model = Self {
-            snapshot: CockpitSnapshot {
-                accounts: Vec::new(),
-                generated_at: Utc::now(),
-                // No scan has run yet — the UI must show "loading", not "no accounts".
-                health: ScanHealth::Pending,
-            },
+            snapshot: initial_snapshot(),
+            refresh_generation: 0,
             inventory: FleetTree::default(),
             pricing: PricingTable::default(),
             oauth_cache: HashMap::new(),
@@ -223,6 +236,10 @@ impl CockpitModel {
 
     /// Kick off a background disk scan; applies the result on the model thread.
     fn spawn_refresh(&mut self, ctx: &mut ModelContext<Self>) {
+        // Advance before reading inputs: disabling the cockpit must invalidate a
+        // scan that is already in flight as surely as starting a newer scan does.
+        self.refresh_generation = self.refresh_generation.wrapping_add(1);
+        let generation = self.refresh_generation;
         let Some(inputs) = self.refresh_inputs(ctx) else {
             // Disabled (or no home dir): blank any stale state instead of
             // silently doing nothing, so the ambient badge and Conductor UI
@@ -369,6 +386,9 @@ impl CockpitModel {
 
                 let _ = spawner
                     .spawn(move |me, ctx| {
+                        if !should_apply_refresh_result(me.refresh_generation, generation) {
+                            return;
+                        }
                         me.apply(
                             snapshot,
                             oauth_cache,
@@ -582,6 +602,22 @@ impl SingletonEntity for CockpitModel {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_scan_state_is_loading_not_empty() {
+        let snapshot = initial_snapshot();
+        assert!(snapshot.accounts.is_empty());
+        assert_eq!(snapshot.health, ScanHealth::Pending);
+    }
+
+    #[test]
+    fn older_scan_completion_cannot_replace_newer_snapshot() {
+        assert!(should_apply_refresh_result(2, 2));
+        assert!(
+            !should_apply_refresh_result(2, 1),
+            "a scan requested before the current generation must be ignored"
+        );
+    }
 
     fn empty_snapshot() -> CockpitSnapshot {
         CockpitSnapshot {
