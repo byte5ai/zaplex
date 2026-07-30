@@ -454,6 +454,12 @@ pub fn render_grid<'a>(
     }
 }
 
+/// Whether inline terminal images should be rendered. Both the iTerm and the kitty
+/// graphics protocols feed the same image map, so either flag enables rendering.
+fn terminal_images_enabled() -> bool {
+    FeatureFlag::ITermImages.is_enabled() || FeatureFlag::KittyImages.is_enabled()
+}
+
 // TODO (kevin): Solidify highlighted_url and link_tool_tip into one single struct.
 #[allow(clippy::too_many_arguments)]
 fn render_grid_without_ligatures<'a>(
@@ -549,7 +555,7 @@ fn render_grid_without_ligatures<'a>(
         .flat_map(|marked_text| marked_text.chars());
     let mut next_marked_text_cell_is_wide_char_spacer = false;
 
-    if FeatureFlag::ITermImages.is_enabled() {
+    if terminal_images_enabled() {
         let image_ids = grid.get_image_ids_in_range(start_row, end_row);
 
         let (background_image_ids, foreground_image_ids): (Vec<_>, Vec<_>) = image_ids
@@ -1048,7 +1054,7 @@ fn render_grid_with_ligatures<'a>(
         .flat_map(|marked_text| marked_text.chars())
         .peekable();
     let mut next_marked_text_cell_is_wide_char_spacer = false;
-    if FeatureFlag::ITermImages.is_enabled() {
+    if terminal_images_enabled() {
         let image_ids = grid.get_image_ids_in_range(start_row, end_row);
 
         let (background_image_ids, foreground_image_ids): (Vec<_>, Vec<_>) = image_ids
