@@ -1266,14 +1266,24 @@ fn kitty_error_code(err: &KittyError) -> String {
     format!("{code}:")
 }
 
-fn create_kitty_reply(image_id: u32, placement_id: Option<u32>, message: String) -> Vec<u8> {
+fn create_kitty_reply(
+    image_id: u32,
+    placement_id: Option<u32>,
+    image_number: Option<u32>,
+    message: String,
+) -> Vec<u8> {
+    let mut identifiers = format!("i={image_id}");
+    // A client that numbers its images needs `I=` echoed back to map the
+    // number onto the id the terminal assigned.
+    if let Some(image_number) = image_number.filter(|&number| number != 0) {
+        identifiers.push_str(&format!(",I={image_number}"));
+    }
     // 0 is not a valid placement id, so a client that left `p` at its zero
     // default gets it omitted from the reply, matching kitty. Exact-match ack
     // parsers rely on this.
-    let identifiers = match placement_id.filter(|&id| id != 0) {
-        Some(placement_id) => format!("i={image_id},p={placement_id}"),
-        None => format!("i={image_id}"),
-    };
+    if let Some(placement_id) = placement_id.filter(|&id| id != 0) {
+        identifiers.push_str(&format!(",p={placement_id}"));
+    }
 
     [
         C1::APC,
@@ -1284,15 +1294,20 @@ fn create_kitty_reply(image_id: u32, placement_id: Option<u32>, message: String)
     .concat()
 }
 
-pub fn create_kitty_ok_reply(image_id: u32, placement_id: Option<u32>) -> Vec<u8> {
-    create_kitty_reply(image_id, placement_id, "OK".to_string())
+pub fn create_kitty_ok_reply(
+    image_id: u32,
+    placement_id: Option<u32>,
+    image_number: Option<u32>,
+) -> Vec<u8> {
+    create_kitty_reply(image_id, placement_id, image_number, "OK".to_string())
 }
 
 pub fn create_kitty_error_reply(
     image_id: u32,
     placement_id: Option<u32>,
+    image_number: Option<u32>,
     err: KittyError,
 ) -> Vec<u8> {
     let message = format!("{}{err:?}", kitty_error_code(&err));
-    create_kitty_reply(image_id, placement_id, message)
+    create_kitty_reply(image_id, placement_id, image_number, message)
 }

@@ -4,7 +4,7 @@
 mod tab_stops;
 
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::ops::Range;
 use std::sync::Arc;
@@ -1743,6 +1743,11 @@ impl GridHandler {
     pub fn evict_placements_in_id_range(&mut self, start: u32, end: u32) {
         let placements = self.images.placements_for_id_range(start, end);
         self.images.evict_placements(&placements);
+    }
+
+    /// Removes every placement of an image that is not in `live`.
+    pub fn evict_images_absent_from(&mut self, live: &HashSet<u32>) {
+        self.images.evict_images_absent_from(live);
     }
 
     fn handle_completed_kitty_action_internal(

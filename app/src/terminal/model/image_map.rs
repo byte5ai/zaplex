@@ -268,6 +268,18 @@ impl ImageMap {
         }
     }
 
+    /// Removes every placement of an image that is not in `live`.
+    pub fn evict_images_absent_from(&mut self, live: &HashSet<u32>) {
+        let orphaned: Vec<(u32, u32)> = self
+            .point_by_image_id
+            .keys()
+            .copied()
+            .filter(|(image_id, _)| !live.contains(image_id))
+            .collect();
+
+        self.evict_placements(&orphaned);
+    }
+
     /// Every placement in the map, paired with its anchor cell and its geometry.
     /// Placements without recorded geometry are skipped, matching how the
     /// rendering queries treat them.

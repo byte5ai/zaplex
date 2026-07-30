@@ -516,8 +516,8 @@ fn extreme_aspect_ratio_display_does_not_underflow() {
     // zero cells, which used to compute `0usize - 1` in the newline loop and
     // turn it into an unbounded line-append in release builds.
     let pixels = vec![0u8; 4000 * 3];
-    let written =
-        terminal.process_bytes_capturing(kitty_apc("a=T,i=7,c=1,f=24,s=4000,v=1", &pixels).as_str());
+    let written = terminal
+        .process_bytes_capturing(kitty_apc("a=T,i=7,c=1,f=24,s=4000,v=1", &pixels).as_str());
 
     let reply = String::from_utf8_lossy(&written);
     assert!(reply.contains("i=7"), "unexpected reply: {reply:?}");
@@ -633,4 +633,89 @@ fn compose_action_is_unsupported() {
         reply.contains("i=1;ENOTSUPP:"),
         "unexpected reply: {reply:?}"
     );
+}
+
+#[test]
+fn reply_echoes_the_client_image_number() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    // No `i=`: the reply is how the client learns the id the terminal assigned
+    // to its number.
+    let reply = reply_for("a=T,I=9,f=24,s=1,v=1", one_pixel_rgb());
+
+    assert!(reply.contains(",I=9;OK"), "unexpected reply: {reply:?}");
+    assert!(reply.contains("i="), "unexpected reply: {reply:?}");
+}
+
+#[test]
+fn delete_all_clears_virtual_placements_without_freeing_the_image() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    terminal.process_bytes(kitty_apc("a=T,U=1,i=1,p=5,f=24,s=1,v=1", one_pixel_rgb()).as_str());
+
+    delete(&mut terminal, "d=a");
+
+    assert!(virtual_placement_ids(&terminal, 1).is_empty());
+    // Lowercase `d=a` removes placements, not the stored image data.
+    assert!(terminal.image_id_to_metadata.contains_key(&1));
+}
+
+#[test]
+fn delete_by_id_clears_virtual_placements() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    terminal.process_bytes(kitty_apc("a=T,U=1,i=1,p=5,f=24,s=1,v=1", one_pixel_rgb()).as_str());
+    terminal.process_bytes(kitty_apc("a=p,U=1,i=1,p=6", &[]).as_str());
+
+    delete(&mut terminal, "d=i,i=1,p=5");
+    assert_eq!(virtual_placement_ids(&terminal, 1), vec![6]);
+
+    delete(&mut terminal, "d=i,i=1");
+    assert!(virtual_placement_ids(&terminal, 1).is_empty());
+}
+
+#[test]
+fn delete_by_z_index_clears_matching_virtual_placements() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    terminal.process_bytes(kitty_apc("a=T,U=1,i=1,p=5,z=3,f=24,s=1,v=1", one_pixel_rgb()).as_str());
+    terminal.process_bytes(kitty_apc("a=p,U=1,i=1,p=6,z=4", &[]).as_str());
+
+    delete(&mut terminal, "d=z,z=3");
+
+    assert_eq!(virtual_placement_ids(&terminal, 1), vec![6]);
+}
+
+#[test]
+fn uppercase_z_delete_evicts_every_placement_of_a_freed_image() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    place_image(&mut terminal, "i=1,p=1,z=5");
+    place_image(&mut terminal, "i=1,p=2,z=6");
+
+    // Freeing image 1 by z-index must not leave the z=6 placement behind as a
+    // blank hole.
+    delete(&mut terminal, "d=Z,z=5");
+
+    assert!(!has_placement(&terminal, 1, 1));
+    assert!(!has_placement(&terminal, 1, 2));
+    assert!(!terminal.image_id_to_metadata.contains_key(&1));
+}
+
+#[test]
+fn uppercase_delete_by_id_with_placement_frees_the_whole_image() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    place_image(&mut terminal, "i=1,p=1");
+    place_image(&mut terminal, "i=1,p=2");
+
+    delete(&mut terminal, "d=I,i=1,p=1");
+
+    assert!(!has_placement(&terminal, 1, 1));
+    assert!(!has_placement(&terminal, 1, 2));
 }

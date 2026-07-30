@@ -79,7 +79,7 @@ use instant::Instant;
 use itertools::{Either, Itertools};
 use serde::Serialize;
 use std::cmp::{max, min};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::ParseIntError;
 use std::ops::{Range, RangeInclusive};
 use std::path::PathBuf;
@@ -1785,7 +1785,23 @@ impl TerminalModel {
         delete_image_data: bool,
     ) {
         if delete_image_data {
+            // Freeing the image data frees every placement of the image: one
+            // left in a grid would draw nothing once the metadata is gone.
             self.image_id_to_metadata.remove(&image_id);
+            self.for_each_image_grid(|grid| grid.evict_image(image_id));
+            return;
+        }
+
+        // Virtual (`U=1`) placements live in the metadata rather than any grid.
+        if let Some(StoredImageMetadata::Kitty(metadata)) =
+            self.image_id_to_metadata.get_mut(&image_id)
+        {
+            match placement_id {
+                Some(placement_id) => {
+                    metadata.virtual_placements.remove(&placement_id);
+                }
+                None => metadata.virtual_placements.clear(),
+            }
         }
 
         self.for_each_image_grid(|grid| match placement_id {
@@ -1859,9 +1875,7 @@ impl TerminalModel {
 
                 metadata.playing = true;
             }
-            KittyAction::AnimationControl {
-                play, gap_edit, ..
-            } => {
+            KittyAction::AnimationControl { play, gap_edit, .. } => {
                 if let Some(play) = play {
                     metadata.playing = play;
                 }
@@ -3652,6 +3666,7 @@ impl ansi::Handler for TerminalModel {
 
         let message_id = pending.control_data.image_id;
         let placement_id = pending.control_data.placement_id;
+        let image_number = pending.control_data.image_number;
         let verbosity = pending.control_data.verbosity;
         // Query replies are the only way a client can detect support, so they are
         // sent regardless of the requested verbosity. This is a deliberate
@@ -3672,6 +3687,11 @@ impl ansi::Handler for TerminalModel {
             }
         }
 
+        // A message that carries only a client-side number (`I=`, no `i=`)
+        // still gets a reply: the reply is how the client learns the id the
+        // terminal assigned to its number.
+        let message_id = message_id.or_else(|| image_number.and(pending.control_data.image_id));
+
         let message = match KittyMessage::try_from(pending) {
             Ok(message) => message,
             Err(err) => {
@@ -3681,6 +3701,7 @@ impl ansi::Handler for TerminalModel {
                         let _ = writer.write_all(&create_kitty_error_reply(
                             message_id,
                             placement_id,
+                            image_number,
                             err.into(),
                         ));
                     }
@@ -3698,8 +3719,11 @@ impl ansi::Handler for TerminalModel {
                 // already answered above.
                 if matches!(action, KittyAction::QuerySupport(_)) {
                     if let Some(message_id) = message_id {
-                        let _ =
-                            writer.write_all(&create_kitty_ok_reply(message_id, placement_id));
+                        let _ = writer.write_all(&create_kitty_ok_reply(
+                            message_id,
+                            placement_id,
+                            image_number,
+                        ));
                     }
                     return;
                 }
@@ -3716,8 +3740,11 @@ impl ansi::Handler for TerminalModel {
                         Ok(()) => {
                             if let Some(message_id) = message_id {
                                 if send_ok {
-                                    let _ = writer
-                                        .write_all(&create_kitty_ok_reply(message_id, placement_id));
+                                    let _ = writer.write_all(&create_kitty_ok_reply(
+                                        message_id,
+                                        placement_id,
+                                        image_number,
+                                    ));
                                 }
                             }
                         }
@@ -3728,6 +3755,7 @@ impl ansi::Handler for TerminalModel {
                                     let _ = writer.write_all(&create_kitty_error_reply(
                                         message_id,
                                         placement_id,
+                                        image_number,
                                         err,
                                     ));
                                 }
@@ -3784,6 +3812,15 @@ impl ansi::Handler for TerminalModel {
                             DeletionType::All => {
                                 if delete_image_data {
                                     self.image_id_to_metadata.clear();
+                                } else {
+                                    // `d=a` removes placements only, and virtual
+                                    // (`U=1`) placements live in the metadata
+                                    // rather than any grid.
+                                    for metadata in self.image_id_to_metadata.values_mut() {
+                                        if let StoredImageMetadata::Kitty(metadata) = metadata {
+                                            metadata.virtual_placements.clear();
+                                        }
+                                    }
                                 }
 
                                 self.for_each_image_grid(|grid| grid.evict_all_images());
@@ -3832,10 +3869,29 @@ impl ansi::Handler for TerminalModel {
                                 self.for_each_image_grid(|grid| {
                                     evicted.extend(grid.evict_placements_with_z(*z_index))
                                 });
+                                let mut affected: Vec<u32> =
+                                    evicted.into_iter().map(|(image_id, _)| image_id).collect();
+
+                                // Virtual (`U=1`) placements carry their own z
+                                // and live in the metadata rather than any grid.
+                                for (image_id, metadata) in self.image_id_to_metadata.iter_mut() {
+                                    if let StoredImageMetadata::Kitty(metadata) = metadata {
+                                        let before = metadata.virtual_placements.len();
+                                        metadata
+                                            .virtual_placements
+                                            .retain(|_, placement| placement.z_index != *z_index);
+                                        if metadata.virtual_placements.len() != before {
+                                            affected.push(*image_id);
+                                        }
+                                    }
+                                }
 
                                 if delete_image_data {
-                                    for (image_id, _) in evicted {
+                                    for image_id in affected {
+                                        // Freeing an image frees every placement
+                                        // of it, not just the matched ones.
                                         self.image_id_to_metadata.remove(&image_id);
+                                        self.for_each_image_grid(|grid| grid.evict_image(image_id));
                                     }
                                 }
                             }
@@ -3855,8 +3911,11 @@ impl ansi::Handler for TerminalModel {
                     Some(Ok(_)) => {
                         if let Some(message_id) = message_id {
                             if send_ok {
-                                let _ = writer
-                                    .write_all(&create_kitty_ok_reply(message_id, placement_id));
+                                let _ = writer.write_all(&create_kitty_ok_reply(
+                                    message_id,
+                                    placement_id,
+                                    image_number,
+                                ));
                             }
                         }
                     }
@@ -3867,6 +3926,7 @@ impl ansi::Handler for TerminalModel {
                                 let _ = writer.write_all(&create_kitty_error_reply(
                                     message_id,
                                     placement_id,
+                                    image_number,
                                     err,
                                 ));
                             }
@@ -3874,6 +3934,24 @@ impl ansi::Handler for TerminalModel {
                     }
                     None => {}
                 };
+
+                // An uppercase positional delete frees image data based on what
+                // the active grid held, but other grids may still hold
+                // placements of the freed images, which would draw as blank
+                // gaps. Sweep out every placement whose image is gone.
+                if let KittyAction::Delete {
+                    delete_placements_only: false,
+                    deletion_type:
+                        DeletionType::AtCursor
+                        | DeletionType::AtPoint { .. }
+                        | DeletionType::AtPointZ { .. }
+                        | DeletionType::Column(_)
+                        | DeletionType::Row(_),
+                } = &action
+                {
+                    let live: HashSet<u32> = self.image_id_to_metadata.keys().copied().collect();
+                    self.for_each_image_grid(|grid| grid.evict_images_absent_from(&live));
+                }
             }
             Err(err) => {
                 log::warn!("{err:?}");
@@ -3882,6 +3960,7 @@ impl ansi::Handler for TerminalModel {
                         let _ = writer.write_all(&create_kitty_error_reply(
                             message_id,
                             placement_id,
+                            image_number,
                             err,
                         ));
                     }
