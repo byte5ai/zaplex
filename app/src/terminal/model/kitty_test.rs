@@ -474,3 +474,33 @@ fn anchored_placement_records_no_virtual_placement() {
 
     assert!(virtual_placement_ids(&terminal, 1).is_empty());
 }
+
+#[test]
+fn extreme_aspect_ratio_display_does_not_underflow() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    // A 4000x1 image squeezed into one column: the desired height truncates to
+    // zero cells, which used to compute `0usize - 1` in the newline loop and
+    // turn it into an unbounded line-append in release builds.
+    let pixels = vec![0u8; 4000 * 3];
+    let written =
+        terminal.process_bytes_capturing(kitty_apc("a=T,i=7,c=1,f=24,s=4000,v=1", &pixels).as_str());
+
+    let reply = String::from_utf8_lossy(&written);
+    assert!(reply.contains("i=7"), "unexpected reply: {reply:?}");
+}
+
+#[test]
+fn query_is_answered_before_a_command_starts_executing() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    // No `simulate_cmd`: the block is still before `preexec`, so grid-bound
+    // actions route to the header grid. A support probe must be answered anyway.
+    let mut terminal = TerminalModel::mock(None, None);
+    let written = terminal
+        .process_bytes_capturing(kitty_apc("a=q,i=31,f=24,s=1,v=1", one_pixel_rgb()).as_str());
+
+    let reply = String::from_utf8_lossy(&written);
+    assert!(reply.contains("i=31;OK"), "unexpected reply: {reply:?}");
+}

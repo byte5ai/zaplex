@@ -3568,7 +3568,8 @@ impl ansi::Handler for TerminalModel {
         let placement_id = pending.control_data.placement_id;
         let verbosity = pending.control_data.verbosity;
         // Query replies are the only way a client can detect support, so they are
-        // sent regardless of the requested verbosity.
+        // sent regardless of the requested verbosity. This is a deliberate
+        // deviation: kitty itself honors `q=2` even for queries.
         let is_query = matches!(
             pending.control_data.placement_action,
             KittyPlacementAction::QuerySupport
@@ -3604,6 +3605,19 @@ impl ansi::Handler for TerminalModel {
 
         match KittyAction::try_from(message) {
             Ok(action) => {
+                // Queries never touch the grid, so answer them before the block
+                // delegate: a block still before `preexec` routes kitty actions
+                // to its header grid, which drops them without a reply, and a
+                // support probe must never go unanswered. Decode failures were
+                // already answered above.
+                if matches!(action, KittyAction::QuerySupport(_)) {
+                    if let Some(message_id) = message_id {
+                        let _ =
+                            writer.write_all(&create_kitty_ok_reply(message_id, placement_id));
+                    }
+                    return;
+                }
+
                 match &action {
                     KittyAction::StoreOnly(action) => {
                         self.image_id_to_metadata.insert(

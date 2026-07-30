@@ -1146,7 +1146,10 @@ fn kitty_error_code(err: &KittyError) -> String {
 }
 
 fn create_kitty_reply(image_id: u32, placement_id: Option<u32>, message: String) -> Vec<u8> {
-    let identifiers = match placement_id {
+    // 0 is not a valid placement id, so a client that left `p` at its zero
+    // default gets it omitted from the reply, matching kitty. Exact-match ack
+    // parsers rely on this.
+    let identifiers = match placement_id.filter(|&id| id != 0) {
         Some(placement_id) => format!("i={image_id},p={placement_id}"),
         None => format!("i={image_id}"),
     };
