@@ -1768,8 +1768,8 @@ impl GridHandler {
                     return Ok(());
                 }
 
-                let max_width =
-                    (self.columns() - self.cursor_point().col) * self.ansi_handler_state.cell_width;
+                let max_width = self.columns().saturating_sub(self.cursor_point().col)
+                    * self.ansi_handler_state.cell_width;
 
                 let max_height =
                     MAX_IMAGE_CELL_HEIGHT as usize * self.ansi_handler_state.cell_height;
@@ -1832,7 +1832,7 @@ impl GridHandler {
                 }
 
                 // Create the whitespace to fit the image on.
-                for _ in 0..height_cells - 1 {
+                for _ in 0..height_cells.saturating_sub(1) {
                     self.newline();
                 }
 
@@ -1858,6 +1858,10 @@ impl GridHandler {
                     }
                 };
 
+                if metadata.image_size.x() == 0.0 || metadata.image_size.y() == 0.0 {
+                    return Ok(());
+                }
+
                 if let Some(0) = action.placement_data.cols {
                     return Ok(());
                 }
@@ -1866,8 +1870,8 @@ impl GridHandler {
                     return Ok(());
                 }
 
-                let max_width =
-                    (self.columns() - self.cursor_point().col) * self.ansi_handler_state.cell_width;
+                let max_width = self.columns().saturating_sub(self.cursor_point().col)
+                    * self.ansi_handler_state.cell_width;
 
                 let max_height =
                     MAX_IMAGE_CELL_HEIGHT as usize * self.ansi_handler_state.cell_height;
@@ -1922,7 +1926,7 @@ impl GridHandler {
                 }
 
                 // Create the whitespace to fit the image on.
-                for _ in 0..height_cells - 1 {
+                for _ in 0..height_cells.saturating_sub(1) {
                     self.newline();
                 }
 

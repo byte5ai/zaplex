@@ -40,7 +40,7 @@ use super::image_map::StoredImageMetadata;
 use super::index::Point;
 use super::kitty::{
     create_kitty_error_reply, create_kitty_ok_reply, DeletionType, KittyAction, KittyChunk,
-    KittyMessage, KittyResponse, PendingKittyMessage,
+    KittyMessage, KittyPlacementAction, KittyResponse, PendingKittyMessage,
 };
 use super::secrets::{RespectObfuscatedSecrets, SecretAndHandle};
 use super::selection::ScrollDelta;
@@ -3522,7 +3522,16 @@ impl ansi::Handler for TerminalModel {
         };
 
         let message_id = pending.control_data.image_id;
+        let placement_id = pending.control_data.placement_id;
         let verbosity = pending.control_data.verbosity;
+        // Query replies are the only way a client can detect support, so they are
+        // sent regardless of the requested verbosity.
+        let is_query = matches!(
+            pending.control_data.placement_action,
+            KittyPlacementAction::QuerySupport
+        );
+        let send_ok = is_query || verbosity.send_ok();
+        let send_error = is_query || verbosity.send_error();
 
         if message_id.is_none() {
             pending.control_data.image_id = Some(self.next_kitty_image_id);
@@ -3538,8 +3547,12 @@ impl ansi::Handler for TerminalModel {
             Err(err) => {
                 log::warn!("{err:?}");
                 if let Some(message_id) = message_id {
-                    if verbosity.send_error() {
-                        let _ = writer.write_all(&create_kitty_error_reply(message_id, err.into()));
+                    if send_error {
+                        let _ = writer.write_all(&create_kitty_error_reply(
+                            message_id,
+                            placement_id,
+                            err.into(),
+                        ));
                     }
                 }
                 return;
@@ -3613,17 +3626,21 @@ impl ansi::Handler for TerminalModel {
                 match self.handle_completed_kitty_action(action.clone(), &mut HashMap::new()) {
                     Some(Ok(_)) => {
                         if let Some(message_id) = message_id {
-                            if verbosity.send_ok() {
-                                let _ = writer.write_all(&create_kitty_ok_reply(message_id));
+                            if send_ok {
+                                let _ = writer
+                                    .write_all(&create_kitty_ok_reply(message_id, placement_id));
                             }
                         }
                     }
                     Some(Err(err)) => {
                         log::warn!("{err:?}");
                         if let Some(message_id) = message_id {
-                            if verbosity.send_error() {
-                                let _ =
-                                    writer.write_all(&create_kitty_error_reply(message_id, err));
+                            if send_error {
+                                let _ = writer.write_all(&create_kitty_error_reply(
+                                    message_id,
+                                    placement_id,
+                                    err,
+                                ));
                             }
                         }
                     }
@@ -3633,8 +3650,12 @@ impl ansi::Handler for TerminalModel {
             Err(err) => {
                 log::warn!("{err:?}");
                 if let Some(message_id) = message_id {
-                    if verbosity.send_error() {
-                        let _ = writer.write_all(&create_kitty_error_reply(message_id, err));
+                    if send_error {
+                        let _ = writer.write_all(&create_kitty_error_reply(
+                            message_id,
+                            placement_id,
+                            err,
+                        ));
                     }
                 }
             }

@@ -985,20 +985,53 @@ pub fn set_kitty_rgb_headers(mut image: KittyImage) -> Result<KittyImage, KittyR
     Ok(image)
 }
 
-fn create_kitty_reply(image_id: u32, message: String) -> Vec<u8> {
+/// The error code prefix the kitty graphics protocol expects a failed response
+/// to start with, including its trailing colon.
+fn kitty_error_code(err: &KittyError) -> String {
+    let code = match err {
+        KittyError::KittyFeatureDisabled => "ENOTSUPP",
+        KittyError::StorageError(StorageError::UnknownId { .. }) => "ENOENT",
+        KittyError::InvalidKittyAction(action) => match action {
+            InvalidKittyAction::UnsupportedAction => "ENOTSUPP",
+            InvalidKittyAction::InvalidControlData(_) => "EINVAL",
+            InvalidKittyAction::InvalidKittyPayload(payload) => match payload {
+                InvalidKittyPayload::InvalidTransmissionMedium(_)
+                | InvalidKittyPayload::KittyDecodeError(_)
+                | InvalidKittyPayload::InvalidKittyImage(_) => "EINVAL",
+                InvalidKittyPayload::FileError(FileError::UnsupportedPlatform)
+                | InvalidKittyPayload::ShmError(ShmError::UnsupportedPlatform) => "ENOTSUPP",
+                InvalidKittyPayload::FileError(_) | InvalidKittyPayload::ShmError(_) => "EBADF",
+            },
+        },
+    };
+
+    format!("{code}:")
+}
+
+fn create_kitty_reply(image_id: u32, placement_id: Option<u32>, message: String) -> Vec<u8> {
+    let identifiers = match placement_id {
+        Some(placement_id) => format!("i={image_id},p={placement_id}"),
+        None => format!("i={image_id}"),
+    };
+
     [
         C1::APC,
         b"G",
-        format!("i={image_id};{message}").as_bytes(),
+        format!("{identifiers};{message}").as_bytes(),
         C1::ST,
     ]
     .concat()
 }
 
-pub fn create_kitty_ok_reply(image_id: u32) -> Vec<u8> {
-    create_kitty_reply(image_id, "OK".to_string())
+pub fn create_kitty_ok_reply(image_id: u32, placement_id: Option<u32>) -> Vec<u8> {
+    create_kitty_reply(image_id, placement_id, "OK".to_string())
 }
 
-pub fn create_kitty_error_reply(image_id: u32, err: KittyError) -> Vec<u8> {
-    create_kitty_reply(image_id, format!("{err:?}"))
+pub fn create_kitty_error_reply(
+    image_id: u32,
+    placement_id: Option<u32>,
+    err: KittyError,
+) -> Vec<u8> {
+    let message = format!("{}{err:?}", kitty_error_code(&err));
+    create_kitty_reply(image_id, placement_id, message)
 }
