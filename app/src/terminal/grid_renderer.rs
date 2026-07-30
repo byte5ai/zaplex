@@ -19,6 +19,8 @@ use lazy_static::lazy_static;
 use num_traits::Float as _;
 use std::cmp::Ordering;
 use std::ops::Range;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use std::{collections::HashMap, ops::RangeInclusive};
 use unicode_width::UnicodeWidthChar;
 use warp_core::features::FeatureFlag;
@@ -1818,6 +1820,11 @@ fn render_glyph_svg(
     }
 }
 
+/// Reference point for animated inline image playback. All animated images share this
+/// phase, so a GIF starts on whichever frame is current when it is first drawn rather
+/// than on frame zero.
+static ANIMATION_EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
+
 #[allow(clippy::too_many_arguments)]
 fn render_image(
     image_id: u32,
@@ -1871,8 +1878,29 @@ fn render_image(
                 CornerRadius::default(),
             );
         }
-        Image::Animated(_) => {
-            log::warn!("Image should be static");
+        Image::Animated(animated_image) => {
+            // After about ~50 days of uptime, casting the elapsed time to a u32 will
+            // silently overflow. The animation may jump and resume from a different frame.
+            let elapsed = ANIMATION_EPOCH.elapsed().as_millis() as u32;
+            match animated_image.get_current_frame(elapsed) {
+                Ok((frame, remaining_delay)) => {
+                    let logical_image_size = frame.size().to_f32() / ctx.scene.scale_factor();
+
+                    let image_origin = grid_origin + glyph_offset;
+                    ctx.scene.draw_image(
+                        RectF::new(image_origin, logical_image_size),
+                        frame,
+                        1.,
+                        CornerRadius::default(),
+                    );
+                    ctx.repaint_after(Duration::from_millis(remaining_delay as u64));
+                }
+                Err(e) => {
+                    log::error!(
+                        "Unable to retrieve current frame from image (image id = {image_id}): {e:?}"
+                    );
+                }
+            }
         }
     }
 }
