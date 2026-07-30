@@ -638,7 +638,6 @@ fn render_grid_without_ligatures<'a>(
 
         // Virtual placements are anchored by their placeholder cells rather than
         // by the image map, so they need their own pass over the visible cells.
-        ctx.scene.start_layer(warpui::ClipBounds::ActiveLayer);
         render_unicode_placeholders(
             grid,
             &visible_rows,
@@ -649,7 +648,6 @@ fn render_grid_without_ligatures<'a>(
             ctx,
             app,
         );
-        ctx.scene.stop_layer();
     }
 
     for (offset, row_idx) in visible_rows.iter().copied().enumerate() {
@@ -1156,7 +1154,6 @@ fn render_grid_with_ligatures<'a>(
 
         // Virtual placements are anchored by their placeholder cells rather than
         // by the image map, so they need their own pass over the visible cells.
-        ctx.scene.start_layer(warpui::ClipBounds::ActiveLayer);
         render_unicode_placeholders(
             grid,
             &visible_rows,
@@ -1167,7 +1164,6 @@ fn render_grid_with_ligatures<'a>(
             ctx,
             app,
         );
-        ctx.scene.stop_layer();
     }
 
     for (offset, row_idx) in visible_rows.iter().copied().enumerate() {
@@ -1905,6 +1901,17 @@ fn render_unicode_placeholders(
     ctx: &mut PaintContext,
     app: &AppContext,
 ) {
+    // The scan below touches every visible cell, so skip it (and its layer)
+    // outright unless some image actually has a virtual placement.
+    if !image_metadata
+        .values()
+        .any(|m| matches!(m, StoredImageMetadata::Kitty(k) if !k.virtual_placements.is_empty()))
+    {
+        return;
+    }
+
+    ctx.scene.start_layer(warpui::ClipBounds::ActiveLayer);
+
     let mut placeholder_cells = Vec::new();
 
     for (offset, row_idx) in visible_rows.iter().copied().enumerate() {
@@ -1934,7 +1941,12 @@ fn render_unicode_placeholders(
             );
         }
     }
+
+    ctx.scene.stop_layer();
 }
+
+/// Matches `MAX_IMAGE_CELL_HEIGHT` in the anchored placement path.
+const MAX_VIRTUAL_PLACEMENT_CELLS: u32 = 255;
 
 /// Draws one horizontal strip of a virtually placed image.
 #[allow(clippy::too_many_arguments)]
@@ -1952,12 +1964,19 @@ fn render_placeholder_run(
     };
 
     // Placement ids cannot be recovered from the cells, so `run.placement_id` is
-    // always 0 (see `parse_placeholder_cell`). An image with exactly one virtual
-    // placement therefore uses that one.
-    let placement = match metadata.virtual_placements.len() {
-        1 => metadata.virtual_placements.values().next(),
-        _ => metadata.virtual_placements.get(&run.placement_id),
-    };
+    // always 0 (see `parse_placeholder_cell`). When the keyed lookup misses,
+    // degrade to the lowest-numbered placement so an image shown through
+    // several virtual placements still renders one of them.
+    let placement = metadata
+        .virtual_placements
+        .get(&run.placement_id)
+        .or_else(|| {
+            metadata
+                .virtual_placements
+                .iter()
+                .min_by_key(|(id, _)| **id)
+                .map(|(_, placement)| placement)
+        });
     let Some(placement) = placement else {
         return;
     };
@@ -1965,12 +1984,17 @@ fn render_placeholder_run(
     // The placement's extent in cells is resolved here rather than when the
     // placement was created, so that a font size change re-tiles the image
     // against the new cell size.
+    // Clamped like the anchored placement path: `r=`/`c=` are client-supplied,
+    // and unclamped values would drive an arbitrarily large resize (and a cache
+    // entry per distinct size) in `ImageCache::image` below.
     let cols = placement
         .cols
-        .unwrap_or_else(|| cells_to_cover(metadata.image_size.x(), cell_size.x()));
+        .unwrap_or_else(|| cells_to_cover(metadata.image_size.x(), cell_size.x()))
+        .min(MAX_VIRTUAL_PLACEMENT_CELLS);
     let rows = placement
         .rows
-        .unwrap_or_else(|| cells_to_cover(metadata.image_size.y(), cell_size.y()));
+        .unwrap_or_else(|| cells_to_cover(metadata.image_size.y(), cell_size.y()))
+        .min(MAX_VIRTUAL_PLACEMENT_CELLS);
 
     if rows == 0 || cols == 0 || run.image_row >= rows || run.image_col_start >= cols {
         return;
