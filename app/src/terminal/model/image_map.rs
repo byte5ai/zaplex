@@ -268,13 +268,18 @@ impl ImageMap {
         }
     }
 
-    /// Removes every placement of an image that is not in `live`.
+    /// Removes every kitty placement of an image that is not in `live`. Only
+    /// kitty placements: a kitty delete command must be structurally incapable
+    /// of touching an iTerm image, whose metadata lifecycle is independent.
     pub fn evict_images_absent_from(&mut self, live: &HashSet<u32>) {
         let orphaned: Vec<(u32, u32)> = self
             .point_by_image_id
             .keys()
             .copied()
-            .filter(|(image_id, _)| !live.contains(image_id))
+            .filter(|(image_id, _)| {
+                !live.contains(image_id)
+                    && self.image_type_by_image_id.get(image_id) == Some(&ImageType::Kitty)
+            })
             .collect();
 
         self.evict_placements(&orphaned);

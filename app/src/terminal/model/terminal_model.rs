@@ -41,7 +41,7 @@ use super::index::Point;
 use super::kitty::{
     create_kitty_error_reply, create_kitty_ok_reply, frame_index, DeletionType, InvalidKittyAction,
     KittyAction, KittyChunk, KittyError, KittyMessage, KittyPlacementAction, KittyResponse,
-    PendingKittyMessage, StorageError,
+    PendingKittyMessage, StorageError, MAX_ANIMATION_FRAMES, MAX_ANIMATION_FRAME_BYTES,
 };
 use super::secrets::{RespectObfuscatedSecrets, SecretAndHandle};
 use super::selection::ScrollDelta;
@@ -1858,25 +1858,44 @@ impl TerminalModel {
                     return Err(InvalidKittyAction::UnsupportedAction.into());
                 }
 
-                let edited = match frame_number {
+                let edited = match frame_number.filter(|&number| number != 0) {
                     // Frame 1 is the root image; replacing its pixels means
                     // replacing the image itself, not a frame.
                     Some(1) => return Err(InvalidKittyAction::UnsupportedAction.into()),
                     Some(frame_number) => {
-                        frame_index(frame_number).and_then(|index| metadata.frames.get_mut(index))
+                        // `r=` names an existing frame; a number past the end
+                        // is an error, not an append.
+                        let index = frame_index(frame_number)
+                            .filter(|&index| index < metadata.frames.len())
+                            .ok_or(KittyError::from(StorageError::UnknownId {
+                                id: frame_number,
+                            }))?;
+                        metadata.frames.get_mut(index)
                     }
                     None => None,
                 };
 
                 match edited {
                     Some(frame) => *frame = (image.data, gap_ms),
-                    None => metadata.frames.push((image.data, gap_ms)),
+                    None => {
+                        let stored_bytes: usize =
+                            metadata.frames.iter().map(|(data, _)| data.len()).sum();
+                        if metadata.frames.len() >= MAX_ANIMATION_FRAMES
+                            || stored_bytes + image.data.len() > MAX_ANIMATION_FRAME_BYTES
+                        {
+                            return Err(InvalidKittyAction::UnsupportedAction.into());
+                        }
+                        metadata.frames.push((image.data, gap_ms));
+                    }
                 }
 
                 metadata.playing = true;
             }
             KittyAction::AnimationControl { play, gap_edit, .. } => {
+                let mut changed = false;
+
                 if let Some(play) = play {
+                    changed |= metadata.playing != play;
                     metadata.playing = play;
                 }
 
@@ -1887,8 +1906,14 @@ impl TerminalModel {
                     if let Some(frame) =
                         frame_index(frame_number).and_then(|index| metadata.frames.get_mut(index))
                     {
+                        changed |= frame.1 != gap_ms;
                         frame.1 = gap_ms;
                     }
+                }
+
+                // A no-op control message must not trigger an asset rebuild.
+                if !changed {
+                    return Ok(());
                 }
             }
             _ => return Ok(()),
@@ -3678,7 +3703,23 @@ impl ansi::Handler for TerminalModel {
         let send_ok = is_query || verbosity.send_ok();
         let send_error = is_query || verbosity.send_error();
 
-        if message_id.is_none() {
+        // A message that names its image only by client number (`I=`, no `i=`)
+        // refers to the newest image transmitted under that number, unless it
+        // is itself a transmission, which allocates a fresh image below.
+        if pending.control_data.image_id.is_none() {
+            if let Some(number) = image_number.filter(|&number| number != 0) {
+                if matches!(
+                    pending.control_data.placement_action,
+                    KittyPlacementAction::DisplayStoredImage
+                        | KittyPlacementAction::TransmitFrame
+                        | KittyPlacementAction::AnimationControl
+                ) {
+                    pending.control_data.image_id = self.newest_kitty_image_with_number(number);
+                }
+            }
+        }
+
+        if pending.control_data.image_id.is_none() {
             pending.control_data.image_id = Some(self.next_kitty_image_id);
             self.next_kitty_image_id = self.next_kitty_image_id.wrapping_add(1);
             // 0 is an invalid ID for kitty images
@@ -3689,8 +3730,13 @@ impl ansi::Handler for TerminalModel {
 
         // A message that carries only a client-side number (`I=`, no `i=`)
         // still gets a reply: the reply is how the client learns the id the
-        // terminal assigned to its number.
-        let message_id = message_id.or_else(|| image_number.and(pending.control_data.image_id));
+        // terminal assigned to its number. `I=0` is the unset default and gets
+        // no reply, matching how the reply builder omits it.
+        let message_id = message_id.or_else(|| {
+            image_number
+                .filter(|&number| number != 0)
+                .and(pending.control_data.image_id)
+        });
 
         let message = match KittyMessage::try_from(pending) {
             Ok(message) => message,
@@ -3936,9 +3982,10 @@ impl ansi::Handler for TerminalModel {
                 };
 
                 // An uppercase positional delete frees image data based on what
-                // the active grid held, but other grids may still hold
-                // placements of the freed images, which would draw as blank
-                // gaps. Sweep out every placement whose image is gone.
+                // the active grid held, but other placements of the freed
+                // images would draw as blank gaps. Sweep them out of the grids
+                // this delete can reach (the alt screen when active, the block
+                // grids otherwise — the same reach as every delete above).
                 if let KittyAction::Delete {
                     delete_placements_only: false,
                     deletion_type:

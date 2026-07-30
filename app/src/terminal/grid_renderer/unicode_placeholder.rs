@@ -112,9 +112,13 @@ pub fn parse_placeholder_cell(cell: &Cell) -> Option<PlaceholderCell> {
     // A third diacritic carries the top byte of a 32-bit image id, which does
     // not fit in a 24-bit colour.
     if let Some(most_significant_byte) = diacritics.next() {
-        // Only indices 0-255 can carry a byte; the table is larger than that,
-        // so mask rather than let a larger index wrap into the wrong bits.
-        image_id |= (most_significant_byte & 0xff) << 24;
+        // Only the first 256 diacritics can encode a byte. A higher index is a
+        // malformed cell, and decoding it anyway would silently name a
+        // different image.
+        if most_significant_byte > 0xff {
+            return None;
+        }
+        image_id |= most_significant_byte << 24;
     }
 
     Some(PlaceholderCell {

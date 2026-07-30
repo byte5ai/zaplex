@@ -3,6 +3,7 @@ use warp_core::features::FeatureFlag;
 
 use crate::terminal::model::image_map::StoredImageMetadata;
 use crate::terminal::model::index::Point;
+use crate::terminal::model::kitty::MAX_ANIMATION_FRAMES;
 use crate::terminal::model::TerminalModel;
 
 /// Builds a single-chunk kitty graphics APC message.
@@ -633,6 +634,74 @@ fn compose_action_is_unsupported() {
         reply.contains("i=1;ENOTSUPP:"),
         "unexpected reply: {reply:?}"
     );
+}
+
+#[test]
+fn zero_image_number_gets_no_reply() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    // `I=0` is the unset default of client libraries that always emit the key;
+    // replying would hand them an id they never asked about.
+    let reply = reply_for("a=T,I=0,f=24,s=1,v=1", one_pixel_rgb());
+
+    assert!(reply.is_empty(), "unexpected reply: {reply:?}");
+}
+
+#[test]
+fn animation_messages_resolve_the_client_image_number() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    terminal.process_bytes(kitty_apc("a=t,i=1,I=5,f=24,s=1,v=1", one_pixel_rgb()).as_str());
+
+    let reply = animate(&mut terminal, "a=f,I=5,f=24,s=1,v=1", one_pixel_rgb());
+
+    assert!(reply.contains("i=1,I=5;OK"), "unexpected reply: {reply:?}");
+    assert_eq!(frame_gaps(&terminal, 1).len(), 1);
+}
+
+#[test]
+fn frame_edit_of_a_missing_frame_is_an_error_not_an_append() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_stored_image();
+
+    let reply = animate(&mut terminal, "a=f,i=1,r=7,f=24,s=1,v=1", one_pixel_rgb());
+
+    assert!(reply.contains("i=1;ENOENT:"), "unexpected reply: {reply:?}");
+    assert!(frame_gaps(&terminal, 1).is_empty());
+}
+
+#[test]
+fn explicit_zero_base_frame_is_accepted() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_stored_image();
+
+    // `c=0` means "no base frame": nothing to composite, so nothing to reject.
+    let reply = animate(&mut terminal, "a=f,i=1,c=0,f=24,s=1,v=1", one_pixel_rgb());
+
+    assert!(reply.contains("i=1;OK"), "unexpected reply: {reply:?}");
+    assert_eq!(frame_gaps(&terminal, 1).len(), 1);
+}
+
+#[test]
+fn animation_frames_are_capped() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_stored_image();
+    for _ in 0..MAX_ANIMATION_FRAMES {
+        terminal.process_bytes(kitty_apc("a=f,i=1,q=1,f=24,s=1,v=1", one_pixel_rgb()).as_str());
+    }
+    assert_eq!(frame_gaps(&terminal, 1).len(), MAX_ANIMATION_FRAMES);
+
+    let reply = animate(&mut terminal, "a=f,i=1,f=24,s=1,v=1", one_pixel_rgb());
+
+    assert!(
+        reply.contains("i=1;ENOTSUPP:"),
+        "unexpected reply: {reply:?}"
+    );
+    assert_eq!(frame_gaps(&terminal, 1).len(), MAX_ANIMATION_FRAMES);
 }
 
 #[test]

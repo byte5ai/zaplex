@@ -55,6 +55,12 @@ pub enum KittyAction {
 /// The gap kitty falls back to for a frame that does not carry a usable one.
 pub const DEFAULT_FRAME_GAP_MS: u32 = 40;
 
+/// Caps on the animation frames kept per image, so a runaway or malicious
+/// `a=f` stream cannot grow memory without bound. Kitty itself keeps every
+/// frame; the bound is a deliberate divergence, reported as `ENOTSUPP:`.
+pub const MAX_ANIMATION_FRAMES: usize = 1024;
+pub const MAX_ANIMATION_FRAME_BYTES: usize = 256 * 1024 * 1024;
+
 /// Reads a frame's `z=` gap. Kitty ignores a zero gap, which leaves the default
 /// in place, and reads a negative one as "no gap at all".
 fn frame_gap_ms(z: i32) -> u32 {
@@ -517,7 +523,7 @@ impl TryFrom<KittyMessage> for KittyAction {
                 // which this terminal does not implement.
                 if message.control_data.delete_x.unwrap_or(0) != 0
                     || message.control_data.delete_y.unwrap_or(0) != 0
-                    || message.control_data.cols.is_some()
+                    || message.control_data.cols.unwrap_or(0) != 0
                 {
                     return Err(InvalidKittyAction::UnsupportedAction.into());
                 }
