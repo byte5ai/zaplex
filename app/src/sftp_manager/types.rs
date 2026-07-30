@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 /// File entry type (UI layer)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +39,7 @@ pub struct FileEntry {
 pub enum TransferDirection {
     Upload,
     Download,
+    Copy,
 }
 
 /// Transfer state
@@ -45,9 +47,28 @@ pub enum TransferDirection {
 pub enum TransferState {
     Pending,
     InProgress,
+    Paused,
+    Cancelling,
     Completed,
+    Skipped,
+    PartiallyCompleted {
+        transferred: usize,
+        published: usize,
+        skipped: usize,
+        source_kept: bool,
+    },
+    CompletedWithWarning(String),
     Failed(String),
     Cancelled,
+}
+
+/// The current transfer phase shown in global activity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TransferPhase {
+    #[default]
+    Transferring,
+    Verifying,
+    Finalizing,
 }
 
 /// Transfer task
@@ -55,6 +76,8 @@ pub enum TransferState {
 pub struct TransferTask {
     /// Task ID
     pub id: usize,
+    /// Queue control generation captured when this task was rendered.
+    pub control_epoch: Option<u64>,
     /// Source path
     pub source_path: PathBuf,
     /// Target path
@@ -65,8 +88,16 @@ pub struct TransferTask {
     pub total_size: u64,
     /// Transferred size (bytes)
     pub transferred: u64,
+    /// Estimated time remaining while the transfer is active.
+    pub eta: Option<Duration>,
+    /// Current streaming or verification phase.
+    pub phase: TransferPhase,
     /// Transfer state
     pub state: TransferState,
+    /// Paths retained after an indeterminate or incomplete cleanup.
+    pub recovery_paths: Vec<PathBuf>,
+    /// Whether the retained cleanup can be retried safely.
+    pub recovery_retryable: bool,
     /// Cancel flag
     pub cancel_flag: Arc<AtomicBool>,
 }
@@ -82,12 +113,17 @@ impl TransferTask {
     ) -> Self {
         Self {
             id,
+            control_epoch: None,
             source_path,
             target_path,
             direction,
             total_size,
             transferred: 0,
+            eta: None,
+            phase: TransferPhase::Transferring,
             state: TransferState::Pending,
+            recovery_paths: Vec::new(),
+            recovery_retryable: false,
             cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }

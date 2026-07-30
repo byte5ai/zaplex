@@ -644,6 +644,11 @@ pub enum WorkspaceAction {
     },
     SaveCurrentTabAsNewConfig(usize),
     SyncTrafficLights,
+    CancelTransfer(crate::sftp_manager::transfer_queue::TransferActionTarget),
+    PauseTransfer(crate::sftp_manager::transfer_queue::TransferActionTarget),
+    ResumeTransfer(crate::sftp_manager::transfer_queue::TransferActionTarget),
+    RetryTransferRecovery(u64),
+    ClearTransferHistory,
     /// Opens a tab config file in the editor and dismisses the associated error toast.
     OpenTabConfigErrorFile {
         path: PathBuf,
@@ -1178,6 +1183,11 @@ impl WorkspaceAction {
             | DismissSessionConfigTabConfigChip
             | SaveCurrentTabAsNewConfig(_)
             | SyncTrafficLights
+            | CancelTransfer(_)
+            | PauseTransfer(_)
+            | ResumeTransfer(_)
+            | RetryTransferRecovery(_)
+            | ClearTransferHistory
             | OpenTabConfigErrorFile { .. }
             | TabConfigSidecarMakeDefault { .. }
             | TabConfigSidecarEditConfig { .. }

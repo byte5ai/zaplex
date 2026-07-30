@@ -34,10 +34,13 @@ use crate::test_util::settings::initialize_settings_for_tests;
 
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 
-use super::browser::{SftpBrowserAction, SftpBrowserView};
-use super::sftp_backend::{InMemorySftpBackend, SftpBackend};
+use super::browser::{
+    copy_move_submission_summary, transfer_display_priority, SftpBrowserAction, SftpBrowserView,
+};
+use super::sftp_backend::{BackendOwnershipAnchor, InMemorySftpBackend, SftpBackend};
 use super::types::{
     ConnectionState, Dialog, FileEntry, FileEntryType, TransferDirection, TransferState,
+    TransferTask,
 };
 
 /// Initializes the minimal set of singletons required by the tests
@@ -49,15 +52,14 @@ fn initialize_app(app: &mut warpui::App) {
     app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
     app.add_singleton_model(|_| ToastStack);
     app.add_singleton_model(|_| super::fm_registry::FileManagerRegistry::new());
+    app.add_singleton_model(|_| super::transfer_queue::TransferQueue::new());
 
     let temp_db = std::env::temp_dir().join("warp_sftp_integration_test.sqlite");
     let _ = warp_ssh_manager::set_database_path(temp_db);
 }
 
 /// Creates a SftpBrowserView and places it in a window (Disconnected state)
-fn create_view(
-    app: &mut warpui::App,
-) -> (warpui::WindowId, warpui::ViewHandle<SftpBrowserView>) {
+fn create_view(app: &mut warpui::App) -> (warpui::WindowId, warpui::ViewHandle<SftpBrowserView>) {
     app.add_window(WindowStyle::NotStealFocus, |ctx| {
         SftpBrowserView::new("test-node".to_string(), None, ctx)
     })
@@ -90,8 +92,8 @@ fn create_connected_view(
     tempfile::TempDir,
 ) {
     let temp_dir = create_temp_dir_with_files(files);
-    let backend = Arc::new(InMemorySftpBackend::new(temp_dir.path().to_path_buf()))
-        as Arc<dyn SftpBackend>;
+    let backend =
+        Arc::new(InMemorySftpBackend::new(temp_dir.path().to_path_buf())) as Arc<dyn SftpBackend>;
 
     let (win_id, view) = create_view(app);
     view.update(app, |v, ctx| {
@@ -314,8 +316,8 @@ fn create_workspace_action_capture_view(
     tempfile::TempDir,
 ) {
     let temp_dir = create_temp_dir_with_files(files);
-    let backend = Arc::new(InMemorySftpBackend::new(temp_dir.path().to_path_buf()))
-        as Arc<dyn SftpBackend>;
+    let backend =
+        Arc::new(InMemorySftpBackend::new(temp_dir.path().to_path_buf())) as Arc<dyn SftpBackend>;
     let (window_id, root) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
         let browser = ctx.add_typed_action_view(|ctx| {
             SftpBrowserView::new("capture-node".to_string(), None, ctx)
@@ -347,14 +349,12 @@ fn create_dual_connected_view(
         ("a.txt", b"a"),
         ("this-is-a-very-long-file-name.txt", b"long"),
     ]);
-    let right_temp = create_temp_dir_with_files(&[
-        ("cursor.txt", b"cursor"),
-        ("selected.txt", b"selected"),
-    ]);
-    let left_backend = Arc::new(InMemorySftpBackend::new(left_temp.path().to_path_buf()))
-        as Arc<dyn SftpBackend>;
-    let right_backend = Arc::new(InMemorySftpBackend::new(right_temp.path().to_path_buf()))
-        as Arc<dyn SftpBackend>;
+    let right_temp =
+        create_temp_dir_with_files(&[("cursor.txt", b"cursor"), ("selected.txt", b"selected")]);
+    let left_backend =
+        Arc::new(InMemorySftpBackend::new(left_temp.path().to_path_buf())) as Arc<dyn SftpBackend>;
+    let right_backend =
+        Arc::new(InMemorySftpBackend::new(right_temp.path().to_path_buf())) as Arc<dyn SftpBackend>;
 
     let (window_id, root) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
         let left = ctx.add_typed_action_view(|ctx| {
@@ -383,6 +383,7 @@ fn initialize_pane_group_app(app: &mut App) {
     crate::test_util::terminal::initialize_app_for_terminal_view(app);
     app.add_singleton_model(|_| crate::workspace::ToastStack);
     app.add_singleton_model(|_| super::fm_registry::FileManagerRegistry::new());
+    app.add_singleton_model(|_| super::transfer_queue::TransferQueue::new());
 
     let temp_db = std::env::temp_dir().join("warp_sftp_pane_group_test.sqlite");
     let _ = warp_ssh_manager::set_database_path(temp_db);
@@ -431,15 +432,11 @@ fn create_three_pane_group(
         )
     });
 
-    let mut browsers = vec![
-        first_browser
-            .borrow()
-            .clone()
-            .expect("first browser should be created"),
-    ];
-    let mut pane_ids = vec![
-        (*first_pane_id.borrow()).expect("first pane id should be created"),
-    ];
+    let mut browsers = vec![first_browser
+        .borrow()
+        .clone()
+        .expect("first browser should be created")];
+    let mut pane_ids = vec![(*first_pane_id.borrow()).expect("first pane id should be created")];
     for temp_dir in &temp_dirs[1..] {
         let pane_path = temp_dir.path().to_path_buf();
         let added = Rc::new(RefCell::new(None));
@@ -565,15 +562,28 @@ impl TracingBackend {
 }
 
 impl SftpBackend for TracingBackend {
+    fn supports_atomic_exchange(&self) -> bool {
+        self.inner.supports_atomic_exchange()
+    }
+
+    fn supports_identity_bound_cleanup(&self) -> bool {
+        self.inner.supports_identity_bound_cleanup()
+    }
+
+    fn existing_entry_ownership_anchor(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Option<Arc<dyn BackendOwnershipAnchor>>, super::sftp_ops::SftpOpsError> {
+        self.inner.existing_entry_ownership_anchor(path)
+    }
+
     fn list_dir(
         &self,
         path: &std::path::Path,
     ) -> Result<Vec<super::types::FileEntry>, super::sftp_ops::SftpOpsError> {
         self.listed_paths.lock().unwrap().push(path.to_path_buf());
         let entries = self.inner.list_dir(path)?;
-        if let Some((created_path, contents)) =
-            self.create_after_next_list.lock().unwrap().take()
-        {
+        if let Some((created_path, contents)) = self.create_after_next_list.lock().unwrap().take() {
             let relative = created_path
                 .strip_prefix("/")
                 .unwrap_or(created_path.as_path());
@@ -584,10 +594,7 @@ impl SftpBackend for TracingBackend {
         Ok(entries)
     }
 
-    fn delete_file(
-        &self,
-        path: &std::path::Path,
-    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+    fn delete_file(&self, path: &std::path::Path) -> Result<(), super::sftp_ops::SftpOpsError> {
         self.inner.delete_file(path)
     }
 
@@ -598,11 +605,15 @@ impl SftpBackend for TracingBackend {
         self.inner.delete_dir_recursive(path)
     }
 
-    fn create_dir(
+    fn create_dir(&self, path: &std::path::Path) -> Result<(), super::sftp_ops::SftpOpsError> {
+        self.inner.create_dir(path)
+    }
+
+    fn create_dir_with_ownership_anchor(
         &self,
         path: &std::path::Path,
-    ) -> Result<(), super::sftp_ops::SftpOpsError> {
-        self.inner.create_dir(path)
+    ) -> Result<Option<Arc<dyn BackendOwnershipAnchor>>, super::sftp_ops::SftpOpsError> {
+        self.inner.create_dir_with_ownership_anchor(path)
     }
 
     fn rename(
@@ -626,10 +637,7 @@ impl SftpBackend for TracingBackend {
         self.inner.replace(old_path, new_path)
     }
 
-    fn realpath(
-        &self,
-        path: &std::path::Path,
-    ) -> Result<PathBuf, super::sftp_ops::SftpOpsError> {
+    fn realpath(&self, path: &std::path::Path) -> Result<PathBuf, super::sftp_ops::SftpOpsError> {
         self.inner.realpath(path)
     }
 
@@ -646,6 +654,13 @@ impl SftpBackend for TracingBackend {
         path: &std::path::Path,
     ) -> Result<super::types::FileEntry, super::sftp_ops::SftpOpsError> {
         self.inner.lstat(path)
+    }
+
+    fn stable_identity(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<super::sftp_backend::StableEntryIdentity, super::sftp_ops::SftpOpsError> {
+        self.inner.stable_identity(path)
     }
 
     fn upload_file(
@@ -828,12 +843,15 @@ fn create_standard_view(
     warpui::ViewHandle<SftpBrowserView>,
     tempfile::TempDir,
 ) {
-    create_connected_view(app, &[
-        ("docs/report.txt", b"report content"),
-        ("readme.txt", b"hello world"),
-        ("config.yaml", b"key: value"),
-        ("data/sub/deep.txt", b"deep file"),
-    ])
+    create_connected_view(
+        app,
+        &[
+            ("docs/report.txt", b"report content"),
+            ("readme.txt", b"hello world"),
+            ("config.yaml", b"key: value"),
+            ("data/sub/deep.txt", b"deep file"),
+        ],
+    )
 }
 
 // ============================================================
@@ -845,10 +863,10 @@ fn create_standard_view(
 fn test_connected_state_with_mock_backend() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("file1.txt", b"content1"),
-            ("file2.txt", b"content2"),
-        ]);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[("file1.txt", b"content1"), ("file2.txt", b"content2")],
+        );
 
         view.read(&app, |v, _| {
             assert!(
@@ -856,7 +874,10 @@ fn test_connected_state_with_mock_backend() {
                 "should be in Connected state"
             );
             assert_eq!(v.entries.len(), 2, "should list 2 files");
-            assert!(v.current_path == PathBuf::from("/"), "current path should be /");
+            assert!(
+                v.current_path == PathBuf::from("/"),
+                "current path should be /"
+            );
         });
     });
 }
@@ -874,7 +895,10 @@ fn test_connection_failure_shows_error_state() {
                 !matches!(v.connection, ConnectionState::Connected),
                 "should not be in Connected state when there is no SSH configuration"
             );
-            assert!(v.entries.is_empty(), "should have no entries when disconnected");
+            assert!(
+                v.entries.is_empty(),
+                "should have no entries when disconnected"
+            );
         });
     });
 }
@@ -884,9 +908,7 @@ fn test_connection_failure_shows_error_state() {
 fn test_reconnect_after_failure() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("reconnect.txt", b"data"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("reconnect.txt", b"data")]);
 
         // First set it to the Failed state
         view.update(&mut app, |v, ctx| {
@@ -903,8 +925,8 @@ fn test_reconnect_after_failure() {
 
         // Re-inject the backend to restore the connection
         let temp2 = create_temp_dir_with_files(&[("new.txt", b"new content")]);
-        let backend = Arc::new(InMemorySftpBackend::new(temp2.path().to_path_buf()))
-            as Arc<dyn SftpBackend>;
+        let backend =
+            Arc::new(InMemorySftpBackend::new(temp2.path().to_path_buf())) as Arc<dyn SftpBackend>;
         view.update(&mut app, |v, ctx| {
             v.set_backend_for_test(backend, PathBuf::from("/"), ctx);
         });
@@ -914,7 +936,11 @@ fn test_reconnect_after_failure() {
                 matches!(v.connection, ConnectionState::Connected),
                 "should be in Connected state after re-injecting backend"
             );
-            assert_eq!(v.entries.len(), 1, "should list 1 file from the new backend");
+            assert_eq!(
+                v.entries.len(),
+                1,
+                "should list 1 file from the new backend"
+            );
         });
     });
 }
@@ -924,9 +950,7 @@ fn test_reconnect_after_failure() {
 fn test_disconnect_clears_entries_and_path() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("file.txt", b"content"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("file.txt", b"content")]);
 
         // Verify it is connected
         view.read(&app, |v, _| {
@@ -990,20 +1014,31 @@ fn test_render_failed_state() {
 fn test_list_dir_populates_entries() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("banana.txt", b"b"),
-            ("apple.txt", b"a"),
-            ("cherry.txt", b"c"),
-            ("folder_a/.keep", b""),
-            ("folder_b/.keep", b""),
-        ]);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[
+                ("banana.txt", b"b"),
+                ("apple.txt", b"a"),
+                ("cherry.txt", b"c"),
+                ("folder_a/.keep", b""),
+                ("folder_b/.keep", b""),
+            ],
+        );
 
         view.read(&app, |v, _| {
             assert_eq!(v.entries.len(), 5, "should have 5 entries");
 
             // Directories should be listed before files
-            let dirs: Vec<_> = v.entries.iter().take_while(|e| e.file_type == FileEntryType::Directory).collect();
-            let files: Vec<_> = v.entries.iter().skip_while(|e| e.file_type == FileEntryType::Directory).collect();
+            let dirs: Vec<_> = v
+                .entries
+                .iter()
+                .take_while(|e| e.file_type == FileEntryType::Directory)
+                .collect();
+            let files: Vec<_> = v
+                .entries
+                .iter()
+                .skip_while(|e| e.file_type == FileEntryType::Directory)
+                .collect();
             assert_eq!(dirs.len(), 2, "should have 2 directories");
             assert_eq!(files.len(), 3, "should have 3 files");
         });
@@ -1015,10 +1050,10 @@ fn test_list_dir_populates_entries() {
 fn test_open_directory_navigates_and_updates_history() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("docs/readme.txt", b"readme"),
-            ("file.txt", b"file"),
-        ]);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[("docs/readme.txt", b"readme"), ("file.txt", b"file")],
+        );
 
         // Find the index of the docs directory
         let docs_idx = view.read(&app, |v, _| {
@@ -1032,10 +1067,14 @@ fn test_open_directory_navigates_and_updates_history() {
 
         view.read(&app, |v, _| {
             assert!(
-                v.current_path.ends_with("docs") || v.current_path.to_string_lossy().contains("docs"),
+                v.current_path.ends_with("docs")
+                    || v.current_path.to_string_lossy().contains("docs"),
                 "current path should contain docs"
             );
-            assert!(v.path_history.len() >= 2, "navigation history should increase");
+            assert!(
+                v.path_history.len() >= 2,
+                "navigation history should increase"
+            );
         });
     });
 }
@@ -1045,9 +1084,7 @@ fn test_open_directory_navigates_and_updates_history() {
 fn test_go_up_from_subdirectory() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("subdir/file.txt", b"content"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("subdir/file.txt", b"content")]);
 
         // Enter the subdirectory
         let sub_idx = view.read(&app, |v, _| {
@@ -1064,7 +1101,8 @@ fn test_go_up_from_subdirectory() {
 
         view.read(&app, |v, _| {
             assert!(
-                v.current_path == PathBuf::from("/") || v.entries.iter().any(|e| e.name == "subdir"),
+                v.current_path == PathBuf::from("/")
+                    || v.entries.iter().any(|e| e.name == "subdir"),
                 "GoUp should return to the parent directory"
             );
         });
@@ -1076,10 +1114,10 @@ fn test_go_up_from_subdirectory() {
 fn test_go_back_forward_restores_path() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("alpha/file.txt", b"a"),
-            ("beta/file.txt", b"b"),
-        ]);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[("alpha/file.txt", b"a"), ("beta/file.txt", b"b")],
+        );
 
         // Record the root path
         let root_path = view.read(&app, |v, _| v.current_path.clone());
@@ -1098,7 +1136,10 @@ fn test_go_back_forward_restores_path() {
             v.handle_action(&SftpBrowserAction::GoBack, ctx);
         });
         view.read(&app, |v, _| {
-            assert_eq!(v.current_path, root_path, "GoBack should return to the root path");
+            assert_eq!(
+                v.current_path, root_path,
+                "GoBack should return to the root path"
+            );
         });
 
         // GoForward
@@ -1106,7 +1147,10 @@ fn test_go_back_forward_restores_path() {
             v.handle_action(&SftpBrowserAction::GoForward, ctx);
         });
         view.read(&app, |v, _| {
-            assert_eq!(v.current_path, alpha_path, "GoForward should return to alpha");
+            assert_eq!(
+                v.current_path, alpha_path,
+                "GoForward should return to alpha"
+            );
         });
     });
 }
@@ -1214,11 +1258,7 @@ fn local_fifo_is_classified_as_other_and_never_opened() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let root = tempfile::tempdir().expect("remote temp");
-        mkfifo(
-            &root.path().join("pipe"),
-            Mode::S_IRUSR | Mode::S_IWUSR,
-        )
-        .unwrap();
+        mkfifo(&root.path().join("pipe"), Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
         let backend =
             Arc::new(InMemorySftpBackend::new(root.path().to_path_buf())) as Arc<dyn SftpBackend>;
         let (_, view) = create_view(&mut app);
@@ -1353,14 +1393,51 @@ fn broken_symlink_reports_failure_without_changing_location() {
     });
 }
 
+#[test]
+fn same_filesystem_submission_reports_queued_not_completed() {
+    crate::i18n::init(Some("en"));
+    let summary = copy_move_submission_summary(2, 1, "other pane");
+
+    assert!(summary.contains(&crate::t!("fm-summary-queued", count = 2)));
+    assert!(summary.contains(&crate::t!("fm-summary-skipped", count = 1)));
+    assert!(!summary.contains(&crate::t!("fm-summary-copied", count = 2)));
+    assert!(!summary.contains(&crate::t!("fm-summary-moved", count = 2)));
+}
+
+#[test]
+fn global_transfer_history_prioritizes_recovery_then_active_jobs() {
+    let mut completed = TransferTask::new(
+        3,
+        PathBuf::from("/completed"),
+        PathBuf::from("/target"),
+        TransferDirection::Download,
+        1,
+    );
+    completed.state = TransferState::Completed;
+    let mut active = completed.clone();
+    active.id = 2;
+    active.state = TransferState::InProgress;
+    let mut recovery = completed.clone();
+    recovery.id = 1;
+    recovery.state = TransferState::Failed("cleanup".to_string());
+    recovery.recovery_paths.push(PathBuf::from("/retained"));
+    let mut tasks = vec![completed, active, recovery];
+
+    tasks.sort_by_key(transfer_display_priority);
+
+    assert_eq!(
+        tasks.iter().map(|task| task.id).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+}
+
 /// Verifies that clicking a breadcrumb navigates to the corresponding path segment
 #[test]
 fn test_breadcrumb_click_navigates_to_segment() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("level1/level2/file.txt", b"deep"),
-        ]);
+        let (_, view, _temp) =
+            create_connected_view(&mut app, &[("level1/level2/file.txt", b"deep")]);
 
         // Enter level1/level2
         let l1_idx = view.read(&app, |v, _| {
@@ -1386,7 +1463,9 @@ fn test_breadcrumb_click_navigates_to_segment() {
         // Navigate back toward the root (via NavigateTo)
         view.update(&mut app, |v, ctx| {
             // Find the breadcrumb path corresponding to level1
-            let l1_path = v.current_path.parent()
+            let l1_path = v
+                .current_path
+                .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| PathBuf::from("/"));
             v.handle_action(&SftpBrowserAction::NavigateTo(l1_path), ctx);
@@ -1406,11 +1485,14 @@ fn test_breadcrumb_click_navigates_to_segment() {
 fn test_search_filter_narrows_visible_entries() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("readme.txt", b"r"),
-            ("config.yaml", b"c"),
-            ("data.csv", b"d"),
-        ]);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[
+                ("readme.txt", b"r"),
+                ("config.yaml", b"c"),
+                ("data.csv", b"d"),
+            ],
+        );
 
         view.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::SetSearchFilter(".txt".to_string()), ctx);
@@ -1418,7 +1500,9 @@ fn test_search_filter_narrows_visible_entries() {
 
         view.read(&app, |v, _| {
             assert!(v.search_filter.is_some());
-            let visible: Vec<_> = v.entries.iter()
+            let visible: Vec<_> = v
+                .entries
+                .iter()
                 .filter(|e| e.name.contains(".txt"))
                 .collect();
             assert_eq!(visible.len(), 1, "only readme.txt should match");
@@ -1431,10 +1515,8 @@ fn test_search_filter_narrows_visible_entries() {
 fn test_clear_search_restores_all_entries() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("a.txt", b"a"),
-            ("b.yaml", b"b"),
-        ]);
+        let (_, view, _temp) =
+            create_connected_view(&mut app, &[("a.txt", b"a"), ("b.yaml", b"b")]);
 
         let total = view.read(&app, |v, _| v.entries.len());
 
@@ -1450,7 +1532,11 @@ fn test_clear_search_restores_all_entries() {
 
         view.read(&app, |v, _| {
             assert!(v.search_filter.is_none());
-            assert_eq!(v.entries.len(), total, "entry count should be restored after clearing search");
+            assert_eq!(
+                v.entries.len(),
+                total,
+                "entry count should be restored after clearing search"
+            );
         });
     });
 }
@@ -1459,12 +1545,10 @@ fn test_clear_search_restores_all_entries() {
 #[test]
 fn test_refresh_dir_reloads_entries() {
     warpui::App::test((), |mut app| async move {
-        let temp = create_temp_dir_with_files(&[
-            ("original.txt", b"original"),
-        ]);
+        let temp = create_temp_dir_with_files(&[("original.txt", b"original")]);
         initialize_app(&mut app);
-        let backend = Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf()))
-            as Arc<dyn SftpBackend>;
+        let backend =
+            Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf())) as Arc<dyn SftpBackend>;
         let (_, view) = create_view(&mut app);
         view.update(&mut app, |v, ctx| {
             v.set_backend_for_test(backend, PathBuf::from("/"), ctx);
@@ -1691,9 +1775,7 @@ fn replaced_entry_at_same_path_aborts_pending_action() {
 fn test_navigate_to_same_path_is_noop() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("file.txt", b"f"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("file.txt", b"f")]);
 
         let history_len = view.read(&app, |v, _| v.path_history.len());
         let current = view.read(&app, |v, _| v.current_path.clone());
@@ -1704,7 +1786,8 @@ fn test_navigate_to_same_path_is_noop() {
 
         view.read(&app, |v, _| {
             assert_eq!(
-                v.path_history.len(), history_len,
+                v.path_history.len(),
+                history_len,
                 "navigating to the current path should not add to history"
             );
         });
@@ -1716,9 +1799,7 @@ fn test_navigate_to_same_path_is_noop() {
 fn test_navigate_normalizes_backslashes() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("target/file.txt", b"t"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("target/file.txt", b"t")]);
 
         // Navigate using a backslash path
         let target_idx = view.read(&app, |v, _| {
@@ -1744,11 +1825,14 @@ fn test_navigate_normalizes_backslashes() {
 fn test_select_entry_highlights_item() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("file_a.txt", b"a"),
-            ("file_b.txt", b"b"),
-            ("file_c.txt", b"c"),
-        ]);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[
+                ("file_a.txt", b"a"),
+                ("file_b.txt", b"b"),
+                ("file_c.txt", b"c"),
+            ],
+        );
 
         // Select the second entry
         view.update(&mut app, |v, ctx| {
@@ -1760,10 +1844,7 @@ fn test_select_entry_highlights_item() {
                 v.selected.contains(&1),
                 "SelectEntry(1) should select the second entry"
             );
-            assert_eq!(
-                v.selected.len(), 1,
-                "should have exactly 1 selection"
-            );
+            assert_eq!(v.selected.len(), 1, "should have exactly 1 selection");
         });
 
         // Switch the selection to the third entry
@@ -1785,9 +1866,7 @@ fn test_select_entry_highlights_item() {
 fn test_select_entry_out_of_bounds_safe() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("only_file.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("only_file.txt", b"x")]);
 
         // An out-of-range selection should not panic (the current implementation inserts the index directly)
         view.update(&mut app, |v, ctx| {
@@ -1849,13 +1928,14 @@ fn test_download_entry_action_without_connection_safe() {
 fn test_open_entry_on_file_triggers_download() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("readme.txt", b"hello"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("readme.txt", b"hello")]);
 
         // Double-clicking a file entry should trigger a download (the file picker is not triggered in the mock)
         let file_idx = view.read(&app, |v, _| {
-            v.entries.iter().position(|e| e.name == "readme.txt").unwrap()
+            v.entries
+                .iter()
+                .position(|e| e.name == "readme.txt")
+                .unwrap()
         });
 
         view.update(&mut app, |v, ctx| {
@@ -1878,13 +1958,16 @@ fn test_open_entry_on_file_triggers_download() {
 fn test_delete_file_confirmed_removes_entry() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("to_delete.txt", b"delete me"),
-            ("keep.txt", b"keep me"),
-        ]);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[("to_delete.txt", b"delete me"), ("keep.txt", b"keep me")],
+        );
 
         let file_idx = view.read(&app, |v, _| {
-            v.entries.iter().position(|e| e.name == "to_delete.txt").unwrap()
+            v.entries
+                .iter()
+                .position(|e| e.name == "to_delete.txt")
+                .unwrap()
         });
 
         // Initiate deletion
@@ -1904,7 +1987,11 @@ fn test_delete_file_confirmed_removes_entry() {
 
         view.read(&app, |v, _| {
             assert!(v.dialog.is_none(), "dialog should be closed");
-            assert_eq!(v.entries.len(), 1, "should have 1 entry remaining after deletion");
+            assert_eq!(
+                v.entries.len(),
+                1,
+                "should have 1 entry remaining after deletion"
+            );
             assert!(v.entries[0].name == "keep.txt");
         });
     });
@@ -1915,10 +2002,10 @@ fn test_delete_file_confirmed_removes_entry() {
 fn test_delete_directory_confirmed_removes_recursively() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("mydir/inner.txt", b"inner file"),
-            ("outer.txt", b"outer"),
-        ]);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[("mydir/inner.txt", b"inner file"), ("outer.txt", b"outer")],
+        );
 
         let dir_idx = view.read(&app, |v, _| {
             v.entries.iter().position(|e| e.name == "mydir").unwrap()
@@ -1932,7 +2019,11 @@ fn test_delete_directory_confirmed_removes_recursively() {
         });
 
         view.read(&app, |v, _| {
-            assert_eq!(v.entries.len(), 1, "should have 1 entry remaining after deleting directory");
+            assert_eq!(
+                v.entries.len(),
+                1,
+                "should have 1 entry remaining after deleting directory"
+            );
             assert!(v.entries[0].name == "outer.txt");
         });
     });
@@ -1943,12 +2034,13 @@ fn test_delete_directory_confirmed_removes_recursively() {
 fn test_rename_entry_updates_name() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("old_name.txt", b"content"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("old_name.txt", b"content")]);
 
         let idx = view.read(&app, |v, _| {
-            v.entries.iter().position(|e| e.name == "old_name.txt").unwrap()
+            v.entries
+                .iter()
+                .position(|e| e.name == "old_name.txt")
+                .unwrap()
         });
 
         // Initiate the rename
@@ -1983,9 +2075,7 @@ fn test_rename_entry_updates_name() {
 fn test_rename_empty_name_shows_error() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("file.txt", b"content"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("file.txt", b"content")]);
 
         let idx = view.read(&app, |v, _| {
             v.entries.iter().position(|e| e.name == "file.txt").unwrap()
@@ -2021,8 +2111,8 @@ fn test_new_folder_creates_entry() {
     warpui::App::test((), |mut app| async move {
         let temp = create_temp_dir_with_files(&[]);
         initialize_app(&mut app);
-        let backend = Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf()))
-            as Arc<dyn SftpBackend>;
+        let backend =
+            Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf())) as Arc<dyn SftpBackend>;
         let (_, view) = create_view(&mut app);
         view.update(&mut app, |v, ctx| {
             v.set_backend_for_test(backend, PathBuf::from("/"), ctx);
@@ -2052,7 +2142,9 @@ fn test_new_folder_creates_entry() {
         view.read(&app, |v, _| {
             assert!(v.dialog.is_none(), "dialog should be closed");
             assert!(
-                v.entries.iter().any(|e| e.name == "test_folder" && e.file_type == FileEntryType::Directory),
+                v.entries
+                    .iter()
+                    .any(|e| e.name == "test_folder" && e.file_type == FileEntryType::Directory),
                 "newly created folder should appear in entries"
             );
         });
@@ -2100,26 +2192,26 @@ fn test_new_folder_empty_name_shows_error() {
 fn test_file_details_dialog_shows_metadata() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("details.txt", b"file content here"),
-        ]);
+        let (_, view, _temp) =
+            create_connected_view(&mut app, &[("details.txt", b"file content here")]);
 
         let idx = view.read(&app, |v, _| {
-            v.entries.iter().position(|e| e.name == "details.txt").unwrap()
+            v.entries
+                .iter()
+                .position(|e| e.name == "details.txt")
+                .unwrap()
         });
 
         view.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::DetailsEntry(idx), ctx);
         });
 
-        view.read(&app, |v, _| {
-            match &v.dialog {
-                Some(Dialog::FileDetails { entry }) => {
-                    assert_eq!(entry.name, "details.txt");
-                    assert_eq!(entry.file_type, FileEntryType::File);
-                }
-                _ => panic!("FileDetails dialog should be open"),
+        view.read(&app, |v, _| match &v.dialog {
+            Some(Dialog::FileDetails { entry }) => {
+                assert_eq!(entry.name, "details.txt");
+                assert_eq!(entry.file_type, FileEntryType::File);
             }
+            _ => panic!("FileDetails dialog should be open"),
         });
     });
 }
@@ -2129,12 +2221,13 @@ fn test_file_details_dialog_shows_metadata() {
 fn test_delete_cancel_preserves_entry() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("keep_me.txt", b"keep"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("keep_me.txt", b"keep")]);
 
         let idx = view.read(&app, |v, _| {
-            v.entries.iter().position(|e| e.name == "keep_me.txt").unwrap()
+            v.entries
+                .iter()
+                .position(|e| e.name == "keep_me.txt")
+                .unwrap()
         });
 
         view.update(&mut app, |v, ctx| {
@@ -2148,7 +2241,11 @@ fn test_delete_cancel_preserves_entry() {
 
         view.read(&app, |v, _| {
             assert!(v.dialog.is_none());
-            assert_eq!(v.entries.len(), 1, "entries should be preserved after cancellation");
+            assert_eq!(
+                v.entries.len(),
+                1,
+                "entries should be preserved after cancellation"
+            );
         });
     });
 }
@@ -2162,15 +2259,16 @@ fn test_delete_cancel_preserves_entry() {
 fn test_right_click_opens_menu_and_selects_entry() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("menu_file.txt", b"content"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("menu_file.txt", b"content")]);
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::ContextMenu {
-                index: 0,
-                position: Vector2F::new(100.0, 100.0),
-            }, ctx);
+            v.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 0,
+                    position: Vector2F::new(100.0, 100.0),
+                },
+                ctx,
+            );
         });
 
         view.read(&app, |v, _| {
@@ -2185,16 +2283,17 @@ fn test_right_click_opens_menu_and_selects_entry() {
 fn test_context_menu_delete_item_triggers_delete() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("ctx_delete.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("ctx_delete.txt", b"x")]);
 
         // Open the context menu
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::ContextMenu {
-                index: 0,
-                position: Vector2F::new(50.0, 50.0),
-            }, ctx);
+            v.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 0,
+                    position: Vector2F::new(50.0, 50.0),
+                },
+                ctx,
+            );
         });
 
         // Choose delete from the menu
@@ -2216,15 +2315,16 @@ fn test_context_menu_delete_item_triggers_delete() {
 fn test_context_menu_rename_item_triggers_rename() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("ctx_rename.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("ctx_rename.txt", b"x")]);
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::ContextMenu {
-                index: 0,
-                position: Vector2F::new(50.0, 50.0),
-            }, ctx);
+            v.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 0,
+                    position: Vector2F::new(50.0, 50.0),
+                },
+                ctx,
+            );
         });
 
         view.update(&mut app, |v, ctx| {
@@ -2245,15 +2345,16 @@ fn test_context_menu_rename_item_triggers_rename() {
 fn test_context_menu_details_item_triggers_details() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("ctx_details.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("ctx_details.txt", b"x")]);
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::ContextMenu {
-                index: 0,
-                position: Vector2F::new(50.0, 50.0),
-            }, ctx);
+            v.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 0,
+                    position: Vector2F::new(50.0, 50.0),
+                },
+                ctx,
+            );
         });
 
         view.update(&mut app, |v, ctx| {
@@ -2274,15 +2375,16 @@ fn test_context_menu_details_item_triggers_details() {
 fn test_dismiss_click_closes_menu() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("menu_close.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("menu_close.txt", b"x")]);
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::ContextMenu {
-                index: 0,
-                position: Vector2F::new(50.0, 50.0),
-            }, ctx);
+            v.handle_action(
+                &SftpBrowserAction::ContextMenu {
+                    index: 0,
+                    position: Vector2F::new(50.0, 50.0),
+                },
+                ctx,
+            );
         });
 
         view.read(&app, |v, _| {
@@ -2308,10 +2410,8 @@ fn test_dismiss_click_closes_menu() {
 fn test_delete_confirm_dialog_multiple_paths() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("file_a.txt", b"a"),
-            ("file_b.txt", b"b"),
-        ]);
+        let (_, view, _temp) =
+            create_connected_view(&mut app, &[("file_a.txt", b"a"), ("file_b.txt", b"b")]);
 
         // Select two entries
         view.update(&mut app, |v, ctx| {
@@ -2325,13 +2425,11 @@ fn test_delete_confirm_dialog_multiple_paths() {
             v.handle_action(&SftpBrowserAction::DeleteSelected, ctx);
         });
 
-        view.read(&app, |v, _| {
-            match &v.dialog {
-                Some(Dialog::DeleteConfirm { paths, .. }) => {
-                    assert_eq!(paths.len(), 2, "should display 2 paths to be deleted");
-                }
-                _ => panic!("delete confirmation dialog should be open"),
+        view.read(&app, |v, _| match &v.dialog {
+            Some(Dialog::DeleteConfirm { paths, .. }) => {
+                assert_eq!(paths.len(), 2, "should display 2 paths to be deleted");
             }
+            _ => panic!("delete confirmation dialog should be open"),
         });
     });
 }
@@ -2341,12 +2439,13 @@ fn test_delete_confirm_dialog_multiple_paths() {
 fn test_rename_editor_enter_confirms() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("rename_enter.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("rename_enter.txt", b"x")]);
 
         let idx = view.read(&app, |v, _| {
-            v.entries.iter().position(|e| e.name == "rename_enter.txt").unwrap()
+            v.entries
+                .iter()
+                .position(|e| e.name == "rename_enter.txt")
+                .unwrap()
         });
 
         view.update(&mut app, |v, ctx| {
@@ -2365,7 +2464,10 @@ fn test_rename_editor_enter_confirms() {
         });
 
         view.read(&app, |v, _| {
-            assert!(v.dialog.is_none(), "dialog should be closed after pressing Enter");
+            assert!(
+                v.dialog.is_none(),
+                "dialog should be closed after pressing Enter"
+            );
         });
     });
 }
@@ -2375,12 +2477,13 @@ fn test_rename_editor_enter_confirms() {
 fn test_rename_editor_escape_cancels() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("rename_esc.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("rename_esc.txt", b"x")]);
 
         let idx = view.read(&app, |v, _| {
-            v.entries.iter().position(|e| e.name == "rename_esc.txt").unwrap()
+            v.entries
+                .iter()
+                .position(|e| e.name == "rename_esc.txt")
+                .unwrap()
         });
 
         view.update(&mut app, |v, ctx| {
@@ -2429,7 +2532,10 @@ fn test_new_folder_editor_enter_confirms() {
         });
 
         view.read(&app, |v, _| {
-            assert!(v.dialog.is_none(), "dialog should be closed after pressing Enter");
+            assert!(
+                v.dialog.is_none(),
+                "dialog should be closed after pressing Enter"
+            );
             assert!(
                 v.entries.iter().any(|e| e.name == "my_folder"),
                 "my_folder should be created"
@@ -2443,9 +2549,7 @@ fn test_new_folder_editor_enter_confirms() {
 fn test_overwrite_confirm_dialog() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("file.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("file.txt", b"x")]);
 
         // Manually set up the overwrite confirmation dialog
         view.update(&mut app, |v, ctx| {
@@ -2463,7 +2567,10 @@ fn test_overwrite_confirm_dialog() {
         });
 
         view.read(&app, |v, _| {
-            assert!(v.dialog.is_none(), "dialog should be closed after overwrite confirmation");
+            assert!(
+                v.dialog.is_none(),
+                "dialog should be closed after overwrite confirmation"
+            );
         });
     });
 }
@@ -2472,13 +2579,11 @@ fn test_overwrite_confirm_dialog() {
 #[test]
 fn test_move_confirm_dialog() {
     warpui::App::test((), |mut app| async move {
-        let temp = create_temp_dir_with_files(&[
-            ("move_src.txt", b"move me"),
-            ("dest_dir/.keep", b""),
-        ]);
+        let temp =
+            create_temp_dir_with_files(&[("move_src.txt", b"move me"), ("dest_dir/.keep", b"")]);
         initialize_app(&mut app);
-        let backend = Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf()))
-            as Arc<dyn SftpBackend>;
+        let backend =
+            Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf())) as Arc<dyn SftpBackend>;
         let (_, view) = create_view(&mut app);
         view.update(&mut app, |v, ctx| {
             v.set_backend_for_test(backend, PathBuf::from("/"), ctx);
@@ -2498,7 +2603,10 @@ fn test_move_confirm_dialog() {
         });
 
         view.read(&app, |v, _| {
-            assert!(v.dialog.is_none(), "dialog should be closed after move confirmation");
+            assert!(
+                v.dialog.is_none(),
+                "dialog should be closed after move confirmation"
+            );
         });
     });
 }
@@ -2518,8 +2626,8 @@ fn test_upload_creates_transfer_task() {
         std::fs::write(&local_file, b"upload content").unwrap();
 
         initialize_app(&mut app);
-        let backend = Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf()))
-            as Arc<dyn SftpBackend>;
+        let backend =
+            Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf())) as Arc<dyn SftpBackend>;
         let (_, view) = create_view(&mut app);
         view.update(&mut app, |v, ctx| {
             v.set_backend_for_test(backend, PathBuf::from("/"), ctx);
@@ -2537,10 +2645,18 @@ fn test_upload_creates_transfer_task() {
             let task = &v.transfers[0];
             assert_eq!(task.direction, TransferDirection::Upload);
             assert!(
-                matches!(task.state, TransferState::Completed | TransferState::InProgress | TransferState::Failed(_)),
+                matches!(
+                    task.state,
+                    TransferState::Completed | TransferState::InProgress | TransferState::Failed(_)
+                ),
                 "transfer task should have a defined state"
             );
         });
+        assert_eq!(
+            std::fs::read(temp.path().join("upload_source.txt")).unwrap(),
+            b"upload content",
+            "a remote pane must read an OS upload from the local backend"
+        );
     });
 }
 
@@ -2572,14 +2688,12 @@ fn test_upload_nonexistent_file_fails() {
 #[test]
 fn test_download_creates_transfer_task() {
     warpui::App::test((), |mut app| async move {
-        let temp = create_temp_dir_with_files(&[
-            ("download_me.txt", b"download content"),
-        ]);
+        let temp = create_temp_dir_with_files(&[("download_me.txt", b"download content")]);
         let local_save = temp.path().join("saved_file.txt");
 
         initialize_app(&mut app);
-        let backend = Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf()))
-            as Arc<dyn SftpBackend>;
+        let backend =
+            Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf())) as Arc<dyn SftpBackend>;
         let (_, view) = create_view(&mut app);
         view.update(&mut app, |v, ctx| {
             v.set_backend_for_test(backend, PathBuf::from("/"), ctx);
@@ -2668,7 +2782,7 @@ fn test_cancel_transfer_sets_cancelled_flag() {
         });
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::CancelTransfer(42), ctx);
+            v.handle_action(&SftpBrowserAction::CancelTransfer(42, None), ctx);
         });
 
         view.read(&app, |v, _| {
@@ -2714,16 +2828,17 @@ fn test_transfer_panel_renders_with_tasks() {
 fn test_drag_enter_shows_overlay() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("file.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("file.txt", b"x")]);
 
         view.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::DragFilesEnter, ctx);
         });
 
         view.read(&app, |v, _| {
-            assert!(v.is_drag_hovering, "overlay should be displayed after drag enter");
+            assert!(
+                v.is_drag_hovering,
+                "overlay should be displayed after drag enter"
+            );
         });
     });
 }
@@ -2733,9 +2848,7 @@ fn test_drag_enter_shows_overlay() {
 fn test_drag_leave_hides_overlay() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("file.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("file.txt", b"x")]);
 
         view.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::DragFilesEnter, ctx);
@@ -2745,7 +2858,10 @@ fn test_drag_leave_hides_overlay() {
         });
 
         view.read(&app, |v, _| {
-            assert!(!v.is_drag_hovering, "overlay should be hidden after drag leave");
+            assert!(
+                !v.is_drag_hovering,
+                "overlay should be hidden after drag leave"
+            );
         });
     });
 }
@@ -2761,8 +2877,8 @@ fn test_drop_files_creates_upload_tasks() {
         std::fs::write(&drop_file, b"dropped content").unwrap();
 
         initialize_app(&mut app);
-        let backend = Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf()))
-            as Arc<dyn SftpBackend>;
+        let backend =
+            Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf())) as Arc<dyn SftpBackend>;
         let (_, view) = create_view(&mut app);
         view.update(&mut app, |v, ctx| {
             v.set_backend_for_test(backend, PathBuf::from("/"), ctx);
@@ -2776,9 +2892,21 @@ fn test_drop_files_creates_upload_tasks() {
         });
 
         view.read(&app, |v, _| {
-            assert_eq!(v.transfers.len(), 1, "drag and drop should create upload task");
-            assert!(!v.is_drag_hovering, "hover state should be cleared after drag and drop");
+            assert_eq!(
+                v.transfers.len(),
+                1,
+                "drag and drop should create upload task"
+            );
+            assert!(
+                !v.is_drag_hovering,
+                "hover state should be cleared after drag and drop"
+            );
         });
+        assert_eq!(
+            std::fs::read(temp.path().join("dropped.txt")).unwrap(),
+            b"dropped content",
+            "drag upload must stream from the local OS path"
+        );
     });
 }
 
@@ -2794,7 +2922,10 @@ fn test_drop_empty_paths_ignored() {
         });
 
         view.read(&app, |v, _| {
-            assert!(v.transfers.is_empty(), "empty paths should not create tasks");
+            assert!(
+                v.transfers.is_empty(),
+                "empty paths should not create tasks"
+            );
         });
     });
 }
@@ -2808,9 +2939,7 @@ fn test_drop_empty_paths_ignored() {
 fn test_keyboard_navigate_up() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("subdir/file.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("subdir/file.txt", b"x")]);
 
         // Enter the subdirectory
         let sub_idx = view.read(&app, |v, _| {
@@ -2844,9 +2973,8 @@ fn test_keyboard_navigate_up() {
 fn test_row_click_right_after_navigate_up_is_swallowed() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("level1/level2/file.txt", b"deep"),
-        ]);
+        let (_, view, _temp) =
+            create_connected_view(&mut app, &[("level1/level2/file.txt", b"deep")]);
 
         // Descend into level1 — a plain open, no window arms here.
         let l1_idx = view.read(&app, |v, _| {
@@ -2938,9 +3066,7 @@ fn parent_row_click_survives_rerender() {
 fn test_keyboard_delete_selected() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("del_target.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("del_target.txt", b"x")]);
 
         // Select the first entry
         view.update(&mut app, |v, ctx| {
@@ -2973,8 +3099,7 @@ fn tab_cycles_fm_panes_clockwise_in_connected_browser() {
             pane_ids[0]
         );
 
-        let (presenter, _scene) =
-            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
         assert!(key_down(&mut app, window_id, presenter, "tab"));
         assert_eq!(
             pane_group.read(&app, |group, ctx| group.focused_pane_id(ctx)),
@@ -2994,8 +3119,7 @@ fn shift_tab_cycles_counterclockwise_in_connected_browser() {
             pane_ids[0]
         );
 
-        let (presenter, _scene) =
-            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
         assert!(key_down(&mut app, window_id, presenter, "shift-tab"));
         assert_eq!(
             pane_group.read(&app, |group, ctx| group.focused_pane_id(ctx)),
@@ -3011,48 +3135,35 @@ fn pane_function_legend_drops_captions_before_overlap_in_real_layout() {
         let (window_id, _, left, right, _left_temp, _right_temp) =
             create_dual_connected_view(&mut app);
 
-        let (wide_presenter, _scene) =
-            render_scene_at(&mut app, window_id, vec2f(2400.0, 800.0));
+        let (wide_presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(2400.0, 800.0));
         for view in [&left, &right] {
-            assert!(maybe_position(
-                &wide_presenter,
-                &layout_id(view, &app, "legend-full")
-            )
-            .is_some());
-            assert!(maybe_position(
-                &wide_presenter,
-                &layout_id(view, &app, "legend-compact")
-            )
-            .is_none());
+            assert!(
+                maybe_position(&wide_presenter, &layout_id(view, &app, "legend-full")).is_some()
+            );
+            assert!(
+                maybe_position(&wide_presenter, &layout_id(view, &app, "legend-compact")).is_none()
+            );
         }
 
         let (compact_presenter, _scene) =
             render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
         for view in [&left, &right] {
-            assert!(maybe_position(
-                &compact_presenter,
-                &layout_id(view, &app, "legend-full")
-            )
-            .is_none());
-            assert!(maybe_position(
-                &compact_presenter,
-                &layout_id(view, &app, "legend-compact")
-            )
-            .is_some());
+            assert!(
+                maybe_position(&compact_presenter, &layout_id(view, &app, "legend-full")).is_none()
+            );
+            assert!(
+                maybe_position(&compact_presenter, &layout_id(view, &app, "legend-compact"))
+                    .is_some()
+            );
         }
 
-        let (narrow_presenter, _scene) =
-            render_scene_at(&mut app, window_id, vec2f(600.0, 800.0));
+        let (narrow_presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(600.0, 800.0));
         for view in [&left, &right] {
-            assert!(maybe_position(
-                &narrow_presenter,
-                &layout_id(view, &app, "legend-compact")
-            )
-            .is_none());
-            let hidden = position(
-                &narrow_presenter,
-                &layout_id(view, &app, "legend-hidden"),
+            assert!(
+                maybe_position(&narrow_presenter, &layout_id(view, &app, "legend-compact"))
+                    .is_none()
             );
+            let hidden = position(&narrow_presenter, &layout_id(view, &app, "legend-hidden"));
             assert_approximately_equal(hidden.height(), 0.0);
         }
     });
@@ -3064,8 +3175,7 @@ fn each_pane_owns_optional_compact_function_legend_in_real_layout() {
         initialize_app(&mut app);
         let (window_id, _, left, right, _left_temp, _right_temp) =
             create_dual_connected_view(&mut app);
-        let (presenter, _scene) =
-            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
 
         let left_root = position(&presenter, &layout_id(&left, &app, "pane-root"));
         let right_root = position(&presenter, &layout_id(&right, &app, "pane-root"));
@@ -3086,8 +3196,7 @@ fn dual_pane_never_renders_global_function_bar() {
         initialize_app(&mut app);
         let (window_id, _, left, right, _left_temp, _right_temp) =
             create_dual_connected_view(&mut app);
-        let (presenter, scene) =
-            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let (presenter, scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
 
         let left_root = position(&presenter, &layout_id(&left, &app, "pane-root"));
         let right_root = position(&presenter, &layout_id(&right, &app, "pane-root"));
@@ -3142,8 +3251,7 @@ fn dual_pane_context_menu_uses_its_own_panel_origin() {
         initialize_app(&mut app);
         let (window_id, _, left, right, _left_temp, _right_temp) =
             create_dual_connected_view(&mut app);
-        let (presenter, _scene) =
-            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
 
         let left_panel = position(&presenter, &layout_id(&left, &app, "panel"));
         let right_panel = position(&presenter, &layout_id(&right, &app, "panel"));
@@ -3151,26 +3259,15 @@ fn dual_pane_context_menu_uses_its_own_panel_origin() {
         assert!(left_panel.max_x() <= right_panel.min_x());
 
         let click_position = right_row.center();
-        right_click(
-            &mut app,
-            window_id,
-            presenter,
-            click_position,
-        );
+        right_click(&mut app, window_id, presenter, click_position);
 
         right.read(&app, |view, _| {
             let menu = view
                 .context_menu
                 .as_ref()
                 .expect("right-pane context menu should open");
-            assert_approximately_equal(
-                menu.position.x(),
-                click_position.x() - right_panel.min_x(),
-            );
-            assert_approximately_equal(
-                menu.position.y(),
-                click_position.y() - right_panel.min_y(),
-            );
+            assert_approximately_equal(menu.position.x(), click_position.x() - right_panel.min_x());
+            assert_approximately_equal(menu.position.y(), click_position.y() - right_panel.min_y());
         });
         left.read(&app, |view, _| {
             assert!(
@@ -3187,8 +3284,7 @@ fn body_consumes_remaining_height() {
         initialize_app(&mut app);
         let (window_id, view, _temp) =
             create_connected_view(&mut app, &[("visible.txt", b"visible")]);
-        let (presenter, _scene) =
-            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
 
         let root = position(&presenter, &layout_id(&view, &app, "pane-root"));
         let body = position(&presenter, &layout_id(&view, &app, "body"));
@@ -3208,30 +3304,25 @@ fn active_style_differs_from_selection() {
             create_dual_connected_view(&mut app);
         let left_pane_id = PaneId::dummy_pane_id();
         let right_pane_id = PaneId::dummy_pane_id();
-        let focus_state =
-            app.add_model(|_| PaneGroupFocusState::new(left_pane_id, None, true));
+        let focus_state = app.add_model(|_| PaneGroupFocusState::new(left_pane_id, None, true));
         left.update(&mut app, |view, ctx| {
             view.set_focus_handle(PaneFocusHandle::new(left_pane_id, focus_state.clone()), ctx);
         });
         right.update(&mut app, |view, ctx| {
             view.cursor = 0;
             view.selected.insert(1);
-            view.set_focus_handle(PaneFocusHandle::new(right_pane_id, focus_state.clone()), ctx);
+            view.set_focus_handle(
+                PaneFocusHandle::new(right_pane_id, focus_state.clone()),
+                ctx,
+            );
         });
 
-        let (hover_presenter, _scene) =
-            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let (hover_presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
         let hovered_row_id = layout_id(&left, &app, "row:1");
         let hover_point = position(&hover_presenter, &hovered_row_id).center();
-        mouse_move(
-            &mut app,
-            window_id,
-            hover_presenter,
-            hover_point,
-        );
+        mouse_move(&mut app, window_id, hover_presenter, hover_point);
 
-        let (presenter, scene) =
-            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let (presenter, scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
         let left_root = position(&presenter, &layout_id(&left, &app, "pane-root"));
         let right_root = position(&presenter, &layout_id(&right, &app, "pane-root"));
         let selected_row = position(&presenter, &layout_id(&right, &app, "row:1"));
@@ -3273,8 +3364,14 @@ fn active_style_differs_from_selection() {
                 && rect.border.color == accent
         });
 
-        assert!(active_border, "the focused connected pane needs an accent border");
-        assert!(!inactive_border, "selection must not impersonate pane focus");
+        assert!(
+            active_border,
+            "the focused connected pane needs an accent border"
+        );
+        assert!(
+            !inactive_border,
+            "selection must not impersonate pane focus"
+        );
         assert!(selection_fill, "the marked row needs its selection fill");
         assert!(hover_fill, "the hovered row needs its distinct hover fill");
         assert!(
@@ -3295,8 +3392,7 @@ fn columns_do_not_move_with_filename() {
                 ("this-is-a-very-long-file-name.txt", b"long"),
             ],
         );
-        let (presenter, _scene) =
-            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
 
         let short_size = position(&presenter, &layout_id(&view, &app, "row:0:size-column"));
         let long_size = position(&presenter, &layout_id(&view, &app, "row:1:size-column"));
@@ -3331,7 +3427,10 @@ fn marks_win_before_cursor() {
         view.read(&app, |v, _| match &v.dialog {
             Some(Dialog::DeleteConfirm { paths, .. }) => {
                 assert_eq!(paths.len(), 1);
-                assert_eq!(paths[0].file_name().and_then(|name| name.to_str()), Some("marked.txt"));
+                assert_eq!(
+                    paths[0].file_name().and_then(|name| name.to_str()),
+                    Some("marked.txt")
+                );
             }
             _ => panic!("DeleteSelected should target the marked row"),
         });
@@ -3365,9 +3464,7 @@ fn test_keyboard_create_folder() {
 fn test_keyboard_shortcuts_without_selection() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("file.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("file.txt", b"x")]);
 
         // No multi-selection; the cursor sits on the first (only) row.
         view.update(&mut app, |v, ctx| {
@@ -3388,9 +3485,15 @@ fn test_keyboard_shortcuts_without_selection() {
                         "DeleteSelected should target the single row under the cursor"
                     );
                 }
-                _ => panic!("DeleteSelected should open the delete confirmation for the cursor row"),
+                _ => {
+                    panic!("DeleteSelected should open the delete confirmation for the cursor row")
+                }
             }
-            assert_eq!(v.entries.len(), 1, "entries are not removed until the dialog is confirmed");
+            assert_eq!(
+                v.entries.len(),
+                1,
+                "entries are not removed until the dialog is confirmed"
+            );
         });
     });
 }
@@ -3400,12 +3503,13 @@ fn test_keyboard_shortcuts_without_selection() {
 fn test_keyboard_escape_closes_dialog() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("esc_file.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("esc_file.txt", b"x")]);
 
         let idx = view.read(&app, |v, _| {
-            v.entries.iter().position(|e| e.name == "esc_file.txt").unwrap()
+            v.entries
+                .iter()
+                .position(|e| e.name == "esc_file.txt")
+                .unwrap()
         });
 
         // Open the rename dialog
@@ -3437,13 +3541,14 @@ fn test_keyboard_escape_closes_dialog() {
 fn test_render_with_all_overlays_connected() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (_, view, _temp) = create_connected_view(&mut app, &[
-            ("overlay.txt", b"x"),
-        ]);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("overlay.txt", b"x")]);
 
         // Open the context menu
         view.update(&mut app, |v, ctx| {
-            v.context_menu = Some(super::context_menu::ContextMenuState::new(0, Vector2F::new(50.0, 50.0)));
+            v.context_menu = Some(super::context_menu::ContextMenuState::new(
+                0,
+                Vector2F::new(50.0, 50.0),
+            ));
             // Open a dialog
             v.dialog = Some(Dialog::DeleteConfirm {
                 paths: vec![PathBuf::from("/overlay.txt")],
@@ -3452,8 +3557,11 @@ fn test_render_with_all_overlays_connected() {
             // Add a transfer task
             use super::types::TransferTask;
             v.transfers.push(TransferTask::new(
-                1, PathBuf::from("/file.txt"), PathBuf::from("/local.txt"),
-                TransferDirection::Upload, 1024,
+                1,
+                PathBuf::from("/file.txt"),
+                PathBuf::from("/local.txt"),
+                TransferDirection::Upload,
+                1024,
             ));
             // Enable drag hovering
             v.is_drag_hovering = true;
@@ -3508,7 +3616,10 @@ fn test_render_empty_directory() {
 
         view.read(&app, |v, _| {
             assert!(matches!(v.connection, ConnectionState::Connected));
-            assert!(v.entries.is_empty(), "empty directory should have no entries");
+            assert!(
+                v.entries.is_empty(),
+                "empty directory should have no entries"
+            );
         });
     });
 }
@@ -3523,8 +3634,8 @@ fn test_render_after_multiple_operations() {
             ("root_file.txt", b"root"),
         ]);
         initialize_app(&mut app);
-        let backend = Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf()))
-            as Arc<dyn SftpBackend>;
+        let backend =
+            Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf())) as Arc<dyn SftpBackend>;
         let (_, view) = create_view(&mut app);
         view.update(&mut app, |v, ctx| {
             v.set_backend_for_test(backend, PathBuf::from("/"), ctx);
@@ -3540,7 +3651,10 @@ fn test_render_after_multiple_operations() {
 
         // Search
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::SetSearchFilter("file1".to_string()), ctx);
+            v.handle_action(
+                &SftpBrowserAction::SetSearchFilter("file1".to_string()),
+                ctx,
+            );
         });
 
         // Clear the search
@@ -3597,6 +3711,21 @@ impl RecordingDeleteBackend {
 
 #[cfg(unix)]
 impl SftpBackend for RecordingDeleteBackend {
+    fn supports_atomic_exchange(&self) -> bool {
+        self.inner.supports_atomic_exchange()
+    }
+
+    fn supports_identity_bound_cleanup(&self) -> bool {
+        self.inner.supports_identity_bound_cleanup()
+    }
+
+    fn existing_entry_ownership_anchor(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Option<Arc<dyn BackendOwnershipAnchor>>, super::sftp_ops::SftpOpsError> {
+        self.inner.existing_entry_ownership_anchor(path)
+    }
+
     fn list_dir(
         &self,
         path: &std::path::Path,
@@ -3628,18 +3757,23 @@ impl SftpBackend for RecordingDeleteBackend {
                     }
                 }
             }
-            return Err(super::sftp_ops::SftpOpsError::Operation(
-                format!(
-                    "injected recursive delete failure after partial cleanup; source recovery path: {}",
-                    path.display()
-                ),
-            ));
+            return Err(super::sftp_ops::SftpOpsError::Operation(format!(
+                "injected recursive delete failure after partial cleanup; source recovery path: {}",
+                path.display()
+            )));
         }
         self.inner.delete_dir_recursive(path)
     }
 
     fn create_dir(&self, path: &std::path::Path) -> Result<(), super::sftp_ops::SftpOpsError> {
         self.inner.create_dir(path)
+    }
+
+    fn create_dir_with_ownership_anchor(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Option<Arc<dyn BackendOwnershipAnchor>>, super::sftp_ops::SftpOpsError> {
+        self.inner.create_dir_with_ownership_anchor(path)
     }
 
     fn rename(
@@ -3722,14 +3856,12 @@ fn create_two_panes_sharing_fs(
 
     let (_, view_a) = create_view(app);
     view_a.update(app, |v, ctx| {
-        let backend =
-            Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+        let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
         v.set_backend_for_test(backend, PathBuf::from("/left"), ctx);
     });
     let (_, view_b) = create_view(app);
     view_b.update(app, |v, ctx| {
-        let backend =
-            Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+        let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
         v.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
     });
 
@@ -3760,6 +3892,58 @@ fn test_f5_copies_cursor_file_into_other_pane() {
             b"hello",
             "copied content matches"
         );
+        app.read(|ctx| {
+            let activities = super::transfer_queue::TransferQueue::as_ref(ctx)
+                .activities()
+                .collect::<Vec<_>>();
+            assert_eq!(activities.len(), 1, "same-host F5 must enqueue one job");
+            assert!(matches!(
+                activities[0].state,
+                super::transfer_queue::QueuedTransferState::Completed
+            ));
+            assert_eq!(activities[0].direction, TransferDirection::Copy);
+            assert_eq!(activities[0].progress.transferred, 5);
+        });
+    });
+}
+
+#[test]
+fn same_fs_target_probe_error_aborts_without_copying() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("left/foo.txt", b"source"), ("right/.keep", b"")]);
+        let root = temp.path().to_path_buf();
+        let backend = Arc::new(
+            InMemorySftpBackend::new(root.clone())
+                .with_lstat_error(PathBuf::from("/right/foo.txt")),
+        ) as Arc<dyn SftpBackend>;
+
+        let (_, source_view) = create_view_with_node(&mut app, "same-host");
+        source_view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend.clone(), PathBuf::from("/left"), ctx);
+        });
+        let (_, target_view) = create_view_with_node(&mut app, "same-host");
+        target_view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
+        });
+
+        source_view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+
+        assert!(
+            !root.join("right/foo.txt").exists(),
+            "a permission or connection-style target probe error must not be treated as absence"
+        );
+        app.read(|ctx| {
+            assert_eq!(
+                super::transfer_queue::TransferQueue::as_ref(ctx)
+                    .activities()
+                    .count(),
+                0,
+                "no transfer may start after an indeterminate target probe"
+            );
+        });
     });
 }
 
@@ -3779,7 +3963,10 @@ fn test_f6_moves_cursor_file_into_other_pane() {
         });
 
         assert!(root.join("right/bar.txt").exists(), "moved into /right");
-        assert!(!root.join("left/bar.txt").exists(), "source removed after move");
+        assert!(
+            !root.join("left/bar.txt").exists(),
+            "source removed after move"
+        );
     });
 }
 
@@ -3848,8 +4035,14 @@ fn test_f5_with_multiple_panes_opens_target_picker() {
             }
             _ => panic!("expected the target picker dialog"),
         });
-        assert!(!root.join("right/foo.txt").exists(), "nothing copied before a pick");
-        assert!(!root.join("third/foo.txt").exists(), "nothing copied before a pick");
+        assert!(
+            !root.join("right/foo.txt").exists(),
+            "nothing copied before a pick"
+        );
+        assert!(
+            !root.join("third/foo.txt").exists(),
+            "nothing copied before a pick"
+        );
 
         // Pick the first candidate (insertion order → pane B, /right).
         view_a.update(&mut app, |v, ctx| {
@@ -3858,8 +4051,14 @@ fn test_f5_with_multiple_panes_opens_target_picker() {
         view_a.read(&app, |v, _| {
             assert!(v.dialog.is_none(), "dialog clears after picking");
         });
-        assert!(root.join("right/foo.txt").exists(), "copied into the picked pane (/right)");
-        assert!(!root.join("third/foo.txt").exists(), "the unpicked pane is untouched");
+        assert!(
+            root.join("right/foo.txt").exists(),
+            "copied into the picked pane (/right)"
+        );
+        assert!(
+            !root.join("third/foo.txt").exists(),
+            "the unpicked pane is untouched"
+        );
         assert!(root.join("left/foo.txt").exists(), "source kept after copy");
     });
 }
@@ -3900,8 +4099,14 @@ fn test_target_picker_cancel_copies_nothing() {
         view_a.read(&app, |v, _| {
             assert!(v.dialog.is_none(), "picker dismissed");
         });
-        assert!(!root.join("right/foo.txt").exists(), "cancel copies nothing");
-        assert!(!root.join("third/foo.txt").exists(), "cancel copies nothing");
+        assert!(
+            !root.join("right/foo.txt").exists(),
+            "cancel copies nothing"
+        );
+        assert!(
+            !root.join("third/foo.txt").exists(),
+            "cancel copies nothing"
+        );
     });
 }
 
@@ -3976,14 +4181,12 @@ fn test_f5_local_to_remote_starts_an_upload_transfer() {
         // Pane A: local (node ""), at /left. Pane B: "remote" host, at /right.
         let (_, view_a) = create_view_with_node(&mut app, "");
         view_a.update(&mut app, |v, ctx| {
-            let backend =
-                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
             v.set_backend_for_test(backend, PathBuf::from("/left"), ctx);
         });
         let (_, view_b) = create_view_with_node(&mut app, "host");
         view_b.update(&mut app, |v, ctx| {
-            let backend =
-                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
             v.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
         });
 
@@ -3992,13 +4195,248 @@ fn test_f5_local_to_remote_starts_an_upload_transfer() {
         });
 
         view_a.read(&app, |v, _| {
-            assert_eq!(v.transfers.len(), 1, "local→remote copy starts one transfer");
+            assert_eq!(
+                v.transfers.len(),
+                1,
+                "local→remote copy starts one transfer"
+            );
             assert_eq!(
                 v.transfers[0].direction,
                 TransferDirection::Upload,
                 "the transfer is an upload"
             );
         });
+        assert_eq!(
+            std::fs::read(root.join("right/foo.txt")).unwrap(),
+            b"hi",
+            "the productive F5 path completes through the streaming job"
+        );
+        app.read(|ctx| {
+            let queue = super::transfer_queue::TransferQueue::as_ref(ctx);
+            let activities = queue.activities().collect::<Vec<_>>();
+            assert_eq!(activities.len(), 1);
+            assert!(matches!(
+                activities[0].state,
+                super::transfer_queue::QueuedTransferState::Completed
+            ));
+            assert_eq!(activities[0].progress.transferred, 2);
+        });
+    });
+}
+
+#[test]
+fn global_transfer_ui_updates_and_controls_jobs_from_another_pane() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, source_view, _source_temp) = create_connected_view(&mut app, &[]);
+        let queue_id = app.update(|ctx| {
+            super::transfer_queue::TransferQueue::handle(ctx).update(ctx, |queue, ctx| {
+                let id = queue
+                    .enqueue_job(
+                        "workspace",
+                        PathBuf::from("/source"),
+                        PathBuf::from("/target"),
+                        TransferDirection::Upload,
+                        128,
+                    )
+                    .unwrap();
+                queue.update_progress(
+                    id,
+                    super::transfer_job::TransferProgress {
+                        transferred: 64,
+                        total: 128,
+                        eta: Some(std::time::Duration::from_secs(3)),
+                        phase: super::types::TransferPhase::Transferring,
+                    },
+                );
+                ctx.notify();
+                id
+            })
+        });
+        source_view.update(&mut app, |browser, _| {
+            let mut task = super::types::TransferTask::new(
+                77,
+                PathBuf::from("/source"),
+                PathBuf::from("/target"),
+                TransferDirection::Upload,
+                128,
+            );
+            task.state = TransferState::InProgress;
+            browser.attach_queue_transfer_for_test(task, queue_id);
+        });
+        let (other_window, other_view, _other_temp) = create_connected_view(&mut app, &[]);
+        other_view.read(&app, |browser, _| {
+            assert!(
+                browser.has_transfer_progress_poll_for_test(),
+                "a queue model update must schedule live transfer rerenders in every pane"
+            );
+        });
+
+        let (presenter, invalidation) = presenter_for_window(&app, other_window);
+        let pause_position = render_position(
+            &mut app,
+            presenter.clone(),
+            invalidation.clone(),
+            &format!("sftp_btn:pause_transfer:{queue_id}"),
+        );
+        render_position(
+            &mut app,
+            presenter.clone(),
+            invalidation.clone(),
+            &format!("sftp_text:transfer_eta:{queue_id}"),
+        );
+        mouse_down(&mut app, other_window, presenter.clone(), pause_position);
+        mouse_up(&mut app, other_window, presenter.clone(), pause_position);
+        app.read(|ctx| {
+            assert!(matches!(
+                super::transfer_queue::TransferQueue::as_ref(ctx)
+                    .activity(queue_id)
+                    .expect("queue activity")
+                    .state,
+                super::transfer_queue::QueuedTransferState::Paused
+            ));
+        });
+
+        let resume_position = render_position(
+            &mut app,
+            presenter.clone(),
+            invalidation.clone(),
+            &format!("sftp_btn:pause_transfer:{queue_id}"),
+        );
+        mouse_down(&mut app, other_window, presenter.clone(), resume_position);
+        mouse_up(&mut app, other_window, presenter.clone(), resume_position);
+
+        let cancel_position = render_position(
+            &mut app,
+            presenter.clone(),
+            invalidation,
+            &format!("sftp_btn:cancel_transfer:{queue_id}"),
+        );
+        mouse_down(&mut app, other_window, presenter.clone(), cancel_position);
+        mouse_up(&mut app, other_window, presenter, cancel_position);
+        app.read(|ctx| {
+            assert!(matches!(
+                super::transfer_queue::TransferQueue::as_ref(ctx)
+                    .activity(queue_id)
+                    .expect("queue activity")
+                    .state,
+                super::transfer_queue::QueuedTransferState::Cancelling
+            ));
+        });
+
+        app.update(|ctx| {
+            super::transfer_queue::TransferQueue::handle(ctx).update(ctx, |queue, ctx| {
+                queue.clear_terminal();
+                ctx.notify();
+            });
+        });
+        source_view.read(&app, |browser, _| {
+            assert_eq!(
+                browser.tracked_queue_transfers_for_test(),
+                1,
+                "a cancelling worker must remain globally visible and controllable"
+            );
+        });
+
+        app.update(|ctx| {
+            super::transfer_queue::TransferQueue::handle(ctx).update(ctx, |queue, ctx| {
+                queue
+                    .activity_handle(queue_id)
+                    .expect("worker activity handle")
+                    .set_state(super::transfer_queue::QueuedTransferState::Cancelled);
+                queue.clear_terminal();
+                ctx.notify();
+            });
+        });
+        source_view.read(&app, |browser, _| {
+            assert_eq!(
+                browser.tracked_queue_transfers_for_test(),
+                0,
+                "clearing global history must prune stale pane-owned queue ids"
+            );
+        });
+    });
+}
+
+#[test]
+fn cancel_all_keeps_late_recovery_visible() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view, _temp) = create_connected_view(&mut app, &[]);
+        let (queue_id, worker) = app.update(|ctx| {
+            super::transfer_queue::TransferQueue::handle(ctx).update(ctx, |queue, ctx| {
+                let id = queue
+                    .enqueue_job(
+                        "workspace",
+                        PathBuf::from("/source"),
+                        PathBuf::from("/target"),
+                        TransferDirection::Upload,
+                        1,
+                    )
+                    .unwrap();
+                let worker = queue.activity_handle(id).unwrap();
+                ctx.notify();
+                (id, worker)
+            })
+        });
+        view.update(&mut app, |browser, ctx| {
+            let task = TransferTask::new(
+                91,
+                PathBuf::from("/source"),
+                PathBuf::from("/target"),
+                TransferDirection::Upload,
+                1,
+            );
+            browser.attach_queue_transfer_for_test(task, queue_id);
+            browser.handle_action(&SftpBrowserAction::ConfirmCloseTransferPanel, ctx);
+        });
+        worker.set_error(&super::sftp_ops::SftpOpsError::RecoveryRequired {
+            message: "late cleanup recovery".to_string(),
+            recovery_id: Some(712),
+            paths: vec![PathBuf::from("/retained")],
+            committed: true,
+        });
+
+        let (presenter, invalidation) = presenter_for_window(&app, window_id);
+        render_position(
+            &mut app,
+            presenter,
+            invalidation,
+            "sftp_transfer_history_scroll",
+        );
+    });
+}
+
+#[test]
+fn new_global_job_reopens_a_previously_hidden_transfer_panel() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view, _temp) = create_connected_view(&mut app, &[]);
+        view.update(&mut app, |browser, ctx| {
+            browser.handle_action(&SftpBrowserAction::ToggleTransferPanel, ctx);
+        });
+        app.update(|ctx| {
+            super::transfer_queue::TransferQueue::handle(ctx).update(ctx, |queue, ctx| {
+                queue
+                    .enqueue_job(
+                        "workspace",
+                        PathBuf::from("/source"),
+                        PathBuf::from("/target"),
+                        TransferDirection::Upload,
+                        1,
+                    )
+                    .unwrap();
+                ctx.notify();
+            });
+        });
+
+        let (presenter, invalidation) = presenter_for_window(&app, window_id);
+        render_position(
+            &mut app,
+            presenter,
+            invalidation,
+            "sftp_transfer_history_scroll",
+        );
     });
 }
 
@@ -4014,14 +4452,12 @@ fn test_f6_move_across_connections_starts_transfer() {
 
         let (_, view_a) = create_view_with_node(&mut app, "");
         view_a.update(&mut app, |v, ctx| {
-            let backend =
-                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
             v.set_backend_for_test(backend, PathBuf::from("/left"), ctx);
         });
         let (_, view_b) = create_view_with_node(&mut app, "host");
         view_b.update(&mut app, |v, ctx| {
-            let backend =
-                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
             v.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
         });
 
@@ -4030,7 +4466,11 @@ fn test_f6_move_across_connections_starts_transfer() {
         });
 
         view_a.read(&app, |v, _| {
-            assert_eq!(v.transfers.len(), 1, "cross-connection move starts one transfer");
+            assert_eq!(
+                v.transfers.len(),
+                1,
+                "cross-connection move starts one transfer"
+            );
             assert_eq!(v.transfers[0].direction, TransferDirection::Upload);
         });
     });
@@ -4057,8 +4497,7 @@ fn cross_connection_dir_move_with_skip_conflict_preserves_source_tree() {
         });
         let (_, target_view) = create_view_with_node(&mut app, "host");
         target_view.update(&mut app, |view, ctx| {
-            let backend =
-                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
             view.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
         });
 
@@ -4111,10 +4550,7 @@ impl SftpBackend for StaticListingBackend {
         Ok(self.entries.clone())
     }
 
-    fn delete_file(
-        &self,
-        _path: &std::path::Path,
-    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+    fn delete_file(&self, _path: &std::path::Path) -> Result<(), super::sftp_ops::SftpOpsError> {
         Self::unsupported()
     }
 
@@ -4125,10 +4561,7 @@ impl SftpBackend for StaticListingBackend {
         Self::unsupported()
     }
 
-    fn create_dir(
-        &self,
-        _path: &std::path::Path,
-    ) -> Result<(), super::sftp_ops::SftpOpsError> {
+    fn create_dir(&self, _path: &std::path::Path) -> Result<(), super::sftp_ops::SftpOpsError> {
         Self::unsupported()
     }
 
@@ -4140,17 +4573,11 @@ impl SftpBackend for StaticListingBackend {
         Self::unsupported()
     }
 
-    fn realpath(
-        &self,
-        _path: &std::path::Path,
-    ) -> Result<PathBuf, super::sftp_ops::SftpOpsError> {
+    fn realpath(&self, _path: &std::path::Path) -> Result<PathBuf, super::sftp_ops::SftpOpsError> {
         Self::unsupported()
     }
 
-    fn stat(
-        &self,
-        path: &std::path::Path,
-    ) -> Result<FileEntry, super::sftp_ops::SftpOpsError> {
+    fn stat(&self, path: &std::path::Path) -> Result<FileEntry, super::sftp_ops::SftpOpsError> {
         Ok(FileEntry {
             name: path
                 .file_name()
@@ -4164,10 +4591,7 @@ impl SftpBackend for StaticListingBackend {
         })
     }
 
-    fn lstat(
-        &self,
-        path: &std::path::Path,
-    ) -> Result<FileEntry, super::sftp_ops::SftpOpsError> {
+    fn lstat(&self, path: &std::path::Path) -> Result<FileEntry, super::sftp_ops::SftpOpsError> {
         self.stat(path)
     }
 
@@ -4219,10 +4643,19 @@ fn test_plan_dir_transfer_upload_lists_files_and_makes_remote_dirs() {
 
     assert_eq!(plan.files.len(), 2, "both files planned");
     assert_eq!(plan.skipped_existing, 0);
-    assert!(backend.stat(std::path::Path::new("/dst")).is_ok(), "/dst created on remote");
-    assert!(backend.stat(std::path::Path::new("/dst/sub")).is_ok(), "/dst/sub created on remote");
+    assert!(
+        backend.stat(std::path::Path::new("/dst")).is_ok(),
+        "/dst created on remote"
+    );
+    assert!(
+        backend.stat(std::path::Path::new("/dst/sub")).is_ok(),
+        "/dst/sub created on remote"
+    );
     for (local, remote) in &plan.files {
-        assert!(local.starts_with(source.path()), "source is the real local file");
+        assert!(
+            local.starts_with(source.path()),
+            "source is the real local file"
+        );
         assert!(remote.starts_with("/dst"), "target is under /dst");
     }
 }
@@ -4231,7 +4664,8 @@ fn test_plan_dir_transfer_upload_lists_files_and_makes_remote_dirs() {
 /// target dirs are created, and every file is planned as a download.
 #[test]
 fn test_plan_dir_transfer_download_lists_files_and_makes_local_dirs() {
-    let remote = create_temp_dir_with_files(&[("src/sub/deep.txt", b"deep"), ("src/top.txt", b"top")]);
+    let remote =
+        create_temp_dir_with_files(&[("src/sub/deep.txt", b"deep"), ("src/top.txt", b"top")]);
     let backend: Arc<dyn SftpBackend> =
         Arc::new(InMemorySftpBackend::new(remote.path().to_path_buf()));
     let local_dest = tempfile::tempdir().expect("local temp");
@@ -4447,9 +4881,15 @@ fn empty_directory_move_deletes_source_after_destination_is_verified() {
             );
         });
 
+        let transfer_state = app.read(|ctx| {
+            super::transfer_queue::TransferQueue::as_ref(ctx)
+                .activities()
+                .next()
+                .map(|activity| activity.state)
+        });
         assert!(
             destination.join("nested").is_dir(),
-            "the complete empty destination tree must exist before source cleanup"
+            "the complete empty destination tree must exist before source cleanup; transfer state: {transfer_state:?}"
         );
         assert!(
             !source.path().join("empty").exists(),
@@ -4653,7 +5093,10 @@ fn partial_directory_cleanup_failure_keeps_recovery_path() {
             temp.path().join(".srcdir.zaplex_move-test").is_dir(),
             "the remaining source must stay at the recovery path reported by the error"
         );
-        assert!(!temp.path().join(".srcdir.zaplex_move-test/inner.txt").exists());
+        assert!(!temp
+            .path()
+            .join(".srcdir.zaplex_move-test/inner.txt")
+            .exists());
     });
 }
 
@@ -4775,7 +5218,10 @@ fn test_f6_remote_to_remote_moves_file() {
         });
 
         assert!(root.join("b/bar.txt").exists(), "relayed onto host B");
-        assert!(!root.join("a/bar.txt").exists(), "source removed after a successful move");
+        assert!(
+            !root.join("a/bar.txt").exists(),
+            "source removed after a successful move"
+        );
     });
 }
 
@@ -4825,14 +5271,12 @@ fn remote_to_remote_move_with_skip_conflict_preserves_source_tree() {
 
         let (_, source_view) = create_view_with_node(&mut app, "hostA");
         source_view.update(&mut app, |view, ctx| {
-            let backend =
-                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
             view.set_backend_for_test(backend, PathBuf::from("/a"), ctx);
         });
         let (_, target_view) = create_view_with_node(&mut app, "hostB");
         target_view.update(&mut app, |view, ctx| {
-            let backend =
-                Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
             view.set_backend_for_test(backend, PathBuf::from("/b"), ctx);
         });
 
@@ -4899,10 +5343,8 @@ fn two_panes_cross_conn(
 fn test_cross_conn_existing_file_opens_overwrite_prompt() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (view_a, _view_b, _temp) = two_panes_cross_conn(
-            &mut app,
-            &[("a/foo.txt", b"new"), ("b/foo.txt", b"old")],
-        );
+        let (view_a, _view_b, _temp) =
+            two_panes_cross_conn(&mut app, &[("a/foo.txt", b"new"), ("b/foo.txt", b"old")]);
 
         view_a.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
@@ -4910,11 +5352,23 @@ fn test_cross_conn_existing_file_opens_overwrite_prompt() {
 
         view_a.read(&app, |v, _| {
             assert!(
-                matches!(v.dialog, Some(Dialog::CrossConnConflict { existing: 1, is_move: false })),
+                matches!(
+                    v.dialog,
+                    Some(Dialog::CrossConnConflict {
+                        existing: 1,
+                        is_move: false
+                    })
+                ),
                 "the overwrite prompt is shown for the existing file"
             );
-            assert!(v.has_pending_cross_conn(), "the conflicting transfer is held");
-            assert!(v.transfers.is_empty(), "nothing transfers before the user decides");
+            assert!(
+                v.has_pending_cross_conn(),
+                "the conflicting transfer is held"
+            );
+            assert!(
+                v.transfers.is_empty(),
+                "nothing transfers before the user decides"
+            );
         });
     });
 }
@@ -4924,15 +5378,16 @@ fn test_cross_conn_existing_file_opens_overwrite_prompt() {
 fn test_cross_conn_overwrite_starts_the_transfer() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (view_a, _view_b, _temp) = two_panes_cross_conn(
-            &mut app,
-            &[("a/foo.txt", b"new"), ("b/foo.txt", b"old")],
-        );
+        let (view_a, _view_b, _temp) =
+            two_panes_cross_conn(&mut app, &[("a/foo.txt", b"new"), ("b/foo.txt", b"old")]);
         view_a.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
         });
         view_a.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::ResolveCrossConnConflict { overwrite: true }, ctx);
+            v.handle_action(
+                &SftpBrowserAction::ResolveCrossConnConflict { overwrite: true },
+                ctx,
+            );
         });
 
         view_a.read(&app, |v, _| {
@@ -4948,15 +5403,16 @@ fn test_cross_conn_overwrite_starts_the_transfer() {
 fn test_cross_conn_skip_starts_no_transfer() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (view_a, _view_b, _temp) = two_panes_cross_conn(
-            &mut app,
-            &[("a/foo.txt", b"new"), ("b/foo.txt", b"old")],
-        );
+        let (view_a, _view_b, _temp) =
+            two_panes_cross_conn(&mut app, &[("a/foo.txt", b"new"), ("b/foo.txt", b"old")]);
         view_a.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
         });
         view_a.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::ResolveCrossConnConflict { overwrite: false }, ctx);
+            v.handle_action(
+                &SftpBrowserAction::ResolveCrossConnConflict { overwrite: false },
+                ctx,
+            );
         });
 
         view_a.read(&app, |v, _| {
@@ -4972,10 +5428,8 @@ fn test_cross_conn_skip_starts_no_transfer() {
 fn test_cross_conn_without_conflict_transfers_directly() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (view_a, _view_b, _temp) = two_panes_cross_conn(
-            &mut app,
-            &[("a/foo.txt", b"new"), ("b/.keep", b"")],
-        );
+        let (view_a, _view_b, _temp) =
+            two_panes_cross_conn(&mut app, &[("a/foo.txt", b"new"), ("b/.keep", b"")]);
 
         view_a.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
@@ -5025,7 +5479,9 @@ fn test_copy_conflict_overwrites_on_confirm() {
         view_a.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::OverwriteConflict { all: false }, ctx);
         });
-        view_a.read(&app, |v, _| assert!(v.dialog.is_none(), "dialog closed after resolve"));
+        view_a.read(&app, |v, _| {
+            assert!(v.dialog.is_none(), "dialog closed after resolve")
+        });
         assert_eq!(
             std::fs::read(root.join("right/dup.txt")).unwrap(),
             b"new",
@@ -5124,9 +5580,8 @@ fn failed_atomic_replace_keeps_existing_destination_intact() {
     });
 }
 
-/// Overwriting a destination that is a symlink to a directory must unlink the
-/// symlink itself. Following it into recursive deletion would erase unrelated
-/// target contents outside the destination pane.
+/// A destination symlink must never be followed or replaced by a transfer.
+/// The linked tree, the link itself, and the source all remain available.
 #[cfg(unix)]
 #[test]
 fn test_copy_conflict_over_directory_symlink_never_recurses_into_target() {
@@ -5175,9 +5630,17 @@ fn test_copy_conflict_over_directory_symlink_never_recurses_into_target() {
             std::fs::read(temp.path().join("target-dir/precious.txt")).unwrap(),
             b"precious"
         );
+        assert!(
+            std::fs::symlink_metadata(temp.path().join("right/item"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the destination link itself must remain intact"
+        );
         assert_eq!(
-            std::fs::read(temp.path().join("right/item")).unwrap(),
-            b"replacement"
+            std::fs::read(temp.path().join("left/item")).unwrap(),
+            b"replacement",
+            "refusing a link destination must preserve the source"
         );
     });
 }
@@ -5242,7 +5705,9 @@ fn test_copy_conflict_overwrite_all_applies_to_batch() {
         view_a.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::OverwriteConflict { all: true }, ctx);
         });
-        view_a.read(&app, |v, _| assert!(v.dialog.is_none(), "no further prompt"));
+        view_a.read(&app, |v, _| {
+            assert!(v.dialog.is_none(), "no further prompt")
+        });
         assert_eq!(std::fs::read(root.join("right/a.txt")).unwrap(), b"A2");
         assert_eq!(std::fs::read(root.join("right/b.txt")).unwrap(), b"B2");
     });
@@ -5278,8 +5743,7 @@ fn f4_dispatches_file_to_workspace_editor() {
             create_workspace_action_capture_view(&mut app, &[("edit.txt", b"x")]);
         browser.update(&mut app, |_, ctx| ctx.focus_self());
 
-        let (presenter, _scene) =
-            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
         assert!(key_down(&mut app, window_id, presenter, "f4"));
 
         root.read(&app, |root, _| {

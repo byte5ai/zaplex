@@ -20,7 +20,7 @@ use zap_sftp::Sftp;
 use super::types::{FileEntry, FileEntryType};
 
 /// SFTP operation error
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum SftpOpsError {
     /// Connection error
     Connection(String),
@@ -32,6 +32,21 @@ pub enum SftpOpsError {
     NoCredentials(String),
     /// Transfer cancelled
     Cancelled,
+    /// The destination is committed even though the final acknowledgement failed.
+    Committed(String),
+    /// The requested path does not exist.
+    NotFound(String),
+    /// The visible transfer result is safe, but retained paths require recovery.
+    RecoveryRequired {
+        /// Human-readable failure context.
+        message: String,
+        /// Process-wide cleanup action, when automatic retry is safe.
+        recovery_id: Option<u64>,
+        /// Paths retained instead of guessing after an indeterminate operation.
+        paths: Vec<PathBuf>,
+        /// Whether the new destination has already been committed.
+        committed: bool,
+    },
 }
 
 impl std::fmt::Display for SftpOpsError {
@@ -42,19 +57,78 @@ impl std::fmt::Display for SftpOpsError {
             SftpOpsError::LocalIo(msg) => write!(f, "Local I/O error: {msg}"),
             SftpOpsError::NoCredentials(msg) => write!(f, "Credentials not found: {msg}"),
             SftpOpsError::Cancelled => write!(f, "Transfer cancelled"),
+            SftpOpsError::Committed(msg) => write!(f, "{msg}"),
+            SftpOpsError::NotFound(path) => write!(f, "Path not found: {path}"),
+            SftpOpsError::RecoveryRequired { message, paths, .. } => {
+                write!(f, "{message}; recovery paths: ")?;
+                for (index, path) in paths.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", path.display())?;
+                }
+                Ok(())
+            }
         }
+    }
+}
+
+impl SftpOpsError {
+    pub fn recovery_id(&self) -> Option<u64> {
+        match self {
+            Self::RecoveryRequired { recovery_id, .. } => *recovery_id,
+            Self::Connection(_)
+            | Self::Operation(_)
+            | Self::LocalIo(_)
+            | Self::NoCredentials(_)
+            | Self::Cancelled
+            | Self::Committed(_)
+            | Self::NotFound(_) => None,
+        }
+    }
+
+    pub fn recovery_paths(&self) -> &[PathBuf] {
+        match self {
+            Self::RecoveryRequired { paths, .. } => paths,
+            Self::Connection(_)
+            | Self::Operation(_)
+            | Self::LocalIo(_)
+            | Self::NoCredentials(_)
+            | Self::Cancelled
+            | Self::Committed(_)
+            | Self::NotFound(_) => &[],
+        }
+    }
+
+    pub fn destination_committed(&self) -> bool {
+        matches!(
+            self,
+            Self::Committed(_)
+                | Self::RecoveryRequired {
+                    committed: true,
+                    ..
+                }
+        )
     }
 }
 
 impl From<zap_sftp::SftpError> for SftpOpsError {
     fn from(e: zap_sftp::SftpError) -> Self {
-        SftpOpsError::Operation(e.to_string())
+        if e.is_not_found() {
+            SftpOpsError::NotFound(e.to_string())
+        } else {
+            SftpOpsError::Operation(e.to_string())
+        }
     }
 }
 
 impl From<std::io::Error> for SftpOpsError {
     fn from(e: std::io::Error) -> Self {
-        SftpOpsError::LocalIo(e.to_string())
+        if e.kind() == std::io::ErrorKind::NotFound {
+            SftpOpsError::NotFound(e.to_string())
+        } else {
+            SftpOpsError::LocalIo(e.to_string())
+        }
     }
 }
 
@@ -219,11 +293,7 @@ pub fn rename(sftp: &Sftp, old_path: &Path, new_path: &Path) -> Result<(), SftpO
 /// Servers that do not support atomic replacement must reject the operation;
 /// falling back to a remove or backup dance would leave the destination absent
 /// across a crash boundary.
-pub fn replace_atomic(
-    sftp: &Sftp,
-    old_path: &Path,
-    new_path: &Path,
-) -> Result<(), SftpOpsError> {
+pub fn replace_atomic(sftp: &Sftp, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
     let opts = zap_sftp::types::RenameOptions {
         overwrite: true,
         atomic: true,
@@ -740,7 +810,7 @@ mod tests {
     fn test_sftp_ops_error_from_io_error() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         let ops_err: SftpOpsError = io_err.into();
-        assert!(matches!(ops_err, SftpOpsError::LocalIo(_)));
+        assert!(matches!(ops_err, SftpOpsError::NotFound(_)));
     }
 
     /// Test conversion from zap_sftp::SftpError to SftpOpsError

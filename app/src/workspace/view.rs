@@ -24690,6 +24690,63 @@ impl TypedActionView for Workspace {
                     ctx.notify();
                 }
             }
+            CancelTransfer(target) => {
+                crate::sftp_manager::transfer_queue::TransferQueue::handle(ctx).update(
+                    ctx,
+                    |queue, ctx| {
+                        queue.cancel(*target);
+                        ctx.notify();
+                    },
+                );
+            }
+            PauseTransfer(target) => {
+                crate::sftp_manager::transfer_queue::TransferQueue::handle(ctx).update(
+                    ctx,
+                    |queue, ctx| {
+                        queue.pause(*target);
+                        ctx.notify();
+                    },
+                );
+            }
+            ResumeTransfer(target) => {
+                crate::sftp_manager::transfer_queue::TransferQueue::handle(ctx).update(
+                    ctx,
+                    |queue, ctx| {
+                        queue.resume(*target);
+                        ctx.notify();
+                    },
+                );
+            }
+            RetryTransferRecovery(id) => {
+                let retry = crate::sftp_manager::transfer_queue::TransferQueue::handle(ctx).update(
+                    ctx,
+                    |queue, ctx| {
+                        let retry = queue.retry_recovery_in_background(*id);
+                        ctx.notify();
+                        retry
+                    },
+                );
+                if let Err(error) = retry {
+                    self.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(
+                                crate::t!("fm-transfer-recovery-failed", err = error.to_string())
+                                    .to_string(),
+                            ),
+                            ctx,
+                        );
+                    });
+                }
+            }
+            ClearTransferHistory => {
+                crate::sftp_manager::transfer_queue::TransferQueue::handle(ctx).update(
+                    ctx,
+                    |queue, ctx| {
+                        queue.clear_terminal();
+                        ctx.notify();
+                    },
+                );
+            }
             SyncTrafficLights => {
                 self.sync_window_button_visibility(ctx);
             }
@@ -25913,6 +25970,22 @@ impl View for Workspace {
                     ParentOffsetBounds::WindowByPosition,
                     ParentAnchor::TopRight,
                     ChildAnchor::TopRight,
+                ),
+            );
+        }
+
+        if let Some(transfer_panel) =
+            crate::sftp_manager::transfer_panel::render_workspace_transfer_panel(app)
+        {
+            stack.add_positioned_overlay_child(
+                ConstrainedBox::new(transfer_panel)
+                    .with_width(420.0)
+                    .finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(-8.0, -8.0),
+                    ParentOffsetBounds::ParentBySize,
+                    ParentAnchor::BottomRight,
+                    ChildAnchor::BottomRight,
                 ),
             );
         }

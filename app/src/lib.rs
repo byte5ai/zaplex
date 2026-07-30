@@ -1645,6 +1645,8 @@ fn initialize_app(
 
     // Cross-pane file-manager registry (F5/F6 copy/move target discovery).
     ctx.add_singleton_model(|_| sftp_manager::fm_registry::FileManagerRegistry::new());
+    // Process-wide file-manager transfers survive pane and tab changes.
+    ctx.add_singleton_model(sftp_manager::transfer_queue::TransferQueue::new_with_notifications);
 
     // TemplatableMCPServerManager must be registered after UpdateManager and MCPServerManager so it can migrate legacy MCPs on start up
     // It should also be registered after FileBasedMCPManager so it can receive file-based server updates.

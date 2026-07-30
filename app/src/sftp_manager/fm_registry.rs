@@ -131,21 +131,27 @@ impl FileManagerRegistry {
     /// Every other pane that shares `fs` — the candidate copy/move targets for
     /// the pane identified by `self_id`.
     pub fn others_same_fs(&self, self_id: u64, fs: &FsNamespace) -> Vec<FmPaneDescriptor> {
-        self.panes
+        let mut panes = self
+            .panes
             .iter()
             .filter(|p| p.id != self_id && &p.fs == fs)
             .cloned()
-            .collect()
+            .collect::<Vec<_>>();
+        panes.sort_unstable_by_key(|pane| pane.id);
+        panes
     }
 
     /// Every other pane, regardless of filesystem — copy/move candidates
     /// including cross-connection ones (routed via [`plan_transfer`]).
     pub fn others(&self, self_id: u64) -> Vec<FmPaneDescriptor> {
-        self.panes
+        let mut panes = self
+            .panes
             .iter()
             .filter(|p| p.id != self_id)
             .cloned()
-            .collect()
+            .collect::<Vec<_>>();
+        panes.sort_unstable_by_key(|pane| pane.id);
+        panes
     }
 
     /// All registered panes (for tests/diagnostics).
@@ -278,5 +284,33 @@ mod tests {
         assert_eq!(plan_transfer(&local, &host_a), TransferKind::Upload);
         assert_eq!(plan_transfer(&host_a, &local), TransferKind::Download);
         assert_eq!(plan_transfer(&host_a, &host_b), TransferKind::RemoteToRemote);
+    }
+
+    #[test]
+    fn one_other_pane_is_default_target() {
+        let mut reg = FileManagerRegistry::new();
+        reg.upsert(desc(10, FsNamespace::Local, "/source"));
+        reg.upsert(desc(20, FsNamespace::Remote("host".into()), "/target"));
+
+        let targets = reg.others(10);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id, 20);
+    }
+
+    #[test]
+    fn hidden_panes_are_targets() {
+        let mut reg = FileManagerRegistry::new();
+        reg.upsert(desc(10, FsNamespace::Local, "/source"));
+        // Simulate panes registered from inactive tabs in an arbitrary
+        // activation order. Target discovery must not inherit that order.
+        reg.upsert(desc(30, FsNamespace::Remote("hidden-b".into()), "/b"));
+        reg.upsert(desc(20, FsNamespace::Remote("hidden-a".into()), "/a"));
+
+        let target_ids = reg
+            .others(10)
+            .into_iter()
+            .map(|pane| pane.id)
+            .collect::<Vec<_>>();
+        assert_eq!(target_ids, vec![20, 30]);
     }
 }

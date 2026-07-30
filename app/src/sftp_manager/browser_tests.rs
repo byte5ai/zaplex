@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
-use warpui::TypedActionView;
+use warpui::{SingletonEntity, TypedActionView};
 
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -17,9 +17,7 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use pathfinder_geometry::vector::Vector2F;
 
 use super::browser::{SftpBrowserAction, SftpBrowserView, SortColumn};
-use super::types::{
-    ConnectionState, Dialog, FileEntry, FileEntryType, TransferDirection, TransferState,
-};
+use super::types::{ConnectionState, Dialog, FileEntry, FileEntryType, TransferDirection};
 use crate::editor::EditorView;
 
 /// Initializes the minimal set of singletons required by the tests
@@ -31,10 +29,33 @@ fn initialize_app(app: &mut warpui::App) {
     app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
     app.add_singleton_model(|_| ToastStack);
     app.add_singleton_model(|_| super::fm_registry::FileManagerRegistry::new());
+    app.add_singleton_model(|_| super::transfer_queue::TransferQueue::new());
 
     // The SSH manager needs a SQLite path; use a temporary file so that failed queries don't panic
     let temp_db = std::env::temp_dir().join("warp_sftp_test.sqlite");
     let _ = warp_ssh_manager::set_database_path(temp_db);
+}
+
+#[test]
+fn review9_partial_transfer_toast_is_not_a_full_skip_or_success_message() {
+    crate::i18n::init(Some("en"));
+    let partial = super::browser::partial_transfer_message(2, 3, 1, false);
+    let source_kept = super::browser::partial_transfer_message(2, 3, 1, true);
+
+    assert_ne!(partial, crate::t!("fm-transfer-completed"));
+    assert_ne!(
+        partial,
+        crate::t!("fm-toast-skipped-existing", count = 3, target = "target")
+    );
+    assert_ne!(partial, source_kept);
+    assert!(
+        partial.contains('3'),
+        "published entry count must be visible"
+    );
+    assert!(
+        partial.contains('2'),
+        "transferred file count must be visible"
+    );
 }
 
 /// Creates a SftpBrowserView and places it in a window
@@ -139,7 +160,10 @@ fn test_select_entry() {
         });
 
         view.read(&app, |view, _| {
-            assert!(view.selected.contains(&0), "After SelectEntry(0), index 0 should be selected");
+            assert!(
+                view.selected.contains(&0),
+                "After SelectEntry(0), index 0 should be selected"
+            );
         });
     });
 }
@@ -164,8 +188,14 @@ fn test_toggle_select_entry() {
             view.handle_action(&SftpBrowserAction::SelectEntry(5), ctx);
         });
         view.read(&app, |view, _| {
-            assert!(!view.selected.contains(&2), "After SelectEntry(5), index 2 should be deselected");
-            assert!(view.selected.contains(&5), "After SelectEntry(5), index 5 should be selected");
+            assert!(
+                !view.selected.contains(&2),
+                "After SelectEntry(5), index 2 should be deselected"
+            );
+            assert!(
+                view.selected.contains(&5),
+                "After SelectEntry(5), index 5 should be selected"
+            );
         });
     });
 }
@@ -257,11 +287,26 @@ fn test_initial_state() {
         let (_, view) = create_view(&mut app);
 
         view.read(&app, |view, _| {
-            assert!(view.entries.is_empty(), "Initial entry list should be empty");
-            assert!(view.selected.is_empty(), "Initial selection set should be empty");
-            assert!(view.transfers.is_empty(), "Initial transfer list should be empty");
-            assert!(view.search_filter.is_none(), "Initial search filter should be None");
-            assert!(!view.is_drag_hovering, "Initial drag hover state should be false");
+            assert!(
+                view.entries.is_empty(),
+                "Initial entry list should be empty"
+            );
+            assert!(
+                view.selected.is_empty(),
+                "Initial selection set should be empty"
+            );
+            assert!(
+                view.transfers.is_empty(),
+                "Initial transfer list should be empty"
+            );
+            assert!(
+                view.search_filter.is_none(),
+                "Initial search filter should be None"
+            );
+            assert!(
+                !view.is_drag_hovering,
+                "Initial drag hover state should be false"
+            );
         });
     });
 }
@@ -281,13 +326,7 @@ fn test_context_menu_sets_state() {
 
         let position = Vector2F::new(100.0, 200.0);
         view.update(&mut app, |view, ctx| {
-            view.handle_action(
-                &SftpBrowserAction::ContextMenu {
-                    index: 3,
-                    position,
-                },
-                ctx,
-            );
+            view.handle_action(&SftpBrowserAction::ContextMenu { index: 3, position }, ctx);
         });
 
         view.read(&app, |view, _| {
@@ -297,7 +336,10 @@ fn test_context_menu_sets_state() {
             );
             let cm = view.context_menu.as_ref().unwrap();
             assert_eq!(cm.entry_index, 3, "entry_index should be 3");
-            assert_eq!(cm.position, position, "position should match the provided value");
+            assert_eq!(
+                cm.position, position,
+                "position should match the provided value"
+            );
             assert!(
                 view.selected.contains(&3),
                 "After ContextMenu, index 3 should be selected"
@@ -378,18 +420,9 @@ fn test_context_menu_replaces_previous() {
         view.read(&app, |view, _| {
             let cm = view.context_menu.as_ref().unwrap();
             assert_eq!(cm.entry_index, 5, "Should update to new entry_index");
-            assert_eq!(
-                cm.position, new_position,
-                "Should update to new position"
-            );
-            assert!(
-                view.selected.contains(&5),
-                "Should select new index 5"
-            );
-            assert!(
-                !view.selected.contains(&0),
-                "Should deselect old index 0"
-            );
+            assert_eq!(cm.position, new_position, "Should update to new position");
+            assert!(view.selected.contains(&5), "Should select new index 5");
+            assert!(!view.selected.contains(&0), "Should deselect old index 0");
         });
     });
 }
@@ -409,13 +442,7 @@ fn test_context_menu_zero_index() {
 
         let position = Vector2F::new(0.0, 0.0);
         view.update(&mut app, |view, ctx| {
-            view.handle_action(
-                &SftpBrowserAction::ContextMenu {
-                    index: 0,
-                    position,
-                },
-                ctx,
-            );
+            view.handle_action(&SftpBrowserAction::ContextMenu { index: 0, position }, ctx);
         });
 
         view.read(&app, |view, _| {
@@ -466,18 +493,15 @@ fn test_context_menu_negative_position() {
 
         let position = Vector2F::new(-50.0, -100.0);
         view.update(&mut app, |view, ctx| {
-            view.handle_action(
-                &SftpBrowserAction::ContextMenu {
-                    index: 1,
-                    position,
-                },
-                ctx,
-            );
+            view.handle_action(&SftpBrowserAction::ContextMenu { index: 1, position }, ctx);
         });
 
         view.read(&app, |view, _| {
             let cm = view.context_menu.as_ref().unwrap();
-            assert_eq!(cm.position, position, "Negative coordinates should be saved correctly");
+            assert_eq!(
+                cm.position, position,
+                "Negative coordinates should be saved correctly"
+            );
         });
     });
 }
@@ -491,7 +515,10 @@ fn test_close_context_menu_when_none() {
 
         // No menu in the initial state
         view.read(&app, |view, _| {
-            assert!(view.context_menu.is_none(), "Initially there should be no menu");
+            assert!(
+                view.context_menu.is_none(),
+                "Initially there should be no menu"
+            );
         });
 
         // Closing directly should not panic
@@ -526,7 +553,10 @@ fn test_context_menu_clears_previous_selection() {
         });
         view.read(&app, |view, _| {
             assert!(view.selected.contains(&3), "Should select 3");
-            assert!(!view.selected.contains(&2), "Single-select mode should clear 2");
+            assert!(
+                !view.selected.contains(&2),
+                "Single-select mode should clear 2"
+            );
         });
 
         // Right-click on entry 7
@@ -569,7 +599,10 @@ fn test_context_menu_multiple_open_close_cycles() {
                 );
             });
             view.read(&app, |view, _| {
-                assert!(view.context_menu.is_some(), "The {i}-th open should succeed");
+                assert!(
+                    view.context_menu.is_some(),
+                    "The {i}-th open should succeed"
+                );
             });
 
             // Close the menu
@@ -635,10 +668,7 @@ fn test_action_context_menu_variant() {
     };
     assert!(matches!(
         action,
-        SftpBrowserAction::ContextMenu {
-            index: 3,
-            ..
-        }
+        SftpBrowserAction::ContextMenu { index: 3, .. }
     ));
 }
 
@@ -793,9 +823,10 @@ fn test_confirm_new_folder_no_connection_with_dialog() {
                 parent_path: PathBuf::from("/home"),
             });
             // First enter a non-empty name to skip the empty-name check
-            view.new_folder_editor.update(ctx, |e: &mut EditorView, ctx| {
-                e.set_buffer_text("new_folder", ctx);
-            });
+            view.new_folder_editor
+                .update(ctx, |e: &mut EditorView, ctx| {
+                    e.set_buffer_text("new_folder", ctx);
+                });
             view.handle_action(&SftpBrowserAction::ConfirmNewFolder, ctx);
         });
 
@@ -1112,7 +1143,7 @@ fn test_cancel_transfer_nonexistent_id() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::CancelTransfer(999), ctx);
+            view.handle_action(&SftpBrowserAction::CancelTransfer(999, None), ctx);
         });
 
         view.read(&app, |view, _| {
@@ -1129,7 +1160,7 @@ fn test_cancel_transfer_zero_id() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::CancelTransfer(0), ctx);
+            view.handle_action(&SftpBrowserAction::CancelTransfer(0, None), ctx);
         });
 
         view.read(&app, |view, _| {
@@ -1187,7 +1218,7 @@ fn test_download_save_as_without_backend() {
     });
 }
 
-/// Verifies that ExecuteUpload marks the task as Failed for a non-existent local file with no connection
+/// A rejected upload must not create an orphaned pane-local or global transfer.
 #[test]
 fn test_execute_upload_nonexistent_file() {
     warpui::App::test((), |mut app| async move {
@@ -1201,12 +1232,14 @@ fn test_execute_upload_nonexistent_file() {
             );
         });
 
-        view.read(&app, |view, _| {
-            assert_eq!(view.transfers.len(), 1);
-            assert!(matches!(
-                view.transfers[0].state,
-                TransferState::Failed(_)
-            ));
+        view.read(&app, |view, app| {
+            assert!(view.transfers.is_empty());
+            assert_eq!(
+                super::transfer_queue::TransferQueue::as_ref(app)
+                    .activities()
+                    .count(),
+                0
+            );
         });
     });
 }
@@ -1495,22 +1528,35 @@ fn test_render_with_dialog_open() {
     });
 }
 
-/// Verifies that the state is correct after a transfer task is created
+/// Verifies that global transfer activity is available to the browser panel.
 #[test]
 fn test_render_with_transfer_task() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        view.update(&mut app, |view, ctx| {
-            view.handle_action(
-                &SftpBrowserAction::ExecuteUpload("/tmp/x.txt".to_string()),
-                ctx,
-            );
+        view.update(&mut app, |_, ctx| {
+            super::transfer_queue::TransferQueue::handle(ctx).update(ctx, |queue, _| {
+                queue
+                    .enqueue_job(
+                        "test-workspace",
+                        PathBuf::from("/tmp/x.txt"),
+                        PathBuf::from("/x.txt"),
+                        TransferDirection::Upload,
+                        1,
+                    )
+                    .unwrap();
+            });
         });
 
-        view.read(&app, |view, _| {
-            assert_eq!(view.transfers.len(), 1);
+        view.read(&app, |view, app| {
+            assert!(view.transfers.is_empty());
+            assert_eq!(
+                super::transfer_queue::TransferQueue::as_ref(app)
+                    .activities()
+                    .count(),
+                1
+            );
         });
     });
 }
@@ -1533,18 +1579,30 @@ fn test_render_all_overlays_combined() {
                 ctx,
             );
             view.handle_action(&SftpBrowserAction::NewFolder, ctx);
-            view.handle_action(
-                &SftpBrowserAction::ExecuteUpload("/tmp/test.txt".to_string()),
-                ctx,
-            );
+            super::transfer_queue::TransferQueue::handle(ctx).update(ctx, |queue, _| {
+                queue
+                    .enqueue_job(
+                        "test-workspace",
+                        PathBuf::from("/tmp/test.txt"),
+                        PathBuf::from("/test.txt"),
+                        TransferDirection::Upload,
+                        1,
+                    )
+                    .unwrap();
+            });
         });
 
-        view.read(&app, |view, _| {
+        view.read(&app, |view, app| {
             assert!(view.is_drag_hovering);
             assert!(view.search_filter.is_some());
             assert!(view.context_menu.is_some());
             assert!(view.dialog.is_some());
-            assert_eq!(view.transfers.len(), 1);
+            assert_eq!(
+                super::transfer_queue::TransferQueue::as_ref(app)
+                    .activities()
+                    .count(),
+                1
+            );
         });
     });
 }
@@ -1635,7 +1693,11 @@ fn entry(name: &str, is_dir: bool) -> FileEntry {
 }
 
 /// Seed the view with a fixed listing, bypassing the async backend.
-fn seed(view: &warpui::ViewHandle<SftpBrowserView>, app: &mut warpui::App, entries: Vec<FileEntry>) {
+fn seed(
+    view: &warpui::ViewHandle<SftpBrowserView>,
+    app: &mut warpui::App,
+    entries: Vec<FileEntry>,
+) {
     view.update(app, |view, _| {
         view.entries = entries;
     });
@@ -1647,7 +1709,11 @@ fn test_cursor_moves_and_maps_to_entry() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
-        seed(&view, &mut app, vec![entry("a", true), entry("b", false), entry("c", false)]);
+        seed(
+            &view,
+            &mut app,
+            vec![entry("a", true), entry("b", false), entry("c", false)],
+        );
 
         view.read(&app, |view, _| {
             assert_eq!(view.cursor, 0);
@@ -1683,7 +1749,11 @@ fn test_cursor_first_and_last() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
-        seed(&view, &mut app, vec![entry("a", false), entry("b", false), entry("c", false)]);
+        seed(
+            &view,
+            &mut app,
+            vec![entry("a", false), entry("b", false), entry("c", false)],
+        );
 
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::CursorLast, ctx);
@@ -1740,7 +1810,10 @@ fn test_filter_clamps_cursor_into_range() {
         // Park the cursor on the last row, then filter down to one match.
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::CursorLast, ctx);
-            view.handle_action(&SftpBrowserAction::SetSearchFilter("target".to_string()), ctx);
+            view.handle_action(
+                &SftpBrowserAction::SetSearchFilter("target".to_string()),
+                ctx,
+            );
         });
 
         view.read(&app, |view, _| {
@@ -1757,7 +1830,11 @@ fn test_activate_cursor_on_directory_without_backend_does_not_commit() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
-        seed(&view, &mut app, vec![entry("subdir", true), entry("file", false)]);
+        seed(
+            &view,
+            &mut app,
+            vec![entry("subdir", true), entry("file", false)],
+        );
 
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::ActivateCursor, ctx);
@@ -1909,7 +1986,11 @@ fn test_directories_lead_in_both_directions() {
             view.handle_action(&SftpBrowserAction::SortBy(SortColumn::Name), ctx);
         });
         view.read(&app, |view, _| {
-            assert_eq!(view.visible_indices(), vec![1, 0], "dir still first, descending");
+            assert_eq!(
+                view.visible_indices(),
+                vec![1, 0],
+                "dir still first, descending"
+            );
         });
     });
 }
@@ -1926,7 +2007,11 @@ fn test_hidden_files_toggle_and_drop_marks_when_hidden() {
         });
 
         view.read(&app, |view, _| {
-            assert_eq!(view.visible_indices(), vec![1], "dot-file hidden by default");
+            assert_eq!(
+                view.visible_indices(),
+                vec![1],
+                "dot-file hidden by default"
+            );
         });
 
         view.update(&mut app, |view, ctx| {
@@ -2035,10 +2120,7 @@ fn test_search_filter_drops_marks_it_hides() {
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::ToggleMark(0), ctx); // alpha
             view.handle_action(&SftpBrowserAction::ToggleMark(1), ctx); // beta
-            view.handle_action(
-                &SftpBrowserAction::SetSearchFilter("beta".to_string()),
-                ctx,
-            );
+            view.handle_action(&SftpBrowserAction::SetSearchFilter("beta".to_string()), ctx);
         });
         view.read(&app, |view, _| {
             assert_eq!(view.visible_indices(), vec![1], "only beta matches");
@@ -2210,7 +2292,11 @@ fn refresh_preserves_marks_by_path() {
         seed(
             &view,
             &mut app,
-            vec![entry("alpha", false), entry("beta", false), entry("gamma", false)],
+            vec![
+                entry("alpha", false),
+                entry("beta", false),
+                entry("gamma", false),
+            ],
         );
         view.update(&mut app, |view, _| {
             view.selected.insert(1); // beta
@@ -2223,7 +2309,11 @@ fn refresh_preserves_marks_by_path() {
         view.update(&mut app, |view, ctx| {
             view.refresh_generation = view.refresh_generation.wrapping_add(1);
             let gen = view.refresh_generation;
-            let listing = vec![entry("zeta", false), entry("beta", false), entry("alpha", false)];
+            let listing = vec![
+                entry("zeta", false),
+                entry("beta", false),
+                entry("alpha", false),
+            ];
             view.on_dir_listed(gen, Ok(Ok(listing)), ctx);
         });
 

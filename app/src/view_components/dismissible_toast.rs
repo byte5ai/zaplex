@@ -355,6 +355,11 @@ impl<A: Action + Clone> DismissibleToast<A> {
         Self::new(main_text, ToastFlavor::Error)
     }
 
+    #[cfg(test)]
+    pub(crate) fn flavor_for_test(&self) -> ToastFlavor {
+        self.flavor
+    }
+
     pub fn with_link(mut self, link: ToastLink<A>) -> Self {
         self.link = Some(link);
         self
