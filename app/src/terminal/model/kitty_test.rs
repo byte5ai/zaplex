@@ -68,6 +68,38 @@ fn place_image(terminal: &mut TerminalModel, control_data: &str) {
     );
 }
 
+/// A terminal holding a stored one pixel image with id 1, which animation
+/// messages can then address.
+fn terminal_with_stored_image() -> TerminalModel {
+    let mut terminal = kitty_terminal();
+    terminal.process_bytes(kitty_apc("a=t,i=1,f=24,s=1,v=1", one_pixel_rgb()).as_str());
+    terminal
+}
+
+/// Sends an animation message and returns whatever was replied to the shell.
+fn animate(terminal: &mut TerminalModel, control_data: &str, payload: &[u8]) -> String {
+    let written = terminal.process_bytes_capturing(kitty_apc(control_data, payload).as_str());
+    String::from_utf8_lossy(&written).into_owned()
+}
+
+/// The gaps of the animation frames recorded for an image, in playback order.
+fn frame_gaps(terminal: &TerminalModel, image_id: u32) -> Vec<u32> {
+    let Some(StoredImageMetadata::Kitty(metadata)) = terminal.image_id_to_metadata.get(&image_id)
+    else {
+        return Vec::new();
+    };
+
+    metadata.frames.iter().map(|&(_, gap)| gap).collect()
+}
+
+/// Whether an image's animation is running.
+fn is_playing(terminal: &TerminalModel, image_id: u32) -> bool {
+    matches!(
+        terminal.image_id_to_metadata.get(&image_id),
+        Some(StoredImageMetadata::Kitty(metadata)) if metadata.playing
+    )
+}
+
 /// Sends a delete message and returns whatever was replied to the shell.
 fn delete(terminal: &mut TerminalModel, control_data: &str) -> String {
     let written =
@@ -503,4 +535,102 @@ fn query_is_answered_before_a_command_starts_executing() {
 
     let reply = String::from_utf8_lossy(&written);
     assert!(reply.contains("i=31;OK"), "unexpected reply: {reply:?}");
+}
+
+#[test]
+fn transmitted_frames_accumulate_with_their_gaps() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_stored_image();
+
+    for gap in [100, 200, 300] {
+        let reply = animate(
+            &mut terminal,
+            &format!("a=f,i=1,f=24,s=1,v=1,z={gap}"),
+            one_pixel_rgb(),
+        );
+        assert!(reply.contains("i=1;OK"), "unexpected reply: {reply:?}");
+    }
+
+    // The stored image is frame 1 of the animation, so only the three
+    // transmitted frames are recorded.
+    assert_eq!(frame_gaps(&terminal, 1), vec![100, 200, 300]);
+}
+
+#[test]
+fn animation_control_starts_and_stops_playback() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_stored_image();
+    animate(&mut terminal, "a=f,i=1,f=24,s=1,v=1,z=100", one_pixel_rgb());
+
+    // Frames are transmitted to be played, so the first one starts the animation.
+    assert!(is_playing(&terminal, 1));
+
+    let reply = animate(&mut terminal, "a=a,i=1,s=1", &[]);
+    assert!(reply.contains("i=1;OK"), "unexpected reply: {reply:?}");
+    assert!(!is_playing(&terminal, 1));
+
+    animate(&mut terminal, "a=a,i=1,s=2", &[]);
+    assert!(is_playing(&terminal, 1));
+}
+
+#[test]
+fn animation_control_edits_a_frame_gap() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_stored_image();
+    animate(&mut terminal, "a=f,i=1,f=24,s=1,v=1,z=100", one_pixel_rgb());
+    animate(&mut terminal, "a=f,i=1,f=24,s=1,v=1,z=200", one_pixel_rgb());
+
+    // Frame 2 is the first transmitted frame; frame 1 is the stored image.
+    let reply = animate(&mut terminal, "a=a,i=1,r=2,z=500", &[]);
+
+    assert!(reply.contains("i=1;OK"), "unexpected reply: {reply:?}");
+    assert_eq!(frame_gaps(&terminal, 1), vec![500, 200]);
+}
+
+#[test]
+fn frames_needing_compositing_are_unsupported() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_stored_image();
+
+    // A frame placed at an offset, a frame built on top of another frame, and a
+    // frame smaller than the canvas all have to be composited.
+    for control_data in [
+        "a=f,i=1,f=24,s=1,v=1,x=4",
+        "a=f,i=1,f=24,s=1,v=1,y=4",
+        "a=f,i=1,f=24,s=1,v=1,c=1",
+    ] {
+        let reply = animate(&mut terminal, control_data, one_pixel_rgb());
+        assert!(
+            reply.contains("i=1;ENOTSUPP:"),
+            "unexpected reply to {control_data:?}: {reply:?}"
+        );
+    }
+
+    let reply = animate(
+        &mut terminal,
+        "a=f,i=1,f=24,s=2,v=1",
+        &[0xff, 0x00, 0x00, 0x00, 0xff, 0x00],
+    );
+    assert!(
+        reply.contains("i=1;ENOTSUPP:"),
+        "unexpected reply: {reply:?}"
+    );
+
+    assert!(frame_gaps(&terminal, 1).is_empty());
+}
+
+#[test]
+fn compose_action_is_unsupported() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let reply = reply_for("a=c,i=1", &[]);
+
+    assert!(
+        reply.contains("i=1;ENOTSUPP:"),
+        "unexpected reply: {reply:?}"
+    );
 }

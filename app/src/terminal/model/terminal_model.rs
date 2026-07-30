@@ -39,8 +39,9 @@ use super::grid::grid_handler::{
 use super::image_map::StoredImageMetadata;
 use super::index::Point;
 use super::kitty::{
-    create_kitty_error_reply, create_kitty_ok_reply, DeletionType, KittyAction, KittyChunk,
-    KittyMessage, KittyPlacementAction, KittyResponse, PendingKittyMessage,
+    create_kitty_error_reply, create_kitty_ok_reply, frame_index, DeletionType, InvalidKittyAction,
+    KittyAction, KittyChunk, KittyError, KittyMessage, KittyPlacementAction, KittyResponse,
+    PendingKittyMessage, StorageError,
 };
 use super::secrets::{RespectObfuscatedSecrets, SecretAndHandle};
 use super::selection::ScrollDelta;
@@ -1804,6 +1805,91 @@ impl TerminalModel {
             })
             .map(|(image_id, _)| *image_id)
             .max()
+    }
+
+    /// Applies an `a=f` frame transmission or an `a=a` playback control to the
+    /// image it names, then hands the resulting frame list to the view so it can
+    /// rebuild the image's asset. Sending no frames leaves the image on frame 1,
+    /// which is how a stopped animation is expressed.
+    fn handle_kitty_animation_action(&mut self, action: KittyAction) -> Result<(), KittyError> {
+        if !FeatureFlag::KittyImages.is_enabled() {
+            return Err(KittyError::KittyFeatureDisabled);
+        }
+
+        let image_id = match &action {
+            KittyAction::TransmitFrame { image_id, .. }
+            | KittyAction::AnimationControl { image_id, .. } => *image_id,
+            // No other action reaches this function.
+            _ => return Ok(()),
+        };
+
+        let Some(StoredImageMetadata::Kitty(metadata)) =
+            self.image_id_to_metadata.get_mut(&image_id)
+        else {
+            return Err(StorageError::UnknownId { id: image_id }.into());
+        };
+
+        match action {
+            KittyAction::TransmitFrame {
+                frame_number,
+                gap_ms,
+                image,
+                ..
+            } => {
+                // A frame smaller than the canvas has to be composited onto what
+                // is already there, which is not implemented.
+                if image.metadata.image_size != metadata.image_size {
+                    return Err(InvalidKittyAction::UnsupportedAction.into());
+                }
+
+                let edited = match frame_number {
+                    // Frame 1 is the root image; replacing its pixels means
+                    // replacing the image itself, not a frame.
+                    Some(1) => return Err(InvalidKittyAction::UnsupportedAction.into()),
+                    Some(frame_number) => {
+                        frame_index(frame_number).and_then(|index| metadata.frames.get_mut(index))
+                    }
+                    None => None,
+                };
+
+                match edited {
+                    Some(frame) => *frame = (image.data, gap_ms),
+                    None => metadata.frames.push((image.data, gap_ms)),
+                }
+
+                metadata.playing = true;
+            }
+            KittyAction::AnimationControl {
+                play, gap_edit, ..
+            } => {
+                if let Some(play) = play {
+                    metadata.playing = play;
+                }
+
+                // A gap edit naming a frame that was never transmitted is
+                // ignored, as is one naming the root frame, whose gap is not
+                // tracked.
+                if let Some((frame_number, gap_ms)) = gap_edit {
+                    if let Some(frame) =
+                        frame_index(frame_number).and_then(|index| metadata.frames.get_mut(index))
+                    {
+                        frame.1 = gap_ms;
+                    }
+                }
+            }
+            _ => return Ok(()),
+        }
+
+        let frames = if metadata.playing {
+            metadata.frames.clone()
+        } else {
+            Vec::new()
+        };
+
+        self.event_proxy
+            .send_terminal_event(Event::AnimatedImageReceived { image_id, frames });
+
+        Ok(())
     }
 
     /// Starts the active block and resets block-to-block state. For local sessions, this is called
@@ -3618,6 +3704,39 @@ impl ansi::Handler for TerminalModel {
                     return;
                 }
 
+                // Animation actions change an image's frames, never the grid, so
+                // they are applied and answered here for the same reason queries
+                // are: a block that has not reached `preexec` routes grid-bound
+                // actions to its header grid, which drops them without a reply.
+                if matches!(
+                    action,
+                    KittyAction::TransmitFrame { .. } | KittyAction::AnimationControl { .. }
+                ) {
+                    match self.handle_kitty_animation_action(action) {
+                        Ok(()) => {
+                            if let Some(message_id) = message_id {
+                                if send_ok {
+                                    let _ = writer
+                                        .write_all(&create_kitty_ok_reply(message_id, placement_id));
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            log::warn!("{err:?}");
+                            if let Some(message_id) = message_id {
+                                if send_error {
+                                    let _ = writer.write_all(&create_kitty_error_reply(
+                                        message_id,
+                                        placement_id,
+                                        err,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 match &action {
                     KittyAction::StoreOnly(action) => {
                         self.image_id_to_metadata.insert(
@@ -3651,7 +3770,10 @@ impl ansi::Handler for TerminalModel {
                             }
                         }
                     }
-                    KittyAction::QuerySupport(_) => {}
+                    // Both are answered above, before this match.
+                    KittyAction::QuerySupport(_)
+                    | KittyAction::TransmitFrame { .. }
+                    | KittyAction::AnimationControl { .. } => {}
                     KittyAction::Delete {
                         delete_placements_only,
                         deletion_type,

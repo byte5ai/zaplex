@@ -30,6 +30,46 @@ pub enum KittyAction {
         delete_placements_only: bool,
         deletion_type: DeletionType,
     },
+    /// `a=f`: an animation frame for an already transmitted image. Only
+    /// full-canvas frames are accepted; see [`KittyImageMetadata::frames`].
+    TransmitFrame {
+        image_id: u32,
+        /// The `r=` frame number this frame replaces, if the client gave one.
+        /// Absent means "append".
+        frame_number: Option<u32>,
+        /// The `z=` gap in milliseconds until the following frame.
+        gap_ms: u32,
+        image: KittyImage,
+    },
+    /// `a=a`: start or stop an image's animation, and/or change a frame's gap.
+    AnimationControl {
+        image_id: u32,
+        /// The playback state requested by `s=`, or `None` when the message only
+        /// edits a gap.
+        play: Option<bool>,
+        /// The `r=` frame number and its new `z=` gap in milliseconds.
+        gap_edit: Option<(u32, u32)>,
+    },
+}
+
+/// The gap kitty falls back to for a frame that does not carry a usable one.
+pub const DEFAULT_FRAME_GAP_MS: u32 = 40;
+
+/// Reads a frame's `z=` gap. Kitty ignores a zero gap, which leaves the default
+/// in place, and reads a negative one as "no gap at all".
+fn frame_gap_ms(z: i32) -> u32 {
+    match z {
+        0 => DEFAULT_FRAME_GAP_MS,
+        z if z.is_negative() => 0,
+        z => z as u32,
+    }
+}
+
+/// Maps a protocol frame number onto an index into
+/// [`KittyImageMetadata::frames`]. Frame 1 is the root image, which is not
+/// stored in that list, so it has no index.
+pub fn frame_index(frame_number: u32) -> Option<usize> {
+    frame_number.checked_sub(2).map(|index| index as usize)
 }
 
 #[derive(Debug, Default, Clone)]
@@ -466,6 +506,71 @@ impl TryFrom<KittyMessage> for KittyAction {
                     delete_placements_only: message.control_data.delete_placements_only,
                 })
             }
+            KittyPlacementAction::TransmitFrame => {
+                let image_id = match message.control_data.image_id {
+                    Some(image_id) => image_id,
+                    None => return Err(InvalidControlData::IdMissing.into()),
+                };
+
+                // On a frame, `x=`/`y=` place it inside the canvas and `c=` names
+                // a frame to use as its base. All three ask for compositing,
+                // which this terminal does not implement.
+                if message.control_data.delete_x.unwrap_or(0) != 0
+                    || message.control_data.delete_y.unwrap_or(0) != 0
+                    || message.control_data.cols.is_some()
+                {
+                    return Err(InvalidKittyAction::UnsupportedAction.into());
+                }
+
+                let frame_number = message.control_data.rows;
+                let gap_ms = frame_gap_ms(message.control_data.z_index);
+
+                let mut image = KittyImage::try_from(message)?;
+                if image.metadata.pixel_data_format == KittyPixelDataFormat::Png {
+                    image = set_kitty_png_size(image)?;
+                } else {
+                    image = set_kitty_rgb_headers(image)?;
+                }
+
+                Ok(KittyAction::TransmitFrame {
+                    image_id,
+                    frame_number,
+                    gap_ms,
+                    image,
+                })
+            }
+            KittyPlacementAction::AnimationControl => {
+                let control_data = &message.control_data;
+
+                let image_id = match control_data.image_id {
+                    Some(image_id) => image_id,
+                    None => return Err(InvalidControlData::IdMissing.into()),
+                };
+
+                // `s=` carries the playback state here rather than a width. Kitty
+                // separates "run until the loops run out" (2) from "run" (3);
+                // loops are not tracked, so both simply play.
+                let play = match control_data.width {
+                    1 => Some(false),
+                    2 | 3 => Some(true),
+                    _ => None,
+                };
+
+                // A frame number without a gap edits nothing: kitty ignores a
+                // zero gap.
+                let gap_edit = match (control_data.rows, control_data.z_index) {
+                    (Some(frame_number), gap) if gap != 0 => {
+                        Some((frame_number, frame_gap_ms(gap)))
+                    }
+                    _ => None,
+                };
+
+                Ok(KittyAction::AnimationControl {
+                    image_id,
+                    play,
+                    gap_edit,
+                })
+            }
             KittyPlacementAction::Unknown => Err(InvalidKittyAction::UnsupportedAction.into()),
         }
     }
@@ -485,6 +590,14 @@ pub struct KittyImageMetadata {
     /// this image's metadata drops its virtual placements with it, which is why
     /// no other copy of this state is kept.
     pub virtual_placements: HashMap<u32, VirtualPlacement>,
+    /// The animation frames transmitted with `a=f`, each paired with the gap in
+    /// milliseconds until the frame after it. The root image is frame 1 of the
+    /// animation and is not copied here — the asset cache already holds it — so
+    /// the protocol's frame number `n` is `frames[n - 2]` (see [`frame_index`]).
+    pub frames: Vec<(Vec<u8>, u32)>,
+    /// Whether this image's animation is running. Set by `a=a,s=`, and by the
+    /// first `a=f`: frames are transmitted in order to be played.
+    pub playing: bool,
 }
 
 /// A `U=1` placement. `rows`/`cols` stay unresolved so that a font-size change
@@ -563,6 +676,8 @@ impl From<KittyControlData> for KittyImageMetadata {
             transmission_medium: control_data.transmission_medium,
             image_number: control_data.image_number,
             virtual_placements: HashMap::new(),
+            frames: Vec::new(),
+            playing: false,
         }
     }
 }
@@ -593,6 +708,8 @@ pub enum KittyPlacementAction {
     DisplayStoredImage,
     QuerySupport,
     Delete,
+    TransmitFrame,
+    AnimationControl,
     Unknown,
 }
 
@@ -613,8 +730,10 @@ pub struct KittyControlData {
     pub verbosity: KittyResponseVerbosity,
     pub z_index: i32,
     pub delete_action: DeleteAction,
-    /// The `x=` key. It is a crop offset on transmission and either a cell column
-    /// or an image id bound on deletion; only the delete reading is implemented.
+    /// The `x=` key. It is a crop offset on transmission, a frame offset on
+    /// `a=f`, and either a cell column or an image id bound on deletion. Only the
+    /// delete reading is implemented; a frame offset is read just far enough to
+    /// reject it.
     pub delete_x: Option<u32>,
     /// The `y=` key. See [`KittyControlData::delete_x`].
     pub delete_y: Option<u32>,
@@ -781,6 +900,8 @@ fn parse_kitty_control_data(control_data: &[u8]) -> KittyControlData {
                     b"p" => KittyPlacementAction::DisplayStoredImage,
                     b"q" => KittyPlacementAction::QuerySupport,
                     b"d" => KittyPlacementAction::Delete,
+                    b"f" => KittyPlacementAction::TransmitFrame,
+                    b"a" => KittyPlacementAction::AnimationControl,
                     _ => KittyPlacementAction::Unknown,
                 }
             }
