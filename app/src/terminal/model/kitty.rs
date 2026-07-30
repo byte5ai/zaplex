@@ -4,6 +4,7 @@ use flate2::read::ZlibDecoder;
 use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
 use std::cmp::min;
+use std::collections::HashMap;
 use std::io::Read;
 #[cfg(all(feature = "local_fs", unix))]
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
@@ -200,7 +201,6 @@ impl From<InvalidKittyAction> for KittyError {
 #[derive(Debug, Clone)]
 pub enum InvalidControlData {
     IdMissing,
-    UnicodePlaceholderUnsupported,
     UnknownDeleteAction,
 }
 
@@ -347,10 +347,6 @@ impl TryFrom<KittyMessage> for KittyAction {
                 Ok(KittyAction::StoreOnly(action))
             }
             KittyPlacementAction::StoreAndDisplay => {
-                if message.control_data.unicode_placeholder {
-                    return Err(InvalidControlData::UnicodePlaceholderUnsupported.into());
-                }
-
                 let mut action = StoreAndDisplay {
                     image_id: message
                         .control_data
@@ -365,6 +361,7 @@ impl TryFrom<KittyMessage> for KittyAction {
                         cols: message.control_data.cols,
                         rows: message.control_data.rows,
                         cursor_movement_policy: message.control_data.cursor_movement_policy,
+                        unicode_placeholder: message.control_data.unicode_placeholder,
                     },
                     image: KittyImage::try_from(message)?,
                 };
@@ -378,10 +375,6 @@ impl TryFrom<KittyMessage> for KittyAction {
                 Ok(KittyAction::StoreAndDisplay(action))
             }
             KittyPlacementAction::DisplayStoredImage => {
-                if message.control_data.unicode_placeholder {
-                    return Err(InvalidControlData::UnicodePlaceholderUnsupported.into());
-                }
-
                 let id = match message.control_data.image_id {
                     Some(id) => id,
                     None => return Err(InvalidControlData::IdMissing.into()),
@@ -398,6 +391,7 @@ impl TryFrom<KittyMessage> for KittyAction {
                         cols: message.control_data.cols,
                         rows: message.control_data.rows,
                         cursor_movement_policy: message.control_data.cursor_movement_policy,
+                        unicode_placeholder: message.control_data.unicode_placeholder,
                     },
                 }))
             }
@@ -485,6 +479,21 @@ pub struct KittyImageMetadata {
     /// The `I=` number the client transmitted this image under, if any. Delete
     /// messages using `d=n` select an image by this number instead of by id.
     pub image_number: Option<u32>,
+    /// Placements created with `U=1`, keyed by placement id. These have no
+    /// anchor in the grid: the cells that reference them carry the row/column
+    /// to sample, so the renderer resolves their geometry per frame. Dropping
+    /// this image's metadata drops its virtual placements with it, which is why
+    /// no other copy of this state is kept.
+    pub virtual_placements: HashMap<u32, VirtualPlacement>,
+}
+
+/// A `U=1` placement. `rows`/`cols` stay unresolved so that a font-size change
+/// re-tiles the image against the new cell size instead of stretching it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct VirtualPlacement {
+    pub rows: Option<u32>,
+    pub cols: Option<u32>,
+    pub z_index: i32,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -493,9 +502,21 @@ pub struct KittyPlacementData {
     pub cols: Option<u32>,
     pub rows: Option<u32>,
     pub cursor_movement_policy: CursorMovementPolicy,
+    /// Set by `U=1`: the image is not anchored at the cursor, it is drawn
+    /// wherever unicode placeholder cells reference it.
+    pub unicode_placeholder: bool,
 }
 
 impl KittyPlacementData {
+    /// The renderer-facing view of a `U=1` placement.
+    pub fn virtual_placement(&self) -> VirtualPlacement {
+        VirtualPlacement {
+            rows: self.rows,
+            cols: self.cols,
+            z_index: self.z_index,
+        }
+    }
+
     pub fn get_desired_dimensions(
         &self,
         image_size: Vector2F,
@@ -541,6 +562,7 @@ impl From<KittyControlData> for KittyImageMetadata {
             image_size: Vector2F::new(control_data.width as f32, control_data.height as f32),
             transmission_medium: control_data.transmission_medium,
             image_number: control_data.image_number,
+            virtual_placements: HashMap::new(),
         }
     }
 }

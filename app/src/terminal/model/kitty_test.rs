@@ -1,6 +1,8 @@
 use base64::engine::general_purpose::STANDARD as BASE64;
 use warp_core::features::FeatureFlag;
 
+use crate::terminal::model::image_map::StoredImageMetadata;
+use crate::terminal::model::index::Point;
 use crate::terminal::model::TerminalModel;
 
 /// Builds a single-chunk kitty graphics APC message.
@@ -25,6 +27,27 @@ fn kitty_terminal() -> TerminalModel {
     let mut terminal = TerminalModel::mock(None, None);
     terminal.simulate_cmd("kitty");
     terminal
+}
+
+/// Where the cursor sits in the block that graphics are landing in.
+fn cursor_point(terminal: &TerminalModel) -> Point {
+    terminal
+        .block_list()
+        .active_block()
+        .grid_handler()
+        .cursor_point()
+}
+
+/// The virtual (`U=1`) placements recorded for an image.
+fn virtual_placement_ids(terminal: &TerminalModel, image_id: u32) -> Vec<u32> {
+    let Some(StoredImageMetadata::Kitty(metadata)) = terminal.image_id_to_metadata.get(&image_id)
+    else {
+        return Vec::new();
+    };
+
+    let mut ids: Vec<u32> = metadata.virtual_placements.keys().copied().collect();
+    ids.sort_unstable();
+    ids
 }
 
 fn reply_for(control_data: &str, payload: &[u8]) -> String {
@@ -378,4 +401,76 @@ fn delete_frames_is_reported_as_unsupported() {
     );
     // Animation frames are not stored yet, so nothing may be removed.
     assert!(has_placement(&terminal, 1, 1));
+}
+
+#[test]
+fn unicode_placeholder_transmit_and_display_is_accepted() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let reply = reply_for("a=T,U=1,i=1,p=2,f=24,s=1,v=1", one_pixel_rgb());
+
+    assert!(reply.contains("i=1,p=2;OK"), "unexpected reply: {reply:?}");
+    assert!(!reply.contains("EINVAL"), "unexpected reply: {reply:?}");
+}
+
+#[test]
+fn unicode_placeholder_display_of_stored_image_is_accepted() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    terminal.process_bytes(kitty_apc("a=t,i=1,f=24,s=1,v=1", one_pixel_rgb()).as_str());
+    let written = terminal.process_bytes_capturing(kitty_apc("a=p,U=1,i=1,p=5", &[]).as_str());
+
+    let reply = String::from_utf8_lossy(&written);
+    assert!(reply.contains("i=1,p=5;OK"), "unexpected reply: {reply:?}");
+    assert_eq!(virtual_placement_ids(&terminal, 1), vec![5]);
+}
+
+#[test]
+fn unicode_placeholder_placement_does_not_move_the_cursor() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    let before = cursor_point(&terminal);
+
+    // A tall image: an anchored placement would scroll in rows of whitespace
+    // and leave the cursor past the image.
+    terminal.process_bytes(kitty_apc("a=T,U=1,i=1,r=4,c=4,f=24,s=1,v=1", one_pixel_rgb()).as_str());
+
+    assert_eq!(
+        cursor_point(&terminal),
+        before,
+        "a virtual placement must not move the cursor"
+    );
+}
+
+#[test]
+fn unicode_placeholder_records_rows_and_columns_unresolved() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    terminal
+        .process_bytes(kitty_apc("a=T,U=1,i=3,p=1,r=2,c=6,f=24,s=1,v=1", one_pixel_rgb()).as_str());
+
+    let Some(StoredImageMetadata::Kitty(metadata)) = terminal.image_id_to_metadata.get(&3) else {
+        panic!("image 3 should have kitty metadata");
+    };
+    let placement = metadata
+        .virtual_placements
+        .get(&1)
+        .expect("placement 1 should be recorded");
+
+    // Left unresolved so that a font size change re-tiles the image.
+    assert_eq!(placement.rows, Some(2));
+    assert_eq!(placement.cols, Some(6));
+}
+
+#[test]
+fn anchored_placement_records_no_virtual_placement() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    terminal.process_bytes(kitty_apc("a=T,i=1,p=2,f=24,s=1,v=1", one_pixel_rgb()).as_str());
+
+    assert!(virtual_placement_ids(&terminal, 1).is_empty());
 }

@@ -1801,6 +1801,22 @@ impl GridHandler {
                     return Ok(());
                 }
 
+                // A virtual placement has no anchor in the grid and must not
+                // disturb the cursor: the unicode placeholder cells that
+                // reference it decide where it is drawn. The image data still
+                // has to reach the asset cache.
+                if action.placement_data.unicode_placeholder {
+                    self.ansi_handler_state
+                        .event_proxy
+                        .send_terminal_event(Event::ImageReceived {
+                            image_id: action.image_id,
+                            image_data: action.image.data,
+                            image_protocol: ImageProtocol::Kitty,
+                        });
+
+                    return Ok(());
+                }
+
                 let max_width = self.columns().saturating_sub(self.cursor_point().col)
                     * self.ansi_handler_state.cell_width;
 
@@ -1901,6 +1917,12 @@ impl GridHandler {
                 }
 
                 if let Some(0) = action.placement_data.rows {
+                    return Ok(());
+                }
+
+                // See the matching branch in `StoreAndDisplay`: a virtual
+                // placement is anchored by its placeholder cells, not the grid.
+                if action.placement_data.unicode_placeholder {
                     return Ok(());
                 }
 

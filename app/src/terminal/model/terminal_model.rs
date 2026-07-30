@@ -3612,12 +3612,31 @@ impl ansi::Handler for TerminalModel {
                         );
                     }
                     KittyAction::StoreAndDisplay(action) => {
-                        self.image_id_to_metadata.insert(
-                            action.image_id,
-                            StoredImageMetadata::Kitty(action.image.metadata.clone()),
-                        );
+                        let mut metadata = action.image.metadata.clone();
+                        if action.placement_data.unicode_placeholder {
+                            metadata.virtual_placements.insert(
+                                action.placement_id,
+                                action.placement_data.virtual_placement(),
+                            );
+                        }
+                        self.image_id_to_metadata
+                            .insert(action.image_id, StoredImageMetadata::Kitty(metadata));
                     }
-                    KittyAction::DisplayStoredImage(_) => {}
+                    KittyAction::DisplayStoredImage(action) => {
+                        // A virtual placement of an already-transmitted image only
+                        // adds to that image's metadata; the cells referencing it
+                        // supply the position.
+                        if action.placement_data.unicode_placeholder {
+                            if let Some(StoredImageMetadata::Kitty(metadata)) =
+                                self.image_id_to_metadata.get_mut(&action.image_id)
+                            {
+                                metadata.virtual_placements.insert(
+                                    action.placement_id,
+                                    action.placement_data.virtual_placement(),
+                                );
+                            }
+                        }
+                    }
                     KittyAction::QuerySupport(_) => {}
                     KittyAction::Delete {
                         delete_placements_only,
