@@ -1763,6 +1763,49 @@ impl TerminalModel {
         self.image_id_to_metadata.remove(&image_id);
     }
 
+    /// Runs `evict` against every grid that can hold images: the alternate screen
+    /// while it is active, otherwise every block's grid.
+    fn for_each_image_grid(&mut self, mut evict: impl FnMut(&mut GridHandler)) {
+        if self.alt_screen_active {
+            evict(self.alt_screen.grid_handler_mut());
+        } else {
+            for block in self.block_list_mut().blocks_mut() {
+                evict(block.grid_handler_mut());
+            }
+        }
+    }
+
+    /// Removes a kitty image's placements, or only the given placement, and
+    /// frees the stored image data when `delete_image_data` is set.
+    fn delete_kitty_image(
+        &mut self,
+        image_id: u32,
+        placement_id: Option<u32>,
+        delete_image_data: bool,
+    ) {
+        if delete_image_data {
+            self.image_id_to_metadata.remove(&image_id);
+        }
+
+        self.for_each_image_grid(|grid| match placement_id {
+            Some(placement_id) => grid.evict_placement(image_id, placement_id),
+            None => grid.evict_image(image_id),
+        });
+    }
+
+    /// The id of the newest image transmitted under the given `I=` number. Ids
+    /// are handed out in increasing order, so the newest is the largest.
+    fn newest_kitty_image_with_number(&self, image_number: u32) -> Option<u32> {
+        self.image_id_to_metadata
+            .iter()
+            .filter(|(_, metadata)| match metadata {
+                StoredImageMetadata::Kitty(metadata) => metadata.image_number == Some(image_number),
+                StoredImageMetadata::ITerm(_) => false,
+            })
+            .map(|(image_id, _)| *image_id)
+            .max()
+    }
+
     /// Starts the active block and resets block-to-block state. For local sessions, this is called
     /// from the input editor when it sends user bytes to the pty (usually the
     /// next command to run, but also ctrl-d). Once we've written to the pty on
@@ -3579,48 +3622,78 @@ impl ansi::Handler for TerminalModel {
                     KittyAction::Delete {
                         delete_placements_only,
                         deletion_type,
-                    } => match deletion_type {
-                        DeletionType::DeleteAll => {
-                            if !delete_placements_only {
-                                self.image_id_to_metadata.clear();
-                            }
+                    } => {
+                        let delete_image_data = !delete_placements_only;
 
-                            if self.alt_screen_active {
-                                self.alt_screen.grid_handler_mut().evict_all_images();
-                            } else {
-                                for block in self.block_list_mut().blocks_mut() {
-                                    block.grid_handler_mut().evict_all_images();
+                        match deletion_type {
+                            DeletionType::All => {
+                                if delete_image_data {
+                                    self.image_id_to_metadata.clear();
+                                }
+
+                                self.for_each_image_grid(|grid| grid.evict_all_images());
+                            }
+                            DeletionType::ById {
+                                image_id,
+                                placement_id,
+                            } => {
+                                self.delete_kitty_image(
+                                    *image_id,
+                                    *placement_id,
+                                    delete_image_data,
+                                );
+                            }
+                            DeletionType::ByNumber {
+                                image_number,
+                                placement_id,
+                            } => {
+                                // Nothing to do when no image was transmitted
+                                // under that number; kitty treats deleting an
+                                // absent image as a no-op.
+                                if let Some(image_id) =
+                                    self.newest_kitty_image_with_number(*image_number)
+                                {
+                                    self.delete_kitty_image(
+                                        image_id,
+                                        *placement_id,
+                                        delete_image_data,
+                                    );
                                 }
                             }
-                        }
-                        DeletionType::DeleteById(delete_by_id) => {
-                            if !delete_placements_only {
-                                self.image_id_to_metadata.remove(&delete_by_id.image_id);
-                            }
+                            DeletionType::IdRange { start, end } => {
+                                let range = *start..=*end;
 
-                            if self.alt_screen_active {
-                                if let Some(placement_id) = delete_by_id.placement_id {
-                                    self.alt_screen
-                                        .grid_handler_mut()
-                                        .evict_placement(delete_by_id.image_id, placement_id);
-                                } else {
-                                    self.alt_screen
-                                        .grid_handler_mut()
-                                        .evict_image(delete_by_id.image_id);
+                                if delete_image_data {
+                                    self.image_id_to_metadata
+                                        .retain(|image_id, _| !range.contains(image_id));
                                 }
-                            } else {
-                                for block in self.block_list_mut().blocks_mut() {
-                                    if let Some(placement_id) = delete_by_id.placement_id {
-                                        block
-                                            .grid_handler_mut()
-                                            .evict_placement(delete_by_id.image_id, placement_id);
-                                    } else {
-                                        block.grid_handler_mut().evict_image(delete_by_id.image_id);
+
+                                self.for_each_image_grid(|grid| {
+                                    grid.evict_placements_in_id_range(*start, *end)
+                                });
+                            }
+                            DeletionType::ZIndex(z_index) => {
+                                let mut evicted = vec![];
+                                self.for_each_image_grid(|grid| {
+                                    evicted.extend(grid.evict_placements_with_z(*z_index))
+                                });
+
+                                if delete_image_data {
+                                    for (image_id, _) in evicted {
+                                        self.image_id_to_metadata.remove(&image_id);
                                     }
                                 }
                             }
+                            // The positional specifiers need a cursor and cell
+                            // geometry, so the grid handler applies them.
+                            DeletionType::AtCursor
+                            | DeletionType::AtPoint { .. }
+                            | DeletionType::AtPointZ { .. }
+                            | DeletionType::Column(_)
+                            | DeletionType::Row(_)
+                            | DeletionType::Frames { .. } => {}
                         }
-                    },
+                    }
                 }
 
                 match self.handle_completed_kitty_action(action.clone(), &mut HashMap::new()) {

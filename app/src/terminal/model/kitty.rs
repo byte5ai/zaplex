@@ -58,16 +58,42 @@ pub struct QuerySupport {
     pub image_id: u32,
 }
 
+/// Which placements a `a=d` message asks the terminal to remove, as selected by
+/// the message's `d=` key.
 #[derive(Debug, Clone)]
 pub enum DeletionType {
-    DeleteAll,
-    DeleteById(DeleteById),
-}
-
-#[derive(Debug, Clone)]
-pub struct DeleteById {
-    pub image_id: u32,
-    pub placement_id: Option<u32>,
+    /// `d=a`: every placement on screen.
+    All,
+    /// `d=i`: every placement of an image id, or a single placement when
+    /// `placement_id` is given.
+    ById {
+        image_id: u32,
+        placement_id: Option<u32>,
+    },
+    /// `d=n`: like [`DeletionType::ById`], but the image is selected by the
+    /// client assigned image number (`I=`) rather than its id.
+    ByNumber {
+        image_number: u32,
+        placement_id: Option<u32>,
+    },
+    /// `d=c`: every placement intersecting the cell the cursor is on.
+    AtCursor,
+    /// `d=p`: every placement intersecting the given cell.
+    AtPoint { col: u32, row: u32 },
+    /// `d=q`: every placement intersecting the given cell that also has the
+    /// given z-index.
+    AtPointZ { col: u32, row: u32, z: i32 },
+    /// `d=x`: every placement intersecting the given column.
+    Column(u32),
+    /// `d=y`: every placement intersecting the given row.
+    Row(u32),
+    /// `d=z`: every placement with the given z-index.
+    ZIndex(i32),
+    /// `d=r`: every placement whose image id lies in the inclusive range.
+    IdRange { start: u32, end: u32 },
+    /// `d=f`: the animation frames of an image. Frames are not stored yet, so
+    /// this is reported as unsupported.
+    Frames { image_id: u32 },
 }
 
 #[derive(Debug, Default, Clone)]
@@ -175,6 +201,7 @@ impl From<InvalidKittyAction> for KittyError {
 pub enum InvalidControlData {
     IdMissing,
     UnicodePlaceholderUnsupported,
+    UnknownDeleteAction,
 }
 
 impl From<InvalidControlData> for KittyError {
@@ -392,18 +419,51 @@ impl TryFrom<KittyMessage> for KittyAction {
                 Ok(KittyAction::QuerySupport(action))
             }
             KittyPlacementAction::Delete => {
-                let deletion_type = match message.control_data.delete_action {
-                    DeleteAction::DeleteAll => DeletionType::DeleteAll,
-                    DeleteAction::DeleteById => {
-                        let image_id = match message.control_data.image_id {
+                let control_data = &message.control_data;
+                // `x=`/`y=` carry the cell coordinates for the positional
+                // specifiers and the id bounds for `d=r`. A missing key reads as
+                // 0, which is not a valid 1-based cell coordinate or image id,
+                // so such a message deletes nothing.
+                let (x, y) = (
+                    control_data.delete_x.unwrap_or(0),
+                    control_data.delete_y.unwrap_or(0),
+                );
+
+                let deletion_type = match control_data.delete_action {
+                    DeleteAction::All => DeletionType::All,
+                    DeleteAction::ById => DeletionType::ById {
+                        image_id: match control_data.image_id {
                             Some(image_id) => image_id,
                             None => return Err(InvalidControlData::IdMissing.into()),
-                        };
-
-                        DeletionType::DeleteById(DeleteById {
-                            image_id,
-                            placement_id: message.control_data.placement_id,
-                        })
+                        },
+                        placement_id: control_data.placement_id,
+                    },
+                    DeleteAction::ByNumber => DeletionType::ByNumber {
+                        image_number: match control_data.image_number {
+                            Some(image_number) => image_number,
+                            None => return Err(InvalidControlData::IdMissing.into()),
+                        },
+                        placement_id: control_data.placement_id,
+                    },
+                    DeleteAction::AtCursor => DeletionType::AtCursor,
+                    DeleteAction::AtPoint => DeletionType::AtPoint { col: x, row: y },
+                    DeleteAction::AtPointZ => DeletionType::AtPointZ {
+                        col: x,
+                        row: y,
+                        z: control_data.z_index,
+                    },
+                    DeleteAction::Column => DeletionType::Column(x),
+                    DeleteAction::Row => DeletionType::Row(y),
+                    DeleteAction::ZIndex => DeletionType::ZIndex(control_data.z_index),
+                    DeleteAction::IdRange => DeletionType::IdRange { start: x, end: y },
+                    DeleteAction::Frames => DeletionType::Frames {
+                        image_id: match control_data.image_id {
+                            Some(image_id) => image_id,
+                            None => return Err(InvalidControlData::IdMissing.into()),
+                        },
+                    },
+                    DeleteAction::Unknown => {
+                        return Err(InvalidControlData::UnknownDeleteAction.into())
                     }
                 };
 
@@ -422,6 +482,9 @@ pub struct KittyImageMetadata {
     pub pixel_data_format: KittyPixelDataFormat,
     pub transmission_medium: KittyTransmissionMedium,
     pub image_size: Vector2F,
+    /// The `I=` number the client transmitted this image under, if any. Delete
+    /// messages using `d=n` select an image by this number instead of by id.
+    pub image_number: Option<u32>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -477,6 +540,7 @@ impl From<KittyControlData> for KittyImageMetadata {
             pixel_data_format: control_data.pixel_data_format,
             image_size: Vector2F::new(control_data.width as f32, control_data.height as f32),
             transmission_medium: control_data.transmission_medium,
+            image_number: control_data.image_number,
         }
     }
 }
@@ -519,11 +583,19 @@ pub struct KittyControlData {
     transmission_medium: KittyTransmissionMedium,
     pub further_chunks: bool,
     pub image_id: Option<u32>,
+    /// The client assigned image number (`I=`), which delete messages can use in
+    /// place of an image id.
+    pub image_number: Option<u32>,
     pub placement_id: Option<u32>,
     pub placement_action: KittyPlacementAction,
     pub verbosity: KittyResponseVerbosity,
     pub z_index: i32,
     pub delete_action: DeleteAction,
+    /// The `x=` key. It is a crop offset on transmission and either a cell column
+    /// or an image id bound on deletion; only the delete reading is implemented.
+    pub delete_x: Option<u32>,
+    /// The `y=` key. See [`KittyControlData::delete_x`].
+    pub delete_y: Option<u32>,
     delete_placements_only: bool,
     pub rows: Option<u32>,
     pub cols: Option<u32>,
@@ -541,11 +613,14 @@ impl Default for KittyControlData {
             transmission_medium: KittyTransmissionMedium::default(),
             further_chunks: false,
             image_id: None,
+            image_number: None,
             placement_id: None,
             placement_action: KittyPlacementAction::default(),
             verbosity: KittyResponseVerbosity::default(),
             z_index: 0,
             delete_action: DeleteAction::default(),
+            delete_x: None,
+            delete_y: None,
             delete_placements_only: true,
             rows: None,
             cols: None,
@@ -555,11 +630,24 @@ impl Default for KittyControlData {
     }
 }
 
+/// The `d=` key of a delete message. The kitty protocol defaults it to `a`.
 #[derive(Default, Debug, PartialEq, Clone, Copy)]
 pub enum DeleteAction {
     #[default]
-    DeleteAll,
-    DeleteById,
+    All,
+    ById,
+    ByNumber,
+    AtCursor,
+    AtPoint,
+    AtPointZ,
+    Column,
+    Row,
+    ZIndex,
+    IdRange,
+    Frames,
+    /// A `d=` letter this terminal does not recognize. Kept distinct from
+    /// [`DeleteAction::All`] so that a typo cannot wipe out every image.
+    Unknown,
 }
 
 #[derive(Default, Debug, PartialEq, Clone, Copy)]
@@ -654,6 +742,11 @@ fn parse_kitty_control_data(control_data: &[u8]) -> KittyControlData {
                     parsed_control_data.image_id = Some(value);
                 }
             }
+            b"I" => {
+                if let Some(value) = parse_u32(value) {
+                    parsed_control_data.image_number = Some(value);
+                }
+            }
             b"p" => {
                 if let Some(value) = parse_u32(value) {
                     parsed_control_data.placement_id = Some(value);
@@ -683,16 +776,28 @@ fn parse_kitty_control_data(control_data: &[u8]) -> KittyControlData {
                 }
             }
             b"d" => {
+                // An uppercase specifier additionally frees the stored image data,
+                // not just the placements.
                 if value.iter().all(|x| x.is_ascii_uppercase()) {
                     parsed_control_data.delete_placements_only = false;
                 }
 
                 parsed_control_data.delete_action = match &value.to_ascii_lowercase()[..] {
-                    // Note: Kitty Protocol specifies "a" as "Delete all placements on screen",
-                    // we're just starting with DeleteAll placements to expedite the launch.
-                    b"a" => DeleteAction::DeleteAll,
-                    b"i" => DeleteAction::DeleteById,
-                    _ => DeleteAction::default(),
+                    b"a" => DeleteAction::All,
+                    b"i" => DeleteAction::ById,
+                    b"n" => DeleteAction::ByNumber,
+                    b"c" => DeleteAction::AtCursor,
+                    b"p" => DeleteAction::AtPoint,
+                    b"q" => DeleteAction::AtPointZ,
+                    b"x" => DeleteAction::Column,
+                    b"y" => DeleteAction::Row,
+                    b"z" => DeleteAction::ZIndex,
+                    b"r" => DeleteAction::IdRange,
+                    b"f" => DeleteAction::Frames,
+                    // Deliberately not `DeleteAction::default()`: falling back to
+                    // "delete everything" would let one unrecognized letter erase
+                    // images the client never asked to remove.
+                    _ => DeleteAction::Unknown,
                 }
             }
             b"c" => {
@@ -710,6 +815,16 @@ fn parse_kitty_control_data(control_data: &[u8]) -> KittyControlData {
                     b"0" => CursorMovementPolicy::MoveCursor,
                     b"1" => CursorMovementPolicy::DoNotMoveCursor,
                     _ => CursorMovementPolicy::default(),
+                }
+            }
+            b"x" => {
+                if let Some(value) = parse_u32(value) {
+                    parsed_control_data.delete_x = Some(value);
+                }
+            }
+            b"y" => {
+                if let Some(value) = parse_u32(value) {
+                    parsed_control_data.delete_y = Some(value);
                 }
             }
             b"U" => {

@@ -33,6 +33,45 @@ fn reply_for(control_data: &str, payload: &[u8]) -> String {
     String::from_utf8_lossy(&written).into_owned()
 }
 
+/// Transmits and displays a one cell image at the cursor without moving the
+/// cursor afterwards (`C=1`), so that tests control which cell it lands on.
+fn place_image(terminal: &mut TerminalModel, control_data: &str) {
+    terminal.process_bytes(
+        kitty_apc(
+            &format!("a=T,f=24,s=1,v=1,C=1,{control_data}"),
+            one_pixel_rgb(),
+        )
+        .as_str(),
+    );
+}
+
+/// Sends a delete message and returns whatever was replied to the shell.
+fn delete(terminal: &mut TerminalModel, control_data: &str) -> String {
+    let written =
+        terminal.process_bytes_capturing(kitty_apc(&format!("a=d,{control_data}"), &[]).as_str());
+    String::from_utf8_lossy(&written).into_owned()
+}
+
+/// Whether the active block's grid still holds the given placement.
+fn has_placement(terminal: &TerminalModel, image_id: u32, placement_id: u32) -> bool {
+    terminal
+        .block_list()
+        .active_block()
+        .grid_handler()
+        .get_image_placement_data(image_id, placement_id)
+        .is_some()
+}
+
+/// A terminal holding two one cell placements: image 1 at the cell kitty calls
+/// `x=1,y=1` and image 2 at `x=3,y=2`. The cursor is left on image 2's cell.
+fn terminal_with_two_placements() -> TerminalModel {
+    let mut terminal = kitty_terminal();
+    place_image(&mut terminal, "i=1,p=1");
+    terminal.process_bytes("\r\n  ");
+    place_image(&mut terminal, "i=2,p=2");
+    terminal
+}
+
 #[test]
 fn zero_size_transmit_and_display_does_not_panic() {
     let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
@@ -108,4 +147,235 @@ fn quiet_mode_two_suppresses_errors() {
 
     let ok_reply = reply_for("a=T,i=1,q=2,f=24,s=1,v=1", one_pixel_rgb());
     assert!(ok_reply.is_empty(), "unexpected reply: {ok_reply:?}");
+}
+
+#[test]
+fn delete_all_removes_every_placement() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_two_placements();
+    delete(&mut terminal, "d=a");
+
+    assert!(!has_placement(&terminal, 1, 1));
+    assert!(!has_placement(&terminal, 2, 2));
+}
+
+#[test]
+fn delete_by_id_removes_only_that_image() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_two_placements();
+    // A second placement of image 1, so we can tell "every placement of an
+    // image" apart from "one placement".
+    place_image(&mut terminal, "i=1,p=9");
+
+    delete(&mut terminal, "d=i,i=1");
+
+    assert!(!has_placement(&terminal, 1, 1));
+    assert!(!has_placement(&terminal, 1, 9));
+    assert!(has_placement(&terminal, 2, 2));
+}
+
+#[test]
+fn delete_by_id_with_placement_id_removes_only_that_placement() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_two_placements();
+    place_image(&mut terminal, "i=1,p=9");
+
+    delete(&mut terminal, "d=i,i=1,p=9");
+
+    assert!(has_placement(&terminal, 1, 1));
+    assert!(!has_placement(&terminal, 1, 9));
+    assert!(has_placement(&terminal, 2, 2));
+}
+
+#[test]
+fn delete_by_number_removes_the_numbered_image() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    // `i=` still identifies the image; `I=` is the client's own number, which is
+    // what `d=n` selects on.
+    place_image(&mut terminal, "i=5,p=5,I=7");
+    place_image(&mut terminal, "i=6,p=6");
+
+    delete(&mut terminal, "d=n,I=7");
+
+    assert!(!has_placement(&terminal, 5, 5));
+    assert!(has_placement(&terminal, 6, 6));
+}
+
+#[test]
+fn delete_at_cursor_removes_the_placement_under_the_cursor() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    // The helper leaves the cursor on image 2's cell.
+    let mut terminal = terminal_with_two_placements();
+    delete(&mut terminal, "d=c");
+
+    assert!(has_placement(&terminal, 1, 1));
+    assert!(!has_placement(&terminal, 2, 2));
+}
+
+#[test]
+fn delete_at_point_removes_the_placement_in_that_cell() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_two_placements();
+    delete(&mut terminal, "d=p,x=1,y=1");
+
+    assert!(!has_placement(&terminal, 1, 1));
+    assert!(has_placement(&terminal, 2, 2));
+}
+
+#[test]
+fn delete_at_point_with_z_index_only_removes_matching_depths() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    // Two placements stacked on the same cell at different depths.
+    let mut terminal = kitty_terminal();
+    place_image(&mut terminal, "i=1,p=1,z=5");
+    place_image(&mut terminal, "i=2,p=2,z=6");
+
+    delete(&mut terminal, "d=q,x=1,y=1,z=6");
+
+    assert!(has_placement(&terminal, 1, 1));
+    assert!(!has_placement(&terminal, 2, 2));
+}
+
+#[test]
+fn delete_in_column_removes_placements_in_that_column() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_two_placements();
+    delete(&mut terminal, "d=x,x=3");
+
+    assert!(has_placement(&terminal, 1, 1));
+    assert!(!has_placement(&terminal, 2, 2));
+}
+
+#[test]
+fn delete_in_row_removes_placements_in_that_row() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = terminal_with_two_placements();
+    delete(&mut terminal, "d=y,y=2");
+
+    assert!(has_placement(&terminal, 1, 1));
+    assert!(!has_placement(&terminal, 2, 2));
+}
+
+#[test]
+fn delete_by_z_index_removes_placements_at_that_depth() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    place_image(&mut terminal, "i=1,p=1,z=5");
+    place_image(&mut terminal, "i=2,p=2");
+
+    delete(&mut terminal, "d=z,z=5");
+
+    assert!(!has_placement(&terminal, 1, 1));
+    assert!(has_placement(&terminal, 2, 2));
+}
+
+#[test]
+fn delete_by_id_range_removes_ids_within_the_range() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    for image_id in 1..=4 {
+        place_image(&mut terminal, &format!("i={image_id},p={image_id}"));
+    }
+
+    delete(&mut terminal, "d=r,x=2,y=3");
+
+    assert!(has_placement(&terminal, 1, 1));
+    assert!(!has_placement(&terminal, 2, 2));
+    assert!(!has_placement(&terminal, 3, 3));
+    assert!(has_placement(&terminal, 4, 4));
+}
+
+#[test]
+fn unknown_delete_specifier_is_rejected_and_deletes_nothing() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    // Regression test: an unrecognized `d=` used to fall through to "delete all".
+    for specifier in ["d=w", "d=!"] {
+        let mut terminal = terminal_with_two_placements();
+        let reply = delete(&mut terminal, &format!("{specifier},i=1"));
+
+        assert!(
+            reply.contains("i=1;EINVAL:"),
+            "unexpected reply for {specifier}: {reply:?}"
+        );
+        assert!(
+            has_placement(&terminal, 1, 1),
+            "{specifier} deleted image 1"
+        );
+        assert!(
+            has_placement(&terminal, 2, 2),
+            "{specifier} deleted image 2"
+        );
+    }
+}
+
+#[test]
+fn uppercase_delete_also_frees_the_image_data() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    place_image(&mut terminal, "i=1,p=1");
+    delete(&mut terminal, "d=I,i=1");
+
+    // The image data is gone, so it can no longer be placed again.
+    let reply = String::from_utf8_lossy(
+        &terminal.process_bytes_capturing(kitty_apc("a=p,i=1", &[]).as_str()),
+    )
+    .into_owned();
+    assert!(reply.contains("i=1;ENOENT:"), "unexpected reply: {reply:?}");
+
+    // The lowercase form only drops placements, so the image survives.
+    let mut terminal = kitty_terminal();
+    place_image(&mut terminal, "i=1,p=1");
+    delete(&mut terminal, "d=i,i=1");
+
+    let reply = String::from_utf8_lossy(
+        &terminal.process_bytes_capturing(kitty_apc("a=p,i=1", &[]).as_str()),
+    )
+    .into_owned();
+    assert!(reply.contains("i=1;OK"), "unexpected reply: {reply:?}");
+}
+
+#[test]
+fn uppercase_positional_delete_also_frees_the_image_data() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    place_image(&mut terminal, "i=1,p=1");
+    delete(&mut terminal, "d=P,x=1,y=1");
+
+    let reply = String::from_utf8_lossy(
+        &terminal.process_bytes_capturing(kitty_apc("a=p,i=1", &[]).as_str()),
+    )
+    .into_owned();
+    assert!(reply.contains("i=1;ENOENT:"), "unexpected reply: {reply:?}");
+}
+
+#[test]
+fn delete_frames_is_reported_as_unsupported() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+
+    let mut terminal = kitty_terminal();
+    place_image(&mut terminal, "i=1,p=1");
+
+    let reply = delete(&mut terminal, "d=f,i=1");
+
+    assert!(
+        reply.contains("i=1;ENOTSUPP:"),
+        "unexpected reply: {reply:?}"
+    );
+    // Animation frames are not stored yet, so nothing may be removed.
+    assert!(has_placement(&terminal, 1, 1));
 }
