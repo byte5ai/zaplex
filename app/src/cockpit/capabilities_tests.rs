@@ -197,6 +197,25 @@ fn open_plan_resumes_an_unlocated_dormant_session() {
 }
 
 #[test]
+fn session_uses_shared_open_plan() {
+    let active = session(Provider::Codex, SessionState::Active, 0);
+    let dormant = session(Provider::Claude, SessionState::Idle, 0);
+
+    assert_eq!(
+        plan_session_open(&active, true),
+        SessionOpenPlan::FocusExistingTerminal
+    );
+    assert_eq!(
+        plan_session_open(&active, false),
+        SessionOpenPlan::LiveSessionUnavailable
+    );
+    assert_eq!(
+        plan_session_open(&dormant, false),
+        SessionOpenPlan::ResumeDormant
+    );
+}
+
+#[test]
 fn reattach_uses_id_without_cwd_guessing() {
     let mut live = session(Provider::Codex, SessionState::Active, 0);
     live.cwd = "/a/path/that/must/not-be-used-as-an-id".to_string();

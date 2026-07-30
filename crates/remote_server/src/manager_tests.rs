@@ -6,6 +6,22 @@
 
 use super::*;
 
+#[test]
+fn connected_daemon_registry_identity_is_deterministic() {
+    assert_eq!(
+        preferred_registry_node_id(None, Some("node-b")),
+        Some("node-b".to_string())
+    );
+    assert_eq!(
+        preferred_registry_node_id(Some("node-b"), Some("node-a")),
+        Some("node-a".to_string())
+    );
+    assert_eq!(
+        preferred_registry_node_id(Some("node-a"), None),
+        Some("node-a".to_string())
+    );
+}
+
 // ---------------------------------------------------------------------------
 // version_is_compatible
 // ---------------------------------------------------------------------------

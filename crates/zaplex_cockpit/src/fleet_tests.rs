@@ -387,7 +387,7 @@ fn fold_identity_is_host_scoped_session_id() {
 }
 
 #[test]
-fn empty_hosts_are_dropped_and_empty_fleet_is_zero() {
+fn empty_remote_hosts_are_dropped_and_empty_fleet_is_zero() {
     let tree = build_fleet_tree(vec![
         host("idle", vec![]),
         host("live", vec![session("a", "/p", SessionState::Active, 1)]),
@@ -401,142 +401,181 @@ fn empty_hosts_are_dropped_and_empty_fleet_is_zero() {
 }
 
 #[test]
-fn merge_registered_adds_agentless_hosts_and_dedups_by_label() {
-    // A tree with one session-backed host ("devhost").
-    let mut tree = build_fleet_tree(vec![host(
-        "devhost",
-        vec![session("a", "/p/x", SessionState::Active, 10)],
-    )]);
-    // Registry: devhost (already present, connected) + agenthost (registered, no
-    // live agent — build_fleet_tree would have dropped it).
-    let registered = vec![
-        ("node-dev".to_string(), "devhost".to_string()),
-        ("node-agent".to_string(), "agenthost".to_string()),
-    ];
+fn registered_and_live_hosts_join_once() {
+    let mut tree = fold_inventory(
+        "local",
+        Vec::new(),
+        vec![(
+            remote_host("devhost", "daemon-dev"),
+            vec![session("a", "/p/x", SessionState::Active, 10)],
+        )],
+    );
+    let registered = vec![RegisteredHost {
+        node_id: "node-dev".to_string(),
+        label: "devhost".to_string(),
+        live_host_id: Some("daemon-dev".to_string()),
+    }];
+
     merge_registered_hosts(&mut tree, &registered);
 
-    assert_eq!(tree.hosts.len(), 2, "agenthost added, devhost not duplicated");
-    let dev = tree.hosts.iter().find(|h| h.host == "devhost").unwrap();
-    assert_eq!(dev.projects.len(), 1, "the connected host keeps its sessions");
-    assert_eq!(
-        dev.registry_node_id.as_deref(),
-        Some("node-dev"),
-        "a live registered host is back-filled with its registry id so host-row \
-         actions (open/manage/star) work"
-    );
-    let agent = tree.hosts.iter().find(|h| h.host == "agenthost").unwrap();
-    assert!(agent.projects.is_empty(), "a registry-only host has no sessions");
-    assert_eq!(agent.registry_node_id.as_deref(), Some("node-agent"));
-    assert!(!agent.is_local);
-    assert_eq!(agent.needs_me, 0);
-    assert_eq!(tree.needs_me, 0, "an agentless host adds no needs-me");
+    let joined: Vec<&HostNode> = tree
+        .hosts
+        .iter()
+        .filter(|host| host.registry_node_id.as_deref() == Some("node-dev"))
+        .collect();
+    assert_eq!(joined.len(), 1);
+    assert_eq!(joined[0].host_id.as_deref(), Some("daemon-dev"));
+    assert_eq!(joined[0].projects.len(), 1);
 }
 
 #[test]
-fn merge_registered_keeps_every_same_named_entry_and_never_binds_ambiguously() {
-    // Two DIFFERENT registered SSH servers that happen to share a display name —
-    // the registry allows it (the label is user-chosen, e.g. the same alias kept
-    // in two folders). Nothing in the data says which one a live daemon is.
-    let mut tree = build_fleet_tree(vec![host(
-        "devhost",
-        vec![session("a", "/p/x", SessionState::Active, 10)],
-    )]);
-    let registered = vec![
-        ("node-dev-1".to_string(), "devhost".to_string()),
-        ("node-dev-2".to_string(), "devhost".to_string()),
-    ];
+fn registered_offline_host_remains_visible() {
+    let mut tree = fold_inventory("local", Vec::new(), Vec::new());
+    let registered = vec![RegisteredHost {
+        node_id: "node-offline".to_string(),
+        label: "offline".to_string(),
+        live_host_id: None,
+    }];
+
     merge_registered_hosts(&mut tree, &registered);
 
-    // Regression: the old implementation looked the label up without checking
-    // whether that root was already bound, so entry 2 found the root entry 1 had
-    // just touched, saw a registry id on it, and `continue`d — dropping a whole
-    // registered host from the Conductor. Every entry must survive.
-    let ids: Vec<&str> = tree
+    let offline = tree
         .hosts
         .iter()
-        .filter_map(|h| h.registry_node_id.as_deref())
-        .collect();
-    assert!(
-        ids.contains(&"node-dev-1") && ids.contains(&"node-dev-2"),
-        "both same-named registry entries must stay reachable, got {ids:?}"
+        .find(|host| host.registry_node_id.as_deref() == Some("node-offline"))
+        .expect("registered offline host stays in the spine");
+    assert_eq!(offline.host, "offline");
+    assert!(offline.host_id.is_none());
+    assert!(offline.projects.is_empty());
+}
+
+#[test]
+fn live_status_enriches_registered_host_without_duplicate() {
+    let mut tree = fold_inventory(
+        "local",
+        Vec::new(),
+        vec![(
+            remote_host("renamed-live-label", "daemon-dev"),
+            vec![session("waiting", "/p/x", SessionState::Waiting, 10)],
+        )],
+    );
+    let registered = vec![RegisteredHost {
+        node_id: "node-dev".to_string(),
+        label: "registry-label".to_string(),
+        live_host_id: Some("daemon-dev".to_string()),
+    }];
+
+    merge_registered_hosts(&mut tree, &registered);
+
+    let remote: Vec<&HostNode> = tree.hosts.iter().filter(|host| !host.is_local).collect();
+    assert_eq!(remote.len(), 1, "stable ids join despite different labels");
+    assert_eq!(remote[0].registry_node_id.as_deref(), Some("node-dev"));
+    assert_eq!(remote[0].needs_me, 1, "live status survives the join");
+    assert_eq!(remote[0].projects[0].sessions[0].session_id, "waiting");
+}
+
+#[test]
+fn same_display_name_hosts_remain_distinct_by_stable_id() {
+    let mut tree = fold_inventory(
+        "local",
+        Vec::new(),
+        vec![
+            (
+                remote_host("box", "daemon-a"),
+                vec![session("a", "/p/a", SessionState::Active, 10)],
+            ),
+            (
+                remote_host("box", "daemon-b"),
+                vec![session("b", "/p/b", SessionState::Waiting, 20)],
+            ),
+        ],
+    );
+    let registered = vec![
+        RegisteredHost {
+            node_id: "node-a".to_string(),
+            label: "box".to_string(),
+            live_host_id: Some("daemon-a".to_string()),
+        },
+        RegisteredHost {
+            node_id: "node-b".to_string(),
+            label: "box".to_string(),
+            live_host_id: Some("daemon-b".to_string()),
+        },
+    ];
+
+    merge_registered_hosts(&mut tree, &registered);
+
+    let remotes: Vec<&HostNode> = tree.hosts.iter().filter(|host| !host.is_local).collect();
+    assert_eq!(remotes.len(), 2);
+    let a = remotes
+        .iter()
+        .find(|host| host.host_id.as_deref() == Some("daemon-a"))
+        .unwrap();
+    let b = remotes
+        .iter()
+        .find(|host| host.host_id.as_deref() == Some("daemon-b"))
+        .unwrap();
+    assert_eq!(a.registry_node_id.as_deref(), Some("node-a"));
+    assert_eq!(b.registry_node_id.as_deref(), Some("node-b"));
+}
+
+#[test]
+fn local_host_appears_exactly_once() {
+    let mut tree = fold_inventory("box", Vec::new(), Vec::new());
+    merge_registered_hosts(
+        &mut tree,
+        &[RegisteredHost {
+            node_id: "remote-box".to_string(),
+            label: "box".to_string(),
+            live_host_id: None,
+        }],
     );
 
-    // And the live host must NOT be bound to either: picking one would aim its
-    // open/manage/★ at a coin-flip SSH entry.
+    assert_eq!(tree.hosts.iter().filter(|host| host.is_local).count(), 1);
+    assert_eq!(
+        tree.hosts
+            .iter()
+            .filter(|host| host.registry_node_id.as_deref() == Some("remote-box"))
+            .count(),
+        1,
+        "a same-named registered remote remains distinct from local"
+    );
+}
+
+#[test]
+fn removed_registered_host_is_never_routable() {
+    let mut tree = fold_inventory(
+        "local",
+        Vec::new(),
+        vec![(
+            remote_host("devhost", "daemon-dev"),
+            vec![session("a", "/p/x", SessionState::Active, 10)],
+        )],
+    );
+    merge_registered_hosts(
+        &mut tree,
+        &[RegisteredHost {
+            node_id: "node-dev".to_string(),
+            label: "devhost".to_string(),
+            live_host_id: Some("daemon-dev".to_string()),
+        }],
+    );
+    assert!(tree
+        .hosts
+        .iter()
+        .any(|host| host.registry_node_id.as_deref() == Some("node-dev")));
+
+    merge_registered_hosts(&mut tree, &[]);
+
     let live = tree
         .hosts
         .iter()
-        .find(|h| !h.projects.is_empty())
-        .expect("the session-backed host survives");
-    assert_eq!(
-        live.registry_node_id, None,
-        "an ambiguous label must never be bound — better no host-row action than \
-         one that edits the wrong SSH entry"
-    );
-    assert_eq!(live.projects.len(), 1, "the live host keeps its sessions");
-
-    // Exactly the live host + one root per registry entry: no drop, no duplicate.
-    assert_eq!(tree.hosts.len(), 3, "1 live + 2 registry roots");
-}
-
-/// The mirror case: one registry entry, two live hosts sharing its label. The
-/// bridge is just as untrustworthy in this direction — binding would pick one
-/// daemon by array order.
-#[test]
-fn merge_registered_does_not_bind_when_two_live_hosts_share_the_label() {
-    let mut tree = build_fleet_tree(vec![
-        host("devhost", vec![session("a", "/p/x", SessionState::Active, 10)]),
-        host("devhost", vec![session("b", "/p/y", SessionState::Idle, 0)]),
-    ]);
-    merge_registered_hosts(
-        &mut tree,
-        &[("node-dev".to_string(), "devhost".to_string())],
-    );
-
+        .find(|host| host.host_id.as_deref() == Some("daemon-dev"))
+        .expect("live inventory remains visible");
     assert!(
-        tree.hosts
-            .iter()
-            .filter(|h| !h.projects.is_empty())
-            .all(|h| h.registry_node_id.is_none()),
-        "neither live host may claim the single registry entry"
+        live.registry_node_id.is_none(),
+        "a deleted registry id must not remain as a routable host action"
     );
-    assert_eq!(tree.hosts.len(), 3, "2 live + the entry as its own root");
-}
-
-/// Merging is a fold over the same registry, so running it twice must not grow
-/// the tree. Guards the `is_none()` candidate filter: without an explicit
-/// already-present check it would find no unbound host on the second pass and
-/// append a duplicate root.
-#[test]
-fn merge_registered_is_idempotent() {
-    let registered = vec![
-        ("node-dev".to_string(), "devhost".to_string()),
-        ("node-solo".to_string(), "agenthost".to_string()),
-    ];
-    let mut tree = build_fleet_tree(vec![host(
-        "devhost",
-        vec![session("a", "/p/x", SessionState::Active, 10)],
-    )]);
-
-    merge_registered_hosts(&mut tree, &registered);
-    let after_first: Vec<(String, Option<String>)> = tree
-        .hosts
-        .iter()
-        .map(|h| (h.host.clone(), h.registry_node_id.clone()))
-        .collect();
-
-    merge_registered_hosts(&mut tree, &registered);
-    let after_second: Vec<(String, Option<String>)> = tree
-        .hosts
-        .iter()
-        .map(|h| (h.host.clone(), h.registry_node_id.clone()))
-        .collect();
-
-    assert_eq!(
-        after_first, after_second,
-        "a second merge of the same registry must be a no-op"
-    );
-    assert_eq!(tree.hosts.len(), 2, "the live devhost + the agentless root");
 }
 
 // ── Account ↔ fleet join (F5) ───────────────────────────────────────────────

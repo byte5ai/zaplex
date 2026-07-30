@@ -210,7 +210,11 @@ fn worktrees_of_one_repo_resolve_to_one_project() {
             "a worktree groups under the repo it belongs to"
         );
     }
-    assert_eq!(main_p.repo_root, main_p.root, "the main checkout is its own repo root");
+    assert_eq!(
+        main_p.repo_root,
+        normalize(&main.canonicalize().unwrap()),
+        "the main checkout provides the canonical grouping identity"
+    );
 
     // …named after the repo, from the shared config — not after its own folder.
     for p in [&main_p, &a, &b, &c] {
@@ -226,6 +230,33 @@ fn worktrees_of_one_repo_resolve_to_one_project() {
     assert_eq!(main_p.worktree, None, "the main checkout is not a linked worktree");
 }
 
+/// A mount alias or symlink must not split the main checkout from its linked
+/// worktrees. The session keeps the path it actually uses for file actions,
+/// while the grouping key consistently uses the canonical main checkout.
+#[cfg(unix)]
+#[test]
+fn symlinked_repo_and_worktree_share_one_canonical_group() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    fs::create_dir_all(&real).unwrap();
+    let alias = tmp.path().join("alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+    let Some(main) = real_repo_with_worktrees(&alias, &["wt-a"]) else {
+        eprintln!("git unavailable — skipping");
+        return;
+    };
+    let main_p = resolve_project(&main);
+    let worktree_p = resolve_project(&alias.join("wt-a"));
+
+    assert_eq!(main_p.root, normalize(&main));
+    assert_eq!(main_p.repo_root, worktree_p.repo_root);
+    assert_eq!(
+        main_p.repo_root,
+        normalize(&main.canonicalize().unwrap())
+    );
+}
+
 /// A sub-directory has always grouped under its repo; the repo key must not
 /// change that.
 #[test]
@@ -239,7 +270,7 @@ fn a_subdirectory_still_groups_under_its_repo() {
 
     let p = resolve_project(&sub);
     assert_eq!(p.root, normalize(&main));
-    assert_eq!(p.repo_root, normalize(&main));
+    assert_eq!(p.repo_root, normalize(&main.canonicalize().unwrap()));
     assert_eq!(p.name, "zaplex");
 }
 

@@ -124,7 +124,8 @@ cockpit-spawn-card-sum-remote = remote
 cockpit-spawn-card-sum-host-home = Home von { $host }
 cockpit-spawn-card-sum-default = Standard (Home)
 workspace-favorites-header = Favoriten
-workspace-favorites-empty = Noch keine Favoriten — ★ einen Host oder ein Projekt in der Seitenleiste
+workspace-favorites-empty = Noch keine Host-Favoriten — ★ einen Host in der Seitenleiste
+workspace-favorites-store-protected = Favoriten konnten nicht gelesen oder gespeichert werden — Änderungen sind zum Schutz der bestehenden Datei deaktiviert
 workspace-favorites-add-header = Zu Favoriten hinzufügen
 workspace-favorite-unavailable = nicht verfügbar — zum Entfernen klicken
 

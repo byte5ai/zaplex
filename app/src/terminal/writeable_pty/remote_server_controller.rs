@@ -529,7 +529,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         let transport = SshTransport::new(socket_path, self.auth_context.clone());
         let auth_context = self.auth_context.clone();
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.connect_session(session_id, transport, auth_context, host_label, ctx);
+            mgr.connect_session(session_id, transport, auth_context, host_label, None, ctx);
         });
     }
 }

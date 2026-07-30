@@ -1914,6 +1914,7 @@ impl CockpitPaneView {
                                 VerbKind::Constructive,
                                 appearance,
                                 WorkspaceAction::OpenSpawnCard {
+                                    registry_node_id: None,
                                     host_id: host_id_owned,
                                     host: host_owned,
                                     project: Some(PathBuf::from(root_owned)),

@@ -480,12 +480,29 @@ pub struct ConnectedDaemon {
     /// host even when labels collide — the correct key for resolving *which*
     /// daemon a guardrail Stop/Kill or attach targets.
     pub host_id: String,
+    /// Stable SSH-registry node that established this daemon connection.
+    ///
+    /// This is the only safe bridge from the live daemon inventory back to the
+    /// registered host navigator. It is absent for legacy/classic connections
+    /// that were not opened from a registry node.
+    pub registry_node_id: Option<String>,
     /// Live client handle — call e.g. `list_agent_sessions()` on it.
     pub client: Arc<RemoteServerClient>,
     /// Capabilities the daemon advertised at handshake. Gate feature-specific
     /// requests on this (e.g. `agent-inventory`) so an old daemon is skipped
     /// rather than erroring.
     pub features: Vec<String>,
+}
+
+fn preferred_registry_node_id(
+    existing: Option<&str>,
+    candidate: Option<&str>,
+) -> Option<String> {
+    match (existing, candidate) {
+        (None, None) => None,
+        (Some(node_id), None) | (None, Some(node_id)) => Some(node_id.to_string()),
+        (Some(existing), Some(candidate)) => Some(existing.min(candidate).to_string()),
+    }
 }
 
 /// Singleton model that manages connections to `remote_server` processes on
@@ -524,6 +541,10 @@ pub struct RemoteServerManager {
     /// `Connected → Reconnecting → Connected` cycle (the reconnect path only
     /// carries the `HostId`); cleared on `deregister_session`.
     session_host_labels: HashMap<SessionId, String>,
+    /// Stable SSH-registry node used to establish each session. Kept outside
+    /// `RemoteSessionState` so it survives reconnects and can join live daemon
+    /// inventory to the registry without comparing display labels.
+    session_registry_node_ids: HashMap<SessionId, String>,
     /// Sessions backed by a persistent daemon (native remote-session layer). For
     /// these, a transport-child exit on a network blip does NOT mean the remote
     /// session died — the daemon keeps it running — so `mark_session_disconnected`
@@ -549,6 +570,7 @@ impl RemoteServerManager {
             auth_context: None,
             session_platforms: HashMap::new(),
             session_host_labels: HashMap::new(),
+            session_registry_node_ids: HashMap::new(),
             persistent_session_ids: HashSet::new(),
         }
     }
@@ -781,6 +803,7 @@ impl RemoteServerManager {
         transport: T,
         auth_context: Arc<RemoteServerAuthContext>,
         host_label: String,
+        registry_node_id: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) where
         T: RemoteTransport + 'static,
@@ -790,6 +813,14 @@ impl RemoteServerManager {
         // the cross-host Agent-Inventory fold.
         if !host_label.is_empty() {
             self.session_host_labels.insert(session_id, host_label);
+        }
+        match registry_node_id {
+            Some(node_id) => {
+                self.session_registry_node_ids.insert(session_id, node_id);
+            }
+            None => {
+                self.session_registry_node_ids.remove(&session_id);
+            }
         }
 
         #[cfg(target_family = "wasm")]
@@ -1082,6 +1113,7 @@ impl RemoteServerManager {
         self.session_bootstrap_info.remove(&session_id);
         self.session_platforms.remove(&session_id);
         self.session_host_labels.remove(&session_id);
+        self.session_registry_node_ids.remove(&session_id);
         self.persistent_session_ids.remove(&session_id);
 
         // Remove the session entry. Dropping the `RemoteSessionState`
@@ -1147,9 +1179,8 @@ impl RemoteServerManager {
     /// per host is both sufficient and correct. Only `Connected` sessions are
     /// included; connecting/reconnecting/disconnected ones contribute nothing.
     pub fn connected_daemons(&self) -> Vec<ConnectedDaemon> {
-        let mut seen: HashSet<&HostId> = HashSet::new();
-        let mut out = Vec::new();
-        for state in self.sessions.values() {
+        let mut by_host: HashMap<&HostId, ConnectedDaemon> = HashMap::new();
+        for (session_id, state) in &self.sessions {
             if let RemoteSessionState::Connected {
                 client,
                 host_id,
@@ -1158,16 +1189,31 @@ impl RemoteServerManager {
                 ..
             } = state
             {
-                if seen.insert(host_id) {
-                    out.push(ConnectedDaemon {
-                        host_label: host_label.clone(),
-                        host_id: host_id.as_str().to_string(),
-                        client: Arc::clone(client),
-                        features: features.clone(),
-                    });
+                let registry_node_id = self.session_registry_node_ids.get(session_id).cloned();
+                match by_host.get_mut(host_id) {
+                    Some(existing) => {
+                        existing.registry_node_id = preferred_registry_node_id(
+                            existing.registry_node_id.as_deref(),
+                            registry_node_id.as_deref(),
+                        );
+                    }
+                    None => {
+                        by_host.insert(
+                            host_id,
+                            ConnectedDaemon {
+                                host_label: host_label.clone(),
+                                host_id: host_id.as_str().to_string(),
+                                registry_node_id,
+                                client: Arc::clone(client),
+                                features: features.clone(),
+                            },
+                        );
+                    }
                 }
             }
         }
+        let mut out: Vec<ConnectedDaemon> = by_host.into_values().collect();
+        out.sort_by(|a, b| a.host_id.cmp(&b.host_id));
         out
     }
 

@@ -42,7 +42,7 @@ pub use conductor::{
 pub use favorites::{Favorite, FavoriteKind, Favorites};
 pub use fleet::{
     build_fleet_tree, fold_inventory, merge_registered_hosts, sessions_of_account, AccountSession,
-    AgentSession, FleetTree, HostNode, HostSessions, ProjectNode, RemoteHost,
+    AgentSession, FleetTree, HostNode, HostSessions, ProjectNode, RegisteredHost, RemoteHost,
 };
 pub use format::{
     binding_window, context_fill, context_window, format_cost, format_relative, format_reset,

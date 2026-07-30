@@ -20,8 +20,8 @@ pub struct ResolvedProject {
     /// repo it belongs to. Anything that acts on the files the session sees
     /// (review, a launch scoped to where it works) must use this.
     pub root: String,
-    /// Working-tree root of the **repo** `root` belongs to: the main checkout for
-    /// a linked worktree, `root` itself otherwise.
+    /// Canonical working-tree root of the **repo** `root` belongs to: the main
+    /// checkout for a linked worktree, the canonical `root` itself otherwise.
     ///
     /// The grouping key for the inventory. Three worktrees of one repo are three
     /// `root`s but one `repo_root`, so they read as one project with three
@@ -48,11 +48,14 @@ pub struct ResolvedProject {
 /// root's `.git/config` `[remote "origin"] url`; on failure it falls back to
 /// the root directory's basename.
 pub fn resolve_project(cwd: &Path) -> ResolvedProject {
-    let root_path = git_root(cwd).unwrap_or(cwd);
+    let discovered_root = git_root(cwd);
+    let root_path = discovered_root.unwrap_or(cwd);
     let root = normalize(root_path);
-    // The repo this tree belongs to. A linked worktree points at the main
-    // checkout; everything else is its own repo.
+    // The repo this tree belongs to. Both the primary checkout and linked
+    // worktrees use the canonical main-checkout identity, so accessing the same
+    // repo through a mount alias or symlink cannot split one project in two.
     let repo_root = main_worktree_root(root_path)
+        .or_else(|| discovered_root.and_then(|_| root_path.canonicalize().ok()))
         .map(|p| normalize(&p))
         .unwrap_or_else(|| root.clone());
     // Named after the REPO, not this tree: `origin` is recorded once, in the

@@ -38,6 +38,26 @@ const CARD_SPACING: f32 = 4.0;
 const HEAT_BAR_WIDTH: f32 = 90.0;
 const HEAT_BAR_HEIGHT: f32 = 6.0;
 
+fn open_registered_host_action(node_id: &str) -> WorkspaceAction {
+    WorkspaceAction::OpenSshTerminalByNode {
+        node_id: node_id.to_string(),
+    }
+}
+
+fn toggle_host_favorite_action(node_id: &str, label: &str) -> WorkspaceAction {
+    WorkspaceAction::ToggleFavorite {
+        kind: FavoriteKind::Host,
+        target: node_id.to_string(),
+        label: label.to_string(),
+    }
+}
+
+fn manage_registered_host_action(node_id: &str) -> WorkspaceAction {
+    WorkspaceAction::ManageSshHost {
+        node_id: node_id.to_string(),
+    }
+}
+
 /// Events the sidebar emits toward the workspace (via the left panel).
 pub enum CockpitPanelEvent {
     /// Open the cockpit pane in the main area: `None` = the fleet dashboard
@@ -69,8 +89,6 @@ pub struct CockpitPanel {
     /// `node_id`. Opens the SSH-manager editor for the host (design §10 folds
     /// the SSH-manager add/edit function onto the host nodes).
     conductor_host_manage_states: HashMap<String, MouseStateHandle>,
-    /// Hover/click state per session ★ (favorite toggle), keyed by [`session_key`].
-    conductor_row_star_states: HashMap<String, MouseStateHandle>,
     /// Hover state of the „VERBINDUNGEN" zone-header gear (opens the SSH manager,
     /// which owns host add/edit — spec v3 §S1/§S2).
     zone_gear_btn: MouseStateHandle,
@@ -150,7 +168,6 @@ impl CockpitPanel {
             conductor_host_states: HashMap::new(),
             conductor_host_star_states: HashMap::new(),
             conductor_host_manage_states: HashMap::new(),
-            conductor_row_star_states: HashMap::new(),
             zone_gear_btn: MouseStateHandle::default(),
             fleet_total_btn: MouseStateHandle::default(),
             rescan_btn: MouseStateHandle::default(),
@@ -177,10 +194,8 @@ impl CockpitPanel {
             })
             .collect();
         self.conductor_row_states.retain(|k, _| live.contains(k));
-        self.conductor_row_star_states.retain(|k, _| live.contains(k));
         for key in live {
-            self.conductor_row_states.entry(key.clone()).or_default();
-            self.conductor_row_star_states.entry(key).or_default();
+            self.conductor_row_states.entry(key).or_default();
         }
         // Card hover handles, keyed by account `key` (one stable handle per card
         // across renders); drop handles of accounts that disappeared.
@@ -621,6 +636,7 @@ impl CockpitPanel {
             // hosts get the same geometry, hover-less, so the column aligns.
             let label_el: Box<dyn Element> = match host.registry_node_id.clone() {
                 Some(node_id) => {
+                    let open_action = open_registered_host_action(&node_id);
                     let handle = self
                         .conductor_host_states
                         .get(&node_id)
@@ -631,9 +647,7 @@ impl CockpitPanel {
                     })
                     .with_cursor(warpui::platform::Cursor::PointingHand)
                     .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(WorkspaceAction::OpenSshTerminalByNode {
-                            node_id: node_id.clone(),
-                        })
+                        ctx.dispatch_typed_action(open_action.clone())
                     })
                     .finish()
                 }
@@ -651,11 +665,7 @@ impl CockpitPanel {
                     let is_fav = favorites
                         .iter()
                         .any(|f| f.same_target(FavoriteKind::Host, &node_id));
-                    let action = WorkspaceAction::ToggleFavorite {
-                        kind: FavoriteKind::Host,
-                        target: node_id.clone(),
-                        label: host.host.clone(),
-                    };
+                    let action = toggle_host_favorite_action(&node_id, &host.host);
                     header_row = header_row
                         .with_child(Self::star_button(star_state, is_fav, appearance, action));
                 }
@@ -664,9 +674,7 @@ impl CockpitPanel {
                 if let Some(manage_state) =
                     self.conductor_host_manage_states.get(&node_id).cloned()
                 {
-                    let action = WorkspaceAction::ManageSshHost {
-                        node_id: node_id.clone(),
-                    };
+                    let action = manage_registered_host_action(&node_id);
                     header_row = header_row.with_child(icon_verb_button_tooltip(
                         manage_state,
                         icons::Icon::DotsHorizontal,
@@ -724,7 +732,6 @@ impl CockpitPanel {
                                 host.host_id.as_deref(),
                                 session,
                                 is_local,
-                                favorites,
                                 appearance,
                             ))
                             .with_padding_left(22.0)
@@ -776,16 +783,14 @@ impl CockpitPanel {
     /// a **fixed-width right column** so it never shifts as the branch label grows
     /// (spec §2.3). Status is the leading shape-coded dot only; the branch is the
     /// sole identity (the project is carried by the group header above it, so the
-    /// row never repeats it). The whole line attaches on click (local + remote);
-    /// the ★ favourite trails after the metric column so it never pushes the
-    /// metrics around. Hover recolors, never re-lays-out (spec §2.7).
+    /// row never repeats it). The whole line attaches on click (local + remote).
+    /// Hover recolors, never re-lays-out (spec §2.7).
     fn render_conductor_row(
         &self,
         host_label: &str,
         host_id: Option<&str>,
         session: &SessionSnapshot,
         is_local: bool,
-        favorites: &[Favorite],
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -796,7 +801,6 @@ impl CockpitPanel {
         // Identity = branch / worktree only, never the model and never the
         // project (the group header carries the project) — spec §2.2.
         let label = session_identity_label(session, "");
-        let fav_label = label.clone();
 
         // The glance line: colour dot · branch (flex) · fixed metric column.
         let glance = Flex::row()
@@ -815,7 +819,7 @@ impl CockpitPanel {
         // The whole glance line attaches on click — BOTH local and remote (remote
         // in-place adopt is wired via `attach_fleet_session`).
         let key = session_key(is_local, host_id, session);
-        let glance_el = match self.conductor_row_states.get(&key).cloned() {
+        match self.conductor_row_states.get(&key).cloned() {
             Some(state) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
@@ -837,34 +841,7 @@ impl CockpitPanel {
                 .finish()
             }
             None => hover_row(glance, false, appearance),
-        };
-
-        // The one trailing affordance: the ★ favourite (design §10). Review + the
-        // model levers are a pane concern — keeping them off the glance rows is
-        // what makes the list read as a calm column. The favourite target is the
-        // complete `session_key` (copied ids can also collide between accounts).
-        let star = self.conductor_row_star_states.get(&key).cloned().map(|st| {
-            let is_fav = favorites
-                .iter()
-                .any(|f| f.same_target(FavoriteKind::Session, &key));
-            let action = WorkspaceAction::ToggleFavorite {
-                kind: FavoriteKind::Session,
-                target: key.clone(),
-                label: fav_label,
-            };
-            Self::star_button(st, is_fav, appearance, action)
-        });
-
-        let Some(star) = star else {
-            return glance_el;
-        };
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(8.0)
-            .with_child(Shrinkable::new(1.0, glance_el).finish())
-            .with_child(star)
-            .with_main_axis_size(MainAxisSize::Max)
-            .finish()
+        }
     }
 
     /// The fixed-width **right metric column** of a session line:
@@ -1259,5 +1236,30 @@ impl TypedActionView for CockpitPanel {
                 CockpitModel::handle(ctx).update(ctx, |model, ctx| model.rescan(ctx));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_node_exposes_primary_actions() {
+        assert!(matches!(
+            open_registered_host_action("node-dev"),
+            WorkspaceAction::OpenSshTerminalByNode { node_id } if node_id == "node-dev"
+        ));
+        assert!(matches!(
+            toggle_host_favorite_action("node-dev", "devhost"),
+            WorkspaceAction::ToggleFavorite {
+                kind: FavoriteKind::Host,
+                target,
+                label,
+            } if target == "node-dev" && label == "devhost"
+        ));
+        assert!(matches!(
+            manage_registered_host_action("node-dev"),
+            WorkspaceAction::ManageSshHost { node_id } if node_id == "node-dev"
+        ));
     }
 }

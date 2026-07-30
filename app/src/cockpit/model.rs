@@ -24,7 +24,8 @@ use watcher::HomeDirectoryWatcher;
 use zaplex_cockpit::HostNode;
 use zaplex_cockpit::{
     apply_oauth_usage, build_snapshot, fold_inventory, session_key, AccountOverrides,
-    CockpitSnapshot, FleetTree, PricingTable, Provider, RemoteHost, ScanHealth, SessionSnapshot,
+    CockpitSnapshot, FleetTree, PricingTable, Provider, RegisteredHost, RemoteHost, ScanHealth,
+    SessionSnapshot,
 };
 // Cross-host daemon fold is a native-only concern: the `agent_session` module
 // (and the whole remote-daemon layer it lives in) is `#[cfg(not(wasm))]`, and a
@@ -283,6 +284,16 @@ impl CockpitModel {
                 // `proto_to_snapshot`) is `#[cfg(not(wasm))]`. On WASM there are
                 // no daemon connections, so `remotes` is empty and the fold below
                 // degrades to the local tree alone.
+                let live_hosts_by_registry_node: HashMap<String, String> = inputs
+                    .daemons
+                    .iter()
+                    .filter_map(|daemon| {
+                        daemon
+                            .registry_node_id
+                            .clone()
+                            .map(|node_id| (node_id, daemon.host_id.clone()))
+                    })
+                    .collect();
                 #[cfg(not(target_family = "wasm"))]
                 let remotes: Vec<(RemoteHost, Vec<SessionSnapshot>)> = {
                     let mut remotes = Vec::with_capacity(inputs.daemons.len());
@@ -334,19 +345,25 @@ impl CockpitModel {
                 let local_label = inputs.local_label.clone();
                 let mut inventory = fold_inventory(inputs.local_label, local, remotes);
 
-                // Merge the SSH registry so the Conductor is the FULL host
-                // navigator: every registered SSH host is a root, even with no
-                // live agent (`build_fleet_tree` drops agentless hosts, so re-add
-                // them here). Dedup by display label — a connected host is already
-                // present via its sessions. A failed registry read degrades to no
-                // merge, never a crash.
-                let registered: Vec<(String, String)> = warp_ssh_manager::with_conn(|c| {
+                // Merge the SSH registry so the Conductor is the full host
+                // navigator. Every registered SSH host is a root, even offline;
+                // a live daemon enriches that root only through the registry node
+                // that established its connection. Display labels never join
+                // identities. A failed registry read degrades to no merge.
+                let registered: Vec<RegisteredHost> = warp_ssh_manager::with_conn(|c| {
                     Ok(warp_ssh_manager::SshRepository::list_nodes(c)?)
                 })
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|n| matches!(n.kind, warp_ssh_manager::types::NodeKind::Server))
-                .map(|n| (n.id, n.name))
+                .map(|n| {
+                    let live_host_id = live_hosts_by_registry_node.get(&n.id).cloned();
+                    RegisteredHost {
+                        node_id: n.id,
+                        label: n.name,
+                        live_host_id,
+                    }
+                })
                 .collect();
                 zaplex_cockpit::merge_registered_hosts(&mut inventory, &registered);
 

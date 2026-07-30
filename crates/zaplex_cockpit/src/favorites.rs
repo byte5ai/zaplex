@@ -91,6 +91,15 @@ impl Favorites {
         self.items.len()
     }
 
+    /// Favorite hosts rendered in the "+" menu. This is a read-only projection:
+    /// project, session, launch, and flow records remain in the ordered store
+    /// even though they no longer appear as flat menu rows.
+    pub fn host_menu_items(&self) -> impl Iterator<Item = &Favorite> {
+        self.items
+            .iter()
+            .filter(|favorite| favorite.kind == FavoriteKind::Host)
+    }
+
     /// Whether a favorite with this `(kind, target)` is already curated.
     pub fn contains(&self, kind: FavoriteKind, target: &str) -> bool {
         self.items.iter().any(|f| f.same_target(kind, target))
@@ -236,5 +245,60 @@ mod tests {
         let favs: Favorites = serde_json::from_str(json).unwrap();
         assert_eq!(favs.items[0].label, "");
         assert_eq!(favs.items[0].display_label(), "n1");
+    }
+
+    #[test]
+    fn project_session_and_launch_favorites_survive_menu_migration() {
+        let mut favorites = Favorites::default();
+        favorites.add(Favorite::new(FavoriteKind::Host, "host-1", "devhost"));
+        favorites.add(Favorite::new(
+            FavoriteKind::Project,
+            "project-1",
+            "zaplex",
+        ));
+        favorites.add(Favorite::new(
+            FavoriteKind::Session,
+            "session-1",
+            "review",
+        ));
+        favorites.add(Favorite::new(
+            FavoriteKind::Launch,
+            "launch-1",
+            "Release",
+        ));
+        let before = favorites.clone();
+
+        let host_rows: Vec<&Favorite> = favorites.host_menu_items().collect();
+
+        assert_eq!(host_rows.len(), 1);
+        assert_eq!(host_rows[0].kind, FavoriteKind::Host);
+        assert_eq!(
+            favorites, before,
+            "filtering the host menu must not mutate or discard hidden favorite records"
+        );
+        let round_trip: Favorites =
+            serde_json::from_str(&serde_json::to_string(&favorites).unwrap()).unwrap();
+        assert_eq!(round_trip, before);
+    }
+
+    #[test]
+    fn menu_lists_only_favorite_hosts() {
+        let favorites = Favorites {
+            items: vec![
+                Favorite::new(FavoriteKind::Project, "project", "Project"),
+                Favorite::new(FavoriteKind::Host, "host-a", "A"),
+                Favorite::new(FavoriteKind::Session, "session", "Session"),
+                Favorite::new(FavoriteKind::Host, "host-b", "B"),
+                Favorite::new(FavoriteKind::Launch, "launch", "Launch"),
+            ],
+        };
+
+        let host_targets: Vec<&str> = favorites
+            .host_menu_items()
+            .map(|favorite| favorite.target.as_str())
+            .collect();
+
+        assert_eq!(host_targets, vec!["host-a", "host-b"]);
+        assert_eq!(favorites.items.len(), 5, "hidden records remain persisted");
     }
 }

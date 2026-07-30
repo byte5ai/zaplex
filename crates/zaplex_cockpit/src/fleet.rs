@@ -18,7 +18,7 @@
 //! the daemon) and rendering the tree build on top.
 
 use crate::types::{SessionSnapshot, SessionState};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 /// An agent-session in the inventory. Alias for the snapshot the spine already
 /// produces — the leaf of the Host ▸ Project ▸ AgentSession tree.
@@ -61,6 +61,20 @@ pub struct RemoteHost {
     /// Stable, opaque per-daemon id (from the daemon's `InitializeResponse`).
     /// Unique per connected host even when labels collide.
     pub host_id: String,
+}
+
+/// One SSH-registry host and its optional live daemon association.
+///
+/// `node_id` and `label` come from the registry, which remains the source of
+/// truth for navigation. `live_host_id` is present only when a currently
+/// connected daemon session was opened through this exact registry node. It is
+/// the sole join key between the registry and live inventory; display labels
+/// are never identities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredHost {
+    pub node_id: String,
+    pub label: String,
+    pub live_host_id: Option<String>,
 }
 
 /// A project grouping within a host, with its own needs-me tally. Sessions are
@@ -128,12 +142,13 @@ fn is_waiting(s: &SessionSnapshot) -> bool {
 /// - projects within a host by needs-me descending, then name;
 /// - sessions within a project: **waiting first**, then most-recent activity.
 ///
-/// Empty hosts (no sessions) are dropped — a conductor lists live work, not
-/// idle machines (host discovery is a separate surface).
+/// Empty remote contributions are dropped. The local host is retained even
+/// without sessions because it is a root of the navigation spine, not merely a
+/// live-work bucket.
 pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
     let mut hosts: Vec<HostNode> = inputs
         .into_iter()
-        .filter(|h| !h.sessions.is_empty())
+        .filter(|h| h.is_local || !h.sessions.is_empty())
         .map(|h| {
             // Group by the REPO, not by each session's own tree (stable order
             // via BTreeMap on the key). Three worktrees of one repo are one
@@ -194,13 +209,74 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
             }
         })
         .collect();
+    sort_hosts(&mut hosts);
+    let needs_me = hosts.iter().map(|h| h.needs_me).sum();
+    FleetTree { hosts, needs_me }
+}
+
+fn sort_hosts(hosts: &mut [HostNode]) {
     hosts.sort_by(|a, b| {
         b.needs_me
             .cmp(&a.needs_me)
             .then_with(|| a.host.cmp(&b.host))
+            .then_with(|| b.is_local.cmp(&a.is_local))
+            .then_with(|| a.host_id.cmp(&b.host_id))
+            .then_with(|| a.registry_node_id.cmp(&b.registry_node_id))
     });
-    let needs_me = hosts.iter().map(|h| h.needs_me).sum();
-    FleetTree { hosts, needs_me }
+}
+
+/// Merge registered SSH hosts into the fleet by stable identity.
+///
+/// The registry is authoritative: every registered host is rendered exactly
+/// once, including offline hosts. A live daemon enriches its registered root
+/// only when [`RegisteredHost::live_host_id`] equals the daemon's stable
+/// [`HostNode::host_id`]. Labels are display-only and never participate in the
+/// join. Re-running with a smaller registry removes stale registry-only roots
+/// and clears stale routing ids from live hosts.
+pub fn merge_registered_hosts(tree: &mut FleetTree, registered: &[RegisteredHost]) {
+    // Start from live/local roots. Registry-only roots from a previous merge are
+    // reconstructed below from the current registry, which makes deletion
+    // converge immediately and prevents stale node ids from remaining routable.
+    tree.hosts.retain(|host| {
+        host.is_local
+            || host.host_id.is_some()
+            || !host.projects.is_empty()
+            || host.registry_node_id.is_none()
+    });
+    for host in &mut tree.hosts {
+        host.registry_node_id = None;
+    }
+
+    let mut registered = registered.to_vec();
+    registered.sort_by(|a, b| {
+        a.label
+            .cmp(&b.label)
+            .then_with(|| a.node_id.cmp(&b.node_id))
+    });
+
+    for registered_host in registered {
+        if let Some(live_host_id) = registered_host.live_host_id.as_deref() {
+            if let Some(live) = tree.hosts.iter_mut().find(|host| {
+                host.host_id.as_deref() == Some(live_host_id)
+                    && host.registry_node_id.is_none()
+            }) {
+                live.host = registered_host.label;
+                live.registry_node_id = Some(registered_host.node_id);
+                continue;
+            }
+        }
+
+        tree.hosts.push(HostNode {
+            host: registered_host.label,
+            is_local: false,
+            host_id: None,
+            registry_node_id: Some(registered_host.node_id),
+            needs_me: 0,
+            projects: Vec::new(),
+        });
+    }
+
+    sort_hosts(&mut tree.hosts);
 }
 
 /// Fold this machine's local sessions plus every connected daemon's
@@ -228,101 +304,6 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
 ///
 /// Pure — no IO, no remote calls. The live fetch that produces `remotes` lives
 /// in the app's `CockpitModel`.
-/// Merge registered SSH hosts into the tree as roots so the Conductor is the
-/// FULL host navigator — every registered host appears even with no live agent.
-/// `registered` is `(node_id, display_name)` pairs from the SSH registry
-/// (`NodeKind::Server`). The display label is the only bridge between the SSH
-/// registry and a live daemon host (which is namespaced by its daemon `HostId`,
-/// not the registry `node_id`) — so this function is careful about **when that
-/// bridge is trustworthy**:
-///
-/// - **Unambiguous label** (exactly one registry entry *and* exactly one live
-///   host carry it) **and that host is still unbound**: the live host keeps its
-///   sessions/`needs_me` and is **back-filled** with the registry `node_id`, so a
-///   registered host that happens to have live agents can still be opened /
-///   favorited / managed (it would otherwise carry `registry_node_id: None` and
-///   lose those actions). A host already holding some *other* entry's id is left
-///   alone and this entry is appended instead — re-pointing it would be the very
-///   mis-binding this function exists to avoid.
-/// - **Ambiguous label**, or no live host with it: the entry is appended as its
-///   own root carrying its own `node_id` (`needs_me: 0`, so it sorts after the
-///   active hosts). Never bound by guesswork — a wrong binding would point the
-///   host row's open/manage/★ at someone else's SSH entry.
-///
-/// Consequence worth knowing: two registry entries sharing a label appear as two
-/// identical-looking roots. That is honest — the data genuinely cannot tell them
-/// apart — and strictly better than the previous behaviour, which showed only the
-/// first and silently dropped the rest.
-///
-/// `needs_me` totals are unchanged (appended hosts contribute zero).
-///
-/// Idempotent: an entry already present in the tree (bound or standing as its own
-/// root) is skipped, so merging twice yields the same tree as merging once.
-pub fn merge_registered_hosts(tree: &mut FleetTree, registered: &[(String, String)]) {
-    // How often each label occurs on either side. A label shared by several
-    // registry entries — or by several live hosts — is **not a usable bridge**:
-    // nothing in the data says which registry entry a given daemon belongs to.
-    // Binding the first arbitrary match would point the host row's
-    // open/manage/★ at the WRONG SSH entry, so ambiguous labels are never bound.
-    let mut registry_uses: HashMap<&str, usize> = HashMap::new();
-    for (_, name) in registered {
-        *registry_uses.entry(name.as_str()).or_insert(0) += 1;
-    }
-    // Counted before the loop pushes anything, so appended registry-only roots
-    // can't be mistaken for live hosts by a later iteration.
-    let mut live_uses: HashMap<String, usize> = HashMap::new();
-    for h in tree.hosts.iter() {
-        *live_uses.entry(h.host.clone()).or_insert(0) += 1;
-    }
-
-    for (node_id, name) in registered {
-        // Idempotence: this exact entry is already somewhere in the tree, bound to
-        // a live host or standing as its own root. A previous merge placed it, so
-        // re-running must leave it alone rather than append a second copy.
-        if tree
-            .hosts
-            .iter()
-            .any(|h| h.registry_node_id.as_deref() == Some(node_id.as_str()))
-        {
-            continue;
-        }
-
-        let unambiguous = registry_uses.get(name.as_str()).copied().unwrap_or(0) == 1
-            && live_uses.get(name.as_str()).copied().unwrap_or(0) == 1;
-        if unambiguous {
-            // Exactly one registry entry and exactly one live host share this
-            // label: the bridge is sound. Give the live host its registry identity
-            // so host-row actions work. Only an unbound host is a candidate — one
-            // that already carries a different entry's id must not be re-pointed.
-            if let Some(existing) = tree
-                .hosts
-                .iter_mut()
-                .find(|h| &h.host == name && h.registry_node_id.is_none())
-            {
-                existing.registry_node_id = Some(node_id.clone());
-                continue;
-            }
-        }
-        // Either the label is ambiguous, or there is no live host to bind to.
-        // Append this entry as its own root: it keeps its OWN node_id (so its row
-        // acts on the right SSH entry) and stays visible.
-        //
-        // This is what the previous implementation got wrong: it looked up the
-        // label without the `registry_node_id.is_none()` guard, so a second
-        // registry entry with the same name found the root the FIRST one had just
-        // created, saw it was already bound, and `continue`d — silently dropping
-        // that host from the Conductor entirely.
-        tree.hosts.push(HostNode {
-            host: name.clone(),
-            is_local: false,
-            host_id: None,
-            registry_node_id: Some(node_id.clone()),
-            needs_me: 0,
-            projects: Vec::new(),
-        });
-    }
-}
-
 pub fn fold_inventory(
     local_label: impl Into<String>,
     local: Vec<SessionSnapshot>,

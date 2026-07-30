@@ -841,11 +841,14 @@ pub enum WorkspaceAction {
     /// opened from a Conductor host/project header `+`; both `None` opens it
     /// unscoped (the global "New Agent" entry).
     OpenSpawnCard {
+        /// Stable SSH-registry node selected by a favorite or registry-backed
+        /// navigator action. This is already in the spawn card's identity space
+        /// and therefore takes precedence over daemon-id translation.
+        registry_node_id: Option<String>,
         /// Stable id of the pre-selected host (`None` = local / unscoped). This
-        /// is the authoritative scoping key: two connected hosts can share a
-        /// display label, so `host` (the label) alone can resolve to the wrong
-        /// node. When present, the card resolves the scoped host by this id and
-        /// only falls back to `host` (name) when it is `None`.
+        /// is the live daemon identity. It is translated to a registry node at
+        /// the spawn-card boundary. Two connected hosts can share a display
+        /// label, so `host` alone is never authoritative.
         host_id: Option<String>,
         /// Pre-selected host label (`None` = local / unscoped). Used for display
         /// and as the resolution fallback when `host_id` is absent.

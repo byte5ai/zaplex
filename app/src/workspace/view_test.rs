@@ -775,6 +775,92 @@ fn reopen_closed_session_menu_item(
     }
 }
 
+fn favorite_host_submenu() -> MenuItem<WorkspaceAction> {
+    super::favorite_host_menu_item(
+        &zaplex_cockpit::Favorite::new(
+            zaplex_cockpit::FavoriteKind::Host,
+            "node-dev",
+            "devhost",
+        ),
+        &[("node-dev".to_string(), "devhost".to_string())],
+    )
+}
+
+#[test]
+fn submenu_offers_terminal_and_new_agent() {
+    let MenuItem::Submenu { menu, .. } = favorite_host_submenu() else {
+        panic!("a favorite host must open a right-hand submenu");
+    };
+    assert_eq!(menu.items().len(), 2);
+    assert!(matches!(
+        menu.items()[0].item_on_select_action(),
+        Some(WorkspaceAction::OpenSshTerminalByNode { node_id }) if node_id == "node-dev"
+    ));
+    assert!(matches!(
+        menu.items()[1].item_on_select_action(),
+        Some(WorkspaceAction::OpenSpawnCard { .. })
+    ));
+}
+
+#[test]
+fn new_agent_opens_spawn_card() {
+    let MenuItem::Submenu { menu, .. } = favorite_host_submenu() else {
+        panic!("a favorite host must open a right-hand submenu");
+    };
+    assert!(matches!(
+        menu.items()[1].item_on_select_action(),
+        Some(WorkspaceAction::OpenSpawnCard {
+            registry_node_id: Some(node_id),
+            host_id: None,
+            host: Some(host),
+            project: None,
+        }) if node_id == "node-dev" && host == "devhost"
+    ));
+}
+
+#[test]
+fn add_favorite_menu_lists_only_unfavorited_registered_hosts() {
+    let favorites = vec![zaplex_cockpit::Favorite::new(
+        zaplex_cockpit::FavoriteKind::Host,
+        "node-a",
+        "alpha",
+    )];
+    let hosts = vec![
+        ("node-b".to_string(), "beta".to_string()),
+        ("node-a".to_string(), "alpha".to_string()),
+    ];
+
+    let Some(MenuItem::Submenu { menu, .. }) =
+        super::add_favorite_hosts_menu_item(&hosts, &favorites)
+    else {
+        panic!("an unfavorited registered host must be available for curation");
+    };
+    assert_eq!(menu.items().len(), 1);
+    assert!(matches!(
+        menu.items()[0].item_on_select_action(),
+        Some(WorkspaceAction::ToggleFavorite {
+            kind: zaplex_cockpit::FavoriteKind::Host,
+            target,
+            label,
+        }) if target == "node-b" && label == "beta"
+    ));
+}
+
+#[test]
+fn sidebar_has_one_host_project_session_tree() {
+    assert_eq!(
+        super::primary_host_navigation_views(true),
+        vec![ToolPanelView::Cockpit]
+    );
+}
+
+#[test]
+fn parallel_roots_are_absent() {
+    let views = super::primary_host_navigation_views(true);
+    assert!(!views.contains(&ToolPanelView::SshManager));
+    assert_eq!(views.len(), 1);
+}
+
 #[test]
 fn test_tab_renaming_editor_selections() {
     App::test((), |mut app| async move {
@@ -2714,8 +2800,7 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
 /// card resolves against SSH `node.id`s. `node_for_daemon_host_in` must invert
 /// the live daemon↔node association so the scoped launch preselects the right
 /// SSH node — even when two hosts share a display label — and must yield `None`
-/// for a daemon that no longer maps to a live node (so the caller falls back to
-/// name matching rather than silently launching on Local).
+/// for a daemon that no longer maps to a live node.
 #[cfg(all(unix, feature = "local_tty"))]
 #[test]
 fn node_for_daemon_host_in_translates_daemon_id_to_ssh_node() {
@@ -2728,22 +2813,49 @@ fn node_for_daemon_host_in_translates_daemon_id_to_ssh_node() {
             ("node-2", "daemon-b".to_string()),
         ]
     };
+    let registered = vec!["node-1".to_string(), "node-2".to_string()];
 
     assert_eq!(
-        super::node_for_daemon_host_in("daemon-b", assocs()),
+        super::node_for_daemon_host_in("daemon-b", assocs(), &registered),
         Some("node-2".to_string()),
         "daemon-b must translate to its own SSH node, not the first same-named one",
     );
     assert_eq!(
-        super::node_for_daemon_host_in("daemon-a", assocs()),
+        super::node_for_daemon_host_in("daemon-a", assocs(), &registered),
         Some("node-1".to_string()),
     );
 
-    // An untranslatable daemon id (session since dropped) yields None, so the
-    // caller keeps the host name and resolution falls back to name — never Local.
+    // An untranslatable daemon id (session since dropped) yields None.
     assert_eq!(
-        super::node_for_daemon_host_in("daemon-gone", assocs()),
+        super::node_for_daemon_host_in("daemon-gone", assocs(), &registered),
         None
+    );
+
+    // A stale manager association is no longer routable once its registered
+    // host has been removed.
+    assert_eq!(
+        super::node_for_daemon_host_in(
+            "daemon-b",
+            assocs(),
+            &["node-1".to_string()],
+        ),
+        None
+    );
+}
+
+#[test]
+fn unresolved_daemon_scope_never_falls_back_to_display_name() {
+    let (node_id, host_name) = super::reconcile_spawn_host_scope(
+        None,
+        Some("daemon-gone"),
+        None,
+        Some("devbox".to_string()),
+    );
+
+    assert_eq!(node_id, None);
+    assert_eq!(
+        host_name, None,
+        "a stale daemon association must not preselect a different same-named host"
     );
 }
 
