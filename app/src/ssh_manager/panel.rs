@@ -826,7 +826,10 @@ impl SshManagerPanel {
         let credential_labels_by_host = warp_ssh_manager::with_conn(|conn| {
             let credentials = SshRepository::list_onekey_credentials(conn)?
                 .into_iter()
-                .map(|credential| (credential.id, credential.display_label()))
+                .map(|credential| {
+                    let label = credential.display_label();
+                    (credential.id, label)
+                })
                 .collect::<HashMap<_, _>>();
             let mut labels_by_host = HashMap::new();
             for server_id in &descendant_server_ids {
@@ -2810,7 +2813,7 @@ impl SshManagerPanel {
             }
             NodeKind::Folder => crate::t!(
                 "workspace-left-panel-ssh-manager-delete-folder-summary",
-                count = impact.host_names.len() as u64
+                count = (impact.host_names.len() as u64)
             ),
             NodeKind::Server => crate::t!("workspace-left-panel-ssh-manager-delete-host-summary"),
         };

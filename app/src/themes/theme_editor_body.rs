@@ -11,7 +11,7 @@ use warpui::elements::{
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
-use warpui::{AppContext, Entity, TypedActionView, View, ViewContext, ViewHandle};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::appearance::{Appearance, AppearanceManager};
 use crate::editor::{EditorView, Event as EditorEvent};
@@ -170,7 +170,7 @@ impl ThemeEditorBody {
         ctx.subscribe_to_view(&name_editor, |me, editor, event, ctx| {
             if matches!(event, EditorEvent::Edited(_)) {
                 if let Some(draft) = &mut me.draft {
-                    draft.name = editor.buffer_text(ctx);
+                    draft.name = editor.as_ref(ctx).buffer_text(ctx);
                     draft.theme.set_name(draft.name.clone());
                     draft.dirty = true;
                 }
@@ -187,7 +187,7 @@ impl ThemeEditorBody {
             let event_field = *field;
             ctx.subscribe_to_view(&editor, move |me, editor, event, ctx| {
                 if matches!(event, EditorEvent::Edited(_)) {
-                    let value = editor.buffer_text(ctx);
+                    let value = editor.as_ref(ctx).buffer_text(ctx);
                     me.color_values.insert(event_key.clone(), value.clone());
                     me.apply_color_input(event_field, &event_key, value, ctx);
                 }
@@ -1139,7 +1139,7 @@ impl ThemeEditorBody {
                 border_color: Some(if invalid {
                     appearance.theme().ui_error_color().into()
                 } else {
-                    appearance.theme().outline()
+                    appearance.theme().outline().into()
                 }),
                 background: Some(Fill::None),
                 padding: Some(Coords::uniform(6.0)),
@@ -1489,14 +1489,11 @@ fn collect_yaml_colors(value: &serde_yaml::Value, colors: &mut Vec<ColorU>) {
             }
         }
         serde_yaml::Value::Mapping(values) => {
-            for value in values.values() {
+            for (_, value) in values {
                 collect_yaml_colors(value, colors);
             }
         }
-        serde_yaml::Value::Null
-        | serde_yaml::Value::Bool(_)
-        | serde_yaml::Value::Number(_)
-        | serde_yaml::Value::Tagged(_) => {}
+        serde_yaml::Value::Null | serde_yaml::Value::Bool(_) | serde_yaml::Value::Number(_) => {}
     }
 }
 

@@ -261,10 +261,8 @@ impl ControlSurfaceServer {
 
         ctx.spawn_stream_local(
             request_rx,
-            |server, envelopes, ctx| {
-                for envelope in envelopes {
-                    server.handle_request(envelope, ctx);
-                }
+            |server, envelope, ctx| {
+                server.handle_request(envelope, ctx);
             },
             |_, _| {},
         );

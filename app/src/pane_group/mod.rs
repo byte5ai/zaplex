@@ -78,8 +78,8 @@ use warp_util::path::convert_wsl_to_windows_host_path;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
-    Border, CrossAxisAlignment, DispatchEventResult, DropShadow, EventHandler, Flex, MainAxisSize,
-    Shrinkable, Stack,
+    Border, Container, CrossAxisAlignment, DispatchEventResult, DropShadow, EventHandler, Flex,
+    MainAxisSize, Shrinkable, Stack,
 };
 use warpui::keymap::{Context, EditableBinding, FixedBinding};
 use warpui::notification::NotificationSendError;
@@ -5436,7 +5436,7 @@ impl PaneGroup {
         if agent_ready {
             self.start_agent_mode_in_new_pane(None, None, ctx);
         }
-        self.terminal_view_from_pane_id(pane_id.into(), ctx)
+        self.terminal_view_from_pane_id(pane_id, ctx)
             .and_then(|terminal| terminal.as_ref(ctx).control_context().cloned())
     }
 

@@ -220,7 +220,7 @@ impl Journal {
     }
 
     fn records(&self) -> std::io::Result<Vec<JournalRecord>> {
-        let mut records = Vec::new();
+        let mut records: Vec<JournalRecord> = Vec::new();
         for entry in fs::read_dir(&self.directory)? {
             let entry = entry?;
             let path = entry.path();

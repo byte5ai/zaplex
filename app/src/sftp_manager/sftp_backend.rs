@@ -11014,8 +11014,16 @@ impl SftpBackend for InMemorySftpBackend {
         path: &Path,
     ) -> Result<Option<std::time::SystemTime>, SftpOpsError> {
         let local = self.to_local(path)?;
-        let metadata =
-            fs::symlink_metadata(local).map_err(|error| map_local_metadata_error(path, error))?;
+        let metadata = fs::symlink_metadata(local).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                SftpOpsError::NotFound(path.display().to_string())
+            } else {
+                SftpOpsError::Operation(format!(
+                    "Failed to get file info {}: {error}",
+                    path.display()
+                ))
+            }
+        })?;
         Ok(metadata.modified().ok())
     }
 
@@ -11366,7 +11374,7 @@ fn copy_into_place_with_mode(
 }
 
 fn publish_copy_without_replacement(temp: &Path, dest: &Path) -> std::io::Result<()> {
-    publish_copy_without_replacement_with_cleanup(temp, dest, fs::remove_file)
+    publish_copy_without_replacement_with_cleanup(temp, dest, |path| fs::remove_file(path))
 }
 
 fn publish_copy_without_replacement_with_cleanup(

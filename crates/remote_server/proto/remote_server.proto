@@ -609,8 +609,8 @@ message WriteFileChunkResponse {
 
 enum SafeFileEntryKind {
   SAFE_FILE_ENTRY_KIND_UNSPECIFIED = 0;
-  SAFE_FILE_REGULAR = 1;
-  SAFE_FILE_DIRECTORY = 2;
+  SAFE_FILE_ENTRY_KIND_REGULAR = 1;
+  SAFE_FILE_ENTRY_KIND_DIRECTORY = 2;
 }
 
 message SafeFileIdentity {
@@ -659,8 +659,8 @@ message SafeFileCloseHandle {
 
 enum SafeFileRenameMode {
   SAFE_FILE_RENAME_MODE_UNSPECIFIED = 0;
-  SAFE_FILE_RENAME_NO_REPLACE = 1;
-  SAFE_FILE_RENAME_EXCHANGE = 2;
+  SAFE_FILE_RENAME_MODE_NO_REPLACE = 1;
+  SAFE_FILE_RENAME_MODE_EXCHANGE = 2;
 }
 
 message SafeFileRename {
@@ -721,8 +721,8 @@ message SafeFileInspectResult {
 
 enum SafeFileMutationState {
   SAFE_FILE_MUTATION_STATE_UNSPECIFIED = 0;
-  SAFE_FILE_MUTATION_APPLIED = 1;
-  SAFE_FILE_MUTATION_ALREADY_APPLIED = 2;
+  SAFE_FILE_MUTATION_STATE_APPLIED = 1;
+  SAFE_FILE_MUTATION_STATE_ALREADY_APPLIED = 2;
 }
 
 message SafeFileMutationResult {

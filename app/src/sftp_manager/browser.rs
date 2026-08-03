@@ -1035,7 +1035,7 @@ impl SftpBrowserView {
         );
         me.schedule_transfer_progress_poll(ctx);
 
-        ctx.subscribe(
+        ctx.subscribe_to_model(
             &RemoteServerManager::handle(ctx),
             |me, _manager, event, ctx| {
                 if matches!(

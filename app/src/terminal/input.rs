@@ -13345,9 +13345,8 @@ impl Input {
                     .with_vertical_padding(4.0)
                     .with_background(appearance.theme().surface_1())
                     .with_border(
-                        Border::all(1.0).with_border_fill(
-                            internal_colors::neutral_4(appearance.theme()).into(),
-                        ),
+                        Border::all(1.0)
+                            .with_border_fill(internal_colors::neutral_4(appearance.theme())),
                     )
                     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.0)))
                     .with_margin_right(6.0)

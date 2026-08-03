@@ -1001,7 +1001,8 @@ fn has_managed_deepseek_hooks(path: &Path) -> Result<bool> {
     let Some(entries) = hooks.get("hooks").and_then(TomlItem::as_array_of_tables) else {
         return Ok(false);
     };
-    Ok(entries.iter().any(is_managed_deepseek_hook))
+    let has_managed_hook = entries.iter().any(is_managed_deepseek_hook);
+    Ok(has_managed_hook)
 }
 
 fn append_managed_hooks(

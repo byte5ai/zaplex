@@ -2,7 +2,7 @@ use ordered_float::OrderedFloat;
 use warp_core::ui::builder;
 use warpui::{
     elements::{ConstrainedBox, Container, Text},
-    AppContext, Element,
+    AppContext, Element, SingletonEntity,
 };
 
 use crate::{
