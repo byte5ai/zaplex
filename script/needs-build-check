@@ -60,7 +60,13 @@ fi
 # docs/ or specs/ is still classified as a build-relevant change.
 DOC_ONLY_PATTERN='^([^/]+\.md|docs/.*\.md|specs/.*\.md|LICENSE(-[A-Za-z]+)?|CODE_OF_CONDUCT\.md|CONTRIBUTING\.md|SECURITY\.md|CHANGELOG\.md)$'
 
-if printf '%s\n' "$changed_files" | grep -vE "$DOC_ONLY_PATTERN" | grep -q .; then
+# Do not pipe into `grep -q` here: with `pipefail`, its intentional early exit
+# gives the upstream grep SIGPIPE on large diffs and misclassifies code as docs-only.
+build_relevant_files="$(
+  printf '%s\n' "$changed_files" | grep -vE "$DOC_ONLY_PATTERN" || true
+)"
+
+if [ -n "$build_relevant_files" ]; then
   echo "true"
 else
   echo "false"
