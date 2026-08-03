@@ -20,6 +20,24 @@
 #
 # (Restored after being removed in cff5085e: the "release tag will catch it"
 # rationale failed when an LLM-assisted change broke main between releases.)
+#
+# Cost guard (changes job): cargo_check + keymap_smoke_test each burn a real
+# compile (~7-13 min billed) on every PR, including docs-only ones. The
+# `changes` job below decides, via script/needs-build-check, whether the diff
+# could possibly affect the build; the two expensive jobs then `if:`-skip
+# their steps for docs-only PRs.
+#
+# Safety property (do NOT "simplify" this into a trigger-level `paths-ignore`
+# on `on: pull_request:` — see no-new-cjk.yml's comment for the same warning):
+# this workflow still triggers on EVERY pull_request unconditionally, so the
+# `cargo check (Linux x86_64)` required-status-check context always gets a
+# check-run. A job that is skipped via its own `if:` reports conclusion
+# "skipped", which GitHub's required-status-checks treats as passing. A
+# trigger-level path filter instead makes the whole workflow never run for
+# excluded paths, so the check-run is never created at all — that leaves the
+# required check permanently "pending" and blocks merging forever. The
+# `changes` job itself always runs (it's a single cheap checkout + diff, not
+# a compile) so it can never be the thing that goes missing.
 
 name: PR Check
 
@@ -41,11 +59,38 @@ env:
   CHANNEL: oss
 
 jobs:
+  changes:
+    name: detect build-relevant changes
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    timeout-minutes: 5
+    outputs:
+      needs_build: ${{ steps.detect.outputs.needs_build }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Detect build-relevant changes
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            # workflow_dispatch or similar: no PR diff to check against, so
+            # always run the full build (safe default).
+            echo "needs_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "needs_build=$(script/needs-build-check "$BASE_SHA")" >> "$GITHUB_OUTPUT"
+        shell: bash
+
   cargo_check:
     name: cargo check (Linux x86_64)
+    needs: changes
+    if: needs.changes.outputs.needs_build == 'true'
     # Same runner as release_linux, glibc 2.35, to avoid deps differences that
     # only appear on ubuntu-latest.
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -72,9 +117,11 @@ jobs:
 
   keymap_smoke_test:
     name: keymap validation (Linux x86_64)
+    needs: changes
+    if: needs.changes.outputs.needs_build == 'true'
     # Runs in parallel with cargo_check so it does not delay compile feedback.
     # Same runner as cargo_check for consistent glibc/deps.
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

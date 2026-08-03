@@ -1,26 +1,26 @@
 # Zaplex release pipeline — triggered by pushing a stable tag (v*)
 #
 # Differences from upstream create_release.yml:
-# - Only macOS arm64 + macOS Intel + Windows x64 + Linux x86_64,
-#   all of Web/CLI/Universal/Win-arm64 removed
-#   (macOS dual-architecture produces single-arch DMG and CLI tarball respectively; Linux produces AppImage/deb/rpm
-#    plus best-effort Arch package, does not publish upstream Zap repository source or signing keys)
+# - Supported release targets are macOS arm64 + Linux x86_64; Web/CLI/Universal,
+#   Intel macOS and Windows are not published. The dormant Windows job is opt-in.
+#   (macOS produces a native DMG and CLI tarball; Linux produces AppImage/deb/rpm
+#    plus a best-effort Arch package, without upstream Zap source or signing keys.)
 # - Single stable OSS channel (configuration provided by release_configurations.json)
 # - macOS is signed with Developer ID and notarized through App Store Connect.
-#   Windows remains unsigned until a separate Windows signing identity is available.
+#   The dormant Windows build remains unsigned until a Windows signing identity is available.
 # - No upload to GCS / third-party crash platforms / Slack / changelog, no channel-versions repository_dispatch call
 # - Reuse ./.github/actions/{prepare_environment,get_channel_config}
 #
 # Pipeline structure (package first, publish later, avoid creating empty Release):
 #   prepare_metadata → signing_preflight → build_remote_server → release_macos
-#                                      └→ release_{windows,linux}
-#   all package jobs → publish_release (download artifacts and create Release after all succeed)
+#                                      └→ release_linux
+#   supported package jobs → publish_release (download artifacts and create Release after all succeed)
 # If any build job fails → publish_release skips due to needs → no Release without installers left behind.
 
 name: Zap Release
 
 # PR validation is handled by .github/workflows/pr-check.yml (Linux cargo check).
-# This workflow only runs full three-platform packaging when pushing a tag / manual dispatch, avoiding ~3h waste on PRs.
+# This workflow only runs full supported-platform packaging on a tag/manual dispatch, avoiding costly PR builds.
 # ci-lint: allow-CI008  Tag/manual release workflow; path filters do not apply to stable tags.
 on:
   push:
@@ -53,7 +53,7 @@ env:
 jobs:
   prepare_metadata:
     name: Prepare metadata
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     outputs:
       release_tag: ${{ steps.compute_tag.outputs.tag }}
@@ -283,14 +283,14 @@ jobs:
 
   release_macos:
     name: Build Release (macOS ${{ matrix.dmg_name_suffix }})
-    # macOS is required to build, sign, notarize and staple both native DMGs.
+    # macOS is required to build, sign, notarize and staple the native DMG.
     runs-on: ${{ matrix.runner }}
     needs:
       - prepare_metadata
       - signing_preflight
       - build_remote_server
-    # macos-26 / macos-26-intel (Pro standard) has no sccache, full cargo build + bundle + create-dmg
-    # is time-consuming; Intel builds historically exceed 180min, relaxing here to GitHub-hosted job 6h limit.
+    # Native arm64 build on Blacksmith Apple Silicon (M4) — no cross-compile. Full cargo build +
+    # bundle + create-dmg with no sccache is still time-consuming; keep a generous timeout to be safe.
     timeout-minutes: 360
     strategy:
       fail-fast: true
@@ -298,10 +298,7 @@ jobs:
         include:
           - arch: aarch64
             dmg_name_suffix: arm64
-            runner: macos-26 # Pro standard arm64 (M2 Pro)
-          - arch: x86_64
-            dmg_name_suffix: intel
-            runner: macos-26-intel # Pro standard Intel
+            runner: blacksmith-12vcpu-macos-26 # Blacksmith Apple Silicon (M4), native arm64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -396,11 +393,14 @@ jobs:
 
   release_windows:
     name: Build Release (Windows x64)
-    # Windows is required to produce and validate the native installer.
+    # ci-lint: allow-CI005  Disabled by default; a native runner is required only when explicitly enabled.
     runs-on: windows-2025
-    needs:
-      - prepare_metadata
-      - signing_preflight
+    # Windows is NOT a supported target — we do not ship it, so it must not burn paid CI minutes.
+    # Disabled by default: this job is skipped (no runner, zero cost) unless the repo variable
+    # ENABLE_WINDOWS_RELEASE is set to 'true'. Flip that variable on when Windows becomes a target.
+    # It is also absent from publish_release.needs, so it can never gate a macOS/Linux release.
+    if: ${{ vars.ENABLE_WINDOWS_RELEASE == 'true' }}
+    needs: prepare_metadata
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -438,7 +438,7 @@ jobs:
 
   release_linux:
     name: Build Release (Linux x86_64)
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     needs:
       - prepare_metadata
       - signing_preflight
@@ -594,15 +594,17 @@ jobs:
 
   publish_release:
     name: Publish GitHub Release
-    # ci-lint: allow-CI005  Standard Linux job; "release_windows" is only a dependency name.
-    runs-on: ubuntu-24.04
+    # ci-lint: allow-CI005  This Linux job only publishes already-built artifacts.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
-    # Must wait for all platforms to build successfully before publishing; if any fails → this job is skipped → no empty Release.
+    # Gate the release on the supported platforms only (macOS arm64 + Linux); if either fails
+    # → this job is skipped → no half-published Release. Windows is unsupported for now and is
+    # deliberately NOT in `needs`, so a Windows failure can never block a macOS/Linux release.
+    # `files: dist/*` below attaches whatever artifacts exist, so a missing Windows asset is fine.
     needs:
       - prepare_metadata
       - build_remote_server
       - release_macos
-      - release_windows
       - release_linux
     steps:
       - name: Download all artifacts

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Prints "true" if this branch's changes (vs BASE_REF) could affect the Rust
+# build — so cargo_check/keymap_smoke_test in pr-check.yml must run — or
+# "false" if every changed file is docs/meta-only and those jobs can skip.
+#
+# Cost motivation: cargo_check + keymap_smoke_test each run a real Linux
+# compile (~7-13 min of billed GitHub Actions minutes) on EVERY pull_request,
+# including PRs that only touch Markdown. This guard lets those jobs skip
+# their expensive steps for docs-only PRs without skipping the WORKFLOW
+# itself — see the safety note in pr-check.yml for why that distinction
+# matters (mirrors the merge-base convention in script/check-no-new-cjk).
+#
+# Usage:
+#   script/needs-build-check [BASE_REF]
+#
+# BASE_REF defaults to origin/main (falling back to main). In CI, pass the PR
+# base SHA.
+
+set -euo pipefail
+
+BASE_REF="${1:-}"
+if [ -z "$BASE_REF" ]; then
+  if git rev-parse --verify -q origin/main >/dev/null; then
+    BASE_REF="origin/main"
+  else
+    BASE_REF="main"
+  fi
+fi
+
+# Only compare what this branch changed on top of the base (mirrors
+# script/check-no-new-cjk's merge-base fallback for unrelated histories).
+if MERGE_BASE="$(git merge-base "$BASE_REF" HEAD 2>/dev/null)"; then
+  :
+else
+  MERGE_BASE="$BASE_REF"
+fi
+
+# No --diff-filter: unlike script/check-no-new-cjk (which only cares about
+# ADDED lines, so dropping deletions is correct there), this classification
+# must also see deletions and renames. Filtering to ACMR would drop deleted
+# (D) files entirely, so a PR that e.g. only deletes a .rs file — leaving a
+# module or Cargo.toml reference dangling — would read as an empty/doc-only
+# diff and skip the compile check meant to catch exactly that breakage.
+changed_files="$(git diff --name-only "$MERGE_BASE" HEAD)"
+
+if [ -z "$changed_files" ]; then
+  echo "false"
+  exit 0
+fi
+
+# Anything outside these doc/meta patterns means the build must be checked.
+# Conservative by design: unrecognized paths count as "needs build", not the
+# other way around — a false "false" would let a real breakage through
+# unchecked, a false "true" only costs the compile minutes we already pay
+# today. `specs/` is included: it is the repo's product/tech-spec tree
+# (`specs/<id>/PRODUCT.md`, `TECH.md`, ...) and, like `docs/`, is Markdown
+# only — verified empty of non-.md files at the time this was written.
+# Every branch requires the .md extension (not just the docs/specs prefix) so
+# a rename that moves a non-Markdown file (e.g. a .rs source file) into
+# docs/ or specs/ is still classified as a build-relevant change.
+DOC_ONLY_PATTERN='^([^/]+\.md|docs/.*\.md|specs/.*\.md|LICENSE(-[A-Za-z]+)?|CODE_OF_CONDUCT\.md|CONTRIBUTING\.md|SECURITY\.md|CHANGELOG\.md)$'
+
+if printf '%s\n' "$changed_files" | grep -vE "$DOC_ONLY_PATTERN" | grep -q .; then
+  echo "true"
+else
+  echo "false"
+fi

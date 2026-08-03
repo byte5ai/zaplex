@@ -6,7 +6,7 @@
 # test-dispatch.yml für Rust-Tests.
 #
 # Aufruf:  gh workflow run test-dmg.yml -R byte5ai/zaplex --ref <branch> \
-#            [-f arch=aarch64|x86_64] [-f dmg_tag=v1.0.0]
+#            [-f dmg_tag=v1.0.0]
 #
 # Das .dmg wird mit Developer ID signiert, über App Store Connect notarisiert
 # und mit dem Notarisierungs-Ticket versehen.
@@ -26,13 +26,6 @@ name: Test DMG
 on:
   workflow_dispatch:
     inputs:
-      arch:
-        description: "macOS-Architektur (aarch64 = Apple Silicon, x86_64 = Intel)"
-        type: choice
-        default: aarch64
-        options:
-          - aarch64
-          - x86_64
       dmg_tag:
         description: "GIT_RELEASE_TAG (bestimmt den remote-server-Pfad auf dem Ziel-Host)"
         type: string
@@ -75,7 +68,7 @@ jobs:
 
       - name: Validate Developer ID signing inputs
         run: |
-          script/macos/bundle --channel "$CHANNEL" --arch ${{ inputs.arch }} \
+          script/macos/bundle --channel "$CHANNEL" --arch aarch64 \
             --read-passwords-from-env --check-signing-only
         shell: bash
         env:
@@ -95,9 +88,8 @@ jobs:
     name: Build bundled remote-server (Linux musl x86_64)
     # Fast large runner (16 vCPU / 64 GB) — this is a static **musl** build, so the
     # glibc-consistency reason the client jobs pin `ubuntu-22.04` does not apply
-    # here; the org set `ubuntu-latest-xl` up precisely to speed up heavy builds.
-    # ci-lint: allow-CI001  Org-managed larger-runner label has no versioned equivalent.
-    runs-on: ubuntu-latest-xl
+      # here; the large Blacksmith runner is used precisely to speed up heavy builds.
+      runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 180
     needs: signing_preflight
     steps:
@@ -181,9 +173,9 @@ jobs:
           retention-days: 7
 
   build_dmg:
-    name: Build Test DMG (macOS ${{ inputs.arch }})
+    name: Build Test DMG (macOS Apple Silicon)
     # macOS is required to build, sign, notarize and staple the DMG.
-    runs-on: ${{ inputs.arch == 'x86_64' && 'macos-26-intel' || 'macos-26' }}
+    runs-on: blacksmith-12vcpu-macos-26
     timeout-minutes: 360
     needs: build_remote_server
     steps:
@@ -201,12 +193,12 @@ jobs:
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
-          cache_key: macos-${{ inputs.arch }}
+          cache_key: macos-aarch64
           is_self_hosted: false
           install_release_deps: true
 
       - name: Ensure rust target is installed
-        run: rustup target add ${{ inputs.arch }}-apple-darwin
+        run: rustup target add aarch64-apple-darwin
         shell: bash
 
       - name: Setup Go
@@ -220,11 +212,11 @@ jobs:
       - name: Install create-dmg
         run: brew install create-dmg
 
-      - name: Build, sign and notarize ${{ inputs.arch }} bundle
+      - name: Build, sign and notarize aarch64 bundle
         id: bundle_app
         run: |
-          script/bundle --channel "$CHANNEL" --arch ${{ inputs.arch }} \
-            --dmg-name-suffix "${{ inputs.arch == 'x86_64' && 'intel' || 'arm64' }}" \
+          script/bundle --channel "$CHANNEL" --arch aarch64 \
+            --dmg-name-suffix arm64 \
             --read-passwords-from-env \
             ${{ inputs.fast && '--debug' || '' }}
         shell: bash
@@ -239,7 +231,7 @@ jobs:
       - name: Upload DMG artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: zap-test-dmg-${{ inputs.arch }}
+          name: zap-test-dmg-aarch64
           path: ${{ steps.bundle_app.outputs.dmg_path }}
           if-no-files-found: error
           retention-days: 7

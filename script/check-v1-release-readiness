@@ -582,7 +582,6 @@ def release_artifact_names_match_autoupdaters(root: Path) -> None:
             release_workflow,
             (
                 "dmg_name_suffix: arm64",
-                "dmg_name_suffix: intel",
                 'script/bundle -Channel $CHANNEL -skip_build_installer --arch x64',
                 'script/bundle --channel "$CHANNEL" --arch x86_64 --packages appimage,deb',
             ),
