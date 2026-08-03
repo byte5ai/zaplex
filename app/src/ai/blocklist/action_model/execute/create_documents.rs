@@ -105,7 +105,7 @@ impl CreateDocumentsExecutor {
                 let artifact = Artifact::Plan {
                     document_uid: id.to_string(),
                     notebook_uid: None, // openWarp does not sync to cloud notebook, always None;
-                                        // local open uses document_uid
+                    // local open uses document_uid
                     title: Some(document.title.clone()),
                 };
                 let terminal_view_id = self.terminal_view_id;

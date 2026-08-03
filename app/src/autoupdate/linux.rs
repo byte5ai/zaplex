@@ -9,6 +9,8 @@ use warp_core::channel::{Channel, ChannelState};
 use super::release_assets_directory_url;
 use super::{DownloadProgress, DownloadReady, ProgressCallback, ReadyForRelaunch};
 
+const OSS_APPIMAGE_ASSET_NAME: &str = "Zaplex-x86_64.AppImage";
+
 lazy_static::lazy_static! {
     /// Stores the path to the current executable.
     ///
@@ -74,18 +76,16 @@ mod appimage {
         const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
         let channel = ChannelState::channel();
-        // openWarp: retrieve the actual download URL from the GitHub Release cache, bypassing the empty releases_base_url.
+        // Zaplex retrieves the actual download URL from the GitHub Release cache, bypassing the empty releases_base_url.
         // Official channels still use release_assets_directory_url.
         let url = if matches!(channel, warp_core::channel::Channel::Oss) {
-            // OSS Linux AppImage default asset name "Zap-x86_64.AppImage".
-            // Release asset names are fixed in GitHub Actions.
-            let asset = "Zap-x86_64.AppImage";
+            let asset = OSS_APPIMAGE_ASSET_NAME;
             if let Some(release) = crate::autoupdate::github::cached_release() {
                 if let Some(found) = release.find_asset(asset) {
                     found.browser_download_url.clone()
                 } else {
                     log::warn!(
-                        "openWarp: cached release tag {} does not have an asset named {asset}, falling back to tag URL",
+                        "Zaplex: cached release tag {} does not have an asset named {asset}, falling back to tag URL",
                         release.tag_name
                     );
                     format!(
@@ -147,25 +147,19 @@ mod appimage {
             if downloaded - last_reported >= REPORT_BYTES_THRESHOLD
                 || last_reported_at.elapsed() >= REPORT_TIME_THRESHOLD
             {
-                on_progress(DownloadProgress {
-                    downloaded,
-                    total,
-                });
+                on_progress(DownloadProgress { downloaded, total });
                 last_reported = downloaded;
                 last_reported_at = Instant::now();
             }
         }
-        on_progress(DownloadProgress {
-            downloaded,
-            total,
-        });
+        on_progress(DownloadProgress { downloaded, total });
 
-        // openWarp: perform SHA-256 verification on the temporary file before overwriting the original AppImage,
+        // Zaplex performs SHA-256 verification on the temporary file before overwriting the original AppImage,
         // defending against CDN man-in-the-middle attacks and network corruption. Other channels skip this (they have their own process).
         if matches!(channel, warp_core::channel::Channel::Oss) {
             let temp_path = new_appimage.path().to_path_buf();
             if let Err(e) =
-                crate::autoupdate::verify_oss_asset_sha256(&temp_path, "Zap-x86_64.AppImage")
+                crate::autoupdate::verify_oss_asset_sha256(&temp_path, OSS_APPIMAGE_ASSET_NAME)
             {
                 // Temporary file is automatically cleaned up when NamedTempFile is dropped; just return the error here.
                 return Err(e);
@@ -395,9 +389,7 @@ impl PackageManager {
             .output();
         let output = match output {
             Ok(o) => o,
-            Err(err) => {
-                return Err(err).context("Failed to run package manager detection script")
-            }
+            Err(err) => return Err(err).context("Failed to run package manager detection script"),
         };
 
         // exit 1 = this candidate name was not recognized by any PM; not an error, try next candidate.
@@ -430,13 +422,19 @@ impl PackageManager {
                 )
             }
             Self::Yum { package_name } => {
-                format!("Run: after downloading .rpm, run `sudo yum install ./{package_name}-*.rpm`")
+                format!(
+                    "Run: after downloading .rpm, run `sudo yum install ./{package_name}-*.rpm`"
+                )
             }
             Self::Dnf { package_name } => {
-                format!("Run: after downloading .rpm, run `sudo dnf install ./{package_name}-*.rpm`")
+                format!(
+                    "Run: after downloading .rpm, run `sudo dnf install ./{package_name}-*.rpm`"
+                )
             }
             Self::Zypper { package_name } => {
-                format!("Run: after downloading .rpm, run `sudo zypper install ./{package_name}-*.rpm`")
+                format!(
+                    "Run: after downloading .rpm, run `sudo zypper install ./{package_name}-*.rpm`"
+                )
             }
             Self::PacmanOfficial { package_name } => {
                 format!("Run: `sudo pacman -Syu {package_name}`")
@@ -449,7 +447,7 @@ impl PackageManager {
                 )
             }
         };
-        log::info!("openWarp upgrade hint: {hint}");
+        log::info!("Zaplex upgrade hint: {hint}");
     }
 }
 
@@ -465,3 +463,7 @@ impl std::fmt::Display for PackageManager {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "linux_tests.rs"]
+mod tests;

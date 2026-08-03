@@ -1,0 +1,7 @@
+{"type":"session_meta","timestamp":"2026-07-30T12:00:00Z","payload":{"id":"session-fixture","cwd":"/tmp/proj"}}
+{"type":"response_item","timestamp":"2026-07-30T12:00:01Z","payload":{"type":"function_call","name":"update_plan","arguments":"{\"plan\":[{\"step\":\"Inspect transcript schema\",\"status\":\"in_progress\"},{\"step\":\"Carry typed task state\",\"status\":\"pending\"},{\"step\":\"Run static checks\",\"status\":\"pending\"}]}","call_id":"call_first","id":"17"}}
+{"type":"response_item","timestamp":"2026-07-30T12:00:02Z","payload":{"type":"function_call","name":"unrelated_tool","arguments":"{\"plan\":[]}","call_id":"call_other","id":"18"}}
+{"type":"response_item","timestamp":"2026-07-30T12:00:03Z","payload":{"type":"function_call","name":"update_plan","arguments":"not-json","call_id":"call_broken","id":"19"}}
+{"type":"response_item","timestamp":"2026-07-30T12:00:04Z","payload":{"type":"function_call","name":"update_plan","arguments":"{\"plan\":[{\"step\":\"Inspect transcript schema\",\"status\":\"completed\"},{\"step\":\"Carry typed task state\",\"status\":\"in_progress\"},{\"step\":\"Run static checks\",\"status\":\"pending\"}]}","call_id":"call_latest","id":"20"}}
+{"type":"response_item","timestamp":"2026-07-30T12:00:05Z","payload":{"type":"function_call","name":"update_plan","arguments":"{\"explanation\":\"missing plan\"}","call_id":"call_missing","id":"21"}}
+{partial-live-line

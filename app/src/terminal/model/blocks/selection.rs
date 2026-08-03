@@ -954,9 +954,10 @@ impl BlockList {
                             }
 
                             if let Some(active_window_id) = app.windows().active_window() {
-                                if let Some(ssh_block) = app
-                                    .view_with_id::<ZaplexifySuccessBlock>(active_window_id, *view_id)
-                                {
+                                if let Some(ssh_block) = app.view_with_id::<ZaplexifySuccessBlock>(
+                                    active_window_id,
+                                    *view_id,
+                                ) {
                                     let zaplexify_success_block = app.view(&ssh_block);
                                     if let Some(selected_text) =
                                         zaplexify_success_block.selected_text()

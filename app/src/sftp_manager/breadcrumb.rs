@@ -55,14 +55,11 @@ pub fn render_breadcrumb(
 
         // Separator (added after the first segment)
         if i > 0 {
-            let sep_icon = ConstrainedBox::new(
-                Icon::ChevronRight
-                    .to_warpui_icon(sub_color.into())
-                    .finish(),
-            )
-            .with_width(12.0)
-            .with_height(12.0)
-            .finish();
+            let sep_icon =
+                ConstrainedBox::new(Icon::ChevronRight.to_warpui_icon(sub_color.into()).finish())
+                    .with_width(12.0)
+                    .with_height(12.0)
+                    .finish();
             elements.push(
                 Container::new(sep_icon)
                     .with_padding_left(2.0)
@@ -154,11 +151,9 @@ mod tests {
 
         fn render(&self, app: &AppContext) -> Box<dyn Element> {
             let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-            for element in render_breadcrumb(
-                &self.path,
-                &self.mouse_handles,
-                Appearance::as_ref(app),
-            ) {
+            for element in
+                render_breadcrumb(&self.path, &self.mouse_handles, Appearance::as_ref(app))
+            {
                 row.add_child(element);
             }
             Stack::new().with_child(row.finish()).finish()
@@ -166,19 +161,18 @@ mod tests {
     }
 
     #[test]
-    fn breadcrumb_click_survives_rerender() {
+    fn breadcrumb_click_survives_rerender_between_mouse_down_and_up() {
         App::test((), |mut app| async move {
             app.add_singleton_model(|_| Appearance::mock());
-            let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| {
-                BreadcrumbTestView {
+            let (window_id, view) =
+                app.add_window(WindowStyle::NotStealFocus, |_| BreadcrumbTestView {
                     path: PathBuf::from("/alpha/beta"),
                     mouse_handles: HashMap::from([(
                         PathBuf::from("alpha"),
                         MouseStateHandle::default(),
                     )]),
                     navigations: Vec::new(),
-                }
-            });
+                });
             let root_view_id = app
                 .root_view_id(window_id)
                 .expect("test window should contain root view");

@@ -93,6 +93,17 @@ fn auth_toggle_includes_onekey_option() {
 }
 
 #[test]
+fn startup_command_is_optional_but_must_be_one_line() {
+    assert_eq!(validated_startup_command("  "), Ok(None));
+    assert_eq!(
+        validated_startup_command("  tmux attach  "),
+        Ok(Some("tmux attach".to_string()))
+    );
+    assert_eq!(validated_startup_command("first\nsecond"), Err(()));
+    assert_eq!(validated_startup_command("first\r\nsecond"), Err(()));
+}
+
+#[test]
 fn onekey_auth_only_renders_credential_field_in_server_form() {
     assert_eq!(
         auth_specific_fields(AuthType::OneKey),
@@ -262,7 +273,7 @@ fn missing_lookup_id_returns_none_when_editor_empty() {
 }
 
 #[test]
-fn stale_test_cannot_replace_current_state() {
+fn stale_test_completion_cannot_overwrite_current_endpoint_state() {
     assert!(should_apply_connection_test_result(7, 7));
     assert!(!should_apply_connection_test_result(8, 7));
 }

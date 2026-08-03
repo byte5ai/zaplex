@@ -83,25 +83,69 @@ fn queue_with_retryable_recovery() -> (
 #[test]
 fn global_and_workspace_activity_survive_view_changes() {
     let mut queue = TransferQueue::new();
-    queue.enqueue("7", 100).unwrap();
-    queue.enqueue("8", 300).unwrap();
+    let first = queue.enqueue("7", 100).unwrap();
+    let second = queue.enqueue("8", 300).unwrap();
+    queue.update_progress(
+        first,
+        TransferProgress {
+            transferred: 25,
+            total: 100,
+            bytes_per_second: 10,
+            eta: Some(Duration::from_secs(8)),
+            phase: TransferPhase::Transferring,
+        },
+    );
+    queue.update_progress(
+        second,
+        TransferProgress {
+            transferred: 75,
+            total: 300,
+            bytes_per_second: 30,
+            eta: Some(Duration::from_secs(8)),
+            phase: TransferPhase::Transferring,
+        },
+    );
 
     assert_eq!(
         queue.summary(),
         ActivitySummary {
             active: 2,
-            transferred: 0,
+            transferred: 100,
             total: 400,
+            bytes_per_second: 40,
         }
     );
     assert_eq!(
         queue.workspace_summary("7"),
         ActivitySummary {
             active: 1,
-            transferred: 0,
+            transferred: 25,
             total: 100,
+            bytes_per_second: 10,
         }
     );
+}
+
+#[test]
+fn activity_records_requested_operation_conflict_and_topology() {
+    let mut queue = TransferQueue::new();
+    let id = queue
+        .enqueue_job_with_audit(
+            "workspace",
+            PathBuf::from("/source"),
+            PathBuf::from("/target"),
+            TransferDirection::Copy,
+            TransferOperation::Move,
+            ConflictDecision::Rename,
+            TransferTopology::RemoteRelay,
+            42,
+        )
+        .unwrap();
+
+    let activity = queue.activity(id).unwrap();
+    assert_eq!(activity.operation, TransferOperation::Move);
+    assert_eq!(activity.conflict, ConflictDecision::Rename);
+    assert_eq!(activity.topology, TransferTopology::RemoteRelay);
 }
 
 #[test]

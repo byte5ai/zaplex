@@ -1,3 +1,107 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct FluentEntrySignature {
+    attributes: BTreeSet<String>,
+    variables: BTreeMap<String, usize>,
+    selectors: usize,
+    variants: BTreeMap<String, usize>,
+    positional_placeables: BTreeMap<String, usize>,
+}
+
+fn increment(counter: &mut BTreeMap<String, usize>, value: &str) {
+    *counter.entry(value.to_owned()).or_default() += 1;
+}
+
+fn fluent_message_identifier(line: &str) -> Option<&str> {
+    if line.starts_with(char::is_whitespace) || line.starts_with('#') {
+        return None;
+    }
+
+    let (identifier, _) = line.split_once('=')?;
+    let identifier = identifier.trim();
+    let identifier_body = identifier.strip_prefix('-').unwrap_or(identifier);
+    (!identifier_body.is_empty()
+        && identifier_body
+            .chars()
+            .all(|character| character.is_alphanumeric() || matches!(character, '-' | '_')))
+    .then_some(identifier)
+}
+
+fn fluent_entry_signatures(catalog: &str) -> BTreeMap<String, FluentEntrySignature> {
+    let mut entries = BTreeMap::<String, FluentEntrySignature>::new();
+    let mut current_identifier = None;
+
+    for line in catalog.lines() {
+        if let Some(identifier) = fluent_message_identifier(line) {
+            assert!(
+                entries
+                    .insert(identifier.to_owned(), FluentEntrySignature::default())
+                    .is_none(),
+                "duplicate Fluent message ID: {identifier}"
+            );
+            current_identifier = Some(identifier.to_owned());
+        }
+
+        let Some(identifier) = current_identifier.as_ref() else {
+            continue;
+        };
+        let signature = entries
+            .get_mut(identifier)
+            .expect("the current Fluent entry must exist");
+        let trimmed = line.trim_start();
+
+        if let Some(attribute) = trimmed.strip_prefix('.') {
+            if let Some((attribute, _)) = attribute.split_once('=') {
+                signature.attributes.insert(attribute.trim().to_owned());
+            }
+        }
+
+        signature.selectors += line.match_indices("->").count();
+
+        if let Some(variant) = trimmed
+            .strip_prefix("*[")
+            .or_else(|| trimmed.strip_prefix('['))
+            .and_then(|variant| variant.split_once(']'))
+            .map(|(variant, _)| variant)
+        {
+            increment(&mut signature.variants, variant);
+        }
+
+        let mut remaining = line;
+        while let Some(variable_start) = remaining.find('$') {
+            remaining = &remaining[variable_start + 1..];
+            let variable_len = remaining
+                .chars()
+                .take_while(|character| {
+                    character.is_alphanumeric() || matches!(character, '-' | '_')
+                })
+                .map(char::len_utf8)
+                .sum();
+            if variable_len > 0 {
+                increment(&mut signature.variables, &remaining[..variable_len]);
+                remaining = &remaining[variable_len..];
+            }
+        }
+
+        for placeable in line.split('{').skip(1) {
+            let Some((placeable, _)) = placeable.split_once('}') else {
+                continue;
+            };
+            let placeable = placeable.trim();
+            if !placeable.is_empty()
+                && placeable
+                    .chars()
+                    .all(|character| character.is_ascii_digit())
+            {
+                increment(&mut signature.positional_placeables, placeable);
+            }
+        }
+    }
+
+    entries
+}
+
 fn fluent_value(line: &str) -> Option<&str> {
     let line = line.trim_start();
     if line.is_empty() || line.starts_with('#') {
@@ -75,6 +179,22 @@ fn has_space_before_ellipsis(line: &str) -> bool {
                 .next_back()
                 .is_some_and(is_visible_character_before_ellipsis)
     })
+}
+
+#[test]
+fn german_catalog_has_complete_structural_parity_with_english() {
+    let english = fluent_entry_signatures(include_str!("../i18n/en/warp.ftl"));
+    let german = fluent_entry_signatures(include_str!("../i18n/de/warp.ftl"));
+
+    assert_eq!(
+        english.keys().collect::<Vec<_>>(),
+        german.keys().collect::<Vec<_>>(),
+        "German Fluent message IDs must exactly match English"
+    );
+    assert_eq!(
+        english, german,
+        "German Fluent attributes, variables, selectors, variants, and positional placeables must preserve the English structure"
+    );
 }
 
 #[test]

@@ -1,6 +1,5 @@
 pub(crate) mod attention_inbox;
 pub(crate) mod codex_modal;
-pub(crate) mod spawn_card;
 pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
 mod crash_recovery;
@@ -8,9 +7,9 @@ pub mod global_search;
 pub(crate) mod launch_modal;
 pub(crate) mod left_panel;
 pub(crate) mod onboarding;
-pub(crate) mod zap_launch_modal;
 pub(crate) mod right_panel;
 pub(crate) mod server_file_browser;
+pub(crate) mod spawn_card;
 mod startup_directory;
 #[cfg(test)]
 #[path = "view_test.rs"]
@@ -18,11 +17,12 @@ mod tests;
 mod vertical_tabs;
 #[cfg(target_family = "wasm")]
 mod wasm_view;
+pub(crate) mod zap_launch_modal;
 
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
-    render_detail_sidecar, render_settings_popup, VerticalTabsPanelState,
-    VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
+    VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID, VerticalTabsPanelState, render_detail_sidecar,
+    render_settings_popup,
 };
 use crate::workspace::cross_window_tab_drag::{
     AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState,
@@ -32,8 +32,8 @@ pub(crate) use onboarding::OnboardingTutorial;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::agent_conversations_model::ConversationOrTask;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::{
     SuggestedRuleAndId, SuggestedRuleModal, SuggestedRuleModalEvent,
@@ -42,15 +42,15 @@ use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::{
-    agent::{api::ServerConversationToken, conversation::AIConversationId, EntrypointType},
+    agent::{EntrypointType, api::ServerConversationToken, conversation::AIConversationId},
     blocklist::{
+        SlashCommandRequest,
         inline_action::code_diff_view::CodeDiffView,
         suggested_agent_mode_workflow_modal::{
             SuggestedAgentModeWorkflowModal, SuggestedAgentModeWorkflowModalEvent,
         },
-        SlashCommandRequest,
     },
-    facts::{view::AIFactPage, AIFactManager, AIFactView, AIFactViewEvent},
+    facts::{AIFactManager, AIFactView, AIFactViewEvent, view::AIFactPage},
 };
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::app_state::{
@@ -58,10 +58,10 @@ use crate::app_state::{
     PaneNodeSnapshot, PaneUuid, RightPanelSnapshot, SettingsPaneSnapshot, TabSnapshot,
     TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
-use crate::code_review::diff_state::DiffStateModel;
 #[cfg(feature = "local_fs")]
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::code_review::GlobalCodeReviewModel;
+use crate::code_review::diff_state::DiffStateModel;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::default_terminal::DefaultTerminal;
 use crate::notebooks::NotebookObject;
@@ -97,36 +97,34 @@ use crate::util::file::external_editor::Editor;
 use crate::util::file::external_editor::EditorSettings;
 use crate::util::openable_file_type::FileTarget;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{resolve_file_target_with_editor_choice, EditorLayout};
+use crate::util::openable_file_type::{EditorLayout, resolve_file_target_with_editor_choice};
 
-use crate::ai::blocklist::history_model::LoadedConversationData;
+use crate::BlocklistAIHistoryModel;
 use crate::ai::blocklist::FORK_PREFIX;
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
-use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
-use crate::terminal::cli_agent::{CLIAgentInstallEvent, CLIAgentInstallModel};
+use crate::ai::blocklist::history_model::LoadedConversationData;
 use crate::terminal::CLIAgent;
+use crate::terminal::cli_agent::{CLIAgentInstallEvent, CLIAgentInstallModel, RoutedAgentLaunch};
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabCloseButtonPosition;
 use crate::workspace::view::attention_inbox::{AttentionInbox, AttentionInboxEvent};
 use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
 use crate::workspace::view::spawn_card::{SpawnCard, SpawnCardEvent};
-use crate::workspace::view::zap_launch_modal::{
-    ZaplexLaunchModal, ZaplexLaunchModalEvent,
-};
+use crate::workspace::view::zap_launch_modal::{ZaplexLaunchModal, ZaplexLaunchModalEvent};
 use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
-use crate::BlocklistAIHistoryModel;
 
 use serde_json;
 use warpui::notification::NotificationSendError;
 
+use super::WorkspaceRegistry;
 use super::hoa_onboarding::{
-    mark_hoa_onboarding_completed, HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep,
+    HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep, mark_hoa_onboarding_completed,
 };
 use super::lightbox_view::{LightboxParams, LightboxView, LightboxViewEvent};
 use super::util;
-use super::WorkspaceRegistry;
 use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
 use crate::auth::AuthState;
@@ -189,15 +187,15 @@ use crate::wasm_nux_dialog::WasmNUXDialog;
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::settings::WarpDriveSettingsChangedEvent;
 use crate::env_vars::{
-    manager::{EnvVarCollectionManager, EnvVarCollectionSource},
     EnvVarCollectionObject,
+    manager::{EnvVarCollectionManager, EnvVarCollectionSource},
 };
 use crate::settings::cloud_preferences::PreferencesSettings;
 
 use crate::appearance::{Appearance, AppearanceManager};
 use crate::auth::AuthStateProvider;
 use crate::autoupdate::{
-    is_incoming_version_past_current, AutoupdateState, AutoupdateStateEvent, RelaunchModel,
+    AutoupdateState, AutoupdateStateEvent, RelaunchModel, is_incoming_version_past_current,
 };
 use crate::banner::BannerState;
 use crate::changelog_model::{ChangelogModel, ChangelogRequestType, Event as ChangelogEvent};
@@ -215,8 +213,8 @@ use crate::drive::{
 };
 use crate::experiments::{BlockOnboarding, Experiment};
 use crate::menu::{
-    Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource, SubMenu,
-    DEFAULT_WIDTH as MENU_DEFAULT_WIDTH,
+    DEFAULT_WIDTH as MENU_DEFAULT_WIDTH, Event as MenuEvent, Menu, MenuItem, MenuItemFields,
+    MenuSelectionSource, SubMenu,
 };
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
@@ -243,8 +241,8 @@ use crate::prompt::editor_modal::{
 };
 use crate::report_if_error;
 use crate::resource_center::{
-    mark_feature_used_and_write_to_user_defaults, skip_tips_and_write_to_user_defaults,
     ResourceCenterEvent, ResourceCenterPage, ResourceCenterView, Tip, TipAction, TipsCompleted,
+    mark_feature_used_and_write_to_user_defaults, skip_tips_and_write_to_user_defaults,
 };
 use crate::root_view::{NewWorkspaceSource, OpenLaunchConfigArg};
 use crate::search::command_search::searcher::{
@@ -260,10 +258,10 @@ use crate::server::telemetry::{
 use crate::server_time::ServerTime;
 use crate::session_management::{SessionNavigationData, SessionSource};
 use crate::settings::{
-    active_theme_kind, respect_system_theme, AccessibilitySettings, AliasExpansionSettings,
-    AppEditorSettings, BlockVisibilitySettings, CursorBlink, DebugSettings, FontSettings,
-    GPUSettings, InputSettings, MonospaceFontSize, PaneSettings, PrivacySettings,
-    SelectionSettings, SshSettings, ThemeSettings,
+    AccessibilitySettings, AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings,
+    CursorBlink, DebugSettings, FontSettings, GPUSettings, InputSettings, MonospaceFontSize,
+    PaneSettings, PrivacySettings, SelectionSettings, SshSettings, ThemeSettings,
+    active_theme_kind, respect_system_theme,
 };
 use crate::settings_view::flags;
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
@@ -277,7 +275,7 @@ use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::session::Session;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::resizable_data::{
-    ModalSizes, ModalType, ResizableData, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH,
+    DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH, ModalSizes, ModalType, ResizableData,
 };
 use crate::terminal::safe_mode_settings::SafeModeSettings;
 use crate::terminal::session_settings::{
@@ -305,27 +303,27 @@ use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModal
 use crate::tips::{TipsEvent, TipsView};
 use crate::ui_components::buttons::{combo_inner_button, icon_button_with_color};
 use crate::undo_close::UndoCloseStack;
+use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 #[cfg(feature = "local_fs")]
 use crate::user_config::{
     ensure_default_worktree_config, find_unused_tab_config_path, find_unused_toml_path,
     find_unused_worktree_config_path, materialize_default_worktree_config, sanitize_toml_base_name,
     tab_configs_dir,
 };
-use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::util::bindings::{keybinding_name_to_display_string, keybinding_name_to_keystroke};
 use crate::util::links;
-use crate::util::traffic_lights::{traffic_light_data, TrafficLightMouseStates, TrafficLightSide};
+use crate::util::traffic_lights::{TrafficLightMouseStates, TrafficLightSide, traffic_light_data};
 use crate::util::truncation::truncate_from_end;
 #[cfg(target_family = "wasm")]
 use crate::view_components::action_button::ActionButton;
 use crate::view_components::callout_bubble::{
-    render_callout_bubble, CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig,
+    CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig, render_callout_bubble,
 };
 use crate::view_components::{AgentToastStack, DismissibleToast, DismissibleToastStack, ToastLink};
 use crate::window_settings::{WindowSettings, WindowSettingsChangedEvent, ZoomLevel};
 use crate::workflows::{
-    manager::WorkflowOpenSource, AIWorkflowOrigin, WorkflowObject, WorkflowSelectionSource,
-    WorkflowSource, WorkflowType, WorkflowViewMode,
+    AIWorkflowOrigin, WorkflowObject, WorkflowSelectionSource, WorkflowSource, WorkflowType,
+    WorkflowViewMode, manager::WorkflowOpenSource,
 };
 use crate::workspace::action::CommandSearchOptions;
 use crate::workspace::one_time_modal_model::OneTimeModalModel;
@@ -333,15 +331,15 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::toast_stack::{
     ToastStack as WorkspaceToastStack, ToastStackEvent as WorkspaceToastStackEvent,
 };
+use crate::{GlobalResourceHandles, send_telemetry_from_ctx};
 use crate::{
     ai_assistant::{
+        AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR, AskAIType,
         panel::{AIAssistantPanelEvent, AIAssistantPanelView},
-        AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR,
     },
     settings,
     ui_components::blended_colors,
 };
-use crate::{send_telemetry_from_ctx, GlobalResourceHandles};
 
 use futures::Future;
 use itertools::Itertools;
@@ -354,10 +352,10 @@ use std::convert::TryFrom;
 use std::time::Duration;
 #[cfg(target_os = "macos")]
 use std::time::{SystemTime, UNIX_EPOCH};
-use warp_core::context_flag::ContextFlag;
 use warp_core::HostId;
+use warp_core::context_flag::ContextFlag;
 use warp_core::semantic_selection::SemanticSelection;
-use warp_util::path::{user_friendly_path, LineAndColumnArg};
+use warp_util::path::{LineAndColumnArg, user_friendly_path};
 use warpui::fonts::Weight;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
 
@@ -427,17 +425,17 @@ use crate::tab_configs::{
     NewWorktreeModal, NewWorktreeModalEvent, TabConfigParamsModal, TabConfigParamsModalEvent,
 };
 
+use crate::TelemetryEvent;
 use crate::code::editor::{add_color, remove_color};
 use crate::palette::PaletteMode;
 use crate::search::command_palette::view::{Event as CommandPaletteEvent, View as CommandPalette};
 use crate::server::telemetry::{NotificationsTurnedOnSource, PaletteSource, TabRenameEvent};
 use crate::tab::{
-    tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
-    TabBarState, TabComponent, TabData, TabTelemetryAction, TAB_BAR_BORDER_HEIGHT,
+    NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT, TabBarState,
+    TabComponent, TabData, TabTelemetryAction, tab_position_id, uses_vertical_tabs,
 };
 use crate::terminal::view::ssh_file_upload::FileUploadId;
 use crate::ui_components::icons;
-use crate::TelemetryEvent;
 use autoupdate::AutoupdateStage;
 #[cfg(target_os = "macos")]
 use command::blocking::Command;
@@ -452,10 +450,10 @@ use std::path::Path;
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::process;
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 use std::{cmp::Ordering, sync::Arc};
-use warp_core::ui::theme::{color::internal_colors, phenomenon::PhenomenonStyle, Fill};
-use warp_core::ui::{color::coloru_with_opacity, Icon};
+use warp_core::ui::theme::{Fill, color::internal_colors, phenomenon::PhenomenonStyle};
+use warp_core::ui::{Icon, color::coloru_with_opacity};
 use warp_editor::editor::NavigationKey;
 use warpui::keymap::Context;
 use warpui::notification::{RequestPermissionsOutcome, UserNotification};
@@ -465,6 +463,7 @@ use warpui::platform::{
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
+    AppContext, Entity, TypedActionView, UpdateView, View, ViewContext, ViewHandle,
     accessibility::{
         AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
     },
@@ -476,8 +475,7 @@ use warpui::{
         PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable,
         Stack, Text,
     },
-    geometry::vector::{vec2f, Vector2F},
-    AppContext, Entity, TypedActionView, UpdateView, View, ViewContext, ViewHandle,
+    geometry::vector::{Vector2F, vec2f},
 };
 use warpui::{
     EntityId, FocusContext, ModelHandle, SingletonEntity, UpdateModel, ViewAsRef, WeakViewHandle,
@@ -609,6 +607,87 @@ pub const NEW_SESSION_MENU_BUTTON_POSITION_ID: &str = "new_session_menu_button";
 
 // The max length of the title of a fork toast (after which we truncate it).
 const MAX_FORK_TOAST_TITLE_LENGTH: usize = 100;
+
+/// Constant shell source for remote agent launches. Every launch-controlled
+/// value is supplied after `$0` as a positional argument, so remote paths,
+/// environment values, programs and CLI arguments never become shell source.
+const REMOTE_AGENT_LAUNCH_SHELL_SOURCE: &str = r#"cwd=$1
+shift
+unset_count=$1
+shift
+while [ "$unset_count" -gt 0 ]; do
+  unset "$1"
+  shift
+  unset_count=$((unset_count - 1))
+done
+env_count=$1
+shift
+while [ "$env_count" -gt 0 ]; do
+  export "$1=$2"
+  shift 2
+  env_count=$((env_count - 1))
+done
+if [ -n "$cwd" ]; then
+  cd -- "$cwd" || exit 1
+else
+  cd || exit 1
+fi
+exec "$@""#;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RemoteAgentLaunchRequest {
+    cwd: Option<PathBuf>,
+    launch: RoutedAgentLaunch,
+}
+
+impl RemoteAgentLaunchRequest {
+    fn new(cwd: Option<&Path>, launch: RoutedAgentLaunch) -> Self {
+        Self {
+            cwd: cwd.map(Path::to_path_buf),
+            launch,
+        }
+    }
+
+    fn shell_source(&self) -> &'static str {
+        REMOTE_AGENT_LAUNCH_SHELL_SOURCE
+    }
+
+    fn shell_arguments(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        args.push(
+            self.cwd
+                .as_deref()
+                .map(|cwd| cwd.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
+        args.push(self.launch.unset_environment.len().to_string());
+        args.extend(
+            self.launch
+                .unset_environment
+                .iter()
+                .map(|name| (*name).to_string()),
+        );
+        args.push(self.launch.environment.len().to_string());
+        for (name, value) in &self.launch.environment {
+            args.push((*name).to_string());
+            args.push(value.clone());
+        }
+        args.push(self.launch.program.clone());
+        args.extend(self.launch.args.iter().cloned());
+        args
+    }
+
+    fn shell_command(&self) -> String {
+        let mut words = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            self.shell_source().to_string(),
+            "zaplex-agent-launch".to_string(),
+        ];
+        words.extend(self.shell_arguments());
+        shell_words::join(words)
+    }
+}
 
 // The max length of the window title (matching conversation title truncation).
 const MAX_WINDOW_TITLE_LENGTH: usize = 80;
@@ -849,6 +928,7 @@ enum PendingSessionConfigTabConfigChipTutorial {
 pub struct TransferredTab {
     pub pane_group: ViewHandle<PaneGroup>,
     pub color: Option<AnsiColorIdentifier>,
+    pub is_pinned: bool,
     pub custom_title: Option<String>,
     pub left_panel_open: bool,
     pub vertical_tabs_panel_open: bool,
@@ -897,7 +977,9 @@ fn node_for_daemon_host_in<'a>(
         .into_iter()
         .find(|(node_id, host_id)| {
             host_id == daemon_host_id
-                && registered_node_ids.iter().any(|registered| registered == node_id)
+                && registered_node_ids
+                    .iter()
+                    .any(|registered| registered == node_id)
         })
         .map(|(node_id, _)| node_id.to_string())
 }
@@ -972,12 +1054,12 @@ fn send_verified_guardrail_signal_with(
         (Some(expected), Some(observed)) if !expected.is_empty() && expected == observed => {
             send(pid, signal)
         }
-        (Some(_), Some(_)) => GuardrailSendOutcome::Failed(
-            "the process ended or its id was reused".to_string(),
-        ),
-        (Some(_), None) | (None, Some(_)) | (None, None) => GuardrailSendOutcome::Failed(
-            "the process identity could not be verified".to_string(),
-        ),
+        (Some(_), Some(_)) => {
+            GuardrailSendOutcome::Failed("the process ended or its id was reused".to_string())
+        }
+        (Some(_), None) | (None, Some(_)) | (None, None) => {
+            GuardrailSendOutcome::Failed("the process identity could not be verified".to_string())
+        }
     }
 }
 
@@ -1045,10 +1127,10 @@ async fn run_remote_guardrail_signal(
                 | AgentProcessSignalStatus::InvalidRequest
                 | AgentProcessSignalStatus::SignalFailed,
             ) => GuardrailSendOutcome::Failed(response.error_message),
-            Ok(AgentProcessSignalStatus::Unspecified) | Err(_) => {
-                GuardrailSendOutcome::Failed("the host returned an invalid signal result".to_string())
-            }
-        }
+            Ok(AgentProcessSignalStatus::Unspecified) | Err(_) => GuardrailSendOutcome::Failed(
+                "the host returned an invalid signal result".to_string(),
+            ),
+        },
         Err(e) => GuardrailSendOutcome::Failed(format!("{e:#}")),
     }
 }
@@ -1062,16 +1144,8 @@ struct AdoptedDaemonSession {
 }
 
 #[cfg(unix)]
-fn daemon_adoption_key(
-    node_id: &str,
-    pty_session_id: &str,
-    generation: u64,
-) -> DaemonAdoptionKey {
-    (
-        node_id.to_string(),
-        pty_session_id.to_string(),
-        generation,
-    )
+fn daemon_adoption_key(node_id: &str, pty_session_id: &str, generation: u64) -> DaemonAdoptionKey {
+    (node_id.to_string(), pty_session_id.to_string(), generation)
 }
 
 #[cfg(unix)]
@@ -1141,13 +1215,10 @@ fn apply_daemon_server_auth(
 #[cfg(unix)]
 fn resolved_daemon_server(node_id: &str) -> Option<warp_ssh_manager::SshServerInfo> {
     warp_ssh_manager::with_conn(|conn| {
-        let Some(server) =
-            warp_ssh_manager::SshRepository::get_server(conn, node_id)?
-        else {
+        let Some(server) = warp_ssh_manager::SshRepository::get_server(conn, node_id)? else {
             return Ok(None);
         };
-        let auth =
-            warp_ssh_manager::SshRepository::resolve_server_auth(conn, &server)?;
+        let auth = warp_ssh_manager::SshRepository::resolve_server_auth(conn, &server)?;
         Ok(Some(apply_daemon_server_auth(server, auth)))
     })
     .ok()
@@ -1163,8 +1234,7 @@ pub struct Workspace {
     /// adopting the same running session again focuses the existing tab without
     /// conflating hosts, handoffs, accounts, or a reused stale id.
     /// Stale entries (tab since closed) are pruned opportunistically.
-    adopted_daemon_sessions:
-        std::collections::HashMap<DaemonAdoptionKey, AdoptedDaemonSession>,
+    adopted_daemon_sessions: std::collections::HashMap<DaemonAdoptionKey, AdoptedDaemonSession>,
     /// SSH host node per tab (pane-group id → `ssh_servers.node_id`), recorded
     /// when a tab is opened for a host (daemon or classic). Lets pane-scoped
     /// actions resolve their host context — e.g. "Open file manager here" on a
@@ -1183,8 +1253,7 @@ pub struct Workspace {
     /// session (the recovery the manager's mismatch branch documents but nobody
     /// caught). Entry is removed on connect or on the one-shot fallback.
     #[cfg(unix)]
-    daemon_session_servers:
-        std::collections::HashMap<SessionId, warp_ssh_manager::SshServerInfo>,
+    daemon_session_servers: std::collections::HashMap<SessionId, warp_ssh_manager::SshServerInfo>,
     /// SSH host `node_id` → its daemon connection `SessionId`, recorded when a
     /// resilient host opens (or adopts) a daemon-backed session. The SFTP file
     /// manager is keyed by `node_id`; this lets it resolve a live daemon
@@ -1196,6 +1265,12 @@ pub struct Workspace {
     /// its own host or to nothing, never to a wrong host.
     #[cfg(all(unix, feature = "local_tty"))]
     daemon_node_sessions: std::collections::HashMap<String, Vec<SessionId>>,
+    /// One workspace-owned daemon connection per SSH registry node, created
+    /// when a standalone SFTP pane needs descriptor-bound safe-file
+    /// transactions but no terminal has connected that host yet. These
+    /// connections outlive panes so queued transfers survive pane closure.
+    #[cfg(all(unix, feature = "local_tty"))]
+    sftp_file_service_sessions: std::collections::HashMap<String, SessionId>,
     /// Remote files opened for editing over *classic* SSH (no daemon), keyed by
     /// their local working-copy path. On a `GlobalBufferModelEvent::FileSaved`
     /// for one of these paths, the working copy is uploaded back to the host
@@ -1421,9 +1496,9 @@ fn add_favorite_hosts_menu_item(
     let mut addable_hosts: Vec<&(String, String)> = host_nodes
         .iter()
         .filter(|(node_id, _)| {
-            !favorites.iter().any(|favorite| {
-                favorite.same_target(zaplex_cockpit::FavoriteKind::Host, node_id)
-            })
+            !favorites
+                .iter()
+                .any(|favorite| favorite.same_target(zaplex_cockpit::FavoriteKind::Host, node_id))
         })
         .collect();
     addable_hosts.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
@@ -2080,7 +2155,9 @@ impl Workspace {
     /// Guardrails (step 7): the shared confirm dialog for the "kill" (per-agent
     /// SIGKILL) and "stop all" (fleet-wide SIGINT) verbs — see
     /// `agent_guardrail_dialog.rs`.
-    fn build_agent_guardrail_dialog(ctx: &mut ViewContext<Self>) -> ViewHandle<AgentGuardrailDialog> {
+    fn build_agent_guardrail_dialog(
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<AgentGuardrailDialog> {
         let agent_guardrail_dialog = ctx.add_typed_action_view(|_| AgentGuardrailDialog::new());
         ctx.subscribe_to_view(&agent_guardrail_dialog, move |me, _, event, ctx| {
             me.handle_agent_guardrail_dialog_event(event, ctx);
@@ -2317,12 +2394,16 @@ impl Workspace {
                     && ai_settings.default_tab_config_path() == path.to_string_lossy();
                 if is_removed_default {
                     AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                        report_if_error!(settings
-                            .default_session_mode_internal
-                            .set_value(DefaultSessionMode::Terminal, ctx));
-                        report_if_error!(settings
-                            .default_tab_config_path
-                            .set_value(String::new(), ctx));
+                        report_if_error!(
+                            settings
+                                .default_session_mode_internal
+                                .set_value(DefaultSessionMode::Terminal, ctx)
+                        );
+                        report_if_error!(
+                            settings
+                                .default_tab_config_path
+                                .set_value(String::new(), ctx)
+                        );
                     });
                 }
                 if let Err(e) = std::fs::remove_file(path) {
@@ -3166,16 +3247,10 @@ impl Workspace {
                     me.daemon_session_servers.remove(session_id);
                 }
                 RemoteServerManagerEvent::SessionExited { session_id, .. } => {
-                    remove_adopted_daemon_session(
-                        &mut me.adopted_daemon_sessions,
-                        *session_id,
-                    );
+                    remove_adopted_daemon_session(&mut me.adopted_daemon_sessions, *session_id);
                 }
                 RemoteServerManagerEvent::SessionDisconnected { session_id, .. } => {
-                    remove_adopted_daemon_session(
-                        &mut me.adopted_daemon_sessions,
-                        *session_id,
-                    );
+                    remove_adopted_daemon_session(&mut me.adopted_daemon_sessions, *session_id);
                     forget_daemon_node_session(&mut me.daemon_node_sessions, *session_id);
                 }
                 // Session torn down (the user closed the tab, possibly mid-connect)
@@ -3185,15 +3260,16 @@ impl Workspace {
                     me.daemon_session_servers.remove(session_id);
                     remove_adopted_daemon_session(&mut me.adopted_daemon_sessions, *session_id);
                     forget_daemon_node_session(&mut me.daemon_node_sessions, *session_id);
+                    me.sftp_file_service_sessions
+                        .retain(|_, candidate| candidate != session_id);
                 }
                 RemoteServerManagerEvent::SessionConnectionFailed {
                     session_id, phase, ..
                 } => {
-                    remove_adopted_daemon_session(
-                        &mut me.adopted_daemon_sessions,
-                        *session_id,
-                    );
+                    remove_adopted_daemon_session(&mut me.adopted_daemon_sessions, *session_id);
                     forget_daemon_node_session(&mut me.daemon_node_sessions, *session_id);
+                    me.sftp_file_service_sessions
+                        .retain(|_, candidate| candidate != session_id);
                     match phase {
                         // The initialize handshake failed for a daemon session — often
                         // a version mismatch, where a stale daemon of another release
@@ -3202,7 +3278,10 @@ impl Workspace {
                         // classic SSH session (the fallback the manager's mismatch
                         // branch documents but that nothing was catching before).
                         crate::remote_server::manager::RemoteServerInitPhase::Initialize => {
-                            me.fall_back_to_classic_after_daemon_handshake_failure(*session_id, ctx);
+                            me.fall_back_to_classic_after_daemon_handshake_failure(
+                                *session_id,
+                                ctx,
+                            );
                         }
                         // Connect-phase failures are handled by the daemon-connect
                         // preflight path; just drop the record so a later event can't
@@ -3468,6 +3547,8 @@ impl Workspace {
             daemon_session_servers: std::collections::HashMap::new(),
             #[cfg(all(unix, feature = "local_tty"))]
             daemon_node_sessions: std::collections::HashMap::new(),
+            #[cfg(all(unix, feature = "local_tty"))]
+            sftp_file_service_sessions: std::collections::HashMap::new(),
             #[cfg(all(unix, feature = "local_tty"))]
             remote_sftp_edits: std::collections::HashMap::new(),
             #[cfg(unix)]
@@ -3901,6 +3982,9 @@ impl Workspace {
             self.tabs[inserted].selected_color = tab_template
                 .color
                 .map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+            let inserted = self
+                .set_tab_pinned(inserted, tab_template.is_pinned, ctx)
+                .unwrap_or(inserted);
             if original_index == original_active {
                 active_tab_index = Some(inserted);
             }
@@ -3934,39 +4018,41 @@ impl Workspace {
                 window_snapshot,
                 block_lists,
             } => {
-                let active_tab_index = window_snapshot.active_tab_index;
+                let original_active_tab_index = window_snapshot.active_tab_index;
+                let mut active_pane_group_id = None;
                 let restored_left_panel_open = window_snapshot.left_panel_open;
 
-                window_snapshot
-                    .tabs
-                    .iter()
-                    .enumerate()
-                    .for_each(|(tab_index, saved_tab)| {
-                        let custom_title = saved_tab.custom_title.clone();
-                        self.add_tab_with_pane_layout(
-                            PanesLayout::Snapshot(Box::new(saved_tab.root.clone())),
-                            block_lists.clone(),
-                            custom_title,
-                            ctx,
-                        );
-                        self.tabs[tab_index].default_directory_color =
-                            saved_tab.default_directory_color;
-                        self.tabs[tab_index].selected_color = saved_tab.selected_color;
+                for (tab_index, saved_tab) in window_snapshot.tabs.iter().enumerate() {
+                    let custom_title = saved_tab.custom_title.clone();
+                    self.add_tab_with_pane_layout(
+                        PanesLayout::Snapshot(Box::new(saved_tab.root.clone())),
+                        block_lists.clone(),
+                        custom_title,
+                        ctx,
+                    );
+                    let inserted = self.active_tab_index;
+                    self.tabs[inserted].default_directory_color = saved_tab.default_directory_color;
+                    self.tabs[inserted].selected_color = saved_tab.selected_color;
+                    self.tabs[inserted].is_pinned = saved_tab.is_pinned;
 
-                        let pane_group = self.tabs[tab_index].pane_group.clone();
+                    let pane_group = self.tabs[inserted].pane_group.clone();
+                    if tab_index == original_active_tab_index {
+                        active_pane_group_id = Some(pane_group.id());
+                    }
 
-                        if let Some(left_panel_snapshot) = &saved_tab.left_panel {
-                            self.restore_left_panel_for_tab(&pane_group, left_panel_snapshot, ctx);
-                        }
+                    if let Some(left_panel_snapshot) = &saved_tab.left_panel {
+                        self.restore_left_panel_for_tab(&pane_group, left_panel_snapshot, ctx);
+                    }
 
-                        if let Some(right_panel_snapshot) = &saved_tab.right_panel {
-                            self.restore_right_panel_for_tab(
-                                &pane_group,
-                                right_panel_snapshot,
-                                ctx,
-                            );
-                        }
-                    });
+                    if let Some(right_panel_snapshot) = &saved_tab.right_panel {
+                        self.restore_right_panel_for_tab(&pane_group, right_panel_snapshot, ctx);
+                    }
+                }
+
+                // Restored tabs are created in snapshot order. Normalize legacy snapshots
+                // into a pinned prefix only after every tab exists so relative order within
+                // the pinned and unpinned groups remains stable.
+                self.tabs.sort_by_key(|tab| !tab.is_pinned);
 
                 if self.tab_count() == 0 {
                     if self.should_trigger_get_started_onboarding(ctx) {
@@ -3987,6 +4073,13 @@ impl Workspace {
                     self.left_panel_open = restored_left_panel_open;
                 }
 
+                let active_tab_index = active_pane_group_id
+                    .and_then(|active_id| {
+                        self.tabs
+                            .iter()
+                            .position(|tab| tab.pane_group.id() == active_id)
+                    })
+                    .unwrap_or_default();
                 self.activate_tab_internal(active_tab_index, ctx);
                 self.check_and_trigger_onboarding(ctx);
                 self.maybe_auto_open_conversation_list(ctx);
@@ -4035,6 +4128,7 @@ impl Workspace {
             #[cfg(feature = "local_fs")]
             NewWorkspaceSource::TransferredTab {
                 tab_color,
+                is_pinned,
                 custom_title,
                 left_panel_open,
                 right_panel_open,
@@ -4052,6 +4146,9 @@ impl Workspace {
                 if let (Some(color), Some(tab)) = (tab_color, self.tabs.last_mut()) {
                     tab.selected_color = SelectedTabColor::Color(color);
                 }
+                if let Some(tab) = self.tabs.last_mut() {
+                    tab.is_pinned = is_pinned;
+                }
                 if self.left_panel_visibility_across_tabs_enabled(ctx) {
                     self.left_panel_open = left_panel_open;
                 }
@@ -4066,6 +4163,7 @@ impl Workspace {
             #[cfg(not(feature = "local_fs"))]
             NewWorkspaceSource::TransferredTab {
                 tab_color,
+                is_pinned,
                 custom_title,
                 left_panel_open,
                 is_tab_drag_preview,
@@ -4080,6 +4178,9 @@ impl Workspace {
                 );
                 if let (Some(color), Some(tab)) = (tab_color, self.tabs.last_mut()) {
                     tab.selected_color = SelectedTabColor::Color(color);
+                }
+                if let Some(tab) = self.tabs.last_mut() {
+                    tab.is_pinned = is_pinned;
                 }
                 if self.left_panel_visibility_across_tabs_enabled(ctx) {
                     self.left_panel_open = left_panel_open;
@@ -4527,7 +4628,7 @@ impl Workspace {
         // Route through the one explicit launch grammar: open the spawn card with
         // the task prompt AND the requested agent preselected (so "Fix with Codex"
         // opens on Codex, not silently on the default). The card is restricted to
-        // the supported Claude/Codex, launches, and prefills the prompt — no blind
+        // the supported installed CLI, launches, and prefills the prompt — no blind
         // one-click. The card also handles the "nothing installed" case (inert
         // Confirm with an install hint) instead of a toast.
         self.open_spawn_card(None, None, None, None, Some(prompt), agent, ctx);
@@ -4778,44 +4879,54 @@ impl Workspace {
         is_local: bool,
         ctx: &AppContext,
     ) -> Option<zaplex_cockpit::SessionSnapshot> {
-        use crate::cockpit::capabilities::session_identity_matches;
-
         let model = crate::cockpit::CockpitModel::as_ref(ctx);
-        let live = model
+        let expected_key = zaplex_cockpit::session_identity_key(
+            is_local,
+            host_id,
+            provider,
+            config_dir,
+            account_email,
+            session_id,
+        );
+        let mut live = model
             .inventory()
             .hosts
             .iter()
-            .filter(|host| {
-                if is_local {
-                    host.is_local
-                } else {
-                    host_id.is_some_and(|id| host.host_id.as_deref() == Some(id))
-                }
-            })
-            .flat_map(|host| &host.projects)
-            .flat_map(|project| &project.sessions)
-            .find(|session| {
-                session.session_id == session_id
-                    && session_identity_matches(session, provider, config_dir, account_email)
+            .flat_map(|host| {
+                let expected_key = &expected_key;
+                host.projects.iter().flat_map(move |project| {
+                    project.sessions.iter().filter(move |session| {
+                        zaplex_cockpit::session_key(host.is_local, host.host_id.as_deref(), session)
+                            == expected_key.as_str()
+                    })
+                })
             })
             .cloned();
-        if live.is_some() || !is_local {
-            return live;
+        let matched_live = live.next();
+        if live.next().is_some() {
+            return None;
+        }
+        if matched_live.is_some() || !is_local {
+            return matched_live;
         }
 
         // Local dormant sessions deliberately live outside the fleet tree: the
         // tree is a live-work navigator, while account snapshots retain the
         // transcript-only rows. They still need the safe ResumeDormant route.
-        model
+        let mut local = model
             .snapshot()
             .accounts
             .iter()
             .flat_map(|account| account.sessions.iter().chain(&account.idle_sessions))
-            .find(|session| {
-                session.session_id == session_id
-                    && session_identity_matches(session, provider, config_dir, account_email)
+            .filter(|session| {
+                zaplex_cockpit::session_key(true, None, session) == expected_key.as_str()
             })
-            .cloned()
+            .cloned();
+        let matched_local = local.next();
+        if local.next().is_some() {
+            return None;
+        }
+        matched_local
     }
 
     /// Run a Claude Code slash command against a discovered session
@@ -4838,7 +4949,7 @@ impl Workspace {
         is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::cockpit::capabilities::{plan_session_open, SessionOpenPlan};
+        use crate::cockpit::capabilities::{SessionOpenPlan, plan_session_open};
 
         let agent = crate::cockpit::agent_of(provider);
         let config_identity = config_dir.map(|dir| dir.to_string_lossy().into_owned());
@@ -4996,9 +5107,7 @@ impl Workspace {
                     return false;
                 };
                 #[cfg(feature = "local_tty")]
-                let remote_host_id = terminal_view
-                    .as_ref(ctx)
-                    .active_session_remote_host_id(ctx);
+                let remote_host_id = terminal_view.as_ref(ctx).active_session_remote_host_id(ctx);
                 #[cfg(not(feature = "local_tty"))]
                 let remote_host_id: Option<warp_core::HostId> = None;
                 session_host_matches(
@@ -5100,7 +5209,7 @@ impl Workspace {
         is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::cockpit::capabilities::{plan_session_open, SessionOpenPlan};
+        use crate::cockpit::capabilities::{SessionOpenPlan, plan_session_open};
 
         // Resolve everything up front, then drop model borrows before focusing,
         // resuming, or showing a toast.
@@ -5311,7 +5420,11 @@ impl Workspace {
             });
         };
         let Some(path) = zaplex_cockpit::sessions::transcript_path(config_dir, session_id) else {
-            toast_err(self, ctx, "No transcript found for this session.".to_string());
+            toast_err(
+                self,
+                ctx,
+                "No transcript found for this session.".to_string(),
+            );
             return;
         };
         let markdown = match std::fs::read_to_string(&path) {
@@ -5696,11 +5809,9 @@ impl Workspace {
             effort.map(str::to_owned),
         );
         if let Some(node_id) = node_id {
-            let cmd = agent.launch_command_routed_with(None, model, effort);
-            let full = match cwd {
-                Some(dir) => format!("cd {} && {cmd}", shell_words::quote(&dir.to_string_lossy())),
-                None => cmd,
-            };
+            let launch =
+                RemoteAgentLaunchRequest::new(cwd, agent.routed_launch(None, model, effort));
+            let launch_command = launch.shell_command();
             let server = warp_ssh_manager::with_conn(|conn| {
                 Ok(warp_ssh_manager::SshRepository::get_server(conn, node_id)?)
             });
@@ -5710,9 +5821,9 @@ impl Workspace {
                     // setup still runs, then the routed agent launch.
                     server.startup_command = Some(match server.startup_command {
                         Some(existing) if !existing.trim().is_empty() => {
-                            format!("{existing}; {full}")
+                            format!("{existing}; {launch_command}")
                         }
-                        _ => full,
+                        _ => launch_command,
                     });
                     self.open_ssh_terminal(node_id.to_string(), server, false, ctx);
                     // Remote launches intentionally use that host's own default
@@ -5788,7 +5899,7 @@ impl Workspace {
             !self.current_workspace_state.is_ai_assistant_panel_open;
 
         // Close any other modals that could be floating on top of the Zaplex AI panel.
-        self.current_workspace_state.close_all_modals();
+        self.close_all_modals(ctx);
 
         if self.current_workspace_state.is_ai_assistant_panel_open {
             // Close the resource center panel if we open the AI Assistant panel.
@@ -6740,6 +6851,117 @@ impl Workspace {
             || self.focus_terminal_view_in_other_window(terminal_view_id, ctx)
     }
 
+    pub(crate) fn control_surface_matches(
+        &self,
+        workspace: ViewHandle<Self>,
+        auth: &warp_cli::control::ControlAuth,
+        ctx: &AppContext,
+    ) -> Vec<crate::control_surface::ControlSurfaceMatch> {
+        self.tabs
+            .iter()
+            .flat_map(|tab| {
+                let workspace = workspace.clone();
+                let pane_group = tab.pane_group.clone();
+                tab.pane_group
+                    .as_ref(ctx)
+                    .control_surface_matches(auth, ctx)
+                    .into_iter()
+                    .map(move |surface| crate::control_surface::ControlSurfaceMatch {
+                        workspace: workspace.clone(),
+                        pane_group: pane_group.clone(),
+                        terminal: surface.terminal,
+                        context: surface.context,
+                    })
+            })
+            .collect()
+    }
+
+    pub(crate) fn control_surface_id_matches(
+        &self,
+        workspace: ViewHandle<Self>,
+        surface_id: &str,
+        ctx: &AppContext,
+    ) -> Vec<crate::control_surface::ControlSurfaceMatch> {
+        self.tabs
+            .iter()
+            .flat_map(|tab| {
+                let workspace = workspace.clone();
+                let pane_group = tab.pane_group.clone();
+                tab.pane_group
+                    .as_ref(ctx)
+                    .control_surface_id_matches(surface_id, ctx)
+                    .into_iter()
+                    .map(move |surface| crate::control_surface::ControlSurfaceMatch {
+                        workspace: workspace.clone(),
+                        pane_group: pane_group.clone(),
+                        terminal: surface.terminal,
+                        context: surface.context,
+                    })
+            })
+            .collect()
+    }
+
+    pub(crate) fn focus_control_terminal(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        self.focus_terminal_view_anywhere(terminal_view_id, ctx)
+    }
+
+    pub(crate) fn focus_control_fleet_session(
+        &mut self,
+        host: &str,
+        session_id: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let mut matches = crate::cockpit::CockpitModel::as_ref(ctx)
+            .inventory()
+            .hosts
+            .iter()
+            .filter(|candidate| {
+                candidate.host == host
+                    || candidate.host_id.as_deref() == Some(host)
+                    || (candidate.is_local && host == "local")
+            })
+            .flat_map(|candidate| {
+                candidate.projects.iter().flat_map(move |project| {
+                    project
+                        .sessions
+                        .iter()
+                        .filter(move |session| session.session_id == session_id)
+                        .map(move |session| {
+                            (
+                                candidate.host.clone(),
+                                candidate.host_id.clone(),
+                                session.provider,
+                                session.config_dir.clone(),
+                                session.account_email.clone(),
+                                candidate.is_local,
+                            )
+                        })
+                })
+            });
+        let Some(target) = matches.next() else {
+            return false;
+        };
+        if matches.next().is_some() {
+            return false;
+        }
+        let (host, host_id, provider, config_dir, account_email, is_local) = target;
+        self.attach_fleet_session(
+            &host,
+            host_id.as_deref(),
+            session_id,
+            provider,
+            config_dir.as_deref(),
+            account_email.as_deref(),
+            is_local,
+            ctx,
+        );
+        true
+    }
+
     /// Shows the notification error in the specific pane.
     pub fn show_notification_error(
         &mut self,
@@ -6863,9 +7085,11 @@ impl Workspace {
             right,
         };
         TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .header_toolbar_chip_selection
-                .set_value(selection, ctx));
+            report_if_error!(
+                settings
+                    .header_toolbar_chip_selection
+                    .set_value(selection, ctx)
+            );
         });
     }
 
@@ -7235,6 +7459,20 @@ impl Workspace {
                     log::warn!("AdoptDaemonSession ignored: daemon sessions are unix-only");
                 }
             }
+            LeftPanelEvent::OpenMultiplexerSession {
+                node_id,
+                server,
+                mode,
+                target,
+            } => {
+                self.open_multiplexer_ssh_terminal(
+                    node_id.clone(),
+                    server.clone(),
+                    *mode,
+                    target,
+                    ctx,
+                );
+            }
         }
     }
 
@@ -7291,14 +7529,11 @@ impl Workspace {
     pub fn open_ssh_server(&mut self, node_id: String, ctx: &mut ViewContext<Self>) {
         use crate::pane_group::pane::ssh_server_pane::SshServerPane;
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            let existing = pane_group
-                .visible_pane_ids()
-                .into_iter()
-                .find(|id| {
-                    pane_group
-                        .downcast_pane_by_id::<SshServerPane>(*id)
-                        .is_some_and(|p| p.node_id() == node_id.as_str())
-                });
+            let existing = pane_group.visible_pane_ids().into_iter().find(|id| {
+                pane_group
+                    .downcast_pane_by_id::<SshServerPane>(*id)
+                    .is_some_and(|p| p.node_id() == node_id.as_str())
+            });
             if let Some(id) = existing {
                 pane_group.focus_pane_by_id(id, ctx);
                 return;
@@ -7340,6 +7575,8 @@ impl Workspace {
     /// Opens an SFTP file browser pane for the given SSH node in the central area.
     pub fn open_sftp_pane(&mut self, node_id: String, ctx: &mut ViewContext<Self>) {
         use crate::pane_group::pane::sftp_pane::SftpPane;
+        #[cfg(all(unix, feature = "local_tty"))]
+        self.ensure_sftp_safe_file_daemon(&node_id, ctx);
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             // SSH-manager "SFTP Browse": browse the host from its root.
             let pane = SftpPane::new(node_id, None, ctx);
@@ -7364,6 +7601,8 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::pane_group::pane::sftp_pane::SftpPane;
+        #[cfg(all(unix, feature = "local_tty"))]
+        self.ensure_sftp_safe_file_daemon(&node_id, ctx);
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             let pane = SftpPane::new_for_pick(node_id, start_path, ctx);
             let smart_split_direction =
@@ -7375,6 +7614,98 @@ impl Workspace {
                 ctx,
             );
         });
+    }
+
+    /// Ensures a standalone SFTP pane has a workspace-owned safe-file daemon.
+    ///
+    /// A terminal-backed pane normally reuses that terminal's daemon. Opening
+    /// "SFTP Browse" directly has no terminal lifetime to borrow, so this
+    /// creates one hidden, persistent host connection and records it before
+    /// starting asynchronous setup to deduplicate concurrent pane opens.
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn ensure_sftp_safe_file_daemon(&mut self, node_id: &str, ctx: &mut ViewContext<Self>) {
+        let already_connected = RemoteServerManager::as_ref(ctx)
+            .connected_daemons()
+            .into_iter()
+            .any(|daemon| {
+                daemon.registry_node_id.as_deref() == Some(node_id)
+                    && zaplex_remote_session::types::has_feature(
+                        &daemon.features,
+                        zaplex_remote_session::types::FEATURE_SAFE_FILE_TRANSACTIONS_V1,
+                    )
+            });
+        if already_connected || self.sftp_file_service_sessions.contains_key(node_id) {
+            return;
+        }
+
+        let Some(server) = resolved_daemon_server(node_id) else {
+            log::warn!("SFTP safe-file service: registry node {node_id} is unavailable");
+            return;
+        };
+        if !crate::remote_server::headless_connect::is_headless_capable(&server) {
+            log::info!(
+                "SFTP safe-file service [{}]: headless daemon authentication is unavailable",
+                server.host
+            );
+            return;
+        }
+
+        use crate::remote_server::auth_context::server_api_auth_context;
+        use crate::remote_server::headless_connect;
+        use crate::remote_server::ssh_transport::SshTransport;
+
+        let session_id = headless_connect::alloc_daemon_session_id();
+        self.sftp_file_service_sessions
+            .insert(node_id.to_string(), session_id);
+        remember_daemon_node_session(
+            &mut self.daemon_node_sessions,
+            node_id.to_string(),
+            session_id,
+        );
+        self.daemon_session_hosts
+            .insert(session_id, server.host.clone());
+
+        let auth_context = std::sync::Arc::new(server_api_auth_context(
+            AuthStateProvider::as_ref(ctx).get().clone(),
+        ));
+        let socket_path = headless_connect::control_socket_path(&server);
+        let host = server.host.clone();
+        let registry_node_id = node_id.to_string();
+        let server_for_transport = server.clone();
+        let registry_node_id_for_failure = registry_node_id.clone();
+
+        ctx.spawn(
+            headless_connect::prepare_daemon_transport(
+                server,
+                socket_path.clone(),
+                auth_context.clone(),
+            ),
+            move |workspace, result, ctx| match result {
+                Ok(()) => {
+                    let transport = SshTransport::new(socket_path, auth_context.clone())
+                        .with_self_heal(server_for_transport);
+                    RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+                        manager.mark_session_persistent(session_id);
+                        manager.connect_session(
+                            session_id,
+                            transport,
+                            auth_context,
+                            host,
+                            Some(registry_node_id),
+                            ctx,
+                        );
+                    });
+                }
+                Err(error) => {
+                    log::warn!("SFTP safe-file service [{host}] could not start: {error}");
+                    workspace
+                        .sftp_file_service_sessions
+                        .remove(&registry_node_id_for_failure);
+                    forget_daemon_node_session(&mut workspace.daemon_node_sessions, session_id);
+                    workspace.daemon_session_hosts.remove(&session_id);
+                }
+            },
+        );
     }
 
     /// After clicking a file in the remote file tree, opens it using the buffer-sync protocol.
@@ -7726,9 +8057,7 @@ impl Workspace {
         let registered_node_ids = warp_ssh_manager::with_conn(|conn| {
             Ok(warp_ssh_manager::SshRepository::list_nodes(conn)?
                 .into_iter()
-                .filter(|node| {
-                    matches!(node.kind, warp_ssh_manager::types::NodeKind::Server)
-                })
+                .filter(|node| matches!(node.kind, warp_ssh_manager::types::NodeKind::Server))
                 .map(|node| node.id)
                 .collect::<Vec<_>>())
         })
@@ -7805,6 +8134,34 @@ impl Workspace {
         force_classic: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.open_ssh_terminal_command(node_id, server, force_classic, None, ctx);
+    }
+
+    fn open_multiplexer_ssh_terminal(
+        &mut self,
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+        mode: warp_ssh_manager::MultiplexerAttachMode,
+        target: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.open_ssh_terminal_command(
+            node_id,
+            server,
+            true,
+            Some((mode, target.to_string())),
+            ctx,
+        );
+    }
+
+    fn open_ssh_terminal_command(
+        &mut self,
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+        force_classic: bool,
+        multiplexer: Option<(warp_ssh_manager::MultiplexerAttachMode, String)>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshRepository, SshSecretStore};
 
         let (server_for_connection, secret_lookup_id, secret_kind) =
@@ -7843,7 +8200,28 @@ impl Workspace {
             }
         }
 
-        let cmd = warp_ssh_manager::build_ssh_command_line(&server_for_connection);
+        let cmd = match multiplexer.as_ref() {
+            Some((mode, target)) => match warp_ssh_manager::build_multiplexer_ssh_command_line(
+                &server_for_connection,
+                *mode,
+                target,
+            ) {
+                Ok(command) => command,
+                Err(error) => {
+                    self.toast_stack.update(ctx, |view, ctx| {
+                        view.add_ephemeral_toast(
+                            DismissibleToast::error(crate::t!(
+                                "workspace-left-panel-ssh-manager-multiplexer-attach-error",
+                                detail = error.to_string()
+                            )),
+                            ctx,
+                        );
+                    });
+                    return;
+                }
+            },
+            None => warp_ssh_manager::build_ssh_command_line(&server_for_connection),
+        };
         let window_id = ctx.window_id();
 
         // Open a new tab (not a split — the previous add_terminal_pane(Direction::Right) would
@@ -7900,14 +8278,16 @@ impl Workspace {
         );
 
         // Startup command injector — waits for the shell to be ready, then automatically runs startup_command
-        if let Some(ref startup_cmd) = server.startup_command {
-            if !startup_cmd.is_empty() {
-                crate::ssh_manager::startup_command_injector::spawn_startup_command_injector(
-                    terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c)),
-                    terminal_view.downgrade(),
-                    startup_cmd.clone(),
-                    ctx,
-                );
+        if multiplexer.is_none() {
+            if let Some(ref startup_cmd) = server.startup_command {
+                if !startup_cmd.is_empty() {
+                    crate::ssh_manager::startup_command_injector::spawn_startup_command_injector(
+                        terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c)),
+                        terminal_view.downgrade(),
+                        startup_cmd.clone(),
+                        ctx,
+                    );
+                }
             }
         }
 
@@ -7963,7 +8343,7 @@ impl Workspace {
     ) -> bool {
         use crate::remote_server::auth_context::server_api_auth_context;
         use crate::remote_server::headless_connect::{
-            self, DaemonPreflight, DAEMON_BINARY_MISSING,
+            self, DAEMON_BINARY_MISSING, DaemonPreflight,
         };
         use crate::remote_server::ssh_transport::{InstallProgress, SshTransport};
 
@@ -8035,7 +8415,8 @@ impl Workspace {
             .get_pane_group_view(self.active_tab_index)
             .map(|pane_group| pane_group.id());
         if let Some(pane_group_id) = pending_pane_group {
-            self.ssh_tab_nodes.insert(pane_group_id, node_id_owned.clone());
+            self.ssh_tab_nodes
+                .insert(pane_group_id, node_id_owned.clone());
         }
 
         // Bounded preflight off the main thread (ControlMaster + binary check +
@@ -8095,7 +8476,12 @@ impl Workspace {
                         // sees a replacement, not a disappearance. The user may
                         // have closed the pending tab themselves meanwhile —
                         // look it up by pane-group id rather than by index.
-                        workspace.fall_back_to_classic_ssh(node_id_owned, server_owned, warning, ctx);
+                        workspace.fall_back_to_classic_ssh(
+                            node_id_owned,
+                            server_owned,
+                            warning,
+                            ctx,
+                        );
                         if let Some(pane_group_id) = pending_pane_group {
                             if let Some(index) = workspace
                                 .tabs
@@ -8103,7 +8489,7 @@ impl Workspace {
                                 .position(|tab| tab.pane_group.id() == pane_group_id)
                             {
                                 workspace.close_tab(
-                                    index, true, /* skip_confirmation */
+                                    index, true,  /* skip_confirmation */
                                     false, /* add_to_undo_stack */
                                     ctx,
                                 );
@@ -8150,9 +8536,9 @@ impl Workspace {
                         );
                         let transport =
                             SshTransport::new(socket_path.clone(), auth_context.clone());
-                        let install = transport.install_binary_with_progress(
-                            InstallProgress::new(progress_tx.clone()),
-                        );
+                        let install = transport.install_binary_with_progress(InstallProgress::new(
+                            progress_tx.clone(),
+                        ));
                         ctx.spawn(install, move |workspace, result, ctx| {
                             // Same cancellation contract as the preflight above:
                             // the install runs for seconds — a tab the user
@@ -8185,44 +8571,47 @@ impl Workspace {
                                 return;
                             }
                             match result {
-                            Ok(()) => {
-                                log::info!(
-                                    "daemon connect [{host}]: install complete — connecting"
-                                );
-                                let _ = progress_tx.try_send(
-                                    crate::t!("connect-progress-setup-complete").to_string(),
-                                );
-                                workspace.connect_daemon_session(
-                                    server_owned,
-                                    session_id,
-                                    socket_path,
-                                    auth_context,
-                                    ctx,
-                                );
-                            }
-                            Err(e) => {
-                                log::warn!(
-                                    "daemon connect [{host}]: install failed; falling back to \
+                                Ok(()) => {
+                                    log::info!(
+                                        "daemon connect [{host}]: install complete — connecting"
+                                    );
+                                    let _ = progress_tx.try_send(
+                                        crate::t!("connect-progress-setup-complete").to_string(),
+                                    );
+                                    workspace.connect_daemon_session(
+                                        server_owned,
+                                        session_id,
+                                        socket_path,
+                                        auth_context,
+                                        ctx,
+                                    );
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "daemon connect [{host}]: install failed; falling back to \
                                      classic SSH: {e}"
-                                );
-                                // Leave the failure visible in the daemon tab, then open a
-                                // working classic session alongside it.
-                                let _ = progress_tx.try_send(
-                                    crate::t!("connect-progress-setup-failed", error = e.to_string())
+                                    );
+                                    // Leave the failure visible in the daemon tab, then open a
+                                    // working classic session alongside it.
+                                    let _ = progress_tx.try_send(
+                                        crate::t!(
+                                            "connect-progress-setup-failed",
+                                            error = e.to_string()
+                                        )
                                         .to_string(),
-                                );
-                                let warning = crate::t!(
-                                    "connect-fallback-install-failed",
-                                    host = host.clone(),
-                                    error = e.to_string()
-                                );
-                                workspace.fall_back_to_classic_ssh(
-                                    node_id_owned,
-                                    server_owned,
-                                    warning,
-                                    ctx,
-                                );
-                            }
+                                    );
+                                    let warning = crate::t!(
+                                        "connect-fallback-install-failed",
+                                        host = host.clone(),
+                                        error = e.to_string()
+                                    );
+                                    workspace.fall_back_to_classic_ssh(
+                                        node_id_owned,
+                                        server_owned,
+                                        warning,
+                                        ctx,
+                                    );
+                                }
                             }
                         });
                     }
@@ -8256,8 +8645,7 @@ impl Workspace {
             .insert(session_id, server.clone());
         let host_label = server.host.clone();
         let registry_node_id = server.node_id.clone();
-        let transport =
-            SshTransport::new(socket_path, auth_context.clone()).with_self_heal(server);
+        let transport = SshTransport::new(socket_path, auth_context.clone()).with_self_heal(server);
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.mark_session_persistent(session_id);
             mgr.connect_session(
@@ -8458,11 +8846,9 @@ impl Workspace {
         // already open in a tab, focus that tab instead of opening a second view
         // onto it (a second adopt would split input/output across two tabs).
         let live_pg_ids: Vec<EntityId> = self.tabs.iter().map(|t| t.pane_group.id()).collect();
-        self.adopted_daemon_sessions.retain(|_, adopted| {
-            live_pg_ids.contains(&adopted.pane_group_id)
-        });
-        let binding_key =
-            daemon_adoption_key(&server.node_id, &pty_session_id, pty_generation);
+        self.adopted_daemon_sessions
+            .retain(|_, adopted| live_pg_ids.contains(&adopted.pane_group_id));
+        let binding_key = daemon_adoption_key(&server.node_id, &pty_session_id, pty_generation);
         if let Some(adopted) = self.adopted_daemon_sessions.get(&binding_key) {
             let pg_id = adopted.pane_group_id;
             let connection_session_id = adopted.connection_session_id;
@@ -8514,14 +8900,13 @@ impl Workspace {
             .get_pane_group_view(self.active_tab_index)
             .map(|pane_group| pane_group.id())
         {
-            self.adopted_daemon_sessions
-                .insert(
-                    binding_key,
-                    AdoptedDaemonSession {
-                        pane_group_id,
-                        connection_session_id: session_id,
-                    },
-                );
+            self.adopted_daemon_sessions.insert(
+                binding_key,
+                AdoptedDaemonSession {
+                    pane_group_id,
+                    connection_session_id: session_id,
+                },
+            );
             self.ssh_tab_nodes
                 .insert(pane_group_id, server.node_id.clone());
         }
@@ -9169,7 +9554,7 @@ impl Workspace {
             let ai_settings = AISettings::as_ref(ctx);
             let install_model = CLIAgentInstallModel::as_ref(ctx);
             for agent in enum_iterator::all::<CLIAgent>() {
-                if matches!(agent, CLIAgent::Unknown) {
+                if !agent.is_available_for_new_launch() {
                     continue;
                 }
                 if !install_model.is_cli_agent_installed(agent) {
@@ -9361,9 +9746,7 @@ impl Workspace {
                     open_in_active_window: false,
                 },
             ),
-            NewSessionMenuItem::OpenLaunchConfigDocs => {
-                ctx.open_url("")
-            }
+            NewSessionMenuItem::OpenLaunchConfigDocs => ctx.open_url(""),
             #[cfg(feature = "local_fs")]
             NewSessionMenuItem::CreateNewTabConfig => {
                 self.create_and_open_new_tab_config(ctx);
@@ -10700,17 +11083,21 @@ impl Workspace {
 
     fn toggle_recording_mode(&self, ctx: &mut ViewContext<Self>) {
         DebugSettings::handle(ctx).update(ctx, |debug_settings, settings_ctx| {
-            report_if_error!(debug_settings
-                .recording_mode
-                .toggle_and_save_value(settings_ctx));
+            report_if_error!(
+                debug_settings
+                    .recording_mode
+                    .toggle_and_save_value(settings_ctx)
+            );
         });
     }
 
     fn toggle_in_band_generators(&self, ctx: &mut ViewContext<Self>) {
         DebugSettings::handle(ctx).update(ctx, |debug_settings, settings_ctx| {
-            report_if_error!(debug_settings
-                .are_in_band_generators_for_all_sessions_enabled
-                .toggle_and_save_value(settings_ctx));
+            report_if_error!(
+                debug_settings
+                    .are_in_band_generators_for_all_sessions_enabled
+                    .toggle_and_save_value(settings_ctx)
+            );
         });
     }
 
@@ -10873,9 +11260,11 @@ impl Workspace {
 
         // Mark that we've done the one-time auto-open
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .has_auto_opened_conversation_list
-                .set_value(true, ctx));
+            report_if_error!(
+                settings
+                    .has_auto_opened_conversation_list
+                    .set_value(true, ctx)
+            );
         });
     }
 
@@ -12626,9 +13015,7 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         let expected_fingerprint = expected_fingerprint.map(str::to_owned);
-        if !zaplex_cockpit::pid_signalable(pid)
-            || expected_fingerprint.is_none()
-        {
+        if !zaplex_cockpit::pid_signalable(pid) || expected_fingerprint.is_none() {
             self.toast_stack.update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
                     DismissibleToast::error(zaplex_cockpit::unsignalable_toast(&agent_label)),
@@ -12666,11 +13053,7 @@ impl Workspace {
             async move {
                 match target {
                     zaplex_cockpit::GuardrailTarget::Local => {
-                        send_local_guardrail_signal(
-                            pid,
-                            expected_fingerprint.as_deref(),
-                            signal,
-                        )
+                        send_local_guardrail_signal(pid, expected_fingerprint.as_deref(), signal)
                     }
                     zaplex_cockpit::GuardrailTarget::Remote(_) => match daemon {
                         Some(daemon)
@@ -12699,7 +13082,9 @@ impl Workspace {
             },
             move |me, outcome, ctx| {
                 let (message, is_error) = match outcome {
-                    GuardrailSendOutcome::Sent => (zaplex_cockpit::sent_toast(&agent_label, signal), false),
+                    GuardrailSendOutcome::Sent => {
+                        (zaplex_cockpit::sent_toast(&agent_label, signal), false)
+                    }
                     GuardrailSendOutcome::Failed(e) => {
                         (zaplex_cockpit::failed_toast(&agent_label, signal, &e), true)
                     }
@@ -12745,18 +13130,16 @@ impl Workspace {
                 .iter()
                 .flat_map(|h| {
                     h.projects.iter().flat_map(move |p| {
-                        p.sessions
-                            .iter()
-                            .map(move |s| {
-                                (
-                                    h.host.clone(),
-                                    h.host_id.clone(),
-                                    h.is_local,
-                                    s.session_id.clone(),
-                                    s.pid,
-                                    s.process_fingerprint.clone(),
-                                )
-                            })
+                        p.sessions.iter().map(move |s| {
+                            (
+                                h.host.clone(),
+                                h.host_id.clone(),
+                                h.is_local,
+                                s.session_id.clone(),
+                                s.pid,
+                                s.process_fingerprint.clone(),
+                            )
+                        })
                     })
                 })
                 .filter(|(_, _, _, _, pid, fingerprint)| {
@@ -12924,9 +13307,11 @@ impl Workspace {
 
     pub fn toggle_block_snackbar(&mut self, ctx: &mut ViewContext<Self>) {
         BlockListSettings::handle(ctx).update(ctx, |blocklist_settings, ctx| {
-            report_if_error!(blocklist_settings
-                .snackbar_enabled
-                .toggle_and_save_value(ctx));
+            report_if_error!(
+                blocklist_settings
+                    .snackbar_enabled
+                    .toggle_and_save_value(ctx)
+            );
         });
     }
 
@@ -12938,9 +13323,11 @@ impl Workspace {
 
     pub fn toggle_syntax_highlighting(&mut self, ctx: &mut ViewContext<Self>) {
         InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-            report_if_error!(input_settings
-                .syntax_highlighting
-                .toggle_and_save_value(ctx));
+            report_if_error!(
+                input_settings
+                    .syntax_highlighting
+                    .toggle_and_save_value(ctx)
+            );
         });
     }
 
@@ -12955,9 +13342,11 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         AccessibilitySettings::handle(ctx).update(ctx, |accessibility_settings, ctx| {
-            report_if_error!(accessibility_settings
-                .a11y_verbosity
-                .set_value(verbosity, ctx));
+            report_if_error!(
+                accessibility_settings
+                    .a11y_verbosity
+                    .set_value(verbosity, ctx)
+            );
         });
     }
 
@@ -13030,6 +13419,7 @@ impl Workspace {
                 TabSnapshot {
                     root,
                     custom_title: pane_group.custom_title(app),
+                    is_pinned: self.tabs.get(tab_index).is_some_and(|tab| tab.is_pinned),
                     default_directory_color: self
                         .tabs
                         .get(tab_index)
@@ -13411,6 +13801,14 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let tab_indices_vec = tab_indices.collect_vec();
+        if !skip_confirmation
+            && tab_indices_vec
+                .iter()
+                .any(|index| self.tabs.get(*index).is_some_and(|tab| tab.is_pinned))
+        {
+            self.show_close_session_confirmation_dialog(dialog_source, ctx);
+            return false;
+        }
         // Check if there are any tabs that can't be closed without confirmation
         if !skip_confirmation && self.should_confirm_close_session() {
             for i in tab_indices_vec.iter() {
@@ -13678,6 +14076,7 @@ impl Workspace {
             pane_group.reattach_panes(ctx);
         });
 
+        let tab_index = self.tab_insertion_index(tab_index, tab_data.is_pinned);
         self.tabs.insert(tab_index, tab_data);
         self.activate_tab(tab_index, ctx);
 
@@ -13961,9 +14360,11 @@ impl Workspace {
                     self.tabs.push(TabData::new(new_pane_group));
                     self.activate_tab_internal(self.tab_count() - 1, ctx);
                 } else {
+                    let insertion_index =
+                        self.tab_insertion_index(self.active_tab_index + 1, false);
                     self.tabs
-                        .insert(self.active_tab_index + 1, TabData::new(new_pane_group));
-                    self.activate_tab_internal(self.active_tab_index + 1, ctx);
+                        .insert(insertion_index, TabData::new(new_pane_group));
+                    self.activate_tab_internal(insertion_index, ctx);
                 }
             }
         }
@@ -14028,6 +14429,7 @@ impl Workspace {
             self.tabs.push(TabData::new(new_pane_group));
             self.activate_tab_internal(self.tab_count() - 1, ctx);
         } else {
+            let new_idx = self.tab_insertion_index(new_idx, false);
             self.tabs.insert(new_idx, TabData::new(new_pane_group));
             self.activate_tab_internal(new_idx, ctx);
         }
@@ -14998,6 +15400,9 @@ impl Workspace {
             TabMovement::Right if index < tabs_len - 1 => index + 1,
             _ => return,
         };
+        if self.tabs[index].is_pinned != self.tabs[new_index].is_pinned {
+            return;
+        }
         // Don't need to worry about negative numbers because that case is covered above
         self.tabs.swap(index, new_index);
 
@@ -15014,6 +15419,55 @@ impl Workspace {
         }
 
         ctx.notify();
+    }
+
+    fn pinned_tab_count(&self) -> usize {
+        self.tabs.iter().take_while(|tab| tab.is_pinned).count()
+    }
+
+    fn tab_insertion_index(&self, requested_index: usize, is_pinned: bool) -> usize {
+        let pinned_tab_count = self.pinned_tab_count();
+        if is_pinned {
+            requested_index.min(pinned_tab_count)
+        } else {
+            requested_index.max(pinned_tab_count).min(self.tabs.len())
+        }
+    }
+
+    /// Changes a tab's pin state and keeps the stable pinned-prefix invariant.
+    /// Returns the tab's new index, or `None` for an invalid source index.
+    fn set_tab_pinned(
+        &mut self,
+        index: usize,
+        is_pinned: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<usize> {
+        let tab = self.tabs.get(index)?;
+        if tab.is_pinned == is_pinned {
+            return Some(index);
+        }
+
+        let active_pane_group_id = self
+            .tabs
+            .get(self.active_tab_index)
+            .map(|tab| tab.pane_group.id());
+        let mut tab = self.tabs.remove(index);
+        tab.is_pinned = is_pinned;
+        let new_index = self.pinned_tab_count();
+        self.tabs.insert(new_index, tab);
+
+        if let Some(active_pane_group_id) = active_pane_group_id {
+            if let Some(active_index) = self
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == active_pane_group_id)
+            {
+                self.set_active_tab_index(active_index, ctx);
+            }
+        }
+
+        ctx.notify();
+        Some(new_index)
     }
 
     /// How to render the tab bar.
@@ -15356,12 +15810,20 @@ impl Workspace {
 
     /// Close all overlays in this workspace and the active pane group.
     fn close_all_overlays(&mut self, ctx: &mut ViewContext<Self>) {
-        self.current_workspace_state.close_all_modals();
+        self.close_all_modals(ctx);
         self.close_tab_bar_overflow_menu(ctx);
         self.close_all_chip_menus(ctx);
 
         self.active_tab_pane_group()
             .update(ctx, |pane_group, ctx| pane_group.close_overlays(ctx));
+    }
+
+    fn close_all_modals(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.current_workspace_state.is_theme_creator_modal_open {
+            self.theme_creator_modal
+                .update(ctx, |modal, ctx| modal.clear_transient(ctx));
+        }
+        self.current_workspace_state.close_all_modals();
     }
 
     /// Close all chip menus across all inputs to prevent overlapping with modals.
@@ -16160,7 +16622,7 @@ impl Workspace {
             }
             // If focused pane contains an object, then set selected state in WD to that object
             pane_group::Event::PaneFocused => {
-                self.current_workspace_state.close_all_modals();
+                self.close_all_modals(ctx);
 
                 // Re-evaluate which region is focused and update pane dimming accordingly.
                 self.update_pane_dimming_for_current_focus_region(ctx);
@@ -18229,7 +18691,11 @@ impl Workspace {
 
     /// Open the guardrails confirm dialog (kill / stop-all) — see
     /// `agent_guardrail_dialog.rs`.
-    fn open_agent_guardrail_dialog(&mut self, kind: AgentGuardrailKind, ctx: &mut ViewContext<Self>) {
+    fn open_agent_guardrail_dialog(
+        &mut self,
+        kind: AgentGuardrailKind,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.agent_guardrail_dialog.update(ctx, |view, _| {
             view.set_kind(kind);
         });
@@ -18438,9 +18904,11 @@ impl Workspace {
 
     fn reset_zoom(&mut self, ctx: &mut ViewContext<Self>) {
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .zoom_level
-                .set_value(ZoomLevel::default_value(), ctx));
+            report_if_error!(
+                window_settings
+                    .zoom_level
+                    .set_value(ZoomLevel::default_value(), ctx)
+            );
         });
     }
 
@@ -18460,9 +18928,11 @@ impl Workspace {
         };
 
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .zoom_level
-                .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx));
+            report_if_error!(
+                window_settings
+                    .zoom_level
+                    .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx)
+            );
         });
     }
 
@@ -18475,9 +18945,11 @@ impl Workspace {
 
     fn set_terminal_font_size(&mut self, new_font_size: f32, ctx: &mut ViewContext<Self>) {
         FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-            report_if_error!(font_settings
-                .monospace_font_size
-                .set_value(new_font_size, ctx));
+            report_if_error!(
+                font_settings
+                    .monospace_font_size
+                    .set_value(new_font_size, ctx)
+            );
         });
     }
 
@@ -18662,8 +19134,8 @@ impl Workspace {
     }
 
     fn handle_codex_modal_event(&mut self, event: &CodexModalEvent, ctx: &mut ViewContext<Self>) {
-        use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
         use crate::AIExecutionProfilesModel;
+        use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 
         match event {
             CodexModalEvent::Close => {
@@ -18840,8 +19312,12 @@ impl Workspace {
         let scan = crate::terminal::cli_agent::scan_cli_agent_installations();
         let claude_installed = scan.get(&CLIAgent::Claude).copied().unwrap_or(false);
         let codex_installed = scan.get(&CLIAgent::Codex).copied().unwrap_or(false);
+        let antigravity_installed = scan.get(&CLIAgent::Antigravity).copied().unwrap_or(false);
+        let grok_installed = scan.get(&CLIAgent::Grok).copied().unwrap_or(false);
         log::info!(
-            "spawn-card: synchronous CLI scan → claude={claude_installed} codex={codex_installed}"
+            "spawn-card: synchronous CLI scan → claude={claude_installed} \
+             codex={codex_installed} antigravity={antigravity_installed} \
+             grok={grok_installed}"
         );
 
         let claude = self.spawn_card_provider_options(
@@ -18877,10 +19353,8 @@ impl Workspace {
         // daemon dropped since the inventory was folded), the scope is stale.
         // In that case neither its id nor its display name may preselect another
         // registered host; the real chooser remains open for an explicit choice.
-        let is_unscoped =
-            registry_node_id.is_none() && host_id.is_none() && host.is_none();
-        let translated_node_id =
-            self.translate_scoped_daemon_host(host_id.as_deref(), &*ctx);
+        let is_unscoped = registry_node_id.is_none() && host_id.is_none() && host.is_none();
+        let translated_node_id = self.translate_scoped_daemon_host(host_id.as_deref(), &*ctx);
         let (scoped_host_id, scoped_host_name) = reconcile_spawn_host_scope(
             registry_node_id,
             host_id.as_deref(),
@@ -18908,6 +19382,8 @@ impl Workspace {
         let cfg = spawn_card::SpawnCardConfig {
             claude,
             codex,
+            antigravity_installed,
+            grok_installed,
             hosts,
             scoped_host_id,
             scoped_host_name,
@@ -18918,7 +19394,7 @@ impl Workspace {
         self.spawn_card
             .update(ctx, |card, ctx| card.configure(cfg, ctx));
 
-        self.current_workspace_state.close_all_modals();
+        self.close_all_modals(ctx);
         self.current_workspace_state.is_spawn_card_open = true;
         ctx.focus(&self.spawn_card);
         ctx.notify();
@@ -18933,7 +19409,10 @@ impl Workspace {
                 self.focus_active_tab(ctx);
                 ctx.notify();
             }
-            SpawnCardEvent::BrowseRemoteDir { node_id, start_path } => {
+            SpawnCardEvent::BrowseRemoteDir {
+                node_id,
+                start_path,
+            } => {
                 // Hide the card (its selections persist — it is a persistent view,
                 // not rebuilt) and open the host's SFTP browser in pick mode; the
                 // chosen dir returns via RemoteSpawnDirPicked (#105).
@@ -22366,12 +22845,12 @@ impl Workspace {
         // The legacy SSH manager remains reachable as a secondary management
         // action from that tree; it is a primary toolbelt fallback only when the
         // Cockpit is disabled.
-        let mut views = primary_host_navigation_views(
-            *crate::cockpit::CockpitSettings::as_ref(ctx).enabled,
-        );
+        let mut views =
+            primary_host_navigation_views(*crate::cockpit::CockpitSettings::as_ref(ctx).enabled);
 
         // Remote files remain their own task-specific surface.
-        if FeatureFlag::ServerFileBrowser.is_enabled() && FeatureFlag::SshRemoteServer.is_enabled() {
+        if FeatureFlag::ServerFileBrowser.is_enabled() && FeatureFlag::SshRemoteServer.is_enabled()
+        {
             views.push(ToolPanelView::ServerFileBrowser);
         }
 
@@ -22504,6 +22983,10 @@ impl TypedActionView for Workspace {
             MoveActiveTabRight => self.move_tab(self.active_tab_index, TabMovement::Right, ctx),
             MoveTabLeft(index) => self.move_tab(*index, TabMovement::Left, ctx),
             MoveTabRight(index) => self.move_tab(*index, TabMovement::Right, ctx),
+            SetTabPinned { index, is_pinned } => {
+                self.set_tab_pinned(*index, *is_pinned, ctx);
+                ctx.dispatch_global_action("workspace:save_app", ());
+            }
             RenameTab(index) => self.rename_tab(*index, ctx),
             ResetTabName(index) => self.clear_tab_name(*index, ctx),
             RenamePane(locator) => self.rename_pane(*locator, ctx),
@@ -22542,12 +23025,16 @@ impl TypedActionView for Workspace {
                         } else {
                             // Config missing or deleted — clear and fall through to Terminal.
                             AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                                report_if_error!(settings
-                                    .default_session_mode_internal
-                                    .set_value(DefaultSessionMode::Terminal, ctx));
-                                report_if_error!(settings
-                                    .default_tab_config_path
-                                    .set_value(String::new(), ctx));
+                                report_if_error!(
+                                    settings
+                                        .default_session_mode_internal
+                                        .set_value(DefaultSessionMode::Terminal, ctx)
+                                );
+                                report_if_error!(
+                                    settings
+                                        .default_tab_config_path
+                                        .set_value(String::new(), ctx)
+                                );
                             });
                             self.add_terminal_tab(false, ctx);
                         }
@@ -22568,6 +23055,7 @@ impl TypedActionView for Workspace {
                     }
                 }
             }
+            OpenThemeCreatorModal => self.open_theme_creator_modal(ctx),
             AddTerminalTab { hide_homepage } => {
                 self.add_new_session_tab_internal_with_default_session_mode_behavior(
                     NewSessionSource::Tab,
@@ -22591,9 +23079,7 @@ impl TypedActionView for Workspace {
                     Ok(warp_ssh_manager::SshRepository::get_server(conn, node_id)?)
                 });
                 match server {
-                    Ok(Some(server)) => {
-                        self.open_ssh_terminal(node_id.clone(), server, false, ctx)
-                    }
+                    Ok(Some(server)) => self.open_ssh_terminal(node_id.clone(), server, false, ctx),
                     _ => {
                         self.toast_stack.update(ctx, |view, ctx| {
                             view.add_ephemeral_toast(
@@ -22606,6 +23092,9 @@ impl TypedActionView for Workspace {
                     }
                 }
             }
+            OpenSftpPaneByNode { node_id } => {
+                self.open_sftp_pane(node_id.clone(), ctx);
+            }
             ToggleFavorite {
                 kind,
                 target,
@@ -22613,19 +23102,16 @@ impl TypedActionView for Workspace {
             } => {
                 // ★ on a tree node / an add-favorite picker item: add if absent,
                 // remove if present. The store persists + broadcasts Changed.
-                let fav =
-                    zaplex_cockpit::Favorite::new(*kind, target.clone(), label.clone());
-                crate::cockpit::favorites::FavoritesStore::handle(ctx)
-                    .update(ctx, |store, ctx| {
-                        store.toggle(fav, ctx);
-                    });
+                let fav = zaplex_cockpit::Favorite::new(*kind, target.clone(), label.clone());
+                crate::cockpit::favorites::FavoritesStore::handle(ctx).update(ctx, |store, ctx| {
+                    store.toggle(fav, ctx);
+                });
             }
             RemoveFavorite { kind, target } => {
                 // One-click remove of a stale favorite whose target has vanished.
-                crate::cockpit::favorites::FavoritesStore::handle(ctx)
-                    .update(ctx, |store, ctx| {
-                        store.remove(*kind, target, ctx);
-                    });
+                crate::cockpit::favorites::FavoritesStore::handle(ctx).update(ctx, |store, ctx| {
+                    store.remove(*kind, target, ctx);
+                });
             }
             ManageSshHost { node_id } => {
                 // Spine "⋯ manage": open the SSH-manager editor for this host.
@@ -22791,6 +23277,11 @@ impl TypedActionView for Workspace {
                 }
             }
             AddSpecificAgentTab(agent) => {
+                // Persisted Gemini panes remain detectable, but stale actions
+                // must not create a new standalone Gemini CLI session.
+                if !agent.is_available_for_new_launch() {
+                    return;
+                }
                 // Route through the spawn card (agent preselected) under the cockpit
                 // vision, like every other agent entrypoint — no blind local launch
                 // at the action boundary (a legacy/stale caller can't bypass it).
@@ -22881,9 +23372,11 @@ impl TypedActionView for Workspace {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.default_session_mode_internal.set_value(*mode, ctx));
                     if let Some(path) = tab_config_path {
-                        report_if_error!(settings
-                            .default_tab_config_path
-                            .set_value(path.to_string_lossy().into_owned(), ctx));
+                        report_if_error!(
+                            settings
+                                .default_tab_config_path
+                                .set_value(path.to_string_lossy().into_owned(), ctx)
+                        );
                     }
                 });
                 #[cfg(feature = "local_tty")]
@@ -23111,8 +23604,7 @@ impl TypedActionView for Workspace {
                     .flat_map(|h| h.projects.iter())
                     .flat_map(|p| p.sessions.iter())
                     .filter(|s| {
-                        zaplex_cockpit::pid_signalable(s.pid)
-                            && s.process_fingerprint.is_some()
+                        zaplex_cockpit::pid_signalable(s.pid) && s.process_fingerprint.is_some()
                     })
                     .count();
                 if count == 0 {
@@ -24414,8 +24906,8 @@ impl TypedActionView for Workspace {
             }
             ToggleWarpDrive => {
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
-                    let is_showing =
-                        self.left_panel_view.as_ref(ctx).active_view() == ToolPanelView::ZaplexDrive;
+                    let is_showing = self.left_panel_view.as_ref(ctx).active_view()
+                        == ToolPanelView::ZaplexDrive;
                     self.toggle_left_panel_view(&LeftPanelAction::ZaplexDrive, is_showing, ctx);
                 }
             }
@@ -26017,6 +26509,7 @@ impl Workspace {
         let tab = self.tabs.get(index)?;
         let pane_group = tab.pane_group.clone();
         let color = tab.color();
+        let is_pinned = tab.is_pinned;
         let draggable_state = tab.draggable_state.clone();
         let custom_title = pane_group.read(ctx, |pg, ctx| pg.custom_title(ctx));
         let left_panel_open = pane_group.read(ctx, |pg, _| pg.left_panel_open);
@@ -26027,6 +26520,7 @@ impl Workspace {
         Some(TransferredTab {
             pane_group,
             color,
+            is_pinned,
             custom_title,
             left_panel_open,
             right_panel_open,
@@ -26083,6 +26577,7 @@ impl Workspace {
         let TransferredTab {
             pane_group,
             color,
+            is_pinned,
             draggable_state,
             ..
         } = transferred_tab;
@@ -26090,9 +26585,10 @@ impl Workspace {
             me.handle_file_tree_event(pane_group, event, ctx)
         });
 
-        let index = insertion_index.min(self.tabs.len());
+        let index = self.tab_insertion_index(insertion_index, is_pinned);
         let mut tab_data = TabData::new(pane_group);
         tab_data.selected_color = color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+        tab_data.is_pinned = is_pinned;
         tab_data.draggable_state = draggable_state;
         self.tabs.insert(index, tab_data);
         self.activate_tab_internal(index, ctx);
@@ -26563,6 +27059,9 @@ impl Workspace {
         };
 
         if new_index != current_index {
+            if self.tabs[new_index].is_pinned != self.tabs[current_index].is_pinned {
+                return;
+            }
             self.tabs.swap(new_index, current_index);
 
             if current_index == self.active_tab_index {

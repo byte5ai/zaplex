@@ -52,16 +52,18 @@ pub(crate) fn verify_oss_asset_sha256(
     asset_name: &str,
 ) -> anyhow::Result<()> {
     let Some(release) = github::cached_release() else {
-        log::info!("openWarp: no cached release, skipping SHA-256 verification");
+        log::info!("Zaplex: no cached release, skipping SHA-256 verification");
         return Ok(());
     };
     let Some(asset) = release.find_asset(asset_name) else {
-        log::warn!("openWarp: asset {asset_name} not found in cached release, skipping SHA-256 verification");
+        log::warn!(
+            "Zaplex: asset {asset_name} not found in cached release, skipping SHA-256 verification"
+        );
         return Ok(());
     };
     let Some(expected) = asset.sha256_hex() else {
         log::info!(
-            "openWarp: asset {asset_name} has no recognizable digest (may be an algorithm other than SHA-256), skipping verification"
+            "Zaplex: asset {asset_name} has no recognizable digest (may be an algorithm other than SHA-256), skipping verification"
         );
         return Ok(());
     };
@@ -81,7 +83,7 @@ pub(crate) fn verify_oss_asset_sha256(
     }
     let actual = format!("{:x}", hasher.finalize());
     if actual == expected {
-        log::info!("openWarp: SHA-256 verification passed ({asset_name})");
+        log::info!("Zaplex: SHA-256 verification passed ({asset_name})");
         Ok(())
     } else {
         Err(anyhow!(
@@ -469,12 +471,7 @@ impl AutoupdateState {
             }) => {
                 // openWarp(Channel::Oss): follows the same download process as official, with platform download_update_and_cleanup
                 // internally selecting the appropriate asset on the OSS branch and skipping codesign verification.
-                self.download_new_update(
-                    update_id.clone(),
-                    request_type,
-                    new_version.clone(),
-                    ctx,
-                );
+                self.download_new_update(update_id.clone(), request_type, new_version.clone(), ctx);
                 // We report the update status after attempting to download the update.
                 return;
             }
@@ -552,8 +549,7 @@ impl AutoupdateState {
         // on the model's main thread receives it, writes to self.download_progress, and notifies.
         // Use unbounded channel to prevent download from blocking on send; UI only reads the latest progress,
         // intermediate backlog is directly overwritten during model processing, preventing "frame drops".
-        let (progress_tx, progress_rx) =
-            futures::channel::mpsc::unbounded::<DownloadProgress>();
+        let (progress_tx, progress_rx) = futures::channel::mpsc::unbounded::<DownloadProgress>();
         let on_progress: ProgressCallback = Arc::new(move |p| {
             // Ignore when receiver closes (download complete / model destroyed), doesn't affect the download itself.
             let _ = progress_tx.unbounded_send(p);
@@ -884,7 +880,7 @@ async fn fetch_version(
     update_id: &str,
     http_client: Arc<http_client::Client>,
 ) -> Result<VersionInfo> {
-    // openWarp uses GitHub Releases (zerx-lab/warp), completely bypassing Zaplex official
+    // Zaplex uses its own GitHub Releases, completely bypassing the upstream
     // channel_versions / GCS. Return early to avoid fetch_channel_versions failing downstream.
     if matches!(channel, Channel::Oss) {
         let release = github::fetch_latest_release(http_client.as_ref()).await?;

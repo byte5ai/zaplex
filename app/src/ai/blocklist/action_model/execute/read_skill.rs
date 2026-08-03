@@ -1,14 +1,14 @@
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 #[cfg(feature = "local_fs")]
 use crate::ai::agent::AIAgentActionResultType;
-use crate::ai::skills::{SkillManager, SkillTelemetryEvent};
 #[cfg(feature = "local_fs")]
 use crate::ai::skills::extract_skill_parent_directory;
+use crate::ai::skills::{SkillManager, SkillTelemetryEvent};
 use crate::send_telemetry_from_ctx;
 use ai::agent::action_result::AnyFileContent;
-use ai::skills::SkillReference;
 #[cfg(feature = "local_fs")]
 use ai::skills::parse_skill;
+use ai::skills::SkillReference;
 use std::path::Path;
 use warpui::{ModelContext, SingletonEntity};
 
@@ -112,21 +112,17 @@ impl ReadSkillExecutor {
                 return ActionExecution::new_async(
                     async move { parse_skill(&path) },
                     move |parsed, _app| match parsed {
-                        Ok(skill) => AIAgentActionResultType::ReadSkill(
-                            ReadSkillResult::Success {
-                                content: FileContext::new(
-                                    skill.path.to_string_lossy().into_owned(),
-                                    AnyFileContent::StringContent(skill.content.clone()),
-                                    skill.line_range.clone(),
-                                    None,
-                                ),
-                            },
-                        ),
-                        Err(err) => AIAgentActionResultType::ReadSkill(
-                            ReadSkillResult::Error(format!(
-                                "Skill not found: {skill_ref_for_async:?} ({err})"
-                            )),
-                        ),
+                        Ok(skill) => AIAgentActionResultType::ReadSkill(ReadSkillResult::Success {
+                            content: FileContext::new(
+                                skill.path.to_string_lossy().into_owned(),
+                                AnyFileContent::StringContent(skill.content.clone()),
+                                skill.line_range.clone(),
+                                None,
+                            ),
+                        }),
+                        Err(err) => AIAgentActionResultType::ReadSkill(ReadSkillResult::Error(
+                            format!("Skill not found: {skill_ref_for_async:?} ({err})"),
+                        )),
                     },
                 );
             }
@@ -160,7 +156,9 @@ impl ReadSkillExecutor {
 ///
 /// Extract helper so that generic `T` in `ActionExecution<T>` infers to the same type
 /// in both `success_execution` and `new_async` paths (otherwise Rust requires explicit return type declaration).
-fn success_execution(skill: &ai::skills::ParsedSkill) -> ActionExecution<anyhow::Result<ai::skills::ParsedSkill>> {
+fn success_execution(
+    skill: &ai::skills::ParsedSkill,
+) -> ActionExecution<anyhow::Result<ai::skills::ParsedSkill>> {
     let content = FileContext::new(
         skill.path.to_string_lossy().into_owned(),
         AnyFileContent::StringContent(skill.content.clone()),

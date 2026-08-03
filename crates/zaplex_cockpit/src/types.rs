@@ -1,7 +1,8 @@
 //! Core cockpit data types — pure, serde-friendly, no I/O and no secrets.
 //!
-//! Privacy invariant: these types carry only **token counts and account metadata**,
-//! never token strings, transcript content, or any credential material.
+//! Privacy invariant: these types never carry token strings or credential
+//! material. Session snapshots may carry the task titles that an external agent
+//! deliberately emitted through its structured task/plan tool.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -14,16 +15,18 @@ use serde::{Deserialize, Serialize};
 /// negative, and [`crate::format::format_cost`] renders every negative value as
 /// `unpriced`. The explicit [`WindowTotals::has_unpriced_usage`] flag remains
 /// the semantic source of truth.
-const UNPRICED_COST_USD: f64 = -1.0e300;
+pub(crate) const UNPRICED_COST_USD: f64 = -1.0e300;
 
 /// The LLM CLI providers the cockpit understands.
 ///
 /// A minimal enum owned by this (pure) crate; the app's richer `CLIAgent` maps onto
-/// it at the wiring layer. Increment 1 covers Claude Code + Codex.
+/// it at the wiring layer. Account/usage discovery covers Claude Code + Codex;
+/// session discovery additionally covers Antigravity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Provider {
     Claude,
     Codex,
+    Antigravity,
 }
 
 impl Provider {
@@ -31,6 +34,7 @@ impl Provider {
         match self {
             Provider::Claude => "claude",
             Provider::Codex => "codex",
+            Provider::Antigravity => "antigravity",
         }
     }
 }
@@ -108,8 +112,10 @@ pub struct WindowTotals {
     pub cache_create: u64,
     pub cache_read: u64,
     pub reasoning: u64,
-    /// Load signal: `input + output + cache_create + reasoning` — excludes the cheap,
+    /// Load signal: `input + output + cache_create` — excludes the cheap,
     /// high-volume cache *reads* so heat/"launch-on-freest" reflect real work.
+    /// Codex reasoning is already included in `output` and is retained only as
+    /// a separately displayable breakdown.
     pub work: u64,
     /// All billable tokens: `work + cache_read`.
     pub total: u64,
@@ -135,19 +141,11 @@ impl WindowTotals {
         let work = e
             .input
             .saturating_add(e.output)
-            .saturating_add(e.cache_create)
-            .saturating_add(e.reasoning);
+            .saturating_add(e.cache_create);
         let total = work.saturating_add(e.cache_read);
         self.work = self.work.saturating_add(work);
         self.total = self.total.saturating_add(total);
-        match pricing.cost_for(
-            &e.model,
-            e.input,
-            e.output,
-            e.cache_create,
-            e.cache_read,
-            e.reasoning,
-        ) {
+        match pricing.cost_for(&e.model, e.input, e.output, e.cache_create, e.cache_read) {
             Some(cost) if !self.has_unpriced_usage => self.cost_usd += cost,
             Some(_) => {}
             None => {
@@ -176,6 +174,33 @@ pub enum SessionState {
     /// entry** — dormant, resumable. Idle is never "needs me" and sorts after
     /// the live states (Waiting/Active/Monitor).
     Idle,
+}
+
+/// Provider-neutral state of one task emitted by an external agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+/// One ordered row in an external agent's structured task state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskItem {
+    /// Provider-local stable identity. Claude uses its task id; Codex uses the
+    /// row's stable position in the latest full `update_plan` replacement.
+    pub id: String,
+    pub title: String,
+    pub status: TaskStatus,
+}
+
+/// The latest structured task state emitted by a session.
+///
+/// `Some` with an empty `tasks` list means the provider explicitly emitted an
+/// empty state; `None` means no usable task state was observed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskState {
+    pub tasks: Vec<TaskItem>,
 }
 
 /// One agent-session snapshot (registry-backed + transcript-joined for live
@@ -267,6 +292,11 @@ pub struct SessionSnapshot {
     /// Whether this is the single attachable foreground agent for that PTY.
     #[serde(default)]
     pub pty_foreground: bool,
+    /// Structured provider-neutral task state reconstructed from the session's
+    /// transcript. Absent for sessions that never emitted a supported task
+    /// tool, and for snapshots from older producers.
+    #[serde(default)]
+    pub task_state: Option<TaskState>,
     pub last_activity: DateTime<Utc>,
     pub pid: u32,
 }

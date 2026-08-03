@@ -1,3 +1,3 @@
 mod view;
 
-pub use view::{init, ZaplexLaunchModal, ZaplexLaunchModalEvent};
+pub use view::{ZaplexLaunchModal, ZaplexLaunchModalEvent, init};

@@ -63,7 +63,7 @@ impl Input {
         if FeatureFlag::ImageAsContext.is_enabled()
             && matches!(ai_input_model.input_type(), InputType::AI)
         {
-            if let Some(images) = self.render_attachment_chips(appearance) {
+            if let Some(images) = self.render_attachment_chips(appearance, false) {
                 column.add_child(
                     Container::new(images)
                         .with_margin_top(spacing::UDI_CHIP_MARGIN)

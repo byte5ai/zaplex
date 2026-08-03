@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use pathfinder_color::ColorU;
-use warp_core::ui::theme::{phenomenon::PhenomenonStyle, Fill};
+use warp_core::ui::theme::{Fill, phenomenon::PhenomenonStyle};
 use warpui::elements::{
     ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable, MainAxisSize,
@@ -32,14 +32,14 @@ use warpui::platform::Cursor;
 use warpui::{
     AppContext, Entity, SingletonEntity as _, TypedActionView, View, ViewContext, ViewHandle,
 };
-use zaplex_cockpit::{session_key, SessionState};
+use zaplex_cockpit::{SessionState, session_key};
 
+use crate::WorkspaceAction;
 use crate::appearance::Appearance;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{attention_coloru, glyph_cell};
 use crate::ui_components::modal_frame;
 use crate::view_components::action_button::ActionButton;
-use crate::WorkspaceAction;
 
 const MODAL_MAX_LIST_HEIGHT: f32 = 420.;
 

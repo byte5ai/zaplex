@@ -159,7 +159,9 @@ impl ShellStarter {
         if let Some(warp_shell_env_var) = warp_shell_path() {
             let (warp_shell_path, shell_type) = supported_shell_path_and_type(&warp_shell_env_var)
                 .unwrap_or_else(|| {
-                    panic!("Cannot spawn shell; $ZAPLEX_SHELL_PATH is invalid: {warp_shell_env_var}")
+                    panic!(
+                        "Cannot spawn shell; $ZAPLEX_SHELL_PATH is invalid: {warp_shell_env_var}"
+                    )
                 });
             return Some(
                 ShellStarterSource::Environment(DirectShellStarter {

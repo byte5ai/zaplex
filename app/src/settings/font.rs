@@ -2,9 +2,7 @@ use warp_core::ui::builder::MIN_FONT_SIZE;
 
 // Re-export UI font size constants defined in the underlying warp_core,
 // keeping `crate::settings::DEFAULT_UI_FONT_SIZE` / `UI_FONT_SIZE_MIN` / `UI_FONT_SIZE_MAX` available.
-pub use warp_core::ui::appearance::{
-    DEFAULT_UI_FONT_SIZE, UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN,
-};
+pub use warp_core::ui::appearance::{DEFAULT_UI_FONT_SIZE, UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN};
 use warpui::{fonts::Weight, rendering::ThinStrokes, AppContext, SingletonEntity};
 
 use settings::{

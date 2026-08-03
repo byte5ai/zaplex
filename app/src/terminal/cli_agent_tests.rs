@@ -10,8 +10,8 @@ use warpui::App;
 #[cfg(unix)]
 use super::cli_agent_search_dirs;
 use super::{
-    build_diff_hunk_prompt, build_review_prompt, build_selection_line_range_prompt,
-    build_selection_substring_prompt, CLIAgent, UBER_TEAM_UID,
+    agents_for_installation_scan, build_diff_hunk_prompt, build_review_prompt,
+    build_selection_line_range_prompt, build_selection_substring_prompt, CLIAgent, UBER_TEAM_UID,
 };
 use crate::ai::agent::{AgentReviewCommentBatch, DiffSetHunk};
 use crate::code::editor::line::EditorLineLocation;
@@ -254,7 +254,11 @@ fn test_detect_known_agents() {
                 ("codex", CLIAgent::Codex),
                 ("deepseek", CLIAgent::DeepSeek),
                 ("deepseek-tui", CLIAgent::DeepSeek),
+                ("codewhale", CLIAgent::DeepSeek),
+                ("codew", CLIAgent::DeepSeek),
+                ("codewhale-tui", CLIAgent::DeepSeek),
                 ("agy", CLIAgent::Antigravity),
+                ("grok", CLIAgent::Grok),
                 ("amp", CLIAgent::Amp),
                 ("droid", CLIAgent::Droid),
                 ("opencode", CLIAgent::OpenCode),
@@ -533,6 +537,7 @@ fn test_cli_agent_search_dirs_include_home_managed_bins() {
 
     assert!(dirs.contains(&home.join(".cargo/bin")));
     assert!(dirs.contains(&home.join(".bun/bin")));
+    assert!(dirs.contains(&home.join(".grok/bin")));
     assert!(dirs.contains(&home.join(".local/bin")));
 }
 
@@ -547,8 +552,13 @@ fn fork_command_per_provider() {
         CLIAgent::Codex.fork_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
         Some("codex fork 0198c8f3-aaaa-bbbb-cccc-1234567890ab".to_string())
     );
+    assert_eq!(
+        CLIAgent::Grok.fork_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
+        Some("grok --resume 0198c8f3-aaaa-bbbb-cccc-1234567890ab --fork-session".to_string())
+    );
     // No known fork mechanism → None, surfaces stay disabled (no fake fork).
     assert_eq!(CLIAgent::Gemini.fork_command("x"), None);
+    assert_eq!(CLIAgent::Antigravity.fork_command("x"), None);
     assert_eq!(CLIAgent::Unknown.fork_command("x"), None);
 }
 
@@ -558,6 +568,10 @@ fn fork_command_quotes_hostile_session_ids() {
         .fork_command("evil; rm -rf /")
         .expect("claude forks");
     assert_eq!(cmd, "claude --resume 'evil; rm -rf /' --fork-session");
+    let cmd = CLIAgent::Grok
+        .fork_command("evil; rm -rf /")
+        .expect("grok forks");
+    assert_eq!(cmd, "grok --resume 'evil; rm -rf /' --fork-session");
 }
 
 #[test]
@@ -573,6 +587,10 @@ fn fork_command_pinned_prepends_inline_env_for_non_default_accounts() {
     assert_eq!(
         CLIAgent::Codex.fork_command_pinned("abc", Some(Path::new("/home/u/.codex-alt"))),
         Some("CODEX_HOME=/home/u/.codex-alt codex fork abc".to_string())
+    );
+    assert_eq!(
+        CLIAgent::Grok.fork_command_pinned("abc", Some(Path::new("/home/u/grok work"))),
+        Some("GROK_HOME='/home/u/grok work' grok --resume abc --fork-session".to_string())
     );
     // Default account (None) → bare fork command, no env prefix.
     assert_eq!(
@@ -592,8 +610,16 @@ fn resume_command_per_provider_continues_in_place() {
         CLIAgent::Codex.resume_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
         Some("codex resume 0198c8f3-aaaa-bbbb-cccc-1234567890ab".to_string())
     );
+    assert_eq!(
+        CLIAgent::Grok.resume_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
+        Some("grok --resume 0198c8f3-aaaa-bbbb-cccc-1234567890ab".to_string())
+    );
     // No known resume mechanism → None, surfaces stay disabled.
     assert_eq!(CLIAgent::Gemini.resume_command("x"), None);
+    assert_eq!(
+        CLIAgent::Antigravity.resume_command("x"),
+        Some("agy --conversation x".into())
+    );
     assert_eq!(CLIAgent::Unknown.resume_command("x"), None);
 }
 
@@ -603,6 +629,10 @@ fn resume_command_quotes_hostile_session_ids() {
         .resume_command("evil; rm -rf /")
         .expect("claude resumes");
     assert_eq!(cmd, "claude --resume 'evil; rm -rf /'");
+    let cmd = CLIAgent::Grok
+        .resume_command("evil; rm -rf /")
+        .expect("grok resumes");
+    assert_eq!(cmd, "grok --resume 'evil; rm -rf /'");
 }
 
 #[test]
@@ -615,6 +645,10 @@ fn resume_command_pinned_prepends_inline_env_for_non_default_accounts() {
     assert_eq!(
         CLIAgent::Codex.resume_command_pinned("abc", Some(Path::new("/home/u/.codex-alt"))),
         Some("CODEX_HOME=/home/u/.codex-alt codex resume abc".to_string())
+    );
+    assert_eq!(
+        CLIAgent::Grok.resume_command_pinned("abc", Some(Path::new("/home/u/grok work"))),
+        Some("GROK_HOME='/home/u/grok work' grok --resume abc".to_string())
     );
     // Default account (None) → bare resume command, no env prefix.
     assert_eq!(
@@ -648,6 +682,11 @@ fn launch_command_routed_handles_codex_and_bare_agents() {
     assert_eq!(
         CLIAgent::Gemini.launch_command_routed(Some(Path::new("/x"))),
         "gemini"
+    );
+    assert_eq!(CLIAgent::Antigravity.launch_command_routed(None), "agy");
+    assert_eq!(
+        CLIAgent::Grok.launch_command_routed(Some(Path::new("/home/u/.grok"))),
+        "GROK_HOME=/home/u/.grok grok"
     );
 }
 
@@ -696,10 +735,51 @@ fn launch_command_routed_with_model_and_effort_codex() {
 }
 
 #[test]
-fn codex_effort_reaches_cli_args() {
+fn selected_codex_effort_reaches_cli_arguments() {
+    let launch = CLIAgent::Codex.routed_launch(None, None, Some("high"));
+    assert_eq!(launch.program, "codex");
+    assert_eq!(
+        launch.args,
+        vec![
+            "-c".to_string(),
+            "model_reasoning_effort=\"high\"".to_string(),
+        ]
+    );
     assert_eq!(
         CLIAgent::Codex.launch_command_routed_with(None, None, Some("high")),
         "unset OPENAI_API_KEY; codex -c 'model_reasoning_effort=\"high\"'"
+    );
+}
+
+#[test]
+fn launch_command_routed_with_model_and_effort_grok() {
+    let launch = CLIAgent::Grok.routed_launch(
+        Some(Path::new("/home/u/grok work")),
+        Some("grok-4"),
+        Some("high"),
+    );
+    assert_eq!(launch.program, "grok");
+    assert_eq!(
+        launch.args,
+        vec![
+            "--model".to_string(),
+            "grok-4".to_string(),
+            "--effort".to_string(),
+            "high".to_string(),
+        ]
+    );
+    assert_eq!(
+        launch.environment,
+        vec![("GROK_HOME", "/home/u/grok work".to_string())]
+    );
+    assert!(launch.unset_environment.is_empty());
+    assert_eq!(
+        CLIAgent::Grok.launch_command_routed_with(
+            Some(Path::new("/home/u/grok work")),
+            Some("grok-4"),
+            Some("high"),
+        ),
+        "GROK_HOME='/home/u/grok work' grok --model grok-4 --effort high"
     );
 }
 
@@ -719,4 +799,44 @@ fn launch_command_routed_with_none_is_verbatim_today() {
         CLIAgent::Gemini.launch_command_routed_with(None, Some("pro"), Some("high")),
         "gemini"
     );
+    assert_eq!(
+        CLIAgent::Antigravity.launch_command_routed_with(
+            None,
+            Some("unverified-model"),
+            Some("unverified-effort"),
+        ),
+        "agy"
+    );
+}
+
+#[test]
+fn new_launch_surfaces_retire_gemini_but_keep_antigravity() {
+    assert!(!CLIAgent::Gemini.is_available_for_new_launch());
+    assert!(CLIAgent::Antigravity.is_available_for_new_launch());
+    assert!(CLIAgent::Grok.is_available_for_new_launch());
+    assert!(!CLIAgent::Unknown.is_available_for_new_launch());
+}
+
+#[test]
+fn installation_scan_targets_agy_not_standalone_gemini() {
+    let agents = agents_for_installation_scan().collect::<Vec<_>>();
+    assert!(agents.contains(&CLIAgent::Antigravity));
+    assert!(agents.contains(&CLIAgent::Grok));
+    assert!(!agents.contains(&CLIAgent::Gemini));
+}
+
+#[test]
+fn gemini_is_only_a_command_search_alias_for_antigravity() {
+    assert_eq!(CLIAgent::Antigravity.command_search_aliases(), &["gemini"]);
+    assert!(CLIAgent::Gemini.command_search_aliases().is_empty());
+    assert!(CLIAgent::Grok.command_search_aliases().is_empty());
+}
+
+#[test]
+fn antigravity_resume_quotes_the_conversation_id_and_does_not_invent_fork_support() {
+    assert_eq!(
+        CLIAgent::Antigravity.resume_command("id with spaces;$(touch /tmp/nope)"),
+        Some("agy --conversation 'id with spaces;$(touch /tmp/nope)'".into())
+    );
+    assert_eq!(CLIAgent::Antigravity.fork_command("conversation"), None);
 }

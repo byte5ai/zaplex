@@ -27,17 +27,15 @@ use warpui::keymap::FixedBinding;
 use warpui::platform::file_picker::{FilePickerConfiguration, FilePickerError};
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
-use crate::ui_components::modal_frame;
-use crate::view_components::action_button::ActionButton;
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
     TextOptions,
 };
 use crate::terminal::CLIAgent;
+use crate::ui_components::modal_frame;
+use crate::view_components::action_button::ActionButton;
 
 const MODAL_WIDTH: f32 = 480.;
 
@@ -88,6 +86,13 @@ pub struct HostOption {
 pub struct SpawnCardConfig {
     pub claude: ProviderOptions,
     pub codex: ProviderOptions,
+    /// Antigravity has no Cockpit account-provider model yet. Installation is
+    /// tracked separately so the card can offer an honest accountless `agy`
+    /// launch without fabricating provider or subscription metadata.
+    pub antigravity_installed: bool,
+    /// Grok has no Cockpit account-provider model yet, so it follows the same
+    /// accountless launch path and lets the CLI resolve its own authentication.
+    pub grok_installed: bool,
     pub hosts: Vec<HostOption>,
     /// Pre-scoped host **id** in the same id space as [`HostOption::id`] — the
     /// SSH `node.id`. The Conductor scopes by the Agent-inventory's *daemon*
@@ -236,18 +241,40 @@ fn default_effort_for(agent: CLIAgent) -> &'static str {
     }
 }
 
+fn agent_is_installed(cfg: &SpawnCardConfig, agent: CLIAgent) -> bool {
+    match agent {
+        CLIAgent::Claude => cfg.claude.installed,
+        CLIAgent::Codex => cfg.codex.installed,
+        CLIAgent::Antigravity => cfg.antigravity_installed,
+        CLIAgent::Grok => cfg.grok_installed,
+        CLIAgent::Gemini
+        | CLIAgent::Amp
+        | CLIAgent::Droid
+        | CLIAgent::OpenCode
+        | CLIAgent::Copilot
+        | CLIAgent::Pi
+        | CLIAgent::Auggie
+        | CLIAgent::CursorCli
+        | CLIAgent::Goose
+        | CLIAgent::DeepSeek
+        | CLIAgent::Unknown => false,
+    }
+}
+
 /// Which agents are actually launchable, per install-detection in `cfg`. Pure
 /// helper (no view state) so the "neither installed" case is unit-testable:
 /// an empty result means the card must not offer a launchable agent chip and
 /// Confirm must stay disabled — there is nothing installed to run.
 fn installed_agents(cfg: &SpawnCardConfig) -> Vec<CLIAgent> {
-    [CLIAgent::Claude, CLIAgent::Codex]
-        .into_iter()
-        .filter(|agent| match agent {
-            CLIAgent::Codex => cfg.codex.installed,
-            _ => cfg.claude.installed,
-        })
-        .collect()
+    [
+        CLIAgent::Claude,
+        CLIAgent::Codex,
+        CLIAgent::Antigravity,
+        CLIAgent::Grok,
+    ]
+    .into_iter()
+    .filter(|agent| agent_is_installed(cfg, *agent))
+    .collect()
 }
 
 /// Map the remote-dir text input to a launch cwd. Only remote hosts use the
@@ -291,10 +318,8 @@ impl SpawnCard {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text(
-                crate::t!("cockpit-spawn-card-remote-dir-placeholder"),
-                ctx,
-            );
+            editor
+                .set_placeholder_text(crate::t!("cockpit-spawn-card-remote-dir-placeholder"), ctx);
             editor
         });
 
@@ -308,8 +333,7 @@ impl SpawnCard {
             }
         });
 
-        let close_button =
-            ctx.add_view(|_ctx| modal_frame::close_button(SpawnCardAction::Close));
+        let close_button = ctx.add_view(|_ctx| modal_frame::close_button(SpawnCardAction::Close));
 
         SpawnCard {
             cfg: SpawnCardConfig::default(),
@@ -335,26 +359,19 @@ impl SpawnCard {
     pub fn configure(&mut self, cfg: SpawnCardConfig, ctx: &mut ViewContext<Self>) {
         // Agent: honor an explicit requested agent (contextual "Fix with <agent>"
         // / per-agent action) when it is one of the supported CLIs and installed,
-        // so the opener's intent isn't silently changed. Otherwise fall back to
-        // Claude if available, else Codex.
+        // so the opener's intent isn't silently changed. Otherwise use the first
+        // installed agent in the card's stable order.
         let requested = cfg
             .default_agent
-            .filter(|a| matches!(a, CLIAgent::Claude | CLIAgent::Codex))
-            .filter(|a| match a {
-                CLIAgent::Codex => cfg.codex.installed,
-                _ => cfg.claude.installed,
-            });
-        self.agent = requested.unwrap_or({
-            if cfg.claude.installed || !cfg.codex.installed {
-                CLIAgent::Claude
-            } else {
-                CLIAgent::Codex
-            }
-        });
+            .filter(|agent| agent.is_available_for_new_launch())
+            .filter(|agent| agent_is_installed(&cfg, *agent));
+        self.agent = requested
+            .or_else(|| installed_agents(&cfg).first().copied())
+            .unwrap_or(CLIAgent::Claude);
         self.model = models_for(self.agent)
             .first()
             .copied()
-            .unwrap_or("opus")
+            .unwrap_or_default()
             .to_string();
         self.effort = default_effort_for(self.agent).to_string();
         self.account = AccountChoice::Freest;
@@ -428,7 +445,6 @@ impl SpawnCard {
     /// "Ändern" reveals the full list with each account's utilisation. Nothing is
     /// hidden — it is one click behind the answer instead of in front of it.
     fn account_controls(&self, appearance: &Appearance) -> Vec<Box<dyn Element>> {
-        let opts = self.provider_options();
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let muted = theme.sub_text_color(theme.background()).into_solid();
@@ -437,6 +453,18 @@ impl SpawnCard {
             .sub_text_color(theme.background())
             .with_opacity(55)
             .into_solid();
+        let Some(opts) = self.provider_options() else {
+            return vec![Container::new(
+                Text::new_inline(
+                    crate::t!("cockpit-spawn-card-cli-default-login"),
+                    family,
+                    12.,
+                )
+                .with_color(muted)
+                .finish(),
+            )
+            .finish()];
+        };
 
         // Collapsed: the account the router chose, stated plainly.
         if !self.show_accounts {
@@ -544,10 +572,23 @@ impl SpawnCard {
         chips
     }
 
-    fn provider_options(&self) -> &ProviderOptions {
+    fn provider_options(&self) -> Option<&ProviderOptions> {
         match self.agent {
-            CLIAgent::Codex => &self.cfg.codex,
-            _ => &self.cfg.claude,
+            CLIAgent::Claude => Some(&self.cfg.claude),
+            CLIAgent::Codex => Some(&self.cfg.codex),
+            CLIAgent::Gemini
+            | CLIAgent::Amp
+            | CLIAgent::Droid
+            | CLIAgent::OpenCode
+            | CLIAgent::Copilot
+            | CLIAgent::Pi
+            | CLIAgent::Auggie
+            | CLIAgent::CursorCli
+            | CLIAgent::Goose
+            | CLIAgent::DeepSeek
+            | CLIAgent::Antigravity
+            | CLIAgent::Grok
+            | CLIAgent::Unknown => None,
         }
     }
 
@@ -565,13 +606,10 @@ impl SpawnCard {
         if matches!(self.host, HostChoice::Remote(_)) {
             return None;
         }
+        let options = self.provider_options()?;
         match self.account {
-            AccountChoice::Freest => self.provider_options().freest_dir.clone(),
-            AccountChoice::Specific(i) => self
-                .provider_options()
-                .accounts
-                .get(i)
-                .map(|a| a.config_dir.clone()),
+            AccountChoice::Freest => options.freest_dir.clone(),
+            AccountChoice::Specific(i) => options.accounts.get(i).map(|a| a.config_dir.clone()),
         }
     }
 
@@ -610,7 +648,7 @@ impl SpawnCard {
             config_dir: self.resolved_config_dir(),
             cwd: self.project.clone(),
             node_id: self.resolved_node_id(),
-            model: Some(self.model.clone()),
+            model: (!self.model.is_empty()).then(|| self.model.clone()),
             effort: matches!(self.agent, CLIAgent::Codex).then(|| self.effort.clone()),
             prompt: self.prompt.clone(),
         })
@@ -745,14 +783,16 @@ impl SpawnCard {
     fn summary(&self, app: &AppContext) -> String {
         let account = match self.host {
             HostChoice::Remote(_) => crate::t!("cockpit-spawn-card-sum-host-account"),
-            HostChoice::Local => match self.account {
-                AccountChoice::Freest => crate::t!("cockpit-spawn-card-sum-freest"),
-                AccountChoice::Specific(i) => self
-                    .provider_options()
+            HostChoice::Local => match (self.provider_options(), self.account) {
+                (Some(_), AccountChoice::Freest) => {
+                    crate::t!("cockpit-spawn-card-sum-freest")
+                }
+                (Some(options), AccountChoice::Specific(i)) => options
                     .accounts
                     .get(i)
                     .map(|a| a.label.clone())
                     .unwrap_or_else(|| crate::t!("cockpit-spawn-card-sum-freest")),
+                (None, _) => crate::t!("cockpit-spawn-card-cli-default-login"),
             },
         };
         let host = match self.host {
@@ -787,16 +827,18 @@ impl SpawnCard {
                 None => crate::t!("cockpit-spawn-card-sum-default"),
             }
         };
-        format!(
-            "{} · {} · {} · {} · {} · {} · {}",
-            self.agent.display_name(),
-            self.model,
-            Self::cap(&self.effort),
-            Self::context_label(&self.model),
-            account,
-            host,
-            dir,
-        )
+        let mut parts = vec![self.agent.display_name().to_string()];
+        if self.model.is_empty() {
+            parts.push(crate::t!("cockpit-spawn-card-cli-default"));
+        } else {
+            parts.push(self.model.clone());
+            if !self.effort.is_empty() {
+                parts.push(Self::cap(&self.effort));
+            }
+            parts.push(Self::context_label(&self.model));
+        }
+        parts.extend([account, host, dir]);
+        parts.join(" · ")
     }
 
     /// The remote launch dir as an editable single-line text input. A native
@@ -855,10 +897,10 @@ impl SpawnCard {
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(Container::new(header).with_margin_bottom(18.).finish());
 
-        // Agent row (only installed providers).
+        // Agent row (only installed launchable CLIs).
         let available = installed_agents(&self.cfg);
         if available.is_empty() {
-            // Neither Claude nor Codex is installed: there is nothing to launch,
+            // No supported CLI is installed: there is nothing to launch,
             // so show a calm install prompt instead of a phantom, unlaunchable
             // chip (Confirm is disabled below for the same reason).
             col = col.with_child(self.row(
@@ -884,43 +926,66 @@ impl SpawnCard {
                     )
                 })
                 .collect();
-            col = col.with_child(self.row(&crate::t!("cockpit-spawn-card-agent"), agent_chips, appearance));
+            col = col.with_child(self.row(
+                &crate::t!("cockpit-spawn-card-agent"),
+                agent_chips,
+                appearance,
+            ));
         }
 
-        // Model row + a live context-window readout.
-        let mut model_chips: Vec<Box<dyn Element>> = models_for(self.agent)
-            .iter()
-            .map(|m| {
-                self.chip(
-                    &format!("model-{m}"),
-                    m.to_string(),
-                    self.model == *m,
-                    SpawnCardAction::SetModel(m.to_string()),
-                    appearance,
-                )
-            })
-            .collect();
-        model_chips.push(
-            Container::new(
-                Text::new_inline(Self::context_label(&self.model), family, 12.)
-                    .with_color(muted)
-                    .finish(),
-            )
-            .with_margin_left(8.)
-            .finish(),
-        );
-        col = col.with_child(self.row(&crate::t!("cockpit-spawn-card-model"), model_chips, appearance));
-
-        // Effort row.
-        let effort_chips: Vec<Box<dyn Element>> = if matches!(self.agent, CLIAgent::Claude) {
+        // Model row + a live context-window readout when the CLI contract is
+        // known. Antigravity launches with its own default; the card does not
+        // invent a curated model list or a context size.
+        let models = models_for(self.agent);
+        let mut model_chips: Vec<Box<dyn Element>> = if models.is_empty() {
             vec![Container::new(
-                Text::new_inline(CLAUDE_EFFORTS[0].to_string(), family, 13.)
+                Text::new_inline(crate::t!("cockpit-spawn-card-cli-default"), family, 13.)
                     .with_color(muted)
                     .finish(),
             )
             .finish()]
         } else {
-            effort_options_for(self.agent)
+            models
+                .iter()
+                .map(|m| {
+                    self.chip(
+                        &format!("model-{m}"),
+                        m.to_string(),
+                        self.model == *m,
+                        SpawnCardAction::SetModel(m.to_string()),
+                        appearance,
+                    )
+                })
+                .collect()
+        };
+        if !self.model.is_empty() {
+            model_chips.push(
+                Container::new(
+                    Text::new_inline(Self::context_label(&self.model), family, 12.)
+                        .with_color(muted)
+                        .finish(),
+                )
+                .with_margin_left(8.)
+                .finish(),
+            );
+        }
+        col = col.with_child(self.row(
+            &crate::t!("cockpit-spawn-card-model"),
+            model_chips,
+            appearance,
+        ));
+
+        // Effort row.
+        let effort_options = effort_options_for(self.agent);
+        let effort_chips: Vec<Box<dyn Element>> = if effort_options.len() <= 1 {
+            vec![Container::new(
+                Text::new_inline(crate::t!("cockpit-spawn-card-cli-default"), family, 13.)
+                    .with_color(muted)
+                    .finish(),
+            )
+            .finish()]
+        } else {
+            effort_options
                 .iter()
                 .map(|e| {
                     self.chip(
@@ -984,7 +1049,11 @@ impl SpawnCard {
                 appearance,
             ));
         }
-        col = col.with_child(self.row(&crate::t!("cockpit-spawn-card-host"), host_chips, appearance));
+        col = col.with_child(self.row(
+            &crate::t!("cockpit-spawn-card-host"),
+            host_chips,
+            appearance,
+        ));
 
         // Directory row — the launch dir as an *explicit* choice (Codex #2), not
         // a blind default. Local: a native folder picker, plus a reset to the
@@ -1003,9 +1072,13 @@ impl SpawnCard {
             let input = self.render_remote_dir_input(appearance).unwrap_or_else(|| {
                 // Fallback for the (unit-test-only) case where no editor exists.
                 Container::new(
-                    Text::new_inline(crate::t!("cockpit-spawn-card-dir-host-home", host = host), family, 12.)
-                        .with_color(muted)
-                        .finish(),
+                    Text::new_inline(
+                        crate::t!("cockpit-spawn-card-dir-host-home", host = host),
+                        family,
+                        12.,
+                    )
+                    .with_color(muted)
+                    .finish(),
                 )
                 .finish()
             });
@@ -1039,15 +1112,23 @@ impl SpawnCard {
                     appearance,
                 ));
             }
-            col = col.with_child(self.row(&crate::t!("cockpit-spawn-card-directory"), dir_chips, appearance));
+            col = col.with_child(self.row(
+                &crate::t!("cockpit-spawn-card-directory"),
+                dir_chips,
+                appearance,
+            ));
         }
 
         // Summary line.
         col = col.with_child(
             Container::new(
-                Text::new_inline(crate::t!("cockpit-spawn-card-launching", summary = self.summary(app)), family, 12.)
-                    .with_color(muted)
-                    .finish(),
+                Text::new_inline(
+                    crate::t!("cockpit-spawn-card-launching", summary = self.summary(app)),
+                    family,
+                    12.,
+                )
+                .with_color(muted)
+                .finish(),
             )
             .with_margin_bottom(16.)
             .finish(),
@@ -1059,7 +1140,10 @@ impl SpawnCard {
         let confirm: Box<dyn Element> = if can_launch {
             self.chip(
                 "confirm",
-                crate::t!("cockpit-spawn-card-launch", agent = self.agent.display_name()),
+                crate::t!(
+                    "cockpit-spawn-card-launch",
+                    agent = self.agent.display_name()
+                ),
                 true,
                 SpawnCardAction::Confirm,
                 appearance,
@@ -1134,7 +1218,7 @@ impl TypedActionView for SpawnCard {
                     self.model = models_for(*agent)
                         .first()
                         .copied()
-                        .unwrap_or("opus")
+                        .unwrap_or_default()
                         .to_string();
                     self.effort = default_effort_for(*agent).to_string();
                     // Account indices are provider-specific; fall back to freest.
@@ -1214,7 +1298,10 @@ impl TypedActionView for SpawnCard {
                         let raw = editor.as_ref(ctx).buffer_text(ctx);
                         remote_cwd_from_input(self.host, &raw).ok().flatten()
                     });
-                    ctx.emit(SpawnCardEvent::BrowseRemoteDir { node_id, start_path });
+                    ctx.emit(SpawnCardEvent::BrowseRemoteDir {
+                        node_id,
+                        start_path,
+                    });
                 }
             }
             SpawnCardAction::Confirm => {
@@ -1285,386 +1372,5 @@ pub enum SpawnCardAction {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn host(id: &str, name: &str) -> HostOption {
-        HostOption {
-            id: id.to_string(),
-            name: name.to_string(),
-        }
-    }
-
-    /// A stable id must route to the matching node — not the *first* node that
-    /// happens to share the display label. This is the regression the Codex
-    /// review flagged: clicking `+` on a later same-named host scoped the launch
-    /// to the wrong remote.
-    #[test]
-    fn scoped_id_resolves_past_same_named_hosts() {
-        let hosts = vec![
-            host("id-a", "devbox"),
-            host("id-b", "devbox"), // same label, different node
-        ];
-        // Given the second node's id, we must land on index 1 despite the shared
-        // "devbox" label that a name-only match would resolve to index 0.
-        assert_eq!(
-            resolve_scoped_host(&hosts, Some("id-b"), Some("devbox")),
-            HostChoice::Remote(1),
-        );
-        assert_eq!(
-            resolve_scoped_host(&hosts, Some("id-a"), Some("devbox")),
-            HostChoice::Remote(0),
-        );
-    }
-
-    /// With no id (e.g. a source that lacks a stable id), fall back to matching
-    /// by name — the first same-named node is the best we can do.
-    #[test]
-    fn name_fallback_when_no_id() {
-        let hosts = vec![host("id-a", "alpha"), host("id-b", "beta")];
-        assert_eq!(
-            resolve_scoped_host(&hosts, None, Some("beta")),
-            HostChoice::Remote(1),
-        );
-    }
-
-    /// Local scoping (no id, no name) stays local — the unscoped / local case.
-    #[test]
-    fn no_scope_stays_local() {
-        let hosts = vec![host("id-a", "alpha")];
-        assert_eq!(resolve_scoped_host(&hosts, None, None), HostChoice::Local);
-    }
-
-    /// A stale/unknown id does not silently fall back to a name match (which
-    /// could route to the wrong host — the very bug we are fixing); it stays
-    /// local, the safe default.
-    #[test]
-    fn unknown_id_does_not_fall_back_to_name() {
-        let hosts = vec![host("id-a", "devbox"), host("id-b", "devbox")];
-        assert_eq!(
-            resolve_scoped_host(&hosts, Some("id-missing"), Some("devbox")),
-            HostChoice::Local,
-        );
-    }
-
-    /// End-to-end contract at the spawn-card boundary (Codex review regression):
-    /// the Conductor scopes by the *daemon* `HostId`, which the workspace
-    /// translates to the SSH `node.id` before it reaches `resolve_scoped_host`.
-    ///
-    /// * A successfully translated daemon id arrives here already as the SSH
-    ///   node id, so it resolves to the matching remote node — past a same-named
-    ///   sibling (a name-only match would have picked the wrong one).
-    /// Untranslatable daemon ids are rejected at the workspace boundary before
-    /// this resolver is called, so they cannot reach the name fallback.
-    #[test]
-    fn daemon_scoped_open_resolves_translated_node() {
-        // `hosts` is keyed by SSH node.id; two nodes share the "devbox" label.
-        let hosts = vec![host("node-1", "devbox"), host("node-2", "devbox")];
-
-        // Translation succeeded: the workspace passes SSH node id "node-2"
-        // (translated from the second host's daemon id). Must resolve to it,
-        // not the first same-named node.
-        assert_eq!(
-            resolve_scoped_host(&hosts, Some("node-2"), Some("devbox")),
-            HostChoice::Remote(1),
-        );
-
-    }
-
-    fn provider(installed: bool) -> ProviderOptions {
-        ProviderOptions {
-            installed,
-            ..Default::default()
-        }
-    }
-
-    /// Codex review regression: when neither Claude nor Codex is installed,
-    /// there must be no launchable agent — a phantom chip previously let
-    /// Confirm emit a `Launch` for a binary that isn't there.
-    #[test]
-    fn installed_agents_empty_when_none_installed() {
-        let cfg = SpawnCardConfig {
-            claude: provider(false),
-            codex: provider(false),
-            ..Default::default()
-        };
-        assert_eq!(installed_agents(&cfg), Vec::new());
-    }
-
-    /// Exactly one installed provider yields exactly that agent — the normal
-    /// single-CLI case must keep working unchanged.
-    #[test]
-    fn installed_agents_only_lists_installed_provider() {
-        let claude_only = SpawnCardConfig {
-            claude: provider(true),
-            codex: provider(false),
-            ..Default::default()
-        };
-        assert_eq!(installed_agents(&claude_only), vec![CLIAgent::Claude]);
-
-        let codex_only = SpawnCardConfig {
-            claude: provider(false),
-            codex: provider(true),
-            ..Default::default()
-        };
-        assert_eq!(installed_agents(&codex_only), vec![CLIAgent::Codex]);
-    }
-
-    /// Both installed: both agents are offered, in the stable Claude-then-Codex
-    /// order the row renders.
-    #[test]
-    fn installed_agents_lists_both_when_both_installed() {
-        let cfg = SpawnCardConfig {
-            claude: provider(true),
-            codex: provider(true),
-            ..Default::default()
-        };
-        assert_eq!(
-            installed_agents(&cfg),
-            vec![CLIAgent::Claude, CLIAgent::Codex]
-        );
-    }
-
-    /// Confirm emits a `Launch` that carries the current selection verbatim: the
-    /// chosen agent, model, effort and project cwd, and — for a local launch —
-    /// the resolved account config dir with no remote node. Positive counterpart
-    /// to the "nothing installed ⇒ no launch" guard.
-    #[test]
-    fn confirm_payload_carries_local_selection() {
-        let card = SpawnCard {
-            cfg: SpawnCardConfig {
-                claude: provider(true),
-                ..Default::default()
-            },
-            agent: CLIAgent::Claude,
-            model: "sonnet".to_string(),
-            effort: "low".to_string(),
-            account: AccountChoice::Freest,
-            show_accounts: false,
-            host: HostChoice::Local,
-            project: Some(PathBuf::from("/home/dev/projects/zaplex")),
-            prompt: None,
-            // The pure tests build the card without a `ViewContext`, so there is
-            // no editor view to construct — remote-dir prefill/read is exercised
-            // at the Confirm site, not here.
-            remote_dir_editor: None,
-            chip_states: Default::default(),
-            close_button: None,
-        };
-
-        match card
-            .launch_payload()
-            .expect("an installed agent must yield a Launch on Confirm")
-        {
-            SpawnCardEvent::Launch {
-                agent,
-                config_dir,
-                cwd,
-                node_id,
-                model,
-                effort,
-                ..
-            } => {
-                assert_eq!(agent, CLIAgent::Claude);
-                assert_eq!(model.as_deref(), Some("sonnet"));
-                assert_eq!(
-                    effort, None,
-                    "Claude exposes only its real CLI-default effort"
-                );
-                assert_eq!(cwd, Some(PathBuf::from("/home/dev/projects/zaplex")));
-                assert_eq!(node_id, None, "a local launch has no remote node");
-                // Freest with no configured freest_dir means the default login.
-                assert_eq!(config_dir, None);
-            }
-            _ => panic!("Confirm must emit Launch"),
-        }
-    }
-
-    /// A remote-scoped launch routes to the selected host's stable node id and,
-    /// because account config dirs are local paths, carries no config dir.
-    #[test]
-    fn confirm_payload_routes_remote_launch_to_node_id() {
-        let card = SpawnCard {
-            cfg: SpawnCardConfig {
-                claude: provider(true),
-                hosts: vec![host("node-7", "devbox")],
-                ..Default::default()
-            },
-            agent: CLIAgent::Claude,
-            model: "opus".to_string(),
-            effort: "high".to_string(),
-            account: AccountChoice::Freest,
-            show_accounts: false,
-            host: HostChoice::Remote(0),
-            project: None,
-            prompt: None,
-            // The pure tests build the card without a `ViewContext`, so there is
-            // no editor view to construct — remote-dir prefill/read is exercised
-            // at the Confirm site, not here.
-            remote_dir_editor: None,
-            chip_states: Default::default(),
-            close_button: None,
-        };
-
-        match card
-            .launch_payload()
-            .expect("an installed agent must yield a Launch on Confirm")
-        {
-            SpawnCardEvent::Launch {
-                node_id,
-                config_dir,
-                ..
-            } => {
-                assert_eq!(node_id.as_deref(), Some("node-7"));
-                assert_eq!(
-                    config_dir, None,
-                    "remote launches use the host's own account"
-                );
-            }
-            _ => panic!("Confirm must emit Launch"),
-        }
-    }
-
-    /// Confirm is inert when nothing is installed — no phantom launch of a
-    /// missing binary (the guard the pane's Confirm relies on).
-    #[test]
-    fn confirm_payload_none_when_nothing_installed() {
-        let card = SpawnCard {
-            cfg: SpawnCardConfig {
-                claude: provider(false),
-                codex: provider(false),
-                ..Default::default()
-            },
-            agent: CLIAgent::Claude,
-            model: "opus".to_string(),
-            effort: "high".to_string(),
-            account: AccountChoice::Freest,
-            show_accounts: false,
-            host: HostChoice::Local,
-            project: None,
-            prompt: None,
-            // The pure tests build the card without a `ViewContext`, so there is
-            // no editor view to construct — remote-dir prefill/read is exercised
-            // at the Confirm site, not here.
-            remote_dir_editor: None,
-            chip_states: Default::default(),
-            close_button: None,
-        };
-        assert!(card.launch_payload().is_none());
-    }
-
-    /// The remote-dir text input maps to the launch cwd: a blank field means the
-    /// host's home (`None`); a typed absolute path becomes the cwd, trimmed so
-    /// stray whitespace never produces a bogus path. A local host never uses the
-    /// typed field. Pure — no editor/ctx needed (the Confirm site reads the
-    /// editor into `raw` and delegates the mapping here).
-    #[test]
-    fn relative_remote_path_is_rejected() {
-        let remote = HostChoice::Remote(0);
-        assert_eq!(
-            remote_cwd_from_input(remote, "srv/app"),
-            Err(RemoteCwdError::RelativePath),
-        );
-        assert_eq!(
-            remote_cwd_from_input(remote, "../x"),
-            Err(RemoteCwdError::RelativePath),
-        );
-    }
-
-    #[test]
-    fn empty_path_maps_explicitly_home() {
-        let remote = HostChoice::Remote(0);
-        assert_eq!(remote_cwd_from_input(remote, ""), Ok(None));
-        assert_eq!(remote_cwd_from_input(remote, "   "), Ok(None));
-        assert_eq!(
-            remote_cwd_from_input(remote, "  /srv/app  "),
-            Ok(Some(PathBuf::from("/srv/app"))),
-        );
-        // A local host never uses the typed field, regardless of input.
-        assert_eq!(
-            remote_cwd_from_input(HostChoice::Local, "/srv/app"),
-            Ok(None)
-        );
-    }
-
-    #[test]
-    fn claude_exposes_only_cli_default() {
-        assert_eq!(effort_options_for(CLIAgent::Claude), &["CLI default"]);
-        assert_eq!(default_effort_for(CLIAgent::Claude), "CLI default");
-        assert_eq!(
-            effort_options_for(CLIAgent::Codex),
-            &["low", "medium", "high"]
-        );
-        assert_eq!(default_effort_for(CLIAgent::Codex), "high");
-    }
-
-    #[test]
-    fn effort_payload_matches_cli_capability() {
-        let mut card = SpawnCard {
-            cfg: SpawnCardConfig {
-                claude: provider(true),
-                codex: provider(true),
-                ..Default::default()
-            },
-            agent: CLIAgent::Codex,
-            model: "gpt-5-codex".to_string(),
-            effort: "high".to_string(),
-            account: AccountChoice::Freest,
-            show_accounts: false,
-            host: HostChoice::Local,
-            project: None,
-            prompt: None,
-            remote_dir_editor: None,
-            chip_states: Default::default(),
-            close_button: None,
-        };
-        let SpawnCardEvent::Launch { effort, .. } =
-            card.launch_payload().expect("Codex is installed")
-        else {
-            panic!("expected launch payload");
-        };
-        assert_eq!(effort.as_deref(), Some("high"));
-
-        card.agent = CLIAgent::Claude;
-        card.effort = default_effort_for(CLIAgent::Claude).to_string();
-        let SpawnCardEvent::Launch { effort, .. } =
-            card.launch_payload().expect("Claude is installed")
-        else {
-            panic!("expected launch payload");
-        };
-        assert_eq!(effort, None);
-    }
-
-    #[test]
-    fn relative_remote_path_prevents_launch_event() {
-        let card = SpawnCard {
-            cfg: SpawnCardConfig {
-                codex: provider(true),
-                hosts: vec![host("node-7", "devbox")],
-                ..Default::default()
-            },
-            agent: CLIAgent::Codex,
-            model: "gpt-5-codex".to_string(),
-            effort: "high".to_string(),
-            account: AccountChoice::Freest,
-            show_accounts: false,
-            host: HostChoice::Remote(0),
-            project: None,
-            prompt: None,
-            remote_dir_editor: None,
-            chip_states: Default::default(),
-            close_button: None,
-        };
-
-        assert!(card
-            .launch_payload_for_remote_input(Some("srv/app"))
-            .is_none());
-        let SpawnCardEvent::Launch { cwd, .. } = card
-            .launch_payload_for_remote_input(Some("/srv/app"))
-            .expect("absolute remote cwd is launchable")
-        else {
-            panic!("expected launch payload");
-        };
-        assert_eq!(cwd, Some(PathBuf::from("/srv/app")));
-    }
-}
+#[path = "spawn_card_tests.rs"]
+mod tests;

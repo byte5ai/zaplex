@@ -1,11 +1,12 @@
 use std::fs;
+use std::io::Write;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 
 use super::*;
-use crate::types::{Provider, SessionState};
+use crate::types::{Provider, SessionState, TaskItem, TaskState, TaskStatus};
 
 /// Write a rollout file under `<home>/sessions/2026/07/07/` with the given
 /// wrapped (`{type,timestamp,payload}`) lines.
@@ -64,13 +65,29 @@ fn token_count(input: u64) -> Value {
     json!({"type":"event_msg","timestamp":ts_now(),
         "payload":{"type":"token_count","info":{
             "last_token_usage":{"input_tokens":input,"cached_input_tokens":0,
-                "output_tokens":10,"reasoning_output_tokens":5,"total_tokens":input+15},
+                "output_tokens":10,"reasoning_output_tokens":5,"total_tokens":input+10},
             "total_token_usage":{"input_tokens":999999,"total_tokens":999999},
             "model_context_window":258400}}})
 }
 
 fn event(kind: &str) -> Value {
     json!({"type":"event_msg","timestamp":ts_now(),"payload":{"type":kind}})
+}
+
+fn update_plan(rows: &[(&str, &str)]) -> Value {
+    let plan: Vec<Value> = rows
+        .iter()
+        .map(|(step, status)| json!({"step":step,"status":status}))
+        .collect();
+    json!({
+        "type":"response_item",
+        "timestamp":ts_now(),
+        "payload":{
+            "type":"function_call",
+            "name":"update_plan",
+            "arguments":serde_json::to_string(&json!({"plan":plan})).unwrap()
+        }
+    })
 }
 
 #[test]
@@ -103,6 +120,112 @@ fn completed_turn_is_waiting_with_model_effort_ctx() {
     assert_eq!(s.project_name, "proj");
     // Codex records no pid.
     assert_eq!(s.pid, 0);
+    assert_eq!(s.task_state, None);
+}
+
+#[test]
+fn codex_session_reconcile_refreshes_the_latest_full_plan() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-plan.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-plan"),
+            turn_context("gpt-5.5", "/tmp/proj", Some("high")),
+            token_count(1000),
+            event("task_started"),
+            update_plan(&[
+                ("Read schema", "in_progress"),
+                ("Wire task state", "pending"),
+            ]),
+        ],
+    );
+
+    let first = live_sessions(tmp.path(), Utc::now()).remove(0);
+    assert_eq!(
+        first.task_state,
+        Some(TaskState {
+            tasks: vec![
+                TaskItem {
+                    id: "0".into(),
+                    title: "Read schema".into(),
+                    status: TaskStatus::InProgress,
+                },
+                TaskItem {
+                    id: "1".into(),
+                    title: "Wire task state".into(),
+                    status: TaskStatus::Pending,
+                },
+            ],
+        })
+    );
+
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&update_plan(&[
+            ("Read schema", "completed"),
+            ("Wire task state", "in_progress"),
+        ]))
+        .unwrap()
+    )
+    .unwrap();
+
+    let refreshed = live_sessions(tmp.path(), Utc::now()).remove(0);
+    assert_eq!(
+        refreshed.task_state.unwrap().tasks,
+        vec![
+            TaskItem {
+                id: "0".into(),
+                title: "Read schema".into(),
+                status: TaskStatus::Completed,
+            },
+            TaskItem {
+                id: "1".into(),
+                title: "Wire task state".into(),
+                status: TaskStatus::InProgress,
+            },
+        ],
+        "the existing scanner/reconcile path must replace, not append, update_plan rows"
+    );
+}
+
+#[test]
+fn rollout_cache_invalidates_when_the_append_only_transcript_grows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-cached.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-cached"),
+            turn_context("gpt-5.5", "/tmp/proj", Some("medium")),
+            token_count(1000),
+            event("task_started"),
+            update_plan(&[("First", "pending")]),
+        ],
+    );
+    let mut cache = RolloutCache::default();
+
+    let first = scan_sessions_with_cache(tmp.path(), Utc::now(), Duration::zero(), 0, &mut cache)
+        .live
+        .remove(0);
+    assert_eq!(first.task_state.unwrap().tasks[0].title, "First");
+    assert_eq!(cache.entries.len(), 1);
+
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&update_plan(&[("Second", "in_progress")])).unwrap()
+    )
+    .unwrap();
+
+    let refreshed =
+        scan_sessions_with_cache(tmp.path(), Utc::now(), Duration::zero(), 0, &mut cache)
+            .live
+            .remove(0);
+    assert_eq!(refreshed.task_state.unwrap().tasks[0].title, "Second");
 }
 
 #[test]
@@ -275,11 +398,15 @@ fn live_and_dormant_rollouts_never_overlap() {
     let live = live_sessions(tmp.path(), now);
     let idle = idle_sessions(tmp.path(), now, MAX_AGE, 50);
     assert_eq!(
-        live.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(),
+        live.iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
         ["fresh"]
     );
     assert_eq!(
-        idle.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(),
+        idle.iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
         ["old"]
     );
 }
@@ -306,14 +433,19 @@ fn dormant_rollouts_stop_at_the_age_bound_and_are_capped_by_recency() {
 
     let all = idle_sessions(tmp.path(), now, MAX_AGE, 50);
     assert_eq!(
-        all.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(),
+        all.iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
         ["newest", "middle", "oldest"],
         "most recent first, and the ancient one is gone"
     );
 
     let capped = idle_sessions(tmp.path(), now, MAX_AGE, 2);
     assert_eq!(
-        capped.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(),
+        capped
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
         ["newest", "middle"],
         "the cap keeps the most recent, not the first walked"
     );
@@ -344,7 +476,10 @@ fn a_touched_but_stale_rollout_is_dormant_rather_than_lost() {
     let scan = scan_sessions(tmp.path(), now, MAX_AGE, 50);
     assert!(scan.live.is_empty(), "stale content is not live");
     assert_eq!(
-        scan.idle.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(),
+        scan.idle
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
         ["sess-touched"],
         "it is dormant and resumable — it must not fall through both lists"
     );
@@ -375,7 +510,10 @@ fn the_transcript_timestamp_decides_for_everything_that_gets_parsed() {
 
     let scan = scan_sessions(tmp.path(), now, MAX_AGE, 50);
     assert_eq!(
-        scan.live.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(),
+        scan.live
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
         ["sess-current"],
         "a current conversation is live no matter which gate found it"
     );

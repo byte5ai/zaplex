@@ -1,10 +1,26 @@
 use prost::Message;
 
 use crate::proto::{
-    client_message, server_message, ClientMessage, Initialize, InitializeResponse, ServerMessage,
+    client_message, server_message, AgentSessionInfo, AgentTaskItem, ClientMessage, Initialize,
+    InitializeResponse, MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList,
+    ServerMessage,
 };
 
 use super::*;
+
+const LEGACY_DAEMON_INVENTORY: &[u8] = &[
+    0x0a, 0x06, b'l', b'e', b'g', b'a', b'c', b'y', 0xea, 0x01, 0x11, 0x0a, 0x0f, 0x0a, 0x07, b'a',
+    b'g', b'e', b'n', b't', b'-', b'1', 0x12, 0x04, b'/', b't', b'm', b'p',
+];
+
+fn decode_legacy_daemon_inventory() -> crate::proto::AgentSessionList {
+    let decoded = ServerMessage::decode(LEGACY_DAEMON_INVENTORY).unwrap();
+    assert_eq!(decoded.request_id, "legacy");
+    let Some(server_message::Message::AgentSessionList(list)) = decoded.message else {
+        panic!("legacy fixture must decode as AgentSessionList");
+    };
+    list
+}
 
 #[tokio::test]
 async fn round_trip_client_message() {
@@ -76,25 +92,97 @@ fn real_legacy_client_fixture_interoperates() {
 }
 
 #[test]
-fn real_legacy_daemon_fixture_decodes_without_binding() {
+fn real_legacy_schema_fixture_decodes_without_pty_binding() {
     // Captured old ServerMessage { request_id: "legacy", agent_session_list:
     // [AgentSessionInfo { session_id: "agent-1", cwd: "/tmp" }] }. This full
     // daemon envelope predates every PTY-binding field and is deliberately not
     // produced by the current encoder.
-    const LEGACY_DAEMON_INVENTORY: &[u8] = &[
-        0x0a, 0x06, b'l', b'e', b'g', b'a', b'c', b'y', 0xea, 0x01, 0x11, 0x0a, 0x0f, 0x0a, 0x07,
-        b'a', b'g', b'e', b'n', b't', b'-', b'1', 0x12, 0x04, b'/', b't', b'm', b'p',
-    ];
-    let decoded = ServerMessage::decode(LEGACY_DAEMON_INVENTORY).unwrap();
-    assert_eq!(decoded.request_id, "legacy");
-    let Some(server_message::Message::AgentSessionList(list)) = decoded.message else {
-        panic!("legacy fixture must decode as AgentSessionList");
-    };
+    let list = decode_legacy_daemon_inventory();
     assert_eq!(list.sessions.len(), 1);
     assert_eq!(list.sessions[0].session_id, "agent-1");
     assert!(list.sessions[0].pty_session_id.is_empty());
     assert_eq!(list.sessions[0].pty_session_generation, 0);
     assert!(!list.sessions[0].pty_foreground);
+    assert!(!list.sessions[0].has_task_state);
+    assert!(list.sessions[0].task_items.is_empty());
+}
+
+#[test]
+fn older_daemon_without_pty_binding_decodes_safely() {
+    let list = decode_legacy_daemon_inventory();
+    let session = &list.sessions[0];
+
+    assert!(session.pty_session_id.is_empty());
+    assert_eq!(session.pty_session_generation, 0);
+    assert!(!session.pty_foreground);
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct LegacyAgentSessionInfo {
+    #[prost(string, tag = "1")]
+    session_id: String,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct LegacyServerEnvelope {
+    #[prost(string, tag = "1")]
+    request_id: String,
+}
+
+#[test]
+fn older_client_ignores_new_pty_binding_field() {
+    let current = AgentSessionInfo {
+        session_id: "agent-1".to_string(),
+        pty_session_id: "pty-7".to_string(),
+        pty_session_generation: 42,
+        pty_foreground: true,
+        ..Default::default()
+    };
+
+    let legacy = LegacyAgentSessionInfo::decode(current.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(legacy.session_id, "agent-1");
+}
+
+#[test]
+fn older_client_ignores_new_structured_task_fields() {
+    let current = AgentSessionInfo {
+        session_id: "agent-1".to_string(),
+        has_task_state: true,
+        task_items: vec![AgentTaskItem {
+            id: "0".to_string(),
+            title: "Inspect".to_string(),
+            status: "in_progress".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    let legacy = LegacyAgentSessionInfo::decode(current.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(legacy.session_id, "agent-1");
+}
+
+#[test]
+fn older_client_ignores_multiplexer_inventory_response() {
+    let current = ServerMessage {
+        request_id: "multiplexers".to_string(),
+        message: Some(server_message::Message::MultiplexerSessionList(
+            MultiplexerSessionList {
+                sessions: vec![MultiplexerSessionInfo {
+                    kind: MultiplexerKind::Tmux.into(),
+                    target: "release; touch /tmp/never".to_string(),
+                    name: "release; touch /tmp/never".to_string(),
+                    windows: 2,
+                    attached_clients: 0,
+                }],
+                warnings: vec![],
+            },
+        )),
+    };
+
+    let legacy = LegacyServerEnvelope::decode(current.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(legacy.request_id, "multiplexers");
 }
 
 #[test]

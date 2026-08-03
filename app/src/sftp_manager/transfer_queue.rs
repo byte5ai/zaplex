@@ -12,8 +12,8 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 use super::sftp_backend::{InMemorySftpBackend, SftpBackend};
 use super::sftp_ops::SftpOpsError;
 use super::transfer_job::{
-    retry_recovery, retry_recovery_controlled, startup_backend_recovery_error, RecoveryOutcome,
-    TransferControl, TransferProgress,
+    retry_recovery, retry_recovery_controlled, startup_backend_recovery_error, ConflictDecision,
+    RecoveryOutcome, TransferControl, TransferOperation, TransferProgress,
 };
 use super::types::{TransferDirection, TransferPhase};
 
@@ -29,6 +29,14 @@ const MAX_TERMINAL_HISTORY: usize = 100;
 const ACTIVITY_NOTIFICATION_INTERVAL: Duration = Duration::from_millis(100);
 pub(crate) const SOURCE_RESTORED_WARNING: &str =
     "Move source was restored; the destination remains complete";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferTopology {
+    SameFilesystem,
+    LocalToRemote,
+    RemoteToLocal,
+    RemoteRelay,
+}
 
 trait RecoveryWorkerSpawner: Send + Sync {
     fn spawn(&self, name: String, worker: Box<dyn FnOnce() + Send>) -> Result<(), std::io::Error>;
@@ -71,6 +79,9 @@ pub struct TransferActivity {
     pub source_path: PathBuf,
     pub target_path: PathBuf,
     pub direction: TransferDirection,
+    pub operation: TransferOperation,
+    pub conflict: ConflictDecision,
+    pub topology: TransferTopology,
     pub progress: TransferProgress,
     pub state: QueuedTransferState,
     pub recovery_paths: Vec<PathBuf>,
@@ -92,6 +103,7 @@ pub struct ActivitySummary {
     pub active: usize,
     pub transferred: u64,
     pub total: u64,
+    pub bytes_per_second: u64,
 }
 
 struct TransferQueueData {
@@ -207,9 +219,9 @@ impl TransferActivityHandle {
             .filter(|activity| activity.control_epoch == self.control_epoch)
         {
             activity.state = if error.destination_committed() {
-                QueuedTransferState::CompletedWithWarning(error.to_string())
+                QueuedTransferState::CompletedWithWarning(error.user_message())
             } else {
-                QueuedTransferState::Failed(error.to_string())
+                QueuedTransferState::Failed(error.user_message())
             };
             activity.recovery_paths = error.recovery_paths().to_vec();
             activity.recovery_retryable = error.recovery_id().is_some();
@@ -268,7 +280,16 @@ impl TransferQueue {
     }
 
     fn register_startup_backend_recoveries(&mut self, backend: Arc<dyn SftpBackend>) {
-        for path in backend.startup_recovery_paths() {
+        let paths = backend.startup_recovery_paths();
+        self.register_backend_recovery_paths(backend, paths);
+    }
+
+    fn register_backend_recovery_paths(
+        &mut self,
+        backend: Arc<dyn SftpBackend>,
+        paths: Vec<PathBuf>,
+    ) {
+        for path in paths {
             let error = startup_backend_recovery_error(backend.clone(), vec![path.clone()]);
             let Ok(id) = self.enqueue_job("global", path.clone(), path, TransferDirection::Copy, 0)
             else {
@@ -277,6 +298,21 @@ impl TransferQueue {
             if let Some(activity) = self.activity_handle(id) {
                 activity.set_error(&error);
             }
+        }
+    }
+
+    /// Scans a newly connected backend for durable recovery records without
+    /// blocking the UI or tying the scan to the lifetime of the source pane.
+    pub(crate) fn register_backend_recoveries_async(&self, backend: Arc<dyn SftpBackend>) {
+        let mut queue = self.clone();
+        let spawn = std::thread::Builder::new()
+            .name("sftp-recovery-scan".to_string())
+            .spawn(move || {
+                let paths = backend.startup_recovery_paths();
+                queue.register_backend_recovery_paths(backend, paths);
+            });
+        if let Err(error) = spawn {
+            log::warn!("Could not start SFTP recovery scan: {error}");
         }
     }
 
@@ -333,6 +369,35 @@ impl TransferQueue {
         direction: TransferDirection,
         total: u64,
     ) -> Result<TransferId, SftpOpsError> {
+        let topology = match direction {
+            TransferDirection::Upload => TransferTopology::LocalToRemote,
+            TransferDirection::Download => TransferTopology::RemoteToLocal,
+            TransferDirection::Copy => TransferTopology::SameFilesystem,
+        };
+        self.enqueue_job_with_audit(
+            workspace_id,
+            source_path,
+            target_path,
+            direction,
+            TransferOperation::Copy,
+            ConflictDecision::Skip,
+            topology,
+            total,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn enqueue_job_with_audit(
+        &mut self,
+        workspace_id: impl Into<String>,
+        source_path: PathBuf,
+        target_path: PathBuf,
+        direction: TransferDirection,
+        operation: TransferOperation,
+        conflict: ConflictDecision,
+        topology: TransferTopology,
+        total: u64,
+    ) -> Result<TransferId, SftpOpsError> {
         let mut data = self.data.lock().expect("transfer queue lock poisoned");
         let id = data.next_id;
         let next_id = data
@@ -354,9 +419,13 @@ impl TransferQueue {
                 source_path,
                 target_path,
                 direction,
+                operation,
+                conflict,
+                topology,
                 progress: TransferProgress {
                     transferred: 0,
                     total,
+                    bytes_per_second: 0,
                     eta: None,
                     phase: TransferPhase::Transferring,
                 },
@@ -561,6 +630,9 @@ impl TransferQueue {
                 RecoveryOutcome::SourceRestored => QueuedTransferState::Failed(
                     "Move source was restored before the destination committed".to_string(),
                 ),
+                RecoveryOutcome::DestinationCommittedSourcePreserved => {
+                    QueuedTransferState::CompletedWithWarning(SOURCE_RESTORED_WARNING.to_string())
+                }
             };
         }
         mark_changed(&mut data);
@@ -668,15 +740,20 @@ impl TransferQueue {
                                     "Move source was restored before the destination committed"
                                         .to_string(),
                                 ),
+                                RecoveryOutcome::DestinationCommittedSourcePreserved => {
+                                    QueuedTransferState::CompletedWithWarning(
+                                        SOURCE_RESTORED_WARNING.to_string(),
+                                    )
+                                }
                             };
                         }
                     }
                     Err(error) => {
                         if let Some(activity) = data.activities.get_mut(&id) {
                             activity.state = if committed {
-                                QueuedTransferState::CompletedWithWarning(error.to_string())
+                                QueuedTransferState::CompletedWithWarning(error.user_message())
                             } else {
-                                QueuedTransferState::Failed(error.to_string())
+                                QueuedTransferState::Failed(error.user_message())
                             };
                             activity.recovery_retryable = true;
                         }
@@ -705,9 +782,9 @@ impl TransferQueue {
                 if let Some(activity) = data.activities.get_mut(&id) {
                     activity.control_epoch = previous_control_epoch;
                     activity.state = if committed {
-                        QueuedTransferState::CompletedWithWarning(error.to_string())
+                        QueuedTransferState::CompletedWithWarning(error.user_message())
                     } else {
-                        QueuedTransferState::Failed(error.to_string())
+                        QueuedTransferState::Failed(error.user_message())
                     };
                     activity.progress = previous_progress;
                     activity.recovery_retryable = true;
@@ -865,6 +942,9 @@ fn summarize(activities: impl Iterator<Item = TransferActivity>) -> ActivitySumm
                 .transferred
                 .saturating_add(activity.progress.transferred);
             summary.total = summary.total.saturating_add(activity.progress.total);
+            summary.bytes_per_second = summary
+                .bytes_per_second
+                .saturating_add(activity.progress.bytes_per_second);
             summary
         })
 }

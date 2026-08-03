@@ -1,0 +1,419 @@
+{
+  "repository": "byte5ai/zaplex",
+  "captured_at": "2026-08-02",
+  "owner_overrides": {
+    "141_token_fixture": {
+      "replaces": "codex_usage_fixture_reports_total_115_and_work_25",
+      "with": "codex_usage_fixture_reports_total_110_and_work_20",
+      "reason": "Owner decision 2026-08-02: reasoning tokens remain visible as an output subset and are not added twice."
+    },
+    "143_runtime_hosts": {
+      "replaces": ["devhost", "agenthost", "hal9000"],
+      "with": ["devhost", "agenthost"],
+      "reason": "hal9000 is not part of the current host topology."
+    },
+    "50_clipboard_image_delivery": {
+      "replaces": "clipboard PNG to temporary file path insertion",
+      "with": "removable image thumbnail and platform-native CLI-agent image paste",
+      "reason": "Owner decision 2026-08-02: the composer must show the image, never an implementation path."
+    }
+  },
+  "legacy_issues": {
+    "18": {
+      "updated_at": "2026-08-01T05:18:07Z",
+      "required_tests": [
+        "theme_color_input_accepts_hex_and_rgb",
+        "invalid_theme_color_input_fails_without_a_fallback_color",
+        "authored_gradients_survive_yaml_export_and_import",
+        "yaml_round_trip_preserves_ansi_and_ui_color_overrides",
+        "removing_ui_overrides_restores_derived_colors",
+        "image_path_update_preserves_the_rest_of_the_theme"
+      ],
+      "required_runtime_rows": ["M14"]
+    },
+    "19": {
+      "updated_at": "2026-08-01T05:18:05Z",
+      "required_tests": [],
+      "required_readiness_markers": [
+        "## Neubewertung der inerten Warp-Stubs (#19)",
+        "bleiben für 1.0 bewusst inert bestehen"
+      ]
+    },
+    "21": {
+      "updated_at": "2026-08-02T05:17:03Z",
+      "required_tests": [
+        "tmux_inventory_preserves_session_names_as_data",
+        "byobu_screen_inventory_keeps_exact_target_and_clean_display_name",
+        "typed_multiplexer_inventory_round_trip",
+        "multiplexer_inventory_requires_explicit_daemon_capability",
+        "multiplexer_kind_selects_only_non_destructive_attach_modes"
+      ],
+      "required_runtime_rows": ["M15"]
+    },
+    "38": {
+      "updated_at": "2026-07-05T20:12:50Z",
+      "required_tests": [],
+      "covered_by": ["47", "50"],
+      "required_runtime_rows": ["M16", "M26", "M27"]
+    },
+    "47": {
+      "updated_at": "2026-07-06T03:37:54Z",
+      "required_tests": [
+        "excludes_self_and_extracts_peers",
+        "fold_two_hosts_sharing_a_path_stay_isolated",
+        "host_ring_usage_uses_only_reported_ring_bytes_and_cap"
+      ],
+      "required_runtime_rows": ["M16"]
+    },
+    "50": {
+      "updated_at": "2026-07-06T04:51:17Z",
+      "required_tests": [
+        "german_catalog_has_complete_structural_parity_with_english",
+        "clipboard_png_paste_in_cli_input_creates_thumbnail_without_inserting_a_path",
+        "combined_override_hide_relabel_recolor_reorder"
+      ],
+      "required_runtime_rows": ["M26", "M27"]
+    },
+    "110": {
+      "updated_at": "2026-07-12T00:56:35Z",
+      "required_tests": [],
+      "covered_by": ["111", "112", "113", "114", "115", "116", "117"]
+    },
+    "111": {
+      "updated_at": "2026-07-12T00:56:03Z",
+      "required_tests": [
+        "normalizes_supported_native_events_to_control_v1_event_names",
+        "normalized_hook_event_is_forwardable_over_the_authenticated_control_transport",
+        "refresh_is_idempotent_and_preserves_unrelated_json",
+        "remove_is_idempotent_and_preserves_foreign_hooks"
+      ],
+      "required_runtime_rows": ["M17"]
+    },
+    "112": {
+      "updated_at": "2026-07-12T00:56:04Z",
+      "required_tests": [
+        "token_is_bound_to_the_exact_surface_and_tab",
+        "every_public_control_verb_is_strictly_typed",
+        "zaplex_control_is_wired_into_the_top_level_cli",
+        "deserialized_requests_are_revalidated_at_the_server_boundary"
+      ],
+      "required_runtime_rows": ["M18"]
+    },
+    "113": {
+      "updated_at": "2026-07-12T00:56:04Z",
+      "required_tests": [
+        "install_refresh_and_remove_are_idempotent",
+        "install_and_remove_preserve_unrelated_skill_entries"
+      ],
+      "required_runtime_rows": ["M19"]
+    },
+    "114": {
+      "updated_at": "2026-07-12T00:56:05Z",
+      "required_tests": [
+        "claude_task_fixture_orders_ids_updates_duplicates_and_filters_internal_rows",
+        "codex_latest_valid_update_plan_replaces_earlier_rows_without_accumulating_duplicates",
+        "claude_session_reconcile_refreshes_structured_task_updates",
+        "task_glance_preserves_order_and_prefers_in_progress_step"
+      ],
+      "required_runtime_rows": ["M20"]
+    },
+    "115": {
+      "updated_at": "2026-07-12T00:56:06Z",
+      "required_tests": [
+        "task_activity_uses_the_current_step_without_losing_recency"
+      ],
+      "required_runtime_rows": ["M20"]
+    },
+    "116": {
+      "updated_at": "2026-07-12T00:56:06Z",
+      "required_tests": [
+        "test_sqlite_round_trips_and_clears_cli_agent_binding",
+        "local_restore_binding_preserves_provider_session_cwd_and_account",
+        "prompt_and_auto_share_the_account_pinned_prepare_path"
+      ],
+      "required_runtime_rows": ["M21"]
+    },
+    "117": {
+      "updated_at": "2026-07-12T00:56:07Z",
+      "required_tests": [
+        "test_sqlite_round_trips_and_clears_tab_pin",
+        "test_tab_pinning_keeps_a_stable_prefix_and_restores_it",
+        "test_pinned_tab_always_requires_close_confirmation"
+      ],
+      "required_runtime_rows": ["M22"]
+    },
+    "118": {
+      "updated_at": "2026-07-12T01:01:46Z",
+      "required_tests": [
+        "test_detect_known_agents",
+        "grok_structured_permission_request_preserves_typed_state",
+        "grok_is_searchable_by_name_and_command",
+        "first_class_agent_results_run_their_canonical_commands"
+      ],
+      "required_runtime_rows": ["M23"]
+    },
+    "119": {
+      "updated_at": "2026-07-12T01:10:10Z",
+      "required_tests": [
+        "new_launch_surfaces_retire_gemini_but_keep_antigravity",
+        "installation_scan_targets_agy_not_standalone_gemini",
+        "gemini_query_resolves_to_antigravity",
+        "antigravity_resume_quotes_the_conversation_id_and_does_not_invent_fork_support",
+        "documented_antigravity_status_payload_drives_blocked_and_active_state"
+      ],
+      "required_runtime_rows": ["M24"]
+    },
+    "120": {
+      "updated_at": "2026-07-12T01:26:21Z",
+      "required_tests": [
+        "only_blocked_status_needs_attention",
+        "attention_halo_keeps_the_accent_hue_at_static_low_alpha"
+      ],
+      "required_runtime_rows": ["M25"]
+    }
+  },
+  "issues": {
+    "125": {
+      "updated_at": "2026-07-23T11:38:29Z",
+      "required_tests": [
+        "resolved_symlink_target_selects_file_open_or_navigation_explicitly",
+        "failed_navigation_keeps_the_entire_visible_location_unchanged",
+        "failed_forward_navigation_keeps_the_current_history_position",
+        "file_symlink_opens_as_a_file_without_navigating",
+        "directory_symlink_navigates_to_its_directory_target",
+        "broken_symlink_reports_failure_without_changing_location",
+        "local_fifo_is_classified_as_other_and_never_opened",
+        "local_socket_is_classified_as_other_and_never_transferred"
+      ]
+    },
+    "126": {
+      "updated_at": "2026-07-23T11:38:33Z",
+      "required_tests": [
+        "local_rename_never_replaces_existing_destination",
+        "local_copy_failure_keeps_existing_destination_intact",
+        "local_self_copy_is_rejected_without_truncation",
+        "recursive_download_rejects_path_outside_source_root",
+        "recursive_move_preserves_symlinks_and_empty_directories",
+        "unsupported_entry_aborts_move_before_source_delete",
+        "remote_move_skip_conflict_preserves_skipped_source_and_source_tree",
+        "move_with_untransferred_symlink_never_deletes_source_tree",
+        "move_with_untransferred_special_entry_never_deletes_source_tree",
+        "concurrent_copies_reserve_distinct_temporary_paths",
+        "cancelled_copy_preserves_previous_destination"
+      ]
+    },
+    "127": {
+      "updated_at": "2026-07-23T11:38:38Z",
+      "required_tests": [
+        "refresh_generation_discards_an_older_completion",
+        "save_as_resolves_the_same_entry_after_refresh",
+        "queued_delete_never_retargets_after_sort",
+        "removed_entry_aborts_pending_action",
+        "changed_entry_type_invalidates_pending_action",
+        "refresh_preserves_marks_for_stable_entries"
+      ]
+    },
+    "128": {
+      "updated_at": "2026-07-23T11:41:03Z",
+      "required_tests": [
+        "breadcrumb_click_survives_rerender_between_mouse_down_and_up",
+        "parent_row_click_survives_rerender",
+        "rescan_click_survives_rerender",
+        "cancel_button_cancels_inflight_operation_exactly_once",
+        "row_action_does_not_fire_twice_after_rerender"
+      ]
+    },
+    "129": {
+      "updated_at": "2026-07-23T11:38:46Z",
+      "required_tests": [
+        "pid_must_fit_the_positive_signed_process_id_range",
+        "pid_outside_the_signed_process_id_range_is_not_alive",
+        "invalid_pid_never_reaches_the_signal_backend",
+        "dead_pid_is_rejected_before_signal_dispatch",
+        "recycled_pid_is_rejected_by_process_identity",
+        "missing_process_fingerprint_disables_signal_fail_closed"
+      ]
+    },
+    "130": {
+      "updated_at": "2026-07-23T11:38:50Z",
+      "required_tests": [
+        "delete_folder_removes_secrets_for_every_descendant_host",
+        "delete_onekey_credential_is_blocked_while_hosts_reference_it",
+        "clone_host_rolls_back_when_secret_copy_fails",
+        "repository_write_reports_sync_version_failure",
+        "keychain_failure_keeps_repository_state_recoverable",
+        "delete_confirmation_lists_all_descendant_hosts"
+      ]
+    },
+    "131": {
+      "updated_at": "2026-07-23T11:38:54Z",
+      "required_tests": [
+        "empty_host_is_rejected_by_save_test_and_connect",
+        "port_zero_and_out_of_range_are_rejected_without_fallback",
+        "connection_test_never_disables_host_key_verification",
+        "unknown_host_key_requires_explicit_confirmation",
+        "changed_host_key_is_a_hard_failure",
+        "stale_test_completion_cannot_overwrite_current_endpoint_state",
+        "tailscale_lookup_uses_injected_workspace_command_factory"
+      ]
+    },
+    "132": {
+      "updated_at": "2026-07-23T11:39:00Z",
+      "required_tests": [
+        "startup_command_waits_for_bootstrap_and_runs_exactly_once",
+        "startup_command_does_not_run_on_session_opened_or_init_shell",
+        "startup_command_survives_replay_then_live_bootstrap",
+        "startup_command_is_retained_when_daemon_enqueue_fails",
+        "startup_command_is_retained_when_writer_is_closed",
+        "retained_startup_command_runs_exactly_once_after_reconnect",
+        "second_bootstrap_after_reconnect_does_not_resend_startup_command",
+        "disconnect_before_daemon_processing_retries_same_command_id_once",
+        "lost_ack_after_execution_is_deduplicated_on_retry",
+        "pending_buffer_never_evicts_unacknowledged_startup_command"
+      ]
+    },
+    "133": {
+      "updated_at": "2026-07-23T11:39:04Z",
+      "required_tests": [
+        "session_identity_matching_never_crosses_provider_or_account_boundaries",
+        "terminal_host_matching_never_crosses_local_or_remote_boundaries",
+        "open_plan_focuses_known_terminal_for_every_session_state",
+        "open_plan_refuses_to_duplicate_an_unlocated_live_session",
+        "only_a_dormant_session_can_be_resumed",
+        "next_waiting_distinguishes_copied_ids_between_accounts",
+        "row_menu_resolves_copied_id_to_exact_account"
+      ]
+    },
+    "134": {
+      "updated_at": "2026-07-23T11:39:08Z",
+      "required_tests": [
+        "agent_inventory_round_trips_optional_pty_session_id",
+        "older_daemon_without_pty_binding_decodes_safely",
+        "older_client_ignores_new_pty_binding_field",
+        "multiple_agent_sessions_can_reference_the_same_pty",
+        "second_live_agent_binding_to_same_pty_is_rejected",
+        "dormant_agent_without_pty_round_trips_as_valid_state",
+        "bind_and_unbind_follow_agent_and_pty_lifecycle",
+        "stale_binding_generation_cannot_replace_current_binding",
+        "foreign_host_or_daemon_binding_is_rejected",
+        "unknown_pty_binding_is_never_attached",
+        "pty_binding_requires_negotiated_capability",
+        "real_legacy_schema_fixture_decodes_without_pty_binding",
+        "reattach_uses_pty_id_without_cwd_guessing",
+        "missing_pty_binding_never_starts_duplicate_session",
+        "fish_bootstrap_body_is_delivered_idempotently",
+        "pwsh_bootstrap_body_is_delivered_idempotently"
+      ]
+    },
+    "135": {
+      "updated_at": "2026-07-23T11:39:12Z",
+      "required_tests": [
+        "relative_remote_launch_directory_is_rejected",
+        "empty_remote_launch_directory_maps_explicitly_to_home",
+        "absolute_remote_launch_directory_reaches_request_unchanged",
+        "claude_spawn_card_exposes_only_cli_default_effort",
+        "selected_codex_effort_reaches_cli_arguments",
+        "launch_request_never_interpolates_remote_path_into_shell_source"
+      ]
+    },
+    "136": {
+      "updated_at": "2026-07-23T11:39:16Z",
+      "required_tests": [
+        "primary_sidebar_has_exactly_one_host_project_session_tree",
+        "registered_offline_host_remains_visible_without_live_inventory",
+        "registered_and_live_host_snapshots_join_into_one_host_node",
+        "same_display_name_hosts_remain_distinct_by_stable_id",
+        "local_host_is_rendered_exactly_once",
+        "removed_host_is_never_routed_as_available",
+        "host_node_exposes_manage_terminal_agent_and_files_actions",
+        "session_node_dispatches_shared_session_open_plan",
+        "parallel_ssh_and_cockpit_primary_roots_are_absent",
+        "metric_column_width_does_not_change_with_label_length",
+        "host_row_click_survives_rerender_between_down_and_up"
+      ]
+    },
+    "137": {
+      "updated_at": "2026-07-23T11:39:21Z",
+      "required_tests": [
+        "plus_menu_lists_only_favorite_hosts",
+        "favorite_host_submenu_offers_terminal_and_new_agent",
+        "new_agent_submenu_opens_spawn_card_without_launching",
+        "automatic_host_registration_never_adds_menu_favorite",
+        "favorite_store_write_is_atomic",
+        "corrupt_favorite_store_is_reported_and_never_overwritten",
+        "stale_favorite_is_disabled_and_removable",
+        "favorite_menu_migration_preserves_non_host_favorite_data",
+        "removed_favorite_host_is_disabled_and_never_routed"
+      ]
+    },
+    "138": {
+      "updated_at": "2026-07-23T11:39:26Z",
+      "required_tests": [
+        "tab_cycles_file_manager_panes_clockwise",
+        "shift_tab_cycles_file_manager_panes_counterclockwise",
+        "f2_renames_cursor_entry",
+        "f3_views_without_editing",
+        "f4_opens_editor",
+        "f5_f6_f7_f8_f10_dispatch_documented_actions",
+        "file_action_uses_marked_entries_before_cursor",
+        "global_tab_binding_does_not_steal_file_manager_focus"
+      ]
+    },
+    "139": {
+      "updated_at": "2026-07-23T11:39:30Z",
+      "required_tests": [
+        "function_bar_drops_low_priority_captions_before_overlap",
+        "function_bar_fits_minimum_supported_pane_width",
+        "file_pane_body_consumes_remaining_height_above_footer",
+        "active_pane_style_differs_from_selection_and_hover",
+        "column_positions_do_not_move_with_filename_length"
+      ]
+    },
+    "140": {
+      "updated_at": "2026-07-23T11:39:35Z",
+      "required_tests": [
+        "one_other_visible_file_manager_is_default_target",
+        "hidden_tab_file_managers_are_selectable_targets",
+        "large_copy_streams_without_buffering_entire_file",
+        "cancelled_transfer_preserves_source_and_removes_partial_output",
+        "queue_survives_source_tab_close",
+        "failed_remote_to_remote_move_never_deletes_source",
+        "conflict_apply_to_all_is_deterministic",
+        "move_deletes_source_only_after_verified_destination_commit"
+      ]
+    },
+    "141": {
+      "updated_at": "2026-07-23T11:39:39Z",
+      "required_tests": [
+        "codex_usage_subtracts_cached_tokens_from_input_total",
+        "codex_usage_fixture_reports_total_115_and_work_25",
+        "unknown_model_price_is_rendered_as_not_priced",
+        "known_estimated_cost_has_provenance_marker",
+        "remote_host_without_pricing_data_has_no_fabricated_cost"
+      ]
+    },
+    "142": {
+      "updated_at": "2026-07-23T11:39:45Z",
+      "required_tests": [
+        "initial_scan_state_is_loading_not_empty",
+        "failed_account_scan_is_excluded_from_freest_routing",
+        "older_scan_completion_cannot_replace_newer_snapshot",
+        "failed_settings_write_preserves_last_good_file",
+        "dirty_onekey_dialog_requires_save_discard_or_cancel",
+        "outside_click_does_not_discard_dirty_changes",
+        "session_table_body_clips_to_zone_card",
+        "known_ssh_transport_errors_never_fall_through_to_raw_copy"
+      ]
+    },
+    "143": {
+      "updated_at": "2026-07-23T11:39:50Z",
+      "required_tests": [
+        "release_metadata_is_consistent_across_manifests_resources_and_docs",
+        "shipped_release_copy_contains_no_rc_beta_or_preview_markers",
+        "release_tree_does_not_contain_rc_handoff_document",
+        "first_ten_user_risks_have_mitigation_recovery_and_validation",
+        "manual_release_matrix_has_result_and_evidence_for_every_row"
+      ]
+    }
+  }
+}

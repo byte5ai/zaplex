@@ -83,12 +83,17 @@ pub fn zaplexify_description(
             "Bring Zaplex's features to your remote session. Blocks, full text editing, auto-complete, Oz, and more."
         ),
     ])]);
-    zaplexify::render::build_description_row(description, theme, appearance, hyperlink_index.clone())
-        .with_hyperlink_font_color(appearance.theme().accent().into_solid())
-        .register_default_click_handlers(|url, _, ctx| {
-            ctx.open_url(&url.url);
-        })
-        .finish()
+    zaplexify::render::build_description_row(
+        description,
+        theme,
+        appearance,
+        hyperlink_index.clone(),
+    )
+    .with_hyperlink_font_color(appearance.theme().accent().into_solid())
+    .register_default_click_handlers(|url, _, ctx| {
+        ctx.open_url(&url.url);
+    })
+    .finish()
 }
 
 impl View for SshZaplexifyBlock {

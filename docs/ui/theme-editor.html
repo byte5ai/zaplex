@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>UI-Spezifikation — Theme-Editor</title>
+  <meta name="ui-spec-route" content="/native/theme-editor">
+  <meta name="ui-spec-viewports" content="1280x900,900x760">
+  <style>
+    :root {
+      --bg: #111318;
+      --surface-1: #191c22;
+      --surface-2: #22262e;
+      --surface-3: #2a2f38;
+      --border: #303641;
+      --text: #f1f3f7;
+      --muted: #9aa3b2;
+      --faint: #687181;
+      --accent: #8b7cf6;
+      --success: #40c98b;
+      --warning: #f4b860;
+      --error: #f26d78;
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 16px;
+      --space-lg: 24px;
+      --radius-control: 6px;
+      --radius-card: 10px;
+      color-scheme: dark;
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0b0d10;
+      color: var(--text);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; }
+    button, input { font: inherit; }
+    #spec {
+      max-width: 1240px;
+      margin: 0 auto 24px;
+      padding: 16px 20px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      background: var(--surface-1);
+    }
+    #spec h1 { margin: 0 0 12px; font-size: 18px; }
+    .spec-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+    #spec h2 { margin: 0 0 5px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+    #spec ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 11px; }
+    #mockups { display: grid; gap: 24px; max-width: 1240px; margin: 0 auto; }
+    .viewport { overflow: hidden; border: 1px solid var(--border); border-radius: 14px; background: var(--bg); box-shadow: 0 18px 60px #0009; }
+    .viewport-label { padding: 7px 12px; border-bottom: 1px solid var(--border); color: var(--faint); font-size: 11px; }
+    .window { min-height: 720px; display: grid; grid-template-rows: 52px 1fr 58px; }
+    .titlebar, .footer { display: flex; align-items: center; gap: var(--space-sm); padding: 0 var(--space-md); background: var(--surface-1); }
+    .titlebar { border-bottom: 1px solid var(--border); }
+    .footer { justify-content: space-between; border-top: 1px solid var(--border); }
+    .title { margin-right: auto; }
+    .title strong { display: block; font-size: 15px; }
+    .title span { color: var(--muted); font-size: 11px; }
+    .button, .field, .segment {
+      min-height: 30px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-control);
+      background: var(--surface-2);
+      color: var(--text);
+    }
+    .button { display: inline-flex; align-items: center; justify-content: center; padding: 5px 10px; white-space: nowrap; }
+    .button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+    .button.danger { color: var(--error); }
+    .button:disabled { color: var(--faint); background: var(--surface-1); }
+    .workspace { min-width: 0; display: grid; grid-template-columns: 410px minmax(0, 1fr); }
+    .inspector { min-width: 0; overflow: hidden; border-right: 1px solid var(--border); background: var(--surface-1); }
+    .inspector-scroll { height: 100%; max-height: 610px; overflow-y: auto; padding: var(--space-md); }
+    .section { margin-bottom: var(--space-lg); }
+    .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-sm); }
+    .section h3 { margin: 0; font-size: 12px; }
+    .help { color: var(--muted); font-size: 11px; }
+    .row { display: grid; grid-template-columns: minmax(105px, 1fr) 26px 94px; align-items: center; gap: 8px; min-height: 34px; }
+    .row label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+    .swatch { width: 26px; height: 26px; border: 1px solid #ffffff38; border-radius: 5px; background: var(--color); }
+    .field { min-width: 0; padding: 5px 7px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .field.invalid { border-color: var(--error); color: var(--error); }
+    .mode { display: flex; gap: 4px; margin-bottom: 8px; }
+    .segment { padding: 5px 9px; color: var(--muted); }
+    .segment.active { border-color: var(--accent); color: var(--text); }
+    .gradient { height: 24px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 5px; background: linear-gradient(90deg, #111318, #252044); }
+    .ansi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+    .ansi { display: grid; grid-template-columns: 20px 1fr; align-items: center; gap: 5px; padding: 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); }
+    .ansi .swatch { width: 20px; height: 20px; }
+    .ansi span { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; }
+    .disclosure { display: flex; align-items: center; gap: 6px; padding: 7px 0; color: var(--text); }
+    .override { color: var(--accent); font-size: 10px; }
+    .preview { min-width: 0; padding: var(--space-md); background: #0e1014; }
+    .preview-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .preview-head strong { font-size: 12px; }
+    .preview-head span { color: var(--muted); font-size: 11px; }
+    .sample-window { overflow: hidden; height: 500px; border: 1px solid #39344f; border-radius: 10px; background: linear-gradient(130deg, #111318, #171329); box-shadow: 0 12px 40px #0008; }
+    .tabs { display: flex; align-items: center; height: 36px; gap: 4px; padding: 0 9px; border-bottom: 1px solid #39344f; background: #191c22; }
+    .tab { padding: 5px 10px; color: #9aa3b2; border-radius: 5px; }
+    .tab.active { color: #f1f3f7; background: #252044; }
+    .sample-body { display: grid; grid-template-columns: 145px 1fr; height: calc(100% - 36px); }
+    .sidebar { padding: 12px 8px; border-right: 1px solid #39344f; background: #171920; }
+    .nav { padding: 6px 8px; border-radius: 5px; color: #9aa3b2; }
+    .nav.active { color: #fff; background: #28233d; }
+    .terminal { padding: 18px; font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; color: #e8e9ed; }
+    .prompt { color: #b5a8ff; }
+    .path { color: #64d3a2; }
+    .warn { color: #f4b860; }
+    .error { color: #f26d78; }
+    .link { color: #76b7ff; text-decoration: underline; }
+    .selection { margin: 8px 0; padding: 4px 6px; background: #39305b; }
+    .status { margin-top: 24px; padding-top: 10px; border-top: 1px solid #39344f; color: #9aa3b2; }
+    .status strong { color: #40c98b; }
+    .dirty { color: var(--warning); font-size: 11px; }
+    .validation { display: flex; align-items: center; gap: 8px; color: var(--error); font-size: 11px; }
+    .validation.valid { color: var(--success); }
+    .template-screen { min-height: 590px; padding: 28px; background: var(--surface-1); }
+    .template-screen h2 { margin: 0; font-size: 18px; }
+    .template-screen > p { margin: 5px 0 22px; color: var(--muted); }
+    .starter-actions { display: flex; gap: 8px; margin-bottom: 20px; }
+    .templates { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .template { padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); }
+    .template.active { border-color: var(--accent); outline: 1px solid var(--accent); }
+    .palette { display: flex; height: 66px; overflow: hidden; margin-bottom: 9px; border-radius: 6px; }
+    .palette i { flex: 1; background: var(--c); }
+    .template strong { display: block; }
+    .template small { color: var(--muted); }
+    .error-banner { margin: 14px 0; padding: 9px 11px; border: 1px solid #74343b; border-radius: 6px; color: var(--error); background: #321b20; }
+    body:has(.viewport:target) #spec,
+    body:has(.viewport:target) .viewport:not(:target) { display: none; }
+    .viewport:target { width: 100%; margin: 0; }
+    @media (max-width: 980px) {
+      body { padding: 10px; }
+      .spec-grid { grid-template-columns: 1fr 1fr; }
+      .workspace { grid-template-columns: 330px minmax(0, 1fr); }
+      .ansi-grid { grid-template-columns: repeat(2, 1fr); }
+      .templates { grid-template-columns: 1fr 1fr; }
+      .sample-body { grid-template-columns: 110px 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <section id="spec">
+    <h1>UI-Spezifikation — Theme-Editor</h1>
+    <div class="spec-grid">
+      <div>
+        <h2>Tokens</h2>
+        <ul>
+          <li>Nur bestehende Theme-Farben und gemeinsame Button-Themes verwenden.</li>
+          <li>Abstände 4 / 8 / 16 / 24 px; 6 px Kontroll- und 10 px Kartenradius.</li>
+          <li>Hexfelder sind monospace; Farbfeld und Textwert sind eine gekoppelte Eingabe.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Regeln</h2>
+        <ul>
+          <li>Start ist eine Vorlagenauswahl; „Aus Bild“ bleibt eine gleichrangige optionale Quelle.</li>
+          <li>Alle Primärrollen und 16 ANSI-Farben sind direkt editierbar; UiColors sind sichtbar aufklappbar.</li>
+          <li>Jede gültige Änderung aktualisiert sofort das ganze App-Theme und die Beispielansicht.</li>
+          <li>Import, Export, Verwerfen und Speichern sind beschriftet und auf erster Ebene sichtbar.</li>
+          <li>Schließen, Vorlagenwechsel, Import und „Aus Bild“ verlangen bei ungespeicherten Änderungen Speichern, Verwerfen oder Abbrechen.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Zustände</h2>
+        <ul>
+          <li>Vorlagenauswahl, Editieren, ungültige Farbe, Importfehler, ungespeicherte Änderungen.</li>
+          <li>Solid, vertikaler und horizontaler Verlauf für Hintergrund und Akzent.</li>
+          <li>UiColors automatisch abgeleitet oder feldweise überschrieben.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Abnahme</h2>
+        <ul>
+          <li>Background, foreground, accent, outline, selection und alle ANSI-Farben akzeptieren Hex/RGB.</li>
+          <li>Eine eingebaute oder importierte YAML-Vorlage ist verlustfrei duplizier-, speicher- und exportierbar.</li>
+          <li>Ungültige Eingaben verändern das Live-Theme nicht; Schließen verwirft nie ungefragt Arbeit.</li>
+          <li>Editor bleibt bei 900 px Breite vollständig bedienbar, mit internem Scrollen statt Überlagerung.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="mockups">
+    <article class="viewport" id="theme-template">
+      <div class="viewport-label">Startzustand · Vorlagen und alternative Quellen</div>
+      <div class="template-screen">
+        <h2>Neues Theme erstellen</h2>
+        <p>Beginne mit einem bestehenden Theme oder importiere eine YAML-Datei.</p>
+        <div class="starter-actions">
+          <span class="button">Theme-YAML importieren</span>
+          <span class="button">Aus Bild erstellen</span>
+        </div>
+        <div class="templates">
+          <div class="template active">
+            <div class="palette"><i style="--c:#111318"></i><i style="--c:#252044"></i><i style="--c:#8b7cf6"></i><i style="--c:#f1f3f7"></i></div>
+            <strong>Zaplex Dark</strong><small>Empfohlene Ausgangsbasis</small>
+          </div>
+          <div class="template">
+            <div class="palette"><i style="--c:#f6f7fa"></i><i style="--c:#e5e8ef"></i><i style="--c:#635bdb"></i><i style="--c:#17191f"></i></div>
+            <strong>Zaplex Light</strong><small>Eingebaut</small>
+          </div>
+          <div class="template">
+            <div class="palette"><i style="--c:#1e1e1e"></i><i style="--c:#252526"></i><i style="--c:#007acc"></i><i style="--c:#d4d4d4"></i></div>
+            <strong>VS Code 2026 Dark</strong><small>Mit UiColors-Overrides</small>
+          </div>
+        </div>
+        <div class="footer" style="margin:28px -28px -28px; height:58px;">
+          <span class="help">Die Vorlage wird dupliziert; das Original bleibt unverändert.</span>
+          <span class="button primary">Vorlage verwenden</span>
+        </div>
+      </div>
+    </article>
+
+    <article class="viewport" id="theme-editor">
+      <div class="viewport-label">Editierzustand · direkte Rollen, ANSI, UiColors und Full-Window-Live-Vorschau</div>
+      <div class="window">
+        <header class="titlebar">
+          <div class="title"><strong>Theme bearbeiten</strong><span>Vorlage: Zaplex Dark</span></div>
+          <span class="button">YAML importieren</span>
+          <span class="button">YAML exportieren</span>
+          <span class="button">Aus Bild neu starten</span>
+        </header>
+        <main class="workspace">
+          <aside class="inspector">
+            <div class="inspector-scroll">
+              <div class="section">
+                <div class="section-head"><h3>Name</h3><span class="dirty">Nicht gespeichert</span></div>
+                <div class="field">Midnight Workshop</div>
+              </div>
+              <div class="section">
+                <div class="section-head"><h3>Grundfarben</h3><span class="help">Hex oder RGB</span></div>
+                <div class="mode"><span class="segment active">Einfarbig</span><span class="segment">Vertikaler Verlauf</span><span class="segment">Horizontaler Verlauf</span></div>
+                <div class="gradient"></div>
+                <div class="row"><label>Hintergrund</label><i class="swatch" style="--color:#111318"></i><span class="field">#111318</span></div>
+                <div class="row"><label>Vordergrund</label><i class="swatch" style="--color:#F1F3F7"></i><span class="field">#F1F3F7</span></div>
+                <div class="row"><label>Akzent</label><i class="swatch" style="--color:#8B7CF6"></i><span class="field">#8B7CF6</span></div>
+                <div class="row"><label>Kontur</label><i class="swatch" style="--color:#303641"></i><span class="field">#303641</span></div>
+                <div class="row"><label>Auswahl</label><i class="swatch" style="--color:#39305B"></i><span class="field">#39305B</span></div>
+              </div>
+              <div class="section">
+                <div class="section-head"><h3>Terminalpalette</h3><span class="help">Normal + hell</span></div>
+                <div class="ansi-grid">
+                  <div class="ansi"><i class="swatch" style="--color:#17191F"></i><span>Schwarz</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#F26D78"></i><span>Rot</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#40C98B"></i><span>Grün</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#F4B860"></i><span>Gelb</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#76B7FF"></i><span>Blau</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#B59CFF"></i><span>Magenta</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#62D7D0"></i><span>Cyan</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#D5D8DF"></i><span>Weiß</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#687181"></i><span>Hellschwarz</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#FF8992"></i><span>Hellrot</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#63E2A8"></i><span>Hellgrün</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#FFD080"></i><span>Hellgelb</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#99CAFF"></i><span>Hellblau</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#CDBAFF"></i><span>Hellmagenta</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#88ECE6"></i><span>Hellcyan</span></div>
+                  <div class="ansi"><i class="swatch" style="--color:#FFFFFF"></i><span>Hellweiß</span></div>
+                </div>
+              </div>
+              <div class="section">
+                <div class="disclosure"><span>▾</span><strong>Oberflächen und semantische Farben</strong><span class="override">3 überschrieben</span></div>
+                <div class="row"><label>Oberfläche 1</label><i class="swatch" style="--color:#191C22"></i><span class="field">Auto</span></div>
+                <div class="row"><label>Warnung</label><i class="swatch" style="--color:#F4B860"></i><span class="field">#F4B860</span></div>
+                <div class="row"><label>Fehler</label><i class="swatch" style="--color:#F26D78"></i><span class="field">#F26D78</span></div>
+                <div class="row"><label>Erfolg</label><i class="swatch" style="--color:#40C98B"></i><span class="field">#40C98B</span></div>
+                <div class="row"><label>Link</label><i class="swatch" style="--color:#76B7FF"></i><span class="field">Auto</span></div>
+              </div>
+            </div>
+          </aside>
+          <section class="preview">
+            <div class="preview-head"><strong>Live-Vorschau</strong><span>Das gesamte App-Fenster verwendet bereits diesen Entwurf.</span></div>
+            <div class="sample-window">
+              <div class="tabs"><span class="tab active">Terminal</span><span class="tab">Theme-Editor</span><span class="tab">Settings</span></div>
+              <div class="sample-body">
+                <aside class="sidebar"><div class="nav active">Lokales Terminal</div><div class="nav">devhost</div><div class="nav">agenthost</div><div class="nav">Dateien</div></aside>
+                <div class="terminal">
+                  <div><span class="prompt">cwendler@devhost</span>:<span class="path">~/projects/zaplex</span>$ cargo check</div>
+                  <div>Checking zaplex v1.0.0</div>
+                  <div class="selection">Selected text demonstrates the configured selection role.</div>
+                  <div class="warn">warning: one recoverable condition</div>
+                  <div class="error">error: one diagnostic example</div>
+                  <div>Documentation: <span class="link">docs.zaplex.dev/themes</span></div>
+                  <div class="status"><strong>✓ Success</strong> · foreground, ANSI and semantic roles update immediately</div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </main>
+        <footer class="footer">
+          <div class="validation valid">Alle Farbwerte sind gültig · Full-Window-Vorschau aktiv</div>
+          <div><span class="button">Verwerfen</span> <span class="button primary">Theme speichern</span></div>
+        </footer>
+      </div>
+    </article>
+
+    <article class="viewport" id="theme-error">
+      <div class="viewport-label">Fehlerzustand · Import bleibt folgenlos und verständlich</div>
+      <div class="template-screen">
+        <h2>Theme-YAML importieren</h2>
+        <p>Zaplex prüft die Datei vollständig, bevor der aktuelle Entwurf ersetzt wird.</p>
+        <div class="error-banner">„studio.yaml“ konnte nicht importiert werden: <strong>terminal_colors.bright_blue</strong> enthält keinen gültigen Hex- oder RGB-Wert. Der aktuelle Entwurf wurde nicht verändert.</div>
+        <div class="footer" style="margin:300px -28px -28px; height:58px;">
+          <span class="help">Diagnosedetails bleiben kopierbar; die Datei wird nicht überschrieben.</span>
+          <span class="button primary">Andere Datei wählen</span>
+        </div>
+      </div>
+    </article>
+  </section>
+</body>
+</html>

@@ -1,13 +1,13 @@
 # Zaplex 1.0 — verbindlicher Umsetzungsplan
 
 Status: **freigegebener Plan, GitHub-Epic und -Issues angelegt**
-Stand: 2026-07-23 · Gate-0-Branch: `rc/master-plan`
+Stand: 2026-07-31 · Gate-0-Branch: `rc/master-plan`
 
 ## Quellen und Ziel
 
 Verbindliche Quellen:
 
-- `docs/2026-07-22-rc-handoff.md`
+- `docs/2026-07-23-v1-gate0-resume.md`
 - `docs/superpowers/specs/2026-07-08-integrated-ux-spine-design.md`
 - `docs/superpowers/specs/2026-07-01-filemanager-pane-mode-design.md`
 - `docs/superpowers/specs/2026-07-18-ui-polish-audit.md`
@@ -15,8 +15,52 @@ Verbindliche Quellen:
 - RC4-Screenshots, User-Abnahme und Fork-Diff-Review vom 22./23. Juli 2026
 
 Ziel ist ein echtes **1.0**, kein MVP, keine Beta und kein Preview. Die
-bestehenden Issues `#50/#100/#101/#104/#106/#108/#110/#116` werden nur als
-Vorgeschichte oder Abhängigkeit referenziert, nicht verändert oder dupliziert.
+ursprüngliche Begrenzung, bestehende Issues nur als Vorgeschichte zu behandeln,
+ist durch die Owner-Freigabe vom 31. Juli 2026 aufgehoben: Vor dem Release
+werden **alle offenen Zaplex-Issues** abgearbeitet, einschließlich `#116` und
+aller bei Reviews entdeckten Findings.
+
+## Deckung der bereits offenen Issues
+
+Die folgenden Issues lagen vor dem 1.0-Epic bereits offen. Sie bleiben eigene
+Abnahmeeinheiten und werden nicht allein durch die neuen Issues `#124–#143`
+implizit als erledigt behandelt:
+
+- **`#18` Theme-Editor:** Rollen- und ANSI-Farben, Hex/RGB, UiColors,
+  Vorlagen, YAML-Import/-Export, Gradients, optionales Bild und
+  Full-Window-Vorschau liegen in `app/src/themes/theme_editor_body*.rs` und
+  `docs/ui/theme-editor.html`.
+- **`#19` inerte Warp-Stubs:** Die erneute 1.0-Entscheidung mit begründetem
+  Verbleib steht in `docs/release/1.0-readiness.md`.
+- **`#21` Multiplexer:** typisierte tmux-/byobu-Erkennung, ausgehandelte
+  Daemon-Fähigkeit und sichtbares Ein-Klick-Attach liegen in
+  `app/src/remote_server/multiplexer*.rs`, `app/src/ssh_manager/panel*.rs` und
+  `docs/ui/multiplexer-adoption.html`.
+- **`#38` Paritäts-Umbrella:** wird erst nach den noch offenen Kindern `#47`
+  und `#50` sowie ihrer Laufzeitabnahme abgeschlossen.
+- **`#47` Remote-Fleet:** Tailscale-Erkennung, hostübergreifende Aggregation
+  und Session-/Host-RAM liegen in `app/src/cockpit/tailscale*.rs`,
+  `crates/zaplex_cockpit/src/fleet*.rs`, `app/src/ssh_manager/panel*.rs` und
+  `docs/ui/remote-session-ram.html`.
+- **`#50` allgemeine Parität:** deutsche Kerntexte und
+  `instances.json`-Overrides sind umgesetzt. Die Owner-Entscheidung vom
+  2. August 2026 verwirft sichtbare Temp-Pfade: Clipboard-Bilder erscheinen im
+  CLI-Agent-Composer als entfernbare Thumbnails und werden beim Absenden über
+  den nativen Bild-Paste des Agents übergeben. Verbindlich ist
+  `specs/APP-3891/`.
+- **`#110–#120` Agent-/Cockpit-Ausbau:** Hook-Bridge (`#111`),
+  Control-Surface (`#112`), Zaplex-Skill (`#113`), strukturierte Tasks
+  (`#114`), verzögerter Pane-/Sidebar-Peek (`#115`), identitätsgebundene
+  Fortsetzung mit Standard „Nachfragen“ (`#116`), persistente Tab-Pins
+  (`#117`), Grok-Hooks (`#118`), Antigravity statt neuer Gemini-Starts
+  (`#119`) und der nur bei `Blocked` sichtbare, durch DND unterdrückte statische
+  Pane-/Tab-Halo (`#120`) besitzen jeweils Implementierung und statische Tests.
+  Das gemeinsame UI-Artefakt `docs/ui/agent-continuity-attention.html` ist seit
+  der Owner-Freigabe vom 2. August 2026 bindend.
+
+Diese Zuordnung belegt den Quellstand, nicht die Laufzeit. Abschluss und
+Schließen erfolgen erst nach den gemeinsamen Gates und der Phase-B-Abnahme am
+freigegebenen Artefakt.
 
 ## Gate 0 — laufenden WIP zuerst schließen
 
@@ -244,6 +288,8 @@ Push, PR, Tag, Publish oder Release.
 - **Scope:** optionale `pty_session_id`; explizite daemon-seitige Bind/Unbind-
   Operationen; an Session-Lifecycle und Generation gebundene IDs; fremde,
   veraltete oder wiederverwendete IDs ablehnen; Reattach nur per validierter ID;
+  Fortsetzungsmodus `off|prompt|auto`, wobei `prompt` („Nachfragen“) der
+  Owner-freigegebene Standard ist und `auto` denselben validierten Resume-Pfad nutzt;
   Capability `agent-pty-binding` vor Verwendung des neuen Feldes aushandeln;
   rückwärtskompatibler Decode anhand echter serialisierter Legacy-Client- und
   -Daemon-Fixtures. Mehrere historische Agent-Sessions pro PTY sind erlaubt,
@@ -406,9 +452,10 @@ Push, PR, Tag, Publish oder Release.
   Schätzung wirkt exakt. `#106` bleibt Vorgeschichte.
 - **Scope:** cached/uncached/total/work; `~`-Provenienz; unknown=unpriced;
   dokumentierte Preisquelle; keine Remote-Fantasiewerte.
-- **Deps/Abnahme:** keine; Fixture 100/90/10/5 ergibt 10/115/25; unbekannt nie `$0`.
+- **Deps/Abnahme:** keine; Fixture 100/90/10/5 ergibt 10/110/20; Reasoning
+  bleibt als Output-Untermenge sichtbar, wird aber nie doppelt addiert; unbekannt nie `$0`.
 - **Rot-Tests:** `usage_subtracts_cached_tokens`,
-  `fixture_reports_total_115_work_25`,
+  `fixture_reports_total_110_work_20`,
   `unknown_model_is_not_zero_cost`,
   `estimate_has_provenance`.
 - **Dateidomäne:** `crates/zaplex_cockpit/src/{codex*,types,pricing,format}*.rs`.
@@ -448,7 +495,11 @@ Push, PR, Tag, Publish oder Release.
   Doku, Recovery und Kernflows ein echtes 1.0 bilden.
 - **Phase A — Pre-build readiness:** Versionen; ausgelieferte RC/Beta-Texte;
   Handoff vor Merge entfernen; aktive Nutzer-/Recovery-Doku; Risiko-Register;
-  vollständige Runtime-Matrix und Abnahmeschritte vorbereiten. Textscans
+  vollständige Runtime-Matrix und Abnahmeschritte vorbereiten; sicherstellen,
+  dass Test- und Release-DMG denselben versionsgebundenen Remote-Daemon offline
+  bündeln, dessen Cache alle App-/Crate-/Resource-Eingaben verfolgt, der
+  Download-Fallback aus dem Zaplex-Release-Repo kommt und die von den Updatern
+  erwarteten macOS-/Linux-/Windows-Artefaktnamen exakt den Bundles entsprechen. Textscans
   erfassen ausschließlich ausgelieferte UI/Ressourcen und aktive Nutzerdoku,
   nicht historische Pläne, interne Handoffs oder Quellkommentare.
 - **STOP/Gate:** Nach grüner Phase A stoppen und unmittelbar vor der Aktion
@@ -456,7 +507,7 @@ Push, PR, Tag, Publish oder Release.
   zählt nicht.
 - **Phase B — Build und Runtime:** Erst nach dieser Freigabe CI/DMG starten und
   das ausgelieferte Artefakt über Clean Install, Keychain, SSH, devhost,
-  agenthost, hal9000, Claude/Codex, Restart, Netzverlust, FM und beschädigte
+  agenthost, Claude/Codex, Restart, Netzverlust, FM und beschädigte
   Settings prüfen.
 - **Deps/Abnahme:** Issues 01–18; Phase A grün; jedes Risiko mit
   Auslöser/Wirkung/Erkennung/Recovery/Test; freigegebene Phase B vollständig
@@ -465,6 +516,9 @@ Push, PR, Tag, Publish oder Release.
 - **Rot-Tests:** `release_metadata_is_consistent`,
   `shipped_user_facing_copy_has_no_rc_beta_markers`,
   `release_tree_has_no_rc_handoff`,
+  `release_workflows_bundle_version_matched_remote_server`,
+  `remote_server_cache_tracks_app_sources`,
+  `release_artifact_names_match_autoupdaters`,
   `first_ten_user_risks_have_mitigation`,
   `runtime_matrix_requires_built_artifact_results`; Versionsfixture bewusst rot.
 - **Dateidomäne:** Manifeste, macOS-/Updater-Ressourcen, `docs/`, Release-Checks.

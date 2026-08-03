@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Barrier, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use tempfile::tempdir;
 
@@ -45,6 +45,11 @@ struct InstrumentedBackend {
     artifact_reserved_identities: Arc<Mutex<HashMap<PathBuf, StableEntryIdentity>>>,
     replaced_artifacts: Arc<Mutex<HashSet<PathBuf>>>,
     fail_reused_directory_identity_call: Option<u64>,
+    fixed_modification_time: Option<SystemTime>,
+    hide_modification_time: bool,
+    occupy_after_missing_probe: Option<(PathBuf, Vec<u8>, Arc<AtomicBool>)>,
+    fail_identity_after_rename: Option<PathBuf>,
+    rename_completed: AtomicBool,
 }
 
 impl InstrumentedBackend {
@@ -78,6 +83,11 @@ impl InstrumentedBackend {
             artifact_reserved_identities: Arc::new(Mutex::new(HashMap::new())),
             replaced_artifacts: Arc::new(Mutex::new(HashSet::new())),
             fail_reused_directory_identity_call: None,
+            fixed_modification_time: None,
+            hide_modification_time: false,
+            occupy_after_missing_probe: None,
+            fail_identity_after_rename: None,
+            rename_completed: AtomicBool::new(false),
         }
     }
 
@@ -86,8 +96,28 @@ impl InstrumentedBackend {
         self
     }
 
+    fn with_modification_time(mut self, modified: SystemTime) -> Self {
+        self.fixed_modification_time = Some(modified);
+        self
+    }
+
+    fn without_modification_time(mut self) -> Self {
+        self.hide_modification_time = true;
+        self
+    }
+
+    fn occupy_after_missing_probe(mut self, path: PathBuf, contents: Vec<u8>) -> Self {
+        self.occupy_after_missing_probe = Some((path, contents, Arc::new(AtomicBool::new(false))));
+        self
+    }
+
     fn with_late_unsupported_exchange(mut self) -> Self {
         self.fail_exchange_preflight = true;
+        self
+    }
+
+    fn failing_identity_after_rename(mut self, path: PathBuf) -> Self {
+        self.fail_identity_after_rename = Some(path);
         self
     }
 
@@ -394,6 +424,18 @@ impl SftpBackend for InstrumentedBackend {
         true
     }
 
+    fn entry_exists(&self, path: &Path) -> Result<bool, SftpOpsError> {
+        let exists = self.inner.entry_exists(path)?;
+        if !exists {
+            if let Some((probe_path, contents, occupied)) = &self.occupy_after_missing_probe {
+                if path == probe_path && !occupied.swap(true, Ordering::SeqCst) {
+                    fs::write(self.local_path(path), contents)?;
+                }
+            }
+        }
+        Ok(exists)
+    }
+
     fn existing_entry_ownership_anchor(
         &self,
         path: &Path,
@@ -513,7 +555,11 @@ impl SftpBackend for InstrumentedBackend {
         new_path: &Path,
         anchor: Arc<dyn BackendOwnershipAnchor>,
     ) -> Result<(), SftpOpsError> {
-        self.inner.rename_if_matches(old_path, new_path, anchor)
+        let result = self.inner.rename_if_matches(old_path, new_path, anchor);
+        if result.is_ok() {
+            self.rename_completed.store(true, Ordering::SeqCst);
+        }
+        result
     }
 
     fn replace(&self, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
@@ -616,7 +662,23 @@ impl SftpBackend for InstrumentedBackend {
         self.inner.lstat(path)
     }
 
+    fn modification_time(&self, path: &Path) -> Result<Option<SystemTime>, SftpOpsError> {
+        if self.hide_modification_time {
+            return Ok(None);
+        }
+        Ok(self
+            .fixed_modification_time
+            .or(self.inner.modification_time(path)?))
+    }
+
     fn stable_identity(&self, path: &Path) -> Result<StableEntryIdentity, SftpOpsError> {
+        if self.rename_completed.load(Ordering::SeqCst)
+            && self.fail_identity_after_rename.as_deref() == Some(path)
+        {
+            return Err(SftpOpsError::Operation(
+                "injected post-rename identity failure".to_string(),
+            ));
+        }
         self.replace_artifact_before_snapshot(path);
         let mut identity = self.inner.stable_identity(path)?;
         if self.reuse_replacement_tokens {
@@ -802,7 +864,232 @@ fn directory_job(
 }
 
 #[test]
-fn large_copy_streams() {
+fn conflict_rename_keeps_destination_and_uses_deterministic_available_name() {
+    let source = tempdir().unwrap();
+    let target = tempdir().unwrap();
+    fs::write(source.path().join("source.bin"), b"source").unwrap();
+    fs::write(target.path().join("target.bin"), b"destination").unwrap();
+    fs::write(target.path().join("target (copy).bin"), b"occupied").unwrap();
+
+    let outcome = run_transfer(
+        &job(
+            source.path(),
+            target.path(),
+            TransferOperation::Copy,
+            ConflictDecision::Rename,
+        ),
+        &TransferControl::default(),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(outcome, TransferOutcome::Completed);
+    assert_eq!(
+        fs::read(target.path().join("target.bin")).unwrap(),
+        b"destination"
+    );
+    assert_eq!(
+        fs::read(target.path().join("target (copy).bin")).unwrap(),
+        b"occupied"
+    );
+    assert_eq!(
+        fs::read(target.path().join("target (copy 2).bin")).unwrap(),
+        b"source"
+    );
+}
+
+#[test]
+fn conflict_rename_never_overwrites_a_name_claimed_after_probe() {
+    let source = tempdir().unwrap();
+    let target = tempdir().unwrap();
+    fs::write(source.path().join("source.bin"), b"source").unwrap();
+    fs::write(target.path().join("target.bin"), b"destination").unwrap();
+    let target_backend: Arc<dyn SftpBackend> = Arc::new(
+        InstrumentedBackend::new(target.path()).occupy_after_missing_probe(
+            PathBuf::from("/target (copy).bin"),
+            b"racing writer".to_vec(),
+        ),
+    );
+    let transfer = TransferJob {
+        source_backend: backend(source.path()),
+        target_backend,
+        source_path: PathBuf::from("/source.bin"),
+        target_path: PathBuf::from("/target.bin"),
+        operation: TransferOperation::Copy,
+        conflict: ConflictDecision::Rename,
+    };
+
+    assert_eq!(
+        run_transfer(&transfer, &TransferControl::default(), None).unwrap(),
+        TransferOutcome::Completed
+    );
+    assert_eq!(
+        fs::read(target.path().join("target (copy).bin")).unwrap(),
+        b"racing writer"
+    );
+    assert_eq!(
+        fs::read(target.path().join("target (copy 2).bin")).unwrap(),
+        b"source"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn recursive_move_preserves_symlinks_and_empty_directories() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    fs::create_dir(root.path().join("source")).unwrap();
+    fs::create_dir_all(root.path().join("source/empty/nested")).unwrap();
+    fs::write(root.path().join("source/file.txt"), b"source").unwrap();
+    symlink("file.txt", root.path().join("source/link.txt")).unwrap();
+    let shared_backend = backend(root.path());
+    let transfer = TransferJob {
+        source_backend: shared_backend.clone(),
+        target_backend: shared_backend,
+        source_path: PathBuf::from("/source"),
+        target_path: PathBuf::from("/target"),
+        operation: TransferOperation::Move,
+        conflict: ConflictDecision::Overwrite,
+    };
+
+    assert_eq!(
+        run_directory_transfer(&transfer, &TransferControl::default(), None).unwrap(),
+        TransferOutcome::Completed
+    );
+    assert!(!root.path().join("source").exists());
+    assert!(root.path().join("target/empty/nested").is_dir());
+    assert!(fs::symlink_metadata(root.path().join("target/link.txt"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(
+        fs::read_link(root.path().join("target/link.txt")).unwrap(),
+        PathBuf::from("file.txt")
+    );
+}
+
+#[test]
+fn newer_only_overwrites_only_when_source_timestamp_is_strictly_newer() {
+    let source = tempdir().unwrap();
+    let target = tempdir().unwrap();
+    fs::write(source.path().join("source.bin"), b"new source").unwrap();
+    fs::write(target.path().join("target.bin"), b"old destination").unwrap();
+    let source_backend = Arc::new(
+        InstrumentedBackend::new(source.path())
+            .with_modification_time(SystemTime::UNIX_EPOCH + Duration::from_secs(20)),
+    ) as Arc<dyn SftpBackend>;
+    let target_backend = Arc::new(
+        InstrumentedBackend::new(target.path())
+            .with_modification_time(SystemTime::UNIX_EPOCH + Duration::from_secs(10)),
+    ) as Arc<dyn SftpBackend>;
+    let transfer = TransferJob {
+        source_backend,
+        target_backend,
+        source_path: PathBuf::from("/source.bin"),
+        target_path: PathBuf::from("/target.bin"),
+        operation: TransferOperation::Copy,
+        conflict: ConflictDecision::NewerOnly,
+    };
+
+    let outcome = run_transfer(&transfer, &TransferControl::default(), None).unwrap();
+
+    assert_eq!(outcome, TransferOutcome::Completed);
+    assert_eq!(
+        fs::read(target.path().join("target.bin")).unwrap(),
+        b"new source"
+    );
+}
+
+#[test]
+fn newer_only_skips_when_source_is_not_strictly_newer() {
+    let source = tempdir().unwrap();
+    let target = tempdir().unwrap();
+    fs::write(source.path().join("source.bin"), b"old source").unwrap();
+    fs::write(target.path().join("target.bin"), b"new destination").unwrap();
+    let source_backend = Arc::new(
+        InstrumentedBackend::new(source.path())
+            .with_modification_time(SystemTime::UNIX_EPOCH + Duration::from_secs(10)),
+    ) as Arc<dyn SftpBackend>;
+    let target_backend = Arc::new(
+        InstrumentedBackend::new(target.path())
+            .with_modification_time(SystemTime::UNIX_EPOCH + Duration::from_secs(20)),
+    ) as Arc<dyn SftpBackend>;
+    let transfer = TransferJob {
+        source_backend,
+        target_backend,
+        source_path: PathBuf::from("/source.bin"),
+        target_path: PathBuf::from("/target.bin"),
+        operation: TransferOperation::Copy,
+        conflict: ConflictDecision::NewerOnly,
+    };
+
+    let outcome = run_transfer(&transfer, &TransferControl::default(), None).unwrap();
+
+    assert_eq!(outcome, TransferOutcome::Skipped);
+    assert_eq!(
+        fs::read(target.path().join("target.bin")).unwrap(),
+        b"new destination"
+    );
+}
+
+#[test]
+fn newer_only_skips_when_recency_cannot_be_proven() {
+    let source = tempdir().unwrap();
+    let target = tempdir().unwrap();
+    fs::write(source.path().join("source.bin"), b"source").unwrap();
+    fs::write(target.path().join("target.bin"), b"destination").unwrap();
+    let transfer = TransferJob {
+        source_backend: Arc::new(
+            InstrumentedBackend::new(source.path()).without_modification_time(),
+        ),
+        target_backend: backend(target.path()),
+        source_path: PathBuf::from("/source.bin"),
+        target_path: PathBuf::from("/target.bin"),
+        operation: TransferOperation::Copy,
+        conflict: ConflictDecision::NewerOnly,
+    };
+
+    assert_eq!(
+        run_transfer(&transfer, &TransferControl::default(), None).unwrap(),
+        TransferOutcome::Skipped
+    );
+    assert_eq!(
+        fs::read(target.path().join("target.bin")).unwrap(),
+        b"destination"
+    );
+}
+
+#[test]
+fn newer_only_never_replaces_an_existing_directory_tree() {
+    let source = tempdir().unwrap();
+    let target = tempdir().unwrap();
+    fs::create_dir(source.path().join("source")).unwrap();
+    fs::create_dir(target.path().join("target")).unwrap();
+    fs::write(source.path().join("source/source-only.txt"), b"source").unwrap();
+    fs::write(target.path().join("target/target-only.txt"), b"target").unwrap();
+    let transfer = TransferJob {
+        source_backend: backend(source.path()),
+        target_backend: backend(target.path()),
+        source_path: PathBuf::from("/source"),
+        target_path: PathBuf::from("/target"),
+        operation: TransferOperation::Copy,
+        conflict: ConflictDecision::NewerOnly,
+    };
+
+    assert_eq!(
+        run_directory_transfer(&transfer, &TransferControl::default(), None).unwrap(),
+        TransferOutcome::Skipped
+    );
+    assert_eq!(
+        fs::read(target.path().join("target/target-only.txt")).unwrap(),
+        b"target"
+    );
+    assert!(!target.path().join("target/source-only.txt").exists());
+}
+
+#[test]
+fn large_copy_streams_without_buffering_entire_file() {
     let source = tempdir().unwrap();
     let target = tempdir().unwrap();
     let bytes = vec![0x5a; STREAM_CHUNK_SIZE * 3 + 17];
@@ -859,7 +1146,7 @@ fn cancel_preserves_source() {
 }
 
 #[test]
-fn accepted_copy_cancel_never_enters_finalizing_cleanup() {
+fn cancelled_copy_preserves_previous_destination() {
     let source = tempdir().unwrap();
     let target = tempdir().unwrap();
     let bytes = vec![0x5c; STREAM_CHUNK_SIZE * 2];
@@ -892,7 +1179,7 @@ fn accepted_copy_cancel_never_enters_finalizing_cleanup() {
 }
 
 #[test]
-fn failed_relay_never_deletes_source() {
+fn failed_remote_to_remote_move_never_deletes_source() {
     let source = tempdir().unwrap();
     let target = tempdir().unwrap();
     fs::write(source.path().join("source.bin"), b"relay").unwrap();
@@ -1142,7 +1429,7 @@ fn publish_failure_preserves_source_and_destination() {
 }
 
 #[test]
-fn verify_failure_preserves_source_and_destination() {
+fn move_deletes_source_only_after_verified_destination_commit() {
     let source = tempdir().unwrap();
     let target = tempdir().unwrap();
     fs::write(source.path().join("source.bin"), b"source").unwrap();
@@ -1240,6 +1527,7 @@ fn progress_eta_and_pause_are_observable() {
     let progress = tracker.record_at(250, Duration::from_secs(2));
     assert_eq!(progress.transferred, 250);
     assert_eq!(progress.total, 1_000);
+    assert_eq!(progress.bytes_per_second, 125);
     assert_eq!(progress.eta, Some(Duration::from_secs(6)));
 
     let source = tempdir().unwrap();
@@ -1852,7 +2140,7 @@ fn own_directory_stage_with_completed_child_is_cleaned_after_later_failure() {
 }
 
 #[test]
-fn directory_cancel_leaves_no_partial_new_target() {
+fn cancelled_transfer_preserves_source_and_removes_partial_output() {
     let source = tempdir().unwrap();
     let target = tempdir().unwrap();
     fs::create_dir(source.path().join("source")).unwrap();
@@ -1881,6 +2169,7 @@ fn directory_cancel_leaves_no_partial_new_target() {
     );
 
     assert!(result.is_err());
+    assert!(source.path().join("source/a.txt").exists());
     assert!(
         !target.path().join("target").exists(),
         "cancelling a directory stage must leave no visible partial destination"
@@ -2384,6 +2673,35 @@ fn directory_replaced_by_symlink_during_traversal_is_rejected_before_target_muta
     )
     .is_err());
     assert!(!target.path().join("target").exists());
+}
+
+#[test]
+fn atomic_directory_move_reports_committed_when_post_rename_verification_fails() {
+    let root = tempdir().unwrap();
+    fs::create_dir(root.path().join("source")).unwrap();
+    fs::write(root.path().join("source/payload.bin"), b"payload").unwrap();
+    let backend = Arc::new(
+        InstrumentedBackend::new(root.path())
+            .failing_identity_after_rename(PathBuf::from("/target")),
+    ) as Arc<dyn SftpBackend>;
+    let transfer = TransferJob {
+        source_backend: backend.clone(),
+        target_backend: backend,
+        source_path: PathBuf::from("/source"),
+        target_path: PathBuf::from("/target"),
+        operation: TransferOperation::Move,
+        conflict: ConflictDecision::Overwrite,
+    };
+
+    let error = run_directory_transfer(&transfer, &TransferControl::default(), None)
+        .expect_err("post-rename verification failure must require recovery");
+
+    assert!(error.destination_committed());
+    assert!(!root.path().join("source").exists());
+    assert_eq!(
+        fs::read(root.path().join("target/payload.bin")).unwrap(),
+        b"payload"
+    );
 }
 
 #[test]

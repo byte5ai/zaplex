@@ -2,6 +2,16 @@
 
 Linear: [APP-3805](https://linear.app/warpdotdev/issue/APP-3805/client-server-version-skew)
 
+> **Zaplex supersession (approved 2026-07-02):** The exact-version path and
+> handshake invariants in this document still apply. The Warp-specific
+> `/download/cli` source and the "upload-over-SSH fallback" non-goal do not.
+> Zaplex releases the remote-server tarballs as GitHub Release assets and uses
+> the approved install ladder in
+> `docs/superpowers/specs/2026-07-02-daemon-install-ladder-design.md`: direct
+> host download when reachable, then an app-bundled tarball or client download
+> relayed over SSH/SCP. Every rung remains pinned to the client's exact release
+> version.
+
 ## 1. Problem
 
 The Warp remote server binary is installed at a single, unversioned path per channel (e.g. `~/.warp/remote-server/oz`). The existence check is `test -x {bin}` and we never inspect the binary's version before talking to it. When the client auto-updates to a new version, it happily reuses the old remote server binary, which can drift arbitrarily far from the protocol/behaviour the client expects. The `InitializeResponse` already carries `server_version`, but the client ignores it.

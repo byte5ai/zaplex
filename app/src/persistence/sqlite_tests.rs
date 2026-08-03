@@ -16,8 +16,9 @@ use crate::{
     server::ids::ClientId,
     server_time::ServerTimestamp,
     tab::SelectedTabColor,
+    terminal::cli_agent_sessions::{PersistedCLIAgentAccount, PersistedCLIAgentBinding},
     terminal::model::block::SerializedBlock,
-    terminal::ShellLaunchData,
+    terminal::{CLIAgent, ShellLaunchData},
 };
 
 use super::{
@@ -118,12 +119,14 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
     WindowSnapshot {
         tabs: vec![TabSnapshot {
             custom_title: None,
+            is_pinned: false,
             root: PaneNodeSnapshot::Leaf(LeafSnapshot {
                 is_focused: true,
                 custom_vertical_tabs_title: None,
                 contents: LeafContents::Terminal(TerminalPaneSnapshot {
                     uuid: vec![u8::from(vertical_tabs_panel_open) + 1],
                     cwd: Some("/tmp".to_string()),
+                    cli_agent_binding: None,
                     shell_launch_data: Some(ShellLaunchData::Executable {
                         executable_path: PathBuf::from("/bin/zsh"),
                         shell_type: crate::terminal::shell::ShellType::Zsh,
@@ -192,6 +195,93 @@ fn test_sqlite_round_trips_vertical_tabs_panel_open() {
 }
 
 #[test]
+fn test_sqlite_round_trips_and_clears_tab_pin() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let mut app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    app_state.windows[0].tabs[0].is_pinned = true;
+
+    save_app_state(&mut conn, &app_state).expect("pinned app state should save");
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("pinned app state should load")
+        .app_state;
+    assert!(restored.windows[0].tabs[0].is_pinned);
+
+    app_state.windows[0].tabs[0].is_pinned = false;
+    save_app_state(&mut conn, &app_state).expect("unpinned app state should save");
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("unpinned app state should load")
+        .app_state;
+    assert!(!restored.windows[0].tabs[0].is_pinned);
+}
+
+#[test]
+fn test_sqlite_round_trips_and_clears_cli_agent_binding() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let binding = PersistedCLIAgentBinding {
+        provider: CLIAgent::Codex,
+        session_id: "thread-123".to_owned(),
+        cwd: "/projects/zaplex".to_owned(),
+        account: Some(PersistedCLIAgentAccount {
+            config_dir: Some("/accounts/work".to_owned()),
+            email: Some("work@example.com".to_owned()),
+        }),
+    };
+    let mut app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    let PaneNodeSnapshot::Leaf(leaf) = &mut app_state.windows[0].tabs[0].root else {
+        panic!("test snapshot should contain a terminal leaf");
+    };
+    let LeafContents::Terminal(terminal) = &mut leaf.contents else {
+        panic!("test snapshot should contain a terminal pane");
+    };
+    terminal.cli_agent_binding = Some(binding.clone());
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("app state should load")
+        .app_state;
+    let PaneNodeSnapshot::Leaf(leaf) = &restored.windows[0].tabs[0].root else {
+        panic!("restored snapshot should contain a terminal leaf");
+    };
+    let LeafContents::Terminal(terminal) = &leaf.contents else {
+        panic!("restored snapshot should contain a terminal pane");
+    };
+    assert_eq!(terminal.cli_agent_binding.as_ref(), Some(&binding));
+
+    let PaneNodeSnapshot::Leaf(leaf) = &mut app_state.windows[0].tabs[0].root else {
+        panic!("test snapshot should contain a terminal leaf");
+    };
+    let LeafContents::Terminal(terminal) = &mut leaf.contents else {
+        panic!("test snapshot should contain a terminal pane");
+    };
+    terminal.cli_agent_binding = None;
+    save_app_state(&mut conn, &app_state).expect("updated app state should save");
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("updated app state should load")
+        .app_state;
+    let PaneNodeSnapshot::Leaf(leaf) = &restored.windows[0].tabs[0].root else {
+        panic!("restored snapshot should contain a terminal leaf");
+    };
+    let LeafContents::Terminal(terminal) = &leaf.contents else {
+        panic!("restored snapshot should contain a terminal pane");
+    };
+    assert_eq!(terminal.cli_agent_binding, None);
+}
+
+#[test]
 fn test_sqlite_round_trips_custom_vertical_tabs_title() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let database_path = tempdir.path().join("warp.sqlite");
@@ -201,12 +291,14 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
         windows: vec![WindowSnapshot {
             tabs: vec![TabSnapshot {
                 custom_title: None,
+                is_pinned: false,
                 root: PaneNodeSnapshot::Leaf(LeafSnapshot {
                     is_focused: true,
                     custom_vertical_tabs_title: Some("Production API".to_string()),
                     contents: LeafContents::Terminal(TerminalPaneSnapshot {
                         uuid: vec![42],
                         cwd: Some("/tmp".to_string()),
+                        cli_agent_binding: None,
                         shell_launch_data: Some(ShellLaunchData::Executable {
                             executable_path: PathBuf::from("/bin/zsh"),
                             shell_type: crate::terminal::shell::ShellType::Zsh,
@@ -273,6 +365,7 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
         windows: vec![WindowSnapshot {
             tabs: vec![TabSnapshot {
                 custom_title: None,
+                is_pinned: false,
                 root: PaneNodeSnapshot::Leaf(LeafSnapshot {
                     is_focused: true,
                     custom_vertical_tabs_title: None,
@@ -415,9 +508,7 @@ fn test_migrate_zap_app_group_sqlite_copies_newer_legacy_files() {
         fs::read_to_string(target_db.with_extension("sqlite-shm")).unwrap(),
         "legacy-shm"
     );
-    assert!(state_dir
-        .join(".zap-app-group-sqlite-migrated")
-        .exists());
+    assert!(state_dir.join(".zap-app-group-sqlite-migrated").exists());
 }
 
 #[cfg(target_os = "macos")]

@@ -864,7 +864,9 @@ impl From<BootstrapSessionType> for SessionType {
     fn from(bst: BootstrapSessionType) -> Self {
         match bst {
             BootstrapSessionType::Local => SessionType::Local,
-            BootstrapSessionType::ZaplexifiedRemote => SessionType::ZaplexifiedRemote { host_id: None },
+            BootstrapSessionType::ZaplexifiedRemote => {
+                SessionType::ZaplexifiedRemote { host_id: None }
+            }
         }
     }
 }

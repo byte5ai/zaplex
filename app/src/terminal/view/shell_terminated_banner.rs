@@ -211,18 +211,16 @@ impl TerminationType {
                 // "More info" pointed at an empty URL (no Zaplex docs); drop it and keep
                 // the working "File issue" button (routes to the zaplex issue form).
                 handles.resize_with(1, MouseStateHandle::default);
-                vec![
-                    ui_builder
-                        .button(ButtonVariant::Text, handles[0].clone())
-                        .with_text_label(crate::t!("terminal-file-issue"))
-                        .build()
-                        .on_click(|ctx, _, _| {
-                            ctx.dispatch_typed_action(Action::OpenUrl(
-                                crate::util::links::feedback_form_url(),
-                            ));
-                        })
-                        .finish(),
-                ]
+                vec![ui_builder
+                    .button(ButtonVariant::Text, handles[0].clone())
+                    .with_text_label(crate::t!("terminal-file-issue"))
+                    .build()
+                    .on_click(|ctx, _, _| {
+                        ctx.dispatch_typed_action(Action::OpenUrl(
+                            crate::util::links::feedback_form_url(),
+                        ));
+                    })
+                    .finish()]
             }
             TerminationType::PtySpawnFailure { pty_spawn_error } => {
                 let ui_builder = inverted_color_ui_builder(appearance);

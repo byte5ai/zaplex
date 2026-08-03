@@ -14,13 +14,19 @@ name: no-new-cjk
 on:
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   no-new-cjk:
     name: no-new-cjk
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Recent p90 is below one minute; five minutes leaves ample startup margin.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:

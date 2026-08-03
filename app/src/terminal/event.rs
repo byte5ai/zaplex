@@ -482,7 +482,11 @@ impl Debug for Event {
             }
             Event::BootstrapPrecmdDone => write!(f, "BootstrapPrecmdDone"),
             Event::PluggableNotification { title, body } => {
-                write!(f, "PluggableNotification(title: {title:?}, body: {body})")
+                write!(
+                    f,
+                    "PluggableNotification(title: {title:?}, body_len: {})",
+                    body.len()
+                )
             }
             Event::ExitShell { session_id } => {
                 write!(f, "ExitShell(session: {session_id:?})")

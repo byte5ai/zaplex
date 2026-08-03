@@ -1,4 +1,4 @@
-use super::agent_binding::{AgentIdentity, AgentPtyBindings, BindingError, BindingRequest};
+use super::{AgentIdentity, AgentPtyBindings, BindingError, BindingRequest};
 
 fn identity(provider: &str, session_id: &str) -> AgentIdentity {
     AgentIdentity {
@@ -23,7 +23,7 @@ fn request(
 }
 
 #[test]
-fn bind_and_unbind_follow_session_lifecycle() {
+fn bind_and_unbind_follow_agent_and_pty_lifecycle() {
     let mut bindings = AgentPtyBindings::default();
     bindings.register_pty("pty-1", 7, 11);
     let agent = identity("codex", "agent-1");
@@ -44,7 +44,7 @@ fn bind_and_unbind_follow_session_lifecycle() {
 }
 
 #[test]
-fn new_generation_rejects_stale_pty_binding() {
+fn stale_binding_generation_cannot_replace_current_binding() {
     let mut bindings = AgentPtyBindings::default();
     bindings.register_pty("pty-1", 8, 11);
 
@@ -57,7 +57,7 @@ fn new_generation_rejects_stale_pty_binding() {
 }
 
 #[test]
-fn foreign_pty_id_is_rejected() {
+fn foreign_host_or_daemon_binding_is_rejected() {
     let mut bindings = AgentPtyBindings::default();
     bindings.register_pty("pty-1", 7, 11);
 
@@ -70,7 +70,19 @@ fn foreign_pty_id_is_rejected() {
 }
 
 #[test]
-fn multiple_historical_agents_can_share_pty() {
+fn unknown_pty_binding_is_never_attached() {
+    let mut bindings = AgentPtyBindings::default();
+
+    assert_eq!(
+        bindings
+            .bind(11, request(identity("claude", "agent-1"), 7, None))
+            .unwrap_err(),
+        BindingError::PtyNotFound
+    );
+}
+
+#[test]
+fn multiple_agent_sessions_can_reference_the_same_pty() {
     let mut bindings = AgentPtyBindings::default();
     bindings.register_pty("pty-1", 7, 11);
     let first = identity("claude", "agent-1");
@@ -87,7 +99,7 @@ fn multiple_historical_agents_can_share_pty() {
 }
 
 #[test]
-fn second_live_foreground_binding_requires_explicit_handoff() {
+fn second_live_agent_binding_to_same_pty_is_rejected() {
     let mut bindings = AgentPtyBindings::default();
     bindings.register_pty("pty-1", 7, 11);
     let first = identity("codex", "agent-1");

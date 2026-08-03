@@ -663,7 +663,13 @@ mod tests {
             "websearch".into(),
             "mcp__github__create_issue".into(),
         ];
-        let out = render_system(&LLMId::from("byop:p:deepseek-chat"), &[], &tools, false, &[]);
+        let out = render_system(
+            &LLMId::from("byop:p:deepseek-chat"),
+            &[],
+            &tools,
+            false,
+            &[],
+        );
         for name in &tools {
             assert!(
                 out.contains(name),
@@ -748,8 +754,14 @@ mod tests {
             false,
             &rules,
         );
-        assert!(out.contains("# User rules"), "should render user rules section: {out}");
-        assert!(out.contains("## My rule"), "should contain rule name: {out}");
+        assert!(
+            out.contains("# User rules"),
+            "should render user rules section: {out}"
+        );
+        assert!(
+            out.contains("## My rule"),
+            "should contain rule name: {out}"
+        );
         assert!(
             out.contains("Always use snake_case in Rust."),
             "should contain rule content: {out}"
@@ -761,7 +773,10 @@ mod tests {
         // user_rules.j2 is injected via footer.j2, and every system template family references footer.
         // This regression test ensures that any of the anthropic / beast / codex / gemini / kimi / trinity /
         // default template families renders user rules, so none of them misses the injection by not pulling in footer.
-        let rules = vec![(Some("family coverage".to_string()), "snake_case only.".to_string())];
+        let rules = vec![(
+            Some("family coverage".to_string()),
+            "snake_case only.".to_string(),
+        )];
         for id in [
             "claude-sonnet-4-5",
             "gpt-4o",
@@ -806,10 +821,15 @@ mod tests {
         // We don't hardcode the exact number of newlines, because the count determined by minijinja's
         // default trim_blocks/lstrip_blocks behavior easily changes with minor template tweaks (a reviewer
         // actually observed a 3-newline shape). The contract we want is "a visual blank line + correct order".
-        let pos_r1 = out.find("first content").expect("could not find R1 content");
+        let pos_r1 = out
+            .find("first content")
+            .expect("could not find R1 content");
         let pos_r2 = out.find("## R2").expect("could not find R2 heading");
         let pos_r3 = out.find("## R3").expect("could not find R3 heading");
-        assert!(pos_r1 < pos_r2 && pos_r2 < pos_r3, "order should be maintained: {out}");
+        assert!(
+            pos_r1 < pos_r2 && pos_r2 < pos_r3,
+            "order should be maintained: {out}"
+        );
         let between_r1_r2 = &out[pos_r1 + "first content".len()..pos_r2];
         let between_r2_r3 = &out[pos_r2..pos_r3];
         assert!(

@@ -124,7 +124,8 @@ fn read_result_to_json(result: &api::message::tool_call_result::Result) -> Optio
 
 pub static READ_DOCUMENTS: OpenAiTool = OpenAiTool {
     name: "read_documents",
-    description: "Read local Zaplex Drive documents (referenced by document_id, not filesystem files).\
+    description:
+        "Read local Zaplex Drive documents (referenced by document_id, not filesystem files).\
                   Returns JSON: { documents: [{document_id, content, line_range?}] }.\
                   Use when the user mentions a specific document_id or document in Drive.",
     parameters: read_parameters,

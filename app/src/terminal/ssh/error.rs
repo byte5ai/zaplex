@@ -294,7 +294,9 @@ impl View for SshErrorBlock {
                         ButtonVariant::Secondary,
                         self.continue_button_mouse_state.clone(),
                     )
-                    .with_centered_text_label(crate::t!("terminal-continue-without-zaplexification"))
+                    .with_centered_text_label(crate::t!(
+                        "terminal-continue-without-zaplexification"
+                    ))
                     .with_style(UiComponentStyles {
                         font_size: Some(appearance.monospace_font_size()),
                         ..Default::default()
@@ -302,7 +304,9 @@ impl View for SshErrorBlock {
                     .build()
                     .with_cursor(Cursor::PointingHand)
                     .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(SshErrorBlockAction::ContinueWithoutZaplexification)
+                        ctx.dispatch_typed_action(
+                            SshErrorBlockAction::ContinueWithoutZaplexification,
+                        )
                     })
                     .finish(),
             );

@@ -23,6 +23,7 @@ fn session(name: &str, cwd: &str, pid: u32) -> SessionSnapshot {
         pty_session_id: None,
         pty_session_generation: None,
         pty_foreground: false,
+        task_state: None,
         last_activity: Utc::now(),
         pid,
     }
@@ -58,8 +59,8 @@ fn guardrail_target_routes_by_explicit_locality() {
     assert_eq!(guardrail_target(true, "devhost"), GuardrailTarget::Local);
     // Remote marker → Remote, carrying the label for the daemon lookup.
     assert_eq!(
-        guardrail_target(false, "macmini"),
-        GuardrailTarget::Remote("macmini".to_string())
+        guardrail_target(false, "agenthost"),
+        GuardrailTarget::Remote("agenthost".to_string())
     );
 }
 
@@ -83,7 +84,7 @@ fn pid_zero_is_never_signalable() {
 }
 
 #[test]
-fn pid_must_fit_positive_signed_range() {
+fn pid_must_fit_the_positive_signed_process_id_range() {
     assert!(pid_signalable(i32::MAX as u32));
     assert!(!pid_signalable(i32::MAX as u32 + 1));
     assert!(!pid_signalable(u32::MAX));

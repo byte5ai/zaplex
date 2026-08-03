@@ -16,6 +16,8 @@ use crate::cloud_object::model::persistence::{ObjectStoreEvent, ObjectStoreModel
 use crate::cloud_object::GenericStringObjectFormat::Json;
 use crate::cloud_object::JsonObjectType;
 use crate::cloud_object::ObjectType;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::cli_agent_sessions::{hook_bridge, CLIAgentSessionsModel};
 
 use crate::editor::{EditorOptions, InteractionState, SingleLineEditorOptions, TextColors};
 use crate::settings::InputSettings;
@@ -30,8 +32,8 @@ use crate::settings::{
     ShowAgentZeroStateHints, ShowConversationHistory, ShowHintText, ThinkingDisplayMode,
     VoiceInputEnabled,
 };
-use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::cli_agent::{CLIAgentInstallEvent, CLIAgentInstallModel};
+use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
 use crate::view_components::{
     action_button::{ActionButton, ButtonSize, SecondaryTheme},
@@ -49,14 +51,14 @@ use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     Border, ChildView, ConstrainedBox, CornerRadius, CrossAxisAlignment, Dismiss, Empty, Expanded,
-    Fill, Hoverable, HyperlinkLens, MainAxisAlignment, MainAxisSize, MouseStateHandle, Radius, Shrinkable,
-    Text,
+    Fill, Hoverable, HyperlinkLens, MainAxisAlignment, MainAxisSize, MouseStateHandle, Radius,
+    Shrinkable, Text,
 };
 use warpui::fonts::{Properties, Weight};
-use warpui::platform::Cursor;
-use warpui::text_layout::TextAlignment;
 use warpui::id;
 use warpui::keymap::ContextPredicate;
+use warpui::platform::Cursor;
+use warpui::text_layout::TextAlignment;
 use warpui::ui_components::slider::SliderStateHandle;
 use warpui::{
     elements::{
@@ -345,6 +347,8 @@ pub struct AISettingsPageView {
     cli_agent_footer_command_agent_dropdowns: Vec<ViewHandle<Dropdown<AISettingsPageAction>>>,
     agent_toolbar_inline_editor: ViewHandle<AgentToolbarInlineEditor>,
     cli_agent_toolbar_inline_editor: ViewHandle<AgentToolbarInlineEditor>,
+    #[cfg(not(target_family = "wasm"))]
+    cli_agent_hook_errors: HashMap<CLIAgent, String>,
 
     apply_code_diffs_dropdown_menu: ViewHandle<Dropdown<AISettingsPageAction>>,
     read_files_dropdown_menu: ViewHandle<Dropdown<AISettingsPageAction>>,
@@ -423,6 +427,11 @@ impl AISettingsPageView {
 
                 ctx.notify();
             }
+        });
+
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_model(&CLIAgentSessionsModel::handle(ctx), |_, _, _, ctx| {
+            ctx.notify();
         });
 
         let voice_input_toggle_key_dropdown = ctx.add_typed_action_view(|ctx| {
@@ -1352,6 +1361,8 @@ impl AISettingsPageView {
             cli_agent_footer_command_agent_dropdowns: Self::create_cli_agent_dropdowns(ctx),
             agent_toolbar_inline_editor,
             cli_agent_toolbar_inline_editor,
+            #[cfg(not(target_family = "wasm"))]
+            cli_agent_hook_errors: HashMap::new(),
             base_model_dropdown,
             coding_model_dropdown,
             context_window_slider_state,
@@ -2076,7 +2087,7 @@ impl AISettingsPageView {
                     let mut items: Vec<MenuItem<DropdownAction<AISettingsPageAction>>> = Vec::new();
 
                     for agent in all::<CLIAgent>() {
-                        if matches!(agent, CLIAgent::Unknown) {
+                        if !agent.is_available_for_new_launch() {
                             continue;
                         }
                         let icon = agent.icon();
@@ -2209,6 +2220,8 @@ pub enum AISettingsPageAction {
     ToggleCLIAgentToolbar,
     /// Toggle visibility for a specific dimension of an individual CLI agent.
     ToggleCLIAgentPerAgent(CLIAgent, PerAgentDimension),
+    #[cfg(not(target_family = "wasm"))]
+    ToggleCLIAgentHookBridge(CLIAgent),
     ToggleUseAgentToolbar,
     ToggleVoiceInput,
     ToggleCanUseWarpCreditsWithByok,
@@ -2611,6 +2624,19 @@ impl TypedActionView for AISettingsPageView {
                         settings.set_cli_agent_titlebar(*agent, !current, ctx);
                     }
                 });
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AISettingsPageAction::ToggleCLIAgentHookBridge(agent) => {
+                let installed = hook_bridge::is_installed_for_agent(*agent).unwrap_or(false);
+                match hook_bridge::set_installed_for_agent(*agent, !installed) {
+                    Ok(()) => {
+                        self.cli_agent_hook_errors.remove(agent);
+                    }
+                    Err(error) => {
+                        self.cli_agent_hook_errors.insert(*agent, error.to_string());
+                    }
+                }
                 ctx.notify();
             }
             AISettingsPageAction::ToggleAutoToggleRichInput => {
@@ -3886,7 +3912,10 @@ impl SettingsWidget for UsageWidget {
                 .with_child(
                     appearance
                         .ui_builder()
-                        .paragraph(crate::t!("settings-ai-resets-at", time = formatted_next_refresh_time))
+                        .paragraph(crate::t!(
+                            "settings-ai-resets-at",
+                            time = formatted_next_refresh_time
+                        ))
                         .with_style(UiComponentStyles {
                             font_color: Some(blended_colors::text_sub(
                                 appearance.theme(),
@@ -4909,7 +4938,9 @@ impl AgentsWidget {
                     styles::description_font_color(ai_settings.is_any_ai_enabled(app), app).into(),
                     HighlightedHyperlink::default(),
                 )
-                .with_heading_to_font_size_multipliers(appearance.heading_font_size_multipliers().clone())
+                .with_heading_to_font_size_multipliers(
+                    appearance.heading_font_size_multipliers().clone(),
+                )
                 .with_hyperlink_font_color(appearance.theme().accent().into_solid())
                 .register_default_click_handlers_with_action_support(|hyperlink_lens, ctx, _app| {
                     match hyperlink_lens {
@@ -5240,7 +5271,9 @@ impl AIInputWidget {
                         styles::description_font_color(is_toggleable, app).into(),
                         incorrect_autodetection_highlight_index,
                     )
-                    .with_heading_to_font_size_multipliers(appearance.heading_font_size_multipliers().clone())
+                    .with_heading_to_font_size_multipliers(
+                        appearance.heading_font_size_multipliers().clone(),
+                    )
                     .with_hyperlink_font_color(appearance.theme().accent().into_solid())
                     .register_default_click_handlers(|url, ctx, _| {
                         ctx.dispatch_typed_action(AISettingsPageAction::HyperlinkClick(url));
@@ -5291,7 +5324,9 @@ impl AIInputWidget {
                         styles::description_font_color(is_toggleable, app).into(),
                         incorrect_autodetection_highlight_index,
                     )
-                    .with_heading_to_font_size_multipliers(appearance.heading_font_size_multipliers().clone())
+                    .with_heading_to_font_size_multipliers(
+                        appearance.heading_font_size_multipliers().clone(),
+                    )
                     .with_hyperlink_font_color(appearance.theme().accent().into_solid())
                     .register_default_click_handlers(|url, ctx, _| {
                         ctx.dispatch_typed_action(AISettingsPageAction::HyperlinkClick(url));
@@ -5385,7 +5420,9 @@ impl SettingsWidget for MCPServersWidget {
                 styles::description_font_color(is_any_ai_enabled, app).into(),
                 self.mcp_docs_link_index.clone(),
             )
-            .with_heading_to_font_size_multipliers(appearance.heading_font_size_multipliers().clone())
+            .with_heading_to_font_size_multipliers(
+                appearance.heading_font_size_multipliers().clone(),
+            )
             .with_hyperlink_font_color(appearance.theme().accent().into_solid())
             .register_default_click_handlers(|url, ctx, _| {
                 ctx.dispatch_typed_action(AISettingsPageAction::HyperlinkClick(url));
@@ -5511,7 +5548,9 @@ impl AIFactWidget {
                 styles::description_font_color(ai_settings.is_any_ai_enabled(app), app).into(),
                 self.rules_link_index.clone(),
             )
-            .with_heading_to_font_size_multipliers(appearance.heading_font_size_multipliers().clone())
+            .with_heading_to_font_size_multipliers(
+                appearance.heading_font_size_multipliers().clone(),
+            )
             .with_hyperlink_font_color(appearance.theme().accent().into_solid())
             .register_default_click_handlers(|url, ctx, _| {
                 ctx.dispatch_typed_action(AISettingsPageAction::HyperlinkClick(url));
@@ -5893,13 +5932,15 @@ struct CLIAgentWidget {
     auto_dismiss_rich_input_toggle: SwitchStateHandle,
     /// Per-agent chip hover state, keyed by agent and visibility dimension.
     per_agent_chip_states: RefCell<HashMap<PerAgentChipKey, MouseStateHandle>>,
+    #[cfg(not(target_family = "wasm"))]
+    hook_bridge_toggle_states: RefCell<HashMap<CLIAgent, SwitchStateHandle>>,
 }
 
 impl SettingsWidget for CLIAgentWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "third party cli coding agent claude codex gemini toolbar footer layout chip chips rearrange re-arrange bar command regex auto show rich input dismiss"
+        "third party cli coding agent claude codex antigravity agy gemini toolbar footer layout chip chips rearrange re-arrange bar command regex auto show rich input dismiss"
     }
 
     fn render(
@@ -5912,7 +5953,7 @@ impl SettingsWidget for CLIAgentWidget {
 
         // The Coding Agents section is always enabled, independent of the
         // global AI toggle, because these settings control third-party coding
-        // agents (Claude Code, Codex, Gemini CLI) rather than Zaplex's own AI.
+        // agents (Claude Code, Codex, Antigravity) rather than Zaplex's own AI.
         let cli_agent_footer_toggle = render_ai_setting_toggle::<ShouldRenderCLIAgentToolbar>(
             crate::t!("settings-ai-show-coding-agent-toolbar"),
             AISettingsPageAction::ToggleCLIAgentToolbar,
@@ -5931,7 +5972,7 @@ impl SettingsWidget for CLIAgentWidget {
             FormattedTextFragment::plain_text(", "),
             FormattedTextFragment::inline_code("codex"),
             FormattedTextFragment::plain_text(", or "),
-            FormattedTextFragment::inline_code("gemini"),
+            FormattedTextFragment::inline_code("agy"),
             FormattedTextFragment::plain_text("."),
         ];
 
@@ -5972,6 +6013,9 @@ impl SettingsWidget for CLIAgentWidget {
             appearance,
             app,
         ));
+
+        #[cfg(not(target_family = "wasm"))]
+        column.add_child(self.render_hook_bridge_section(view, appearance, app));
 
         if is_footer_enabled {
             use super::settings_page::AdditionalInfo;
@@ -6167,6 +6211,216 @@ impl SettingsWidget for CLIAgentWidget {
 }
 
 impl CLIAgentWidget {
+    #[cfg(not(target_family = "wasm"))]
+    fn render_hook_bridge_section(
+        &self,
+        view: &AISettingsPageView,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let install_model = CLIAgentInstallModel::as_ref(app);
+        let installed_agents = enum_iterator::all::<CLIAgent>()
+            .filter(|agent| {
+                agent.is_available_for_new_launch()
+                    && install_model.is_cli_agent_installed(*agent)
+                    && hook_bridge::supports_agent(*agent)
+            })
+            .collect::<Vec<_>>();
+
+        let mut column = Flex::column().with_child(
+            Container::new(
+                appearance
+                    .ui_builder()
+                    .span(crate::t!("settings-ai-live-agent-status"))
+                    .with_style(UiComponentStyles {
+                        font_size: Some(appearance.ui_font_body()),
+                        font_color: Some(styles::header_font_color(true, app).into()),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+            )
+            .with_margin_top(PER_AGENT_SECTION_MARGIN_TOP)
+            .with_margin_bottom(PER_AGENT_SECTION_MARGIN_BOTTOM)
+            .finish(),
+        );
+        column.add_child(render_ai_setting_description(
+            crate::t!("settings-ai-live-agent-status-description"),
+            true,
+            app,
+        ));
+
+        if !install_model.is_scan_complete() {
+            column.add_child(render_ai_setting_description(
+                crate::t!("settings-ai-per-agent-scanning"),
+                true,
+                app,
+            ));
+            return column.finish();
+        }
+
+        if installed_agents.is_empty() {
+            column.add_child(render_ai_setting_description(
+                crate::t!("settings-ai-per-agent-empty"),
+                true,
+                app,
+            ));
+        }
+
+        for agent in installed_agents {
+            let installed_result = hook_bridge::is_installed_for_agent(agent);
+            let installed = installed_result.as_ref().copied().unwrap_or(false);
+            let error = view
+                .cli_agent_hook_errors
+                .get(&agent)
+                .cloned()
+                .or_else(|| installed_result.err().map(|error| error.to_string()));
+            let rich_status_proven =
+                CLIAgentSessionsModel::as_ref(app).has_rich_status_session_for_agent(agent);
+            let (status, detail, status_color) = if let Some(error) = error {
+                (
+                    crate::t!("settings-ai-live-agent-status-error"),
+                    error,
+                    theme.ui_error_color(),
+                )
+            } else if !installed {
+                (
+                    crate::t!("settings-ai-live-agent-status-off"),
+                    crate::t!("settings-ai-live-agent-status-off-detail"),
+                    internal_colors::text_sub(theme, theme.background().into_solid()),
+                )
+            } else if matches!(agent, CLIAgent::Codex) && !rich_status_proven {
+                (
+                    crate::t!("settings-ai-live-agent-status-review"),
+                    crate::t!("settings-ai-live-agent-status-review-detail"),
+                    theme.terminal_colors().normal.yellow.into(),
+                )
+            } else if !rich_status_proven {
+                (
+                    crate::t!("settings-ai-live-agent-status-installed"),
+                    crate::t!("settings-ai-live-agent-status-installed-unverified-detail"),
+                    theme.terminal_colors().normal.yellow.into(),
+                )
+            } else {
+                (
+                    crate::t!("settings-ai-live-agent-status-installed"),
+                    crate::t!("settings-ai-live-agent-status-installed-detail"),
+                    theme.terminal_colors().normal.green.into(),
+                )
+            };
+
+            let icon = agent
+                .icon()
+                .unwrap_or(crate::ui_components::icons::Icon::LayoutAlt01);
+            let agent_label = appearance
+                .ui_builder()
+                .wrappable_text(agent.display_name().to_string(), true)
+                .with_style(UiComponentStyles {
+                    font_color: Some(theme.foreground().into_solid()),
+                    font_family_id: Some(appearance.ui_font_family()),
+                    font_size: Some(appearance.ui_font_size()),
+                    ..Default::default()
+                })
+                .build()
+                .finish();
+            let status_label = appearance
+                .ui_builder()
+                .span(status)
+                .with_style(UiComponentStyles {
+                    font_color: Some(status_color),
+                    font_size: Some(appearance.ui_font_size()),
+                    ..Default::default()
+                })
+                .build()
+                .finish();
+            let detail = appearance
+                .ui_builder()
+                .wrappable_text(detail, true)
+                .with_style(UiComponentStyles {
+                    font_color: Some(styles::description_font_color(true, app).into()),
+                    font_size: Some(appearance.ui_font_size()),
+                    ..Default::default()
+                })
+                .build()
+                .finish();
+            let status_dot = ConstrainedBox::new(
+                Container::new(Empty::new().finish())
+                    .with_background(status_color)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                    .finish(),
+            )
+            .with_width(8.)
+            .with_height(8.)
+            .finish();
+            let status_column = Flex::column()
+                .with_child(
+                    Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(7.)
+                        .with_children([status_dot, status_label])
+                        .finish(),
+                )
+                .with_child(detail)
+                .finish();
+            let switch_state = self
+                .hook_bridge_toggle_states
+                .borrow_mut()
+                .entry(agent)
+                .or_insert_with(SwitchStateHandle::default)
+                .clone();
+            let toggle = render_ai_feature_switch(
+                switch_state,
+                installed,
+                true,
+                AISettingsPageAction::ToggleCLIAgentHookBridge(agent),
+                app,
+            );
+
+            column.add_child(
+                Container::new(
+                    Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_main_axis_size(MainAxisSize::Max)
+                        .with_spacing(10.)
+                        .with_children([
+                            Container::new(
+                                ConstrainedBox::new(
+                                    icon.to_warpui_icon(theme.foreground()).finish(),
+                                )
+                                .with_width(AGENT_ICON_SIZE)
+                                .with_height(AGENT_ICON_SIZE)
+                                .finish(),
+                            )
+                            .with_margin_right(AGENT_ICON_MARGIN_RIGHT)
+                            .finish(),
+                            ConstrainedBox::new(agent_label).with_width(140.).finish(),
+                            Expanded::new(1., status_column).finish(),
+                            toggle,
+                        ])
+                        .finish(),
+                )
+                .with_background(theme.surface_1())
+                .with_horizontal_padding(ROW_HORIZONTAL_PADDING)
+                .with_vertical_padding(ROW_VERTICAL_PADDING)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)))
+                .with_margin_bottom(ROW_GAP)
+                .finish(),
+            );
+        }
+
+        column.add_child(
+            Container::new(render_ai_setting_description(
+                crate::t!("settings-ai-live-agent-status-privacy"),
+                true,
+                app,
+            ))
+            .with_margin_top(8.)
+            .finish(),
+        );
+        column.finish()
+    }
+
     fn render_per_agent_settings_section(
         &self,
         ai_settings: &AISettings,
@@ -6178,7 +6432,7 @@ impl CLIAgentWidget {
         let ui_font_family = appearance.ui_font_family();
         let install_model = CLIAgentInstallModel::as_ref(app);
         let installed_agents: Vec<CLIAgent> = enum_iterator::all::<CLIAgent>()
-            .filter(|a| !matches!(a, CLIAgent::Unknown) && install_model.is_cli_agent_installed(*a))
+            .filter(|a| a.is_available_for_new_launch() && install_model.is_cli_agent_installed(*a))
             .collect();
 
         let mut column = Flex::column().with_child(
@@ -6371,11 +6625,13 @@ impl CLIAgentWidget {
         });
 
         if is_clickable {
-            chip = chip.with_cursor(Cursor::PointingHand).on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(AISettingsPageAction::ToggleCLIAgentPerAgent(
-                    agent, dimension,
-                ));
-            });
+            chip = chip
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::ToggleCLIAgentPerAgent(
+                        agent, dimension,
+                    ));
+                });
         }
 
         chip.finish()

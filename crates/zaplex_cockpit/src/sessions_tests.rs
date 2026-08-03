@@ -1,10 +1,11 @@
 use std::time::SystemTime;
+use std::{fs::OpenOptions, io::Write};
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 
 use super::*;
-use crate::types::{Provider, SessionState};
+use crate::types::{Provider, SessionState, TaskItem, TaskState, TaskStatus};
 
 /// Builds a fake account dir with one registry entry + transcript.
 fn fake_account(
@@ -112,6 +113,44 @@ fn assistant_line(stop_reason: &str) -> serde_json::Value {
     })
 }
 
+fn task_tool_line(name: &str, id: &str, input: serde_json::Value) -> serde_json::Value {
+    json!({
+        "type": "assistant",
+        "timestamp": "2026-07-03T00:00:00Z",
+        "message": {
+            "stop_reason": "tool_use",
+            "model": "claude-opus-4-8",
+            "usage": {"input_tokens": 100},
+            "content": [{
+                "type": "tool_use",
+                "id": id,
+                "name": name,
+                "input": input
+            }]
+        }
+    })
+}
+
+fn task_create_result_line(tool_use_id: &str, task_id: &str, subject: &str) -> serde_json::Value {
+    json!({
+        "type": "user",
+        "timestamp": "2026-07-03T00:00:01Z",
+        "message": {
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "content": format!("Task #{task_id} created successfully: {subject}")
+            }]
+        },
+        "toolUseResult": {
+            "task": {
+                "id": task_id,
+                "subject": subject
+            }
+        }
+    })
+}
+
 #[test]
 fn busy_session_is_active() {
     let tmp = tempfile::tempdir().unwrap();
@@ -133,10 +172,73 @@ fn busy_session_is_active() {
     assert_eq!(sessions[0].effort, None);
     assert_eq!(sessions[0].project_root, "/tmp/proj");
     assert_eq!(sessions[0].project_name, "proj");
+    assert_eq!(
+        sessions[0].task_state, None,
+        "a transcript without task tools preserves the existing coarse state path"
+    );
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     assert!(
         sessions[0].process_fingerprint.is_some(),
         "a matching Claude procStart must bind the live process"
+    );
+}
+
+#[test]
+fn claude_session_reconcile_refreshes_structured_task_updates() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "task-session",
+        "busy",
+        "",
+        &[
+            task_tool_line(
+                "TaskCreate",
+                "toolu_create",
+                json!({
+                    "subject":"Wire task state",
+                    "description":"Carry structured progress"
+                }),
+            ),
+            task_create_result_line("toolu_create", "2", "Wire task state"),
+        ],
+    );
+
+    let first = live_sessions(tmp.path(), Utc::now()).remove(0);
+    assert_eq!(
+        first.task_state,
+        Some(TaskState {
+            tasks: vec![TaskItem {
+                id: "2".into(),
+                title: "Wire task state".into(),
+                status: TaskStatus::Pending,
+            }],
+        })
+    );
+
+    let transcript = tmp
+        .path()
+        .join("projects")
+        .join("-tmp-proj")
+        .join("task-session.jsonl");
+    let mut file = OpenOptions::new().append(true).open(transcript).unwrap();
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&task_tool_line(
+            "TaskUpdate",
+            "toolu_update",
+            json!({"taskId":"2","status":"completed"}),
+        ))
+        .unwrap()
+    )
+    .unwrap();
+
+    let refreshed = live_sessions(tmp.path(), Utc::now()).remove(0);
+    assert_eq!(
+        refreshed.task_state.unwrap().tasks[0].status,
+        TaskStatus::Completed,
+        "the existing disk-scan reconcile path must observe appended task updates"
     );
 }
 
@@ -212,6 +314,24 @@ fn legacy_session_snapshot_without_a_fingerprint_deserializes_as_unverified() {
 
     let decoded: crate::types::SessionSnapshot = serde_json::from_value(encoded).unwrap();
     assert_eq!(decoded.process_fingerprint, None);
+}
+
+#[test]
+fn legacy_session_snapshot_without_task_state_deserializes_as_no_structured_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "legacy-task-wire",
+        "busy",
+        "",
+        &[assistant_line("tool_use")],
+    );
+    let snapshot = live_sessions(tmp.path(), Utc::now()).remove(0);
+    let mut encoded = serde_json::to_value(snapshot).unwrap();
+    encoded.as_object_mut().unwrap().remove("task_state");
+
+    let decoded: crate::types::SessionSnapshot = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded.task_state, None);
 }
 
 #[test]

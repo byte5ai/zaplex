@@ -5,7 +5,7 @@ use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use warp_core::channel::ChannelState;
 use warp_core::SessionId;
 use warp_util::standardized_path::StandardizedPath;
@@ -42,6 +42,10 @@ use zaplex_remote_session::agent_binding::{
     AgentIdentity, AgentPtyBindings, BindingError, BindingRequest,
 };
 use zaplex_remote_session::types::{supported_features, FEATURE_AGENT_PTY_BINDING};
+#[cfg(unix)]
+use zaplex_remote_session::types::{
+    FEATURE_MULTIPLEXER_INVENTORY_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
+};
 
 // Buffer-sync related: depends on GlobalBufferModel, which server-local operations are only
 // available under `local_fs`, so the entire server-side buffer handling is gated by `local_fs`.
@@ -69,8 +73,7 @@ pub const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10 
 /// sessions otherwise live indefinitely so a client can reconnect (laptop
 /// closed, etc.); this bounds memory against truly abandoned ones (Stage 4).
 #[cfg(unix)]
-const MAX_DETACHED_SESSION_AGE: std::time::Duration =
-    std::time::Duration::from_secs(24 * 60 * 60);
+const MAX_DETACHED_SESSION_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 /// Soft cap on total output-ring bytes across all of this host's sessions. When
 /// exceeded, the oldest *detached* sessions are reaped until back under it
 /// (live, attached sessions are never reaped).
@@ -135,14 +138,13 @@ where
         signal,
     } = req;
 
-    let failure = |status: AgentProcessSignalStatus, error_message: String| {
-        AgentProcessSignalResponse {
+    let failure =
+        |status: AgentProcessSignalStatus, error_message: String| AgentProcessSignalResponse {
             session_id: session_id.clone(),
             pid,
             status: status.into(),
             error_message,
-        }
-    };
+        };
 
     if session_id.trim().is_empty() {
         return failure(
@@ -318,6 +320,14 @@ pub struct ServerModel {
     /// Monotonic generation assigned to the next PTY opened by this daemon.
     #[cfg(unix)]
     next_pty_generation: u64,
+    /// Descriptor-bound file handles and durable mutation journal used by the
+    /// safe file-manager transfer protocol.
+    #[cfg(unix)]
+    safe_files: super::safe_file::SafeFileServer,
+    /// Bounded transcript parse cache shared by all agent-inventory requests.
+    /// The scan itself stays off the model thread; the mutex only serializes
+    /// concurrent readers of the process-local cache.
+    agent_transcript_cache: Arc<Mutex<zaplex_cockpit::TranscriptScanCache>>,
 }
 
 impl Entity for ServerModel {
@@ -352,6 +362,11 @@ impl ServerModel {
             agent_pty_bindings: AgentPtyBindings::default(),
             #[cfg(unix)]
             next_pty_generation: 1,
+            #[cfg(unix)]
+            safe_files: super::safe_file::SafeFileServer::new(),
+            agent_transcript_cache: Arc::new(Mutex::new(
+                zaplex_cockpit::TranscriptScanCache::default(),
+            )),
         };
         // Subscribe to FileModel and RepoMetadataModel events
         // file operation results and repo metadata pushes are forwarded to all
@@ -670,6 +685,8 @@ impl ServerModel {
         if self.connection_senders.remove(&conn_id).is_none() {
             return;
         }
+        #[cfg(unix)]
+        self.safe_files.close_connection(conn_id);
         // Drop this connection from all open server-local buffers; orphaned
         // buffers (no remaining connections) are deallocated by the tracker.
         #[cfg(feature = "local_fs")]
@@ -808,7 +825,9 @@ impl ServerModel {
             #[cfg(feature = "local_fs")]
             Some(client_message::Message::ResolvePath(msg)) => self.handle_resolve_path(msg),
             #[cfg(feature = "local_fs")]
-            Some(client_message::Message::CreateDirectory(msg)) => self.handle_create_directory(msg),
+            Some(client_message::Message::CreateDirectory(msg)) => {
+                self.handle_create_directory(msg)
+            }
             #[cfg(feature = "local_fs")]
             Some(client_message::Message::ReadFileChunk(msg)) => self.handle_read_file_chunk(msg),
             #[cfg(feature = "local_fs")]
@@ -868,6 +887,46 @@ impl ServerModel {
             Some(client_message::Message::UnbindAgentPty(msg)) => {
                 self.handle_unbind_agent_pty(conn_id, msg)
             }
+            #[cfg(unix)]
+            Some(client_message::Message::SafeFile(request)) => {
+                let is_close_notification = request_id.is_empty()
+                    && matches!(
+                        request.operation.as_ref(),
+                        Some(super::proto::safe_file_request::Operation::CloseHandle(_))
+                    );
+                if self.client_supports_safe_file_transactions(conn_id)
+                    && self.safe_files.is_available()
+                {
+                    let response = self.safe_files.handle(conn_id, request);
+                    if is_close_notification {
+                        if let Some(super::proto::safe_file_response::Result::Error(error)) =
+                            response.result
+                        {
+                            log::warn!("Safe-file close notification failed: {}", error.message);
+                        }
+                        return;
+                    }
+                    HandlerOutcome::Sync(server_message::Message::SafeFileResponse(response))
+                } else {
+                    if is_close_notification {
+                        log::debug!(
+                            "Ignoring safe-file close notification without negotiated capability"
+                        );
+                        return;
+                    }
+                    HandlerOutcome::Sync(server_message::Message::SafeFileResponse(
+                        super::proto::SafeFileResponse {
+                            result: Some(super::proto::safe_file_response::Result::Error(
+                                FileOperationError {
+                                    message:
+                                        "safe-file-transactions-v1 capability was not negotiated"
+                                            .to_string(),
+                                },
+                            )),
+                        },
+                    ))
+                }
+            }
             #[cfg(not(unix))]
             Some(
                 client_message::Message::BindAgentPty(_)
@@ -878,6 +937,17 @@ impl ServerModel {
                     message: "agent-pty-binding requires a unix daemon".to_string(),
                 },
             )),
+            #[cfg(not(unix))]
+            Some(client_message::Message::SafeFile(_)) => HandlerOutcome::Sync(
+                server_message::Message::SafeFileResponse(super::proto::SafeFileResponse {
+                    result: Some(super::proto::safe_file_response::Result::Error(
+                        FileOperationError {
+                            message: "safe-file transactions require a supported unix daemon"
+                                .to_string(),
+                        },
+                    )),
+                }),
+            ),
             // Agent-session inventory (Agent-Cockpit): report this host's
             // Claude/Codex agent-sessions discovered on the daemon's filesystem.
             // Not PTY-bound, so available on every platform.
@@ -892,6 +962,25 @@ impl ServerModel {
                 HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                     code: ErrorCode::InvalidRequest.into(),
                     message: "zaplex session host requires a unix daemon".to_string(),
+                }))
+            }
+            #[cfg(unix)]
+            Some(client_message::Message::ListMultiplexerSessions(_)) => {
+                if self.client_supports_multiplexer_inventory(conn_id) {
+                    self.handle_list_multiplexer_sessions(&request_id, conn_id, ctx)
+                } else {
+                    HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: "multiplexer-inventory-v1 capability was not negotiated"
+                            .to_string(),
+                    }))
+                }
+            }
+            #[cfg(not(unix))]
+            Some(client_message::Message::ListMultiplexerSessions(_)) => {
+                HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: "multiplexer inventory requires a unix daemon".to_string(),
                 }))
             }
             // Non-unix daemons have no session host (PTY ownership is unix-only).
@@ -1042,6 +1131,11 @@ impl ServerModel {
             self.auth_token = Some(msg.auth_token);
         }
         let server_version = ChannelState::app_version().unwrap_or("").to_string();
+        let mut features = supported_features();
+        #[cfg(unix)]
+        if !self.safe_files.is_available() {
+            features.retain(|feature| feature != FEATURE_SAFE_FILE_TRANSACTIONS_V1);
+        }
         HandlerOutcome::Sync(server_message::Message::InitializeResponse(
             InitializeResponse {
                 server_version,
@@ -1049,7 +1143,7 @@ impl ServerModel {
                 // Capabilities this daemon advertises. Stage 0 is empty (the
                 // native session host is not implemented yet); Stage 1 adds
                 // FEATURE_SESSION_HOST via supported_features().
-                features: supported_features(),
+                features,
             },
         ))
     }
@@ -1058,6 +1152,20 @@ impl ServerModel {
         self.connection_features
             .get(&conn_id)
             .is_some_and(|features| features.contains(FEATURE_AGENT_PTY_BINDING))
+    }
+
+    #[cfg(unix)]
+    fn client_supports_multiplexer_inventory(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_MULTIPLEXER_INVENTORY_V1))
+    }
+
+    #[cfg(unix)]
+    fn client_supports_safe_file_transactions(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_SAFE_FILE_TRANSACTIONS_V1))
     }
 
     /// Handles `Authenticate` by replacing the daemon-wide credential.
@@ -1228,15 +1336,9 @@ impl ServerModel {
     /// protocol enum to [`GuardrailSignal`] and delegates only to
     /// [`zaplex_cockpit::send_verified_process_signal`], which re-verifies the
     /// process identity immediately before signalling.
-    fn handle_agent_process_signal(
-        &mut self,
-        req: AgentProcessSignalRequest,
-    ) -> HandlerOutcome {
+    fn handle_agent_process_signal(&mut self, req: AgentProcessSignalRequest) -> HandlerOutcome {
         HandlerOutcome::Sync(server_message::Message::AgentProcessSignalResponse(
-            execute_agent_process_signal_with(
-                req,
-                zaplex_cockpit::send_verified_process_signal,
-            ),
+            execute_agent_process_signal_with(req, zaplex_cockpit::send_verified_process_signal),
         ))
     }
 
@@ -1901,8 +2003,7 @@ impl ServerModel {
                     let metadata = entry.metadata().ok();
                     let kind = entry_kind(file_type.as_ref(), metadata.as_ref());
                     let is_dir = kind == FileSystemEntryKind::Directory as i32;
-                    let size_bytes =
-                        metadata.as_ref().filter(|m| m.is_file()).map(|m| m.len());
+                    let size_bytes = metadata.as_ref().filter(|m| m.is_file()).map(|m| m.len());
                     let modified_epoch_millis = metadata
                         .as_ref()
                         .and_then(|m| m.modified().ok())
@@ -2108,10 +2209,7 @@ fn expand_user_path(path: &str) -> PathBuf {
 }
 
 #[cfg(feature = "local_fs")]
-fn entry_kind(
-    file_type: Option<&std::fs::FileType>,
-    metadata: Option<&std::fs::Metadata>,
-) -> i32 {
+fn entry_kind(file_type: Option<&std::fs::FileType>, metadata: Option<&std::fs::Metadata>) -> i32 {
     if file_type.is_some_and(|ft| ft.is_symlink()) {
         return FileSystemEntryKind::Symlink as i32;
     }
@@ -2189,7 +2287,7 @@ fn now_epoch_millis() -> u64 {
         .unwrap_or(0)
 }
 
-/// Discovers the agent-sessions (Claude/Codex CLI conversations) present on
+/// Discovers the agent-sessions (Claude/Codex/Antigravity CLI conversations) present on
 /// this daemon's filesystem and maps them to the wire shape. Pure filesystem +
 /// transcript reads — no PTY, so it works on every platform. Runs the same
 /// `zaplex_cockpit` discovery the local app uses, over the daemon's own home:
@@ -2197,7 +2295,9 @@ fn now_epoch_millis() -> u64 {
 ///
 /// Returns an empty list (never an error) when the home directory can't be
 /// resolved — an inventory the client can safely fold as "zero sessions here".
-fn collect_agent_sessions() -> Vec<super::proto::AgentSessionInfo> {
+fn collect_agent_sessions(
+    transcript_cache: &mut zaplex_cockpit::TranscriptScanCache,
+) -> Vec<super::proto::AgentSessionInfo> {
     let Some(home) = dirs::home_dir() else {
         log::warn!("Daemon: ListAgentSessions: no home dir; reporting empty inventory");
         return Vec::new();
@@ -2210,31 +2310,38 @@ fn collect_agent_sessions() -> Vec<super::proto::AgentSessionInfo> {
     // belongs to — nothing else on this wire identifies a subscription across
     // hosts. The same function `build_snapshot` uses locally, so two hosts cannot
     // stamp the same account differently.
-    let claude = zaplex_cockpit::claude::discover_accounts(&home, None)
-        .into_iter()
-        .flat_map(|account| {
-            zaplex_cockpit::sessions::live_sessions(&account.config_dir, now)
-                .into_iter()
-                .map(move |mut s| {
-                    account.stamp(&mut s);
-                    s
-                })
-        });
+    let mut snapshots = Vec::new();
+    for account in zaplex_cockpit::claude::discover_accounts(&home, None) {
+        for mut snapshot in zaplex_cockpit::live_claude_sessions_with_cache(
+            &account.config_dir,
+            now,
+            transcript_cache,
+        ) {
+            account.stamp(&mut snapshot);
+            snapshots.push(snapshot);
+        }
+    }
     // … plus Codex sessions (transcript-inferred; no registry/pid — see
     // zaplex_cockpit::codex_sessions), so remote Codex agents flow through the
     // unified inventory too.
-    let codex = zaplex_cockpit::codex::discover_accounts(&home.join(".codex"))
+    for account in zaplex_cockpit::codex::discover_accounts(&home.join(".codex")) {
+        for mut snapshot in zaplex_cockpit::live_codex_sessions_with_cache(
+            &account.config_dir,
+            now,
+            transcript_cache,
+        ) {
+            account.stamp(&mut snapshot);
+            snapshots.push(snapshot);
+        }
+    }
+    snapshots.extend(zaplex_cockpit::antigravity_idle_sessions(
+        &home,
+        now,
+        zaplex_cockpit::IDLE_MAX_AGE,
+        zaplex_cockpit::IDLE_SESSION_LIMIT,
+    ));
+    snapshots
         .into_iter()
-        .flat_map(|account| {
-            zaplex_cockpit::codex_sessions::live_sessions(&account.config_dir, now)
-                .into_iter()
-                .map(move |mut s| {
-                    account.stamp(&mut s);
-                    s
-                })
-        });
-    claude
-        .chain(codex)
         .map(|snapshot| super::agent_session::snapshot_to_proto(&snapshot))
         .collect()
 }
@@ -2248,7 +2355,8 @@ impl ServerModel {
     ///
     /// The scan itself — account discovery plus a transcript-session filesystem
     /// walk with JSON parsing — can be slow on hosts with many Claude/Codex
-    /// transcripts or a slow home dir. Running it inline on the model thread
+    /// transcripts or a slow home dir. Antigravity adds only one small bounded
+    /// registry read. Running it inline on the model thread
     /// would stall PTY/session servicing (`SessionInput`/`SessionOutput`/attach)
     /// for the duration of every cockpit inventory poll. So we offload the work
     /// off the model thread: [`Self::spawn_request_handler`] runs the future on
@@ -2263,6 +2371,7 @@ impl ServerModel {
     ) -> HandlerOutcome {
         let request_id_for_response = request_id.clone();
         let conn_id_for_response = conn_id;
+        let transcript_cache = Arc::clone(&self.agent_transcript_cache);
         // `collect_agent_sessions` performs blocking filesystem/JSON work with no
         // await points; because `spawn_request_handler` schedules this future on
         // the background executor, that blocking work never touches the model
@@ -2270,7 +2379,15 @@ impl ServerModel {
         // preserved inside `collect_agent_sessions`.
         let handle = self.spawn_request_handler(
             request_id.clone(),
-            async move { collect_agent_sessions() },
+            async move {
+                let mut cache = transcript_cache.lock().unwrap_or_else(|poisoned| {
+                    log::warn!(
+                        "Daemon: agent transcript cache mutex was poisoned; recovering its state"
+                    );
+                    poisoned.into_inner()
+                });
+                collect_agent_sessions(&mut cache)
+            },
             move |me, mut sessions, _ctx| {
                 #[cfg(unix)]
                 if me.client_supports_agent_pty_binding(conn_id_for_response) {
@@ -2294,6 +2411,29 @@ impl ServerModel {
                     Some(conn_id_for_response),
                     Some(&request_id_for_response),
                     server_message::Message::AgentSessionList(AgentSessionList { sessions }),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    #[cfg(unix)]
+    fn handle_list_multiplexer_sessions(
+        &mut self,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            super::multiplexer::discover_multiplexer_sessions(),
+            move |me, inventory, _ctx| {
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::MultiplexerSessionList(inventory),
                 );
             },
             ctx,
@@ -2533,7 +2673,7 @@ impl ServerModel {
 
         let session_id = uuid::Uuid::new_v4().to_string();
         self.next_pty_generation = next_pty_generation;
-        let (input_tx, input_rx) = async_channel::unbounded::<Vec<u8>>();
+        let (input_tx, input_rx) = async_channel::unbounded::<super::session_host::PtyInput>();
         let shell_pid = child.id();
         self.sessions.insert(
             session_id.clone(),
@@ -2567,8 +2707,11 @@ impl ServerModel {
             ctx.spawner(),
         ))
         .detach();
-        exec.spawn(super::session_host::run_session_writer(async_leader, input_rx))
-            .detach();
+        exec.spawn(super::session_host::run_session_writer(
+            async_leader,
+            input_rx,
+        ))
+        .detach();
         // Advisory probe: did the user's profile auto-attach tmux/screen into
         // this session despite the spawn-env opt-outs? See run_multiplexer_probe.
         exec.spawn(super::session_host::run_multiplexer_probe(
@@ -2632,7 +2775,10 @@ impl ServerModel {
         match bootstrap {
             Some(bootstrap) => {
                 if let Some(session) = self.sessions.get(&session_id) {
-                    if let Err(e) = session.input_tx.try_send(bootstrap) {
+                    if let Err(e) = session
+                        .input_tx
+                        .try_send(super::session_host::PtyInput::Bootstrap(bootstrap))
+                    {
                         log::warn!("Daemon: failed to enqueue bootstrap for {session_id}: {e}");
                     } else {
                         log::info!("Daemon: bootstrapped session {session_id} (shell={shell})");
@@ -2699,11 +2845,25 @@ impl ServerModel {
         }
         if startup_command_id.is_empty() {
             if let Some(session) = self.sessions.get(&session_id) {
-                if let Err(e) = session.input_tx.try_send(bytes) {
+                if let Err(e) = session
+                    .input_tx
+                    .try_send(super::session_host::PtyInput::Visible(bytes))
+                {
                     log::warn!("Daemon: dropping input for session {session_id}: {e}");
                 }
             }
             return None;
+        }
+        if !super::session_host::is_valid_startup_input(&bytes) {
+            log::warn!(
+                "Daemon: rejecting malformed startup command {startup_command_id} for session \
+                 {session_id}; expected one non-empty LF-terminated line"
+            );
+            return Some(StartupCommandAck {
+                session_id,
+                startup_command_id,
+                accepted: false,
+            });
         }
 
         let accepted = if let Some(session) = self.sessions.get_mut(&session_id) {
@@ -2727,7 +2887,10 @@ impl ServerModel {
                 );
                 false
             } else {
-                match session.input_tx.try_send(bytes.clone()) {
+                match session
+                    .input_tx
+                    .try_send(super::session_host::PtyInput::Startup(bytes.clone()))
+                {
                     Ok(()) => {
                         session
                             .accepted_startup_commands
@@ -2923,7 +3086,10 @@ impl ServerModel {
             // (which would silently cut off the new tab's live output).
             if session.attached == conn_id {
                 session.attached = uuid::Uuid::nil();
-                log::info!("Daemon: detached session {} (still running)", msg.session_id);
+                log::info!(
+                    "Daemon: detached session {} (still running)",
+                    msg.session_id
+                );
             } else {
                 log::debug!(
                     "Daemon: ignoring stale detach for session {} from conn {conn_id} \
@@ -2971,7 +3137,10 @@ impl ServerModel {
                 }
             })
             .collect();
-        HandlerOutcome::Sync(server_message::Message::SessionList(SessionList { sessions }))
+        HandlerOutcome::Sync(server_message::Message::SessionList(SessionList {
+            sessions,
+            host_ring_cap_bytes: HOST_RING_CAP_BYTES as u64,
+        }))
     }
 
     /// Memory governor (Stage 4): reaps detached sessions that are either idle
@@ -3196,11 +3365,7 @@ impl ServerModel {
     }
 
     /// Reader-task callback on PTY EOF: reap the shell and emit `SessionExited`.
-    pub(super) fn on_session_reader_eof(
-        &mut self,
-        session_id: &str,
-        ctx: &mut ModelContext<Self>,
-    ) {
+    pub(super) fn on_session_reader_eof(&mut self, session_id: &str, ctx: &mut ModelContext<Self>) {
         let Some(mut session) = self.sessions.remove(session_id) else {
             return;
         };

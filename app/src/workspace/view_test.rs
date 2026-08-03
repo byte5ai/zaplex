@@ -73,6 +73,32 @@ use terminal::view::ActiveSessionState;
 use warpui::AddSingletonModel;
 use warpui::{App, ViewHandle, platform::WindowStyle};
 
+#[test]
+fn launch_request_never_interpolates_remote_path_into_shell_source() {
+    let remote_path = "/srv/projects/a path;$(touch /tmp/not-shell-source)";
+    let request = RemoteAgentLaunchRequest::new(
+        Some(Path::new(remote_path)),
+        CLIAgent::Codex.routed_launch(None, Some("gpt-5-codex"), Some("high")),
+    );
+
+    assert!(!request.shell_source().contains(remote_path));
+    let shell_argv = shell_words::split(&request.shell_command())
+        .expect("launch command must remain valid argv");
+    assert_eq!(shell_argv[0], "sh");
+    assert_eq!(shell_argv[1], "-c");
+    assert_eq!(shell_argv[2], REMOTE_AGENT_LAUNCH_SHELL_SOURCE);
+    assert_eq!(shell_argv[3], "zaplex-agent-launch");
+    assert_eq!(shell_argv[4], remote_path);
+    let expected_agent_argv = vec![
+        "codex".to_string(),
+        "--model".to_string(),
+        "gpt-5-codex".to_string(),
+        "-c".to_string(),
+        "model_reasoning_effort=\"high\"".to_string(),
+    ];
+    assert_eq!(&shell_argv[8..], expected_agent_argv.as_slice());
+}
+
 fn initialize_app(app: &mut App) {
     // Load the bundled localization so `t!` returns real strings (not keys) —
     // mirrors prod (`lib.rs` `i18n::init`). Force English so the label-based menu
@@ -225,22 +251,14 @@ fn assert_review21_skip_toast_is_neutral(directory: bool) {
             std::fs::write(source_root.path().join("item.bin"), b"same").unwrap();
             std::fs::write(target_root.path().join("item.bin"), b"same").unwrap();
         }
-        let source_backend = Arc::new(
-            crate::sftp_manager::sftp_backend::InMemorySftpBackend::new(
-                source_root.path().to_path_buf(),
-            ),
-        ) as Arc<dyn crate::sftp_manager::sftp_backend::SftpBackend>;
-        let target_backend = Arc::new(
-            crate::sftp_manager::sftp_backend::InMemorySftpBackend::new(
-                target_root.path().to_path_buf(),
-            ),
-        ) as Arc<dyn crate::sftp_manager::sftp_backend::SftpBackend>;
+        let source_backend = Arc::new(crate::sftp_manager::sftp_backend::InMemorySftpBackend::new(
+            source_root.path().to_path_buf(),
+        )) as Arc<dyn crate::sftp_manager::sftp_backend::SftpBackend>;
+        let target_backend = Arc::new(crate::sftp_manager::sftp_backend::InMemorySftpBackend::new(
+            target_root.path().to_path_buf(),
+        )) as Arc<dyn crate::sftp_manager::sftp_backend::SftpBackend>;
         let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
-            crate::sftp_manager::browser::SftpBrowserView::new(
-                "review21".to_string(),
-                None,
-                ctx,
-            )
+            crate::sftp_manager::browser::SftpBrowserView::new("review21".to_string(), None, ctx)
         });
         let flavor = Arc::new(std::sync::Mutex::new(None));
         app.update(|ctx| {
@@ -511,6 +529,7 @@ fn transferred_tab_workspace(
             None,
             NewWorkspaceSource::TransferredTab {
                 tab_color: None,
+                is_pinned: false,
                 custom_title: None,
                 left_panel_open: false,
                 vertical_tabs_panel_open,
@@ -777,17 +796,13 @@ fn reopen_closed_session_menu_item(
 
 fn favorite_host_submenu() -> MenuItem<WorkspaceAction> {
     super::favorite_host_menu_item(
-        &zaplex_cockpit::Favorite::new(
-            zaplex_cockpit::FavoriteKind::Host,
-            "node-dev",
-            "devhost",
-        ),
+        &zaplex_cockpit::Favorite::new(zaplex_cockpit::FavoriteKind::Host, "node-dev", "devhost"),
         &[("node-dev".to_string(), "devhost".to_string())],
     )
 }
 
 #[test]
-fn submenu_offers_terminal_and_new_agent() {
+fn favorite_host_submenu_offers_terminal_and_new_agent() {
     let MenuItem::Submenu { menu, .. } = favorite_host_submenu() else {
         panic!("a favorite host must open a right-hand submenu");
     };
@@ -803,7 +818,7 @@ fn submenu_offers_terminal_and_new_agent() {
 }
 
 #[test]
-fn new_agent_opens_spawn_card() {
+fn new_agent_submenu_opens_spawn_card_without_launching() {
     let MenuItem::Submenu { menu, .. } = favorite_host_submenu() else {
         panic!("a favorite host must open a right-hand submenu");
     };
@@ -815,6 +830,53 @@ fn new_agent_opens_spawn_card() {
             host: Some(host),
             project: None,
         }) if node_id == "node-dev" && host == "devhost"
+    ));
+}
+
+#[test]
+fn stale_favorite_is_disabled_and_removable() {
+    let favorite = zaplex_cockpit::Favorite::new(
+        zaplex_cockpit::FavoriteKind::Host,
+        "deleted-node",
+        "old-devhost",
+    );
+    let item = super::favorite_host_menu_item(&favorite, &[]);
+    let MenuItem::Item(fields) = &item else {
+        panic!("a stale favorite must remain visible as a removable menu row");
+    };
+
+    assert!(matches!(
+        fields.on_select_action(),
+        Some(WorkspaceAction::RemoveFavorite { kind, target })
+            if *kind == zaplex_cockpit::FavoriteKind::Host && target == "deleted-node"
+    ));
+    assert!(
+        fields
+            .label()
+            .contains(&crate::t!("workspace-favorite-unavailable"))
+    );
+}
+
+#[test]
+fn removed_favorite_host_is_disabled_and_never_routed() {
+    let favorite = zaplex_cockpit::Favorite::new(
+        zaplex_cockpit::FavoriteKind::Host,
+        "removed-node",
+        "removed-host",
+    );
+    let item = super::favorite_host_menu_item(&favorite, &[]);
+    let MenuItem::Item(fields) = &item else {
+        panic!("a removed host must not retain its live host submenu");
+    };
+
+    assert!(matches!(
+        fields.on_select_action(),
+        Some(WorkspaceAction::RemoveFavorite { kind, target })
+            if *kind == zaplex_cockpit::FavoriteKind::Host && target == "removed-node"
+    ));
+    assert!(!matches!(
+        fields.on_select_action(),
+        Some(WorkspaceAction::OpenSshTerminalByNode { .. } | WorkspaceAction::OpenSpawnCard { .. })
     ));
 }
 
@@ -847,7 +909,24 @@ fn add_favorite_menu_lists_only_unfavorited_registered_hosts() {
 }
 
 #[test]
-fn sidebar_has_one_host_project_session_tree() {
+fn automatic_host_registration_never_adds_menu_favorite() {
+    let favorites = Vec::new();
+    let hosts = vec![("node-dev".to_string(), "devhost".to_string())];
+
+    let item = super::add_favorite_hosts_menu_item(&hosts, &favorites);
+
+    assert!(
+        item.is_some(),
+        "the host is available only in the curation submenu"
+    );
+    assert!(
+        favorites.is_empty(),
+        "registering a host must not silently curate it as a favorite"
+    );
+}
+
+#[test]
+fn primary_sidebar_has_exactly_one_host_project_session_tree() {
     assert_eq!(
         super::primary_host_navigation_views(true),
         vec![ToolPanelView::Cockpit]
@@ -855,7 +934,7 @@ fn sidebar_has_one_host_project_session_tree() {
 }
 
 #[test]
-fn parallel_roots_are_absent() {
+fn parallel_ssh_and_cockpit_primary_roots_are_absent() {
     let views = super::primary_host_navigation_views(true);
     assert!(!views.contains(&ToolPanelView::SshManager));
     assert_eq!(views.len(), 1);
@@ -1346,6 +1425,134 @@ fn test_reopen_closed_shared_tab() {
             assert!(!pane_group.as_ref(ctx).is_terminal_pane_being_shared(ctx));
             assert_eq!(workspace.tab_count(), 3);
         })
+    });
+}
+
+#[test]
+fn test_tab_pinning_keeps_a_stable_prefix_and_restores_it() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let snapshot = workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 3);
+
+            let second_id = workspace.tabs[1].pane_group.id();
+            let third_id = workspace.tabs[2].pane_group.id();
+            assert_eq!(workspace.set_tab_pinned(1, true, ctx), Some(0));
+            assert_eq!(workspace.set_tab_pinned(2, true, ctx), Some(1));
+            assert_eq!(workspace.active_tab_index(), 1);
+            assert_eq!(workspace.tabs[0].pane_group.id(), second_id);
+            assert_eq!(workspace.tabs[1].pane_group.id(), third_id);
+            assert_eq!(
+                workspace
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.is_pinned)
+                    .collect::<Vec<_>>(),
+                vec![true, true, false]
+            );
+
+            workspace.move_tab(1, TabMovement::Right, ctx);
+            assert_eq!(workspace.tabs[1].pane_group.id(), third_id);
+
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.active_tab_index(), 2);
+            assert_eq!(
+                workspace
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.is_pinned)
+                    .collect::<Vec<_>>(),
+                vec![true, true, false, false]
+            );
+
+            assert_eq!(workspace.set_tab_pinned(0, false, ctx), Some(1));
+            assert_eq!(workspace.tabs[1].pane_group.id(), second_id);
+            assert_eq!(
+                workspace
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.is_pinned)
+                    .collect::<Vec<_>>(),
+                vec![true, false, false, false]
+            );
+
+            workspace.snapshot(ctx.window_id(), false, ctx)
+        });
+
+        let restored = restored_workspace(&mut app, snapshot);
+        restored.read(&app, |workspace, _| {
+            assert_eq!(workspace.active_tab_index(), 2);
+            assert_eq!(
+                workspace
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.is_pinned)
+                    .collect::<Vec<_>>(),
+                vec![true, false, false, false]
+            );
+        });
+    });
+}
+
+#[test]
+fn restored_legacy_pin_order_keeps_the_original_active_tab() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let mut snapshot = workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            workspace.activate_tab(0, ctx);
+            workspace.snapshot(ctx.window_id(), false, ctx)
+        });
+        snapshot.active_tab_index = 0;
+        snapshot.tabs[0].selected_color = SelectedTabColor::Color(AnsiColorIdentifier::Red);
+        snapshot.tabs[1].is_pinned = true;
+
+        let restored = restored_workspace(&mut app, snapshot);
+        restored.read(&app, |workspace, _| {
+            assert_eq!(workspace.active_tab_index(), 1);
+            assert_eq!(
+                workspace.tabs[workspace.active_tab_index()].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Red)
+            );
+            assert_eq!(
+                workspace
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.is_pinned)
+                    .collect::<Vec<_>>(),
+                vec![true, false, false]
+            );
+        });
+    });
+}
+
+#[test]
+fn test_pinned_tab_always_requires_close_confirmation() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(disable_quit_warning);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.set_tab_pinned(1, true, ctx), Some(0));
+
+            workspace.handle_action(&WorkspaceAction::CloseTab(0), ctx);
+
+            assert_eq!(workspace.tab_count(), 2);
+            assert!(
+                workspace
+                    .current_workspace_state
+                    .is_close_session_confirmation_dialog_open
+            );
+        });
     });
 }
 
@@ -2834,11 +3041,7 @@ fn node_for_daemon_host_in_translates_daemon_id_to_ssh_node() {
     // A stale manager association is no longer routable once its registered
     // host has been removed.
     assert_eq!(
-        super::node_for_daemon_host_in(
-            "daemon-b",
-            assocs(),
-            &["node-1".to_string()],
-        ),
+        super::node_for_daemon_host_in("daemon-b", assocs(), &["node-1".to_string()],),
         None
     );
 }

@@ -15,9 +15,11 @@ pub const CLI_AGENT_NOTIFICATION_SENTINEL: &str = "warp://cli-agent";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CLIAgentEventType {
     SessionStart,
+    PreToolUse,
     PromptSubmit,
     ToolComplete,
     Stop,
+    SessionEnd,
     PermissionRequest,
     PermissionReplied,
     QuestionAsked,

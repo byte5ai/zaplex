@@ -36,9 +36,7 @@ pub fn sftp_browser_view(app: &App, window_id: WindowId) -> ViewHandle<SftpBrows
 /// files is a list of (relative path, content); automatically creates needed parent directories.
 /// author: logic
 /// date: 2026-05-30
-pub fn create_mock_backend(
-    files: &[(&str, &[u8])],
-) -> (tempfile::TempDir, Arc<dyn SftpBackend>) {
+pub fn create_mock_backend(files: &[(&str, &[u8])]) -> (tempfile::TempDir, Arc<dyn SftpBackend>) {
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
     for (path, content) in files {
         let full_path = temp_dir.path().join(path);
@@ -47,8 +45,8 @@ pub fn create_mock_backend(
         }
         std::fs::write(&full_path, content).expect("failed to write test file");
     }
-    let backend = Arc::new(InMemorySftpBackend::new(temp_dir.path().to_path_buf()))
-        as Arc<dyn SftpBackend>;
+    let backend =
+        Arc::new(InMemorySftpBackend::new(temp_dir.path().to_path_buf())) as Arc<dyn SftpBackend>;
     (temp_dir, backend)
 }
 

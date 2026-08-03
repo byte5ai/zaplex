@@ -141,7 +141,10 @@ impl SessionContext {
     /// Returns `true` if this is a remote session (regardless of whether
     /// the remote server client is connected).
     pub fn is_remote(&self) -> bool {
-        matches!(self.session_type, Some(SessionType::ZaplexifiedRemote { .. }))
+        matches!(
+            self.session_type,
+            Some(SessionType::ZaplexifiedRemote { .. })
+        )
     }
 
     /// Zaplex: legacy SSH connection info (host/port); only meaningful when `is_legacy_ssh()` is true.

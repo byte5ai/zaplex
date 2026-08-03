@@ -41,7 +41,7 @@
 //! It does not enforce anything: a caller that skips it can still render a verb
 //! that fails. It is the one place to ask, not a gate around the actions.
 
-use zaplex_cockpit::types::{Provider, SessionSnapshot, SessionState};
+use zaplex_cockpit::types::{SessionSnapshot, SessionState};
 
 use crate::cockpit::agent_of;
 
@@ -102,20 +102,6 @@ pub fn session_host_matches(
         (Some(expected), Some(actual)) => expected == actual,
         (Some(_), None) | (None, Some(_)) | (None, None) => false,
     }
-}
-
-/// Whether a snapshot is the exact provider account named by an action.
-/// Session ids can be copied between accounts, so an id alone must never choose
-/// which subscription receives a resume command.
-pub fn session_identity_matches(
-    session: &SessionSnapshot,
-    provider: Provider,
-    config_dir: Option<&str>,
-    account_email: Option<&str>,
-) -> bool {
-    session.provider == provider
-        && session.config_dir.as_deref() == config_dir
-        && session.account_email.as_deref() == account_email
 }
 
 /// Whether a provider/session id names at most one account route on its host.

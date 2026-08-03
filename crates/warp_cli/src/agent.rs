@@ -130,8 +130,8 @@ pub enum Harness {
     /// Delegate to the `opencode` CLI.
     #[value(name = "opencode", alias = "open-code")]
     OpenCode,
-    /// Delegate to the `gemini` CLI.
-    #[value(name = "gemini")]
+    /// Legacy Gemini harness retained for persisted-run display only.
+    #[value(skip)]
     Gemini,
     /// A harness produced by a newer client/server that this client doesn't
     /// recognize. Surfaced via deserialization fallbacks (e.g. unknown serialized
@@ -190,6 +190,20 @@ pub enum AgentProfileCommand {
 pub enum AgentCommand {
     /// Run a new Oz agent.
     Run(Box<RunAgentArgs>),
+    /// Install or refresh Zaplex's first-party terminal-control skill.
+    InstallSkill,
+    /// Remove only the Zaplex-managed terminal-control skill link.
+    RemoveSkill,
+    /// Install or refresh Zaplex's native lifecycle hooks for a CLI agent.
+    InstallHooks {
+        #[arg(value_enum)]
+        agent: crate::CliAgentHookAgent,
+    },
+    /// Remove only Zaplex-managed lifecycle hooks for a CLI agent.
+    RemoveHooks {
+        #[arg(value_enum)]
+        agent: crate::CliAgentHookAgent,
+    },
     /// Manage agent profiles.
     #[command(subcommand)]
     Profile(AgentProfileCommand),

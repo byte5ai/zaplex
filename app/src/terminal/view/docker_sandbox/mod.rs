@@ -149,6 +149,10 @@ impl TerminalView {
         let resources = TerminalViewResources {
             tips_completed: self.tips_completed.clone(),
             model_event_sender: self.model_event_sender.clone(),
+            control_tab_id: self
+                .control_context()
+                .map(|context| context.tab_id().to_string())
+                .unwrap_or_else(|| ctx.view_id().to_string()),
         };
         let pane_configuration = self.pane_configuration().clone();
 

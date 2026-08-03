@@ -17,7 +17,10 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use pathfinder_geometry::vector::Vector2F;
 
 use super::browser::{SftpBrowserAction, SftpBrowserView, SortColumn};
-use super::types::{ConnectionState, Dialog, FileEntry, FileEntryType, TransferDirection};
+use super::types::{
+    ConnectionState, Dialog, EntryIdentity, EntryReference, FileEntry, FileEntryType,
+    StableEntryIdentity, TransferDirection,
+};
 use crate::editor::EditorView;
 
 /// Initializes the minimal set of singletons required by the tests
@@ -65,6 +68,21 @@ fn create_view(app: &mut warpui::App) -> (warpui::WindowId, warpui::ViewHandle<S
     app.add_window(WindowStyle::NotStealFocus, |ctx| {
         SftpBrowserView::new("test-node".to_string(), None, ctx)
     })
+}
+
+fn test_entry_reference(index: usize) -> EntryReference {
+    EntryReference {
+        listing_generation: 0,
+        identity: EntryIdentity {
+            path: PathBuf::from(format!("/test-entry-{index}")),
+            backend: StableEntryIdentity {
+                file_type: FileEntryType::File,
+                size: 0,
+                object_id: format!("test-entry-{index}"),
+                revision: "1".to_string(),
+            },
+        },
+    }
 }
 
 // ============================================================
@@ -156,12 +174,14 @@ fn test_select_entry() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::SelectEntry(0), ctx);
+            view.entries = vec![entry("zero", false)];
+            let entry = view.entry_reference(0).unwrap();
+            view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
         });
 
         view.read(&app, |view, _| {
             assert!(
-                view.selected.contains(&0),
+                view.is_index_marked(0),
                 "After SelectEntry(0), index 0 should be selected"
             );
         });
@@ -177,23 +197,28 @@ fn test_toggle_select_entry() {
 
         // Select index 2
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::SelectEntry(2), ctx);
+            view.entries = (0..=5)
+                .map(|index| entry(&format!("entry-{index}"), false))
+                .collect();
+            let entry = view.entry_reference(2).unwrap();
+            view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
         });
         view.read(&app, |view, _| {
-            assert!(view.selected.contains(&2));
+            assert!(view.is_index_marked(2));
         });
 
         // Select index 5 → clears the previous selection, keeping only 5
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::SelectEntry(5), ctx);
+            let entry = view.entry_reference(5).unwrap();
+            view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
         });
         view.read(&app, |view, _| {
             assert!(
-                !view.selected.contains(&2),
+                !view.is_index_marked(2),
                 "After SelectEntry(5), index 2 should be deselected"
             );
             assert!(
-                view.selected.contains(&5),
+                view.is_index_marked(5),
                 "After SelectEntry(5), index 5 should be selected"
             );
         });
@@ -326,7 +351,11 @@ fn test_context_menu_sets_state() {
 
         let position = Vector2F::new(100.0, 200.0);
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::ContextMenu { index: 3, position }, ctx);
+            view.entries = (0..=3)
+                .map(|index| entry(&format!("entry-{index}"), false))
+                .collect();
+            let entry = view.entry_reference(3).unwrap();
+            view.handle_action(&SftpBrowserAction::ContextMenu { entry, position }, ctx);
         });
 
         view.read(&app, |view, _| {
@@ -335,13 +364,13 @@ fn test_context_menu_sets_state() {
                 "After ContextMenu, context_menu should be Some"
             );
             let cm = view.context_menu.as_ref().unwrap();
-            assert_eq!(cm.entry_index, 3, "entry_index should be 3");
+            assert_eq!(cm.entry, view.entry_reference(3).unwrap());
             assert_eq!(
                 cm.position, position,
                 "position should match the provided value"
             );
             assert!(
-                view.selected.contains(&3),
+                view.is_index_marked(3),
                 "After ContextMenu, index 3 should be selected"
             );
         });
@@ -359,9 +388,11 @@ fn test_close_context_menu_clears_state() {
 
         // First open the context menu
         view.update(&mut app, |view, ctx| {
+            view.entries = vec![entry("zero", false), entry("one", false)];
+            let entry = view.entry_reference(1).unwrap();
             view.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 1,
+                    entry,
                     position: Vector2F::new(50.0, 50.0),
                 },
                 ctx,
@@ -396,9 +427,13 @@ fn test_context_menu_replaces_previous() {
 
         // Open the first menu
         view.update(&mut app, |view, ctx| {
+            view.entries = (0..=5)
+                .map(|index| entry(&format!("entry-{index}"), false))
+                .collect();
+            let entry = view.entry_reference(0).unwrap();
             view.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 0,
+                    entry,
                     position: Vector2F::new(10.0, 10.0),
                 },
                 ctx,
@@ -408,9 +443,10 @@ fn test_context_menu_replaces_previous() {
         // Open the second menu (different position and index)
         let new_position = Vector2F::new(300.0, 400.0);
         view.update(&mut app, |view, ctx| {
+            let entry = view.entry_reference(5).unwrap();
             view.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 5,
+                    entry,
                     position: new_position,
                 },
                 ctx,
@@ -419,10 +455,10 @@ fn test_context_menu_replaces_previous() {
 
         view.read(&app, |view, _| {
             let cm = view.context_menu.as_ref().unwrap();
-            assert_eq!(cm.entry_index, 5, "Should update to new entry_index");
+            assert_eq!(cm.entry, view.entry_reference(5).unwrap());
             assert_eq!(cm.position, new_position, "Should update to new position");
-            assert!(view.selected.contains(&5), "Should select new index 5");
-            assert!(!view.selected.contains(&0), "Should deselect old index 0");
+            assert!(view.is_index_marked(5), "Should select new index 5");
+            assert!(!view.is_index_marked(0), "Should deselect old index 0");
         });
     });
 }
@@ -442,14 +478,16 @@ fn test_context_menu_zero_index() {
 
         let position = Vector2F::new(0.0, 0.0);
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::ContextMenu { index: 0, position }, ctx);
+            view.entries = vec![entry("zero", false)];
+            let entry = view.entry_reference(0).unwrap();
+            view.handle_action(&SftpBrowserAction::ContextMenu { entry, position }, ctx);
         });
 
         view.read(&app, |view, _| {
             let cm = view.context_menu.as_ref().unwrap();
-            assert_eq!(cm.entry_index, 0, "index=0 should be saved correctly");
+            assert_eq!(cm.entry, view.entry_reference(0).unwrap());
             assert_eq!(cm.position, position, "position should be saved correctly");
-            assert!(view.selected.contains(&0), "Should select index 0");
+            assert!(view.is_index_marked(0), "Should select index 0");
         });
     });
 }
@@ -467,7 +505,7 @@ fn test_context_menu_large_index() {
         view.update(&mut app, |view, ctx| {
             view.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 999,
+                    entry: test_entry_reference(999),
                     position,
                 },
                 ctx,
@@ -475,9 +513,11 @@ fn test_context_menu_large_index() {
         });
 
         view.read(&app, |view, _| {
-            let cm = view.context_menu.as_ref().unwrap();
-            assert_eq!(cm.entry_index, 999, "Large index should be saved correctly");
-            assert!(view.selected.contains(&999), "Should select large index");
+            assert!(
+                view.context_menu.is_none(),
+                "a reference absent from the current generation must be ignored"
+            );
+            assert!(view.selected.is_empty());
         });
     });
 }
@@ -493,7 +533,9 @@ fn test_context_menu_negative_position() {
 
         let position = Vector2F::new(-50.0, -100.0);
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::ContextMenu { index: 1, position }, ctx);
+            view.entries = vec![entry("zero", false), entry("one", false)];
+            let entry = view.entry_reference(1).unwrap();
+            view.handle_action(&SftpBrowserAction::ContextMenu { entry, position }, ctx);
         });
 
         view.read(&app, |view, _| {
@@ -546,24 +588,30 @@ fn test_context_menu_clears_previous_selection() {
 
         // First select entries 2 and 3 (via two SelectEntry calls)
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::SelectEntry(2), ctx);
+            view.entries = (0..=7)
+                .map(|index| entry(&format!("entry-{index}"), false))
+                .collect();
+            let entry = view.entry_reference(2).unwrap();
+            view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
         });
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::SelectEntry(3), ctx);
+            let entry = view.entry_reference(3).unwrap();
+            view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
         });
         view.read(&app, |view, _| {
-            assert!(view.selected.contains(&3), "Should select 3");
+            assert!(view.is_index_marked(3), "Should select 3");
             assert!(
-                !view.selected.contains(&2),
+                !view.is_index_marked(2),
                 "Single-select mode should clear 2"
             );
         });
 
         // Right-click on entry 7
         view.update(&mut app, |view, ctx| {
+            let entry = view.entry_reference(7).unwrap();
             view.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 7,
+                    entry,
                     position: Vector2F::new(200.0, 300.0),
                 },
                 ctx,
@@ -571,8 +619,8 @@ fn test_context_menu_clears_previous_selection() {
         });
 
         view.read(&app, |view, _| {
-            assert!(view.selected.contains(&7), "Should select 7");
-            assert!(!view.selected.contains(&3), "Should clear old selection 3");
+            assert!(view.is_index_marked(7), "Should select 7");
+            assert!(!view.is_index_marked(3), "Should clear old selection 3");
             assert_eq!(view.selected.len(), 1, "Should have only one selected item");
         });
     });
@@ -586,13 +634,21 @@ fn test_context_menu_multiple_open_close_cycles() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
+        seed(
+            &view,
+            &mut app,
+            (0..5)
+                .map(|index| entry(&format!("entry-{index}"), false))
+                .collect(),
+        );
 
         for i in 0..5 {
             // Open the menu
             view.update(&mut app, |view, ctx| {
+                let entry = view.entry_reference(i).unwrap();
                 view.handle_action(
                     &SftpBrowserAction::ContextMenu {
-                        index: i,
+                        entry,
                         position: Vector2F::new(i as f32 * 10.0, i as f32 * 20.0),
                     },
                     ctx,
@@ -626,49 +682,55 @@ fn test_context_menu_multiple_open_close_cycles() {
 /// Verifies that the SftpBrowserAction::DetailsEntry variant is constructed correctly
 #[test]
 fn test_action_details_entry() {
-    let action = SftpBrowserAction::DetailsEntry(42);
-    assert!(matches!(action, SftpBrowserAction::DetailsEntry(42)));
+    let entry = test_entry_reference(42);
+    let action = SftpBrowserAction::DetailsEntry(entry.clone());
+    assert!(matches!(action, SftpBrowserAction::DetailsEntry(actual) if actual == entry));
 }
 
 /// Verifies that the SftpBrowserAction::DeleteEntry variant is constructed correctly
 #[test]
 fn test_action_delete_entry() {
-    let action = SftpBrowserAction::DeleteEntry(10);
-    assert!(matches!(action, SftpBrowserAction::DeleteEntry(10)));
+    let entry = test_entry_reference(10);
+    let action = SftpBrowserAction::DeleteEntry(entry.clone());
+    assert!(matches!(action, SftpBrowserAction::DeleteEntry(actual) if actual == entry));
 }
 
 /// Verifies that the SftpBrowserAction::RenameEntry variant is constructed correctly
 #[test]
 fn test_action_rename_entry() {
-    let action = SftpBrowserAction::RenameEntry(5);
-    assert!(matches!(action, SftpBrowserAction::RenameEntry(5)));
+    let entry = test_entry_reference(5);
+    let action = SftpBrowserAction::RenameEntry(entry.clone());
+    assert!(matches!(action, SftpBrowserAction::RenameEntry(actual) if actual == entry));
 }
 
 /// Verifies that the SftpBrowserAction::DownloadEntry variant is constructed correctly
 #[test]
 fn test_action_download_entry() {
-    let action = SftpBrowserAction::DownloadEntry(3);
-    assert!(matches!(action, SftpBrowserAction::DownloadEntry(3)));
+    let entry = test_entry_reference(3);
+    let action = SftpBrowserAction::DownloadEntry(entry.clone());
+    assert!(matches!(action, SftpBrowserAction::DownloadEntry(actual) if actual == entry));
 }
 
 /// Verifies that the SftpBrowserAction::OpenEntry variant is constructed correctly
 #[test]
 fn test_action_open_entry() {
-    let action = SftpBrowserAction::OpenEntry(1);
-    assert!(matches!(action, SftpBrowserAction::OpenEntry(1)));
+    let entry = test_entry_reference(1);
+    let action = SftpBrowserAction::OpenEntry(entry.clone());
+    assert!(matches!(action, SftpBrowserAction::OpenEntry(actual) if actual == entry));
 }
 
 /// Verifies that the SftpBrowserAction::ContextMenu variant is constructed correctly
 #[test]
 fn test_action_context_menu_variant() {
     use pathfinder_geometry::vector::Vector2F;
+    let entry = test_entry_reference(3);
     let action = SftpBrowserAction::ContextMenu {
-        index: 3,
+        entry: entry.clone(),
         position: Vector2F::new(100.0, 200.0),
     };
     assert!(matches!(
         action,
-        SftpBrowserAction::ContextMenu { index: 3, .. }
+        SftpBrowserAction::ContextMenu { entry: actual, .. } if actual == entry
     ));
 }
 
@@ -692,7 +754,10 @@ fn test_delete_entry_no_connection() {
 
         // Running DeleteEntry with no SFTP connection should not panic
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::DeleteEntry(0), ctx);
+            view.handle_action(
+                &SftpBrowserAction::DeleteEntry(test_entry_reference(0)),
+                ctx,
+            );
         });
     });
 }
@@ -705,7 +770,10 @@ fn test_rename_entry_no_connection() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::RenameEntry(0), ctx);
+            view.handle_action(
+                &SftpBrowserAction::RenameEntry(test_entry_reference(0)),
+                ctx,
+            );
         });
     });
 }
@@ -1179,8 +1247,8 @@ fn test_download_save_as_after_disconnect() {
         view.update(&mut app, |view, ctx| {
             view.handle_action(
                 &SftpBrowserAction::DownloadSaveAs {
-                    remote_path: PathBuf::from("/remote/out-of-range.txt"),
-                    file_size: 0,
+                    entry: test_entry_reference(0),
+                    resolved_target_size: None,
                     local_path: "/tmp/out.txt".to_string(),
                 },
                 ctx,
@@ -1204,8 +1272,8 @@ fn test_download_save_as_without_backend() {
         view.update(&mut app, |view, ctx| {
             view.handle_action(
                 &SftpBrowserAction::DownloadSaveAs {
-                    remote_path: PathBuf::from("/remote/empty-list.txt"),
-                    file_size: 0,
+                    entry: test_entry_reference(0),
+                    resolved_target_size: None,
                     local_path: "/tmp/out.txt".to_string(),
                 },
                 ctx,
@@ -1256,7 +1324,10 @@ fn test_details_entry_out_of_range() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::DetailsEntry(999), ctx);
+            view.handle_action(
+                &SftpBrowserAction::DetailsEntry(test_entry_reference(999)),
+                ctx,
+            );
         });
 
         view.read(&app, |view, _| {
@@ -1273,7 +1344,10 @@ fn test_details_entry_zero_empty() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::DetailsEntry(0), ctx);
+            view.handle_action(
+                &SftpBrowserAction::DetailsEntry(test_entry_reference(0)),
+                ctx,
+            );
         });
 
         view.read(&app, |view, _| {
@@ -1290,7 +1364,10 @@ fn test_details_entry_usize_max() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::DetailsEntry(usize::MAX), ctx);
+            view.handle_action(
+                &SftpBrowserAction::DetailsEntry(test_entry_reference(usize::MAX)),
+                ctx,
+            );
         });
 
         view.read(&app, |view, _| {
@@ -1311,7 +1388,10 @@ fn test_open_entry_out_of_range() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::OpenEntry(999), ctx);
+            view.handle_action(
+                &SftpBrowserAction::OpenEntry(test_entry_reference(999)),
+                ctx,
+            );
         });
 
         view.read(&app, |view, _| {
@@ -1328,7 +1408,7 @@ fn test_open_entry_zero_empty() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::OpenEntry(0), ctx);
+            view.handle_action(&SftpBrowserAction::OpenEntry(test_entry_reference(0)), ctx);
         });
 
         view.read(&app, |view, _| {
@@ -1345,7 +1425,10 @@ fn test_download_entry_empty_entries() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::DownloadEntry(0), ctx);
+            view.handle_action(
+                &SftpBrowserAction::DownloadEntry(test_entry_reference(0)),
+                ctx,
+            );
         });
         // Passing means not panicking
     });
@@ -1380,7 +1463,10 @@ fn test_delete_selected_no_entries() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::SelectEntry(0), ctx);
+            view.handle_action(
+                &SftpBrowserAction::SelectEntry(test_entry_reference(0)),
+                ctx,
+            );
             view.handle_action(&SftpBrowserAction::DeleteSelected, ctx);
         });
 
@@ -1390,7 +1476,7 @@ fn test_delete_selected_no_entries() {
     });
 }
 
-/// Verifies that SelectEntry accepts usize::MAX without panicking
+/// Verifies that a reference absent from the listing is ignored.
 #[test]
 fn test_select_entry_usize_max() {
     warpui::App::test((), |mut app| async move {
@@ -1398,11 +1484,14 @@ fn test_select_entry_usize_max() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::SelectEntry(usize::MAX), ctx);
+            view.handle_action(
+                &SftpBrowserAction::SelectEntry(test_entry_reference(usize::MAX)),
+                ctx,
+            );
         });
 
         view.read(&app, |view, _| {
-            assert!(view.selected.contains(&usize::MAX));
+            assert!(view.selected.is_empty());
         });
     });
 }
@@ -1415,16 +1504,20 @@ fn test_multiple_select_clears_previous() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::SelectEntry(1), ctx);
-            view.handle_action(&SftpBrowserAction::SelectEntry(3), ctx);
-            view.handle_action(&SftpBrowserAction::SelectEntry(7), ctx);
+            view.entries = (0..=7)
+                .map(|index| entry(&format!("entry-{index}"), false))
+                .collect();
+            for index in [1, 3, 7] {
+                let entry = view.entry_reference(index).unwrap();
+                view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
+            }
         });
 
         view.read(&app, |view, _| {
             assert_eq!(view.selected.len(), 1);
-            assert!(view.selected.contains(&7));
-            assert!(!view.selected.contains(&1));
-            assert!(!view.selected.contains(&3));
+            assert!(view.is_index_marked(7));
+            assert!(!view.is_index_marked(1));
+            assert!(!view.is_index_marked(3));
         });
     });
 }
@@ -1494,11 +1587,13 @@ fn test_render_with_context_menu() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("menu", false)]);
 
         view.update(&mut app, |view, ctx| {
+            let entry = view.entry_reference(0).unwrap();
             view.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 0,
+                    entry,
                     position: Vector2F::new(10.0, 20.0),
                 },
                 ctx,
@@ -1517,6 +1612,7 @@ fn test_render_with_dialog_open() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("overlay", false)]);
 
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::NewFolder, ctx);
@@ -1571,9 +1667,10 @@ fn test_render_all_overlays_combined() {
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::DragFilesEnter, ctx);
             view.handle_action(&SftpBrowserAction::SetSearchFilter("x".to_string()), ctx);
+            let entry = view.entry_reference(0).unwrap();
             view.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 0,
+                    entry,
                     position: Vector2F::new(5.0, 5.0),
                 },
                 ctx,
@@ -1613,14 +1710,16 @@ fn test_render_after_close_all_overlays() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("overlay", false)]);
 
         // Open all overlays
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::DragFilesEnter, ctx);
             view.handle_action(&SftpBrowserAction::SetSearchFilter("x".to_string()), ctx);
+            let entry = view.entry_reference(0).unwrap();
             view.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 0,
+                    entry,
                     position: Vector2F::new(5.0, 5.0),
                 },
                 ctx,
@@ -1678,17 +1777,24 @@ fn test_render_is_loading_initial_false() {
 
 /// Build a simple entry (file or directory) rooted under `/`.
 fn entry(name: &str, is_dir: bool) -> FileEntry {
+    let file_type = if is_dir {
+        FileEntryType::Directory
+    } else {
+        FileEntryType::File
+    };
     FileEntry {
         name: name.to_string(),
         path: PathBuf::from("/").join(name),
-        file_type: if is_dir {
-            FileEntryType::Directory
-        } else {
-            FileEntryType::File
-        },
+        file_type,
         size: 0,
         modified: None,
         permissions: None,
+        identity: super::types::StableEntryIdentity {
+            file_type,
+            size: 0,
+            object_id: format!("test:{name}"),
+            revision: "1".to_string(),
+        },
     }
 }
 
@@ -1779,12 +1885,12 @@ fn test_toggle_select_cursor() {
             view.handle_action(&SftpBrowserAction::CursorDown, ctx);
             view.handle_action(&SftpBrowserAction::ToggleSelectCursor, ctx);
         });
-        view.read(&app, |view, _| assert!(view.selected.contains(&1)));
+        view.read(&app, |view, _| assert!(view.is_index_marked(1)));
 
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::ToggleSelectCursor, ctx);
         });
-        view.read(&app, |view, _| assert!(!view.selected.contains(&1)));
+        view.read(&app, |view, _| assert!(!view.is_index_marked(1)));
     });
 }
 
@@ -1853,17 +1959,24 @@ fn test_activate_cursor_on_directory_without_backend_does_not_commit() {
 
 /// An entry with an explicit size / modified stamp, for the sort tests.
 fn sized_entry(name: &str, is_dir: bool, size: u64, modified: Option<&str>) -> FileEntry {
+    let file_type = if is_dir {
+        FileEntryType::Directory
+    } else {
+        FileEntryType::File
+    };
     FileEntry {
         name: name.to_string(),
         path: PathBuf::from("/sub").join(name),
-        file_type: if is_dir {
-            FileEntryType::Directory
-        } else {
-            FileEntryType::File
-        },
+        file_type,
         size,
         modified: modified.map(str::to_string),
         permissions: None,
+        identity: super::types::StableEntryIdentity {
+            file_type,
+            size,
+            object_id: format!("test:{name}"),
+            revision: modified.unwrap_or_default().to_string(),
+        },
     }
 }
 
@@ -1932,7 +2045,7 @@ fn test_sort_reorders_view_and_keeps_marks_on_their_files() {
                 sized_entry("mid.txt", false, 100, None),
             ];
             // Mark "big.txt" (entry index 0).
-            view.selected.insert(0);
+            view.mark_index_for_test(0);
         });
 
         view.read(&app, |view, _| {
@@ -1953,7 +2066,7 @@ fn test_sort_reorders_view_and_keeps_marks_on_their_files() {
                 "size descending on first click: 900, 100, 10"
             );
             assert!(
-                view.selected.contains(&0),
+                view.is_index_marked(0),
                 "the mark stays on big.txt, not on whatever now sits in its old row"
             );
         });
@@ -2024,7 +2137,8 @@ fn test_hidden_files_toggle_and_drop_marks_when_hidden() {
 
         // Mark the dot-file, then hide it again.
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::ToggleMark(0), ctx);
+            let entry = view.entry_reference(0).unwrap();
+            view.handle_action(&SftpBrowserAction::ToggleMark(entry), ctx);
             view.handle_action(&SftpBrowserAction::ToggleHidden, ctx);
         });
         view.read(&app, |view, _| {
@@ -2057,7 +2171,7 @@ fn test_insert_marks_and_advances() {
         });
         view.read(&app, |view, _| {
             assert_eq!(view.selected.len(), 2);
-            assert!(view.selected.contains(&0) && view.selected.contains(&1));
+            assert!(view.is_index_marked(0) && view.is_index_marked(1));
             assert_eq!(view.cursor, 2, "cursor advanced past both");
         });
     });
@@ -2077,28 +2191,32 @@ fn test_mark_clicks_accumulate_unlike_row_clicks() {
         );
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::ToggleMark(0), ctx);
-            view.handle_action(&SftpBrowserAction::ToggleMark(2), ctx);
+            for index in [0, 2] {
+                let entry = view.entry_reference(index).unwrap();
+                view.handle_action(&SftpBrowserAction::ToggleMark(entry), ctx);
+            }
         });
         view.read(&app, |view, _| {
             assert_eq!(view.selected.len(), 2, "marks accumulate");
         });
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::ToggleMark(0), ctx);
+            let entry = view.entry_reference(0).unwrap();
+            view.handle_action(&SftpBrowserAction::ToggleMark(entry), ctx);
         });
         view.read(&app, |view, _| {
             assert_eq!(view.selected.len(), 1, "toggling the same row unmarks it");
-            assert!(view.selected.contains(&2));
+            assert!(view.is_index_marked(2));
         });
 
         // A plain row click replaces the whole selection.
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::SelectEntry(1), ctx);
+            let entry = view.entry_reference(1).unwrap();
+            view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
         });
         view.read(&app, |view, _| {
             assert_eq!(view.selected.len(), 1);
-            assert!(view.selected.contains(&1));
+            assert!(view.is_index_marked(1));
         });
     });
 }
@@ -2118,8 +2236,10 @@ fn test_search_filter_drops_marks_it_hides() {
         );
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::ToggleMark(0), ctx); // alpha
-            view.handle_action(&SftpBrowserAction::ToggleMark(1), ctx); // beta
+            for index in [0, 1] {
+                let entry = view.entry_reference(index).unwrap();
+                view.handle_action(&SftpBrowserAction::ToggleMark(entry), ctx);
+            }
             view.handle_action(&SftpBrowserAction::SetSearchFilter("beta".to_string()), ctx);
         });
         view.read(&app, |view, _| {
@@ -2129,7 +2249,7 @@ fn test_search_filter_drops_marks_it_hides() {
                 1,
                 "the mark on the now-hidden alpha must be dropped"
             );
-            assert!(view.selected.contains(&1));
+            assert!(view.is_index_marked(1));
         });
     });
 }
@@ -2189,7 +2309,9 @@ fn queued_delete_never_retargets_after_sort() {
                 .unwrap()
         });
         let expected_path = view.read(&app, |view, _| view.entries[small_index].path.clone());
-        let queued_delete = SftpBrowserAction::DeleteEntry(small_index);
+        let queued_delete = view.read(&app, |view, _| {
+            SftpBrowserAction::DeleteEntry(view.entry_reference(small_index).unwrap())
+        });
 
         view.update(&mut app, |view, ctx| {
             view.handle_action(&SftpBrowserAction::SortBy(SortColumn::Size), ctx);
@@ -2218,6 +2340,88 @@ fn queued_delete_never_retargets_after_sort() {
     });
 }
 
+#[test]
+fn queued_delete_rejects_same_path_replacement_after_refresh() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("same.txt", false)]);
+        let queued_delete = view.read(&app, |view, _| {
+            SftpBrowserAction::DeleteEntry(view.entry_reference(0).unwrap())
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.refresh_generation = view.refresh_generation.wrapping_add(1);
+            let generation = view.refresh_generation;
+            let mut replacement = entry("same.txt", false);
+            replacement.identity.object_id = "replacement".to_string();
+            replacement.identity.revision = "2".to_string();
+            view.on_dir_listed(generation, Ok(Ok(vec![replacement])), ctx);
+            view.handle_action(&queued_delete, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(
+                view.dialog.is_none(),
+                "an action captured for the replaced object must not retarget by path"
+            );
+        });
+    });
+}
+
+#[test]
+fn changed_entry_type_invalidates_pending_action() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("same", false)]);
+        let queued_delete = view.read(&app, |view, _| {
+            SftpBrowserAction::DeleteEntry(view.entry_reference(0).unwrap())
+        });
+
+        view.update(&mut app, |view, ctx| {
+            let mut replacement = entry("same", true);
+            replacement.identity.object_id = view.entries[0].identity.object_id.clone();
+            replacement.identity.revision = view.entries[0].identity.revision.clone();
+            view.entries = vec![replacement];
+            view.handle_action(&queued_delete, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(
+                view.dialog.is_none(),
+                "a pending file action must not retarget a directory at the same path"
+            );
+        });
+    });
+}
+
+#[test]
+fn mark_does_not_survive_same_path_replacement() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(&view, &mut app, vec![entry("same.txt", false)]);
+        view.update(&mut app, |view, _| view.mark_index_for_test(0));
+
+        view.update(&mut app, |view, ctx| {
+            view.refresh_generation = view.refresh_generation.wrapping_add(1);
+            let generation = view.refresh_generation;
+            let mut replacement = entry("same.txt", false);
+            replacement.identity.object_id = "replacement".to_string();
+            replacement.identity.revision = "2".to_string();
+            view.on_dir_listed(generation, Ok(Ok(vec![replacement])), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(
+                view.selected.is_empty(),
+                "a path reused by another object must not inherit the old mark"
+            );
+        });
+    });
+}
+
 // ============================================================
 // Refresh race + stale indices (T1.5)
 // ============================================================
@@ -2228,7 +2432,7 @@ fn queued_delete_never_retargets_after_sort() {
 /// (open/download/delete) hits the wrong file. Without the generation guard the
 /// stale listing overwrites the current one.
 #[test]
-fn refresh_generation_discards_older_completion() {
+fn refresh_generation_discards_an_older_completion() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
@@ -2284,7 +2488,7 @@ fn current_refresh_result_installs() {
 /// though its row index changed, and a file that disappeared loses its mark.
 /// The old code cleared every mark on every refresh.
 #[test]
-fn refresh_preserves_marks_by_path() {
+fn refresh_preserves_marks_for_stable_entries() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
@@ -2299,8 +2503,8 @@ fn refresh_preserves_marks_by_path() {
             ],
         );
         view.update(&mut app, |view, _| {
-            view.selected.insert(1); // beta
-            view.selected.insert(2); // gamma
+            view.mark_index_for_test(1); // beta
+            view.mark_index_for_test(2); // gamma
         });
 
         // Refresh returns a different input order, drops gamma, adds zeta. After
@@ -2321,9 +2525,10 @@ fn refresh_preserves_marks_by_path() {
             let names: Vec<_> = view.entries.iter().map(|e| e.name.clone()).collect();
             assert_eq!(names, vec!["alpha", "beta", "zeta"], "re-sorted listing");
             let marked: std::collections::HashSet<String> = view
-                .selected
+                .entries
                 .iter()
-                .filter_map(|&i| view.entries.get(i).map(|e| e.name.clone()))
+                .filter(|entry| view.selected.contains(&entry.entry_identity()))
+                .map(|entry| entry.name.clone())
                 .collect();
             assert_eq!(
                 marked,
@@ -2344,9 +2549,10 @@ fn refresh_closes_open_context_menu() {
         let (_, view) = create_view(&mut app);
         seed(&view, &mut app, vec![entry("a", false), entry("b", false)]);
         view.update(&mut app, |view, ctx| {
+            let entry = view.entry_reference(1).unwrap();
             view.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 1,
+                    entry,
                     position: Vector2F::new(10.0, 10.0),
                 },
                 ctx,

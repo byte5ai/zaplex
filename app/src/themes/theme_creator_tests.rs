@@ -57,3 +57,32 @@ fn accent_colors_contrast_test() {
         pick_accent_color_from_options(&[background, foreground], &accent_options)
     );
 }
+
+#[test]
+fn theme_color_input_accepts_hex_and_rgb() {
+    let expected = ColorU::new(12, 34, 56, 255);
+    assert_eq!(parse_theme_color_input("#0C2238").unwrap(), expected);
+    assert_eq!(parse_theme_color_input("0c2238").unwrap(), expected);
+    assert_eq!(
+        parse_theme_color_input("rgb(12, 34, 56)").unwrap(),
+        expected
+    );
+    assert_eq!(
+        parse_theme_color_input("RGB(12, 34, 56)").unwrap(),
+        expected
+    );
+    assert_eq!(
+        parse_theme_color_input("#0C223880").unwrap(),
+        ColorU::new(12, 34, 56, 128)
+    );
+    assert_eq!(
+        format_theme_color(ColorU::new(12, 34, 56, 128)),
+        "#0C223880"
+    );
+}
+
+#[test]
+fn invalid_theme_color_input_fails_without_a_fallback_color() {
+    assert!(parse_theme_color_input("rgb(12, 34)").is_err());
+    assert!(parse_theme_color_input("#not-a-color").is_err());
+}

@@ -5,12 +5,14 @@ use crate::proto::{
     client_message, read_file_chunk_response, resolve_path_response, run_command_response,
     server_message, write_file_chunk_response, AgentProcessSignal, AgentProcessSignalRequest,
     AgentProcessSignalResponse, AgentProcessSignalStatus, AgentPtyBindingResponse,
-    AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo, AgentSessionList, ClientMessage,
-    ErrorCode, FileSystemEntryKind, HostExecResult, InitializeResponse, ReadFileChunkResponse,
+    AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo, AgentSessionList, AgentTaskItem,
+    ClientMessage, ErrorCode, FileSystemEntryKind, HostExecResult, InitializeResponse,
+    MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList, ReadFileChunkResponse,
     ReadFileChunkSuccess, ResolvePathResponse, ResolvePathSuccess, RunCommandResponse,
-    RunCommandSuccess, ServerMessage, SessionAttached, SessionExited, SessionInfo, SessionList,
-    SessionOpened, SessionOutput, SessionSize, StartupCommandAck, WriteFileChunkResponse,
-    WriteFileChunkSuccess,
+    RunCommandSuccess, SafeFileEntryKind, SafeFileIdentity, SafeFileMutationResult,
+    SafeFileMutationState, SafeFileOpenExisting, SafeFileOpened, SafeFileRequest, SafeFileResponse,
+    ServerMessage, SessionAttached, SessionExited, SessionInfo, SessionList, SessionOpened,
+    SessionOutput, SessionSize, StartupCommandAck, WriteFileChunkResponse, WriteFileChunkSuccess,
 };
 use crate::protocol;
 use warp_core::SessionId;
@@ -294,6 +296,84 @@ async fn write_file_chunk_round_trip() {
         panic!("expected write chunk success");
     };
     assert_eq!(success.next_offset, 3);
+}
+
+#[tokio::test]
+async fn safe_file_request_round_trip() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        let Some(client_message::Message::SafeFile(request)) = &msg.message else {
+            panic!("Expected SafeFile request");
+        };
+        assert!(request.operation_id.is_empty());
+        let Some(crate::proto::safe_file_request::Operation::OpenExisting(open)) =
+            &request.operation
+        else {
+            panic!("Expected safe-file open");
+        };
+        assert_eq!(open.path, "/tmp/source.bin");
+        assert_eq!(open.expected_kind, SafeFileEntryKind::Regular as i32);
+        server_message::Message::SafeFileResponse(SafeFileResponse {
+            result: Some(crate::proto::safe_file_response::Result::Opened(
+                SafeFileOpened {
+                    handle_id: "handle-1".to_string(),
+                    identity: Some(SafeFileIdentity {
+                        kind: SafeFileEntryKind::Regular as i32,
+                        size: 3,
+                        object_id: "1:2".to_string(),
+                        revision: "1:2:3".to_string(),
+                    }),
+                },
+            )),
+        })
+    });
+
+    let response = client
+        .safe_file(SafeFileRequest {
+            operation_id: String::new(),
+            operation: Some(crate::proto::safe_file_request::Operation::OpenExisting(
+                SafeFileOpenExisting {
+                    path: "/tmp/source.bin".to_string(),
+                    expected_kind: SafeFileEntryKind::Regular as i32,
+                },
+            )),
+        })
+        .await
+        .unwrap();
+    let Some(crate::proto::safe_file_response::Result::Opened(opened)) = response.result else {
+        panic!("expected opened response");
+    };
+    assert_eq!(opened.handle_id, "handle-1");
+}
+
+#[tokio::test]
+async fn safe_file_handle_close_is_a_nonblocking_notification() {
+    let (observed_tx, observed_rx) = async_channel::bounded(1);
+    let (client, _disconnect_rx, _executor) = setup_mock_client(move |msg| {
+        assert!(msg.request_id.is_empty());
+        let Some(client_message::Message::SafeFile(request)) = &msg.message else {
+            panic!("expected safe-file close notification");
+        };
+        assert!(request.operation_id.is_empty());
+        let Some(crate::proto::safe_file_request::Operation::CloseHandle(close)) =
+            &request.operation
+        else {
+            panic!("expected safe-file close operation");
+        };
+        assert_eq!(close.handle_id, "handle-1");
+        observed_tx.try_send(()).unwrap();
+        server_message::Message::SafeFileResponse(SafeFileResponse {
+            result: Some(crate::proto::safe_file_response::Result::Mutation(
+                SafeFileMutationResult {
+                    state: SafeFileMutationState::Applied as i32,
+                },
+            )),
+        })
+    });
+
+    client
+        .close_safe_file_handle("handle-1".to_string())
+        .unwrap();
+    observed_rx.recv().await.unwrap();
 }
 
 #[tokio::test]
@@ -837,6 +917,7 @@ async fn list_sessions_round_trip() {
                     generation: 8,
                 },
             ],
+            host_ring_cap_bytes: 256 * 1024 * 1024,
         })
     });
 
@@ -846,6 +927,7 @@ async fn list_sessions_round_trip() {
     assert_eq!(resp.sessions[0].cwd, "/home/me/work");
     assert!(resp.sessions[0].alive);
     assert_eq!(resp.sessions[1].last_attached_epoch_millis, 456);
+    assert_eq!(resp.host_ring_cap_bytes, 256 * 1024 * 1024);
 }
 
 #[tokio::test]
@@ -881,6 +963,19 @@ async fn list_agent_sessions_round_trip() {
                     pty_session_id: "pty-7".to_string(),
                     pty_session_generation: 7,
                     pty_foreground: true,
+                    has_task_state: true,
+                    task_items: vec![
+                        AgentTaskItem {
+                            id: "2".to_string(),
+                            title: "Inspect".to_string(),
+                            status: "completed".to_string(),
+                        },
+                        AgentTaskItem {
+                            id: "10".to_string(),
+                            title: "Implement".to_string(),
+                            status: "in_progress".to_string(),
+                        },
+                    ],
                 },
                 AgentSessionInfo {
                     session_id: "a2".to_string(),
@@ -910,6 +1005,8 @@ async fn list_agent_sessions_round_trip() {
                     pty_session_id: String::new(),
                     pty_session_generation: 0,
                     pty_foreground: false,
+                    has_task_state: false,
+                    task_items: Vec::new(),
                 },
             ],
         })
@@ -925,9 +1022,15 @@ async fn list_agent_sessions_round_trip() {
         resp.sessions[0].last_activity_epoch_millis,
         1_720_000_000_123
     );
+    assert!(resp.sessions[0].has_task_state);
+    assert_eq!(resp.sessions[0].task_items.len(), 2);
+    assert_eq!(resp.sessions[0].task_items[0].id, "2");
+    assert_eq!(resp.sessions[0].task_items[1].status, "in_progress");
     assert_eq!(resp.sessions[1].state, "idle");
     assert_eq!(resp.sessions[1].provider, "codex");
     assert!(resp.sessions[1].effort.is_empty());
+    assert!(!resp.sessions[1].has_task_state);
+    assert!(resp.sessions[1].task_items.is_empty());
 }
 
 #[tokio::test]
@@ -1017,4 +1120,29 @@ async fn host_exec_round_trip() {
     assert_eq!(resp.stdout, b"done");
     assert!(resp.stderr.is_empty());
     assert_eq!(resp.exit_code, Some(0));
+}
+
+#[tokio::test]
+async fn typed_multiplexer_inventory_round_trip() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        assert!(matches!(
+            msg.message,
+            Some(client_message::Message::ListMultiplexerSessions(_))
+        ));
+        server_message::Message::MultiplexerSessionList(MultiplexerSessionList {
+            sessions: vec![MultiplexerSessionInfo {
+                kind: MultiplexerKind::Tmux.into(),
+                target: "release; touch /tmp/never".to_string(),
+                name: "release; touch /tmp/never".to_string(),
+                windows: 3,
+                attached_clients: 1,
+            }],
+            warnings: Vec::new(),
+        })
+    });
+
+    let inventory = client.list_multiplexer_sessions().await.unwrap();
+    assert_eq!(inventory.sessions.len(), 1);
+    assert_eq!(inventory.sessions[0].target, "release; touch /tmp/never");
+    assert!(inventory.warnings.is_empty());
 }

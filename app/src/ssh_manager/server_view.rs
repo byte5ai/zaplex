@@ -12,8 +12,8 @@ use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::ssh_manager::{
-    SshTreeChangedEvent, SshTreeChangedNotifier, credential_operation_message,
-    endpoint_validation_message,
+    credential_operation_message, endpoint_validation_message, SshTreeChangedEvent,
+    SshTreeChangedNotifier,
 };
 use crate::ui_components::modal_frame;
 use crate::view_components::action_button::ActionButton;
@@ -22,9 +22,9 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-    Container, CornerRadius, CrossAxisAlignment, Element, Fill, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth,
-    Shrinkable, Stack, Text, Wrap,
+    Container, CornerRadius, CrossAxisAlignment, Element, Fill, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Stack, Text,
+    Wrap,
 };
 use warpui::fonts::Weight;
 use warpui::platform::{Cursor, FilePickerConfiguration};
@@ -36,11 +36,11 @@ use warpui::{
 };
 
 use warp_ssh_manager::{
-    AuthType, ConnectionStatus, EndpointUse, KeychainSecretStore, NodeKind, OneKeyCredentialKind,
-    SaveServerRequest, SecretKind, SessionResilience, SshNode, SshOneKeyCredential, SshRepository,
-    SshSecretStore, SshSecretStoreError, SshServerInfo, UnknownHostKey,
     delete_onekey_credential_and_secrets, save_onekey_credential_with_secret,
-    save_server_with_secrets, validate_ssh_endpoint,
+    save_server_with_secrets, validate_ssh_endpoint, AuthType, ConnectionStatus, EndpointUse,
+    KeychainSecretStore, NodeKind, OneKeyCredentialKind, SaveServerRequest, SecretKind,
+    SessionResilience, SshNode, SshOneKeyCredential, SshRepository, SshSecretStore,
+    SshSecretStoreError, SshServerInfo, UnknownHostKey,
 };
 use zeroize::Zeroizing;
 
@@ -53,8 +53,12 @@ const AUTH_TOGGLE_PADDING_H: f32 = 14.0;
 const AUTH_TOGGLE_PADDING_V: f32 = 6.0;
 /// Per-host daemon scrollback-ceiling presets shown as pills: (MiB, label).
 /// 0 = the daemon's built-in default ceiling.
-const RING_CEILING_PRESETS: [(u32, &str); 4] =
-    [(0, "Default"), (64, "64 MB"), (256, "256 MB"), (1024, "1 GB")];
+const RING_CEILING_PRESETS: [(u32, &str); 4] = [
+    (0, "Default"),
+    (64, "64 MB"),
+    (256, "256 MB"),
+    (1024, "1 GB"),
+];
 const ONEKEY_MANAGER_WIDTH: f32 = 680.0;
 const ONEKEY_MANAGER_HEIGHT: f32 = 500.0;
 const ONEKEY_MANAGER_LIST_WIDTH: f32 = 220.0;
@@ -117,6 +121,14 @@ fn status_banner_content(status: Option<&StatusBanner>) -> Option<(String, Statu
         StatusBanner::Success(message) => Some((message.clone(), StatusTone::Success)),
         StatusBanner::Error(message) => Some((message.clone(), StatusTone::Error)),
     }
+}
+
+fn validated_startup_command(text: &str) -> Result<Option<String>, ()> {
+    if text.contains('\r') || text.contains('\n') {
+        return Err(());
+    }
+    let command = text.trim();
+    Ok((!command.is_empty()).then(|| command.to_string()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -942,6 +954,16 @@ impl SshServerView {
                 return;
             }
         };
+        let startup_command = match validated_startup_command(&startup_command_text) {
+            Ok(command) => command,
+            Err(()) => {
+                self.status = Some(StatusBanner::Error(crate::t!(
+                    "workspace-left-panel-ssh-manager-error-startup-command-single-line"
+                )));
+                ctx.notify();
+                return;
+            }
+        };
 
         let credential_id = if self.auth_type == AuthType::OneKey {
             if self.selected_onekey_credential_id.is_none() {
@@ -969,11 +991,7 @@ impl SshServerView {
                 Some(key_path)
             },
             credential_id,
-            startup_command: if startup_command_text.trim().is_empty() {
-                None
-            } else {
-                Some(startup_command_text.trim().to_string())
-            },
+            startup_command,
             notes: if notes_text.trim().is_empty() {
                 None
             } else {
@@ -1053,6 +1071,16 @@ impl SshServerView {
                 return;
             }
         };
+        let startup_command = match validated_startup_command(&startup_command_text) {
+            Ok(command) => command,
+            Err(()) => {
+                self.status = Some(StatusBanner::Error(crate::t!(
+                    "workspace-left-panel-ssh-manager-error-startup-command-single-line"
+                )));
+                ctx.notify();
+                return;
+            }
+        };
         let key_path = key_path_text.trim().to_string();
         let server = SshServerInfo {
             node_id: self.node_id.clone(),
@@ -1066,11 +1094,7 @@ impl SshServerView {
                 Some(key_path)
             },
             credential_id,
-            startup_command: if startup_command_text.trim().is_empty() {
-                None
-            } else {
-                Some(startup_command_text.trim().to_string())
-            },
+            startup_command,
             notes: if notes_text.trim().is_empty() {
                 None
             } else {
@@ -1214,8 +1238,7 @@ impl SshServerView {
                     }
                     ConnectionStatus::Offline => {
                         me.latency_ms = None;
-                        let err =
-                            humanize_ssh_transport_error(result.error_message.as_deref());
+                        let err = humanize_ssh_transport_error(result.error_message.as_deref());
                         me.status = Some(StatusBanner::Error(err));
                     }
                     ConnectionStatus::Unknown => {
@@ -1379,8 +1402,7 @@ impl SshServerView {
             Ok(credential) => credential,
             Err(e) => {
                 log::error!("ssh_server_view: save OneKey credential failed: {e:?}");
-                self.onekey_status =
-                    Some(StatusBanner::Error(credential_operation_message(&e)));
+                self.onekey_status = Some(StatusBanner::Error(credential_operation_message(&e)));
                 ctx.notify();
                 return false;
             }
@@ -2280,11 +2302,7 @@ impl SshServerView {
         .finish()
     }
 
-    fn render_onekey_manager(
-        &self,
-        app: &AppContext,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
+    fn render_onekey_manager(&self, app: &AppContext, appearance: &Appearance) -> Box<dyn Element> {
         let title = crate::t!("workspace-left-panel-ssh-manager-onekey-manager-title");
         let header = modal_frame::modal_header(
             title,
@@ -2352,8 +2370,7 @@ impl SshServerView {
             &self.onekey_secret_editor,
             appearance,
         ));
-        if let Some(banner) =
-            self.render_status_banner_for(self.onekey_status.as_ref(), appearance)
+        if let Some(banner) = self.render_status_banner_for(self.onekey_status.as_ref(), appearance)
         {
             form.add_child(banner);
         }
@@ -2367,9 +2384,7 @@ impl SshServerView {
             form.add_child(
                 Container::new(
                     Text::new(
-                        crate::t!(
-                            "workspace-left-panel-ssh-manager-onekey-unsaved-changes"
-                        ),
+                        crate::t!("workspace-left-panel-ssh-manager-onekey-unsaved-changes"),
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )
@@ -2393,9 +2408,7 @@ impl SshServerView {
                 )
                 .with_centered_text_label(crate::t!("common-cancel"))
                 .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(cancel_action)
-                })
+                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(cancel_action))
                 .finish();
             footer.add_child(cancel_button);
             let discard_button = appearance
@@ -2406,9 +2419,7 @@ impl SshServerView {
                 )
                 .with_centered_text_label(crate::t!("common-discard"))
                 .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(discard_action)
-                })
+                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(discard_action))
                 .finish();
             footer.add_child(discard_button);
             let save_button = appearance
@@ -2419,9 +2430,7 @@ impl SshServerView {
                 )
                 .with_centered_text_label(crate::t!("common-save-changes"))
                 .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(save_action)
-                })
+                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(save_action))
                 .finish();
             footer.add_child(save_button);
         } else if let Some(pending_id) = self.pending_onekey_delete_id.as_ref() {
@@ -2492,9 +2501,7 @@ impl SshServerView {
                     ButtonVariant::Accent,
                     self.onekey_manager_save_btn_state.clone(),
                 )
-                .with_centered_text_label(crate::t!(
-                    "workspace-left-panel-ssh-manager-onekey-save"
-                ))
+                .with_centered_text_label(crate::t!("workspace-left-panel-ssh-manager-onekey-save"))
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(SshServerAction::SaveManagedOneKeyCredential)

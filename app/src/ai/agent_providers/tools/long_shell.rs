@@ -27,7 +27,7 @@ struct WriteArgs {
 }
 
 fn default_mode() -> String {
-    "line".to_owned()  // default: "line"
+    "line".to_owned() // default: "line"
 }
 
 fn write_parameters() -> Value {

@@ -1,7 +1,7 @@
 use crate::modal::Modal;
 use crate::themes::theme::ThemeKind;
-use crate::themes::theme_creator_body::{
-    ThemeCreatorBody, ThemeCreatorBodyAction, ThemeCreatorBodyEvent,
+use crate::themes::theme_editor_body::{
+    ThemeEditorBody, ThemeEditorBodyAction, ThemeEditorBodyEvent,
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
@@ -9,17 +9,15 @@ use std::default::Default;
 use std::path::PathBuf;
 use warpui::fonts::Weight;
 use warpui::keymap::FixedBinding;
-use warpui::platform::{FilePickerConfiguration, FileType};
+use warpui::platform::{FilePickerConfiguration, FileType, SaveFilePickerConfiguration};
 use warpui::presenter::ChildView;
 use warpui::ui_components::components::{Coords, UiComponentStyles};
 use warpui::ViewHandle;
 use warpui::{AppContext, SingletonEntity as _};
 use warpui::{Element, Entity, TypedActionView, View, ViewContext};
 
-const THEME_CREATOR_MODAL_HEADER: &str = "Create new theme from image";
-
 pub struct ThemeCreatorModal {
-    theme_creator_modal: ViewHandle<Modal<ThemeCreatorBody>>,
+    theme_creator_modal: ViewHandle<Modal<ThemeEditorBody>>,
 }
 
 #[derive(Debug)]
@@ -46,8 +44,8 @@ pub fn init(app: &mut AppContext) {
 impl ThemeCreatorModal {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let theme_creator_body =
-            ctx.add_typed_action_view(|ctx: &mut ViewContext<'_, ThemeCreatorBody>| {
-                ThemeCreatorBody::new(ctx)
+            ctx.add_typed_action_view(|ctx: &mut ViewContext<'_, ThemeEditorBody>| {
+                ThemeEditorBody::new(ctx)
             });
 
         ctx.subscribe_to_view(&theme_creator_body, move |me, _, event, ctx| {
@@ -56,13 +54,13 @@ impl ThemeCreatorModal {
 
         let theme_creator_modal = ctx.add_typed_action_view(|ctx| {
             Modal::new(
-                Some(THEME_CREATOR_MODAL_HEADER.to_string()),
+                Some(crate::t!("theme-editor-title")),
                 theme_creator_body,
                 ctx,
             )
             .with_modal_style(UiComponentStyles {
-                width: Some(600.),
-                height: Some(300.),
+                width: Some(900.),
+                height: Some(720.),
                 ..Default::default()
             })
             .with_header_style(UiComponentStyles {
@@ -87,7 +85,6 @@ impl ThemeCreatorModal {
                 ..Default::default()
             })
             .with_background_opacity(100)
-            .with_dismiss_on_click()
             .close_modal_button_disabled()
         });
 
@@ -103,12 +100,20 @@ impl ThemeCreatorModal {
     pub fn cancel(&mut self, ctx: &mut ViewContext<Self>) {
         self.theme_creator_modal.update(ctx, |modal, ctx| {
             modal.body().update(ctx, |theme_creator_body, ctx| {
-                theme_creator_body.cancel(ctx);
+                theme_creator_body.request_close(ctx);
             });
         });
     }
 
-    pub fn open_file_picker(&mut self, ctx: &mut ViewContext<Self>) {
+    pub fn clear_transient(&mut self, ctx: &mut ViewContext<Self>) {
+        self.theme_creator_modal.update(ctx, |modal, ctx| {
+            modal.body().update(ctx, |theme_creator_body, ctx| {
+                theme_creator_body.clear_transient(ctx);
+            });
+        });
+    }
+
+    pub fn open_image_picker(&mut self, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         let theme_creator_body_id = self
             .theme_creator_modal
@@ -120,15 +125,13 @@ impl ThemeCreatorModal {
                         ctx.dispatch_typed_action_for_view(
                             window_id,
                             theme_creator_body_id,
-                            &ThemeCreatorBodyAction::HandleImageSelected(PathBuf::from(
-                                path_string,
-                            )),
+                            &ThemeEditorBodyAction::HandleImageSelected(PathBuf::from(path_string)),
                         );
                     } else {
                         ctx.dispatch_typed_action_for_view(
                             window_id,
                             theme_creator_body_id,
-                            &ThemeCreatorBodyAction::FilePickerCancelled,
+                            &ThemeEditorBodyAction::FilePickerCancelled,
                         );
                     }
                 }
@@ -143,7 +146,7 @@ impl ThemeCreatorModal {
                     ctx.dispatch_typed_action_for_view(
                         window_id,
                         theme_creator_body_id,
-                        &ThemeCreatorBodyAction::FilePickerCancelled,
+                        &ThemeEditorBodyAction::FilePickerCancelled,
                     );
                 }
             },
@@ -151,24 +154,85 @@ impl ThemeCreatorModal {
         );
     }
 
+    pub fn open_import_picker(&mut self, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        let body_id = self
+            .theme_creator_modal
+            .read(ctx, |modal, _ctx| modal.body().id());
+        ctx.open_file_picker(
+            move |result, ctx| match result {
+                Ok(paths) => {
+                    if let Some(path) = paths.into_iter().next() {
+                        ctx.dispatch_typed_action_for_view(
+                            window_id,
+                            body_id,
+                            &ThemeEditorBodyAction::HandleImportSelected(PathBuf::from(path)),
+                        );
+                    } else {
+                        ctx.dispatch_typed_action_for_view(
+                            window_id,
+                            body_id,
+                            &ThemeEditorBodyAction::FilePickerCancelled,
+                        );
+                    }
+                }
+                Err(error) => {
+                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!("{error}")),
+                            window_id,
+                            ctx,
+                        );
+                    });
+                }
+            },
+            FilePickerConfiguration::new().set_allowed_file_types(vec![FileType::Yaml]),
+        );
+    }
+
+    fn export_yaml(&mut self, filename: String, yaml: String, ctx: &mut ViewContext<Self>) {
+        ctx.open_save_file_picker(
+            move |path, _me, ctx| {
+                if let Some(path) = path {
+                    if let Err(error) = std::fs::write(path, &yaml) {
+                        log::error!("Failed to export theme: {error}");
+                        ctx.emit(ThemeCreatorModalEvent::ShowErrorToast {
+                            message: crate::t!(
+                                "theme-editor-error-export-write",
+                                error = error.to_string()
+                            ),
+                        });
+                    }
+                }
+            },
+            SaveFilePickerConfiguration::new().with_default_filename(filename),
+        );
+    }
+
     fn handle_theme_creator_body_event(
         &mut self,
-        event: &ThemeCreatorBodyEvent,
+        event: &ThemeEditorBodyEvent,
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            ThemeCreatorBodyEvent::Close => {
+            ThemeEditorBodyEvent::Close => {
                 self.close(ctx);
             }
-            ThemeCreatorBodyEvent::OpenFilePicker => {
-                self.open_file_picker(ctx);
+            ThemeEditorBodyEvent::OpenImagePicker => {
+                self.open_image_picker(ctx);
             }
-            ThemeCreatorBodyEvent::SetCustomTheme { theme } => {
+            ThemeEditorBodyEvent::OpenImportPicker => {
+                self.open_import_picker(ctx);
+            }
+            ThemeEditorBodyEvent::ExportYaml { filename, yaml } => {
+                self.export_yaml(filename.clone(), yaml.clone(), ctx);
+            }
+            ThemeEditorBodyEvent::SetCustomTheme { theme } => {
                 ctx.emit(ThemeCreatorModalEvent::SetCustomTheme {
                     theme: theme.clone(),
                 });
             }
-            ThemeCreatorBodyEvent::ShowErrorToast { message } => {
+            ThemeEditorBodyEvent::ShowErrorToast { message } => {
                 ctx.emit(ThemeCreatorModalEvent::ShowErrorToast {
                     message: message.clone(),
                 });

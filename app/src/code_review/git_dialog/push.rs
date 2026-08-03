@@ -215,8 +215,10 @@ fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn
         .soft_wrap(false)
         .finish();
 
-        let stats_text =
-            crate::t!("git-dialog-file-count", count = (commit.files_changed as i64));
+        let stats_text = crate::t!(
+            "git-dialog-file-count",
+            count = (commit.files_changed as i64)
+        );
 
         let mut stats_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)

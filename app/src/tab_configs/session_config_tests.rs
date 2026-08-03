@@ -400,6 +400,7 @@ fn make_terminal_leaf(cwd: Option<&str>, is_focused: bool) -> PaneNodeSnapshot {
         contents: LeafContents::Terminal(TerminalPaneSnapshot {
             uuid: vec![],
             cwd: cwd.map(|s| s.to_string()),
+            cli_agent_binding: None,
             shell_launch_data: None,
             is_active: false,
             is_read_only: false,
@@ -602,6 +603,7 @@ fn make_agent_leaf(cwd: Option<&str>, is_focused: bool) -> PaneNodeSnapshot {
         contents: LeafContents::Terminal(TerminalPaneSnapshot {
             uuid: vec![],
             cwd: cwd.map(|s| s.to_string()),
+            cli_agent_binding: None,
             shell_launch_data: None,
             is_active: false,
             is_read_only: false,

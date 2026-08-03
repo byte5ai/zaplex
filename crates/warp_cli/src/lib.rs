@@ -19,6 +19,7 @@ pub mod skill;
 pub mod agent;
 pub mod completions;
 pub mod config_file;
+pub mod control;
 // Zaplex Wave 7-2: `environment` CLI removed along with cloud ambient agent main subsystem.
 pub mod json_filter;
 pub mod mcp;
@@ -58,6 +59,44 @@ pub struct RemoteServerIdentityArgs {
     /// Non-secret identity partition key for the remote-server daemon.
     #[arg(long = "identity-key", hide = true)]
     pub identity_key: String,
+}
+
+/// Agent identity accepted by the hidden structured hook worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CliAgentHookAgent {
+    Claude,
+    Codex,
+    Grok,
+    Antigravity,
+    #[value(name = "deepseek", alias = "codewhale")]
+    DeepSeek,
+}
+
+impl CliAgentHookAgent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CliAgentHookAgent::Claude => "claude",
+            CliAgentHookAgent::Codex => "codex",
+            CliAgentHookAgent::Grok => "grok",
+            CliAgentHookAgent::Antigravity => "antigravity",
+            CliAgentHookAgent::DeepSeek => "deepseek",
+        }
+    }
+}
+
+/// Arguments for the hidden structured hook worker.
+#[derive(Debug, Clone, clap::Args)]
+pub struct CliAgentHookArgs {
+    #[arg(long, value_enum, hide = true)]
+    pub agent: CliAgentHookAgent,
+
+    /// Stable ownership marker used to distinguish Zaplex-managed hook commands.
+    #[arg(long, hide = true)]
+    pub managed_by: String,
+
+    /// Native lifecycle event for agents whose hook payload omits the event name.
+    #[arg(long, hide = true)]
+    pub event: Option<String>,
 }
 
 /// Global options that apply to all CLI commands.
@@ -308,6 +347,11 @@ pub enum WorkerCommand {
         /// Paths to search.
         paths: Vec<std::path::PathBuf>,
     },
+
+    /// Normalize one native CLI-agent hook event and forward it to the current PTY.
+    #[cfg(not(target_family = "wasm"))]
+    #[clap(hide = true)]
+    CliAgentHook(CliAgentHookArgs),
 }
 
 /// CLI-related subcommands. The command-line interface to Zaplex isn't a full SDK (e.g. with language bindings),
@@ -317,6 +361,10 @@ pub enum CliCommand {
     /// Interact with Oz.
     #[command(subcommand)]
     Agent(crate::agent::AgentCommand),
+
+    /// Control the running Zaplex surface from an authenticated terminal pane.
+    #[command(subcommand)]
+    Control(crate::control::ControlCommand),
 
     // Zaplex Wave 7-2: `Environment` variant removed along with cloud ambient agent main subsystem.
     /// Manage MCP servers.

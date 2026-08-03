@@ -47,7 +47,7 @@ zaplex is a fork of [Zap](https://github.com/zerx-lab/zap) — the open-source, 
 2. **Real terminals, real PTYs.** The client is a GPU-rendered, block-based terminal (Warp's proven core). Agents run as ordinary interactive CLIs in real PTYs — zaplex never wraps, proxies, or replaces them.
 3. **A cockpit that reads, never phones home.** Account discovery, usage heat, and session states come from read-only parsing of local data (config dirs, JSONL transcripts, session registries) on your machines. No cloud, no account, no telemetry.
 
-**What runs on your hosts:** one binary under `~/.zap/remote-server/`, spoken to exclusively over your existing SSH connection. It keeps session scrollback in bounded RAM, writes no telemetry, and retires itself when idle with no live sessions. Delete the directory and it is gone.
+**What runs on your hosts:** one binary under `~/.zaplex/remote-server/`, spoken to exclusively over your existing SSH connection. It keeps session scrollback in bounded RAM, writes no telemetry, and retires itself when idle with no live sessions. Delete the directory and it is gone.
 
 ## Features
 
@@ -56,20 +56,22 @@ zaplex is a fork of [Zap](https://github.com/zerx-lab/zap) — the open-source, 
 - **Native agent awareness** — blocks know when an agent needs input, finished, or got blocked: banner, footer, notification center.
 - **Multi-account, multi-provider** — all your Claude and ChatGPT/Codex subscription logins discovered and monitored side by side.
 - **Adopt any session** — daemon sessions started elsewhere appear in the sidebar; Enter attaches one as a block, history included.
-- **File manager pane mode** — flip any terminal pane into a host-aware file manager; dual-pane cross-host copy is on the roadmap.
+- **File manager pane mode** — local and remote panes, MC-style keyboard control, streamed copy/move, conflict handling, progress, cancellation, and cross-host transfers.
 - **A full terminal first** — blocks, command palette, SSH host manager, themes: everything the Warp core does, without its cloud.
 
 ## Agents
 
 **First-class: [Claude Code](https://github.com/anthropics/claude-code) and [Codex](https://github.com/openai/codex).** zaplex's orchestration layer — multi-account discovery, usage heat, account routing — is built around subscription accounts, because their rolling rate windows are what make heat tracking and "launch on the freest account" meaningful.
 
-**Bring the rest.** zaplex is not an agent and does not ship one. Block-level support (status, banners, notifications) covers Gemini CLI, OpenCode, Copilot, DeepSeek, Goose, and more — inherited from Zap and extended. More deep integrations will follow as the base solidifies.
+**Bring the rest.** zaplex is not an agent and does not ship one. Block-level support (status, banners, notifications) covers Antigravity, OpenCode, Copilot, DeepSeek/CodeWhale, Goose, and more — inherited from Zap and extended. More deep integrations will follow as the base solidifies.
 
 **zero, natively.** zaplex is adopting [zero](https://github.com/Gitlawb/zero)'s schema-versioned stream-JSON protocol to render headless zero runs as typed, native timelines — tool calls, permission requests with risk levels, usage. zero stays your agent; zaplex becomes its cockpit. (Designed — see status below.)
 
 ## Status & roadmap
 
-zaplex is in **early, active development** — no releases yet. Honest state of affairs:
+Zaplex 1.0.0 is in final validation. No public binary has been released yet;
+the table reflects the integrated source state, not an unperformed runtime
+acceptance:
 
 | Area | State |
 |---|---|
@@ -77,12 +79,12 @@ zaplex is in **early, active development** — no releases yet. Honest state of 
 | Cockpit: account discovery, usage/heat/cost, live session states | ✅ merged |
 | File manager pane mode (stage 1) | ✅ merged |
 | Fix/ask with *your* agent (routes to your own CLI agent) | ✅ merged |
-| Real subscription utilization (OAuth usage endpoint) | 📋 designed |
-| Launch wizard + launch-on-freest account routing | 📋 planned |
-| Session fork & isolated-worktree launches | 📋 designed |
+| Real subscription utilization, pricing provenance and account routing | ✅ merged |
+| Launch wizard + launch-on-freest account routing | ✅ merged |
+| Session fork & isolated-worktree launches | ✅ merged |
 | zero integration: block support + stream-JSON rendering | 📋 designed |
-| Dual-pane cross-host file copy | 📋 planned |
-| GitHub flows (quick issue, PR review) | 📋 planned |
+| Safe dual-pane and cross-host file transfer queue | ✅ merged |
+| GitHub flows (quick issue, PR review) | ✅ merged |
 | MCP backchannel (`zaplex-mcp`) | 📋 planned (post-v1) |
 | mosh-grade UDP transport (roaming, predictive echo) | 📋 planned |
 | Mobile companion | 🔭 outlook |
@@ -91,12 +93,14 @@ Every designed item has a dated design doc in [`docs/superpowers/`](docs/superpo
 
 ## Install
 
-**Pre-release.** There are no binary releases yet — zaplex currently targets contributors and the adventurous:
+The first public Zaplex 1.0.0 binary will appear on
+[Releases](https://github.com/byte5ai/zaplex/releases) after the documented
+runtime matrix passes. The macOS DMG is built in GitHub Actions, signed with
+Developer ID, notarized by Apple, and shipped together with its matching Linux
+host daemon. Nothing needs to be installed manually on a remote host.
 
-- **macOS app:** build from source with a Rust toolchain (dependency list: `script/linux/install_build_deps`; macOS builds need Xcode), or via the repository's GitHub Actions DMG workflow (`test-dmg.yml`).
-- **Host daemon:** nothing to install by hand — the app installs and updates it automatically on first connect to a resilience-enabled host.
-
-Watch [Releases](https://github.com/byte5ai/zaplex/releases) for the first tagged builds.
+Installation and recovery steps are in the
+[Zaplex 1.0 guide](docs/release/1.0-user-guide.md).
 
 ## Lineage & acknowledgements
 

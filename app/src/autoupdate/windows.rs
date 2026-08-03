@@ -38,7 +38,7 @@ pub(super) async fn download_update_and_cleanup(
 
     let channel = ChannelState::channel();
     let installer_file_name = installer_file_name()?;
-    // openWarp: fetch actual download URL from GitHub Release cache (asset name is ZaplexSetup.exe /
+    // Zaplex fetches the actual download URL from GitHub Release cache (asset name is ZaplexSetup.exe /
     // ZaplexSetup-arm64.exe, see installer_file_name()). Other channels use official base url.
     let url = if matches!(channel, Channel::Oss) {
         if let Some(release) = github::cached_release() {
@@ -46,7 +46,7 @@ pub(super) async fn download_update_and_cleanup(
                 found.browser_download_url.clone()
             } else {
                 log::warn!(
-                    "openWarp: cached release tag {} has no asset named {installer_file_name}, falling back to tag URL",
+                    "Zaplex: cached release tag {} has no asset named {installer_file_name}, falling back to tag URL",
                     release.tag_name
                 );
                 format!(
@@ -116,18 +116,12 @@ pub(super) async fn download_update_and_cleanup(
             if downloaded - last_reported >= REPORT_BYTES_THRESHOLD
                 || last_reported_at.elapsed() >= REPORT_TIME_THRESHOLD
             {
-                on_progress(DownloadProgress {
-                    downloaded,
-                    total,
-                });
+                on_progress(DownloadProgress { downloaded, total });
                 last_reported = downloaded;
                 last_reported_at = Instant::now();
             }
         }
-        on_progress(DownloadProgress {
-            downloaded,
-            total,
-        });
+        on_progress(DownloadProgress { downloaded, total });
     } else {
         // Reuse the previously downloaded installer with the same name: do not make a new request,
         // just report progress once to let UI directly show 100%.
@@ -143,7 +137,7 @@ pub(super) async fn download_update_and_cleanup(
         });
     }
 
-    // openWarp: verify SHA-256 from GitHub Release metadata to defend against CDN MITM/corruption.
+    // Zaplex verifies SHA-256 from GitHub Release metadata to defend against CDN MITM/corruption.
     // On verification failure, return Err directly; installer temp file will be cleaned up by TempPath drop;
     // intentionally not placing it in INSTALLER_PATH here (otherwise subsequent relaunch() might misuse it).
     if matches!(channel, Channel::Oss) {

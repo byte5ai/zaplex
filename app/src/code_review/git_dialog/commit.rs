@@ -94,7 +94,10 @@ pub(super) fn new_state(
     let (push_label, push_icon) = if has_upstream {
         (crate::t!("git-dialog-commit-and-push"), Icon::ArrowUp)
     } else {
-        (crate::t!("git-dialog-commit-and-publish"), Icon::UploadCloud)
+        (
+            crate::t!("git-dialog-commit-and-publish"),
+            Icon::UploadCloud,
+        )
     };
     // If AI autogen is on, the dialog opens with "Generating\u{2026}" and a
     // background request fills the editor when it resolves. Otherwise, we

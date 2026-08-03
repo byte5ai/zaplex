@@ -2,7 +2,29 @@
 
 本文档记录 Zap 各个发布版本的关键变更。仅收录功能性 commit,省略 dev / stable 等内部滚动 tag。
 
-## [Unreleased]
+## [1.0.0] — 2026-07-30
+
+- **Remote-Sitzungen:** versionsgebundener Host-Dienst, persistente PTYs,
+  exaktes Reattach, Replay und idempotenter Shell-Bootstrap für Bash, fish und
+  PowerShell.
+- **Cockpit:** Host–Projekt–Session-Spine, mehrere Claude-/Codex-Konten,
+  belastbare Nutzungs- und Kostendarstellung, explizite Loading-/Fehlerzustände
+  und sichere Sitzungsaktionen.
+- **SSH:** atomarer und referenzsicherer Credential-Lifecycle, OneKey-Editor
+  mit Save/Discard/Cancel sowie strikte Endpunkt- und Host-Key-Prüfung.
+- **Dateimanager:** MC-Tastatursteuerung, stabile Dateiidentitäten, sichere
+  lokale und entfernte Operationen sowie eine gestreamte, fortsetzbare
+  Transfer-Queue für lokale, entfernte und hostübergreifende Transfers.
+- **Dateimanager-Sicherheit:** Remote SFTP-Mutationen behalten ihre Operation-ID
+  über Verbindungsabbrüche, werden idempotent wiederaufgenommen und bewahren die
+  Quelle, bis der daemonseitige Commit ausdrücklich bestätigt ist.
+- **Oberfläche:** englische und deutsche Kernoberflächen, gemeinsame
+  Modal-/Status-Komponenten und responsive Cockpit- und Dateimanager-Panes.
+- **Agenten:** Antigravity ersetzt die eingestellte Gemini CLI; Claude Code,
+  Codex, Grok und DeepSeek/CodeWhale liefern über lokale, selbst verwaltete
+  Integrationen verlässliche Arbeits-, Freigabe- und Abschlusszustände.
+- **Distribution:** konsistente Version `1.0.0`; macOS-DMGs werden mit
+  Developer ID signiert und über Apple notarisiert.
 
 - **AI / BYOP**:port opencode `applyCaching`,启用 prompt caching;`write_to_long_running_shell_command` 在 line 模式下拒绝嵌入 LF;BYOP LRC monitor fallback 改走 silent subtask;`cancel_execution` 50ms 窗口内 sender 泄漏修复(#134 follow-up,#137)
 - **云端剥离 Phase 1–2**:增加 `cloud-disabled` channel 谓词;清理 billing/pricing、referral/reward、cloud sharing dialog UI;退订 RTC UpdateManager;退役 notebook/folder sync queue
@@ -89,7 +111,8 @@ Zap 社区分支首个预览版本。
 - **AI**:CJK 输入分类、reasoning 拆分、BYOP tool_call 诊断、LRC tag-in 合成虚拟 subagent + 浮窗 spawn 链路
 - **CI**:Release 显式声明 `contents: write` 权限修 403
 
-[Unreleased]: https://github.com/zerx-lab/warp/compare/v2026.05.06.preview...HEAD
+[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/byte5ai/zaplex/releases/tag/v1.0.0
 [v2026.05.06.preview]: https://github.com/zerx-lab/warp/compare/v2026.05.04.preview...v2026.05.06.preview
 [v2026.05.04.preview]: https://github.com/zerx-lab/warp/compare/v2026.05.03.preview.4...v2026.05.04.preview
 [v2026.05.03.preview(.2/.3/.4)]: https://github.com/zerx-lab/warp/compare/v2026.05.02.preview...v2026.05.03.preview.4

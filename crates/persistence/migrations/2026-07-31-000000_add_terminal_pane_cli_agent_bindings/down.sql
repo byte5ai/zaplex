@@ -1,0 +1,1 @@
+DROP TABLE terminal_pane_cli_agent_bindings;

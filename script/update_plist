@@ -17,30 +17,27 @@ if [[ -z "$ZAPLEX_PLIST_PATH" ]]; then
 fi
 
 if [[ -n "$GIT_RELEASE_TAG" ]]; then
-  echo "Updating plist Warp version to $GIT_RELEASE_TAG"
-  plutil -insert WarpVersion -string "$GIT_RELEASE_TAG" "$ZAPLEX_PLIST_PATH"
+  echo "Updating plist Zaplex version to $GIT_RELEASE_TAG"
+  plutil -insert WarpVersion -string "$GIT_RELEASE_TAG" "$ZAPLEX_PLIST_PATH" 2>/dev/null || \
+    plutil -replace WarpVersion -string "$GIT_RELEASE_TAG" "$ZAPLEX_PLIST_PATH"
 
-  # We convert our version format to be period-separated integers only to align better with
-  # Apple's guidance on values for `CFBundleVersion` / `CFBundleShortVersionString`.
-  # (They technically only allow [major].[minor].[patch], but it's not enforced.)
-  # This allows IT admins to work with a more stable version of our internal versioning scheme.
-  # A tag like `v0.2025.01.07.08.02.stable_02` would be converted to `0.2025.01.07.08.02.02`.
-  if [[ $GIT_RELEASE_TAG =~ ^v([0-9]+)\.([0-9]{4})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.[a-z]+_([0-9]{2})$ ]]; then
+  # Apple requires CFBundleShortVersionString to contain three period-separated
+  # integers. Preserve the full release tag in WarpVersion while using its first
+  # semantic-version triplet for both Apple version fields.
+  if [[ $GIT_RELEASE_TAG =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)([.-].*)?$ ]]; then
     MAJOR="${BASH_REMATCH[1]}"
-    YEAR="${BASH_REMATCH[2]}"
-    MONTH="${BASH_REMATCH[3]}"
-    DAY="${BASH_REMATCH[4]}"
-    HOUR="${BASH_REMATCH[5]}"
-    MINUTE="${BASH_REMATCH[6]}"
-    BUILD="${BASH_REMATCH[7]}"
-    
-    FORMATTED_VERSION="${MAJOR}.${YEAR}.${MONTH}.${DAY}.${HOUR}.${MINUTE}.${BUILD}"
+    MINOR="${BASH_REMATCH[2]}"
+    PATCH="${BASH_REMATCH[3]}"
+    FORMATTED_VERSION="${MAJOR}.${MINOR}.${PATCH}"
     
     echo "Updating plist version to $FORMATTED_VERSION"
-    plutil -replace CFBundleShortVersionString -string "$FORMATTED_VERSION" "$ZAPLEX_PLIST_PATH"
-    plutil -replace CFBundleVersion -string "$FORMATTED_VERSION" "$ZAPLEX_PLIST_PATH"
+    plutil -replace CFBundleShortVersionString -string "$FORMATTED_VERSION" "$ZAPLEX_PLIST_PATH" 2>/dev/null || \
+      plutil -insert CFBundleShortVersionString -string "$FORMATTED_VERSION" "$ZAPLEX_PLIST_PATH"
+    plutil -replace CFBundleVersion -string "$FORMATTED_VERSION" "$ZAPLEX_PLIST_PATH" 2>/dev/null || \
+      plutil -insert CFBundleVersion -string "$FORMATTED_VERSION" "$ZAPLEX_PLIST_PATH"
   else
-    echo "Warning: GIT_RELEASE_TAG '$GIT_RELEASE_TAG' does not match expected format vN.YYYY.MM.DD.HH.MM.channel_NN"
+    echo "GIT_RELEASE_TAG '$GIT_RELEASE_TAG' does not begin with a semantic version." >&2
+    exit 1
   fi
 fi
 
@@ -52,8 +49,8 @@ if [[ -n "$ZAPLEX_SCHEME_NAME" ]]; then
 fi
 
 echo "Updating plist with supported localizations"
-plutil -insert CFBundleLocalizations -xml "<array><string>en</string><string>ja</string><string>zh-CN</string></array>" "$ZAPLEX_PLIST_PATH" 2>/dev/null || \
-  plutil -replace CFBundleLocalizations -xml "<array><string>en</string><string>ja</string><string>zh-CN</string></array>" "$ZAPLEX_PLIST_PATH"
+plutil -insert CFBundleLocalizations -xml "<array><string>en</string><string>de</string></array>" "$ZAPLEX_PLIST_PATH" 2>/dev/null || \
+  plutil -replace CFBundleLocalizations -xml "<array><string>en</string><string>de</string></array>" "$ZAPLEX_PLIST_PATH"
 
 if [[ -z "$ZAPLEX_PLIST_NO_FILE_TYPES" ]]; then
   echo "Updating plist with supported file types"

@@ -14664,7 +14664,7 @@ dependencies = [
 
 [[package]]
 name = "warp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "addr",
  "aho-corasick",
@@ -14999,6 +14999,7 @@ name = "warp_cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "cfg-if",
  "cfg_aliases 0.2.1",
  "chrono",
@@ -15006,7 +15007,9 @@ dependencies = [
  "clap_complete",
  "color-print",
  "humantime",
+ "ipc",
  "jaq-all",
+ "serde",
  "serial_test",
  "url",
  "uuid",

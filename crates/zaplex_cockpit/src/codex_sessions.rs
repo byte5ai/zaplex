@@ -26,21 +26,24 @@
 //! Model, effort, context tokens, cwd and session id all come straight from the
 //! rollout (Codex, unlike Claude, records the reasoning **effort** in
 //! `turn_context`, so effort here is real rather than launch-registry-derived).
-//! Privacy invariant holds: only token counts + coordinates are read, never
-//! message text.
+//! Privacy invariant holds: no conversational message text, token strings, or
+//! credentials are surfaced. The structured titles deliberately emitted by
+//! `update_plan` are the sole task-progress projection.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use crate::types::{Provider, SessionSnapshot, SessionState};
+use crate::types::{Provider, SessionSnapshot, SessionState, TaskState};
 
 /// A rollout whose last activity is older than this is not treated as live
 /// (Codex has no pid to confirm the process, so discovery is scoped to recent
 /// activity). Matches the spirit of the Claude background-job active window.
 const CODEX_LIVE_WINDOW: Duration = Duration::minutes(15);
+const ROLLOUT_CACHE_LIMIT: usize = 512;
 
 /// Recursively find the first sub-value under `key` anywhere in `v` (rollout
 /// lines wrap their payload, and the token-usage object nests under `info`).
@@ -75,6 +78,77 @@ struct RolloutInfo {
     /// A real turn was observed (a `task_started`/`task_complete`/usage line) —
     /// guards against listing an empty/aborted rollout as a session.
     has_turn: bool,
+    task_state: Option<TaskState>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedRollout {
+    fingerprint: crate::transcript::FileFingerprint,
+    info: RolloutInfo,
+    last_used: u64,
+}
+
+/// Bounded cache for complete Codex rollout parsing.
+///
+/// Codex stores all session signals and structured task state in the same
+/// append-only rollout. An unchanged `(mtime, size)` pair can therefore reuse
+/// the complete distilled result instead of reopening the transcript on every
+/// reconcile tick.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RolloutCache {
+    entries: HashMap<PathBuf, CachedRollout>,
+    clock: u64,
+}
+
+impl RolloutCache {
+    fn parse_file(&mut self, path: &Path) -> RolloutInfo {
+        let fingerprint = match crate::transcript::file_fingerprint(path) {
+            Ok(fingerprint) => fingerprint,
+            Err(_) => {
+                self.entries.remove(path);
+                return RolloutInfo::default();
+            }
+        };
+        self.clock = self.clock.wrapping_add(1);
+        if let Some(cached) = self.entries.get_mut(path) {
+            if cached.fingerprint == fingerprint {
+                cached.last_used = self.clock;
+                return cached.info.clone();
+            }
+        }
+
+        let info = match std::fs::read_to_string(path) {
+            Ok(content) => parse_rollout_content(path, &content),
+            Err(_) => {
+                self.entries.remove(path);
+                return RolloutInfo::default();
+            }
+        };
+        self.entries.insert(
+            path.to_path_buf(),
+            CachedRollout {
+                fingerprint,
+                info: info.clone(),
+                last_used: self.clock,
+            },
+        );
+        self.evict_lru();
+        info
+    }
+
+    fn evict_lru(&mut self) {
+        while self.entries.len() > ROLLOUT_CACHE_LIMIT {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(path, _)| path.clone())
+            else {
+                return;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
 }
 
 /// Session id derived from a rollout's file name — the fallback for a rollout
@@ -104,15 +178,13 @@ pub(crate) fn session_id_from_path(path: &Path) -> String {
 /// A uuid is five dash-separated groups (`8-4-4-4-12`).
 const UUID_GROUPS: usize = 5;
 
-/// Read a rollout transcript and distil its live-session signals. Best-effort
-/// and defensive: each line is an independent JSON object, malformed lines are
+/// Distil one rollout transcript's live-session signals. Best-effort and
+/// defensive: each line is an independent JSON object, malformed lines are
 /// skipped, and both the wrapped (`{type,payload}`) and flat shapes are handled.
-fn parse_rollout(path: &Path) -> RolloutInfo {
+fn parse_rollout_content(path: &Path, content: &str) -> RolloutInfo {
     let mut info = RolloutInfo::default();
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return info;
-    };
     info.session_id = session_id_from_path(path);
+    info.task_state = crate::transcript::parse_task_state(Provider::Codex, content);
 
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
@@ -230,8 +302,9 @@ fn snapshot_of(
     mtime: DateTime<Utc>,
     now: DateTime<Utc>,
     force_state: Option<SessionState>,
+    cache: &mut RolloutCache,
 ) -> Option<SessionSnapshot> {
-    let info = parse_rollout(path);
+    let info = cache.parse_file(path);
     if !info.has_turn {
         return None;
     }
@@ -259,6 +332,7 @@ fn snapshot_of(
         pty_session_id: None,
         pty_session_generation: None,
         pty_foreground: false,
+        task_state: info.task_state,
         last_activity: info.last_ts.or(Some(mtime)).unwrap_or(now),
         // Codex records no pid — guardrail signalling can't target it.
         pid: 0,
@@ -293,11 +367,12 @@ pub struct SessionScan {
 ///
 /// One walk, one classification: two separate passes could disagree about the
 /// same rollout and list it twice.
-pub fn scan_sessions(
+pub(crate) fn scan_sessions_with_cache(
     codex_home: &Path,
     now: DateTime<Utc>,
     max_age: Duration,
     limit: usize,
+    cache: &mut RolloutCache,
 ) -> SessionScan {
     let live_cutoff = now - CODEX_LIVE_WINDOW;
     let age_cutoff = now - max_age;
@@ -323,7 +398,7 @@ pub fn scan_sessions(
     // through: the transcript's own last timestamp decides. mtime only chose who
     // got parsed — deciding *with* it as well would let the two disagree.
     for (path, mtime) in fresh.into_iter().chain(dormant) {
-        let Some(mut s) = snapshot_of(&path, mtime, now, None) else {
+        let Some(mut s) = snapshot_of(&path, mtime, now, None, cache) else {
             continue;
         };
         if s.last_activity >= live_cutoff {
@@ -354,6 +429,21 @@ pub fn scan_sessions(
     idle.truncate(limit);
 
     SessionScan { live, idle }
+}
+
+pub fn scan_sessions(
+    codex_home: &Path,
+    now: DateTime<Utc>,
+    max_age: Duration,
+    limit: usize,
+) -> SessionScan {
+    scan_sessions_with_cache(
+        codex_home,
+        now,
+        max_age,
+        limit,
+        &mut RolloutCache::default(),
+    )
 }
 
 pub fn live_sessions(codex_home: &Path, now: DateTime<Utc>) -> Vec<SessionSnapshot> {

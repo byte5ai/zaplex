@@ -1,8 +1,8 @@
 use std::io;
 
-use clap_complete::aot::{Shell, generate};
+use clap_complete::aot::{generate, Shell};
 
-use crate::{Args, binary_name};
+use crate::{binary_name, Args};
 use warp_core::channel::ChannelState;
 
 /// Generate shell completions for the Zaplex CLI and write them to stdout.

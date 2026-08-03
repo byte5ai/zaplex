@@ -7,22 +7,22 @@ use ai::skills::SkillReference;
 use command_corrections::Correction;
 use pathfinder_geometry::vector::Vector2F;
 use warp_util::user_input::UserInput;
-use warpui::EntityId;
 use warpui::elements::HyperlinkUrl;
 use warpui::event::ModifiersState;
 use warpui::units::Lines;
+use warpui::EntityId;
 
-use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::AIAgentExchangeId;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::server::telemetry::{AgentModeRewindEntrypoint, PaletteSource, ToggleBlockFilterSource};
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::ssh::error::SshErrorBlockAction;
-use crate::terminal::view::RichContentSecretTooltipInfo;
 use crate::terminal::view::inline_banner::AgentModeSetupSpeedbumpBannerAction;
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
+use crate::terminal::view::RichContentSecretTooltipInfo;
 use crate::workflows::workflow::Workflow;
 use crate::{
     server::ids::SyncId,
@@ -32,18 +32,18 @@ use crate::{
         },
         block_list_viewport::OverhangingBlock,
         model::{
-            SecretHandle,
             index::Point,
             mouse::MouseState,
             selection::{SelectAction, SelectionDirection},
             terminal_model::{BlockIndex, WithinModel},
+            SecretHandle,
         },
     },
 };
 
 use super::inline_banner::{
-    AwsBedrockLoginBannerAction, AwsCliNotInstalledBannerAction, OpenInWarpBannerAction,
-    VimModeBannerAction,
+    AwsBedrockLoginBannerAction, AwsCliNotInstalledBannerAction, CLIAgentRestoreBannerAction,
+    OpenInWarpBannerAction, VimModeBannerAction,
 };
 use super::{
     AliasExpansionBannerAction, ContextMenuAction, GridHighlightedLink, InputContextMenuAction,
@@ -265,6 +265,7 @@ pub enum TerminalAction {
     ExpandBlockSelectionAbove,
     ExpandBlockSelectionBelow,
     NotificationsDiscoveryBanner(NotificationsDiscoveryBannerAction),
+    CLIAgentRestoreBanner(CLIAgentRestoreBannerAction),
     BookmarkBlock(BlockIndex),
     NotificationsErrorBanner(NotificationsErrorBannerAction),
     LegacySSHBanner(SSHBannerAction),
@@ -522,6 +523,9 @@ impl fmt::Debug for TerminalAction {
             TypedCharacters(_) => f.write_str("TypedCharacters"),
             NotificationsDiscoveryBanner(action) => {
                 write!(f, "NotificationsDiscoveryBanner({action:?})")
+            }
+            CLIAgentRestoreBanner(action) => {
+                write!(f, "CLIAgentRestoreBanner({action:?})")
             }
             BookmarkBlock(index) => {
                 write!(f, "BookmarkBlock({index:?})")

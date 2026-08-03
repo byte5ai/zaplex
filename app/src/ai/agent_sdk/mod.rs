@@ -58,6 +58,11 @@ mod provider;
 #[cfg(test)]
 mod test_support;
 mod text_layout;
+mod zaplex_skill;
+
+pub(crate) fn refresh_zaplex_skill_if_installed() -> anyhow::Result<()> {
+    zaplex_skill::refresh_if_installed()
+}
 
 /// Prints a non-blocking warning to stderr when the CLI is invoked with a team-scoped API key.
 fn maybe_warn_team_api_key(ctx: &AppContext) {
@@ -90,6 +95,9 @@ fn dispatch_command(
 ) -> anyhow::Result<()> {
     match command {
         CliCommand::Agent(agent_cmd) => run_agent(ctx, global_options, agent_cmd),
+        CliCommand::Control(_) => Err(anyhow::anyhow!(
+            "control command must use the local control dispatcher"
+        )),
         CliCommand::MCP(mcp_cmd) => mcp::run(ctx, global_options, mcp_cmd),
         CliCommand::Model(model_cmd) => model::run(ctx, global_options, model_cmd),
         CliCommand::Whoami => admin::whoami(ctx, global_options.output_format),
@@ -176,10 +184,36 @@ fn run_agent(
 
             Ok(())
         }
+        AgentCommand::InstallSkill => zaplex_skill::install(),
+        AgentCommand::RemoveSkill => zaplex_skill::remove(),
+        AgentCommand::InstallHooks { agent } => {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                crate::terminal::cli_agent_sessions::hook_bridge::install_for_current_user(agent)
+            }
+            #[cfg(target_family = "wasm")]
+            {
+                let _ = agent;
+                Err(anyhow::anyhow!(
+                    "CLI-agent hooks are unavailable on WebAssembly"
+                ))
+            }
+        }
+        AgentCommand::RemoveHooks { agent } => {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                crate::terminal::cli_agent_sessions::hook_bridge::remove_for_current_user(agent)
+            }
+            #[cfg(target_family = "wasm")]
+            {
+                let _ = agent;
+                Err(anyhow::anyhow!(
+                    "CLI-agent hooks are unavailable on WebAssembly"
+                ))
+            }
+        }
         AgentCommand::Profile(sub) => profiles::run(ctx, global_options, sub),
-        AgentCommand::List(_) => Err(anyhow::anyhow!(
-            "Agent skill listing is disabled in Zaplex"
-        )),
+        AgentCommand::List(_) => Err(anyhow::anyhow!("Agent skill listing is disabled in Zaplex")),
     }
 }
 
@@ -545,11 +579,16 @@ fn command_requires_auth(command: &CliCommand) -> bool {
     match command {
         CliCommand::Agent(agent_cmd) => match agent_cmd {
             AgentCommand::Run { .. } => true,
+            AgentCommand::InstallSkill
+            | AgentCommand::RemoveSkill
+            | AgentCommand::InstallHooks { .. }
+            | AgentCommand::RemoveHooks { .. } => false,
             AgentCommand::Profile(sub) => match sub {
                 AgentProfileCommand::List => true,
             },
             AgentCommand::List(_) => true,
         },
+        CliCommand::Control(_) => false,
         CliCommand::MCP(mcp_cmd) => match mcp_cmd {
             MCPCommand::List => true,
         },

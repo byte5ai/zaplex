@@ -60,32 +60,176 @@ fn vscode_2026_dark_has_ui_colors_override() {
     let ui = theme.ui_colors().expect("should have ui_colors override");
 
     // Surface layers
-    assert_eq!(ui.surface_1, Some(ColorU { r: 0x20, g: 0x21, b: 0x22, a: 255 }));
-    assert_eq!(ui.surface_2, Some(ColorU { r: 0x24, g: 0x25, b: 0x26, a: 255 }));
-    assert_eq!(ui.surface_3, Some(ColorU { r: 0x2A, g: 0x2B, b: 0x2C, a: 255 }));
+    assert_eq!(
+        ui.surface_1,
+        Some(ColorU {
+            r: 0x20,
+            g: 0x21,
+            b: 0x22,
+            a: 255
+        })
+    );
+    assert_eq!(
+        ui.surface_2,
+        Some(ColorU {
+            r: 0x24,
+            g: 0x25,
+            b: 0x26,
+            a: 255
+        })
+    );
+    assert_eq!(
+        ui.surface_3,
+        Some(ColorU {
+            r: 0x2A,
+            g: 0x2B,
+            b: 0x2C,
+            a: 255
+        })
+    );
 
     // Borders
-    assert_eq!(ui.border, Some(ColorU { r: 0x33, g: 0x35, b: 0x36, a: 255 }));
-    assert_eq!(ui.focus_border, Some(ColorU { r: 0x39, g: 0x94, b: 0xBC, a: 0xB3 }));
-    assert_eq!(ui.split_pane_border, Some(ColorU { r: 0x2A, g: 0x2B, b: 0x2C, a: 255 }));
+    assert_eq!(
+        ui.border,
+        Some(ColorU {
+            r: 0x33,
+            g: 0x35,
+            b: 0x36,
+            a: 255
+        })
+    );
+    assert_eq!(
+        ui.focus_border,
+        Some(ColorU {
+            r: 0x39,
+            g: 0x94,
+            b: 0xBC,
+            a: 0xB3
+        })
+    );
+    assert_eq!(
+        ui.split_pane_border,
+        Some(ColorU {
+            r: 0x2A,
+            g: 0x2B,
+            b: 0x2C,
+            a: 255
+        })
+    );
 
     // Text colors
-    assert_eq!(ui.main_text, Some(ColorU { r: 0xED, g: 0xED, b: 0xED, a: 255 }));
-    assert_eq!(ui.sub_text, Some(ColorU { r: 0x8C, g: 0x8C, b: 0x8C, a: 255 }));
-    assert_eq!(ui.hint_text, Some(ColorU { r: 0x55, g: 0x55, b: 0x55, a: 255 }));
-    assert_eq!(ui.disabled_text, Some(ColorU { r: 0x55, g: 0x55, b: 0x55, a: 255 }));
+    assert_eq!(
+        ui.main_text,
+        Some(ColorU {
+            r: 0xED,
+            g: 0xED,
+            b: 0xED,
+            a: 255
+        })
+    );
+    assert_eq!(
+        ui.sub_text,
+        Some(ColorU {
+            r: 0x8C,
+            g: 0x8C,
+            b: 0x8C,
+            a: 255
+        })
+    );
+    assert_eq!(
+        ui.hint_text,
+        Some(ColorU {
+            r: 0x55,
+            g: 0x55,
+            b: 0x55,
+            a: 255
+        })
+    );
+    assert_eq!(
+        ui.disabled_text,
+        Some(ColorU {
+            r: 0x55,
+            g: 0x55,
+            b: 0x55,
+            a: 255
+        })
+    );
 
     // Interactive states
-    assert_eq!(ui.selection, Some(ColorU { r: 0x39, g: 0x94, b: 0xBC, a: 0x33 }));
-    assert_eq!(ui.text_selection, Some(ColorU { r: 0x39, g: 0x94, b: 0xBC, a: 0x33 }));
-    assert_eq!(ui.hover, Some(ColorU { r: 0xFF, g: 0xFF, b: 0xFF, a: 0x0D }));
-    assert_eq!(ui.active, Some(ColorU { r: 0x39, g: 0x94, b: 0xBC, a: 255 }));
+    assert_eq!(
+        ui.selection,
+        Some(ColorU {
+            r: 0x39,
+            g: 0x94,
+            b: 0xBC,
+            a: 0x33
+        })
+    );
+    assert_eq!(
+        ui.text_selection,
+        Some(ColorU {
+            r: 0x39,
+            g: 0x94,
+            b: 0xBC,
+            a: 0x33
+        })
+    );
+    assert_eq!(
+        ui.hover,
+        Some(ColorU {
+            r: 0xFF,
+            g: 0xFF,
+            b: 0xFF,
+            a: 0x0D
+        })
+    );
+    assert_eq!(
+        ui.active,
+        Some(ColorU {
+            r: 0x39,
+            g: 0x94,
+            b: 0xBC,
+            a: 255
+        })
+    );
 
     // Semantic colors
-    assert_eq!(ui.warning, Some(ColorU { r: 0xE5, g: 0xBA, b: 0x7D, a: 255 }));
-    assert_eq!(ui.error, Some(ColorU { r: 0xF4, g: 0x87, b: 0x71, a: 255 }));
-    assert_eq!(ui.success, Some(ColorU { r: 0x72, g: 0xC8, b: 0x92, a: 255 }));
-    assert_eq!(ui.link, Some(ColorU { r: 0x48, g: 0xA0, b: 0xC7, a: 255 }));
+    assert_eq!(
+        ui.warning,
+        Some(ColorU {
+            r: 0xE5,
+            g: 0xBA,
+            b: 0x7D,
+            a: 255
+        })
+    );
+    assert_eq!(
+        ui.error,
+        Some(ColorU {
+            r: 0xF4,
+            g: 0x87,
+            b: 0x71,
+            a: 255
+        })
+    );
+    assert_eq!(
+        ui.success,
+        Some(ColorU {
+            r: 0x72,
+            g: 0xC8,
+            b: 0x92,
+            a: 255
+        })
+    );
+    assert_eq!(
+        ui.link,
+        Some(ColorU {
+            r: 0x48,
+            g: 0xA0,
+            b: 0xC7,
+            a: 255
+        })
+    );
 }
 
 /// Verifies UiColors override actually takes effect (surface_1 returns override value, not derived value).
@@ -95,15 +239,39 @@ fn vscode_2026_dark_ui_colors_override_works() {
 
     // surface_1 should return the value defined in UiColors (#1E1F20), not the derived value
     let s1 = theme.surface_1().into_solid();
-    assert_eq!(s1, ColorU { r: 0x20, g: 0x21, b: 0x22, a: 255 });
+    assert_eq!(
+        s1,
+        ColorU {
+            r: 0x20,
+            g: 0x21,
+            b: 0x22,
+            a: 255
+        }
+    );
 
     // outline should return the border value defined in UiColors (#333536)
     let ol = theme.outline().into_solid();
-    assert_eq!(ol, ColorU { r: 0x33, g: 0x35, b: 0x36, a: 255 });
+    assert_eq!(
+        ol,
+        ColorU {
+            r: 0x33,
+            g: 0x35,
+            b: 0x36,
+            a: 255
+        }
+    );
 
     // text_selection_color should return the selection value defined in UiColors
     let sel = theme.text_selection_color().into_solid();
-    assert_eq!(sel, ColorU { r: 0x39, g: 0x94, b: 0xBC, a: 0x33 });
+    assert_eq!(
+        sel,
+        ColorU {
+            r: 0x39,
+            g: 0x94,
+            b: 0xBC,
+            a: 0x33
+        }
+    );
 }
 
 /// Verifies ThemeKind::VsCode2026Dark is registered in the default configuration.
@@ -111,14 +279,20 @@ fn vscode_2026_dark_ui_colors_override_works() {
 fn vscode_2026_dark_registered_in_default_config() {
     let config = WarpThemeConfig::default();
     let theme = config.theme_map.get(&ThemeKind::VsCode2026Dark);
-    assert!(theme.is_some(), "VsCode2026Dark should exist in the default theme configuration");
+    assert!(
+        theme.is_some(),
+        "VsCode2026Dark should exist in the default theme configuration"
+    );
     assert_eq!(theme.unwrap().name(), Some("VS Code 2026 Dark".to_string()));
 }
 
 /// Verifies the Display output of ThemeKind::VsCode2026Dark.
 #[test]
 fn vscode_2026_dark_display_name() {
-    assert_eq!(format!("{}", ThemeKind::VsCode2026Dark), "VS Code 2026 Dark");
+    assert_eq!(
+        format!("{}", ThemeKind::VsCode2026Dark),
+        "VS Code 2026 Dark"
+    );
 }
 
 #[test]

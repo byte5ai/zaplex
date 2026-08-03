@@ -21,7 +21,10 @@ use crate::cloud_object::{
 };
 use crate::search::files::model::FileSearchModel;
 use crate::server::ids::ClientId;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
+    CLIAgentSessionStatus, CLIAgentSessionsModel,
+};
 use crate::terminal::input::slash_command_model::SlashCommandEntryState;
 use crate::terminal::input::slash_commands::SlashCommandsEvent;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
@@ -555,6 +558,93 @@ fn select_first_command_line_of_block(
         );
         let selection = blocks.selection();
         assert!(selection.is_some());
+    });
+}
+
+#[test]
+fn clipboard_png_paste_in_cli_input_creates_thumbnail_without_inserting_a_path() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        terminal.update(&mut app, |terminal, ctx| {
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.set_session(
+                    terminal.view_id,
+                    CLIAgentSession {
+                        agent: CLIAgent::Codex,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext::default(),
+                        input_state: CLIAgentInputState::Open {
+                            entrypoint: CLIAgentInputEntrypoint::FooterButton,
+                            previous_input_config: InputConfig {
+                                input_type: InputType::Shell,
+                                is_locked: false,
+                            },
+                            previous_was_lock_set_with_empty_buffer: false,
+                        },
+                        should_auto_toggle_input: false,
+                        listener: None,
+                        plugin_version: None,
+                        remote_host: None,
+                        draft_text: None,
+                        custom_command_prefix: None,
+                    },
+                    ctx,
+                );
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            assert_eq!(
+                input.handle_pasted_image_data(
+                    ClipboardContent {
+                        images: Some(vec![ImageData {
+                            data: include_bytes!("../editor/view/figma_utils/non-figma-export.png")
+                                .to_vec(),
+                            mime_type: "image/png".to_owned(),
+                            filename: Some("clipboard capture.png".to_owned()),
+                        }]),
+                        ..Default::default()
+                    },
+                    ctx,
+                ),
+                1
+            );
+        });
+
+        for _ in 0..50 {
+            let attached = input.read(&app, |input, ctx| {
+                input.ai_context_model.as_ref(ctx).pending_images().len() == 1
+                    && input.attachment_chips.len() == 1
+            });
+            if attached {
+                break;
+            }
+            warpui::r#async::Timer::after(Duration::from_millis(10)).await;
+        }
+
+        input.read(&app, |input, ctx| {
+            assert!(input.buffer_text(ctx).is_empty());
+            assert!(input.editor.as_ref(ctx).image_context_options.is_enabled());
+            assert_eq!(
+                input.ai_input_model.as_ref(ctx).input_config(),
+                InputConfig {
+                    input_type: InputType::Shell,
+                    is_locked: false,
+                }
+            );
+            let images = input.ai_context_model.as_ref(ctx).pending_images();
+            assert_eq!(images.len(), 1);
+            assert_eq!(images[0].file_name, "clipboard capture.png");
+            assert_eq!(input.attachment_chips.len(), 1);
+            assert_eq!(input.attachment_chips[0].file_name, "clipboard capture.png");
+            assert!(matches!(
+                input.attachment_chips[0].preview_source.as_ref(),
+                Some(AssetSource::Raw { .. })
+            ));
+        });
     });
 }
 

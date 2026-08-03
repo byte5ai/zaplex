@@ -4,7 +4,9 @@
 
 use super::*;
 use chrono::NaiveDateTime;
-use warp_ssh_manager::{NodeKind, SshNode};
+use diesel::Connection;
+use diesel_migrations::MigrationHarness;
+use warp_ssh_manager::{NodeKind, OneKeyCredentialKind, SshNode};
 
 // --- Test helpers -------------------------------------------------------
 
@@ -36,6 +38,59 @@ fn server(id: &str, parent_id: Option<&str>, name: &str, sort_order: i32) -> Ssh
         updated_at: ts(),
         is_collapsed: false,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn tailscale_lookup_uses_injected_workspace_command_factory() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::Mutex;
+    use warp_ssh_manager::WorkspaceCommandFactory;
+
+    struct RecordingCommandFactory {
+        script: std::path::PathBuf,
+        programs: Mutex<Vec<String>>,
+    }
+
+    impl WorkspaceCommandFactory for RecordingCommandFactory {
+        fn async_command(&self, program: &str) -> command::r#async::Command {
+            self.programs.lock().unwrap().push(program.to_string());
+            let mut command = command::r#async::Command::new(&self.script);
+            command.arg(program);
+            command
+        }
+
+        fn blocking_command(&self, program: &str) -> command::blocking::Command {
+            self.programs.lock().unwrap().push(program.to_string());
+            let mut command = command::blocking::Command::new(&self.script);
+            command.arg(program);
+            command
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake-command");
+    let mut file = std::fs::File::create(&script).unwrap();
+    file.write_all(b"#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+        .unwrap();
+    let mut permissions = file.metadata().unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    drop(file);
+    let factory = RecordingCommandFactory {
+        script,
+        programs: Mutex::new(Vec::new()),
+    };
+
+    let output = tailscale_status_output(&factory).unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(factory.programs.lock().unwrap().as_slice(), ["tailscale"]);
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "tailscale\nstatus\n--json\n"
+    );
 }
 
 // --- resolve_parent_for_new_node tests ----------------------------------------
@@ -105,6 +160,77 @@ fn parent_deeply_nested_folder_selected_returns_immediate_parent() {
         resolve_parent_for_new_node(Some("s1"), &nodes),
         Some("f2".to_string())
     );
+}
+
+#[test]
+fn delete_confirmation_lists_all_descendant_hosts() {
+    let nodes = vec![
+        folder("f1", None, "Production", 0),
+        server("s1", Some("f1"), "web", 0),
+        folder("f2", Some("f1"), "Databases", 1),
+        server("s2", Some("f2"), "db", 0),
+        server("s3", None, "unrelated", 1),
+    ];
+    let credential_labels = HashMap::from([
+        ("s1".to_string(), "Deploy key (ops)".to_string()),
+        ("s3".to_string(), "Unrelated key".to_string()),
+    ]);
+
+    let impact = build_delete_impact(&nodes, "f1", &credential_labels).unwrap();
+
+    assert_eq!(impact.node_name, "Production");
+    assert_eq!(impact.node_kind, NodeKind::Folder);
+    assert_eq!(impact.host_names, vec!["web", "db"]);
+    assert_eq!(
+        impact.credential_assignments,
+        vec![DeleteCredentialAssignment {
+            host_name: "web".to_string(),
+            credential_label: "Deploy key (ops)".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn host_delete_impact_never_includes_sibling_hosts() {
+    let nodes = vec![
+        folder("f1", None, "Production", 0),
+        server("s1", Some("f1"), "web", 0),
+        server("s2", Some("f1"), "db", 1),
+    ];
+    let credential_labels = HashMap::from([("s1".to_string(), "Deploy key".to_string())]);
+
+    let impact = build_delete_impact(&nodes, "s1", &credential_labels).unwrap();
+
+    assert_eq!(impact.node_kind, NodeKind::Server);
+    assert_eq!(impact.host_names, vec!["web"]);
+    assert_eq!(impact.credential_assignments.len(), 1);
+    assert_eq!(impact.credential_assignments[0].host_name, "web");
+}
+
+#[test]
+fn large_folder_delete_impact_keeps_every_host_and_assignment() {
+    let mut nodes = vec![folder("f1", None, "Large fleet", 0)];
+    let mut credential_labels = HashMap::new();
+    for index in 0..100 {
+        let id = format!("s{index}");
+        nodes.push(server(&id, Some("f1"), &format!("host-{index:03}"), index));
+        if index % 2 == 0 {
+            credential_labels.insert(id, format!("credential-{index:03}"));
+        }
+    }
+
+    let impact = build_delete_impact(&nodes, "f1", &credential_labels).unwrap();
+
+    assert_eq!(impact.host_names.len(), 100);
+    assert_eq!(
+        impact.host_names.first().map(String::as_str),
+        Some("host-000")
+    );
+    assert_eq!(
+        impact.host_names.last().map(String::as_str),
+        Some("host-099")
+    );
+    assert_eq!(impact.credential_assignments.len(), 50);
 }
 
 // --- compute_depths tests -------------------------------------------------
@@ -262,5 +388,115 @@ fn format_ring_bytes_is_human_readable_and_none_at_zero() {
     assert_eq!(format_ring_bytes(500 * 1024), Some("500 KB".to_string()));
     // >= 1 MiB → MB with one decimal.
     assert_eq!(format_ring_bytes(1024 * 1024), Some("1.0 MB".to_string()));
-    assert_eq!(format_ring_bytes(3 * 1024 * 1024 + 512 * 1024), Some("3.5 MB".to_string()));
+    assert_eq!(
+        format_ring_bytes(3 * 1024 * 1024 + 512 * 1024),
+        Some("3.5 MB".to_string())
+    );
+}
+
+#[test]
+fn host_ring_usage_uses_only_reported_ring_bytes_and_cap() {
+    let inventory = SessionList {
+        sessions: vec![
+            remote_server::proto::SessionInfo {
+                ring_bytes: 40,
+                ..Default::default()
+            },
+            remote_server::proto::SessionInfo {
+                ring_bytes: 39,
+                ..Default::default()
+            },
+        ],
+        host_ring_cap_bytes: 100,
+    };
+    assert_eq!(
+        host_ring_usage(&inventory),
+        Some(HostRingUsage {
+            used_bytes: 79,
+            cap_bytes: 100,
+            tone: HostRingTone::Calm,
+        })
+    );
+
+    let mut warning = inventory.clone();
+    warning.sessions[1].ring_bytes = 40;
+    assert_eq!(
+        host_ring_usage(&warning).unwrap().tone,
+        HostRingTone::Warning
+    );
+
+    let mut critical = inventory;
+    critical.sessions[1].ring_bytes = 60;
+    assert_eq!(
+        host_ring_usage(&critical).unwrap().tone,
+        HostRingTone::Critical
+    );
+}
+
+#[test]
+fn old_daemon_without_host_cap_never_gets_a_guessed_aggregate() {
+    let inventory = SessionList {
+        sessions: vec![remote_server::proto::SessionInfo {
+            ring_bytes: 64 * 1024 * 1024,
+            ..Default::default()
+        }],
+        host_ring_cap_bytes: 0,
+    };
+    assert_eq!(host_ring_usage(&inventory), None);
+}
+
+#[test]
+fn multiplexer_kind_selects_only_non_destructive_attach_modes() {
+    assert_eq!(
+        multiplexer_attach_mode(MultiplexerKind::Tmux as i32, 0),
+        Some(MultiplexerAttachMode::Tmux)
+    );
+    assert_eq!(
+        multiplexer_attach_mode(MultiplexerKind::ByobuTmux as i32, 2),
+        Some(MultiplexerAttachMode::Tmux)
+    );
+    assert_eq!(
+        multiplexer_attach_mode(MultiplexerKind::ByobuScreen as i32, 0),
+        Some(MultiplexerAttachMode::ScreenDetached)
+    );
+    assert_eq!(
+        multiplexer_attach_mode(MultiplexerKind::ByobuScreen as i32, 1),
+        Some(MultiplexerAttachMode::ScreenAttached)
+    );
+    assert_eq!(
+        multiplexer_attach_mode(MultiplexerKind::Unspecified as i32, 0),
+        None
+    );
+}
+
+#[test]
+fn multiplexer_connection_resolves_onekey_to_effective_ssh_auth() {
+    let mut conn = diesel::sqlite::SqliteConnection::establish(":memory:").unwrap();
+    conn.run_pending_migrations(persistence::MIGRATIONS)
+        .unwrap();
+    let credential = SshRepository::create_onekey_credential(
+        &mut conn,
+        "shared-key",
+        "deploy",
+        OneKeyCredentialKind::Key,
+        Some("/home/deploy/.ssh/id_ed25519"),
+    )
+    .unwrap();
+    let mut info = SshServerInfo::new_default(String::new());
+    info.host = "edge.example.com".into();
+    info.auth_type = AuthType::OneKey;
+    info.username = "ignored-local-user".into();
+    info.credential_id = Some(credential.id);
+    let node = SshRepository::create_server(&mut conn, None, "edge", &info).unwrap();
+
+    let resolved = resolve_server_for_node(&mut conn, &node.id)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(resolved.username, "deploy");
+    assert_eq!(resolved.auth_type, AuthType::Key);
+    assert_eq!(
+        resolved.key_path.as_deref(),
+        Some("/home/deploy/.ssh/id_ed25519")
+    );
 }

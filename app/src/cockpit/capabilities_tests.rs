@@ -24,6 +24,7 @@ fn session(provider: Provider, state: SessionState, pid: u32) -> SessionSnapshot
         pty_session_id: None,
         pty_session_generation: None,
         pty_foreground: false,
+        task_state: None,
         last_activity: Utc::now(),
         pid,
     }
@@ -34,22 +35,20 @@ fn session(provider: Provider, state: SessionState, pid: u32) -> SessionSnapshot
 /// and answer the click with an error toast.
 #[test]
 fn a_codex_session_cannot_be_signalled() {
-    let caps = SessionCapabilities::of(
-        &session(Provider::Codex, SessionState::Waiting, 0),
-        true,
+    let caps = SessionCapabilities::of(&session(Provider::Codex, SessionState::Waiting, 0), true);
+    assert!(
+        !caps.can_signal,
+        "no pid, no signal — do not offer stop/kill"
     );
-    assert!(!caps.can_signal, "no pid, no signal — do not offer stop/kill");
     // Forking is intentionally a new conversation, so it remains available.
     assert!(caps.can_fork, "codex fork <id> exists");
     assert!(!caps.can_resume, "a live session must not be resumed twice");
 }
 
 #[test]
-fn a_claude_session_with_only_a_pid_cannot_be_signalled() {
-    let caps = SessionCapabilities::of(
-        &session(Provider::Claude, SessionState::Active, 4242),
-        true,
-    );
+fn missing_process_fingerprint_disables_signal_fail_closed() {
+    let caps =
+        SessionCapabilities::of(&session(Provider::Claude, SessionState::Active, 4242), true);
     assert!(
         !caps.can_signal,
         "a pid without a process-identity fingerprint is not a safe signal target"
@@ -75,10 +74,7 @@ fn a_fingerprinted_pid_is_signalable_independent_of_host_locality() {
 /// the pid, not the brand.
 #[test]
 fn a_claude_session_without_a_pid_cannot_be_signalled_either() {
-    let caps = SessionCapabilities::of(
-        &session(Provider::Claude, SessionState::Waiting, 0),
-        true,
-    );
+    let caps = SessionCapabilities::of(&session(Provider::Claude, SessionState::Waiting, 0), true);
     assert!(!caps.can_signal);
     // State, not pid availability, decides whether resuming is safe.
     assert!(!caps.can_resume);
@@ -90,18 +86,10 @@ fn a_claude_session_without_a_pid_cannot_be_signalled_either() {
 #[test]
 fn dormant_slash_commands_follow_provider_support() {
     assert!(
-        !SessionCapabilities::of(
-            &session(Provider::Codex, SessionState::Idle, 0),
-            true,
-        )
-        .can_slash
+        !SessionCapabilities::of(&session(Provider::Codex, SessionState::Idle, 0), true,).can_slash
     );
     assert!(
-        SessionCapabilities::of(
-            &session(Provider::Claude, SessionState::Idle, 0),
-            true,
-        )
-        .can_slash
+        SessionCapabilities::of(&session(Provider::Claude, SessionState::Idle, 0), true,).can_slash
     );
 }
 
@@ -134,8 +122,8 @@ fn a_remote_session_keeps_everything_that_does_not_need_this_machine() {
 }
 
 #[test]
-fn only_dormant_session_can_resume() {
-    for provider in [Provider::Claude, Provider::Codex] {
+fn only_a_dormant_session_can_be_resumed() {
+    for provider in [Provider::Claude, Provider::Codex, Provider::Antigravity] {
         for state in [
             SessionState::Active,
             SessionState::Waiting,
@@ -155,7 +143,7 @@ fn only_dormant_session_can_resume() {
 }
 
 #[test]
-fn open_plan_focuses_a_known_terminal_for_every_session_state() {
+fn open_plan_focuses_known_terminal_for_every_session_state() {
     for state in [
         SessionState::Active,
         SessionState::Waiting,
@@ -171,7 +159,7 @@ fn open_plan_focuses_a_known_terminal_for_every_session_state() {
 }
 
 #[test]
-fn open_plan_refuses_unlocated_live_duplicate() {
+fn open_plan_refuses_to_duplicate_an_unlocated_live_session() {
     for state in [
         SessionState::Active,
         SessionState::Waiting,
@@ -188,16 +176,13 @@ fn open_plan_refuses_unlocated_live_duplicate() {
 #[test]
 fn open_plan_resumes_an_unlocated_dormant_session() {
     assert_eq!(
-        plan_session_open(
-            &session(Provider::Claude, SessionState::Idle, 0),
-            false,
-        ),
+        plan_session_open(&session(Provider::Claude, SessionState::Idle, 0), false,),
         SessionOpenPlan::ResumeDormant,
     );
 }
 
 #[test]
-fn session_uses_shared_open_plan() {
+fn session_node_dispatches_shared_session_open_plan() {
     let active = session(Provider::Codex, SessionState::Active, 0);
     let dormant = session(Provider::Claude, SessionState::Idle, 0);
 
@@ -216,7 +201,7 @@ fn session_uses_shared_open_plan() {
 }
 
 #[test]
-fn reattach_uses_id_without_cwd_guessing() {
+fn reattach_uses_pty_id_without_cwd_guessing() {
     let mut live = session(Provider::Codex, SessionState::Active, 0);
     live.cwd = "/a/path/that/must/not-be-used-as-an-id".to_string();
     live.pty_session_id = Some("daemon-pty-7".to_string());
@@ -233,7 +218,30 @@ fn reattach_uses_id_without_cwd_guessing() {
 }
 
 #[test]
-fn host_matching_never_crosses_boundary() {
+fn missing_pty_binding_never_starts_duplicate_session() {
+    let mut live = session(Provider::Codex, SessionState::Active, 0);
+    assert_eq!(daemon_reattach_target(&live), None);
+    assert_eq!(
+        plan_session_open(&live, false),
+        SessionOpenPlan::LiveSessionUnavailable
+    );
+
+    live.pty_session_id = Some("daemon-pty-7".to_string());
+    live.pty_session_generation = Some(42);
+    assert_eq!(
+        daemon_reattach_target(&live),
+        None,
+        "a non-foreground binding is not attachable"
+    );
+    assert_eq!(
+        plan_session_open(&live, false),
+        SessionOpenPlan::LiveSessionUnavailable,
+        "a partial PTY binding must not fall back to resume"
+    );
+}
+
+#[test]
+fn terminal_host_matching_never_crosses_local_or_remote_boundaries() {
     assert!(session_host_matches(true, None, None));
     assert!(!session_host_matches(true, None, Some("remote-a")));
     assert!(session_host_matches(
@@ -252,7 +260,7 @@ fn host_matching_never_crosses_boundary() {
 }
 
 #[test]
-fn identity_never_crosses_provider_or_account() {
+fn session_identity_matching_never_crosses_provider_or_account_boundaries() {
     let mut claude_default = session(Provider::Claude, SessionState::Idle, 0);
     claude_default.config_dir = None;
     claude_default.account_email = Some("default@example.com".to_string());
@@ -264,36 +272,19 @@ fn identity_never_crosses_provider_or_account() {
     let mut codex_default = claude_default.clone();
     codex_default.provider = Provider::Codex;
 
-    assert!(session_identity_matches(
-        &claude_default,
-        Provider::Claude,
-        None,
-        Some("default@example.com")
-    ));
-    assert!(!session_identity_matches(
-        &claude_work,
-        Provider::Claude,
-        None,
-        Some("default@example.com")
-    ));
-    assert!(session_identity_matches(
-        &claude_work,
-        Provider::Claude,
-        Some("/accounts/claude-work"),
-        Some("work@example.com")
-    ));
-    assert!(!session_identity_matches(
-        &stale_email,
-        Provider::Claude,
-        Some("/accounts/claude-work"),
-        Some("work@example.com")
-    ));
-    assert!(!session_identity_matches(
-        &codex_default,
-        Provider::Claude,
-        None,
-        Some("default@example.com")
-    ));
+    let default_key = zaplex_cockpit::session_key(true, None, &claude_default);
+    assert_ne!(
+        default_key,
+        zaplex_cockpit::session_key(true, None, &claude_work)
+    );
+    assert_ne!(
+        zaplex_cockpit::session_key(true, None, &claude_work),
+        zaplex_cockpit::session_key(true, None, &stale_email)
+    );
+    assert_ne!(
+        default_key,
+        zaplex_cockpit::session_key(true, None, &codex_default)
+    );
 }
 
 #[test]

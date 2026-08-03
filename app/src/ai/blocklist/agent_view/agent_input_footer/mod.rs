@@ -115,6 +115,8 @@ pub(crate) use self::reasoning_depth_selector::{
 #[cfg(not(target_family = "wasm"))]
 use crate::server::telemetry::PluginChipTelemetryAction;
 #[cfg(not(target_family = "wasm"))]
+use crate::terminal::cli_agent_sessions::hook_bridge;
+#[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     compare_versions, plugin_manager_for, plugin_manager_for_with_shell, CliAgentPluginManager,
     PluginInstallError, PluginModalKind,
@@ -834,6 +836,11 @@ impl AgentInputFooter {
             }
 
             let session = CLIAgentSessionsModel::as_ref(app).session(self.terminal_view_id)?;
+            if !session.is_remote()
+                && hook_bridge::is_installed_for_agent(session.agent).unwrap_or(false)
+            {
+                return None;
+            }
 
             let manager = plugin_manager_for(session.agent)?;
             let min_version = manager.minimum_plugin_version();

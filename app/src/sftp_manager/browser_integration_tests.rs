@@ -7,7 +7,6 @@
 //! date: 2026-05-30
 
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,9 +38,35 @@ use super::browser::{
 };
 use super::sftp_backend::{BackendOwnershipAnchor, InMemorySftpBackend, SftpBackend};
 use super::types::{
-    ConnectionState, Dialog, FileEntry, FileEntryType, TransferDirection, TransferState,
-    TransferTask,
+    ConnectionState, Dialog, EntryIdentity, EntryReference, FileEntry, FileEntryType,
+    StableEntryIdentity, TransferDirection, TransferState, TransferTask,
 };
+
+fn stale_entry_reference(index: usize) -> EntryReference {
+    EntryReference {
+        listing_generation: 0,
+        identity: EntryIdentity {
+            path: PathBuf::from(format!("/missing-{index}")),
+            backend: StableEntryIdentity {
+                file_type: FileEntryType::File,
+                size: 0,
+                object_id: format!("missing-{index}"),
+                revision: "1".to_string(),
+            },
+        },
+    }
+}
+
+fn entry_action(
+    view: &SftpBrowserView,
+    index: usize,
+    constructor: fn(EntryReference) -> SftpBrowserAction,
+) -> SftpBrowserAction {
+    constructor(
+        view.entry_reference(index)
+            .unwrap_or_else(|| stale_entry_reference(index)),
+    )
+}
 
 /// Initializes the minimal set of singletons required by the tests
 fn initialize_app(app: &mut warpui::App) {
@@ -1062,7 +1087,8 @@ fn test_open_directory_navigates_and_updates_history() {
 
         // Double-click to enter the docs directory
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::OpenEntry(docs_idx), ctx);
+            let action = entry_action(v, docs_idx, SftpBrowserAction::OpenEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
@@ -1091,7 +1117,8 @@ fn test_go_up_from_subdirectory() {
             v.entries.iter().position(|e| e.name == "subdir").unwrap()
         });
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::OpenEntry(sub_idx), ctx);
+            let action = entry_action(v, sub_idx, SftpBrowserAction::OpenEntry);
+            v.handle_action(&action, ctx);
         });
 
         // Go back up
@@ -1127,7 +1154,8 @@ fn test_go_back_forward_restores_path() {
             v.entries.iter().position(|e| e.name == "alpha").unwrap()
         });
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::OpenEntry(alpha_idx), ctx);
+            let action = entry_action(v, alpha_idx, SftpBrowserAction::OpenEntry);
+            v.handle_action(&action, ctx);
         });
         let alpha_path = view.read(&app, |v, _| v.current_path.clone());
 
@@ -1192,7 +1220,8 @@ fn failed_forward_navigation_keeps_the_current_history_position() {
                 .unwrap()
         });
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::OpenEntry(gone), ctx);
+            let action = entry_action(view, gone, SftpBrowserAction::OpenEntry);
+            view.handle_action(&action, ctx);
             view.handle_action(&SftpBrowserAction::GoBack, ctx);
         });
         std::fs::remove_dir_all(temp.path().join("gone")).unwrap();
@@ -1230,7 +1259,8 @@ fn file_symlink_opens_as_a_file_without_navigating() {
         let before = navigation_snapshot(&view, &app);
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::OpenEntry(link), ctx);
+            let action = entry_action(view, link, SftpBrowserAction::OpenEntry);
+            view.handle_action(&action, ctx);
         });
 
         assert_eq!(navigation_snapshot(&view, &app), before);
@@ -1276,13 +1306,52 @@ fn local_fifo_is_classified_as_other_and_never_opened() {
             assert_eq!(view.entries[fifo_index].file_type, FileEntryType::Other);
         });
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::OpenEntry(fifo_index), ctx);
+            let action = entry_action(view, fifo_index, SftpBrowserAction::OpenEntry);
+            view.handle_action(&action, ctx);
         });
         view.read(&app, |view, _| {
             assert_eq!(view.current_path, PathBuf::from("/"));
             assert!(
                 view.transfers.is_empty(),
                 "activating a FIFO must not start a download"
+            );
+        });
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn local_socket_is_classified_as_other_and_never_transferred() {
+    use std::os::unix::net::UnixListener;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let root = tempfile::tempdir().expect("remote temp");
+        let _listener = UnixListener::bind(root.path().join("service.sock")).unwrap();
+        let backend =
+            Arc::new(InMemorySftpBackend::new(root.path().to_path_buf())) as Arc<dyn SftpBackend>;
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend, PathBuf::from("/"), ctx);
+        });
+        let socket_index = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "service.sock")
+                .expect("socket should be listed")
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.entries[socket_index].file_type, FileEntryType::Other);
+        });
+        view.update(&mut app, |view, ctx| {
+            let action = entry_action(view, socket_index, SftpBrowserAction::DownloadEntry);
+            view.handle_action(&action, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert!(
+                view.transfers.is_empty(),
+                "a local socket must never enter the transfer path"
             );
         });
     });
@@ -1311,7 +1380,8 @@ fn directory_symlink_navigates_to_its_directory_target() {
         });
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::OpenEntry(link), ctx);
+            let action = entry_action(view, link, SftpBrowserAction::OpenEntry);
+            view.handle_action(&action, ctx);
         });
 
         view.read(&app, |view, _| {
@@ -1371,7 +1441,8 @@ fn broken_symlink_reports_failure_without_changing_location() {
         });
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::OpenEntry(link), ctx);
+            let action = entry_action(view, link, SftpBrowserAction::OpenEntry);
+            view.handle_action(&action, ctx);
         });
 
         assert_eq!(navigation_snapshot(&view, &app), before);
@@ -1444,13 +1515,15 @@ fn test_breadcrumb_click_navigates_to_segment() {
             v.entries.iter().position(|e| e.name == "level1").unwrap()
         });
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::OpenEntry(l1_idx), ctx);
+            let action = entry_action(v, l1_idx, SftpBrowserAction::OpenEntry);
+            v.handle_action(&action, ctx);
         });
         let l2_idx = view.read(&app, |v, _| {
             v.entries.iter().position(|e| e.name == "level2").unwrap()
         });
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::OpenEntry(l2_idx), ctx);
+            let action = entry_action(v, l2_idx, SftpBrowserAction::OpenEntry);
+            v.handle_action(&action, ctx);
         });
 
         // Verify the current path is level1/level2
@@ -1610,7 +1683,7 @@ impl View for RefreshButtonTestView {
 /// A refresh click survives a render boundary and dispatches exactly once
 /// through the exact element builder used by the production toolbar.
 #[test]
-fn rescan_keeps_persistent_mouse_state() {
+fn rescan_click_survives_rerender() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, view) =
@@ -1640,7 +1713,7 @@ fn rescan_keeps_persistent_mouse_state() {
 
 /// A normal file row keeps its click state across a render boundary.
 #[test]
-fn file_row_click_survives_rerender() {
+fn row_action_does_not_fire_twice_after_rerender() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, view, _root) = create_connected_view(&mut app, &[("clickable.txt", b"x")]);
@@ -1664,10 +1737,11 @@ fn file_row_click_survives_rerender() {
         mouse_up(&mut app, window_id, presenter, position);
 
         view.read(&app, |view, _| {
+            assert!(view.is_index_marked(entry_index));
             assert_eq!(
-                view.selected,
-                HashSet::from([entry_index]),
-                "the row click must fire exactly once after a rerender"
+                view.selected.len(),
+                1,
+                "the row click must fire exactly once"
             );
         });
     });
@@ -1806,7 +1880,8 @@ fn test_navigate_normalizes_backslashes() {
             v.entries.iter().position(|e| e.name == "target").unwrap()
         });
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::OpenEntry(target_idx), ctx);
+            let action = entry_action(v, target_idx, SftpBrowserAction::OpenEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
@@ -1836,12 +1911,13 @@ fn test_select_entry_highlights_item() {
 
         // Select the second entry
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::SelectEntry(1), ctx);
+            let action = entry_action(v, 1, SftpBrowserAction::SelectEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
             assert!(
-                v.selected.contains(&1),
+                v.is_index_marked(1),
                 "SelectEntry(1) should select the second entry"
             );
             assert_eq!(v.selected.len(), 1, "should have exactly 1 selection");
@@ -1849,12 +1925,13 @@ fn test_select_entry_highlights_item() {
 
         // Switch the selection to the third entry
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::SelectEntry(2), ctx);
+            let action = entry_action(v, 2, SftpBrowserAction::SelectEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
             assert!(
-                v.selected.contains(&2),
+                v.is_index_marked(2),
                 "SelectEntry(2) should select the third entry"
             );
         });
@@ -1868,16 +1945,16 @@ fn test_select_entry_out_of_bounds_safe() {
         initialize_app(&mut app);
         let (_, view, _temp) = create_connected_view(&mut app, &[("only_file.txt", b"x")]);
 
-        // An out-of-range selection should not panic (the current implementation inserts the index directly)
+        // An out-of-range reference must not panic or create a stale mark.
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::SelectEntry(99), ctx);
+            let action = entry_action(v, 99, SftpBrowserAction::SelectEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
-            // The implementation does not validate bounds, so index 99 is inserted into selected
             assert!(
-                v.selected.contains(&99),
-                "current implementation inserts out-of-bounds indices into selected"
+                v.selected.is_empty(),
+                "an absent identity must not enter the selection"
             );
         });
     });
@@ -1911,7 +1988,8 @@ fn test_download_entry_action_without_connection_safe() {
 
         // Triggering a download while not connected should not panic
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::DownloadEntry(0), ctx);
+            let action = entry_action(v, 0, SftpBrowserAction::DownloadEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
@@ -1939,7 +2017,8 @@ fn test_open_entry_on_file_triggers_download() {
         });
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::OpenEntry(file_idx), ctx);
+            let action = entry_action(v, file_idx, SftpBrowserAction::OpenEntry);
+            v.handle_action(&action, ctx);
         });
 
         // It should not panic; whether a transfer task is created depends on the availability of the file picker
@@ -1972,7 +2051,8 @@ fn test_delete_file_confirmed_removes_entry() {
 
         // Initiate deletion
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::DeleteEntry(file_idx), ctx);
+            let action = entry_action(v, file_idx, SftpBrowserAction::DeleteEntry);
+            v.handle_action(&action, ctx);
         });
 
         // The delete confirmation dialog should be present
@@ -2012,7 +2092,8 @@ fn test_delete_directory_confirmed_removes_recursively() {
         });
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::DeleteEntry(dir_idx), ctx);
+            let action = entry_action(v, dir_idx, SftpBrowserAction::DeleteEntry);
+            v.handle_action(&action, ctx);
         });
         view.update(&mut app, |v, ctx| {
             v.handle_action(&SftpBrowserAction::ConfirmDelete, ctx);
@@ -2045,7 +2126,8 @@ fn test_rename_entry_updates_name() {
 
         // Initiate the rename
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::RenameEntry(idx), ctx);
+            let action = entry_action(v, idx, SftpBrowserAction::RenameEntry);
+            v.handle_action(&action, ctx);
         });
 
         // Enter the new name in the editor
@@ -2082,7 +2164,8 @@ fn test_rename_empty_name_shows_error() {
         });
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::RenameEntry(idx), ctx);
+            let action = entry_action(v, idx, SftpBrowserAction::RenameEntry);
+            v.handle_action(&action, ctx);
         });
 
         // Clear the editor
@@ -2203,7 +2286,8 @@ fn test_file_details_dialog_shows_metadata() {
         });
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::DetailsEntry(idx), ctx);
+            let action = entry_action(v, idx, SftpBrowserAction::DetailsEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| match &v.dialog {
@@ -2231,7 +2315,8 @@ fn test_delete_cancel_preserves_entry() {
         });
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::DeleteEntry(idx), ctx);
+            let action = entry_action(v, idx, SftpBrowserAction::DeleteEntry);
+            v.handle_action(&action, ctx);
         });
 
         // Cancel (close the dialog)
@@ -2262,9 +2347,10 @@ fn test_right_click_opens_menu_and_selects_entry() {
         let (_, view, _temp) = create_connected_view(&mut app, &[("menu_file.txt", b"content")]);
 
         view.update(&mut app, |v, ctx| {
+            let entry = v.entry_reference(0).unwrap();
             v.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 0,
+                    entry,
                     position: Vector2F::new(100.0, 100.0),
                 },
                 ctx,
@@ -2273,7 +2359,7 @@ fn test_right_click_opens_menu_and_selects_entry() {
 
         view.read(&app, |v, _| {
             assert!(v.context_menu.is_some(), "context menu should open");
-            assert!(v.selected.contains(&0), "should select the first entry");
+            assert!(v.is_index_marked(0), "should select the first entry");
         });
     });
 }
@@ -2287,9 +2373,10 @@ fn test_context_menu_delete_item_triggers_delete() {
 
         // Open the context menu
         view.update(&mut app, |v, ctx| {
+            let entry = v.entry_reference(0).unwrap();
             v.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 0,
+                    entry,
                     position: Vector2F::new(50.0, 50.0),
                 },
                 ctx,
@@ -2298,7 +2385,8 @@ fn test_context_menu_delete_item_triggers_delete() {
 
         // Choose delete from the menu
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::DeleteEntry(0), ctx);
+            let action = entry_action(v, 0, SftpBrowserAction::DeleteEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
@@ -2318,9 +2406,10 @@ fn test_context_menu_rename_item_triggers_rename() {
         let (_, view, _temp) = create_connected_view(&mut app, &[("ctx_rename.txt", b"x")]);
 
         view.update(&mut app, |v, ctx| {
+            let entry = v.entry_reference(0).unwrap();
             v.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 0,
+                    entry,
                     position: Vector2F::new(50.0, 50.0),
                 },
                 ctx,
@@ -2328,7 +2417,8 @@ fn test_context_menu_rename_item_triggers_rename() {
         });
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::RenameEntry(0), ctx);
+            let action = entry_action(v, 0, SftpBrowserAction::RenameEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
@@ -2348,9 +2438,10 @@ fn test_context_menu_details_item_triggers_details() {
         let (_, view, _temp) = create_connected_view(&mut app, &[("ctx_details.txt", b"x")]);
 
         view.update(&mut app, |v, ctx| {
+            let entry = v.entry_reference(0).unwrap();
             v.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 0,
+                    entry,
                     position: Vector2F::new(50.0, 50.0),
                 },
                 ctx,
@@ -2358,7 +2449,8 @@ fn test_context_menu_details_item_triggers_details() {
         });
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::DetailsEntry(0), ctx);
+            let action = entry_action(v, 0, SftpBrowserAction::DetailsEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
@@ -2378,9 +2470,10 @@ fn test_dismiss_click_closes_menu() {
         let (_, view, _temp) = create_connected_view(&mut app, &[("menu_close.txt", b"x")]);
 
         view.update(&mut app, |v, ctx| {
+            let entry = v.entry_reference(0).unwrap();
             v.handle_action(
                 &SftpBrowserAction::ContextMenu {
-                    index: 0,
+                    entry,
                     position: Vector2F::new(50.0, 50.0),
                 },
                 ctx,
@@ -2416,8 +2509,8 @@ fn test_delete_confirm_dialog_multiple_paths() {
         // Select two entries
         view.update(&mut app, |v, ctx| {
             v.selected.clear();
-            v.selected.insert(0);
-            v.selected.insert(1);
+            v.mark_index_for_test(0);
+            v.mark_index_for_test(1);
             ctx.notify();
         });
 
@@ -2449,7 +2542,8 @@ fn test_rename_editor_enter_confirms() {
         });
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::RenameEntry(idx), ctx);
+            let action = entry_action(v, idx, SftpBrowserAction::RenameEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.update(&mut app, |v, ctx| {
@@ -2487,7 +2581,8 @@ fn test_rename_editor_escape_cancels() {
         });
 
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::RenameEntry(idx), ctx);
+            let action = entry_action(v, idx, SftpBrowserAction::RenameEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
@@ -2694,16 +2789,21 @@ fn test_download_creates_transfer_task() {
         initialize_app(&mut app);
         let backend =
             Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf())) as Arc<dyn SftpBackend>;
+        let listed_entry = backend
+            .lstat(std::path::Path::new("/download_me.txt"))
+            .unwrap();
         let (_, view) = create_view(&mut app);
         view.update(&mut app, |v, ctx| {
             v.set_backend_for_test(backend, PathBuf::from("/"), ctx);
+            v.entries = vec![listed_entry];
         });
 
         view.update(&mut app, |v, ctx| {
+            let entry = v.entry_reference(0).unwrap();
             v.handle_action(
                 &SftpBrowserAction::DownloadSaveAs {
-                    remote_path: PathBuf::from("/download_me.txt"),
-                    file_size: b"download content".len() as u64,
+                    entry,
+                    resolved_target_size: None,
                     local_path: local_save.to_string_lossy().to_string(),
                 },
                 ctx,
@@ -2720,7 +2820,7 @@ fn test_download_creates_transfer_task() {
 /// The native save dialog can remain open while a refresh or sort changes row
 /// indices. Completing it must still download the file originally chosen.
 #[test]
-fn save_as_resolves_same_entry_after_refresh() {
+fn save_as_resolves_the_same_entry_after_refresh() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view, _remote) =
@@ -2734,18 +2834,21 @@ fn save_as_resolves_same_entry_after_refresh() {
                 .position(|entry| entry.name == "a.txt")
                 .unwrap()
         });
-        let (remote_path, file_size) = view.read(&app, |view, _| {
-            let entry = &view.entries[selected_index];
-            (entry.path.clone(), entry.size)
+        let entry = view.read(&app, |view, _| {
+            view.entry_reference(selected_index).unwrap()
         });
-        view.update(&mut app, |view, _| {
-            view.entries.swap(0, 1);
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::Refresh, ctx);
+            view.handle_action(
+                &SftpBrowserAction::SortBy(super::browser::SortColumn::Size),
+                ctx,
+            );
         });
         view.update(&mut app, |view, ctx| {
             view.handle_action(
                 &SftpBrowserAction::DownloadSaveAs {
-                    remote_path,
-                    file_size,
+                    entry,
+                    resolved_target_size: None,
                     local_path: destination.to_string_lossy().to_string(),
                 },
                 ctx,
@@ -2946,7 +3049,8 @@ fn test_keyboard_navigate_up() {
             v.entries.iter().position(|e| e.name == "subdir").unwrap()
         });
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::OpenEntry(sub_idx), ctx);
+            let action = entry_action(v, sub_idx, SftpBrowserAction::OpenEntry);
+            v.handle_action(&action, ctx);
         });
 
         // NavigateUp
@@ -2981,7 +3085,8 @@ fn test_row_click_right_after_navigate_up_is_swallowed() {
             v.entries.iter().position(|e| e.name == "level1").unwrap()
         });
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::OpenEntry(l1_idx), ctx);
+            let action = entry_action(v, l1_idx, SftpBrowserAction::OpenEntry);
+            v.handle_action(&action, ctx);
         });
         let in_level1 = view.read(&app, |v, _| v.current_path.clone());
 
@@ -2996,7 +3101,8 @@ fn test_row_click_right_after_navigate_up_is_swallowed() {
             v.entries.iter().position(|e| e.name == "level1").unwrap()
         });
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::OpenEntry(l1_idx), ctx);
+            let action = entry_action(v, l1_idx, SftpBrowserAction::OpenEntry);
+            v.handle_action(&action, ctx);
         });
         view.read(&app, |v, _| {
             assert_eq!(
@@ -3008,7 +3114,8 @@ fn test_row_click_right_after_navigate_up_is_swallowed() {
         // Past the window, the same click works.
         view.update(&mut app, |v, ctx| {
             v.expire_click_guard();
-            v.handle_action(&SftpBrowserAction::OpenEntry(l1_idx), ctx);
+            let action = entry_action(v, l1_idx, SftpBrowserAction::OpenEntry);
+            v.handle_action(&action, ctx);
         });
         view.read(&app, |v, _| {
             assert_eq!(
@@ -3034,7 +3141,8 @@ fn parent_row_click_survives_rerender() {
                 .unwrap()
         });
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&SftpBrowserAction::OpenEntry(subdir_index), ctx);
+            let action = entry_action(view, subdir_index, SftpBrowserAction::OpenEntry);
+            view.handle_action(&action, ctx);
         });
         assert_eq!(
             view.read(&app, |view, _| view.current_path.clone()),
@@ -3071,7 +3179,7 @@ fn test_keyboard_delete_selected() {
         // Select the first entry
         view.update(&mut app, |v, ctx| {
             v.selected.clear();
-            v.selected.insert(0);
+            v.mark_index_for_test(0);
             ctx.notify();
         });
 
@@ -3089,7 +3197,7 @@ fn test_keyboard_delete_selected() {
 }
 
 #[test]
-fn tab_cycles_fm_panes_clockwise_in_connected_browser() {
+fn tab_cycles_file_manager_panes_clockwise() {
     App::test((), |mut app| async move {
         let (window_id, pane_group, browsers, pane_ids, _temp_dirs) =
             create_three_pane_group(&mut app);
@@ -3109,7 +3217,7 @@ fn tab_cycles_fm_panes_clockwise_in_connected_browser() {
 }
 
 #[test]
-fn shift_tab_cycles_counterclockwise_in_connected_browser() {
+fn shift_tab_cycles_file_manager_panes_counterclockwise() {
     App::test((), |mut app| async move {
         let (window_id, pane_group, browsers, pane_ids, _temp_dirs) =
             create_three_pane_group(&mut app);
@@ -3129,7 +3237,24 @@ fn shift_tab_cycles_counterclockwise_in_connected_browser() {
 }
 
 #[test]
-fn pane_function_legend_drops_captions_before_overlap_in_real_layout() {
+fn global_tab_binding_does_not_steal_file_manager_focus() {
+    App::test((), |mut app| async move {
+        let (window_id, pane_group, browsers, pane_ids, _temp_dirs) =
+            create_three_pane_group(&mut app);
+        browsers[0].update(&mut app, |view, ctx| view.focus_contents(ctx));
+
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
+        assert!(key_down(&mut app, window_id, presenter, "tab"));
+        assert_eq!(
+            pane_group.read(&app, |group, ctx| group.focused_pane_id(ctx)),
+            pane_ids[1],
+            "Tab must remain owned by the file-manager pane group"
+        );
+    });
+}
+
+#[test]
+fn function_bar_drops_low_priority_captions_before_overlap() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, _, left, right, _left_temp, _right_temp) =
@@ -3187,6 +3312,25 @@ fn each_pane_owns_optional_compact_function_legend_in_real_layout() {
         assert!(right_legend.min_x() >= right_root.min_x());
         assert!(right_legend.max_x() <= right_root.max_x());
         assert!(left_legend.max_x() <= right_legend.min_x());
+    });
+}
+
+#[test]
+fn function_bar_fits_minimum_supported_pane_width() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, _, left, right, _left_temp, _right_temp) =
+            create_dual_connected_view(&mut app);
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(600.0, 800.0));
+
+        let left_root = position(&presenter, &layout_id(&left, &app, "pane-root"));
+        let right_root = position(&presenter, &layout_id(&right, &app, "pane-root"));
+        assert!(left_root.max_x() <= right_root.min_x());
+        for (view, root) in [(&left, left_root), (&right, right_root)] {
+            let hidden = position(&presenter, &layout_id(view, &app, "legend-hidden"));
+            assert_approximately_equal(hidden.height(), 0.0);
+            assert!(hidden.width() <= root.width());
+        }
     });
 }
 
@@ -3279,7 +3423,7 @@ fn dual_pane_context_menu_uses_its_own_panel_origin() {
 }
 
 #[test]
-fn body_consumes_remaining_height() {
+fn file_pane_body_consumes_remaining_height_above_footer() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, view, _temp) =
@@ -3297,7 +3441,7 @@ fn body_consumes_remaining_height() {
 }
 
 #[test]
-fn active_style_differs_from_selection() {
+fn active_pane_style_differs_from_selection_and_hover() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, _, left, right, _left_temp, _right_temp) =
@@ -3310,7 +3454,7 @@ fn active_style_differs_from_selection() {
         });
         right.update(&mut app, |view, ctx| {
             view.cursor = 0;
-            view.selected.insert(1);
+            view.mark_index_for_test(1);
             view.set_focus_handle(
                 PaneFocusHandle::new(right_pane_id, focus_state.clone()),
                 ctx,
@@ -3382,7 +3526,7 @@ fn active_style_differs_from_selection() {
 }
 
 #[test]
-fn columns_do_not_move_with_filename() {
+fn column_positions_do_not_move_with_filename_length() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, view, _temp) = create_connected_view(
@@ -3409,7 +3553,7 @@ fn columns_do_not_move_with_filename() {
 /// A multi-mark is the operation target even when the keyboard cursor rests
 /// on a different row. This protects F8/F5/F6 from silently using the cursor.
 #[test]
-fn marks_win_before_cursor() {
+fn file_action_uses_marked_entries_before_cursor() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view, _temp) = create_connected_view(
@@ -3420,7 +3564,7 @@ fn marks_win_before_cursor() {
         view.update(&mut app, |v, ctx| {
             v.cursor = 0;
             v.selected.clear();
-            v.selected.insert(1);
+            v.mark_index_for_test(1);
             v.handle_action(&SftpBrowserAction::DeleteSelected, ctx);
         });
 
@@ -3514,7 +3658,8 @@ fn test_keyboard_escape_closes_dialog() {
 
         // Open the rename dialog
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::RenameEntry(idx), ctx);
+            let action = entry_action(v, idx, SftpBrowserAction::RenameEntry);
+            v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
@@ -3545,8 +3690,9 @@ fn test_render_with_all_overlays_connected() {
 
         // Open the context menu
         view.update(&mut app, |v, ctx| {
+            let entry = v.entry_reference(0).unwrap();
             v.context_menu = Some(super::context_menu::ContextMenuState::new(
-                0,
+                entry,
                 Vector2F::new(50.0, 50.0),
             ));
             // Open a dialog
@@ -3646,7 +3792,8 @@ fn test_render_after_multiple_operations() {
             v.entries.iter().position(|e| e.name == "op_dir").unwrap()
         });
         view.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::OpenEntry(dir_idx), ctx);
+            let action = entry_action(v, dir_idx, SftpBrowserAction::OpenEntry);
+            v.handle_action(&action, ctx);
         });
 
         // Search
@@ -4220,6 +4367,18 @@ fn test_f5_local_to_remote_starts_an_upload_transfer() {
                 super::transfer_queue::QueuedTransferState::Completed
             ));
             assert_eq!(activities[0].progress.transferred, 2);
+            assert_eq!(
+                activities[0].operation,
+                super::transfer_job::TransferOperation::Copy
+            );
+            assert_eq!(
+                activities[0].conflict,
+                super::transfer_job::ConflictDecision::Skip
+            );
+            assert_eq!(
+                activities[0].topology,
+                super::transfer_queue::TransferTopology::LocalToRemote
+            );
         });
     });
 }
@@ -4245,6 +4404,7 @@ fn global_transfer_ui_updates_and_controls_jobs_from_another_pane() {
                     super::transfer_job::TransferProgress {
                         transferred: 64,
                         total: 128,
+                        bytes_per_second: 32,
                         eta: Some(std::time::Duration::from_secs(3)),
                         phase: super::types::TransferPhase::Transferring,
                     },
@@ -4404,6 +4564,51 @@ fn cancel_all_keeps_late_recovery_visible() {
             invalidation,
             "sftp_transfer_history_scroll",
         );
+    });
+}
+
+#[test]
+fn queue_survives_source_tab_close() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) = create_connected_view(&mut app, &[]);
+        let queue_id = app.update(|ctx| {
+            super::transfer_queue::TransferQueue::handle(ctx).update(ctx, |queue, ctx| {
+                let id = queue
+                    .enqueue_job(
+                        "workspace",
+                        PathBuf::from("/source"),
+                        PathBuf::from("/target"),
+                        TransferDirection::Upload,
+                        1,
+                    )
+                    .unwrap();
+                ctx.notify();
+                id
+            })
+        });
+        view.update(&mut app, |browser, ctx| {
+            browser.attach_queue_transfer_for_test(
+                TransferTask::new(
+                    92,
+                    PathBuf::from("/source"),
+                    PathBuf::from("/target"),
+                    TransferDirection::Upload,
+                    1,
+                ),
+                queue_id,
+            );
+            browser.close_for_test(ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                super::transfer_queue::TransferQueue::as_ref(ctx)
+                    .activity(queue_id)
+                    .is_some(),
+                "closing the source tab must not remove its global queue activity"
+            );
+        });
     });
 }
 
@@ -4588,6 +4793,12 @@ impl SftpBackend for StaticListingBackend {
             size: 0,
             modified: None,
             permissions: None,
+            identity: super::types::StableEntryIdentity {
+                file_type: FileEntryType::Directory,
+                size: 0,
+                object_id: path.display().to_string(),
+                revision: "1".to_string(),
+            },
         })
     }
 
@@ -4701,6 +4912,12 @@ fn recursive_download_rejects_path_outside_source_root() {
             size: 1,
             modified: None,
             permissions: None,
+            identity: super::types::StableEntryIdentity {
+                file_type: FileEntryType::File,
+                size: 1,
+                object_id: "outside-source".to_string(),
+                revision: "1".to_string(),
+            },
         }],
     });
     let local_dest = tempfile::tempdir().expect("local temp");
@@ -4730,6 +4947,12 @@ fn recursive_download_rejects_unhandled_symlink() {
             size: 0,
             modified: None,
             permissions: None,
+            identity: super::types::StableEntryIdentity {
+                file_type: FileEntryType::Symlink,
+                size: 0,
+                object_id: "link".to_string(),
+                revision: "1".to_string(),
+            },
         }],
     });
     let local_dest = tempfile::tempdir().expect("local temp");
@@ -4758,6 +4981,12 @@ fn recursive_download_rejects_special_file() {
             size: 0,
             modified: None,
             permissions: None,
+            identity: super::types::StableEntryIdentity {
+                file_type: FileEntryType::Other,
+                size: 0,
+                object_id: "pipe".to_string(),
+                revision: "1".to_string(),
+            },
         }],
     });
     let local_dest = tempfile::tempdir().expect("local temp");
@@ -4802,7 +5031,7 @@ fn recursive_upload_rejects_unhandled_symlink() {
 
 #[cfg(unix)]
 #[test]
-fn recursive_upload_rejects_special_file() {
+fn unsupported_entry_aborts_move_before_source_delete() {
     use nix::sys::stat::Mode;
     use nix::unistd::mkfifo;
 
@@ -4822,6 +5051,10 @@ fn recursive_upload_rejects_special_file() {
     assert!(
         result.is_err(),
         "silently skipping a FIFO would make a later move destructive"
+    );
+    assert!(
+        source.path().join("pipe").exists(),
+        "rejecting an unsupported entry must leave the source tree untouched"
     );
 }
 
@@ -4947,7 +5180,7 @@ fn directory_move_never_deletes_data_created_after_source_enumeration() {
 
 #[cfg(unix)]
 #[test]
-fn move_never_deletes_untransferred_symlink() {
+fn move_with_untransferred_symlink_never_deletes_source_tree() {
     use std::os::unix::fs::symlink;
 
     warpui::App::test((), |mut app| async move {
@@ -4989,7 +5222,7 @@ fn move_never_deletes_untransferred_symlink() {
 
 #[cfg(unix)]
 #[test]
-fn move_never_deletes_source_tree_with_untransferred_special_file() {
+fn move_with_untransferred_special_entry_never_deletes_source_tree() {
     use nix::sys::stat::Mode;
     use nix::unistd::mkfifo;
 
@@ -5190,6 +5423,24 @@ fn test_f5_remote_to_remote_relays_file() {
             "content matches"
         );
         assert!(root.join("a/foo.txt").exists(), "source kept after a copy");
+        app.read(|ctx| {
+            let activities = super::transfer_queue::TransferQueue::as_ref(ctx)
+                .activities()
+                .collect::<Vec<_>>();
+            assert_eq!(activities.len(), 1);
+            assert_eq!(
+                activities[0].operation,
+                super::transfer_job::TransferOperation::Copy
+            );
+            assert_eq!(
+                activities[0].conflict,
+                super::transfer_job::ConflictDecision::Skip
+            );
+            assert_eq!(
+                activities[0].topology,
+                super::transfer_queue::TransferTopology::RemoteRelay
+            );
+        });
     });
 }
 
@@ -5222,6 +5473,20 @@ fn test_f6_remote_to_remote_moves_file() {
             !root.join("a/bar.txt").exists(),
             "source removed after a successful move"
         );
+        app.read(|ctx| {
+            let activities = super::transfer_queue::TransferQueue::as_ref(ctx)
+                .activities()
+                .collect::<Vec<_>>();
+            assert_eq!(activities.len(), 1);
+            assert_eq!(
+                activities[0].operation,
+                super::transfer_job::TransferOperation::Move
+            );
+            assert_eq!(
+                activities[0].topology,
+                super::transfer_queue::TransferTopology::RemoteRelay
+            );
+        });
     });
 }
 
@@ -5259,7 +5524,7 @@ fn test_f5_remote_to_remote_relays_directory() {
 /// A directory move is incomplete when any destination entry is skipped. The
 /// source tree must remain intact even if every non-conflicting file transfers.
 #[test]
-fn remote_to_remote_move_with_skip_conflict_preserves_source_tree() {
+fn remote_move_skip_conflict_preserves_skipped_source_and_source_tree() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let temp = create_temp_dir_with_files(&[
@@ -5668,10 +5933,10 @@ fn test_copy_conflict_skips_on_skip() {
     });
 }
 
-/// "Overwrite all" resolves the current conflict AND every following one in the
-/// batch without re-prompting.
+/// Applying "keep both" to all conflicts deterministically allocates sibling
+/// names without replacing either existing destination.
 #[test]
-fn test_copy_conflict_overwrite_all_applies_to_batch() {
+fn conflict_apply_to_all_is_deterministic() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (view_a, _view_b, temp) = create_two_panes_sharing_fs(
@@ -5701,21 +5966,48 @@ fn test_copy_conflict_overwrite_all_applies_to_batch() {
             assert!(matches!(v.dialog, Some(Dialog::CopyMoveConflict { .. })));
         });
 
-        // Overwrite all → both targets replaced, no dialog left.
+        // Keep both for all → no further prompt and neither target is replaced.
         view_a.update(&mut app, |v, ctx| {
-            v.handle_action(&SftpBrowserAction::OverwriteConflict { all: true }, ctx);
+            v.handle_action(&SftpBrowserAction::RenameConflict { all: true }, ctx);
         });
         view_a.read(&app, |v, _| {
             assert!(v.dialog.is_none(), "no further prompt")
         });
-        assert_eq!(std::fs::read(root.join("right/a.txt")).unwrap(), b"A2");
-        assert_eq!(std::fs::read(root.join("right/b.txt")).unwrap(), b"B2");
+        assert_eq!(std::fs::read(root.join("right/a.txt")).unwrap(), b"A1");
+        assert_eq!(std::fs::read(root.join("right/b.txt")).unwrap(), b"B1");
+        assert_eq!(
+            std::fs::read(root.join("right/a (copy).txt")).unwrap(),
+            b"A2"
+        );
+        assert_eq!(
+            std::fs::read(root.join("right/b (copy).txt")).unwrap(),
+            b"B2"
+        );
     });
 }
 
 // ============================================================
 // F4 open-in-editor (FM Pflicht 2 — directory branch)
 // ============================================================
+
+#[test]
+fn f2_renames_cursor_entry() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) = create_connected_view(&mut app, &[("rename.txt", b"x")]);
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::RenameCursor, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(
+                matches!(view.dialog, Some(Dialog::Rename { .. })),
+                "F2's cursor action must open the rename dialog"
+            );
+        });
+    });
+}
 
 /// F4 on a directory enters it (the file branch dispatches a workspace
 /// action, which the file-manager harness can't observe here).
@@ -5736,7 +6028,7 @@ fn test_open_in_editor_on_directory_navigates() {
 }
 
 #[test]
-fn f4_dispatches_file_to_workspace_editor() {
+fn f4_opens_editor() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, root, browser, _temp) =
@@ -5758,7 +6050,7 @@ fn f4_dispatches_file_to_workspace_editor() {
 
 /// F3 is a metadata view, while F4 remains the editor/navigation action.
 #[test]
-fn f3_views_cursor_details_without_entering_editor() {
+fn f3_views_without_editing() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view, _temp) = create_connected_view(&mut app, &[("view.txt", b"x")]);

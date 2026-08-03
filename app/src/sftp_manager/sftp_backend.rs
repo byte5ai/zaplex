@@ -10,14 +10,24 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::fs;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use dunce;
+use parking_lot::RwLock;
+use remote_server::client::RemoteServerClient;
+use remote_server::proto::{
+    safe_file_request, safe_file_response, SafeFileCreateExclusive, SafeFileDelete,
+    SafeFileEntryKind, SafeFileFlushHandle, SafeFileIdentity, SafeFileInspectHandle,
+    SafeFileInspectResult, SafeFileListRecoveries, SafeFileOpenExisting, SafeFileReadHandle,
+    SafeFileRename, SafeFileRenameMode, SafeFileRequest, SafeFileRetryRecovery,
+    SafeFileWriteHandle,
+};
 use sha2::{Digest, Sha256};
 
 use super::sftp_ops::{self, ProgressCallback, SftpOpsError};
+pub use super::types::StableEntryIdentity;
 use super::types::{FileEntry, FileEntryType};
 
 pub(crate) const fn local_safe_rename_primitives_available() -> bool {
@@ -78,16 +88,6 @@ fn secure_compare(left: &str, right: &str) -> bool {
             difference | (left ^ right)
         })
         == 0
-}
-
-/// A stable-enough backend identity captured before a transfer and compared
-/// again immediately before a move removes its source.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StableEntryIdentity {
-    pub file_type: FileEntryType,
-    pub size: u64,
-    pub object_id: String,
-    pub revision: String,
 }
 
 /// Opaque handle that keeps an exclusively reserved backend object alive and
@@ -376,6 +376,46 @@ fn copy_validated_tree<B: SftpBackend + ?Sized>(
     Ok(())
 }
 
+fn lexical_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
+
+pub(crate) fn validate_copy_destination(
+    source: &Path,
+    destination: &Path,
+    source_is_directory: bool,
+) -> Result<(), SftpOpsError> {
+    let source = lexical_path(source);
+    let destination = lexical_path(destination);
+    if source == destination {
+        return Err(SftpOpsError::Operation(format!(
+            "Source and destination are the same path: {}",
+            source.display()
+        )));
+    }
+    if source_is_directory && destination.starts_with(&source) {
+        return Err(SftpOpsError::Operation(format!(
+            "A directory cannot be copied into its own descendant: {}",
+            destination.display()
+        )));
+    }
+    Ok(())
+}
+
 /// SFTP backend operation abstraction to decouple the UI layer from the protocol layer.
 pub trait SftpBackend: Send + Sync {
     /// Whether the backend can atomically exchange two existing paths.
@@ -415,6 +455,18 @@ pub trait SftpBackend: Send + Sync {
         _path: &Path,
     ) -> Result<Option<Vec<PathBuf>>, SftpOpsError> {
         Ok(None)
+    }
+
+    /// Reports that a recovered backend rename committed its destination while
+    /// the higher-level move source remained intact. The flag is consumed once.
+    fn take_recovery_source_preserved(&self, _path: &Path) -> bool {
+        false
+    }
+
+    /// Reports that recovery proved the destination did not commit and the
+    /// higher-level move source therefore remains the authoritative copy.
+    fn take_recovery_source_restored(&self, _path: &Path) -> bool {
+        false
     }
 
     /// Opens a live ownership handle for an existing source entry. Backends
@@ -553,6 +605,15 @@ pub trait SftpBackend: Send + Sync {
     /// overwrite the path.
     fn lstat(&self, path: &Path) -> Result<FileEntry, SftpOpsError>;
 
+    /// Modification time used by the "newer only" conflict policy. `None`
+    /// means the backend cannot prove which side is newer.
+    fn modification_time(
+        &self,
+        _path: &Path,
+    ) -> Result<Option<std::time::SystemTime>, SftpOpsError> {
+        Ok(None)
+    }
+
     fn entry_exists(&self, path: &Path) -> Result<bool, SftpOpsError> {
         match self.lstat(path) {
             Ok(_) => Ok(true),
@@ -650,6 +711,7 @@ pub trait SftpBackend: Send + Sync {
     /// with `list_dir` + `create_dir` + `copy_file`; backends may override with
     /// a native recursive copy.
     fn copy_dir_recursive(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
+        validate_copy_destination(src, dst, true)?;
         if !matches!(self.lstat(src)?.file_type, FileEntryType::Directory) {
             return Err(SftpOpsError::Operation(format!(
                 "Recursive copy source is not a directory: {}",
@@ -1077,12 +1139,111 @@ fn anchored_link_count(anchor: &fs::File) -> Result<u64, SftpOpsError> {
 /// Real SFTP backend that wraps zap_sftp::Sftp.
 pub struct LiveSftpBackend {
     sftp: zap_sftp::Sftp,
+    safe_files: SafeFileClientSlot,
+    recovery_operations: Arc<Mutex<HashMap<PathBuf, Vec<RemoteRecoveryOperation>>>>,
+    recovered_source_preserved: Arc<Mutex<HashSet<PathBuf>>>,
+    recovered_source_restored: Arc<Mutex<HashSet<PathBuf>>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct RemoteRecoveryOperation {
+    operation_id: String,
+    source_preserved_after_commit: bool,
+    action: RemoteRecoveryAction,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum RemoteRecoveryAction {
+    Acknowledge,
+    Rename {
+        old_path: PathBuf,
+        new_path: PathBuf,
+        mode: i32,
+        expected_target: Option<SafeFileIdentity>,
+        source: StableEntryIdentity,
+        source_is_owned_artifact: bool,
+    },
+    Delete(SafeFileDelete),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteRecoveryResolution {
+    MutationApplied,
+    DestinationCommittedSourcePreserved,
+    SourceRestored,
+}
+
+/// Live safe-file capability for one SFTP pane.
+///
+/// The daemon transport can connect or reconnect after the SFTP channel. The
+/// shared slot lets future transfer operations pick up the current negotiated
+/// client without rebuilding the pane or disturbing transfers that already
+/// hold their own descriptor-bound client.
+#[derive(Clone, Default)]
+pub(crate) struct SafeFileClientSlot {
+    client: Arc<RwLock<Option<Arc<RemoteServerClient>>>>,
+}
+
+impl SafeFileClientSlot {
+    fn with_client(client: Arc<RemoteServerClient>) -> Self {
+        let slot = Self::default();
+        slot.set(Some(client));
+        slot
+    }
+
+    /// Replaces the live client and reports a transition from unavailable to
+    /// available, which is when durable remote recovery records need scanning.
+    pub(crate) fn set(&self, client: Option<Arc<RemoteServerClient>>) -> bool {
+        let mut current = self.client.write();
+        let became_available = current.is_none() && client.is_some();
+        *current = client;
+        became_available
+    }
+
+    fn get(&self) -> Option<Arc<RemoteServerClient>> {
+        self.client.read().clone()
+    }
+
+    fn is_available(&self) -> bool {
+        self.client.read().is_some()
+    }
 }
 
 impl LiveSftpBackend {
     /// Creates a backend from an Sftp instance.
     pub fn new(sftp: zap_sftp::Sftp) -> Self {
-        Self { sftp }
+        Self {
+            sftp,
+            safe_files: SafeFileClientSlot::default(),
+            recovery_operations: Arc::new(Mutex::new(HashMap::new())),
+            recovered_source_preserved: Arc::new(Mutex::new(HashSet::new())),
+            recovered_source_restored: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    /// Creates a backend with a negotiated descriptor-bound remote file service.
+    pub fn new_with_safe_files(sftp: zap_sftp::Sftp, safe_files: Arc<RemoteServerClient>) -> Self {
+        Self {
+            sftp,
+            safe_files: SafeFileClientSlot::with_client(safe_files),
+            recovery_operations: Arc::new(Mutex::new(HashMap::new())),
+            recovered_source_preserved: Arc::new(Mutex::new(HashSet::new())),
+            recovered_source_restored: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    /// Creates a backend whose safe-file capability follows daemon reconnects.
+    pub(crate) fn new_with_safe_file_slot(
+        sftp: zap_sftp::Sftp,
+        safe_files: SafeFileClientSlot,
+    ) -> Self {
+        Self {
+            sftp,
+            safe_files,
+            recovery_operations: Arc::new(Mutex::new(HashMap::new())),
+            recovered_source_preserved: Arc::new(Mutex::new(HashSet::new())),
+            recovered_source_restored: Arc::new(Mutex::new(HashSet::new())),
+        }
     }
 
     /// Gets a reference to the internal Sftp instance (used for realpath calls in connect_to_server).
@@ -1090,40 +1251,271 @@ impl LiveSftpBackend {
         &self.sftp
     }
 
-    fn cleanup_tombstone(path: &Path) -> PathBuf {
-        path.with_file_name(format!(
-            ".{}.zaplex-delete-{}",
-            path.file_name()
-                .map(|name| name.to_string_lossy())
-                .unwrap_or_default(),
-            uuid::Uuid::new_v4()
-        ))
+    fn safe_client(&self) -> Result<Arc<RemoteServerClient>, SftpOpsError> {
+        self.safe_files.get().ok_or_else(|| {
+            SftpOpsError::CapabilityRequired(
+                "Secure remote file transactions are unavailable for this connection".to_string(),
+            )
+        })
     }
 
-    fn file_sha256(&self, path: &Path) -> Result<String, SftpOpsError> {
-        let mut reader = self.open_file_reader(path)?;
-        let mut digest = Sha256::new();
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            let read = reader.read_chunk(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            digest.update(&buffer[..read]);
-        }
-        Ok(format!("{:x}", digest.finalize()))
-    }
-
-    fn restore_isolated_cleanup(
+    fn open_safe_handle(
         &self,
         path: &Path,
-        tombstone: &Path,
-        primary: &SftpOpsError,
-    ) -> SftpOpsError {
-        restore_isolated_cleanup_entry(self, path, tombstone, primary)
+        kind: FileEntryType,
+    ) -> Result<Arc<RemoteSafeHandle>, SftpOpsError> {
+        let client = self.safe_client()?;
+        let path = remote_path_string(path)?;
+        let response = safe_file_call(
+            &client,
+            String::new(),
+            safe_file_request::Operation::OpenExisting(SafeFileOpenExisting {
+                path,
+                expected_kind: safe_kind(kind)? as i32,
+            }),
+        )?;
+        let safe_file_response::Result::Opened(opened) = response else {
+            return Err(unexpected_safe_file_response("open"));
+        };
+        let identity = opened.identity.ok_or_else(|| {
+            SftpOpsError::Operation("Safe-file open returned no identity".to_string())
+        })?;
+        if identity.object_id.is_empty() {
+            return Err(SftpOpsError::Operation(
+                "Safe-file open returned no immutable object identity".to_string(),
+            ));
+        }
+        Ok(Arc::new(RemoteSafeHandle {
+            client,
+            handle_id: opened.handle_id,
+            kind,
+            owned_artifact: false,
+        }))
+    }
+
+    fn create_safe_handle(
+        &self,
+        path: &Path,
+        kind: FileEntryType,
+    ) -> Result<Arc<RemoteSafeHandle>, SftpOpsError> {
+        let client = self.safe_client()?;
+        let response = journaled_safe_file_call(
+            &client,
+            uuid::Uuid::new_v4().to_string(),
+            safe_file_request::Operation::CreateExclusive(SafeFileCreateExclusive {
+                path: remote_path_string(path)?,
+                kind: safe_kind(kind)? as i32,
+            }),
+        )?;
+        let safe_file_response::Result::Opened(opened) = response else {
+            return Err(unexpected_safe_file_response("create"));
+        };
+        let identity = opened.identity.ok_or_else(|| {
+            SftpOpsError::Operation("Safe-file create returned no identity".to_string())
+        })?;
+        if identity.object_id.is_empty() {
+            return Err(SftpOpsError::Operation(
+                "Safe-file create returned no immutable object identity".to_string(),
+            ));
+        }
+        Ok(Arc::new(RemoteSafeHandle {
+            client,
+            handle_id: opened.handle_id,
+            kind,
+            owned_artifact: true,
+        }))
+    }
+
+    fn rename_safe_handle(
+        &self,
+        handle: &RemoteSafeHandle,
+        old_path: &Path,
+        new_path: &Path,
+        mode: SafeFileRenameMode,
+        expected_target: Option<SafeFileIdentity>,
+    ) -> Result<(), SftpOpsError> {
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let recovery_path = new_path.to_path_buf();
+        let source = handle.identity()?;
+        let rename = SafeFileRename {
+            handle_id: handle.handle_id.clone(),
+            old_path: remote_path_string(old_path)?,
+            new_path: remote_path_string(new_path)?,
+            mode: mode as i32,
+            expected_target: expected_target.clone(),
+        };
+        let replay = RemoteRecoveryOperation {
+            operation_id: operation_id.clone(),
+            source_preserved_after_commit: true,
+            action: RemoteRecoveryAction::Rename {
+                old_path: old_path.to_path_buf(),
+                new_path: new_path.to_path_buf(),
+                mode: mode as i32,
+                expected_target,
+                source,
+                source_is_owned_artifact: handle.owned_artifact,
+            },
+        };
+        let response = journaled_safe_file_call(
+            &handle.client,
+            operation_id.clone(),
+            safe_file_request::Operation::Rename(rename),
+        );
+        let response = match response {
+            Ok(response) => response,
+            Err(SftpOpsError::Connection(message)) => {
+                self.retain_remote_recovery(recovery_path.clone(), replay);
+                return Err(SftpOpsError::RecoveryRequired {
+                    message: format!("Remote rename acknowledgement was lost: {message}"),
+                    recovery_id: None,
+                    paths: vec![recovery_path],
+                    committed: false,
+                });
+            }
+            Err(error) => {
+                if let Some((operation, path)) =
+                    pending_remote_recovery(&handle.client, &operation_id)?
+                {
+                    self.retain_remote_recovery(path.clone(), operation);
+                    return Err(SftpOpsError::RecoveryRequired {
+                        message: error.to_string(),
+                        recovery_id: None,
+                        paths: vec![path],
+                        committed: false,
+                    });
+                }
+                return Err(error);
+            }
+        };
+        match response {
+            safe_file_response::Result::Mutation(_) => {
+                if let Err(error) = acknowledge_safe_file_mutation(&handle.client, &operation_id) {
+                    self.retain_remote_recovery(
+                        recovery_path.clone(),
+                        RemoteRecoveryOperation {
+                            operation_id,
+                            source_preserved_after_commit: true,
+                            action: RemoteRecoveryAction::Acknowledge,
+                        },
+                    );
+                    return Err(SftpOpsError::RecoveryRequired {
+                        message: format!(
+                            "Remote rename committed but acknowledgement was lost: {error}"
+                        ),
+                        recovery_id: None,
+                        paths: vec![recovery_path],
+                        committed: true,
+                    });
+                }
+                Ok(())
+            }
+            _ => Err(unexpected_safe_file_response("rename")),
+        }
+    }
+
+    fn retain_remote_recovery(&self, path: PathBuf, operation: RemoteRecoveryOperation) {
+        let mut routes = self
+            .recovery_operations
+            .lock()
+            .expect("safe-file recovery route lock poisoned");
+        let operations = routes.entry(path).or_default();
+        if operations
+            .iter()
+            .all(|existing| existing.operation_id != operation.operation_id)
+        {
+            operations.push(operation);
+        }
+    }
+
+    fn replay_remote_recovery(
+        &self,
+        client: &RemoteServerClient,
+        operation: &RemoteRecoveryOperation,
+    ) -> Result<RemoteRecoveryResolution, SftpOpsError> {
+        let (request, _retained_handle) = match &operation.action {
+            RemoteRecoveryAction::Acknowledge => {
+                return Ok(RemoteRecoveryResolution::MutationApplied)
+            }
+            RemoteRecoveryAction::Rename {
+                old_path,
+                new_path,
+                mode,
+                expected_target,
+                source,
+                source_is_owned_artifact,
+            } => {
+                let entry = match self.lstat(old_path) {
+                    Ok(entry) => entry,
+                    Err(SftpOpsError::NotFound(_)) => {
+                        return match self.stable_identity(new_path) {
+                            Ok(actual) if same_immutable_object(source, &actual) => {
+                                Ok(RemoteRecoveryResolution::DestinationCommittedSourcePreserved)
+                            }
+                            Err(SftpOpsError::NotFound(_)) if *source_is_owned_artifact => {
+                                Ok(RemoteRecoveryResolution::SourceRestored)
+                            }
+                            Err(SftpOpsError::NotFound(_)) => {
+                                Err(SftpOpsError::Operation(format!(
+                                    "Remote recovery source and destination are both missing: {}, {}",
+                                    old_path.display(),
+                                    new_path.display()
+                                )))
+                            }
+                            Ok(_) => Err(SftpOpsError::Operation(format!(
+                                "Remote recovery destination identity changed at {}",
+                                new_path.display()
+                            ))),
+                            Err(error) => Err(error),
+                        };
+                    }
+                    Err(error) => return Err(error),
+                };
+                if entry.file_type != source.file_type {
+                    return Err(SftpOpsError::Operation(format!(
+                        "Remote recovery source type changed at {}",
+                        old_path.display()
+                    )));
+                }
+                let handle = self.open_safe_handle(old_path, source.file_type)?;
+                let actual = handle.identity()?;
+                if !same_immutable_object(source, &actual) {
+                    return Err(SftpOpsError::Operation(format!(
+                        "Remote recovery source identity changed at {}",
+                        old_path.display()
+                    )));
+                }
+                (
+                    safe_file_request::Operation::Rename(SafeFileRename {
+                        handle_id: handle.handle_id.clone(),
+                        old_path: remote_path_string(old_path)?,
+                        new_path: remote_path_string(new_path)?,
+                        mode: *mode,
+                        expected_target: expected_target.clone(),
+                    }),
+                    Some(handle),
+                )
+            }
+            RemoteRecoveryAction::Delete(delete) => {
+                (safe_file_request::Operation::Delete(delete.clone()), None)
+            }
+        };
+        let response = journaled_safe_file_call(client, operation.operation_id.clone(), request)?;
+        if !matches!(response, safe_file_response::Result::Mutation(_)) {
+            return Err(unexpected_safe_file_response("replayed recovery"));
+        }
+        acknowledge_safe_file_mutation(client, &operation.operation_id)?;
+        Ok(match &operation.action {
+            RemoteRecoveryAction::Rename { .. } => {
+                RemoteRecoveryResolution::DestinationCommittedSourcePreserved
+            }
+            RemoteRecoveryAction::Acknowledge | RemoteRecoveryAction::Delete(_) => {
+                RemoteRecoveryResolution::MutationApplied
+            }
+        })
     }
 
     fn metadata_to_entry(path: &Path, metadata: zap_sftp::types::Metadata) -> FileEntry {
+        let identity = stable_identity_from_remote_metadata(&metadata);
         let file_type = match metadata.file_type {
             zap_sftp::types::FileType::Dir => FileEntryType::Directory,
             zap_sftp::types::FileType::File => FileEntryType::File,
@@ -1150,43 +1542,467 @@ impl LiveSftpBackend {
             size: metadata.size,
             modified,
             permissions,
+            identity,
         }
     }
 }
 
-struct LiveFileReader(zap_sftp::File);
+fn remote_path_string(path: &Path) -> Result<String, SftpOpsError> {
+    path.to_str().map(ToOwned::to_owned).ok_or_else(|| {
+        SftpOpsError::Operation(format!(
+            "Secure remote file transactions require a UTF-8 path: {}",
+            path.display()
+        ))
+    })
+}
 
-impl BackendFileReader for LiveFileReader {
-    fn read_chunk(&mut self, buffer: &mut [u8]) -> Result<usize, SftpOpsError> {
-        self.0.read(buffer).map_err(Into::into)
+fn replace_recovery_routes(
+    routes: &mut HashMap<PathBuf, Vec<RemoteRecoveryOperation>>,
+    recoveries: impl IntoIterator<Item = (RemoteRecoveryOperation, PathBuf)>,
+) -> Vec<PathBuf> {
+    let recoveries = recoveries.into_iter().collect::<Vec<_>>();
+    let server_operation_ids = recoveries
+        .iter()
+        .map(|(operation, _)| operation.operation_id.clone())
+        .collect::<HashSet<_>>();
+    let local_replays = routes
+        .values()
+        .flatten()
+        .filter(|operation| !matches!(operation.action, RemoteRecoveryAction::Acknowledge))
+        .map(|operation| (operation.operation_id.clone(), operation.clone()))
+        .collect::<HashMap<_, _>>();
+    let previously_reported = routes
+        .values()
+        .flatten()
+        .map(|operation| operation.operation_id.clone())
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    let mut replacement = HashMap::<PathBuf, Vec<RemoteRecoveryOperation>>::new();
+    let mut newly_reported = Vec::new();
+    for (path, operations) in routes.iter() {
+        for operation in operations {
+            if !matches!(operation.action, RemoteRecoveryAction::Acknowledge)
+                && !server_operation_ids.contains(&operation.operation_id)
+                && seen.insert(operation.operation_id.clone())
+            {
+                replacement
+                    .entry(path.clone())
+                    .or_default()
+                    .push(operation.clone());
+            }
+        }
+    }
+    for (mut operation, path) in recoveries {
+        if operation.operation_id.is_empty() || !seen.insert(operation.operation_id.clone()) {
+            continue;
+        }
+        if let Some(local) = local_replays.get(&operation.operation_id) {
+            operation.action = local.action.clone();
+        }
+        replacement
+            .entry(path.clone())
+            .or_default()
+            .push(operation.clone());
+        if !previously_reported.contains(&operation.operation_id) {
+            newly_reported.push(path);
+        }
+    }
+    *routes = replacement;
+    newly_reported
+}
+
+fn safe_kind(file_type: FileEntryType) -> Result<SafeFileEntryKind, SftpOpsError> {
+    match file_type {
+        FileEntryType::File => Ok(SafeFileEntryKind::Regular),
+        FileEntryType::Directory => Ok(SafeFileEntryKind::Directory),
+        FileEntryType::Symlink | FileEntryType::Other => Err(SftpOpsError::Operation(
+            "Secure remote file transactions refuse links and special files".to_string(),
+        )),
     }
 }
 
-struct LiveFileWriter(zap_sftp::File);
+fn stable_identity_from_safe(identity: SafeFileIdentity) -> StableEntryIdentity {
+    let file_type = match SafeFileEntryKind::try_from(identity.kind).ok() {
+        Some(SafeFileEntryKind::Regular) => FileEntryType::File,
+        Some(SafeFileEntryKind::Directory) => FileEntryType::Directory,
+        Some(SafeFileEntryKind::Unspecified) | None => FileEntryType::Other,
+    };
+    StableEntryIdentity {
+        file_type,
+        size: identity.size,
+        object_id: identity.object_id,
+        revision: identity.revision,
+    }
+}
 
-impl BackendFileWriter for LiveFileWriter {
+fn safe_identity_from_stable(
+    identity: &StableEntryIdentity,
+) -> Result<SafeFileIdentity, SftpOpsError> {
+    if identity.object_id.is_empty() {
+        return Err(SftpOpsError::Operation(
+            "Secure remote mutation requires an immutable object identity".to_string(),
+        ));
+    }
+    Ok(SafeFileIdentity {
+        kind: safe_kind(identity.file_type)? as i32,
+        size: identity.size,
+        object_id: identity.object_id.clone(),
+        revision: identity.revision.clone(),
+    })
+}
+
+fn unexpected_safe_file_response(operation: &str) -> SftpOpsError {
+    SftpOpsError::Operation(format!(
+        "Remote safe-file service returned an unexpected {operation} response"
+    ))
+}
+
+fn safe_file_call(
+    client: &RemoteServerClient,
+    operation_id: String,
+    operation: safe_file_request::Operation,
+) -> Result<safe_file_response::Result, SftpOpsError> {
+    let response = warpui::r#async::block_on(client.safe_file(SafeFileRequest {
+        operation_id,
+        operation: Some(operation),
+    }))
+    .map_err(|error| SftpOpsError::Connection(error.to_string()))?;
+    match response.result {
+        Some(safe_file_response::Result::Error(error)) => {
+            Err(SftpOpsError::Operation(error.message))
+        }
+        Some(result) => Ok(result),
+        None => Err(SftpOpsError::Operation(
+            "Remote safe-file service returned an empty response".to_string(),
+        )),
+    }
+}
+
+fn journaled_safe_file_call(
+    client: &RemoteServerClient,
+    operation_id: String,
+    operation: safe_file_request::Operation,
+) -> Result<safe_file_response::Result, SftpOpsError> {
+    let first = safe_file_call(client, operation_id.clone(), operation.clone());
+    if matches!(first, Err(SftpOpsError::Connection(_))) {
+        safe_file_call(client, operation_id, operation)
+    } else {
+        first
+    }
+}
+
+fn acknowledge_safe_file_mutation(
+    client: &RemoteServerClient,
+    operation_id: &str,
+) -> Result<(), SftpOpsError> {
+    let response = safe_file_call(
+        client,
+        operation_id.to_string(),
+        safe_file_request::Operation::RetryRecovery(SafeFileRetryRecovery {}),
+    )?;
+    match response {
+        safe_file_response::Result::Mutation(_) => Ok(()),
+        _ => Err(unexpected_safe_file_response("mutation acknowledgement")),
+    }
+}
+
+fn pending_remote_recovery(
+    client: &RemoteServerClient,
+    operation_id: &str,
+) -> Result<Option<(RemoteRecoveryOperation, PathBuf)>, SftpOpsError> {
+    let response = safe_file_call(
+        client,
+        String::new(),
+        safe_file_request::Operation::ListRecoveries(SafeFileListRecoveries {}),
+    )?;
+    let safe_file_response::Result::Recoveries(recoveries) = response else {
+        return Err(unexpected_safe_file_response("recovery inventory"));
+    };
+    Ok(recoveries
+        .recoveries
+        .into_iter()
+        .find(|recovery| recovery.operation_id == operation_id)
+        .and_then(|recovery| {
+            recovery.paths.first().map(|path| {
+                (
+                    RemoteRecoveryOperation {
+                        operation_id: recovery.operation_id,
+                        source_preserved_after_commit: recovery.source_preserved_after_commit,
+                        action: RemoteRecoveryAction::Acknowledge,
+                    },
+                    PathBuf::from(path),
+                )
+            })
+        }))
+}
+
+struct RemoteSafeHandle {
+    client: Arc<RemoteServerClient>,
+    handle_id: String,
+    kind: FileEntryType,
+    owned_artifact: bool,
+}
+
+impl RemoteSafeHandle {
+    fn inspect(&self, path: Option<&Path>) -> Result<SafeFileInspectResult, SftpOpsError> {
+        let response = safe_file_call(
+            &self.client,
+            String::new(),
+            safe_file_request::Operation::InspectHandle(SafeFileInspectHandle {
+                handle_id: self.handle_id.clone(),
+                path: path
+                    .map(remote_path_string)
+                    .transpose()?
+                    .unwrap_or_default(),
+            }),
+        )?;
+        match response {
+            safe_file_response::Result::Inspected(inspected) => Ok(inspected),
+            _ => Err(unexpected_safe_file_response("inspect")),
+        }
+    }
+}
+
+impl Drop for RemoteSafeHandle {
+    fn drop(&mut self) {
+        if let Err(error) = self.client.close_safe_file_handle(self.handle_id.clone()) {
+            log::warn!("Closing remote safe-file handle failed: {error}");
+        }
+    }
+}
+
+impl BackendOwnershipAnchor for RemoteSafeHandle {
+    fn identity(&self) -> Result<StableEntryIdentity, SftpOpsError> {
+        let identity = self.inspect(None)?.identity.ok_or_else(|| {
+            SftpOpsError::Operation("Safe-file inspect returned no identity".to_string())
+        })?;
+        let identity = stable_identity_from_safe(identity);
+        if identity.file_type != self.kind || identity.object_id.is_empty() {
+            return Err(SftpOpsError::Operation(
+                "Safe-file handle identity is invalid".to_string(),
+            ));
+        }
+        Ok(identity)
+    }
+
+    fn matches_path(&self, path: &Path) -> Result<bool, SftpOpsError> {
+        Ok(self.inspect(Some(path))?.matches_path)
+    }
+
+    fn link_count(&self) -> Result<Option<u64>, SftpOpsError> {
+        Ok(self.inspect(None)?.link_count)
+    }
+}
+
+struct RemoteSafeFileReader {
+    handle: Arc<RemoteSafeHandle>,
+    eof: bool,
+}
+
+impl BackendFileReader for RemoteSafeFileReader {
+    fn read_chunk(&mut self, buffer: &mut [u8]) -> Result<usize, SftpOpsError> {
+        if buffer.is_empty() || self.eof {
+            return Ok(0);
+        }
+        let response = safe_file_call(
+            &self.handle.client,
+            String::new(),
+            safe_file_request::Operation::ReadHandle(SafeFileReadHandle {
+                handle_id: self.handle.handle_id.clone(),
+                max_bytes: buffer.len() as u64,
+            }),
+        )?;
+        let safe_file_response::Result::Read(read) = response else {
+            return Err(unexpected_safe_file_response("read"));
+        };
+        if read.bytes.len() > buffer.len() {
+            return Err(SftpOpsError::Operation(
+                "Remote safe-file read exceeded the requested chunk size".to_string(),
+            ));
+        }
+        buffer[..read.bytes.len()].copy_from_slice(&read.bytes);
+        self.eof = read.eof;
+        Ok(read.bytes.len())
+    }
+}
+
+struct RemoteSafeFileWriter {
+    handle: Arc<RemoteSafeHandle>,
+}
+
+impl BackendFileWriter for RemoteSafeFileWriter {
     fn write_chunk(&mut self, buffer: &[u8]) -> Result<(), SftpOpsError> {
-        self.0.write_all(buffer).map_err(Into::into)
+        let response = safe_file_call(
+            &self.handle.client,
+            String::new(),
+            safe_file_request::Operation::WriteHandle(SafeFileWriteHandle {
+                handle_id: self.handle.handle_id.clone(),
+                bytes: buffer.to_vec(),
+            }),
+        )?;
+        match response {
+            safe_file_response::Result::Mutation(_) => Ok(()),
+            _ => Err(unexpected_safe_file_response("write")),
+        }
     }
 
     fn flush(&mut self) -> Result<(), SftpOpsError> {
-        self.0.flush().map_err(Into::into)
+        let response = safe_file_call(
+            &self.handle.client,
+            String::new(),
+            safe_file_request::Operation::FlushHandle(SafeFileFlushHandle {
+                handle_id: self.handle.handle_id.clone(),
+            }),
+        )?;
+        match response {
+            safe_file_response::Result::Mutation(_) => Ok(()),
+            _ => Err(unexpected_safe_file_response("flush")),
+        }
+    }
+
+    fn ownership_anchor(
+        &mut self,
+    ) -> Result<Option<Arc<dyn BackendOwnershipAnchor>>, SftpOpsError> {
+        Ok(Some(self.handle.clone()))
     }
 }
 
 impl SftpBackend for LiveSftpBackend {
+    fn supports_atomic_exchange(&self) -> bool {
+        self.safe_files.is_available()
+    }
+
+    fn supports_identity_bound_cleanup(&self) -> bool {
+        self.safe_files.is_available()
+    }
+
+    fn startup_recovery_paths(&self) -> Vec<PathBuf> {
+        let Some(client) = self.safe_files.get() else {
+            return Vec::new();
+        };
+        let response = safe_file_call(
+            &client,
+            String::new(),
+            safe_file_request::Operation::ListRecoveries(SafeFileListRecoveries {}),
+        );
+        let Ok(safe_file_response::Result::Recoveries(recoveries)) = response else {
+            return Vec::new();
+        };
+        let recoveries = recoveries.recoveries.into_iter().filter_map(|recovery| {
+            recovery.paths.first().map(PathBuf::from).map(|path| {
+                (
+                    RemoteRecoveryOperation {
+                        operation_id: recovery.operation_id,
+                        source_preserved_after_commit: recovery.source_preserved_after_commit,
+                        action: RemoteRecoveryAction::Acknowledge,
+                    },
+                    path,
+                )
+            })
+        });
+        let mut routes = self
+            .recovery_operations
+            .lock()
+            .expect("safe-file recovery route lock poisoned");
+        replace_recovery_routes(&mut routes, recoveries)
+    }
+
+    fn retry_unresolved_recovery(&self, path: &Path) -> Result<Option<Vec<PathBuf>>, SftpOpsError> {
+        let operation = self
+            .recovery_operations
+            .lock()
+            .expect("safe-file recovery route lock poisoned")
+            .get(path)
+            .and_then(|operations| operations.first())
+            .cloned();
+        let Some(operation) = operation else {
+            return Ok(None);
+        };
+        let client = self.safe_client()?;
+        let response = safe_file_call(
+            &client,
+            operation.operation_id.clone(),
+            safe_file_request::Operation::RetryRecovery(SafeFileRetryRecovery {}),
+        );
+        let resolution = match response {
+            Ok(safe_file_response::Result::Mutation(_)) => {
+                if operation.source_preserved_after_commit {
+                    RemoteRecoveryResolution::DestinationCommittedSourcePreserved
+                } else {
+                    RemoteRecoveryResolution::MutationApplied
+                }
+            }
+            Ok(_) => return Err(unexpected_safe_file_response("recovery retry")),
+            Err(error) => match pending_remote_recovery(&client, &operation.operation_id) {
+                Ok(Some(_)) => return Err(error),
+                Ok(None) => self.replay_remote_recovery(&client, &operation)?,
+                Err(_) => return Err(error),
+            },
+        };
+        let mut routes = self
+            .recovery_operations
+            .lock()
+            .expect("safe-file recovery route lock poisoned");
+        if let Some(operations) = routes.get_mut(path) {
+            if operations.first() == Some(&operation) {
+                operations.remove(0);
+            }
+            if operations.is_empty() {
+                routes.remove(path);
+            }
+        }
+        match resolution {
+            RemoteRecoveryResolution::MutationApplied => {}
+            RemoteRecoveryResolution::DestinationCommittedSourcePreserved => {
+                self.recovered_source_preserved
+                    .lock()
+                    .expect("safe-file recovered-source lock poisoned")
+                    .insert(path.to_path_buf());
+            }
+            RemoteRecoveryResolution::SourceRestored => {
+                self.recovered_source_restored
+                    .lock()
+                    .expect("safe-file restored-source lock poisoned")
+                    .insert(path.to_path_buf());
+            }
+        }
+        Ok(Some(Vec::new()))
+    }
+
+    fn take_recovery_source_preserved(&self, path: &Path) -> bool {
+        self.recovered_source_preserved
+            .lock()
+            .expect("safe-file recovered-source lock poisoned")
+            .remove(path)
+    }
+
+    fn take_recovery_source_restored(&self, path: &Path) -> bool {
+        self.recovered_source_restored
+            .lock()
+            .expect("safe-file restored-source lock poisoned")
+            .remove(path)
+    }
+
+    fn existing_entry_ownership_anchor(
+        &self,
+        path: &Path,
+    ) -> Result<Option<Arc<dyn BackendOwnershipAnchor>>, SftpOpsError> {
+        let entry = self.lstat(path)?;
+        self.open_safe_handle(path, entry.file_type)
+            .map(|handle| Some(handle as Arc<dyn BackendOwnershipAnchor>))
+    }
+
     fn preflight_safe_mutation(
         &self,
         path: &Path,
-        require_exchange: bool,
+        _require_exchange: bool,
     ) -> Result<(), SftpOpsError> {
-        if require_exchange {
-            return Err(SftpOpsError::Operation(format!(
-                "Atomic exchange is unsupported for {}",
+        self.safe_client().map(|_| ()).map_err(|_| {
+            SftpOpsError::CapabilityRequired(format!(
+                "Secure remote file transactions are unavailable for {}",
                 path.display()
-            )));
-        }
-        Ok(())
+            ))
+        })
     }
 
     fn list_dir(&self, path: &Path) -> Result<Vec<FileEntry>, SftpOpsError> {
@@ -1205,8 +2021,67 @@ impl SftpBackend for LiveSftpBackend {
         sftp_ops::create_dir(&self.sftp, path)
     }
 
+    fn create_dir_with_ownership_anchor(
+        &self,
+        path: &Path,
+    ) -> Result<Option<Arc<dyn BackendOwnershipAnchor>>, SftpOpsError> {
+        self.create_safe_handle(path, FileEntryType::Directory)
+            .map(|handle| Some(handle as Arc<dyn BackendOwnershipAnchor>))
+    }
+
     fn rename(&self, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
-        sftp_ops::rename(&self.sftp, old_path, new_path)
+        let entry = self.lstat(old_path)?;
+        let handle = self.open_safe_handle(old_path, entry.file_type)?;
+        self.rename_safe_handle(
+            &handle,
+            old_path,
+            new_path,
+            SafeFileRenameMode::NoReplace,
+            None,
+        )
+    }
+
+    fn rename_if_matches(
+        &self,
+        old_path: &Path,
+        new_path: &Path,
+        anchor: Arc<dyn BackendOwnershipAnchor>,
+    ) -> Result<(), SftpOpsError> {
+        if !anchor.matches_path(old_path)? {
+            return Err(SftpOpsError::Operation(format!(
+                "Remote rename source ownership changed at {}",
+                old_path.display()
+            )));
+        }
+        let expected = anchor.identity()?;
+        let handle = self.open_safe_handle(old_path, expected.file_type)?;
+        let actual = handle.identity()?;
+        if !same_immutable_object(&expected, &actual) {
+            return Err(SftpOpsError::Operation(format!(
+                "Remote rename source identity changed at {}",
+                old_path.display()
+            )));
+        }
+        self.rename_safe_handle(
+            &handle,
+            old_path,
+            new_path,
+            SafeFileRenameMode::NoReplace,
+            None,
+        )
+    }
+
+    fn replace(&self, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
+        let source_entry = self.lstat(old_path)?;
+        let target_identity = self.stable_identity(new_path)?;
+        let source = self.open_safe_handle(old_path, source_entry.file_type)?;
+        self.rename_safe_handle(
+            &source,
+            old_path,
+            new_path,
+            SafeFileRenameMode::Exchange,
+            Some(safe_identity_from_stable(&target_identity)?),
+        )
     }
 
     fn delete_file_if_matches(
@@ -1215,49 +2090,72 @@ impl SftpBackend for LiveSftpBackend {
         expected: &StableEntryIdentity,
         expected_sha256: &str,
     ) -> Result<(), SftpOpsError> {
-        if !has_immutable_object_token(expected) {
-            return Err(SftpOpsError::RecoveryRequired {
-                message: format!(
-                    "Remote cleanup cannot prove immutable ownership of {}",
-                    path.display()
-                ),
-                recovery_id: None,
-                paths: vec![path.to_path_buf()],
-                committed: false,
-            });
-        }
-        let tombstone = Self::cleanup_tombstone(path);
-        let rename_error = self.rename(path, &tombstone).err();
-        isolate_cleanup_entry(self, path, &tombstone, expected, rename_error)?;
-        let actual = self.stable_identity(&tombstone);
-        let digest = self.file_sha256(&tombstone);
-        if !actual.as_ref().is_ok_and(|actual| *actual == *expected)
-            || !digest
-                .as_ref()
-                .is_ok_and(|digest| digest == expected_sha256)
-        {
-            let primary = actual.err().or_else(|| digest.err()).unwrap_or_else(|| {
-                SftpOpsError::Operation(format!(
-                    "Cleanup file changed before deletion at {}",
-                    path.display()
-                ))
-            });
-            return Err(self.restore_isolated_cleanup(path, &tombstone, &primary));
-        }
-        match sftp_ops::delete_file(&self.sftp, &tombstone) {
-            Ok(()) => Ok(()),
-            Err(error) => match self.entry_exists(&tombstone) {
-                Ok(false) => Err(error),
-                Ok(true) => Err(self.restore_isolated_cleanup(path, &tombstone, &error)),
-                Err(probe_error) => Err(SftpOpsError::RecoveryRequired {
-                    message: format!(
-                        "{error}; probing isolated cleanup file failed: {probe_error}"
-                    ),
+        let client = self.safe_client()?;
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let delete = SafeFileDelete {
+            path: remote_path_string(path)?,
+            expected: Some(safe_identity_from_stable(expected)?),
+            expected_sha256: Some(expected_sha256.to_string()),
+        };
+        let replay = RemoteRecoveryOperation {
+            operation_id: operation_id.clone(),
+            source_preserved_after_commit: false,
+            action: RemoteRecoveryAction::Delete(delete.clone()),
+        };
+        let response = journaled_safe_file_call(
+            &client,
+            operation_id.clone(),
+            safe_file_request::Operation::Delete(delete),
+        );
+        let response = match response {
+            Ok(response) => response,
+            Err(SftpOpsError::Connection(message)) => {
+                self.retain_remote_recovery(path.to_path_buf(), replay);
+                return Err(SftpOpsError::RecoveryRequired {
+                    message: format!("Remote delete acknowledgement was lost: {message}"),
                     recovery_id: None,
-                    paths: vec![path.to_path_buf(), tombstone],
+                    paths: vec![path.to_path_buf()],
                     committed: false,
-                }),
-            },
+                });
+            }
+            Err(error) => {
+                if let Some((operation, recovery_path)) =
+                    pending_remote_recovery(&client, &operation_id)?
+                {
+                    self.retain_remote_recovery(recovery_path.clone(), operation);
+                    return Err(SftpOpsError::RecoveryRequired {
+                        message: error.to_string(),
+                        recovery_id: None,
+                        paths: vec![recovery_path],
+                        committed: false,
+                    });
+                }
+                return Err(error);
+            }
+        };
+        match response {
+            safe_file_response::Result::Mutation(_) => {
+                if let Err(error) = acknowledge_safe_file_mutation(&client, &operation_id) {
+                    self.retain_remote_recovery(
+                        path.to_path_buf(),
+                        RemoteRecoveryOperation {
+                            operation_id,
+                            source_preserved_after_commit: false,
+                            action: RemoteRecoveryAction::Acknowledge,
+                        },
+                    );
+                    return Err(SftpOpsError::RecoveryRequired {
+                        message: format!(
+                            "Remote delete committed but acknowledgement was lost: {error}"
+                        ),
+                        recovery_id: None,
+                        paths: vec![path.to_path_buf()],
+                        committed: true,
+                    });
+                }
+                Ok(())
+            }
+            _ => Err(unexpected_safe_file_response("delete")),
         }
     }
 
@@ -1266,47 +2164,72 @@ impl SftpBackend for LiveSftpBackend {
         path: &Path,
         expected: &StableEntryIdentity,
     ) -> Result<(), SftpOpsError> {
-        if !has_immutable_object_token(expected) {
-            return Err(SftpOpsError::RecoveryRequired {
-                message: format!(
-                    "Remote cleanup cannot prove immutable ownership of {}",
-                    path.display()
-                ),
-                recovery_id: None,
-                paths: vec![path.to_path_buf()],
-                committed: false,
-            });
-        }
-        let tombstone = Self::cleanup_tombstone(path);
-        let rename_error = self.rename(path, &tombstone).err();
-        isolate_cleanup_entry(self, path, &tombstone, expected, rename_error)?;
-        let actual = self.stable_identity(&tombstone);
-        let entries = self.list_dir(&tombstone);
-        let matches = actual.as_ref().is_ok_and(|actual| *actual == *expected)
-            && entries.as_ref().is_ok_and(|entries| entries.is_empty());
-        if !matches {
-            let primary = actual.err().or_else(|| entries.err()).unwrap_or_else(|| {
-                SftpOpsError::Operation(format!(
-                    "Cleanup directory changed before deletion at {}",
-                    path.display()
-                ))
-            });
-            return Err(self.restore_isolated_cleanup(path, &tombstone, &primary));
-        }
-        match self.sftp.remove_dir(&tombstone).map_err(SftpOpsError::from) {
-            Ok(()) => Ok(()),
-            Err(error) => match self.entry_exists(&tombstone) {
-                Ok(false) => Err(error),
-                Ok(true) => Err(self.restore_isolated_cleanup(path, &tombstone, &error)),
-                Err(probe_error) => Err(SftpOpsError::RecoveryRequired {
-                    message: format!(
-                        "{error}; probing isolated cleanup directory failed: {probe_error}"
-                    ),
+        let client = self.safe_client()?;
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let delete = SafeFileDelete {
+            path: remote_path_string(path)?,
+            expected: Some(safe_identity_from_stable(expected)?),
+            expected_sha256: None,
+        };
+        let replay = RemoteRecoveryOperation {
+            operation_id: operation_id.clone(),
+            source_preserved_after_commit: false,
+            action: RemoteRecoveryAction::Delete(delete.clone()),
+        };
+        let response = journaled_safe_file_call(
+            &client,
+            operation_id.clone(),
+            safe_file_request::Operation::Delete(delete),
+        );
+        let response = match response {
+            Ok(response) => response,
+            Err(SftpOpsError::Connection(message)) => {
+                self.retain_remote_recovery(path.to_path_buf(), replay);
+                return Err(SftpOpsError::RecoveryRequired {
+                    message: format!("Remote directory-delete acknowledgement was lost: {message}"),
                     recovery_id: None,
-                    paths: vec![path.to_path_buf(), tombstone],
+                    paths: vec![path.to_path_buf()],
                     committed: false,
-                }),
-            },
+                });
+            }
+            Err(error) => {
+                if let Some((operation, recovery_path)) =
+                    pending_remote_recovery(&client, &operation_id)?
+                {
+                    self.retain_remote_recovery(recovery_path.clone(), operation);
+                    return Err(SftpOpsError::RecoveryRequired {
+                        message: error.to_string(),
+                        recovery_id: None,
+                        paths: vec![recovery_path],
+                        committed: false,
+                    });
+                }
+                return Err(error);
+            }
+        };
+        match response {
+            safe_file_response::Result::Mutation(_) => {
+                if let Err(error) = acknowledge_safe_file_mutation(&client, &operation_id) {
+                    self.retain_remote_recovery(
+                        path.to_path_buf(),
+                        RemoteRecoveryOperation {
+                            operation_id,
+                            source_preserved_after_commit: false,
+                            action: RemoteRecoveryAction::Acknowledge,
+                        },
+                    );
+                    return Err(SftpOpsError::RecoveryRequired {
+                        message: format!(
+                            "Remote directory delete committed but acknowledgement was lost: {error}"
+                        ),
+                        recovery_id: None,
+                        paths: vec![path.to_path_buf()],
+                        committed: true,
+                    });
+                }
+                Ok(())
+            }
+            _ => Err(unexpected_safe_file_response("directory delete")),
         }
     }
 
@@ -1323,40 +2246,57 @@ impl SftpBackend for LiveSftpBackend {
 
     fn lstat(&self, path: &Path) -> Result<FileEntry, SftpOpsError> {
         let metadata = self.sftp.lstat(path)?;
-        Ok(Self::metadata_to_entry(path, metadata))
+        let mut entry = Self::metadata_to_entry(path, metadata);
+        if self.safe_files.is_available()
+            && matches!(
+                entry.file_type,
+                FileEntryType::File | FileEntryType::Directory
+            )
+        {
+            entry.identity = self.stable_identity(path)?;
+        }
+        Ok(entry)
+    }
+
+    fn modification_time(
+        &self,
+        path: &Path,
+    ) -> Result<Option<std::time::SystemTime>, SftpOpsError> {
+        Ok(self.sftp.lstat(path)?.modified)
     }
 
     fn stable_identity(&self, path: &Path) -> Result<StableEntryIdentity, SftpOpsError> {
         let metadata = self.sftp.lstat(path)?;
-        let file_type = match metadata.file_type {
-            zap_sftp::types::FileType::Dir => FileEntryType::Directory,
+        let kind = match metadata.file_type {
             zap_sftp::types::FileType::File => FileEntryType::File,
-            zap_sftp::types::FileType::Symlink => FileEntryType::Symlink,
-            zap_sftp::types::FileType::Other => FileEntryType::Other,
+            zap_sftp::types::FileType::Dir => FileEntryType::Directory,
+            zap_sftp::types::FileType::Symlink => {
+                return Err(SftpOpsError::Operation(format!(
+                    "Refusing to identify remote symbolic link {}",
+                    path.display()
+                )))
+            }
+            zap_sftp::types::FileType::Other => {
+                return Err(SftpOpsError::Operation(format!(
+                    "Refusing to identify remote special file {}",
+                    path.display()
+                )))
+            }
         };
-        let modified = metadata
-            .modified
-            .and_then(|time| time.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        Ok(StableEntryIdentity {
-            file_type,
-            size: metadata.size,
-            object_id: String::new(),
-            revision: format!("{}:{}:{modified}", metadata.uid, metadata.gid),
-        })
+        self.open_safe_handle(path, kind)?.identity()
     }
 
     fn open_file_reader(&self, path: &Path) -> Result<Box<dyn BackendFileReader>, SftpOpsError> {
-        let file = self.sftp.open(path, zap_sftp::types::OpenOptions::read())?;
-        Ok(Box::new(LiveFileReader(file)))
+        Ok(Box::new(RemoteSafeFileReader {
+            handle: self.open_safe_handle(path, FileEntryType::File)?,
+            eof: false,
+        }))
     }
 
     fn create_file_writer(&self, path: &Path) -> Result<Box<dyn BackendFileWriter>, SftpOpsError> {
-        let file = self
-            .sftp
-            .open(path, zap_sftp::types::OpenOptions::create_new())?;
-        Ok(Box::new(LiveFileWriter(file)))
+        Ok(Box::new(RemoteSafeFileWriter {
+            handle: self.create_safe_handle(path, FileEntryType::File)?,
+        }))
     }
 
     fn upload_file(
@@ -1420,6 +2360,7 @@ impl SftpBackend for LiveSftpBackend {
     }
 
     fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
+        validate_copy_destination(src, dst, false)?;
         let mut reader = self.open_file_reader(src)?;
         let mut writer = self.create_file_writer(dst)?;
         let mut buffer = vec![0_u8; super::transfer_job::STREAM_CHUNK_SIZE];
@@ -1858,6 +2799,28 @@ impl BackendFileWriter for CorruptingFileWriter {
         &mut self,
     ) -> Result<Option<Arc<dyn BackendOwnershipAnchor>>, SftpOpsError> {
         local_ownership_anchor(&self.file, &self.root).map(Some)
+    }
+}
+
+fn stable_identity_from_remote_metadata(
+    metadata: &zap_sftp::types::Metadata,
+) -> StableEntryIdentity {
+    let file_type = match metadata.file_type {
+        zap_sftp::types::FileType::Dir => FileEntryType::Directory,
+        zap_sftp::types::FileType::File => FileEntryType::File,
+        zap_sftp::types::FileType::Symlink => FileEntryType::Symlink,
+        zap_sftp::types::FileType::Other => FileEntryType::Other,
+    };
+    let modified = metadata
+        .modified
+        .and_then(|time| time.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    StableEntryIdentity {
+        file_type,
+        size: metadata.size,
+        object_id: String::new(),
+        revision: format!("{}:{}:{modified}", metadata.uid, metadata.gid),
     }
 }
 
@@ -8710,6 +9673,7 @@ impl InMemorySftpBackend {
             size: if meta.is_dir() { 0 } else { meta.len() },
             modified,
             permissions: None,
+            identity: stable_identity_from_local_metadata(meta),
         }
     }
 }
@@ -10045,6 +11009,16 @@ impl SftpBackend for InMemorySftpBackend {
         Ok(self.metadata_to_entry(name, &local, &meta))
     }
 
+    fn modification_time(
+        &self,
+        path: &Path,
+    ) -> Result<Option<std::time::SystemTime>, SftpOpsError> {
+        let local = self.to_local(path)?;
+        let metadata =
+            fs::symlink_metadata(local).map_err(|error| map_local_metadata_error(path, error))?;
+        Ok(metadata.modified().ok())
+    }
+
     fn stable_identity(&self, path: &Path) -> Result<StableEntryIdentity, SftpOpsError> {
         #[cfg(test)]
         if self.fail_staged_identity
@@ -10186,6 +11160,7 @@ impl SftpBackend for InMemorySftpBackend {
     }
 
     fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), SftpOpsError> {
+        validate_copy_destination(src, dst, false)?;
         let total = self.lstat(src)?.size;
         let mut reader = self.open_file_reader(src)?;
         let dst_local = self.to_local(dst)?;
@@ -10310,7 +11285,7 @@ fn copy_reader_into_place(
         if overwrite_destination {
             fs::rename(&temp, dest)
         } else {
-            fs::hard_link(&temp, dest).and_then(|()| fs::remove_file(&temp))
+            publish_copy_without_replacement(&temp, dest)
         }
         .map_err(|error| {
             SftpOpsError::LocalIo(format!("Failed to finalize streamed copy: {error}"))
@@ -10329,6 +11304,7 @@ fn copy_into_place_with_mode(
     cancel_flag: Option<&AtomicBool>,
     overwrite_destination: bool,
 ) -> Result<(), SftpOpsError> {
+    validate_copy_destination(src, dest, false)?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| SftpOpsError::LocalIo(format!("Failed to create directory: {e}")))?;
@@ -10376,13 +11352,9 @@ fn copy_into_place_with_mode(
             fs::rename(&temp, dest)
                 .map_err(|e| SftpOpsError::LocalIo(format!("Failed to finalize copy: {e}")))
         } else {
-            fs::hard_link(&temp, dest)
-                .and_then(|()| fs::remove_file(&temp))
-                .map_err(|e| {
-                    SftpOpsError::LocalIo(format!(
-                        "Failed to finalize copy without replacement: {e}"
-                    ))
-                })
+            publish_copy_without_replacement(&temp, dest).map_err(|e| {
+                SftpOpsError::LocalIo(format!("Failed to finalize copy without replacement: {e}"))
+            })
         }
     })();
 
@@ -10391,6 +11363,26 @@ fn copy_into_place_with_mode(
         let _ = fs::remove_file(&temp);
     }
     result
+}
+
+fn publish_copy_without_replacement(temp: &Path, dest: &Path) -> std::io::Result<()> {
+    publish_copy_without_replacement_with_cleanup(temp, dest, fs::remove_file)
+}
+
+fn publish_copy_without_replacement_with_cleanup(
+    temp: &Path,
+    dest: &Path,
+    cleanup_temp: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    fs::hard_link(temp, dest)?;
+    if let Err(error) = cleanup_temp(temp) {
+        log::warn!(
+            "copy published at {} but temporary link {} could not be removed: {error}",
+            dest.display(),
+            temp.display()
+        );
+    }
+    Ok(())
 }
 
 /// Convenience method for creating Arc<dyn SftpBackend>.
@@ -10402,294 +11394,8 @@ impl InMemorySftpBackend {
 }
 
 #[cfg(test)]
-mod data_safety_tests {
-    use super::*;
-    use std::sync::atomic::AtomicBool;
-
-    fn backend() -> (InMemorySftpBackend, tempfile::TempDir) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        (InMemorySftpBackend::new(dir.path().to_path_buf()), dir)
-    }
-
-    /// Renaming onto an existing name must refuse, not silently destroy it.
-    /// `fs::rename` overwrites on Unix; the remote backend has always used
-    /// `overwrite: false`, and this is the local path catching up (RC audit).
-    #[test]
-    fn local_rename_never_replaces_existing_destination() {
-        let (be, dir) = backend();
-        fs::write(dir.path().join("victim.txt"), b"PRECIOUS").unwrap();
-        fs::write(dir.path().join("source.txt"), b"new").unwrap();
-
-        let err = be
-            .rename(Path::new("/source.txt"), Path::new("/victim.txt"))
-            .expect_err("renaming onto an existing file must fail");
-        assert!(
-            matches!(err, SftpOpsError::Operation(ref m) if m.contains("already exists")),
-            "expected an already-exists conflict, got {err:?}"
-        );
-        assert_eq!(
-            fs::read(dir.path().join("victim.txt")).unwrap(),
-            b"PRECIOUS",
-            "the existing file must be untouched"
-        );
-    }
-
-    /// A destination created after the initial lookup is still a conflict.
-    /// The commit itself must be no-replace; a check followed by plain rename
-    /// loses this race on Unix.
-    #[test]
-    fn local_rename_never_replaces_concurrently_created_destination() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        fs::write(dir.path().join("source.txt"), b"source").unwrap();
-        let backend =
-            InMemorySftpBackend::new(dir.path().to_path_buf()).with_before_rename(|destination| {
-                fs::write(destination, b"CONCURRENT").unwrap();
-            });
-
-        backend
-            .rename(Path::new("/source.txt"), Path::new("/destination.txt"))
-            .expect_err("an atomically created destination must block rename");
-
-        assert_eq!(
-            fs::read(dir.path().join("destination.txt")).unwrap(),
-            b"CONCURRENT",
-            "rename must not replace the destination created in the race window"
-        );
-        assert!(
-            dir.path().join("source.txt").exists(),
-            "failed rename must preserve its source"
-        );
-    }
-
-    /// The exchange primitive swaps unlike entry types without unlinking
-    /// either object.
-    #[test]
-    fn local_atomic_exchange_swaps_file_and_directory_without_data_loss() {
-        let (be, dir) = backend();
-        fs::write(dir.path().join("source.txt"), b"replacement").unwrap();
-        fs::create_dir(dir.path().join("destination")).unwrap();
-        fs::write(dir.path().join("destination/precious.txt"), b"PRECIOUS").unwrap();
-
-        be.replace(Path::new("/source.txt"), Path::new("/destination"))
-            .expect("the platform exchange primitive must swap both entries");
-
-        assert_eq!(
-            fs::read(dir.path().join("destination")).unwrap(),
-            b"replacement",
-            "the source file must move to the destination path"
-        );
-        assert_eq!(
-            fs::read(dir.path().join("source.txt/precious.txt")).unwrap(),
-            b"PRECIOUS",
-            "the displaced directory must remain intact at the source path"
-        );
-    }
-
-    /// A cancelled copy must leave the destination exactly as it was — the old
-    /// code wrote straight into it, so a cancel truncated a good file.
-    #[test]
-    fn local_copy_failure_keeps_existing_destination_intact() {
-        let (be, dir) = backend();
-        let dest = dir.path().join("dest.bin");
-        fs::write(&dest, b"ORIGINAL-CONTENT").unwrap();
-        // Source big enough that the cancel is observed inside the copy loop.
-        fs::write(dir.path().join("src.bin"), vec![b'x'; 512 * 1024]).unwrap();
-
-        let cancel = AtomicBool::new(true);
-        let err = be
-            .upload_file(
-                &dir.path().join("src.bin"),
-                Path::new("/dest.bin"),
-                None,
-                Some(&cancel),
-            )
-            .expect_err("a pre-cancelled copy must fail");
-        assert!(matches!(err, SftpOpsError::Cancelled), "got {err:?}");
-        assert_eq!(
-            fs::read(&dest).unwrap(),
-            b"ORIGINAL-CONTENT",
-            "a cancelled copy must not touch the destination"
-        );
-        // And it must not litter: no partial left behind.
-        let leftovers: Vec<_> = fs::read_dir(dir.path())
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.contains("zaplex_partial"))
-            .collect();
-        assert!(leftovers.is_empty(), "partial left behind: {leftovers:?}");
-    }
-
-    /// A successful copy still replaces the destination completely.
-    #[test]
-    fn successful_copy_replaces_the_destination() {
-        let (be, dir) = backend();
-        fs::write(dir.path().join("dest.bin"), b"OLD").unwrap();
-        fs::write(dir.path().join("src.bin"), b"NEW-CONTENT").unwrap();
-
-        be.upload_file(
-            &dir.path().join("src.bin"),
-            Path::new("/dest.bin"),
-            None,
-            None,
-        )
-        .expect("copy should succeed");
-        assert_eq!(
-            fs::read(dir.path().join("dest.bin")).unwrap(),
-            b"NEW-CONTENT"
-        );
-    }
-
-    /// Independent transfers targeting the same final name must never share
-    /// their in-progress file. Otherwise either transfer can truncate, rename
-    /// or clean up the other transfer's bytes.
-    #[test]
-    fn concurrent_copies_reserve_distinct_temporary_paths() {
-        let destination = Path::new("/tmp/destination.bin");
-
-        let first = temp_sibling(destination).unwrap();
-        let second = temp_sibling(destination).unwrap();
-
-        assert_ne!(
-            first, second,
-            "each transfer needs an exclusive temporary sibling"
-        );
-    }
-
-    #[test]
-    fn local_no_replace_copy_preserves_existing_destination() {
-        let (backend, dir) = backend();
-        let source = dir.path().join("source.bin");
-        fs::write(&source, b"NEW").unwrap();
-        fs::write(dir.path().join("destination.bin"), b"EXISTING").unwrap();
-
-        backend
-            .upload_file_no_replace(&source, Path::new("/destination.bin"), None, None)
-            .expect_err("an unconfirmed copy must not replace its destination");
-
-        assert_eq!(
-            fs::read(dir.path().join("destination.bin")).unwrap(),
-            b"EXISTING"
-        );
-    }
-
-    /// Exclusive temp creation must reject symlink collisions instead of
-    /// truncating the symlink target through `File::create`.
-    #[cfg(unix)]
-    #[test]
-    fn local_copy_temp_creation_never_follows_existing_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let (backend, dir) = backend();
-        let source = dir.path().join("source.bin");
-        let destination = dir.path().join("destination.bin");
-        let victim = dir.path().join("victim.bin");
-        fs::write(&source, b"NEW").unwrap();
-        fs::write(&victim, b"PRECIOUS").unwrap();
-
-        let first_sequence = COPY_TEMP_COUNTER.load(Ordering::Relaxed);
-        for sequence in first_sequence..first_sequence + 32 {
-            let candidate = destination.with_file_name(format!(
-                ".destination.bin.zaplex_partial-{}-{sequence}",
-                std::process::id()
-            ));
-            symlink(&victim, candidate).unwrap();
-        }
-
-        backend
-            .upload_file(&source, Path::new("/destination.bin"), None, None)
-            .expect("copy should retry after colliding with symlinks");
-
-        assert_eq!(
-            fs::read(&victim).unwrap(),
-            b"PRECIOUS",
-            "temporary-file creation must never follow a symlink"
-        );
-        assert_eq!(fs::read(destination).unwrap(), b"NEW");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn stat_follows_a_symlink_to_a_file() {
-        use std::os::unix::fs::symlink;
-
-        let (be, dir) = backend();
-        fs::write(dir.path().join("target.txt"), b"target").unwrap();
-        symlink("target.txt", dir.path().join("link.txt")).unwrap();
-
-        let entry = be
-            .stat(Path::new("/link.txt"))
-            .expect("a valid file symlink should resolve");
-
-        assert_eq!(entry.file_type, FileEntryType::File);
-        assert_eq!(entry.size, 6);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn stat_follows_a_symlink_to_a_directory() {
-        use std::os::unix::fs::symlink;
-
-        let (be, dir) = backend();
-        fs::create_dir(dir.path().join("target-dir")).unwrap();
-        symlink("target-dir", dir.path().join("link-dir")).unwrap();
-
-        let entry = be
-            .stat(Path::new("/link-dir"))
-            .expect("a valid directory symlink should resolve");
-
-        assert_eq!(entry.file_type, FileEntryType::Directory);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn stat_rejects_a_broken_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let (be, dir) = backend();
-        symlink("missing-target", dir.path().join("broken-link")).unwrap();
-
-        assert_eq!(
-            be.lstat(Path::new("/broken-link")).unwrap().file_type,
-            FileEntryType::Symlink,
-            "lstat must still see a broken link for overwrite/delete checks"
-        );
-        be.stat(Path::new("/broken-link"))
-            .expect_err("a broken symlink must not masquerade as a usable entry");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn deleting_a_directory_symlink_never_deletes_its_target() {
-        use std::os::unix::fs::symlink;
-
-        let (be, dir) = backend();
-        fs::create_dir(dir.path().join("target-dir")).unwrap();
-        fs::write(dir.path().join("target-dir/keep.txt"), b"keep").unwrap();
-        symlink("target-dir", dir.path().join("link-dir")).unwrap();
-
-        let listed = be.list_dir(Path::new("/")).unwrap();
-        let link = listed
-            .iter()
-            .find(|entry| entry.name == "link-dir")
-            .expect("the symlink should be listed");
-        assert_eq!(
-            link.file_type,
-            FileEntryType::Symlink,
-            "directory listings must retain lstat semantics for destructive decisions"
-        );
-
-        be.delete_file(Path::new("/link-dir"))
-            .expect("deleting the link should succeed");
-
-        assert_eq!(dir.path().join("link-dir").exists(), false);
-        assert_eq!(
-            fs::read(dir.path().join("target-dir/keep.txt")).unwrap(),
-            b"keep",
-            "deleting the symlink must not recurse into its directory target"
-        );
-    }
-}
+#[path = "sftp_backend_data_safety_tests.rs"]
+mod data_safety_tests;
 
 #[cfg(test)]
 #[path = "sftp_backend_tests.rs"]

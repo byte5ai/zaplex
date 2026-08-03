@@ -60,6 +60,12 @@ message ClientMessage {
     // daemon-owned PTY that currently hosts it.
     BindAgentPty bind_agent_pty = 34;
     UnbindAgentPty unbind_agent_pty = 35;
+    // Descriptor-bound, journaled file transaction. Clients must negotiate
+    // "safe-file-transactions-v1" before using this request.
+    SafeFileRequest safe_file = 36;
+    // Typed inventory of existing tmux/byobu sessions. Clients must negotiate
+    // "multiplexer-inventory-v1" before using this request.
+    ListMultiplexerSessions list_multiplexer_sessions = 37;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -109,6 +115,8 @@ message ServerMessage {
     AgentProcessSignalResponse agent_process_signal_response = 32;
     // Correlated, typed result for BindAgentPty / UnbindAgentPty.
     AgentPtyBindingResponse agent_pty_binding_response = 33;
+    SafeFileResponse safe_file_response = 34;
+    MultiplexerSessionList multiplexer_session_list = 35;
   }
 }
 
@@ -597,6 +605,154 @@ message WriteFileChunkResponse {
   }
 }
 
+// ── Safe file transactions ───────────────────────────────────────
+
+enum SafeFileEntryKind {
+  SAFE_FILE_ENTRY_KIND_UNSPECIFIED = 0;
+  SAFE_FILE_REGULAR = 1;
+  SAFE_FILE_DIRECTORY = 2;
+}
+
+message SafeFileIdentity {
+  SafeFileEntryKind kind = 1;
+  uint64 size = 2;
+  // Unix device + inode encoded as an opaque token. Clients compare it but
+  // never interpret it.
+  string object_id = 3;
+  // Includes size and modification time so content changes on the same inode
+  // are visible while a path-only rename keeps the revision stable.
+  string revision = 4;
+}
+
+message SafeFileOpenExisting {
+  string path = 1;
+  SafeFileEntryKind expected_kind = 2;
+}
+
+message SafeFileCreateExclusive {
+  string path = 1;
+  SafeFileEntryKind kind = 2;
+}
+
+message SafeFileReadHandle {
+  string handle_id = 1;
+  uint64 max_bytes = 2;
+}
+
+message SafeFileWriteHandle {
+  string handle_id = 1;
+  bytes bytes = 2;
+}
+
+message SafeFileFlushHandle {
+  string handle_id = 1;
+}
+
+message SafeFileInspectHandle {
+  string handle_id = 1;
+  string path = 2;
+}
+
+message SafeFileCloseHandle {
+  string handle_id = 1;
+}
+
+enum SafeFileRenameMode {
+  SAFE_FILE_RENAME_MODE_UNSPECIFIED = 0;
+  SAFE_FILE_RENAME_NO_REPLACE = 1;
+  SAFE_FILE_RENAME_EXCHANGE = 2;
+}
+
+message SafeFileRename {
+  string handle_id = 1;
+  string old_path = 2;
+  string new_path = 3;
+  SafeFileRenameMode mode = 4;
+  // Required for exchange. The mutation is refused if the destination is no
+  // longer this exact object.
+  optional SafeFileIdentity expected_target = 5;
+}
+
+message SafeFileDelete {
+  string path = 1;
+  SafeFileIdentity expected = 2;
+  // Required for regular files and omitted for empty directories.
+  optional string expected_sha256 = 3;
+}
+
+message SafeFileListRecoveries {}
+
+message SafeFileRetryRecovery {}
+
+message SafeFileRequest {
+  // Required for create/rename/delete. Reusing an id returns the persisted
+  // result instead of executing a second mutation.
+  string operation_id = 1;
+  oneof operation {
+    SafeFileOpenExisting open_existing = 2;
+    SafeFileCreateExclusive create_exclusive = 3;
+    SafeFileReadHandle read_handle = 4;
+    SafeFileWriteHandle write_handle = 5;
+    SafeFileFlushHandle flush_handle = 6;
+    SafeFileInspectHandle inspect_handle = 7;
+    SafeFileCloseHandle close_handle = 8;
+    SafeFileRename rename = 9;
+    SafeFileDelete delete = 10;
+    SafeFileListRecoveries list_recoveries = 11;
+    SafeFileRetryRecovery retry_recovery = 12;
+  }
+}
+
+message SafeFileOpened {
+  string handle_id = 1;
+  SafeFileIdentity identity = 2;
+}
+
+message SafeFileReadResult {
+  bytes bytes = 1;
+  bool eof = 2;
+}
+
+message SafeFileInspectResult {
+  SafeFileIdentity identity = 1;
+  bool matches_path = 2;
+  optional uint64 link_count = 3;
+}
+
+enum SafeFileMutationState {
+  SAFE_FILE_MUTATION_STATE_UNSPECIFIED = 0;
+  SAFE_FILE_MUTATION_APPLIED = 1;
+  SAFE_FILE_MUTATION_ALREADY_APPLIED = 2;
+}
+
+message SafeFileMutationResult {
+  SafeFileMutationState state = 1;
+}
+
+message SafeFileRecovery {
+  string operation_id = 1;
+  repeated string paths = 2;
+  // A successfully reconciled rename commits the destination while leaving
+  // the higher-level move source intact. The client uses this to report the
+  // recovered transfer honestly instead of presenting it as a completed move.
+  bool source_preserved_after_commit = 3;
+}
+
+message SafeFileRecoveryList {
+  repeated SafeFileRecovery recoveries = 1;
+}
+
+message SafeFileResponse {
+  oneof result {
+    SafeFileOpened opened = 1;
+    SafeFileReadResult read = 2;
+    SafeFileInspectResult inspected = 3;
+    SafeFileMutationResult mutation = 4;
+    SafeFileRecoveryList recoveries = 5;
+    FileOperationError error = 15;
+  }
+}
+
 // ── Native Remote Session Layer (zaplex native session host) ──────────
 // See docs/superpowers/plans/2026-06-24-native-remote-session-layer.md.
 //
@@ -769,6 +925,40 @@ message SessionInfo {
 // Daemon → client: result of ListSessions.
 message SessionList {
   repeated SessionInfo sessions = 1;
+  // Host-wide output-ring cap enforced by the daemon. Older daemons omit this
+  // field, which decodes as 0 (unknown) and must not be guessed by the client.
+  uint64 host_ring_cap_bytes = 2;
+}
+
+// Client → daemon: enumerate existing terminal-multiplexer sessions without
+// attaching to them or interpolating their names into shell commands.
+message ListMultiplexerSessions {}
+
+enum MultiplexerKind {
+  MULTIPLEXER_KIND_UNSPECIFIED = 0;
+  MULTIPLEXER_KIND_TMUX = 1;
+  MULTIPLEXER_KIND_BYOBU_TMUX = 2;
+  MULTIPLEXER_KIND_BYOBU_SCREEN = 3;
+}
+
+// One attachable multiplexer session. `target` is the exact opaque value the
+// backend reported and must be passed as one argv/data value when attaching;
+// `name` is presentation-only and may omit a screen PID prefix.
+message MultiplexerSessionInfo {
+  MultiplexerKind kind = 1;
+  string target = 2;
+  string name = 3;
+  // 0 means the backend did not report a reliable value.
+  uint32 windows = 4;
+  uint32 attached_clients = 5;
+}
+
+// Daemon → client: typed multiplexer inventory. A missing executable or an
+// absent multiplexer server is an empty, successful result. Real scan failures
+// remain visible through `warnings` and must not be rendered as an empty list.
+message MultiplexerSessionList {
+  repeated MultiplexerSessionInfo sessions = 1;
+  repeated string warnings = 2;
 }
 
 // Daemon → client (push, empty request_id): live PTY output. seq is
@@ -881,6 +1071,18 @@ message AgentSessionInfo {
   string pty_session_id = 19;
   uint64 pty_session_generation = 20;
   bool pty_foreground = 21;
+  // Latest structured task state parsed on the daemon host. The explicit
+  // presence bit distinguishes "no supported task record" (and old daemons)
+  // from a provider that deliberately emitted an empty list.
+  bool has_task_state = 22;
+  repeated AgentTaskItem task_items = 23;
+}
+
+message AgentTaskItem {
+  string id = 1;
+  string title = 2;
+  // {"pending","in_progress","completed"}; unknown values decode as pending.
+  string status = 3;
 }
 
 // Daemon → client: result of ListAgentSessions.

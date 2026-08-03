@@ -251,3 +251,7 @@ impl AgentPtyBindings {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "agent_binding_tests.rs"]
+mod tests;

@@ -94,7 +94,7 @@ fn server() -> SshServerInfo {
 }
 
 #[test]
-fn delete_folder_removes_all_descendant_secrets() {
+fn delete_folder_removes_secrets_for_every_descendant_host() {
     let mut conn = setup_in_memory();
     let store = FailingSecretStore::default();
     let folder = SshRepository::create_folder(&mut conn, None, "prod").unwrap();
@@ -127,7 +127,7 @@ fn delete_folder_removes_all_descendant_secrets() {
 }
 
 #[test]
-fn clone_compensates_secret_failure() {
+fn clone_host_rolls_back_when_secret_copy_fails() {
     let mut conn = setup_in_memory();
     let store = FailingSecretStore::default();
     let source = SshRepository::create_server(&mut conn, None, "source", &server()).unwrap();
@@ -255,7 +255,7 @@ fn changing_server_auth_removes_obsolete_secret() {
 }
 
 #[test]
-fn delete_after_remove_failure_restores_server_secret() {
+fn keychain_failure_keeps_repository_state_recoverable() {
     let mut conn = setup_in_memory();
     let store = FailingSecretStore::default();
     let node = SshRepository::create_server(&mut conn, None, "server", &server()).unwrap();

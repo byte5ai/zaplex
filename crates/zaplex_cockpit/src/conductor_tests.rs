@@ -37,6 +37,7 @@ fn session(id: &str, cwd: &str, state: SessionState, activity: i64) -> SessionSn
         pty_session_id: None,
         pty_session_generation: None,
         pty_foreground: false,
+        task_state: None,
         last_activity: at(activity),
         pid: 0,
     }
@@ -331,7 +332,7 @@ fn next_waiting_from_stale_cursor_restarts_at_first() {
 }
 
 #[test]
-fn next_waiting_distinguishes_a_copied_session_id_between_accounts() {
+fn next_waiting_distinguishes_copied_ids_between_accounts() {
     let mut default = session("copied", "/p/default", SessionState::Waiting, 2);
     default.account_email = Some("personal@example.com".to_string());
     let mut work = session("copied", "/p/work", SessionState::Waiting, 1);
@@ -406,11 +407,14 @@ fn session_key_scopes_a_copied_id_by_provider_and_account() {
     work.config_dir = Some("/accounts/claude-work".to_string());
     let mut codex = default.clone();
     codex.provider = Provider::Codex;
+    let mut other_id = default.clone();
+    other_id.session_id = "other".to_string();
 
     let default_key = session_key(true, None, &default);
     assert_ne!(default_key, session_key(true, None, &work));
     assert_ne!(default_key, session_key(true, None, &codex));
     assert_ne!(default_key, session_key(false, Some("remote-a"), &default));
+    assert_ne!(default_key, session_key(true, None, &other_id));
     assert_eq!(default_key, session_key(true, None, &default));
 }
 
@@ -425,5 +429,20 @@ fn session_key_uses_account_identity_when_the_route_stamp_is_missing() {
         session_key(true, None, &personal),
         session_key(true, None, &work),
         "config_dir is a route, not the account identity"
+    );
+}
+
+#[test]
+fn session_key_never_crosses_account_config_boundaries() {
+    let mut first = session("copied", "/p/first", SessionState::Waiting, 1);
+    first.account_email = Some("same@example.com".to_string());
+    first.config_dir = Some("/accounts/first".to_string());
+    let mut second = first.clone();
+    second.config_dir = Some("/accounts/second".to_string());
+
+    assert_ne!(
+        session_key(true, None, &first),
+        session_key(true, None, &second),
+        "the exact host-local account route is part of session identity"
     );
 }

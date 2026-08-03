@@ -1,0 +1,4 @@
+interface:
+  display_name: "Zaplex Control"
+  short_description: "Control Zaplex panes and worktrees safely"
+  default_prompt: "Use $zaplex to organize this work across Zaplex panes."

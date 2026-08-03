@@ -307,7 +307,7 @@ fn clicking_panel_background_does_not_toggle_transfer_panel() {
 }
 
 #[test]
-fn cancel_cancels_inflight_operation_exactly_once() {
+fn cancel_button_cancels_inflight_operation_exactly_once() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, view) =
@@ -481,6 +481,7 @@ fn workspace_observes_worker_progress_without_a_live_sftp_browser() {
         worker.update_progress(TransferProgress {
             transferred: 1024,
             total: 1024,
+            bytes_per_second: 512,
             eta: None,
             phase: TransferPhase::Verifying,
         });

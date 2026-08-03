@@ -155,7 +155,10 @@ impl ExternalEditorView {
 
         let mut items = vec![default_app];
 
-        items.push(DropdownItem::new("Zaplex", make_action(EditorChoice::Zaplex)));
+        items.push(DropdownItem::new(
+            "Zaplex",
+            make_action(EditorChoice::Zaplex),
+        ));
         if FeatureFlag::AllowOpeningFileLinksUsingEditorEnv.is_enabled() {
             items.push(DropdownItem::new(
                 "$EDITOR",

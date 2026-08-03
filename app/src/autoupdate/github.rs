@@ -1,5 +1,5 @@
-// openWarp(Channel::Oss) autoupdate uses GitHub Releases API, not Zaplex's official
-// channel_versions / GCS. This module only handles "fetch latest release metadata" + "select asset by filename";
+// Zaplex (Channel::Oss) autoupdate uses its GitHub Releases API instead of the
+// upstream channel_versions / GCS. This module only handles "fetch latest release metadata" + "select asset by filename";
 // actual download, save, and directory opening are handled by windows.rs / mac.rs.
 
 use std::sync::Mutex;

@@ -258,7 +258,9 @@ impl ZaplexifySuccessBlock {
                         code_snippet.to_string(),
                     ));
 
-                    ctx.dispatch_typed_action(ZaplexifySuccessBlockAction::ClearAutoZaplexifySnippet);
+                    ctx.dispatch_typed_action(
+                        ZaplexifySuccessBlockAction::ClearAutoZaplexifySnippet,
+                    );
                 }
             })),
             Some(Box::new({

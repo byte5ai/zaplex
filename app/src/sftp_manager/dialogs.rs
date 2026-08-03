@@ -331,6 +331,10 @@ fn render_copy_move_conflict(
     skip_btn_state: MouseStateHandle,
     overwrite_all_btn_state: MouseStateHandle,
     skip_all_btn_state: MouseStateHandle,
+    rename_btn_state: MouseStateHandle,
+    newer_only_btn_state: MouseStateHandle,
+    rename_all_btn_state: MouseStateHandle,
+    newer_only_all_btn_state: MouseStateHandle,
     close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -398,15 +402,62 @@ fn render_copy_move_conflict(
         skip_all_btn_state,
         Some("sftp_btn:dialog_skip_all"),
     );
+    let rename_btn = render_button(
+        &crate::t!("fm-dlg-rename-copy"),
+        false,
+        appearance,
+        SftpBrowserAction::RenameConflict { all: false },
+        rename_btn_state,
+        Some("sftp_btn:dialog_rename"),
+    );
+    let newer_only_btn = render_button(
+        &crate::t!("fm-dlg-newer-only"),
+        false,
+        appearance,
+        SftpBrowserAction::NewerOnlyConflict { all: false },
+        newer_only_btn_state,
+        Some("sftp_btn:dialog_newer_only"),
+    );
+    let rename_all_btn = render_button(
+        &crate::t!("fm-dlg-rename-copy-all"),
+        false,
+        appearance,
+        SftpBrowserAction::RenameConflict { all: true },
+        rename_all_btn_state,
+        Some("sftp_btn:dialog_rename_all"),
+    );
+    let newer_only_all_btn = render_button(
+        &crate::t!("fm-dlg-newer-only-all"),
+        false,
+        appearance,
+        SftpBrowserAction::NewerOnlyConflict { all: true },
+        newer_only_all_btn_state,
+        Some("sftp_btn:dialog_newer_only_all"),
+    );
 
-    let buttons = Flex::row()
+    let primary_buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_alignment(MainAxisAlignment::End)
         .with_spacing(8.0)
         .with_child(overwrite_btn)
         .with_child(skip_btn)
+        .with_child(rename_btn)
+        .with_child(newer_only_btn)
+        .finish();
+    let all_buttons = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_alignment(MainAxisAlignment::End)
+        .with_spacing(8.0)
         .with_child(overwrite_all_btn)
         .with_child(skip_all_btn)
+        .with_child(rename_all_btn)
+        .with_child(newer_only_all_btn)
+        .finish();
+    let buttons = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_spacing(8.0)
+        .with_child(primary_buttons)
+        .with_child(all_buttons)
         .finish();
 
     let content = Flex::column()
@@ -912,6 +963,10 @@ pub fn render_dialog(
     close_btn_state: MouseStateHandle,
     overwrite_all_btn_state: MouseStateHandle,
     skip_all_btn_state: MouseStateHandle,
+    rename_conflict_btn_state: MouseStateHandle,
+    newer_only_conflict_btn_state: MouseStateHandle,
+    rename_all_btn_state: MouseStateHandle,
+    newer_only_all_btn_state: MouseStateHandle,
     target_pick_btn_states: &[MouseStateHandle],
 ) -> Box<dyn Element> {
     match dialog {
@@ -936,6 +991,10 @@ pub fn render_dialog(
             cancel_btn_state,
             overwrite_all_btn_state,
             skip_all_btn_state,
+            rename_conflict_btn_state,
+            newer_only_conflict_btn_state,
+            rename_all_btn_state,
+            newer_only_all_btn_state,
             close_btn_state,
         ),
         Dialog::CrossConnConflict { existing, is_move } => render_cross_conn_conflict(

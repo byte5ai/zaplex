@@ -10,17 +10,17 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Empty,
     Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect, RowBackground,
-    ScrollbarWidth, Shrinkable, Stack, Table, TableColumnWidth, TableConfig, TableHeader, TableStateHandle,
-    TableVerticalSizing, Text,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect,
+    RowBackground, ScrollbarWidth, Shrinkable, Stack, Table, TableColumnWidth, TableConfig,
+    TableHeader, TableStateHandle, TableVerticalSizing, Text,
 };
-use pathfinder_geometry::vector::Vector2F;
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
@@ -29,27 +29,27 @@ use warpui::{
 };
 use zaplex_cockpit::{
     fleet_is_large, format_cost, format_relative, format_reset, format_tokens, heat_fill,
-    heat_pct_label_with_provenance, host_auto_collapsed, host_ident, host_key,
-    session_glyph, session_key, AccountStatus, AccountUsage, FleetTree, HeatLevel, HostNode,
-    Provider, SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
+    heat_pct_label_with_provenance, host_auto_collapsed, host_ident, host_key, session_glyph,
+    session_key, AccountStatus, AccountUsage, FleetTree, HeatLevel, HostNode, Provider,
+    SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
 };
 
-use crate::cockpit::model::{CockpitEvent, CockpitModel};
-use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions};
 use crate::cockpit::capabilities::SessionCapabilities;
+use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
     attention_coloru, cluster_divider, ctx_pct_element, glyph_cell, heat_coloru_on,
-    icon_verb_button_tooltip, icon_word_verb,
-    provider_color_on,
-    status_dot_coloru,
-    utilisation_coloru, verb_button, verb_button_colored, zone_card, VerbKind,
-    BLOCK_RADIUS, CONTROL_RADIUS,
+    icon_verb_button_tooltip, icon_word_verb, provider_color_on, provider_label, status_dot_coloru,
+    utilisation_coloru, verb_button, verb_button_colored, zone_card, VerbKind, BLOCK_RADIUS,
+    CONTROL_RADIUS,
 };
-use crate::search_bar::SearchBar;
-use crate::ui_components::icons;
+use crate::editor::{
+    EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
+};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
+use crate::search_bar::SearchBar;
+use crate::ui_components::icons;
 use crate::WorkspaceAction;
 
 const PANE_PADDING: f32 = 16.0;
@@ -64,6 +64,17 @@ fn session_table_viewport_height(row_count: usize) -> f32 {
     let visible_rows = row_count.min(SESSION_TABLE_MAX_VISIBLE_ROWS);
     SESSION_TABLE_HEADER_HEIGHT + visible_rows as f32 * SESSION_TABLE_ROW_HEIGHT
 }
+
+fn session_today_cost(
+    is_local: bool,
+    session_id: &str,
+    local_totals: &BTreeMap<String, WindowTotals>,
+) -> Option<f64> {
+    is_local
+        .then(|| local_totals.get(session_id).map(|totals| totals.cost_usd))
+        .flatten()
+}
+
 /// The search box's width. Fixed on purpose: an `EditorView` panics when it is
 /// measured against an infinite width constraint, which is what a flexible child
 /// of a row gets during the intrinsic pass.
@@ -219,7 +230,9 @@ impl SortColumn {
             SortColumn::Session | SortColumn::Worktree | SortColumn::Host | SortColumn::Model => {
                 true
             }
-            SortColumn::Context | SortColumn::Today | SortColumn::Last | SortColumn::Status => false,
+            SortColumn::Context | SortColumn::Today | SortColumn::Last | SortColumn::Status => {
+                false
+            }
         }
     }
 }
@@ -367,6 +380,9 @@ pub struct CockpitPaneView {
     /// account, and conversation identity). Clicking the row attaches the agent.
     /// Synced against the unified inventory on every update.
     conductor_row_states: HashMap<String, MouseStateHandle>,
+    /// Delayed hover state for the read-only session peek. Separate from the
+    /// click state so dismissing the overlay cannot disturb row activation.
+    conductor_peek_states: HashMap<String, MouseStateHandle>,
     /// Hover state of each Conductor host collapse toggle (key = stable host
     /// identity `host_ident`, not the display label).
     conductor_host_toggle_states: HashMap<String, MouseStateHandle>,
@@ -456,10 +472,7 @@ pub enum CockpitPaneAction {
     /// Start renaming this pane's account (A1) — the ⋯ on the detail card.
     StartAliasEdit,
     /// Open the ⋯ drive for a table row (P5), anchored where it was clicked.
-    OpenRowMenu {
-        row_key: String,
-        position: Vector2F,
-    },
+    OpenRowMenu { row_key: String, position: Vector2F },
     /// Close it.
     CloseRowMenu,
     /// Fold/unfold a host node (key = stable host identity `host_ident`, not the
@@ -587,6 +600,7 @@ impl CockpitPaneView {
             session_transcript_states: HashMap::new(),
             session_in_repo: HashMap::new(),
             conductor_row_states: HashMap::new(),
+            conductor_peek_states: HashMap::new(),
             conductor_host_toggle_states: HashMap::new(),
             conductor_project_toggle_states: HashMap::new(),
             conductor_plus_states: HashMap::new(),
@@ -683,7 +697,8 @@ impl CockpitPaneView {
         // Drop what vanished so the maps don't grow with every session ever seen;
         // the collapse map keeps only live keys, so absent still means "expanded".
         self.table_row_states.retain(|k, _| row_keys.contains(k));
-        self.table_group_states.retain(|k, _| group_keys.contains(k));
+        self.table_group_states
+            .retain(|k, _| group_keys.contains(k));
         self.table_plus_states.retain(|k, _| group_keys.contains(k));
         self.collapsed_table_groups
             .retain(|k, _| group_keys.contains(k));
@@ -696,8 +711,19 @@ impl CockpitPaneView {
             // one row's worth at a time.
             if self.row_menu.as_ref().is_some_and(|m| m.row_key == k) {
                 for item in [
-                    "adopt", "fork", "forkwt", "compact", "clear", "transcript", "review",
-                    "reviewed", "redirect", "commit", "pr", "stop", "kill",
+                    "adopt",
+                    "fork",
+                    "forkwt",
+                    "compact",
+                    "clear",
+                    "transcript",
+                    "review",
+                    "reviewed",
+                    "redirect",
+                    "commit",
+                    "pr",
+                    "stop",
+                    "kill",
                 ] {
                     self.row_dots_states
                         .entry(format!("{k}\u{0}{item}"))
@@ -772,6 +798,8 @@ impl CockpitPaneView {
             .collect();
         self.conductor_row_states
             .retain(|k, _| live_rows.contains(k));
+        self.conductor_peek_states
+            .retain(|k, _| live_rows.contains(k));
         // Review-loop maps: keyed `"{verb}\0{session_key}"`; the tail after the
         // first `\0` is the complete row key. Retain live rows, drop the rest.
         self.conductor_review_states.retain(|k, _| {
@@ -824,6 +852,7 @@ impl CockpitPaneView {
                 for session in &project.sessions {
                     let rk = session_key(host.is_local, host.host_id.as_deref(), session);
                     self.conductor_row_states.entry(rk.clone()).or_default();
+                    self.conductor_peek_states.entry(rk.clone()).or_default();
                     for verb in REVIEW_VERB_KEYS {
                         self.conductor_review_states
                             .entry(format!("{verb}\u{0}{rk}"))
@@ -865,13 +894,7 @@ impl CockpitPaneView {
         if !SessionCapabilities::of(session, true).can_fork {
             return None;
         }
-        if into_worktree
-            && !self
-                .session_in_repo
-                .get(&key)
-                .copied()
-                .unwrap_or(false)
-        {
+        if into_worktree && !self.session_in_repo.get(&key).copied().unwrap_or(false) {
             return None;
         }
         let states = if into_worktree {
@@ -929,10 +952,7 @@ impl CockpitPaneView {
         if !SessionCapabilities::of(session, true).can_resume {
             return None;
         }
-        let state = self
-            .session_adopt_states
-            .get(&key)
-            .cloned()?;
+        let state = self.session_adopt_states.get(&key).cloned()?;
 
         let action = WorkspaceAction::AdoptAgentSession {
             agent,
@@ -966,10 +986,7 @@ impl CockpitPaneView {
             return None;
         }
         let key = session_key(true, None, session);
-        let state = self
-            .session_transcript_states
-            .get(&key)
-            .cloned()?;
+        let state = self.session_transcript_states.get(&key).cloned()?;
 
         let action = WorkspaceAction::ViewTranscript {
             session_id: session.session_id.clone(),
@@ -1034,9 +1051,9 @@ impl CockpitPaneView {
             (true, true) => None,
             (false, true) => Some(format!("{label_5h} ↻ {reset_5h}")),
             (true, false) => Some(format!("{label_week} ↻ {reset_wk}")),
-            (false, false) => {
-                Some(format!("{label_5h} ↻ {reset_5h} · {label_week} ↻ {reset_wk}"))
-            }
+            (false, false) => Some(format!(
+                "{label_5h} ↻ {reset_5h} · {label_week} ↻ {reset_wk}"
+            )),
         }
     }
 
@@ -1072,14 +1089,20 @@ impl CockpitPaneView {
         // A deliberately-disabled cockpit is neither "empty" nor "loading" — say so,
         // and offer no retry (re-scanning cannot help while it is off).
         if !enabled {
-            return Self::text(crate::t!("cockpit-disabled").to_string(), family, body, muted);
+            return Self::text(
+                crate::t!("cockpit-disabled").to_string(),
+                family,
+                body,
+                muted,
+            );
         }
         let (msg, retry) = match health {
             ScanHealth::Pending => (crate::t!("cockpit-loading").to_string(), false),
             ScanHealth::Degraded(_) => (crate::t!("cockpit-scan-failed").to_string(), true),
-            ScanHealth::Loaded => {
-                (crate::t!("workspace-left-panel-cockpit-empty").to_string(), true)
-            }
+            ScanHealth::Loaded => (
+                crate::t!("workspace-left-panel-cockpit-empty").to_string(),
+                true,
+            ),
         };
         let msg_el = Self::text(msg, family, body, muted);
         if !retry {
@@ -1263,8 +1286,10 @@ impl CockpitPaneView {
         // same repo on another machine is its own group. Merging those would give
         // the group's "+" no host to launch on, and mix two working trees under
         // one count.
-        let mut by_repo: BTreeMap<String, Vec<(SessionSnapshot, Option<String>, Option<String>, bool)>> =
-            BTreeMap::new();
+        let mut by_repo: BTreeMap<
+            String,
+            Vec<(SessionSnapshot, Option<String>, Option<String>, bool)>,
+        > = BTreeMap::new();
         for row in all {
             by_repo.entry(group_key(&row)).or_default().push(row);
         }
@@ -1279,17 +1304,17 @@ impl CockpitPaneView {
                     SortColumn::Session => zaplex_cockpit::session_label(&a.0)
                         .to_lowercase()
                         .cmp(&zaplex_cockpit::session_label(&b.0).to_lowercase()),
-                    SortColumn::Worktree => a
-                        .0
-                        .worktree
-                        .as_deref()
-                        .unwrap_or("")
-                        .cmp(b.0.worktree.as_deref().unwrap_or("")),
-                    SortColumn::Host => a
-                        .1
-                        .as_deref()
-                        .unwrap_or("")
-                        .cmp(b.1.as_deref().unwrap_or("")),
+                    SortColumn::Worktree => {
+                        a.0.worktree
+                            .as_deref()
+                            .unwrap_or("")
+                            .cmp(b.0.worktree.as_deref().unwrap_or(""))
+                    }
+                    SortColumn::Host => {
+                        a.1.as_deref()
+                            .unwrap_or("")
+                            .cmp(b.1.as_deref().unwrap_or(""))
+                    }
                     SortColumn::Model => a.0.model.cmp(&b.0.model),
                     SortColumn::Context => zaplex_cockpit::context_fill(&a.0.model, a.0.ctx_tokens)
                         .partial_cmp(&zaplex_cockpit::context_fill(&b.0.model, b.0.ctx_tokens))
@@ -1310,7 +1335,11 @@ impl CockpitPaneView {
                     SortColumn::Status => state_rank(a.0.state).cmp(&state_rank(b.0.state)),
                     SortColumn::Last => a.0.last_activity.cmp(&b.0.last_activity),
                 };
-                let ord = if self.sort.ascending { ord } else { ord.reverse() };
+                let ord = if self.sort.ascending {
+                    ord
+                } else {
+                    ord.reverse()
+                };
                 // A stable tie-break, so two equal rows don't swap places
                 // between frames for no reason the user can see.
                 ord.then_with(|| a.0.session_id.cmp(&b.0.session_id))
@@ -1339,10 +1368,8 @@ impl CockpitPaneView {
                 // What this session spent today (F4). Absent rather than $0.00:
                 // a session that has not spent today has no figure, and a zero
                 // would read as one.
-                let today_cost = acct
-                    .today_by_session
-                    .get(&session.session_id)
-                    .map(|t| t.cost_usd);
+                let today_cost =
+                    session_today_cost(is_local, &session.session_id, &acct.today_by_session);
                 rows.push(TableRow::Session {
                     session,
                     host,
@@ -1763,10 +1790,26 @@ impl CockpitPaneView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0);
         for (key, label, filter) in [
-            ("all", crate::t!("cockpit-table-filter-all"), SessionFilter::All),
-            ("waiting", crate::t!("cockpit-table-filter-waiting"), SessionFilter::Waiting),
-            ("active", crate::t!("cockpit-table-filter-active"), SessionFilter::Active),
-            ("idle", crate::t!("cockpit-table-filter-idle"), SessionFilter::Idle),
+            (
+                "all",
+                crate::t!("cockpit-table-filter-all"),
+                SessionFilter::All,
+            ),
+            (
+                "waiting",
+                crate::t!("cockpit-table-filter-waiting"),
+                SessionFilter::Waiting,
+            ),
+            (
+                "active",
+                crate::t!("cockpit-table-filter-active"),
+                SessionFilter::Active,
+            ),
+            (
+                "idle",
+                crate::t!("cockpit-table-filter-idle"),
+                SessionFilter::Idle,
+            ),
         ] {
             let Some(state) = self.filter_chip_states.get(key).cloned() else {
                 continue;
@@ -1832,32 +1875,34 @@ impl CockpitPaneView {
         let main = theme.main_text_color(bg).into_solid();
         // A header says what it sorts by and which way — a caret only on the
         // active one, so the row of headers stays quiet until it means something.
-        let header = |key: &'static str, label: String, col: SortColumn, right: bool| -> TableHeader {
-            let active = self.sort.column == col;
-            let text = if active {
-                format!("{label} {}", if self.sort.ascending { "▲" } else { "▼" })
-            } else {
-                label
+        let header =
+            |key: &'static str, label: String, col: SortColumn, right: bool| -> TableHeader {
+                let active = self.sort.column == col;
+                let text = if active {
+                    format!("{label} {}", if self.sort.ascending { "▲" } else { "▼" })
+                } else {
+                    label
+                };
+                let color = if active { main } else { muted };
+                let el = Self::cell(text, color, right, appearance);
+                let el: Box<dyn Element> = match self.sort_header_states.get(key).cloned() {
+                    Some(state) => Hoverable::new(state, move |_m| el)
+                        .with_cursor(Cursor::PointingHand)
+                        .on_click(move |ctx, _, _| {
+                            ctx.dispatch_typed_action(CockpitPaneAction::SortBy(col))
+                        })
+                        .finish(),
+                    None => el,
+                };
+                TableHeader::new(el)
             };
-            let color = if active { main } else { muted };
-            let el = Self::cell(text, color, right, appearance);
-            let el: Box<dyn Element> = match self.sort_header_states.get(key).cloned() {
-                Some(state) => Hoverable::new(state, move |_m| el)
-                    .with_cursor(Cursor::PointingHand)
-                    .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(CockpitPaneAction::SortBy(col))
-                    })
-                    .finish(),
-                None => el,
-            };
-            TableHeader::new(el)
-        };
 
         // Everything the render closure needs, owned: it outlives this frame.
         let rows_for_render = std::sync::Arc::new(rows);
         let rows_len = rows_for_render.len();
         let group_states = self.table_group_states.clone();
         let row_states = self.table_row_states.clone();
+        let peek_states = self.conductor_peek_states.clone();
         let dots_states = self.row_dots_states.clone();
         let plus_states = self.table_plus_states.clone();
 
@@ -1901,29 +1946,28 @@ impl CockpitPaneView {
                     // The tree's project "+" lands here: a new agent pre-bound to
                     // the repo you are looking at. Without a successor, folding
                     // the tree away would take the scoped launch with it.
-                    let plus: Option<Box<dyn Element>> =
-                        plus_states.get(key).cloned().map(|st| {
-                            // Scoped to the group's OWN host, not this machine.
-                            // The tree's plus carried the host identity; passing
-                            // None here would launch a remote project's agent
-                            // locally — the exact regression P6 must not ship.
-                            let (host_owned, host_id_owned) = (host.clone(), host_id.clone());
-                            let root_owned = zaplex_cockpit::split_host_key(key)
-                                .map(|(_, root)| root.to_string())
-                                .unwrap_or_else(|| key.clone());
-                            verb_button(
-                                st,
-                                "+",
-                                VerbKind::Constructive,
-                                appearance,
-                                WorkspaceAction::OpenSpawnCard {
-                                    registry_node_id: None,
-                                    host_id: host_id_owned,
-                                    host: host_owned,
-                                    project: Some(PathBuf::from(root_owned)),
-                                },
-                            )
-                        });
+                    let plus: Option<Box<dyn Element>> = plus_states.get(key).cloned().map(|st| {
+                        // Scoped to the group's OWN host, not this machine.
+                        // The tree's plus carried the host identity; passing
+                        // None here would launch a remote project's agent
+                        // locally — the exact regression P6 must not ship.
+                        let (host_owned, host_id_owned) = (host.clone(), host_id.clone());
+                        let root_owned = zaplex_cockpit::split_host_key(key)
+                            .map(|(_, root)| root.to_string())
+                            .unwrap_or_else(|| key.clone());
+                        verb_button(
+                            st,
+                            "+",
+                            VerbKind::Constructive,
+                            appearance,
+                            WorkspaceAction::OpenSpawnCard {
+                                registry_node_id: None,
+                                host_id: host_id_owned,
+                                host: host_owned,
+                                project: Some(PathBuf::from(root_owned)),
+                            },
+                        )
+                    });
                     let first: Box<dyn Element> = match group_states.get(key).cloned() {
                         Some(state) => {
                             let key = key.clone();
@@ -1982,7 +2026,9 @@ impl CockpitPaneView {
                             .with_height(5.0)
                             .finish(),
                         )
-                        .with_child(Shrinkable::new(1.0, Self::text(name, family, body, main)).finish())
+                        .with_child(
+                            Shrinkable::new(1.0, Self::text(name, family, body, main)).finish(),
+                        )
                         .with_main_axis_size(MainAxisSize::Max)
                         .finish();
 
@@ -2007,16 +2053,66 @@ impl CockpitPaneView {
                         }
                         None => sess,
                     };
+                    let sess_cell = match peek_states.get(&rk).cloned() {
+                        Some(peek_state) => {
+                            let peek_title = zaplex_cockpit::session_label(session);
+                            let peek_account = session.account_email.as_ref().map_or_else(
+                                || provider_label(session.provider).to_owned(),
+                                |email| format!("{} · {email}", provider_label(session.provider)),
+                            );
+                            let peek_host = host.clone().unwrap_or_else(|| {
+                                crate::t!("cockpit-table-host-local").to_string()
+                            });
+                            let peek_cwd = session.cwd.clone();
+                            let session_state = session.state;
+                            let task_state = session.task_state.clone();
+                            let relative =
+                                format_relative(session.last_activity, chrono::Utc::now());
+                            let activity =
+                                super::panel::task_activity_label(task_state.as_ref(), &relative);
+                            Hoverable::new(peek_state, move |mouse| {
+                                let mut stack = Stack::new().with_child(sess_cell);
+                                if mouse.is_hovered() {
+                                    stack.add_positioned_overlay_child(
+                                        super::panel::CockpitPanel::render_task_peek(
+                                            &peek_title,
+                                            &peek_account,
+                                            &peek_host,
+                                            &peek_cwd,
+                                            session_state,
+                                            &activity,
+                                            task_state.as_ref(),
+                                            appearance,
+                                        ),
+                                        OffsetPositioning::offset_from_parent(
+                                            vec2f(8.0, 0.0),
+                                            ParentOffsetBounds::Unbounded,
+                                            ParentAnchor::TopRight,
+                                            ChildAnchor::TopLeft,
+                                        ),
+                                    );
+                                }
+                                stack.finish()
+                            })
+                            .with_hover_in_delay(super::panel::TASK_PEEK_DELAY)
+                            .finish()
+                        }
+                        None => sess_cell,
+                    };
 
                     // Worktree is an attribute of the session (F9) — the group
                     // above is the repo. Absent when this is the main checkout.
                     let wt = session.worktree.clone().unwrap_or_else(|| "—".to_string());
-                    let wt_color = if session.worktree.is_some() { muted } else { faint };
+                    let wt_color = if session.worktree.is_some() {
+                        muted
+                    } else {
+                        faint
+                    };
 
                     // Host (F5): this machine says so by staying quiet.
-                    let host_label = host.clone().unwrap_or_else(|| {
-                        crate::t!("cockpit-table-host-local").to_string()
-                    });
+                    let host_label = host
+                        .clone()
+                        .unwrap_or_else(|| crate::t!("cockpit-table-host-local").to_string());
 
                     let model = zaplex_cockpit::model_effort_label(
                         &session.model,
@@ -2041,7 +2137,11 @@ impl CockpitPaneView {
                             zaplex_cockpit::state_word(session.state).to_string(),
                             family,
                             body,
-                            if session.state == SessionState::Waiting { main } else { muted },
+                            if session.state == SessionState::Waiting {
+                                main
+                            } else {
+                                muted
+                            },
                         ))
                         .with_main_axis_size(MainAxisSize::Min)
                         .finish();
@@ -2059,7 +2159,9 @@ impl CockpitPaneView {
                                 session.state,
                             );
                             match attrs.ctx_pct {
-                                Some(pct) => ctx_pct_element(pct, attrs.ctx_fill, false, appearance),
+                                Some(pct) => {
+                                    ctx_pct_element(pct, attrs.ctx_fill, false, appearance)
+                                }
                                 None => Self::cell("—".to_string(), faint, true, appearance),
                             }
                         },
@@ -2099,28 +2201,68 @@ impl CockpitPaneView {
 
         let table = Table::new(self.table_state.clone(), 0.0, 0.0)
             .with_headers(vec![
-                header("session", crate::t!("cockpit-table-col-session").to_string(), SortColumn::Session, false)
-                    .with_width(TableColumnWidth::Flex(2.2)),
-                header("worktree", crate::t!("cockpit-table-col-worktree").to_string(), SortColumn::Worktree, false)
-                    .with_width(TableColumnWidth::Flex(1.2)),
-                header("host", crate::t!("cockpit-table-col-host").to_string(), SortColumn::Host, false)
-                    .with_width(TableColumnWidth::Flex(0.9)),
+                header(
+                    "session",
+                    crate::t!("cockpit-table-col-session").to_string(),
+                    SortColumn::Session,
+                    false,
+                )
+                .with_width(TableColumnWidth::Flex(2.2)),
+                header(
+                    "worktree",
+                    crate::t!("cockpit-table-col-worktree").to_string(),
+                    SortColumn::Worktree,
+                    false,
+                )
+                .with_width(TableColumnWidth::Flex(1.2)),
+                header(
+                    "host",
+                    crate::t!("cockpit-table-col-host").to_string(),
+                    SortColumn::Host,
+                    false,
+                )
+                .with_width(TableColumnWidth::Flex(0.9)),
                 // 1.4: the model cell carries "family·effort" strings that a
                 // 1.0 share truncated mid-word ("codex-auto-revie…") with no
                 // way to read the rest. The existing tooltip helpers are
                 // button-bound (`icon_verb_button_tooltip`), there is no plain
                 // cell-tooltip wrapper — so the column gets the room instead
                 // (audit P1.3).
-                header("model", crate::t!("cockpit-table-col-model").to_string(), SortColumn::Model, false)
-                    .with_width(TableColumnWidth::Flex(1.4)),
-                header("context", crate::t!("cockpit-table-col-context").to_string(), SortColumn::Context, true)
-                    .with_width(TableColumnWidth::Flex(1.0)),
-                header("today", crate::t!("cockpit-pane-col-today").to_string(), SortColumn::Today, true)
-                    .with_width(TableColumnWidth::Flex(0.8)),
-                header("status", crate::t!("cockpit-table-col-status").to_string(), SortColumn::Status, false)
-                    .with_width(TableColumnWidth::Flex(1.0)),
-                header("last", crate::t!("cockpit-table-col-last").to_string(), SortColumn::Last, true)
-                    .with_width(TableColumnWidth::Flex(0.8)),
+                header(
+                    "model",
+                    crate::t!("cockpit-table-col-model").to_string(),
+                    SortColumn::Model,
+                    false,
+                )
+                .with_width(TableColumnWidth::Flex(1.4)),
+                header(
+                    "context",
+                    crate::t!("cockpit-table-col-context").to_string(),
+                    SortColumn::Context,
+                    true,
+                )
+                .with_width(TableColumnWidth::Flex(1.0)),
+                header(
+                    "today",
+                    crate::t!("cockpit-pane-col-today").to_string(),
+                    SortColumn::Today,
+                    true,
+                )
+                .with_width(TableColumnWidth::Flex(0.8)),
+                header(
+                    "status",
+                    crate::t!("cockpit-table-col-status").to_string(),
+                    SortColumn::Status,
+                    false,
+                )
+                .with_width(TableColumnWidth::Flex(1.0)),
+                header(
+                    "last",
+                    crate::t!("cockpit-table-col-last").to_string(),
+                    SortColumn::Last,
+                    true,
+                )
+                .with_width(TableColumnWidth::Flex(0.8)),
                 // The ⋯ column: no label — a header over a menu affordance would
                 // be naming the furniture.
                 TableHeader::new(Empty::new().finish()).with_width(TableColumnWidth::Fixed(24.0)),
@@ -2200,7 +2342,11 @@ impl CockpitPaneView {
     /// the head of *that account's* pane, so it can afford the identity in full
     /// (mail/org belong here — the sidebar deliberately drops them) and the three
     /// windows side by side instead of stacked.
-    fn render_account_detail(&self, acct: &AccountUsage, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_account_detail(
+        &self,
+        acct: &AccountUsage,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
@@ -2217,10 +2363,7 @@ impl CockpitPaneView {
         // this small would read as a circle.
         let tile = ConstrainedBox::new(
             Rect::new()
-                .with_background_color(provider_color_on(
-                    acct.account.provider,
-                    bg.into_solid(),
-                ))
+                .with_background_color(provider_color_on(acct.account.provider, bg.into_solid()))
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
                 .finish(),
         )
@@ -2342,7 +2485,12 @@ impl CockpitPaneView {
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_spacing(2.0)
                 .with_child(Self::text(label, family, body, muted))
-                .with_child(Self::text(format_cost(totals.cost_usd), family, heading, main))
+                .with_child(Self::text(
+                    format_cost(totals.cost_usd),
+                    family,
+                    heading,
+                    main,
+                ))
                 .with_child(Self::text(format_tokens(totals.total), family, body, faint))
                 .finish()
         };
@@ -2350,9 +2498,18 @@ impl CockpitPaneView {
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(24.0)
-            .with_child(figure(crate::t!("cockpit-pane-col-today").to_string(), &acct.today))
-            .with_child(figure(crate::t!("cockpit-pane-col-5h").to_string(), &acct.block5h))
-            .with_child(figure(crate::t!("cockpit-pane-col-week").to_string(), &acct.week))
+            .with_child(figure(
+                crate::t!("cockpit-pane-col-today").to_string(),
+                &acct.today,
+            ))
+            .with_child(figure(
+                crate::t!("cockpit-pane-col-5h").to_string(),
+                &acct.block5h,
+            ))
+            .with_child(figure(
+                crate::t!("cockpit-pane-col-week").to_string(),
+                &acct.week,
+            ))
             .finish();
         col = col.with_child(figures);
 
@@ -2565,15 +2722,6 @@ impl CockpitPaneView {
             .finish()
     }
 
-
-
-
-
-
-
-
-
-
     fn render_aggregate(
         &self,
         accounts: &[AccountUsage],
@@ -2670,117 +2818,118 @@ impl View for CockpitPaneView {
             // say "turned off", not "account gone" (it was not removed, the cockpit is
             // just off).
             if !enabled {
-                return Container::new(
-                    self.render_scan_placeholder(&snapshot.health, enabled, appearance),
-                )
+                return Container::new(self.render_scan_placeholder(
+                    &snapshot.health,
+                    enabled,
+                    appearance,
+                ))
                 .with_background(theme.background())
                 .with_uniform_padding(PANE_PADDING)
                 .finish();
             }
             let model = CockpitModel::as_ref(app);
             let tree = model.inventory().clone();
-            let content: Box<dyn Element> = match snapshot
-                .accounts
-                .iter()
-                .find(|a| a.account.key == key)
-            {
-                Some(acct) => {
-                    let scroll = {
-                    // Two zone-cards (the sidebar's §2.1 vocabulary): the
-                    // account's identity + meters, then its sessions (toolbar +
-                    // table). Bounded surfaces with a hairline edge instead of
-                    // print on the raw pane background — without them, stacked
-                    // account panes read as one continuous debug dump (RC
-                    // acceptance, 2026-07-17).
-                    let sessions_zone = zone_card(
-                        Flex::column()
-                            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                            .with_main_axis_size(MainAxisSize::Min)
-                            .with_child(
-                                Container::new(
-                                    self.render_table_toolbar(acct, &tree, appearance),
-                                )
-                                .with_margin_bottom(CARD_SPACING)
-                                .finish(),
+            let content: Box<dyn Element> =
+                match snapshot.accounts.iter().find(|a| a.account.key == key) {
+                    Some(acct) => {
+                        let scroll = {
+                            // Two zone-cards (the sidebar's §2.1 vocabulary): the
+                            // account's identity + meters, then its sessions (toolbar +
+                            // table). Bounded surfaces with a hairline edge instead of
+                            // print on the raw pane background — without them, stacked
+                            // account panes read as one continuous debug dump (RC
+                            // acceptance, 2026-07-17).
+                            let sessions_zone = zone_card(
+                                Flex::column()
+                                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                                    .with_main_axis_size(MainAxisSize::Min)
+                                    .with_child(
+                                        Container::new(
+                                            self.render_table_toolbar(acct, &tree, appearance),
+                                        )
+                                        .with_margin_bottom(CARD_SPACING)
+                                        .finish(),
+                                    )
+                                    .with_child(
+                                        self.render_sessions_table(acct, &tree, app, appearance),
+                                    )
+                                    .finish(),
+                                appearance,
                             )
-                            .with_child(self.render_sessions_table(acct, &tree, app, appearance))
-                            .finish(),
-                        appearance,
-                    )
-                    .with_uniform_padding(CARD_PADDING)
-                    .finish();
-                    let mut col = Flex::column()
-                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                        .with_main_axis_size(MainAxisSize::Min)
-                        .with_child(self.render_account_detail(acct, appearance))
-                        .with_child(sessions_zone);
-                    // C3b: the ~ marker needs its explanation wherever it is
-                    // visible — this pane showed estimates unexplained while
-                    // only the fleet dashboard carried the legend (audit P0.6).
-                    if acct.provenance == UsageProvenance::Estimate {
-                        col = col.with_child(
-                            Container::new(Self::text(
-                                crate::t!("cockpit-pane-provenance-legend"),
-                                family,
-                                body,
-                                muted,
-                            ))
-                            .with_margin_top(CARD_SPACING)
-                            .finish(),
-                        );
-                    }
-                    // The pane padding sits INSIDE the scrollable, so the ⋯
-                    // drive's overlay Stack keeps its geometry (its anchor maths
-                    // broke once already; don't move its parent).
-                    ClippedScrollable::vertical(
-                        self.scroll_state.clone(),
-                        Container::new(col.finish())
-                            .with_uniform_padding(PANE_PADDING)
-                            .finish(),
-                        ScrollbarWidth::Auto,
-                        theme.disabled_text_color(theme.background()).into(),
-                        theme.main_text_color(theme.background()).into(),
-                        ElementFill::None,
-                    )
-                    .with_overlayed_scrollbar()
-                    .finish()
-                    };
-                    // The ⋯ drive floats over the pane, anchored where it was
-                    // clicked, and dismisses on any click outside itself.
-                    match self.render_row_menu(acct, &tree, app, appearance) {
-                        Some(menu) => {
-                            let position = self
-                                .row_menu
-                                .as_ref()
-                                .map(|m| m.position)
-                                .unwrap_or_default();
-                            let mut stack = Stack::new();
-                            stack.add_child(scroll);
-                            stack.add_positioned_overlay_child(
-                                menu,
-                                OffsetPositioning::offset_from_parent(
-                                    position,
-                                    ParentOffsetBounds::ParentByPosition,
-                                    ParentAnchor::TopLeft,
-                                    ChildAnchor::TopLeft,
-                                ),
-                            );
-                            stack.finish()
+                            .with_uniform_padding(CARD_PADDING)
+                            .finish();
+                            let mut col = Flex::column()
+                                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                                .with_main_axis_size(MainAxisSize::Min)
+                                .with_child(self.render_account_detail(acct, appearance))
+                                .with_child(sessions_zone);
+                            // C3b: the ~ marker needs its explanation wherever it is
+                            // visible — this pane showed estimates unexplained while
+                            // only the fleet dashboard carried the legend (audit P0.6).
+                            if acct.provenance == UsageProvenance::Estimate {
+                                col = col.with_child(
+                                    Container::new(Self::text(
+                                        crate::t!("cockpit-pane-provenance-legend"),
+                                        family,
+                                        body,
+                                        muted,
+                                    ))
+                                    .with_margin_top(CARD_SPACING)
+                                    .finish(),
+                                );
+                            }
+                            // The pane padding sits INSIDE the scrollable, so the ⋯
+                            // drive's overlay Stack keeps its geometry (its anchor maths
+                            // broke once already; don't move its parent).
+                            ClippedScrollable::vertical(
+                                self.scroll_state.clone(),
+                                Container::new(col.finish())
+                                    .with_uniform_padding(PANE_PADDING)
+                                    .finish(),
+                                ScrollbarWidth::Auto,
+                                theme.disabled_text_color(theme.background()).into(),
+                                theme.main_text_color(theme.background()).into(),
+                                ElementFill::None,
+                            )
+                            .with_overlayed_scrollbar()
+                            .finish()
+                        };
+                        // The ⋯ drive floats over the pane, anchored where it was
+                        // clicked, and dismisses on any click outside itself.
+                        match self.render_row_menu(acct, &tree, app, appearance) {
+                            Some(menu) => {
+                                let position = self
+                                    .row_menu
+                                    .as_ref()
+                                    .map(|m| m.position)
+                                    .unwrap_or_default();
+                                let mut stack = Stack::new();
+                                stack.add_child(scroll);
+                                stack.add_positioned_overlay_child(
+                                    menu,
+                                    OffsetPositioning::offset_from_parent(
+                                        position,
+                                        ParentOffsetBounds::ParentByPosition,
+                                        ParentAnchor::TopLeft,
+                                        ChildAnchor::TopLeft,
+                                    ),
+                                );
+                                stack.finish()
+                            }
+                            None => scroll,
                         }
-                        None => scroll,
                     }
-                }
-                // Signed out, config dir gone — say so instead of an empty pane
-                // that looks like a load that never finished.
-                None => Container::new(Self::text(
-                    crate::t!("cockpit-account-gone"),
-                    family,
-                    body,
-                    muted,
-                ))
-                .with_uniform_padding(PANE_PADDING)
-                .finish(),
-            };
+                    // Signed out, config dir gone — say so instead of an empty pane
+                    // that looks like a load that never finished.
+                    None => Container::new(Self::text(
+                        crate::t!("cockpit-account-gone"),
+                        family,
+                        body,
+                        muted,
+                    ))
+                    .with_uniform_padding(PANE_PADDING)
+                    .finish(),
+                };
             // Same opaque pane background as the fleet branch below — an
             // account pane left it unset, so its content sat directly on
             // whatever was behind the pane (part of the "debug view" look).
@@ -2800,9 +2949,13 @@ impl View for CockpitPaneView {
             // shows this in its own placeholder instead.
             if matches!(snapshot.health, zaplex_cockpit::ScanHealth::Degraded(_)) {
                 col = col.with_child(
-                    Container::new(self.render_scan_placeholder(&snapshot.health, enabled, appearance))
-                        .with_margin_bottom(CARD_SPACING * 2.0)
-                        .finish(),
+                    Container::new(self.render_scan_placeholder(
+                        &snapshot.health,
+                        enabled,
+                        appearance,
+                    ))
+                    .with_margin_bottom(CARD_SPACING * 2.0)
+                    .finish(),
                 );
             }
             col = col.with_child(
@@ -2834,7 +2987,8 @@ impl View for CockpitPaneView {
                     .override_color(&acct.account.key)
                     .and_then(parse_hex_color);
                 let is_selected = selected.as_deref() == Some(acct.account.key.as_str());
-                col = col.with_child(self.render_card(acct, override_color, is_selected, appearance));
+                col =
+                    col.with_child(self.render_card(acct, override_color, is_selected, appearance));
             }
             // C3b: explain the ~ marker whenever any bar shows an estimate
             // (real numbers stay unmarked — no chrome for the good case).
@@ -2880,7 +3034,11 @@ impl TypedActionView for CockpitPaneView {
         match action {
             CockpitPaneAction::ToggleTableGroup(root) => {
                 // Absent = expanded (groups default open); the first click folds.
-                let cur = self.collapsed_table_groups.get(root).copied().unwrap_or(false);
+                let cur = self
+                    .collapsed_table_groups
+                    .get(root)
+                    .copied()
+                    .unwrap_or(false);
                 self.collapsed_table_groups.insert(root.clone(), !cur);
                 ctx.notify();
             }
@@ -3052,150 +3210,5 @@ impl BackingView for CockpitPaneView {
 }
 
 #[cfg(test)]
-mod tests {
-    use chrono::Utc;
-    use zaplex_cockpit::{Provider, SessionSnapshot, SessionState};
-
-    use super::{
-        matching_session_row, parse_hex_color, session_key, session_table_viewport_height,
-        TableRow, SESSION_TABLE_HEADER_HEIGHT, SESSION_TABLE_MAX_VISIBLE_ROWS,
-        SESSION_TABLE_ROW_HEIGHT,
-    };
-
-    #[test]
-    fn session_table_body_clips_to_zone_card() {
-        let capped = SESSION_TABLE_HEADER_HEIGHT
-            + SESSION_TABLE_MAX_VISIBLE_ROWS as f32 * SESSION_TABLE_ROW_HEIGHT;
-        assert_eq!(session_table_viewport_height(1), 62.0);
-        assert_eq!(session_table_viewport_height(100), capped);
-    }
-
-    #[test]
-    fn cockpit_table_clips_to_card() {
-        assert_eq!(
-            session_table_viewport_height(SESSION_TABLE_MAX_VISIBLE_ROWS + 20),
-            session_table_viewport_height(SESSION_TABLE_MAX_VISIBLE_ROWS)
-        );
-    }
-
-    fn session(config_dir: Option<&str>, account_email: Option<&str>) -> SessionSnapshot {
-        SessionSnapshot {
-            session_id: "copied-session".to_string(),
-            cwd: "/work/project".to_string(),
-            name: "job".to_string(),
-            state: SessionState::Idle,
-            provider: Provider::Claude,
-            model: String::new(),
-            effort: None,
-            ctx_tokens: 0,
-            project_root: "/work/project".to_string(),
-            repo_root: "/work/project".to_string(),
-            project_name: "project".to_string(),
-            branch: None,
-            worktree: None,
-            config_dir: config_dir.map(str::to_string),
-            account_email: account_email.map(str::to_string),
-            process_fingerprint: None,
-            pty_session_id: None,
-            pty_session_generation: None,
-            pty_foreground: false,
-            last_activity: Utc::now(),
-            pid: 0,
-        }
-    }
-
-    fn row(session: SessionSnapshot) -> TableRow {
-        TableRow::Session {
-            session,
-            host: None,
-            host_id: None,
-            is_local: true,
-            today_cost: None,
-        }
-    }
-
-    #[test]
-    fn row_menu_resolves_a_copied_session_id_to_the_exact_account() {
-        let default = session(None, Some("personal@example.com"));
-        let work = session(
-            Some("/accounts/claude-work"),
-            Some("work@example.com"),
-        );
-        let work_key = session_key(true, None, &work);
-        let rows = vec![row(default), row(work)];
-
-        let matched = matching_session_row(&rows, &work_key).expect("work-account row");
-        assert_eq!(
-            matched.session.config_dir.as_deref(),
-            Some("/accounts/claude-work"),
-            "the menu must not take the first same-id row from another account"
-        );
-    }
-
-    #[test]
-    fn row_menu_refuses_duplicate_unknown_account_identity() {
-        let first_unknown = session(None, None);
-        let second_unknown = session(None, None);
-        let ambiguous_key = session_key(true, None, &first_unknown);
-        let rows = vec![row(first_unknown), row(second_unknown)];
-
-        assert!(
-            matching_session_row(&rows, &ambiguous_key).is_none(),
-            "ambiguous legacy rows must fail closed instead of selecting the first account"
-        );
-    }
-
-    #[test]
-    fn parses_six_digit_hex() {
-        let c = parse_hex_color("#22C55E").expect("valid 6-digit hex");
-        assert_eq!((c.r, c.g, c.b, c.a), (0x22, 0xC5, 0x5E, 255));
-    }
-
-    #[test]
-    fn parses_three_digit_shorthand() {
-        // #f0a → ff 00 aa (each nibble doubled).
-        let c = parse_hex_color("#f0a").expect("valid 3-digit hex");
-        assert_eq!((c.r, c.g, c.b, c.a), (0xff, 0x00, 0xaa, 255));
-    }
-
-    #[test]
-    fn rejects_malformed_returns_none() {
-        for bad in [
-            "", "22C55E", "#", "#12", "#1234", "#12345", "#GGGGGG", "#12345Z",
-        ] {
-            assert!(parse_hex_color(bad).is_none(), "{bad:?} must not parse");
-        }
-    }
-
-    /// The doc promised "never a panic" and did not deliver. `len()` counts
-    /// bytes; the slices index char boundaries. `#éa` measures 3 bytes, takes
-    /// the shorthand branch, and `&hex[0..1]` cuts the `é` in half — aborting
-    /// the app while it renders an account card, over a value someone typed into
-    /// instances.json by hand.
-    #[test]
-    fn a_non_ascii_colour_yields_no_tint_rather_than_taking_the_app_down() {
-        // 3 bytes, 2 chars: exactly the shorthand branch's length check.
-        assert_eq!(parse_hex_color("#éa"), None);
-        // 6 bytes, 3 chars: the same trap on the long branch.
-        assert_eq!(parse_hex_color("#ééé"), None);
-        assert_eq!(parse_hex_color("#22C55é"), None);
-        assert_eq!(parse_hex_color("#🎨🎨"), None);
-    }
-
-    /// Malformed-but-ASCII stays malformed — the guard must not start accepting
-    /// things it used to reject.
-    #[test]
-    fn ascii_rubbish_is_still_rejected() {
-        for bad in ["#", "#12", "#1234", "#12345", "#1234567", "#GGGGGG", "22C55E", ""] {
-            assert_eq!(parse_hex_color(bad), None, "{bad:?} must not parse");
-        }
-    }
-
-    /// …and the valid cases still work.
-    #[test]
-    fn the_guard_does_not_reject_real_colours() {
-        assert!(parse_hex_color("#22C55E").is_some());
-        assert!(parse_hex_color("#f0a").is_some());
-        assert!(parse_hex_color("#FFFFFF").is_some());
-    }
-}
+#[path = "pane_tests.rs"]
+mod tests;

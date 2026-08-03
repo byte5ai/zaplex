@@ -23,11 +23,11 @@ pub struct ModelPrice {
 /// price are an estimate, not an invoice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PricingSource {
-    /// Bundled API list price, verified on 2026-07-24 from the vendor's public
+    /// Bundled API list price, verified on 2026-07-31 from the vendor's public
     /// pricing page. It is intentionally static: Zaplex never invents or fetches
     /// a runtime price for an unknown model.
     ///
-    /// OpenAI: <https://developers.openai.com/api/docs/models/gpt-5-codex>
+    /// OpenAI: <https://developers.openai.com/api/docs/models>
     /// Anthropic: <https://docs.anthropic.com/en/docs/about-claude/pricing>
     BundledListPrice,
     /// A caller-supplied static table. It is still an estimate, but Zaplex does
@@ -84,8 +84,9 @@ impl PricingTable {
             .map(|(_, price, _)| *price)
     }
 
-    /// Estimate one turn's API-list-price cost. Reasoning tokens (Codex) bill as
-    /// output. `None` means the model is unpriced, never that it costs zero.
+    /// Estimate one turn's API-list-price cost. Codex `output` already includes
+    /// its reasoning-token breakdown. `None` means the model is unpriced, never
+    /// that it costs zero.
     pub fn estimate_for(
         &self,
         model: &str,
@@ -93,7 +94,6 @@ impl PricingTable {
         output: u64,
         cache_create: u64,
         cache_read: u64,
-        reasoning: u64,
     ) -> Option<CostEstimate> {
         let m = model.to_ascii_lowercase();
         let (_, p, source) = self
@@ -102,7 +102,6 @@ impl PricingTable {
             .find(|(key, _, _)| m.contains(key.as_str()))?;
         let usd = (input as f64 * p.input
             + output as f64 * p.output
-            + reasoning as f64 * p.output
             + cache_create as f64 * p.cache_write
             + cache_read as f64 * p.cache_read)
             / 1_000_000.0;
@@ -120,9 +119,8 @@ impl PricingTable {
         output: u64,
         cache_create: u64,
         cache_read: u64,
-        reasoning: u64,
     ) -> Option<f64> {
-        self.estimate_for(model, input, output, cache_create, cache_read, reasoning)
+        self.estimate_for(model, input, output, cache_create, cache_read)
             .map(|estimate| estimate.usd)
     }
 }
@@ -131,8 +129,8 @@ impl Default for PricingTable {
     /// Seeded from current Anthropic + OpenAI list prices (standard tier). Keys are
     /// lowercase substrings matched against the transcript `model` field.
     ///
-    /// TODO(pricing): refresh on model launches; verify OpenAI/Codex rates (their
-    /// transcripts + `~/.codex/models_cache.json` carry no price fields).
+    /// TODO(pricing): refresh on model launches; Codex transcripts and
+    /// `~/.codex/models_cache.json` carry no price fields.
     fn default() -> Self {
         let m = |input, output, cache_write, cache_read| ModelPrice {
             input,
@@ -152,9 +150,16 @@ impl Default for PricingTable {
             ("claude-sonnet-4-6".into(), m(3.0, 15.0, 3.75, 0.30)),
             ("claude-haiku-4-5".into(), m(1.0, 5.0, 1.25, 0.10)),
             // --- OpenAI (Codex / GPT-5 family) ---
-            // Codex transcripts report `cached_input_tokens` (→ cache_read); no
-            // separate cache-write concept, so cache_write mirrors input.
+            // Codex rollouts currently report cache reads but no cache writes.
+            // Keep the official 1.25x write rates nonetheless so a future
+            // explicit write counter cannot silently understate cost.
+            ("gpt-5.6-sol".into(), m(5.0, 30.0, 6.25, 0.50)),
+            ("gpt-5.6-terra".into(), m(2.50, 15.0, 3.125, 0.25)),
+            ("gpt-5.6-luna".into(), m(1.0, 6.0, 1.25, 0.10)),
+            ("gpt-5.1-codex".into(), m(1.25, 10.0, 1.25, 0.125)),
             ("gpt-5-codex".into(), m(1.25, 10.0, 1.25, 0.125)),
+            // GPT-5.5 is intentionally unpriced until this table can represent
+            // its >272K-input 2x-input / 1.5x-output long-context surcharge.
         ])
     }
 }

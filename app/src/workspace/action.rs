@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use warp_util::path::LineAndColumnArg;
 
+use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::auth::LoginGatedFeature;
-use crate::drive::items::WarpDriveItemId;
 use crate::drive::ObjectTypeAndId;
+use crate::drive::items::WarpDriveItemId;
 use crate::palette::PaletteMode;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search;
@@ -20,8 +20,8 @@ use crate::server::telemetry::{AddTabWithShellSource, AgentModeEntrypoint, Palet
 use crate::settings_view::{SettingsAction as SettingsTabAction, SettingsSection};
 use crate::tab::{NewSessionMenuItem, SelectedTabColor};
 use crate::tab_configs::TabConfig;
-use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::CLIAgent;
+use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
@@ -104,6 +104,10 @@ pub enum WorkspaceAction {
     MoveActiveTabRight,
     MoveTabLeft(usize),
     MoveTabRight(usize),
+    SetTabPinned {
+        index: usize,
+        is_pinned: bool,
+    },
     RenameTab(usize),
     ResetTabName(usize),
     RenamePane(PaneViewLocator),
@@ -138,6 +142,7 @@ pub enum WorkspaceAction {
     CloseTabsRight(usize),
     CloseTabsRightActiveTab,
     AddDefaultTab,
+    OpenThemeCreatorModal,
     AddTerminalTab {
         hide_homepage: bool,
     },
@@ -152,6 +157,12 @@ pub enum WorkspaceAction {
     /// Conductor spine when a registered host row (with no live agent) is clicked,
     /// so the caller need not carry the server info.
     OpenSshTerminalByNode {
+        node_id: String,
+    },
+    /// Open an SFTP file-manager pane for a registered SSH host, resolving the
+    /// connection by its stable registry node id. Dispatched by the visible
+    /// "Files" action on a Conductor host node.
+    OpenSftpPaneByNode {
         node_id: String,
     },
     /// Toggle a curated favorite (design §10): the ★ affordance on a Conductor
@@ -988,6 +999,7 @@ impl WorkspaceAction {
             | MoveActiveTabRight
             | MoveTabLeft(_)
             | MoveTabRight(_)
+            | SetTabPinned { .. }
             | DropTab
             | RenameTab(_)
             | ResetTabName(_)
@@ -1004,9 +1016,11 @@ impl WorkspaceAction {
             | CloseTabsRightActiveTab
             | ToggleTabColor { .. }
             | AddDefaultTab
+            | OpenThemeCreatorModal
             | AddTerminalTab { .. }
             | OpenSshTerminal { .. }
             | OpenSshTerminalByNode { .. }
+            | OpenSftpPaneByNode { .. }
             | OpenLocalFileManager { .. }
             | ToggleSshManager
             // Opening the SSH manager changes the persisted left-panel view, exactly

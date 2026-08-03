@@ -8,10 +8,8 @@
 
 use warpui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
 
-use crate::pane_group::{
-    BackingView, PaneConfiguration, PaneContent, PaneGroup, PaneView,
-};
 use crate::app_state::LeafContents;
+use crate::pane_group::{BackingView, PaneConfiguration, PaneContent, PaneGroup, PaneView};
 use crate::sftp_manager::browser::SftpBrowserView;
 
 use super::{DetachType, PaneId, ShareableLink, ShareableLinkError};
@@ -26,10 +24,7 @@ pub struct SftpPane {
 
 impl SftpPane {
     #[cfg(test)]
-    pub(crate) fn browser_view(
-        &self,
-        ctx: &warpui::AppContext,
-    ) -> ViewHandle<SftpBrowserView> {
+    pub(crate) fn browser_view(&self, ctx: &warpui::AppContext) -> ViewHandle<SftpBrowserView> {
         self.view.as_ref(ctx).child(ctx)
     }
 

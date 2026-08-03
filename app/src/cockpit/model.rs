@@ -23,9 +23,9 @@ use watcher::HomeDirectoryWatcher;
 #[cfg(test)]
 use zaplex_cockpit::HostNode;
 use zaplex_cockpit::{
-    apply_oauth_usage, build_snapshot, fold_inventory, session_key, AccountOverrides,
+    apply_oauth_usage, build_snapshot_with_cache, fold_inventory, session_key, AccountOverrides,
     CockpitSnapshot, FleetTree, PricingTable, Provider, RegisteredHost, RemoteHost, ScanHealth,
-    SessionSnapshot,
+    SessionSnapshot, TranscriptScanCache,
 };
 // Cross-host daemon fold is a native-only concern: the `agent_session` module
 // (and the whole remote-daemon layer it lives in) is `#[cfg(not(wasm))]`, and a
@@ -103,6 +103,10 @@ pub struct CockpitModel {
     /// Lives here so the 15-min TTL survives across refresh cycles; the token
     /// itself is never stored — only the parsed, secret-free usage numbers.
     oauth_cache: HashMap<PathBuf, CachedOauth>,
+    /// Bounded parse cache for structured agent task state and Codex rollout
+    /// metadata. Survives reconcile ticks so unchanged transcripts are not
+    /// reopened every 45 seconds.
+    transcript_cache: TranscriptScanCache,
     /// User overrides (instances.json: label/color/order/hide), applied to every
     /// snapshot. Kept here so the card renderer can look up per-account colors
     /// (color isn't an `Account` field). Empty when the file is absent/broken.
@@ -132,6 +136,9 @@ struct RefreshInputs {
     /// Cache state moved into the build; the (possibly refreshed) cache comes
     /// back with the snapshot via `apply`.
     oauth_cache: HashMap<PathBuf, CachedOauth>,
+    /// Transcript parse cache moved through the background scan and returned
+    /// with the accepted refresh result.
+    transcript_cache: TranscriptScanCache,
     /// Path to the user's `instances.json` account overrides (read off-thread).
     instances_path: PathBuf,
     /// Live daemon connections captured on the model thread, moved into the
@@ -156,6 +163,7 @@ impl CockpitModel {
             inventory: FleetTree::default(),
             pricing: PricingTable::default(),
             oauth_cache: HashMap::new(),
+            transcript_cache: TranscriptScanCache::default(),
             overrides: AccountOverrides::default(),
             local_label: "local".to_string(),
             selected_account: None,
@@ -229,6 +237,7 @@ impl CockpitModel {
             pricing: self.pricing.clone(),
             oauth_enabled: *CockpitSettings::as_ref(ctx).oauth_usage,
             oauth_cache: self.oauth_cache.clone(),
+            transcript_cache: self.transcript_cache.clone(),
             daemons,
             local_label,
         })
@@ -240,7 +249,7 @@ impl CockpitModel {
         // scan that is already in flight as surely as starting a newer scan does.
         self.refresh_generation = self.refresh_generation.wrapping_add(1);
         let generation = self.refresh_generation;
-        let Some(inputs) = self.refresh_inputs(ctx) else {
+        let Some(mut inputs) = self.refresh_inputs(ctx) else {
             // Disabled (or no home dir): blank any stale state instead of
             // silently doing nothing, so the ambient badge and Conductor UI
             // don't hold onto a waiting-count from before the toggle.
@@ -250,14 +259,16 @@ impl CockpitModel {
         let spawner = ctx.spawner();
         ctx.background_executor()
             .spawn(async move {
-                let mut snapshot = build_snapshot(
+                let scan_now = Utc::now();
+                let mut snapshot = build_snapshot_with_cache(
                     &inputs.home,
                     &inputs.codex_home,
                     inputs.claude_config_dir_env.as_deref(),
-                    Utc::now(),
+                    scan_now,
                     inputs.budget_5h,
                     inputs.budget_week,
                     &inputs.pricing,
+                    &mut inputs.transcript_cache,
                 );
                 // C3b: overlay real per-account utilization where available.
                 // Piggybacks on this refresh (no extra timer); the 15-min TTL
@@ -352,12 +363,24 @@ impl CockpitModel {
                     let _ = inputs.daemons;
                     Vec::new()
                 };
-                // Local contribution: every account's live sessions, tagged with
-                // the local host label.
+                // Local contribution: every live account session plus
+                // Antigravity's per-workspace resume registry. Antigravity is
+                // deliberately Idle: its disk state proves a resumable
+                // conversation, not a running process. Claude/Codex dormant
+                // histories remain on their existing account-detail surfaces;
+                // adding all of them here would turn provider enablement into a
+                // broad Conductor behavior change.
+                let antigravity = zaplex_cockpit::antigravity_idle_sessions(
+                    &inputs.home,
+                    scan_now,
+                    zaplex_cockpit::IDLE_MAX_AGE,
+                    zaplex_cockpit::IDLE_SESSION_LIMIT,
+                );
                 let local: Vec<SessionSnapshot> = snapshot
                     .accounts
                     .iter()
-                    .flat_map(|a| a.sessions.iter().cloned())
+                    .flat_map(|account| account.sessions.iter().cloned())
+                    .chain(antigravity)
                     .collect();
                 let local_label = inputs.local_label.clone();
                 let mut inventory = fold_inventory(inputs.local_label, local, remotes);
@@ -392,6 +415,7 @@ impl CockpitModel {
                         me.apply(
                             snapshot,
                             oauth_cache,
+                            inputs.transcript_cache,
                             overrides,
                             inventory,
                             local_label,
@@ -455,6 +479,7 @@ impl CockpitModel {
             health: ScanHealth::Loaded,
         };
         self.inventory = FleetTree::default();
+        self.transcript_cache = TranscriptScanCache::default();
         self.selected_account = None;
         ctx.emit(CockpitEvent::Updated);
     }
@@ -463,6 +488,7 @@ impl CockpitModel {
         &mut self,
         snapshot: CockpitSnapshot,
         oauth_cache: HashMap<PathBuf, CachedOauth>,
+        transcript_cache: TranscriptScanCache,
         overrides: AccountOverrides,
         inventory: FleetTree,
         local_label: String,
@@ -477,6 +503,7 @@ impl CockpitModel {
         self.snapshot = snapshot;
         self.inventory = inventory;
         self.oauth_cache = oauth_cache;
+        self.transcript_cache = transcript_cache;
         self.overrides = overrides;
         self.local_label = local_label;
         // Drop a selection whose account no longer exists, so the highlight never
@@ -600,226 +627,5 @@ impl Entity for CockpitModel {
 impl SingletonEntity for CockpitModel {}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn initial_scan_state_is_loading_not_empty() {
-        let snapshot = initial_snapshot();
-        assert!(snapshot.accounts.is_empty());
-        assert_eq!(snapshot.health, ScanHealth::Pending);
-    }
-
-    #[test]
-    fn older_scan_completion_cannot_replace_newer_snapshot() {
-        assert!(should_apply_refresh_result(2, 2));
-        assert!(
-            !should_apply_refresh_result(2, 1),
-            "a scan requested before the current generation must be ignored"
-        );
-    }
-
-    fn empty_snapshot() -> CockpitSnapshot {
-        CockpitSnapshot {
-            accounts: Vec::new(),
-            generated_at: Utc::now(),
-            health: ScanHealth::Loaded,
-        }
-    }
-
-    /// The freshly-disabled (or never-populated) state is blank — this is the
-    /// state `clear_for_disabled` settles into, and every disabled tick after
-    /// the first must see this and stay a no-op (no `Updated` spam).
-    #[test]
-    fn default_state_is_blank() {
-        assert!(is_blank(&empty_snapshot(), &FleetTree::default()));
-    }
-
-    /// A nonzero waiting count (the exact staleness the Codex review flagged —
-    /// the badge stuck at an old count) must NOT read as blank, so
-    /// `clear_for_disabled` still clears it on the enabled→disabled
-    /// transition.
-    #[test]
-    fn nonzero_needs_me_is_not_blank() {
-        let mut inventory = FleetTree::default();
-        inventory.needs_me = 3;
-        assert!(!is_blank(&empty_snapshot(), &inventory));
-    }
-
-    /// A populated host list is not blank even if nothing happens to be
-    /// waiting right now — the Conductor pane must also clear on disable, not
-    /// just the badge count.
-    #[test]
-    fn nonempty_hosts_is_not_blank() {
-        let mut inventory = FleetTree::default();
-        inventory.hosts.push(HostNode {
-            host: "devbox".to_string(),
-            is_local: true,
-            host_id: None,
-            registry_node_id: None,
-            projects: Vec::new(),
-            needs_me: 0,
-        });
-        assert!(!is_blank(&empty_snapshot(), &inventory));
-    }
-
-    fn session(id: &str, state: zaplex_cockpit::SessionState) -> SessionSnapshot {
-        SessionSnapshot {
-            session_id: id.into(),
-            cwd: "/w".into(),
-            name: "job".into(),
-            state,
-            provider: Provider::Claude,
-            model: "opus".into(),
-            effort: None,
-            ctx_tokens: 0,
-            project_root: "/w".into(),
-            repo_root: "/w".into(),
-            project_name: "proj".into(),
-            branch: None,
-            worktree: None,
-            config_dir: None,
-            account_email: None,
-            process_fingerprint: None,
-            pty_session_id: None,
-            pty_session_generation: None,
-            pty_foreground: false,
-            last_activity: Utc::now(),
-            pid: 0,
-        }
-    }
-
-    #[test]
-    fn pty_routes_require_daemon_binding_capability() {
-        let mut legacy = session("legacy", zaplex_cockpit::SessionState::Active);
-        legacy.pty_session_id = Some("pty-1".to_string());
-        legacy.pty_session_generation = Some(7);
-        legacy.pty_foreground = true;
-        retain_negotiated_agent_pty_routes(
-            &["agent-inventory".to_string()],
-            std::slice::from_mut(&mut legacy),
-        );
-        assert!(legacy.pty_session_id.is_none());
-        assert!(legacy.pty_session_generation.is_none());
-        assert!(!legacy.pty_foreground);
-
-        let mut capable = session("capable", zaplex_cockpit::SessionState::Active);
-        capable.pty_session_id = Some("pty-2".to_string());
-        capable.pty_session_generation = Some(8);
-        capable.pty_foreground = true;
-        retain_negotiated_agent_pty_routes(
-            &[
-                "agent-inventory".to_string(),
-                "agent-pty-binding".to_string(),
-            ],
-            std::slice::from_mut(&mut capable),
-        );
-        assert_eq!(capable.pty_session_id.as_deref(), Some("pty-2"));
-        assert_eq!(capable.pty_session_generation, Some(8));
-        assert!(capable.pty_foreground);
-    }
-
-    /// One remote host with `host_id` carrying a single session in `state`,
-    /// under the shared display `label`.
-    fn remote_host(label: &str, host_id: &str, session: SessionSnapshot) -> HostNode {
-        HostNode {
-            host: label.into(),
-            is_local: false,
-            host_id: Some(host_id.into()),
-            registry_node_id: None,
-            projects: vec![zaplex_cockpit::ProjectNode {
-                root: "/w".into(),
-                name: "proj".into(),
-                needs_me: 0,
-                sessions: vec![session],
-            }],
-            needs_me: 0,
-        }
-    }
-
-    /// Finding 2: two remote daemons sharing a display label, each with a session
-    /// under the SAME host-scoped id but DISTINCT `host_id`. A working→Waiting
-    /// transition on one must not be masked by the other's old state. A
-    /// label-keyed diff would alias both into one map entry (one overwriting the
-    /// other); keying by the stable host identity keeps them distinct.
-    #[test]
-    fn same_label_hosts_do_not_mask_each_others_waiting_transition() {
-        use zaplex_cockpit::SessionState;
-        // Both hosts labelled "box", same session id "s1", different host_id.
-        let old = FleetTree {
-            hosts: vec![
-                remote_host("box", "host-A", session("s1", SessionState::Active)),
-                remote_host("box", "host-B", session("s1", SessionState::Active)),
-            ],
-            needs_me: 0,
-        };
-        // Host A's session flips to Waiting; host B keeps working.
-        let new = FleetTree {
-            hosts: vec![
-                remote_host("box", "host-A", session("s1", SessionState::Waiting)),
-                remote_host("box", "host-B", session("s1", SessionState::Active)),
-            ],
-            needs_me: 1,
-        };
-        let transitions = fleet_transitions_to_waiting(&old, &new);
-        // Exactly one transition fires — host A's — and it isn't masked by host
-        // B's identical (label, session id).
-        assert_eq!(transitions, vec!["box — job".to_string()]);
-
-        // And symmetrically: a transition on B alone also fires (not swallowed by
-        // A's old Active state under the shared label).
-        let new_b = FleetTree {
-            hosts: vec![
-                remote_host("box", "host-A", session("s1", SessionState::Active)),
-                remote_host("box", "host-B", session("s1", SessionState::Waiting)),
-            ],
-            needs_me: 1,
-        };
-        assert_eq!(
-            fleet_transitions_to_waiting(&old, &new_b),
-            vec!["box — job".to_string()]
-        );
-    }
-
-    #[test]
-    fn same_host_and_session_id_in_different_accounts_do_not_mask_waiting_transition() {
-        use zaplex_cockpit::SessionState;
-
-        let mut old_personal = session("copied", SessionState::Active);
-        old_personal.account_email = Some("personal@example.com".to_string());
-        let mut old_work = session("copied", SessionState::Waiting);
-        old_work.account_email = Some("work@example.com".to_string());
-
-        let mut new_personal = old_personal.clone();
-        new_personal.state = SessionState::Waiting;
-        let new_work = old_work.clone();
-
-        let host = |sessions| HostNode {
-            host: "box".to_string(),
-            is_local: false,
-            host_id: Some("host-A".to_string()),
-            registry_node_id: None,
-            projects: vec![zaplex_cockpit::ProjectNode {
-                root: "/w".to_string(),
-                name: "proj".to_string(),
-                needs_me: 0,
-                sessions,
-            }],
-            needs_me: 0,
-        };
-        let old = FleetTree {
-            hosts: vec![host(vec![old_personal, old_work])],
-            needs_me: 1,
-        };
-        let new = FleetTree {
-            hosts: vec![host(vec![new_personal, new_work])],
-            needs_me: 2,
-        };
-
-        assert_eq!(
-            fleet_transitions_to_waiting(&old, &new),
-            vec!["box — job".to_string()],
-            "the already-waiting account must not overwrite the other account's old state"
-        );
-    }
-}
+#[path = "model_tests.rs"]
+mod tests;

@@ -12,10 +12,12 @@
 
 use std::collections::HashMap;
 use std::fs::File;
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
 use async_io::Async;
 use futures::io::{AsyncReadExt, AsyncWriteExt};
+use nix::sys::termios::{self, LocalFlags, SetArg};
 use warpui::ModelSpawner;
 use zaplex_remote_session::server::output_ring::OutputRing;
 
@@ -41,6 +43,35 @@ pub(super) const MAX_ACCEPTED_STARTUP_COMMANDS: usize = 64;
 /// Read chunk size for the per-session PTY reader.
 const READ_CHUNK: usize = 64 * 1024;
 
+/// One ordered write to a daemon-hosted PTY.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum PtyInput {
+    /// Ordinary user keyboard/mouse input. The PTY's current echo mode applies.
+    Visible(Vec<u8>),
+    /// Shell bootstrap bytes. The PTY echo race is closed before the session is
+    /// registered; the bootstrap itself restores the interactive terminal mode.
+    Bootstrap(Vec<u8>),
+    /// A client-requested startup command. Its text must not become observable
+    /// terminal output even though the bootstrapped shell has restored ECHO.
+    Startup(Vec<u8>),
+}
+
+impl PtyInput {
+    #[cfg(test)]
+    pub(super) fn into_bytes(self) -> Vec<u8> {
+        match self {
+            Self::Visible(bytes) | Self::Bootstrap(bytes) | Self::Startup(bytes) => bytes,
+        }
+    }
+}
+
+pub(super) fn is_valid_startup_input(bytes: &[u8]) -> bool {
+    let Some(command) = bytes.strip_suffix(b"\n") else {
+        return false;
+    };
+    !command.is_empty() && !command.contains(&b'\r') && !command.contains(&b'\n')
+}
+
 /// A live daemon-hosted session: the PTY master, the shell child, the output
 /// ring, and the channel feeding the ordered input writer.
 pub(super) struct Session {
@@ -61,7 +92,7 @@ pub(super) struct Session {
     /// Connection currently receiving this session's live output.
     pub(super) attached: ConnectionId,
     /// Ordered keyboard/mouse input → the writer task → the PTY.
-    pub(super) input_tx: async_channel::Sender<Vec<u8>>,
+    pub(super) input_tx: async_channel::Sender<PtyInput>,
     /// Retry-safe startup commands already accepted by the ordered writer,
     /// keyed by their stable client-generated delivery id. The bytes are kept
     /// with the id so an accidental id reuse with different content is rejected
@@ -215,7 +246,11 @@ mod tests {
         let mut p = BootstrapPreamble::new(1024);
         assert_eq!(p.frozen(), None, "nothing frozen while still capturing");
         p.capture(b"INIT-SHELL...BOOTSTRAPPED...prompt$ ");
-        assert_eq!(p.frozen(), None, "still capturing until the boundary is set");
+        assert_eq!(
+            p.frozen(),
+            None,
+            "still capturing until the boundary is set"
+        );
         // Boundary lands right after "...BOOTSTRAPPED..." (28 bytes).
         p.freeze(28);
         assert_eq!(p.frozen(), Some(&b"INIT-SHELL...BOOTSTRAPPED..."[..]));
@@ -236,7 +271,11 @@ mod tests {
         // A boundary past what we captured would leave a partial (possibly
         // InitShell-less) handshake, so it is abandoned rather than frozen.
         let p = frozen_at(b"short", 9999);
-        assert_eq!(p.frozen(), None, "an out-of-range boundary abandons capture");
+        assert_eq!(
+            p.frozen(),
+            None,
+            "an out-of-range boundary abandons capture"
+        );
     }
 
     #[test]
@@ -263,7 +302,11 @@ mod tests {
     fn capture_after_freeze_is_ignored() {
         let mut p = frozen_at(b"DONE", 4);
         p.capture(b"-late-output");
-        assert_eq!(p.frozen(), Some(&b"DONE"[..]), "post-freeze output is not captured");
+        assert_eq!(
+            p.frozen(),
+            Some(&b"DONE"[..]),
+            "post-freeze output is not captured"
+        );
     }
 
     #[test]
@@ -283,7 +326,10 @@ mod tests {
         // so seq 0 (and the whole handshake) is long evicted.
         let mut ring = OutputRing::new(10);
         ring.append(&vec![b'x'; 30]);
-        assert!(ring.base_seq() > 0, "precondition: the ring evicted its start");
+        assert!(
+            ring.base_seq() > 0,
+            "precondition: the ring evicted its start"
+        );
 
         let preamble = frozen_at(b"HANDSHAKE!!", 6); // frozen preamble = "HANDSH" (6 bytes)
         let (base_seq, replay, sent) = plan_attach(&ring, &preamble, 0, true);
@@ -298,7 +344,11 @@ mod tests {
             ring.base_seq(),
             "with the whole preamble range evicted, replay is the ring's live window"
         );
-        assert_eq!(replay.len(), ring.len(), "replay is the current ring contents");
+        assert_eq!(
+            replay.len(),
+            ring.len(),
+            "replay is the current ring contents"
+        );
     }
 
     /// Backward compatibility: a client that did NOT opt in (`false`) gets the
@@ -311,8 +361,15 @@ mod tests {
         let preamble = frozen_at(b"HANDSHAKE!!", 6);
 
         let (base_seq, replay, sent) = plan_attach(&ring, &preamble, 0, false);
-        assert!(sent.is_empty(), "an opted-out client must never receive the preamble");
-        assert_eq!(base_seq, ring.base_seq(), "plain replay_from(0): the ring's live window");
+        assert!(
+            sent.is_empty(),
+            "an opted-out client must never receive the preamble"
+        );
+        assert_eq!(
+            base_seq,
+            ring.base_seq(),
+            "plain replay_from(0): the ring's live window"
+        );
         assert_eq!(replay.len(), ring.len());
     }
 
@@ -339,7 +396,10 @@ mod tests {
         let preamble = frozen_at(b"INIT", 4);
 
         let (base_seq, replay, sent) = plan_attach(&ring, &preamble, 0, true);
-        assert!(sent.is_empty(), "replay still contains the handshake; no preamble");
+        assert!(
+            sent.is_empty(),
+            "replay still contains the handshake; no preamble"
+        );
         assert_eq!(base_seq, 0);
         assert_eq!(replay, b"INIT...prompt$ ");
     }
@@ -359,7 +419,10 @@ mod tests {
         let (base_seq, replay, sent) = plan_attach(&ring, &preamble, 0, true);
 
         assert_eq!(sent.len(), 8, "preamble [0,8) served");
-        assert_eq!(base_seq, 8, "replay starts exactly at the preamble end — contiguous, no gap");
+        assert_eq!(
+            base_seq, 8,
+            "replay starts exactly at the preamble end — contiguous, no gap"
+        );
         assert_eq!(replay.len(), 12, "replay is [8,20)");
     }
 
@@ -478,18 +541,88 @@ fn multiplexer_on_session_tty(child_pid: u32) -> Option<String> {
 /// is dropped (its `input_tx` is dropped, closing the channel).
 pub(super) async fn run_session_writer(
     leader: Arc<Async<File>>,
-    input_rx: async_channel::Receiver<Vec<u8>>,
+    input_rx: async_channel::Receiver<PtyInput>,
 ) {
     let mut writer: &Async<File> = &leader;
-    while let Ok(bytes) = input_rx.recv().await {
-        let mut rest: &[u8] = &bytes;
-        while !rest.is_empty() {
-            match writer.write(rest).await {
-                Ok(0) => return,
-                Ok(n) => rest = &rest[n..],
-                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => return,
+    while let Ok(input) = input_rx.recv().await {
+        match input {
+            PtyInput::Visible(bytes) | PtyInput::Bootstrap(bytes) => {
+                if write_all(&mut writer, &bytes).await.is_err() {
+                    return;
+                }
+            }
+            PtyInput::Startup(bytes) => {
+                if write_startup_without_echo(&mut writer, &bytes)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
             }
         }
     }
+}
+
+async fn write_all(writer: &mut &Async<File>, mut bytes: &[u8]) -> std::io::Result<()> {
+    while !bytes.is_empty() {
+        match writer.write(bytes).await {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "daemon PTY writer returned zero bytes",
+                ));
+            }
+            Ok(n) => bytes = &bytes[n..],
+            Err(ref error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Writes startup text with ECHO disabled, restores the prior echo mode, then
+/// sends the final execution newline. The shell cannot execute the command
+/// before that newline, so it cannot race the restoration by switching its own
+/// terminal mode (for example when `codex` immediately enters raw mode).
+async fn write_startup_without_echo(
+    writer: &mut &Async<File>,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    let Some(text) = bytes.strip_suffix(b"\n").filter(|text| !text.is_empty()) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "startup input must be one non-empty line terminated by LF",
+        ));
+    };
+    if text.contains(&b'\r') || text.contains(&b'\n') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "startup input must not contain embedded line breaks",
+        ));
+    }
+
+    let fd = writer.as_raw_fd();
+    let original = termios::tcgetattr(fd).map_err(std::io::Error::other)?;
+    let restore_echo = original.local_flags.contains(LocalFlags::ECHO);
+    let mut no_echo = original.clone();
+    no_echo.local_flags.remove(LocalFlags::ECHO);
+    termios::tcsetattr(fd, SetArg::TCSANOW, &no_echo).map_err(std::io::Error::other)?;
+
+    if let Err(error) = write_all(writer, text).await {
+        let _ = restore_echo_flag(fd, restore_echo);
+        return Err(error);
+    }
+
+    restore_echo_flag(fd, restore_echo)?;
+    write_all(writer, b"\n").await
+}
+
+fn restore_echo_flag(fd: i32, echo_was_enabled: bool) -> std::io::Result<()> {
+    let mut current = termios::tcgetattr(fd).map_err(std::io::Error::other)?;
+    if echo_was_enabled {
+        current.local_flags.insert(LocalFlags::ECHO);
+    } else {
+        current.local_flags.remove(LocalFlags::ECHO);
+    }
+    termios::tcsetattr(fd, SetArg::TCSANOW, &current).map_err(std::io::Error::other)
 }

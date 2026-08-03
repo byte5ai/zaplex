@@ -366,8 +366,8 @@ impl View for NewWorktreeModal {
                 &crate::t!("new-worktree-select-branch"),
                 appearance,
             ))
-                .with_margin_top(SECTION_GAP)
-                .finish(),
+            .with_margin_top(SECTION_GAP)
+            .finish(),
         );
         body.add_child(ChildView::new(&self.branch_picker).finish());
 

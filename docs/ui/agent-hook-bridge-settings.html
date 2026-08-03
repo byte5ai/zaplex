@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>UI-Spezifikation — Nativer Live-Status für Coding Agents</title>
+  <meta name="ui-spec-route" content="/native/settings/coding-agents">
+  <meta name="ui-spec-viewports" content="1280x900,760x820">
+  <style>
+    :root {
+      --page: #0f1116;
+      --sidebar: #15181e;
+      --surface: #1a1e25;
+      --surface-raised: #222730;
+      --border: #303641;
+      --text: #f0f2f6;
+      --muted: #9ba4b3;
+      --faint: #6f7887;
+      --accent: #8675f5;
+      --accent-soft: #8675f52a;
+      --success: #48c98b;
+      --warning: #e0a84f;
+      --danger: #ef737b;
+      --radius: 7px;
+      color-scheme: dark;
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: #090b0f;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; }
+    #spec {
+      max-width: 1180px;
+      margin: 0 auto 24px;
+      padding: 16px 20px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+    #spec h1 { margin: 0 0 13px; font-size: 18px; }
+    .spec-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+    .spec-grid h2 {
+      margin: 0 0 5px;
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .spec-grid ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 11px; }
+    .spec-grid code { color: var(--text); }
+    #mockups { max-width: 1180px; margin: 0 auto; }
+    .viewport {
+      overflow: hidden;
+      min-height: 630px;
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      background: var(--page);
+      box-shadow: 0 20px 62px #0009;
+    }
+    .viewport-label {
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--faint);
+      background: #11141a;
+      font-size: 11px;
+    }
+    .app { min-height: 600px; display: grid; grid-template-columns: 235px minmax(0, 1fr); }
+    .sidebar { padding: 18px 12px; border-right: 1px solid var(--border); background: var(--sidebar); }
+    .sidebar h2 { margin: 0 10px 15px; font-size: 15px; }
+    .nav-group { margin: 13px 10px 6px; color: var(--faint); font-size: 10px; letter-spacing: .07em; text-transform: uppercase; }
+    .nav-item { margin-bottom: 2px; padding: 7px 10px; border-radius: 6px; color: var(--muted); }
+    .nav-item.active { color: var(--text); background: var(--surface-raised); }
+    .content { padding: 26px 32px 38px; }
+    .content-inner { width: min(760px, 100%); }
+    .content h1 { margin: 0 0 5px; font-size: 22px; }
+    .lead { margin: 0 0 25px; color: var(--muted); }
+    .section { margin-top: 24px; }
+    .section h2 { margin: 0 0 5px; font-size: 14px; }
+    .description { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+    .agent-list { display: grid; gap: 5px; }
+    .agent-row {
+      display: grid;
+      grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.4fr) auto;
+      align-items: center;
+      min-height: 48px;
+      gap: 14px;
+      padding: 8px 10px;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .agent-row.warning { border-color: #6a5431; }
+    .agent { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .logo {
+      display: grid;
+      width: 23px;
+      height: 23px;
+      flex: 0 0 auto;
+      place-items: center;
+      border-radius: 6px;
+      color: white;
+      background: #333945;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .claude { background: #c96f45; }
+    .codex { background: #267b65; }
+    .grok { background: #30323a; }
+    .antigravity { background: #7c3aed; }
+    .deepseek { background: #3868c9; }
+    .agent strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .status { min-width: 0; }
+    .status-line { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+    .status-line strong { color: var(--text); font-size: 12px; font-weight: 550; }
+    .status small { display: block; margin-top: 1px; color: var(--faint); }
+    .dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--faint); }
+    .dot.on { background: var(--success); }
+    .dot.warning { background: var(--warning); }
+    .dot.limited { background: #748094; }
+    .switch {
+      position: relative;
+      width: 34px;
+      height: 20px;
+      border: 1px solid #4a5260;
+      border-radius: 999px;
+      background: #303641;
+    }
+    .switch::after {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #a6adba;
+      content: "";
+    }
+    .switch.on { border-color: var(--accent); background: var(--accent); }
+    .switch.on::after { left: 17px; background: #fff; }
+    .switch.disabled { opacity: .45; }
+    .notice {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid #5c492b;
+      border-radius: var(--radius);
+      color: #d9bd88;
+      background: #372b1b;
+      font-size: 12px;
+    }
+    .button {
+      margin-left: auto;
+      padding: 5px 9px;
+      border: 1px solid #79613a;
+      border-radius: 5px;
+      color: #f2d49c;
+      background: #4c3a21;
+      white-space: nowrap;
+    }
+    .privacy {
+      display: flex;
+      gap: 9px;
+      margin-top: 13px;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      color: var(--muted);
+      background: var(--accent-soft);
+      font-size: 12px;
+    }
+    .privacy strong { color: var(--text); }
+    .chips { display: flex; gap: 7px; }
+    .chip {
+      min-width: 78px;
+      padding: 5px 8px;
+      border: 1px solid var(--accent);
+      border-radius: 5px;
+      color: var(--text);
+      background: var(--accent-soft);
+      text-align: center;
+      font-size: 12px;
+    }
+    @media (max-width: 820px) {
+      body { padding: 10px; }
+      .spec-grid { grid-template-columns: 1fr 1fr; }
+      .app { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .content { padding: 22px 18px 30px; }
+      .agent-row { grid-template-columns: minmax(125px, 1fr) minmax(145px, 1.2fr) auto; gap: 8px; }
+      .notice { flex-wrap: wrap; }
+      .button { margin-left: 17px; }
+    }
+  </style>
+</head>
+<body>
+  <section id="spec">
+    <h1>Nativer Live-Status für Coding Agents</h1>
+    <div class="spec-grid">
+      <div>
+        <h2>Platzierung</h2>
+        <ul>
+          <li>Unter <code>Einstellungen → Coding Agents</code>.</li>
+          <li>Direkt unter der vorhandenen Sichtbarkeitstabelle.</li>
+          <li>Kein ⋯-Menü und keine versteckte Unterseite.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Verhalten</h2>
+        <ul>
+          <li>Ein sichtbarer Schalter pro unterstütztem, installiertem Agent.</li>
+          <li>Einschalten installiert nur Zaplex-eigene Hooks; Ausschalten entfernt nur diese.</li>
+          <li>Fremde Hook-Einträge und Dateirechte bleiben erhalten.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Zustände</h2>
+        <ul>
+          <li><code>Aus</code>, <code>Eingerichtet</code>, <code>Überprüfung nötig</code>, <code>Fehler</code>.</li>
+          <li>Codex gilt erst nach seiner eigenen Hook-Prüfung als aktiv.</li>
+          <li>Antigravity nutzt seinen offiziellen Statuskanal; DeepSeek/CodeWhale dessen lokales Approval-Audit.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Akzeptanz</h2>
+        <ul>
+          <li>Claude, Codex, Grok, Antigravity und DeepSeek/CodeWhale lassen sich unabhängig schalten.</li>
+          <li>Jede Aktion und jeder Zustand hat ein sichtbares Textlabel.</li>
+          <li>Die UI behauptet nie „aktiv“, wenn nur eine Datei vorhanden ist.</li>
+          <li>Kein Prompt- oder Tool-Inhalt verlässt den lokalen Prozess.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <main id="mockups">
+    <section class="viewport">
+      <div class="viewport-label">Desktop · Einstellungen → Coding Agents · installierte Agenten mit gemischten Zuständen</div>
+      <div class="app">
+        <aside class="sidebar">
+          <h2>Einstellungen</h2>
+          <div class="nav-group">AI</div>
+          <div class="nav-item">Warp Agent</div>
+          <div class="nav-item">Profile</div>
+          <div class="nav-item active">Coding Agents</div>
+          <div class="nav-item">Provider</div>
+          <div class="nav-item">MCP-Server</div>
+        </aside>
+
+        <section class="content">
+          <div class="content-inner">
+            <h1>Coding Agents</h1>
+            <p class="lead">Darstellung und lokale Integration installierter Coding Agents.</p>
+
+            <section class="section">
+              <h2>Sichtbarkeit pro Agent</h2>
+              <p class="description">Lege fest, wo installierte Agents in Zaplex erscheinen.</p>
+              <div class="agent-row">
+                <div class="agent"><span class="logo claude">C</span><strong>Claude Code</strong></div>
+                <div class="chips"><span class="chip">✓ Toolbar</span><span class="chip">✓ Neuer Tab</span></div>
+                <span class="chip">Titelleiste</span>
+              </div>
+            </section>
+
+            <section class="section">
+              <h2>Live-Agent-Status</h2>
+              <p class="description">Erkennt Arbeiten, Warten und Abschluss zuverlässig über lokale Agent-Hooks.</p>
+              <div class="agent-list">
+                <div class="agent-row">
+                  <div class="agent"><span class="logo claude">C</span><strong>Claude Code</strong></div>
+                  <div class="status">
+                    <div class="status-line"><span class="dot on"></span><strong>Eingerichtet</strong></div>
+                    <small>Nativer Status aktiv</small>
+                  </div>
+                  <span class="switch on" aria-label="Live-Status für Claude Code eingeschaltet"></span>
+                </div>
+
+                <div class="agent-row warning">
+                  <div class="agent"><span class="logo codex">O</span><strong>Codex</strong></div>
+                  <div class="status">
+                    <div class="status-line"><span class="dot warning"></span><strong>Überprüfung nötig</strong></div>
+                    <small>Hook ist eingerichtet; Codex muss ihn einmal bestätigen</small>
+                  </div>
+                  <span class="switch on" aria-label="Live-Status für Codex eingeschaltet"></span>
+                </div>
+
+                <div class="agent-row">
+                  <div class="agent"><span class="logo grok">G</span><strong>Grok</strong></div>
+                  <div class="status">
+                    <div class="status-line"><span class="dot"></span><strong>Aus</strong></div>
+                    <small>Terminal-Basisstatus bleibt verfügbar</small>
+                  </div>
+                  <span class="switch" aria-label="Live-Status für Grok ausgeschaltet"></span>
+                </div>
+
+                <div class="agent-row">
+                  <div class="agent"><span class="logo antigravity">A</span><strong>Antigravity</strong></div>
+                  <div class="status">
+                    <div class="status-line"><span class="dot on"></span><strong>Eingerichtet</strong></div>
+                    <small>Offizieller Agent- und Freigabestatus aktiv</small>
+                  </div>
+                  <span class="switch on" aria-label="Live-Status für Antigravity eingeschaltet"></span>
+                </div>
+
+                <div class="agent-row">
+                  <div class="agent"><span class="logo deepseek">D</span><strong>DeepSeek</strong></div>
+                  <div class="status">
+                    <div class="status-line"><span class="dot on"></span><strong>Eingerichtet</strong></div>
+                    <small>Native Hooks und lokales Approval-Audit aktiv</small>
+                  </div>
+                  <span class="switch on" aria-label="Live-Status für DeepSeek eingeschaltet"></span>
+                </div>
+              </div>
+
+              <div class="notice">
+                <span>●</span>
+                <span><strong>Codex wartet auf deine Bestätigung.</strong><br>Prüfe den neuen Zaplex-Hook beim nächsten Codex-Start.</span>
+                <span class="button">Verstanden</span>
+              </div>
+
+              <div class="privacy">
+                <span>⌁</span>
+                <span><strong>Bleibt lokal:</strong> Zaplex übernimmt nur Agent-Zustand, Sitzungs-ID, Arbeitsordner und Werkzeugname — niemals Prompt, Befehl oder Werkzeug-Eingabe.</span>
+              </div>
+            </section>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -81,7 +81,7 @@ fn parse_transcript_sums_per_turn_and_ignores_cumulative_envelope() {
 }
 
 #[test]
-fn usage_subtracts_cached_tokens() {
+fn codex_usage_subtracts_cached_tokens_from_input_total() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("rollout-x.jsonl");
     write(
@@ -101,7 +101,7 @@ fn usage_subtracts_cached_tokens() {
 }
 
 #[test]
-fn fixture_reports_total_115_work_25() {
+fn codex_usage_fixture_reports_total_110_and_work_20() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("rollout-x.jsonl");
     write(
@@ -121,8 +121,8 @@ fn fixture_reports_total_115_work_25() {
 
     assert_eq!(totals.input, 10);
     assert_eq!(totals.cache_read, 90);
-    assert_eq!(totals.total, 115);
-    assert_eq!(totals.work, 25);
+    assert_eq!(totals.total, 110);
+    assert_eq!(totals.work, 20);
 }
 
 #[test]
@@ -215,11 +215,16 @@ fn parsed_spend_carries_the_session_id_from_session_meta() {
             serde_json::json!({"type":"event_msg","timestamp":"2026-06-30T10:01:00Z",
                 "payload":{"type":"token_count","info":{"last_token_usage":{
                     "input_tokens":100,"cached_input_tokens":0,"output_tokens":10,
-                    "reasoning_output_tokens":5,"total_tokens":115}}}}),
+                    "reasoning_output_tokens":5,"total_tokens":110}}}}),
         ),
     );
 
-    let entries = parse_transcript(&path, DateTime::parse_from_rfc3339("2026-06-30T00:00:00Z").unwrap().with_timezone(&Utc));
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0].session_id, id,
@@ -243,11 +248,16 @@ fn the_file_name_fallback_matches_the_one_discovery_uses() {
             serde_json::json!({"type":"event_msg","timestamp":"2026-06-30T10:01:00Z",
                 "payload":{"type":"token_count","info":{"last_token_usage":{
                     "input_tokens":100,"cached_input_tokens":0,"output_tokens":10,
-                    "reasoning_output_tokens":5,"total_tokens":115}}}}),
+                    "reasoning_output_tokens":5,"total_tokens":110}}}}),
         ),
     );
 
-    let entries = parse_transcript(&path, DateTime::parse_from_rfc3339("2026-06-30T00:00:00Z").unwrap().with_timezone(&Utc));
+    let entries = parse_transcript(
+        &path,
+        DateTime::parse_from_rfc3339("2026-06-30T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    );
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0].session_id,

@@ -33,7 +33,9 @@ permissions:
 jobs:
   validate:
     name: validate-tag-on-main
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # No historical runs exist yet; this deterministic Git-only check is capped conservatively.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:

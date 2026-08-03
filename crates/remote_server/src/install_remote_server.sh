@@ -2,7 +2,7 @@
 # Install Zaplex CLI binary on remote host for remote-server-proxy.
 #
 # setup.rs will replace these placeholders at runtime:
-#   {download_base_url}     - e.g. https://github.com/zerx-lab/warp/releases/latest/download
+#   {download_base_url}     - e.g. https://github.com/byte5ai/zaplex/releases/latest/download
 #   {install_dir}           - e.g. ~/.zap/remote-server
 #   {binary_name}           - e.g. zaplex
 #   {version_suffix}        - e.g. -v0.2026..., empty when no release tag

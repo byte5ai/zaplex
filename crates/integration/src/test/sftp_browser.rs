@@ -395,9 +395,13 @@ pub fn test_sftp_toolbar_up() -> Builder {
                 .with_action(|app, window_id, _| {
                     let view = sftp::sftp_browser_view(app, window_id);
                     view.update(app, |v, ctx| {
-                        v.handle_action(&SftpBrowserAction::OpenEntry(
-                            v.entries().iter().position(|e| e.name == "subdir").unwrap(),
-                        ), ctx);
+                        let entry = v
+                            .entries()
+                            .iter()
+                            .find(|entry| entry.name == "subdir")
+                            .unwrap()
+                            .entry_reference(0);
+                        v.handle_action(&SftpBrowserAction::OpenEntry(entry), ctx);
                     });
                 })
                 .set_post_step_pause(std::time::Duration::from_millis(500)),
@@ -445,7 +449,7 @@ pub fn test_sftp_click_file_row_selects() -> Builder {
                     let view = sftp::sftp_browser_view(app, window_id);
                     view.read(app, |v, _| {
                         async_assert!(
-                            v.selected().contains(&0),
+                            v.selected().contains(&v.entries()[0].entry_identity()),
                             "The first file should be selected"
                         )
                     })
@@ -594,7 +598,8 @@ pub fn test_sftp_breadcrumb_root_click() -> Builder {
                     let view = sftp::sftp_browser_view(app, window_id);
                     view.update(app, |v, ctx| {
                         let idx = v.entries().iter().position(|e| e.name == "subdir").unwrap();
-                        v.handle_action(&SftpBrowserAction::OpenEntry(idx), ctx);
+                        let entry = v.entries()[idx].entry_reference(0);
+                        v.handle_action(&SftpBrowserAction::OpenEntry(entry), ctx);
                     });
                 })
                 .set_post_step_pause(std::time::Duration::from_millis(500)),
@@ -642,7 +647,8 @@ pub fn test_sftp_keyboard_backspace_up() -> Builder {
                     let view = sftp::sftp_browser_view(app, window_id);
                     view.update(app, |v, ctx| {
                         let idx = v.entries().iter().position(|e| e.name == "subdir").unwrap();
-                        v.handle_action(&SftpBrowserAction::OpenEntry(idx), ctx);
+                        let entry = v.entries()[idx].entry_reference(0);
+                        v.handle_action(&SftpBrowserAction::OpenEntry(entry), ctx);
                     });
                 })
                 .set_post_step_pause(std::time::Duration::from_millis(500)),
@@ -684,7 +690,8 @@ pub fn test_sftp_keyboard_delete() -> Builder {
                 .with_action(|app, window_id, _| {
                     let view = sftp::sftp_browser_view(app, window_id);
                     view.update(app, |v, ctx| {
-                        v.handle_action(&SftpBrowserAction::SelectEntry(0), ctx);
+                        let entry = v.entries()[0].entry_reference(0);
+                        v.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
                     });
                 })
                 .set_post_step_pause(std::time::Duration::from_millis(300)),

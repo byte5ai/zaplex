@@ -515,7 +515,9 @@ impl PrivacySettings {
 
             if self.auth_state.is_logged_in() {
                 // Zaplex Wave 3-1: same as above.
-                log::debug!("set_is_telemetry_enabled remote sync localized, new_value={new_value}");
+                log::debug!(
+                    "set_is_telemetry_enabled remote sync localized, new_value={new_value}"
+                );
             }
             ctx.emit(PrivacySettingsChangedEvent::UpdateIsTelemetryEnabled {
                 old_value,

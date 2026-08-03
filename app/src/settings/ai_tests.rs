@@ -382,6 +382,13 @@ fn test_toolbar_command_map_matched_agent() {
 }
 
 #[test]
+fn deprecated_gemini_is_not_enabled_for_new_launch_surfaces() {
+    assert!(!PerAgentSettings::default_for(CLIAgent::Gemini).tabmenu);
+    assert!(PerAgentSettings::default_for(CLIAgent::Antigravity).tabmenu);
+    assert!(PerAgentSettings::default_for(CLIAgent::Gemini).toolbar);
+}
+
+#[test]
 fn test_should_display_quota_reset_banner_with_empty_history() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);

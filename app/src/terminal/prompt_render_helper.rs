@@ -293,7 +293,10 @@ impl PromptRenderHelper {
             if shell_name.is_empty() {
                 crate::t!("terminal-starting-shell")
             } else {
-                crate::t!("terminal-bootstrapping-starting-shell-name", shell = shell_name)
+                crate::t!(
+                    "terminal-bootstrapping-starting-shell-name",
+                    shell = shell_name
+                )
             }
         }
     }

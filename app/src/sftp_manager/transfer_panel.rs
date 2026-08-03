@@ -537,6 +537,7 @@ pub fn render_workspace_transfer_panel(app: &AppContext) -> Option<Box<dyn Eleme
             activity.progress.total,
         );
         task.transferred = activity.progress.transferred;
+        task.bytes_per_second = activity.progress.bytes_per_second;
         task.control_epoch = Some(activity.control_epoch);
         task.eta = activity.progress.eta;
         task.phase = activity.progress.phase;

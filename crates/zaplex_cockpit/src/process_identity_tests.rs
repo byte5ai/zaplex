@@ -93,7 +93,7 @@ fn recycled_pid_is_rejected_by_process_identity() {
 }
 
 #[test]
-fn invalid_pid_never_reaches_signal_backend() {
+fn invalid_pid_never_reaches_the_signal_backend() {
     for pid in [0, i32::MAX as u32 + 1, u32::MAX] {
         assert_eq!(
             send_verified_process_signal(pid, "unreachable-fingerprint", GuardrailSignal::Kill),
@@ -101,4 +101,19 @@ fn invalid_pid_never_reaches_signal_backend() {
             "pid {pid} must fail before any platform signal operation"
         );
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn dead_pid_is_rejected_before_signal_dispatch() {
+    let result = send_verified_process_signal(
+        i32::MAX as u32,
+        "fingerprint-for-a-process-that-does-not-exist",
+        GuardrailSignal::Interrupt,
+    );
+    assert!(matches!(
+        result,
+        Err(ProcessSignalError::IdentityUnavailable(_))
+            | Err(ProcessSignalError::IdentityChanged)
+    ));
 }

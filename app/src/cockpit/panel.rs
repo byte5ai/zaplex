@@ -5,30 +5,35 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
-    ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, Rect, ScrollbarWidth, Shrinkable, Text,
+    ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, Rect, SavePosition, ScrollbarWidth, Shrinkable,
+    Stack, Text,
 };
 use warpui::platform::Cursor;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 use zaplex_cockpit::{
-    fleet_is_large, format_cost, heat_fill, heat_pct_label_with_provenance,
+    fleet_is_large, format_cost, format_relative, heat_fill, heat_pct_label_with_provenance,
     host_auto_collapsed, host_ident, host_session_count, session_glyph, session_key, AccountUsage,
-    Favorite, FavoriteKind, FleetTree, HostNode, SessionSnapshot, SessionState, UsageProvenance,
+    Favorite, FavoriteKind, FleetTree, HostNode, SessionSnapshot, SessionState, TaskItem,
+    TaskState, TaskStatus, UsageProvenance,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
     attention_coloru, ctx_pct_element, glyph_cell, hover_row, icon_verb_button_tooltip,
-    provider_color_on, provider_label, status_dot_coloru, utilisation_coloru,
-    verb_button_colored, zone_card, BLOCK_RADIUS, CONTROL_RADIUS, GLYPH_COL_WIDTH,
-    METRIC_COL_WIDTH,
+    provider_color_on, provider_label, session_metric_column_width, status_dot_coloru,
+    utilisation_coloru, verb_button, verb_button_colored, zone_card, VerbKind, BLOCK_RADIUS,
+    CONTROL_RADIUS, GLYPH_COL_WIDTH,
 };
 use crate::ui_components::icons;
 use crate::WorkspaceAction;
@@ -37,6 +42,8 @@ const CARD_PADDING: f32 = 8.0;
 const CARD_SPACING: f32 = 4.0;
 const HEAT_BAR_WIDTH: f32 = 90.0;
 const HEAT_BAR_HEIGHT: f32 = 6.0;
+const TASK_PEEK_WIDTH: f32 = 390.0;
+pub(super) const TASK_PEEK_DELAY: Duration = Duration::from_millis(350);
 
 fn open_registered_host_action(node_id: &str) -> WorkspaceAction {
     WorkspaceAction::OpenSshTerminalByNode {
@@ -58,6 +65,38 @@ fn manage_registered_host_action(node_id: &str) -> WorkspaceAction {
     }
 }
 
+fn open_registered_host_agent_action(node_id: &str, host: &str) -> WorkspaceAction {
+    WorkspaceAction::OpenSpawnCard {
+        registry_node_id: Some(node_id.to_string()),
+        host_id: None,
+        host: Some(host.to_string()),
+        project: None,
+    }
+}
+
+fn open_registered_host_files_action(node_id: &str) -> WorkspaceAction {
+    WorkspaceAction::OpenSftpPaneByNode {
+        node_id: node_id.to_string(),
+    }
+}
+
+fn registered_host_click_target(
+    node_id: &str,
+    content: Box<dyn Element>,
+    state: MouseStateHandle,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let action = open_registered_host_action(node_id);
+    let position_id = format!("cockpit_host:{node_id}");
+    let target = Hoverable::new(state, move |mouse| {
+        hover_row(content, mouse.is_hovered(), appearance)
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+    .finish();
+    SavePosition::new(target, &position_id).finish()
+}
+
 /// Events the sidebar emits toward the workspace (via the left panel).
 pub enum CockpitPanelEvent {
     /// Open the cockpit pane in the main area: `None` = the fleet dashboard
@@ -75,6 +114,7 @@ pub struct CockpitPanel {
     /// account + conversation identity), synced against the unified inventory.
     /// Clicking a row attaches the agent.
     conductor_row_states: HashMap<String, MouseStateHandle>,
+    conductor_peek_states: HashMap<String, MouseStateHandle>,
     /// Hover state per account card (key = account `key`). The whole card is a
     /// click target that opens the roomy dashboard pane.
     card_states: HashMap<String, MouseStateHandle>,
@@ -89,6 +129,10 @@ pub struct CockpitPanel {
     /// `node_id`. Opens the SSH-manager editor for the host (design §10 folds
     /// the SSH-manager add/edit function onto the host nodes).
     conductor_host_manage_states: HashMap<String, MouseStateHandle>,
+    /// Stable handles for the visible "Agent" action on each registered host.
+    conductor_host_agent_states: HashMap<String, MouseStateHandle>,
+    /// Stable handles for the visible "Files" action on each registered host.
+    conductor_host_files_states: HashMap<String, MouseStateHandle>,
     /// Hover state of the „VERBINDUNGEN" zone-header gear (opens the SSH manager,
     /// which owns host add/edit — spec v3 §S1/§S2).
     zone_gear_btn: MouseStateHandle,
@@ -146,6 +190,54 @@ fn session_identity_label(session: &SessionSnapshot, project_name: &str) -> Stri
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct TaskGlance<'a> {
+    completed: usize,
+    total: usize,
+    current: Option<&'a str>,
+    tasks: &'a [TaskItem],
+}
+
+fn task_glance(session: &SessionSnapshot) -> Option<TaskGlance<'_>> {
+    let state = session.task_state.as_ref()?;
+    Some(task_glance_from_state(state))
+}
+
+fn task_glance_from_state(state: &TaskState) -> TaskGlance<'_> {
+    let completed = state
+        .tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::Completed)
+        .count();
+    let current = state
+        .tasks
+        .iter()
+        .find(|task| task.status == TaskStatus::InProgress)
+        .or_else(|| {
+            state
+                .tasks
+                .iter()
+                .find(|task| task.status == TaskStatus::Pending)
+        })
+        .map(|task| task.title.as_str());
+    TaskGlance {
+        completed,
+        total: state.tasks.len(),
+        current,
+        tasks: &state.tasks,
+    }
+}
+
+pub(super) fn task_activity_label(task_state: Option<&TaskState>, relative: &str) -> String {
+    task_state
+        .map(task_glance_from_state)
+        .and_then(|task| task.current)
+        .map_or_else(
+            || relative.to_owned(),
+            |current| format!("{current} · {relative}"),
+        )
+}
+
 impl CockpitPanel {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         // Re-render on theme change and whenever the snapshot updates.
@@ -164,10 +256,13 @@ impl CockpitPanel {
         let mut me = Self {
             scroll_state: ClippedScrollStateHandle::default(),
             conductor_row_states: HashMap::new(),
+            conductor_peek_states: HashMap::new(),
             card_states: HashMap::new(),
             conductor_host_states: HashMap::new(),
             conductor_host_star_states: HashMap::new(),
             conductor_host_manage_states: HashMap::new(),
+            conductor_host_agent_states: HashMap::new(),
+            conductor_host_files_states: HashMap::new(),
             zone_gear_btn: MouseStateHandle::default(),
             fleet_total_btn: MouseStateHandle::default(),
             rescan_btn: MouseStateHandle::default(),
@@ -194,8 +289,10 @@ impl CockpitPanel {
             })
             .collect();
         self.conductor_row_states.retain(|k, _| live.contains(k));
+        self.conductor_peek_states.retain(|k, _| live.contains(k));
         for key in live {
-            self.conductor_row_states.entry(key).or_default();
+            self.conductor_row_states.entry(key.clone()).or_default();
+            self.conductor_peek_states.entry(key).or_default();
         }
         // Card hover handles, keyed by account `key` (one stable handle per card
         // across renders); drop handles of accounts that disappeared.
@@ -222,10 +319,22 @@ impl CockpitPanel {
             .retain(|k, _| host_nodes.contains(k));
         self.conductor_host_manage_states
             .retain(|k, _| host_nodes.contains(k));
+        self.conductor_host_agent_states
+            .retain(|k, _| host_nodes.contains(k));
+        self.conductor_host_files_states
+            .retain(|k, _| host_nodes.contains(k));
         for key in host_nodes {
             self.conductor_host_states.entry(key.clone()).or_default();
-            self.conductor_host_star_states.entry(key.clone()).or_default();
-            self.conductor_host_manage_states.entry(key).or_default();
+            self.conductor_host_star_states
+                .entry(key.clone())
+                .or_default();
+            self.conductor_host_manage_states
+                .entry(key.clone())
+                .or_default();
+            self.conductor_host_agent_states
+                .entry(key.clone())
+                .or_default();
+            self.conductor_host_files_states.entry(key).or_default();
         }
         // Project-group header handles + collapse overrides, keyed by
         // `project_key` (host identity + project name — never the label alone).
@@ -236,9 +345,7 @@ impl CockpitPanel {
             .iter()
             .flat_map(|h| {
                 let ident = host_ident(h.is_local, h.host_id.as_deref());
-                h.projects
-                    .iter()
-                    .map(move |p| project_key(&ident, &p.root))
+                h.projects.iter().map(move |p| project_key(&ident, &p.root))
             })
             .collect();
         self.conductor_project_states
@@ -278,14 +385,20 @@ impl CockpitPanel {
         // A deliberately-disabled cockpit is neither "empty" nor "loading" — say so,
         // and offer no retry (re-scanning cannot help while it is off).
         if !enabled {
-            return Self::text(crate::t!("cockpit-disabled").to_string(), family, body, muted);
+            return Self::text(
+                crate::t!("cockpit-disabled").to_string(),
+                family,
+                body,
+                muted,
+            );
         }
         let (msg, retry) = match health {
             ScanHealth::Pending => (crate::t!("cockpit-loading").to_string(), false),
             ScanHealth::Degraded(_) => (crate::t!("cockpit-scan-failed").to_string(), true),
-            ScanHealth::Loaded => {
-                (crate::t!("workspace-left-panel-cockpit-empty").to_string(), true)
-            }
+            ScanHealth::Loaded => (
+                crate::t!("workspace-left-panel-cockpit-empty").to_string(),
+                true,
+            ),
         };
         let msg_el = Self::text(msg, family, body, muted);
         if !retry {
@@ -525,7 +638,10 @@ impl CockpitPanel {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let sub = appearance.ui_font_subheading();
-        let faint = theme.sub_text_color(theme.background()).with_opacity(55).into_solid();
+        let faint = theme
+            .sub_text_color(theme.background())
+            .with_opacity(55)
+            .into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
 
         let mut row = Flex::row()
@@ -534,11 +650,9 @@ impl CockpitPanel {
             // The label is scaffolding, not content: muted + uppercase, so the eye
             // reads it as structure and skips to the rows (spec v3 §0).
             .with_child(Self::text(label.to_uppercase(), family, sub, muted))
-            .with_child(Shrinkable::new(
-                1.0,
-                Self::text(count.to_string(), family, sub, faint),
-            )
-            .finish());
+            .with_child(
+                Shrinkable::new(1.0, Self::text(count.to_string(), family, sub, faint)).finish(),
+            );
         if let Some(trailing) = trailing {
             row = row.with_child(trailing);
         }
@@ -636,20 +750,12 @@ impl CockpitPanel {
             // hosts get the same geometry, hover-less, so the column aligns.
             let label_el: Box<dyn Element> = match host.registry_node_id.clone() {
                 Some(node_id) => {
-                    let open_action = open_registered_host_action(&node_id);
                     let handle = self
                         .conductor_host_states
                         .get(&node_id)
                         .cloned()
                         .unwrap_or_default();
-                    Hoverable::new(handle, move |mouse| {
-                        hover_row(head_el, mouse.is_hovered(), appearance)
-                    })
-                    .with_cursor(warpui::platform::Cursor::PointingHand)
-                    .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(open_action.clone())
-                    })
-                    .finish()
+                    registered_host_click_target(&node_id, head_el, handle, appearance)
                 }
                 None => hover_row(head_el, false, appearance),
             };
@@ -669,10 +775,27 @@ impl CockpitPanel {
                     header_row = header_row
                         .with_child(Self::star_button(star_state, is_fav, appearance, action));
                 }
+                if let Some(agent_state) = self.conductor_host_agent_states.get(&node_id).cloned() {
+                    header_row = header_row.with_child(verb_button(
+                        agent_state,
+                        crate::t!("cockpit-host-action-agent"),
+                        VerbKind::Constructive,
+                        appearance,
+                        open_registered_host_agent_action(&node_id, &host.host),
+                    ));
+                }
+                if let Some(files_state) = self.conductor_host_files_states.get(&node_id).cloned() {
+                    header_row = header_row.with_child(verb_button(
+                        files_state,
+                        crate::t!("cockpit-host-action-files"),
+                        VerbKind::Constructive,
+                        appearance,
+                        open_registered_host_files_action(&node_id),
+                    ));
+                }
                 // ⋯ manage: open the SSH-manager editor for this host (design §10
                 // folds host add/edit onto the spine's host nodes).
-                if let Some(manage_state) =
-                    self.conductor_host_manage_states.get(&node_id).cloned()
+                if let Some(manage_state) = self.conductor_host_manage_states.get(&node_id).cloned()
                 {
                     let action = manage_registered_host_action(&node_id);
                     header_row = header_row.with_child(icon_verb_button_tooltip(
@@ -779,12 +902,9 @@ impl CockpitPanel {
         Some(col.finish())
     }
 
-    /// One fixed Conductor line: `Dot · Branch · ctx%` with the metric cluster in
-    /// a **fixed-width right column** so it never shifts as the branch label grows
-    /// (spec §2.3). Status is the leading shape-coded dot only; the branch is the
-    /// sole identity (the project is carried by the group header above it, so the
-    /// row never repeats it). The whole line attaches on click (local + remote).
-    /// Hover recolors, never re-lays-out (spec §2.7).
+    /// One calm Conductor row. Structured task state adds only progress and the
+    /// current step below the established session identity; without a plan the
+    /// row remains unchanged.
     fn render_conductor_row(
         &self,
         host_label: &str,
@@ -797,12 +917,12 @@ impl CockpitPanel {
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
         let main = theme.main_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
 
-        // Identity = branch / worktree only, never the model and never the
-        // project (the group header carries the project) — spec §2.2.
+        let task_glance = task_glance(session);
         let label = session_identity_label(session, "");
+        let metric_width = session_metric_column_width(&label);
 
-        // The glance line: colour dot · branch (flex) · fixed metric column.
         let glance = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0)
@@ -812,14 +932,31 @@ impl CockpitPanel {
                 appearance,
             ))
             .with_child(Shrinkable::new(1.0, Self::text(label, family, body, main)).finish())
-            .with_child(self.metric_column(session, is_local, host_id, appearance))
+            .with_child(self.metric_column(session, is_local, host_id, metric_width, appearance))
             .with_main_axis_size(MainAxisSize::Max)
             .finish();
+        let glance = if let Some(task) = task_glance.as_ref() {
+            let progress = task.current.map_or_else(
+                || format!("{}/{}", task.completed, task.total),
+                |current| format!("{}/{} · {current}", task.completed, task.total),
+            );
+            Flex::column()
+                .with_spacing(2.0)
+                .with_child(glance)
+                .with_child(
+                    Container::new(Self::text(progress, family, body - 1.0, muted))
+                        .with_padding_left(GLYPH_COL_WIDTH + 6.0)
+                        .finish(),
+                )
+                .finish()
+        } else {
+            glance
+        };
 
         // The whole glance line attaches on click — BOTH local and remote (remote
         // in-place adopt is wired via `attach_fleet_session`).
         let key = session_key(is_local, host_id, session);
-        match self.conductor_row_states.get(&key).cloned() {
+        let row = match self.conductor_row_states.get(&key).cloned() {
             Some(state) => {
                 let action = WorkspaceAction::AttachFleetSession {
                     host: host_label.to_string(),
@@ -841,7 +978,166 @@ impl CockpitPanel {
                 .finish()
             }
             None => hover_row(glance, false, appearance),
+        };
+
+        let Some(peek_state) = self.conductor_peek_states.get(&key).cloned() else {
+            return row;
+        };
+        let peek_title = session_identity_label(session, "");
+        let peek_account = session.account_email.as_ref().map_or_else(
+            || provider_label(session.provider).to_owned(),
+            |email| format!("{} · {email}", provider_label(session.provider)),
+        );
+        let peek_host = host_label.to_owned();
+        let peek_cwd = session.cwd.clone();
+        let session_state = session.state;
+        let task_state = session.task_state.clone();
+        let relative = format_relative(session.last_activity, chrono::Utc::now());
+        let activity = task_activity_label(task_state.as_ref(), &relative);
+        Hoverable::new(peek_state, move |mouse| {
+            let mut stack = Stack::new().with_child(row);
+            if mouse.is_hovered() {
+                stack.add_positioned_overlay_child(
+                    Self::render_task_peek(
+                        &peek_title,
+                        &peek_account,
+                        &peek_host,
+                        &peek_cwd,
+                        session_state,
+                        &activity,
+                        task_state.as_ref(),
+                        appearance,
+                    ),
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(8.0, 0.0),
+                        ParentOffsetBounds::Unbounded,
+                        ParentAnchor::TopRight,
+                        ChildAnchor::TopLeft,
+                    ),
+                );
+            }
+            stack.finish()
+        })
+        .with_hover_in_delay(TASK_PEEK_DELAY)
+        .finish()
+    }
+
+    pub(super) fn render_task_peek(
+        title: &str,
+        account: &str,
+        host: &str,
+        cwd: &str,
+        state: SessionState,
+        activity: &str,
+        task_state: Option<&TaskState>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+        let accent = theme.accent().into_solid();
+        let state_label = match state {
+            SessionState::Waiting => crate::t!("cockpit-task-peek-state-waiting"),
+            SessionState::Active | SessionState::Monitor => {
+                crate::t!("cockpit-task-peek-state-working")
+            }
+            SessionState::Idle => crate::t!("cockpit-task-peek-state-idle"),
+        };
+        let header = Flex::row()
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(
+                Shrinkable::new(1.0, Self::text(title.to_owned(), family, body, main)).finish(),
+            )
+            .with_child(Self::text(state_label, family, body, accent))
+            .finish();
+        let facts = Flex::column()
+            .with_spacing(3.0)
+            .with_child(Self::text(
+                crate::t!("cockpit-task-peek-account", value = account),
+                family,
+                body - 1.0,
+                muted,
+            ))
+            .with_child(Self::text(
+                crate::t!("cockpit-task-peek-host", value = host),
+                family,
+                body - 1.0,
+                muted,
+            ))
+            .with_child(Self::text(
+                crate::t!("cockpit-task-peek-directory", value = cwd),
+                family,
+                body - 1.0,
+                muted,
+            ))
+            .finish();
+        let mut content = Flex::column()
+            .with_spacing(7.0)
+            .with_child(header)
+            .with_child(facts)
+            .with_child(Self::text(
+                crate::t!("cockpit-task-peek-activity", value = activity),
+                family,
+                body,
+                main,
+            ));
+        if let Some(task_state) = task_state {
+            let completed = task_state
+                .tasks
+                .iter()
+                .filter(|task| task.status == TaskStatus::Completed)
+                .count();
+            content = content.with_child(Self::text(
+                crate::t!(
+                    "cockpit-task-peek-title",
+                    completed = completed,
+                    total = task_state.tasks.len()
+                ),
+                family,
+                body,
+                main,
+            ));
+            for task in &task_state.tasks {
+                let (glyph, color) = match task.status {
+                    TaskStatus::Pending => ("○", muted),
+                    TaskStatus::InProgress => ("●", accent),
+                    TaskStatus::Completed => ("✓", muted),
+                };
+                content = content.with_child(
+                    Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                        .with_spacing(8.0)
+                        .with_child(Self::text(glyph.to_owned(), family, body, color))
+                        .with_child(
+                            Shrinkable::new(
+                                1.0,
+                                Self::text(task.title.clone(), family, body, color),
+                            )
+                            .finish(),
+                        )
+                        .finish(),
+                );
+            }
+        } else {
+            content = content.with_child(Self::text(
+                crate::t!("cockpit-task-peek-no-plan"),
+                family,
+                body,
+                muted,
+            ));
         }
+        ConstrainedBox::new(
+            Container::new(content.finish())
+                .with_background(theme.tooltip_background())
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.0)))
+                .with_padding(Padding::uniform(10.0))
+                .finish(),
+        )
+        .with_width(TASK_PEEK_WIDTH)
+        .finish()
     }
 
     /// The fixed-width **right metric column** of a session line:
@@ -854,6 +1150,7 @@ impl CockpitPanel {
         session: &SessionSnapshot,
         is_local: bool,
         host_id: Option<&str>,
+        width: f32,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let effort = crate::cockpit::session_effort(session, is_local, host_id);
@@ -875,7 +1172,7 @@ impl CockpitPanel {
             row = row.with_child(ctx_pct_element(pct, attrs.ctx_fill, false, appearance));
         }
         ConstrainedBox::new(row.with_main_axis_size(MainAxisSize::Max).finish())
-            .with_width(METRIC_COL_WIDTH)
+            .with_width(width)
             .finish()
     }
 
@@ -1042,7 +1339,10 @@ impl CockpitPanel {
         let theme = appearance.theme();
         let total = verb_button_colored(
             self.fleet_total_btn.clone(),
-            crate::t!("cockpit-header-today-total", today = format_cost(fleet_today)),
+            crate::t!(
+                "cockpit-header-today-total",
+                today = format_cost(fleet_today)
+            ),
             theme.sub_text_color(theme.background()).into_solid(),
             theme.accent().into_solid(),
             appearance,
@@ -1240,26 +1540,5 @@ impl TypedActionView for CockpitPanel {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn host_node_exposes_primary_actions() {
-        assert!(matches!(
-            open_registered_host_action("node-dev"),
-            WorkspaceAction::OpenSshTerminalByNode { node_id } if node_id == "node-dev"
-        ));
-        assert!(matches!(
-            toggle_host_favorite_action("node-dev", "devhost"),
-            WorkspaceAction::ToggleFavorite {
-                kind: FavoriteKind::Host,
-                target,
-                label,
-            } if target == "node-dev" && label == "devhost"
-        ));
-        assert!(matches!(
-            manage_registered_host_action("node-dev"),
-            WorkspaceAction::ManageSshHost { node_id } if node_id == "node-dev"
-        ));
-    }
-}
+#[path = "panel_tests.rs"]
+mod tests;

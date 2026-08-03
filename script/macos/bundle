@@ -24,14 +24,16 @@
 #
 # Once the stapling is done, the app can be shared.
 #
-# Three passwords are read from GCP Secret Manager (or from env if --read-passwords-from-env is set) if you are codesigning.
-# 1) ZAPLEX_NOTARIZATION_PASSWORD:  This is an "app-specific password" that
-#    is tied to the zach@warp.dev account.  See https://support.apple.com/en-us/HT204397
-# 2) ZAPLEX_DEVELOPER_ID_CERT_PASSWORD: This is a password tied to the private key
-#    of our cert - it is needed to use the cert to sign our binary.
-# 3) ZAPLEX_CODESIGN_KEYCHAIN_PASSWORD: This is an arbitrary password only used
-#    in the lifetime of this app for creating the keychain used to sign.  Can
-#    be anything.
+# Distribution signing reads five GitHub Actions secrets from the environment
+# when --read-passwords-from-env is set:
+# 1) MACOS_CERTIFICATE_P12_BASE64: Developer ID Application certificate and key.
+# 2) MACOS_CERTIFICATE_PASSWORD: Password protecting the exported .p12.
+# 3) MACOS_NOTARY_KEY_ID: App Store Connect API key ID.
+# 4) MACOS_NOTARY_ISSUER_ID: App Store Connect issuer ID.
+# 5) MACOS_NOTARY_KEY_P8_BASE64: App Store Connect API private key.
+#
+# The temporary keychain password is generated per build. Apple-ID passwords
+# and a hard-coded signing team are deliberately not used.
 #
 # See
 # https://github.com/burtonageo/cargo-bundle
@@ -88,18 +90,133 @@ cleanup_dmg_files() {
 
 # Clean up the temporary codesigning keychain.
 cleanup_codesign_keychain() {
-    if [[ "${CODESIGN:-false}" = true && -n "${CODESIGN_KEYCHAIN_NAME:-}" ]]; then
-        echo "Cleaning up by deleting $CODESIGN_KEYCHAIN_NAME keychain."
-        security delete-keychain "$CODESIGN_KEYCHAIN_NAME" || echo "No keychain to delete or already deleted."
+    if [[ "${CODESIGN:-false}" = true && -n "${CODESIGN_KEYCHAIN_PATH:-}" ]]; then
+        echo "Cleaning up temporary signing keychain."
+        security delete-keychain "$CODESIGN_KEYCHAIN_PATH" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${CODESIGN_CERT_PATH:-}" ]]; then
+        rm -f "$CODESIGN_CERT_PATH"
+    fi
+    if [[ -n "${NOTARY_KEY_PATH:-}" ]]; then
+        rm -f "$NOTARY_KEY_PATH"
     fi
 }
 
+cleanup_bundle_state() {
+    if [[ -n "${DMG_DIR:-}" ]]; then
+        cleanup_dmg_files "$DMG_DIR"
+    fi
+    cleanup_codesign_keychain
+}
+
 # Set up cleanup trap
-trap 'cleanup_dmg_files "$DMG_DIR"; cleanup_codesign_keychain' EXIT
+trap cleanup_bundle_state EXIT
 
 # Define a helper function that uses Python to compute a relative path.
 function relpath() {
   python -c "import os,sys;print(os.path.relpath(*(sys.argv[1:])))" "$@";
+}
+
+prepare_distribution_signing_inputs() {
+  MISSING_SIGNING_VALUES=()
+  for SIGNING_VALUE_NAME in \
+    MACOS_CERTIFICATE_P12_BASE64 \
+    MACOS_CERTIFICATE_PASSWORD \
+    MACOS_NOTARY_KEY_ID \
+    MACOS_NOTARY_ISSUER_ID \
+    MACOS_NOTARY_KEY_P8_BASE64
+  do
+    SIGNING_VALUE="${!SIGNING_VALUE_NAME}"
+    if [[ -z "$SIGNING_VALUE" ]]; then
+      MISSING_SIGNING_VALUES+=("$SIGNING_VALUE_NAME")
+    fi
+  done
+  if [[ ${#MISSING_SIGNING_VALUES[@]} -gt 0 ]]; then
+    echo "Missing macOS signing values: ${MISSING_SIGNING_VALUES[*]}" >&2
+    exit 1
+  fi
+
+  SIGNING_TEMP_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+  CODESIGN_CERT_PATH="$SIGNING_TEMP_DIR/zaplex-signing-$$.p12"
+  NOTARY_KEY_PATH="$SIGNING_TEMP_DIR/zaplex-notary-$$.p8"
+  (
+    umask 077
+    printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | /usr/bin/base64 -D > "$CODESIGN_CERT_PATH"
+    printf '%s' "$MACOS_NOTARY_KEY_P8_BASE64" | /usr/bin/base64 -D > "$NOTARY_KEY_PATH"
+  )
+
+  CERTIFICATE_SUBJECT="$(
+    openssl pkcs12 \
+      -in "$CODESIGN_CERT_PATH" \
+      -clcerts \
+      -nokeys \
+      -passin env:MACOS_CERTIFICATE_PASSWORD 2>/dev/null \
+      | openssl x509 -noout -subject -nameopt RFC2253
+  )"
+  if [[ "$CERTIFICATE_SUBJECT" != *"CN=Developer ID Application:"* ]]; then
+    echo "The certificate is not a Developer ID Application certificate." >&2
+    exit 1
+  fi
+  openssl pkcs12 \
+    -in "$CODESIGN_CERT_PATH" \
+    -nocerts \
+    -nodes \
+    -passin env:MACOS_CERTIFICATE_PASSWORD 2>/dev/null \
+    | openssl pkey -noout >/dev/null
+  openssl pkey -in "$NOTARY_KEY_PATH" -noout >/dev/null
+
+  ZAPLEX_APPLE_TEAM_ID="$(
+    printf '%s\n' "$CERTIFICATE_SUBJECT" \
+      | sed -n 's/.*OU=\([^,]*\).*/\1/p'
+  )"
+  if [[ ! "$ZAPLEX_APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+    echo "Unable to derive an Apple Team ID from the Developer ID certificate." >&2
+    exit 1
+  fi
+  export ZAPLEX_APPLE_TEAM_ID
+}
+
+prepare_distribution_signing_keychain() {
+  CODESIGN_KEYCHAIN_PATH="$SIGNING_TEMP_DIR/zaplex-signing-$$.keychain-db"
+  CODESIGN_KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+
+  echo "Creating temporary signing keychain."
+  security create-keychain -p "$CODESIGN_KEYCHAIN_PASSWORD" "$CODESIGN_KEYCHAIN_PATH"
+  security set-keychain-settings -lut 21600 "$CODESIGN_KEYCHAIN_PATH"
+  security unlock-keychain -p "$CODESIGN_KEYCHAIN_PASSWORD" "$CODESIGN_KEYCHAIN_PATH"
+  security import "$CODESIGN_CERT_PATH" \
+    -P "$MACOS_CERTIFICATE_PASSWORD" \
+    -f pkcs12 \
+    -k "$CODESIGN_KEYCHAIN_PATH" \
+    -T /usr/bin/codesign \
+    -T /usr/bin/security
+  security set-key-partition-list \
+    -S "apple-tool:,apple:" \
+    -s \
+    -k "$CODESIGN_KEYCHAIN_PASSWORD" \
+    "$CODESIGN_KEYCHAIN_PATH" >/dev/null
+
+  EXISTING_KEYCHAINS=()
+  while IFS= read -r EXISTING_KEYCHAIN; do
+    EXISTING_KEYCHAIN="${EXISTING_KEYCHAIN//\"/}"
+    if [[ -n "$EXISTING_KEYCHAIN" ]]; then
+      EXISTING_KEYCHAINS+=("$EXISTING_KEYCHAIN")
+    fi
+  done < <(security list-keychains -d user)
+  if [[ ${#EXISTING_KEYCHAINS[@]} -gt 0 ]]; then
+    security list-keychains -d user -s "$CODESIGN_KEYCHAIN_PATH" "${EXISTING_KEYCHAINS[@]}"
+  else
+    security list-keychains -d user -s "$CODESIGN_KEYCHAIN_PATH"
+  fi
+
+  SIGNING_CERT="$(
+    security find-identity -v -p codesigning "$CODESIGN_KEYCHAIN_PATH" \
+      | awk '/Developer ID Application/{print $2; exit}'
+  )"
+  if [[ -z "$SIGNING_CERT" ]]; then
+    echo "The certificate does not contain an importable Developer ID Application identity." >&2
+    exit 1
+  fi
 }
 
 # Defaults for command-line flags.
@@ -117,6 +234,7 @@ CODESIGN=true
 SELFSIGN=false
 OPEN_AFTER_BUNDLE=false
 READ_PASSWORDS_FROM_ENV=false
+CHECK_SIGNING_ONLY=false
 
 PARAMS=""
 while (( "$#" )); do
@@ -215,10 +333,15 @@ while (( "$#" )); do
         exit 1
       fi
       ;;
-    # Read codesigning passwords from environment variables instead of GCP secret manager
+    # Read Developer ID and App Store Connect signing material from environment variables.
     --read-passwords-from-env)
         echo "Reading codesigning passwords from env."
         READ_PASSWORDS_FROM_ENV=true
+        shift
+        ;;
+    --check-signing-only)
+        echo "Only validating distribution-signing inputs."
+        CHECK_SIGNING_ONLY=true
         shift
         ;;
     --features)
@@ -252,6 +375,24 @@ while (( "$#" )); do
 done
 # set positional arguments in their proper place
 eval set -- "$PARAMS"
+
+if [[ $CODESIGN = true && $READ_PASSWORDS_FROM_ENV = true ]]; then
+  prepare_distribution_signing_inputs
+fi
+
+if [[ $CHECK_SIGNING_ONLY = true ]]; then
+  if [[ $CODESIGN != true || $READ_PASSWORDS_FROM_ENV != true ]]; then
+    echo "--check-signing-only requires --read-passwords-from-env." >&2
+    exit 1
+  fi
+  prepare_distribution_signing_keychain
+  xcrun notarytool history \
+    --key "$NOTARY_KEY_PATH" \
+    --key-id "$MACOS_NOTARY_KEY_ID" \
+    --issuer "$MACOS_NOTARY_ISSUER_ID" >/dev/null
+  echo "Developer ID identity and App Store Connect notarization credentials are valid."
+  exit 0
+fi
 
 # Infer a cargo profile from the bundle configuration.
 if [[ $DEBUG = true ]]; then
@@ -315,7 +456,7 @@ elif [[ $RELEASE_CHANNEL = "oss" ]]; then
     BUNDLE_ID="dev.zaplex.Zaplex"
     ZAPLEX_APP_NAME="Zaplex"
     ZAPLEX_SCHEME_NAME="zaplex"
-    # autoupdate via GitHub Release (zerx-lab/warp): only downloads the DMG to
+    # autoupdate via Zaplex's GitHub Release: only downloads the DMG to
     # Downloads, does not auto-overwrite the .app.
     FEATURES="release_bundle,extern_plist,autoupdate"
 fi
@@ -630,40 +771,8 @@ if [[ $READ_PASSWORDS_FROM_ENV != true ]]; then
 fi
 
 if [[ $CODESIGN = true ]]; then
-  # TODO - does this need to change per user?  Seems like it's tied to the ZAPLEX_NOTARIZATION_PASSWORD password.
-  APPLE_TEAM_ID="2BBY89MBSN"
-  CODESIGN_KEYCHAIN_NAME="warp-codesign-keychain"
-
   echo "Starting codesigning..."
-
-  if [[ $READ_PASSWORDS_FROM_ENV = true ]]; then
-    if [ -z "$ZAPLEX_NOTARIZATION_PASSWORD" ] ; then
-      echo "ZAPLEX_NOTARIZATION_PASSWORD must be set for code signing"
-      exit 1
-    fi
-
-    if [ -z "$ZAPLEX_DEVELOPER_ID_CERT_PASSWORD" ] ; then
-      echo "ZAPLEX_DEVELOPER_ID_CERT_PASSWORD must be set for code signing"
-      exit 1
-    fi
-
-    if [ -z "$ZAPLEX_CODESIGN_KEYCHAIN_PASSWORD" ] ; then
-      echo "ZAPLEX_CODESIGN_KEYCHAIN_PASSWORD must be set for code signing"
-      exit 1
-    fi
-  fi
-
-  security delete-keychain $CODESIGN_KEYCHAIN_NAME || echo "No existing keychain to clean up".
-
-  echo "Creating $CODESIGN_KEYCHAIN_NAME keychain."
-  security create-keychain -p "$ZAPLEX_CODESIGN_KEYCHAIN_PASSWORD" $CODESIGN_KEYCHAIN_NAME
-  security list-keychains -s $CODESIGN_KEYCHAIN_NAME
-  security set-keychain-settings -t 3600 -u $CODESIGN_KEYCHAIN_NAME
-
-  echo "Unlocking keychain and setting cert."
-  security unlock-keychain -p "$ZAPLEX_CODESIGN_KEYCHAIN_PASSWORD" $CODESIGN_KEYCHAIN_NAME
-  security import <(echo "$ZAPLEX_DEVELOPER_ID_CERT" | base64 -d) -f pkcs12 -P "$ZAPLEX_DEVELOPER_ID_CERT_PASSWORD" -k $CODESIGN_KEYCHAIN_NAME -T /usr/bin/codesign
-  security set-key-partition-list -S "apple-tool:,apple:" -s -k "$ZAPLEX_CODESIGN_KEYCHAIN_PASSWORD" $CODESIGN_KEYCHAIN_NAME
+  prepare_distribution_signing_keychain
 fi
 
 ##############################
@@ -689,10 +798,20 @@ elif [[ $CODESIGN = true ]]; then
   if [[ "$ARTIFACT" == app ]]; then
     echo "Codesigning $BUNDLE_DIR/$ZAPLEX_APP_NAME.app..."
     # Use --deep so we sign bundled frameworks as well
-    codesign --deep -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app" --entitlements script/Entitlements.plist
+    codesign --deep -f -o runtime --timestamp \
+      --keychain "$CODESIGN_KEYCHAIN_PATH" \
+      -s "$SIGNING_CERT" \
+      "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app" \
+      --entitlements script/Entitlements.plist
+    codesign --verify --deep --strict --verbose=2 "$BUNDLE_DIR/$ZAPLEX_APP_NAME.app"
   elif [[ "$ARTIFACT" == cli ]]; then
     echo "Codesigning $OUT_DIR/$ZAPLEX_BIN..."
-    codesign -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$OUT_DIR/$ZAPLEX_BIN" --entitlements script/Entitlements.plist
+    codesign -f -o runtime --timestamp \
+      --keychain "$CODESIGN_KEYCHAIN_PATH" \
+      -s "$SIGNING_CERT" \
+      "$OUT_DIR/$ZAPLEX_BIN" \
+      --entitlements script/Entitlements.plist
+    codesign --verify --strict --verbose=2 "$OUT_DIR/$ZAPLEX_BIN"
 
     # Create the .zip for notarization in a separate location - otherwise, Apple's codesigning
     # tools decide that it's a sealed resource that belongs to the binary and needs to also be signed.
@@ -764,7 +883,11 @@ if [[ "$ARTIFACT" = app ]]; then
     create_warp_dmg "$DMG_DIR"
 
     echo "Codesigning $DMG_DIR/$DMG_NAME..."
-    codesign -s "$APPLE_TEAM_ID" --timestamp "$DMG_DIR/$DMG_NAME"
+    codesign -s "$SIGNING_CERT" \
+      --keychain "$CODESIGN_KEYCHAIN_PATH" \
+      --timestamp \
+      "$DMG_DIR/$DMG_NAME"
+    codesign --verify --strict --verbose=2 "$DMG_DIR/$DMG_NAME"
 
     NOTARIZATION_ARTIFACT="$DMG_DIR/$DMG_NAME"
     STAPLE_TICKET=true
@@ -785,7 +908,11 @@ fi
 
 if [[ $CODESIGN = true ]]; then
   echo "Uploading $NOTARIZATION_ARTIFACT to Apple for notarization..."
-  xcrun notarytool submit "$NOTARIZATION_ARTIFACT" --apple-id "$ZAPLEX_NOTARIZATION_APPLE_ID" --password "$ZAPLEX_NOTARIZATION_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+  xcrun notarytool submit "$NOTARIZATION_ARTIFACT" \
+    --key "$NOTARY_KEY_PATH" \
+    --key-id "$MACOS_NOTARY_KEY_ID" \
+    --issuer "$MACOS_NOTARY_ISSUER_ID" \
+    --wait
 
   if [[ $STAPLE_TICKET = true ]]; then
     echo "Attempting to staple the notarization ticket to $NOTARIZATION_ARTIFACT..."

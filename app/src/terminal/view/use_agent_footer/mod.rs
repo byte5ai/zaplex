@@ -88,7 +88,7 @@ const CLI_AGENT_BRACKETED_PASTE_ENTER_DELAY: Duration = Duration::from_millis(30
 /// Longer delay between clipboard image pastes (Ctrl+V) to CLI agents.
 /// The CLI agent needs time to read from the system clipboard before
 /// we overwrite it with the next image.
-const CLI_AGENT_IMAGE_PASTE_DELAY: Duration = Duration::from_millis(300);
+const CLI_AGENT_IMAGE_PASTE_DELAY: Duration = Duration::from_millis(500);
 
 /// ASCII prefixes that CLI agents use to switch input modes (e.g. `!` for bash
 /// mode in Claude Code). When the rich input starts with one of these, the
@@ -128,7 +128,8 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         | CLIAgent::Gemini
         | CLIAgent::Auggie
         | CLIAgent::CursorCli
-        | CLIAgent::Antigravity => RichInputSubmitStrategy::DelayedEnter,
+        | CLIAgent::Antigravity
+        | CLIAgent::Grok => RichInputSubmitStrategy::DelayedEnter,
         CLIAgent::Amp | CLIAgent::Droid | CLIAgent::Pi | CLIAgent::Goose | CLIAgent::Unknown => {
             RichInputSubmitStrategy::Inline
         }
@@ -803,7 +804,12 @@ impl TerminalView {
                                 }]),
                                 ..Default::default()
                             });
-                            me.write_user_bytes_to_pty(vec![0x16], ctx);
+                            let paste_bytes = if cfg!(windows) {
+                                vec![0x1b, b'v']
+                            } else {
+                                vec![0x16]
+                            };
+                            me.write_user_bytes_to_pty(paste_bytes, ctx);
                             true
                         })
                         .await;
@@ -1116,7 +1122,8 @@ impl UseAgentToolbar {
     pub(in crate::terminal) fn notify_and_notify_children(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.notify();
         self.agent_input_footer.update(ctx, |_, ctx| ctx.notify());
-        self.zaplexify_footer_view.update(ctx, |_, ctx| ctx.notify());
+        self.zaplexify_footer_view
+            .update(ctx, |_, ctx| ctx.notify());
         self.button.update(ctx, |_, ctx| ctx.notify());
         self.give_control_back_button
             .update(ctx, |_, ctx| ctx.notify());
@@ -1158,7 +1165,10 @@ impl UseAgentToolbar {
     }
 
     /// Returns the current zaplexification mode, if set.
-    pub(in crate::terminal) fn zaplexify_mode(&self, app: &AppContext) -> Option<ZaplexificationMode> {
+    pub(in crate::terminal) fn zaplexify_mode(
+        &self,
+        app: &AppContext,
+    ) -> Option<ZaplexificationMode> {
         self.zaplexify_footer_view.as_ref(app).mode().cloned()
     }
 

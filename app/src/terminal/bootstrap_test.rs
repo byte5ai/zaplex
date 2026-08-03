@@ -97,7 +97,7 @@ fn test_asset_provider_cannot_poison_real_bootstrap_body() {
 }
 
 #[test]
-fn fish_body_is_idempotent() {
+fn fish_bootstrap_body_is_delivered_idempotently() {
     let script = bundled_script("bundled/bootstrap/fish.sh");
     let lines = significant_lines(&script);
 
@@ -126,7 +126,7 @@ fn fish_body_is_idempotent() {
 }
 
 #[test]
-fn pwsh_body_is_idempotent() {
+fn pwsh_bootstrap_body_is_delivered_idempotently() {
     let script = bundled_script("bundled/bootstrap/pwsh.ps1");
     let lines = significant_lines(&script);
     let param_index = lines

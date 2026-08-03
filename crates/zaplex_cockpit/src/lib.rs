@@ -4,13 +4,16 @@
 //! transcript token usage into rolling windows (5h block / today / week), and
 //! derives cost (per-model pricing) and heat (load vs. budget).
 //!
-//! This crate is a **pure, headless-testable data layer**: no GUI, no network, and —
-//! a hard privacy invariant — it reads only **token counts and account metadata**,
-//! never token strings or transcript content. The `CockpitModel` / file-watch wiring
-//! that surfaces this into the app lives in `app/src/cockpit/`.
+//! This crate is a **pure, headless-testable data layer**: no GUI and no network.
+//! It never reads token strings or credentials. Structured task titles are the
+//! one deliberate transcript-content projection: providers emit them through
+//! task tools, and session snapshots carry them for the Conductor. The
+//! `CockpitModel` / file-watch wiring that surfaces this into the app lives in
+//! `app/src/cockpit/`.
 //!
 //! See `docs/superpowers/specs/2026-06-30-cockpit-increment1-account-usage-design.md`.
 
+pub mod antigravity_sessions;
 pub mod claude;
 pub mod codex;
 pub mod codex_sessions;
@@ -32,12 +35,13 @@ pub mod transcript;
 pub mod types;
 pub mod windows;
 
+pub use antigravity_sessions::idle_sessions as antigravity_idle_sessions;
 pub use conductor::{
     fleet_is_large, fleet_session_count, host_auto_collapsed, host_ident, host_key,
     host_key_is_local, host_session_count, host_summary, model_effort_label, next_waiting,
-    session_attr_line, session_attrs, session_glyph, session_key, split_host_key, state_word,
-    waiting_sessions, SessionAttrs,
-    WaitingTarget, GLYPH_IDLE, GLYPH_WAITING, GLYPH_WORKING,
+    session_attr_line, session_attrs, session_glyph, session_identity_key, session_key,
+    split_host_key, state_word, waiting_sessions, SessionAttrs, WaitingTarget, GLYPH_IDLE,
+    GLYPH_WAITING, GLYPH_WORKING,
 };
 pub use favorites::{Favorite, FavoriteKind, Favorites};
 pub use fleet::{
@@ -46,8 +50,7 @@ pub use fleet::{
 };
 pub use format::{
     binding_window, context_fill, context_window, format_cost, format_relative, format_reset,
-    format_tokens,
-    heat_fill, heat_pct_label_with_provenance, model_family, HeatLevel,
+    format_tokens, heat_fill, heat_pct_label_with_provenance, model_family, HeatLevel,
 };
 pub use guardrails::{
     failed_toast, guardrail_target, kill_confirm_message, no_remote_connection_toast,
@@ -64,14 +67,15 @@ pub use process_identity::{
 pub use project::{resolve_project, ResolvedProject};
 pub use review::{git_commit_all_cmd, git_diff_cmd, render_review_markdown, WorkingChanges};
 pub use reviewed::{ReviewedSessions, REVIEWED_LIMIT};
+pub use routing::pick_freest_checked;
 pub use routing::{is_over_budget, pick_freest, rank_by_freeness, OVER_BUDGET_HEAT};
 pub use transcript::{
-    format_transcript_markdown, parse_transcript, ToolCall, TranscriptTurn, TurnRole, TurnUsage,
+    format_transcript_markdown, parse_task_state, parse_transcript, ToolCall, TranscriptTurn,
+    TurnRole, TurnUsage,
 };
-pub use routing::pick_freest_checked;
 pub use types::{
     Account, AccountStatus, AccountUsage, CockpitSnapshot, Provider, ScanHealth, SessionSnapshot,
-    SessionState, UsageEntry, UsageProvenance, WindowTotals,
+    SessionState, TaskItem, TaskState, TaskStatus, UsageEntry, UsageProvenance, WindowTotals,
 };
 pub use windows::{
     build_account_usage, window_5h, window_week, with_idle_sessions, with_sessions,
@@ -82,12 +86,22 @@ use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
 
-/// How far back dormant-session discovery looks, for **both** providers.
+/// Process-local, bounded transcript parse caches shared across reconcile
+/// cycles. It stores only the same structured task titles already projected on
+/// session snapshots, never credentials or conversational message text.
+#[derive(Clone, Debug, Default)]
+pub struct TranscriptScanCache {
+    task_states: transcript::TaskStateCache,
+    codex_rollouts: codex_sessions::RolloutCache,
+}
+
+/// How far back dormant-session discovery looks.
 ///
-/// Not a limit of `claude --resume` / `codex resume` — the transcripts live far
-/// longer than this. It is a *usefulness* bound: picking a conversation back up
-/// is something you do within days, and by then the working tree it refers to
-/// has usually moved on. Older ones would be list noise, so they stay out.
+/// Not a limit of `claude --resume`, `codex resume`, or `agy --conversation` —
+/// provider state lives far longer than this. It is a *usefulness* bound:
+/// picking a conversation back up is something you do within days, and by then
+/// the working tree it refers to has usually moved on. Older ones would be list
+/// noise, so they stay out.
 pub const IDLE_MAX_AGE: Duration = Duration::days(7);
 
 /// Upper bound on dormant sessions surfaced per account, most-recent first.
@@ -111,6 +125,28 @@ pub fn build_snapshot(
     budget_5h: u64,
     budget_week: u64,
     pricing: &PricingTable,
+) -> CockpitSnapshot {
+    build_snapshot_with_cache(
+        home,
+        codex_home,
+        claude_config_dir_env,
+        now,
+        budget_5h,
+        budget_week,
+        pricing,
+        &mut TranscriptScanCache::default(),
+    )
+}
+
+pub fn build_snapshot_with_cache(
+    home: &Path,
+    codex_home: &Path,
+    claude_config_dir_env: Option<&str>,
+    now: DateTime<Utc>,
+    budget_5h: u64,
+    budget_week: u64,
+    pricing: &PricingTable,
+    transcript_cache: &mut TranscriptScanCache,
 ) -> CockpitSnapshot {
     let since = now - window_week();
     let mut accounts = Vec::new();
@@ -139,11 +175,12 @@ pub fn build_snapshot(
         }
         // One scan: live and dormant are decided by the same pid probe, so a
         // session cannot show up as both because it exited between two passes.
-        let scan = sessions::scan_sessions(
+        let scan = sessions::scan_sessions_with_cache(
             &account.config_dir,
             now,
             IDLE_MAX_AGE,
             IDLE_SESSION_LIMIT,
+            &mut transcript_cache.task_states,
         );
         // Route + identity, from the one function the daemon also uses.
         let stamp = |mut s: SessionSnapshot| {
@@ -176,8 +213,7 @@ pub fn build_snapshot(
     // auth.json always yields one account, so an empty result with the file present
     // (Ok(true)) or inaccessible (Err) means it failed to load; only a definite absence
     // (Ok(false)) is a genuine "no Codex".
-    if codex_accounts.is_empty()
-        && !matches!(codex_home.join("auth.json").try_exists(), Ok(false))
+    if codex_accounts.is_empty() && !matches!(codex_home.join("auth.json").try_exists(), Ok(false))
     {
         degraded.push("Codex account: sign-in file unreadable".to_string());
     }
@@ -200,11 +236,12 @@ pub fn build_snapshot(
         // registry/pid (see `codex_sessions`). Attached so they flow into the
         // unified Agent-Inventory exactly like Claude's — one walk, so the live
         // window classifies each rollout once.
-        let scan = codex_sessions::scan_sessions(
+        let scan = codex_sessions::scan_sessions_with_cache(
             &account.config_dir,
             now,
             IDLE_MAX_AGE,
             IDLE_SESSION_LIMIT,
+            &mut transcript_cache.codex_rollouts,
         );
         let stamp = |mut s: SessionSnapshot| {
             account.stamp(&mut s);
@@ -229,6 +266,38 @@ pub fn build_snapshot(
         generated_at: now,
         health,
     }
+}
+
+/// Cached live-session scan for one Claude account, used by remote daemons.
+pub fn live_claude_sessions_with_cache(
+    config_dir: &Path,
+    now: DateTime<Utc>,
+    transcript_cache: &mut TranscriptScanCache,
+) -> Vec<SessionSnapshot> {
+    sessions::scan_sessions_with_cache(
+        config_dir,
+        now,
+        Duration::zero(),
+        0,
+        &mut transcript_cache.task_states,
+    )
+    .live
+}
+
+/// Cached live-session scan for one Codex account, used by remote daemons.
+pub fn live_codex_sessions_with_cache(
+    config_dir: &Path,
+    now: DateTime<Utc>,
+    transcript_cache: &mut TranscriptScanCache,
+) -> Vec<SessionSnapshot> {
+    codex_sessions::scan_sessions_with_cache(
+        config_dir,
+        now,
+        Duration::zero(),
+        0,
+        &mut transcript_cache.codex_rollouts,
+    )
+    .live
 }
 
 #[cfg(test)]

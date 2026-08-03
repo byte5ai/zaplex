@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   stale:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Recent p90 is below one minute; five minutes also covers the observed outlier.
+    timeout-minutes: 5
     steps:
       - uses: actions/stale@v9
         with:

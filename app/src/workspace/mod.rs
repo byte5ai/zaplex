@@ -650,7 +650,9 @@ pub fn init(app: &mut AppContext) {
             WorkspaceAction::CreatePersonalFolder,
         )
         .with_group(bindings::BindingGroup::Folders.as_str())
-        .with_context_predicate(id!("Workspace") & id!(flags::ENABLE_ZAPLEX_DRIVE) & id!("IsOnline")),
+        .with_context_predicate(
+            id!("Workspace") & id!(flags::ENABLE_ZAPLEX_DRIVE) & id!("IsOnline"),
+        ),
         EditableBinding::new(
             NEW_TAB_BINDING_NAME,
             BindingDescription::new(crate::t!("keybinding-desc-workspace-new-tab")),
@@ -1415,11 +1417,13 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
         .with_custom_action(CustomAction::ShowAboutWarp),
         EditableBinding::new(
             "workspace:show_settings_zaplexify_page",
-            BindingDescription::new(crate::t!("keybinding-desc-workspace-show-settings-zaplexify"))
-                .with_custom_description(
-                    bindings::MAC_MENUS_CONTEXT,
-                    crate::t!("keybinding-desc-workspace-show-settings-zaplexify-menu"),
-                ),
+            BindingDescription::new(crate::t!(
+                "keybinding-desc-workspace-show-settings-zaplexify"
+            ))
+            .with_custom_description(
+                bindings::MAC_MENUS_CONTEXT,
+                crate::t!("keybinding-desc-workspace-show-settings-zaplexify-menu"),
+            ),
             WorkspaceAction::ShowSettingsPage(SettingsSection::Zaplexify),
         )
         .with_group(bindings::BindingGroup::Settings.as_str())

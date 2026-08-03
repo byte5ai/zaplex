@@ -47,6 +47,7 @@ fn session_in(
         pty_session_id: None,
         pty_session_generation: None,
         pty_foreground: false,
+        task_state: None,
         last_activity: at(activity),
         pid: 0,
     }
@@ -100,17 +101,17 @@ fn needs_me_bubbles_session_to_project_to_host_to_fleet() {
             ],
         ),
         host(
-            "macmini",
+            "agenthost",
             vec![session("d", "/p/three", SessionState::Monitor, 8)],
         ),
     ]);
-    // devhost: 2 waiting (one in /p/one, one in /p/two); macmini: 0.
+    // devhost: 2 waiting (one in /p/one, one in /p/two); agenthost: 0.
     let dev = tree.hosts.iter().find(|h| h.host == "devhost").unwrap();
     assert_eq!(dev.needs_me, 2);
     let one = dev.projects.iter().find(|p| p.root == "/p/one").unwrap();
     assert_eq!(one.needs_me, 1);
-    let mac = tree.hosts.iter().find(|h| h.host == "macmini").unwrap();
-    assert_eq!(mac.needs_me, 0);
+    let agent = tree.hosts.iter().find(|h| h.host == "agenthost").unwrap();
+    assert_eq!(agent.needs_me, 0);
     assert_eq!(tree.needs_me, 2, "grand total across the fleet");
 }
 
@@ -340,16 +341,16 @@ fn fold_needs_me_bubbles_across_the_whole_fleet() {
         session("b", "/p/two", SessionState::Waiting, 6),
         session("c", "/p/two", SessionState::Active, 7),
     ];
-    let mac = vec![session("d", "/p/three", SessionState::Monitor, 8)];
+    let agent = vec![session("d", "/p/three", SessionState::Monitor, 8)];
     let tree = fold_inventory(
         "local",
         local,
         vec![
             (remote_host("devhost", "devhost-id"), dev),
-            (remote_host("macmini", "macmini-id"), mac),
+            (remote_host("agenthost", "agenthost-id"), agent),
         ],
     );
-    // Grand total spans every host: 1 (local) + 1 (devhost) + 0 (macmini).
+    // Grand total spans every host: 1 (local) + 1 (devhost) + 0 (agenthost).
     assert_eq!(tree.needs_me, 2);
     assert_eq!(tree.hosts.len(), 3);
     // Hosts with waiting work sort ahead of the quiet one.
@@ -358,7 +359,7 @@ fn fold_needs_me_bubbles_across_the_whole_fleet() {
     assert_eq!(
         tree.hosts
             .iter()
-            .find(|h| h.host == "macmini")
+            .find(|h| h.host == "agenthost")
             .unwrap()
             .needs_me,
         0
@@ -401,7 +402,7 @@ fn empty_remote_hosts_are_dropped_and_empty_fleet_is_zero() {
 }
 
 #[test]
-fn registered_and_live_hosts_join_once() {
+fn registered_and_live_host_snapshots_join_into_one_host_node() {
     let mut tree = fold_inventory(
         "local",
         Vec::new(),
@@ -429,7 +430,7 @@ fn registered_and_live_hosts_join_once() {
 }
 
 #[test]
-fn registered_offline_host_remains_visible() {
+fn registered_offline_host_remains_visible_without_live_inventory() {
     let mut tree = fold_inventory("local", Vec::new(), Vec::new());
     let registered = vec![RegisteredHost {
         node_id: "node-offline".to_string(),
@@ -520,7 +521,7 @@ fn same_display_name_hosts_remain_distinct_by_stable_id() {
 }
 
 #[test]
-fn local_host_appears_exactly_once() {
+fn local_host_is_rendered_exactly_once() {
     let mut tree = fold_inventory("box", Vec::new(), Vec::new());
     merge_registered_hosts(
         &mut tree,
@@ -543,7 +544,7 @@ fn local_host_appears_exactly_once() {
 }
 
 #[test]
-fn removed_registered_host_is_never_routable() {
+fn removed_host_is_never_routed_as_available() {
     let mut tree = fold_inventory(
         "local",
         Vec::new(),
@@ -618,7 +619,13 @@ fn an_accounts_sessions_are_found_on_every_host() {
             host: "mac".into(),
             is_local: true,
             host_id: None,
-            sessions: vec![owned("local", "/p/a", Provider::Claude, Some("me@x.de"), None)],
+            sessions: vec![owned(
+                "local",
+                "/p/a",
+                Provider::Claude,
+                Some("me@x.de"),
+                None,
+            )],
         },
         HostSessions {
             host: "devhost".into(),
@@ -635,19 +642,31 @@ fn an_accounts_sessions_are_found_on_every_host() {
         },
     ]);
 
-    let found = sessions_of_account(&tree, &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude"));
+    let found = sessions_of_account(
+        &tree,
+        &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude"),
+    );
     // Rows come in tree order (hosts by needs-me, then name); the table sorts by
     // its own columns anyway, so assert the set rather than that incidental order.
-    let mut ids: Vec<&str> = found.iter().map(|a| a.session.session_id.as_str()).collect();
+    let mut ids: Vec<&str> = found
+        .iter()
+        .map(|a| a.session.session_id.as_str())
+        .collect();
     ids.sort_unstable();
     assert_eq!(ids, ["local", "remote"], "both hosts contribute");
 
     // The Host column, and the identity a remote action must route through.
-    let remote = found.iter().find(|a| a.session.session_id == "remote").unwrap();
+    let remote = found
+        .iter()
+        .find(|a| a.session.session_id == "remote")
+        .unwrap();
     assert_eq!(remote.host, "devhost");
     assert!(!remote.is_local);
     assert_eq!(remote.host_id, Some("daemon-1"));
-    let local = found.iter().find(|a| a.session.session_id == "local").unwrap();
+    let local = found
+        .iter()
+        .find(|a| a.session.session_id == "local")
+        .unwrap();
     assert!(local.is_local);
     assert_eq!(local.host_id, None);
 }
@@ -663,20 +682,37 @@ fn a_second_account_on_another_host_is_not_claimed_as_ours() {
             host: "mac".into(),
             is_local: true,
             host_id: None,
-            sessions: vec![owned("mine", "/p/a", Provider::Claude, Some("me@x.de"), None)],
+            sessions: vec![owned(
+                "mine",
+                "/p/a",
+                Provider::Claude,
+                Some("me@x.de"),
+                None,
+            )],
         },
         HostSessions {
             host: "devhost".into(),
             is_local: false,
             host_id: Some("daemon-1".into()),
             // Same provider, same (empty) pin — a different subscription.
-            sessions: vec![owned("theirs", "/p/b", Provider::Claude, Some("other@x.de"), None)],
+            sessions: vec![owned(
+                "theirs",
+                "/p/b",
+                Provider::Claude,
+                Some("other@x.de"),
+                None,
+            )],
         },
     ]);
 
-    let mine = sessions_of_account(&tree, &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude"));
+    let mine = sessions_of_account(
+        &tree,
+        &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude"),
+    );
     assert_eq!(
-        mine.iter().map(|a| a.session.session_id.as_str()).collect::<Vec<_>>(),
+        mine.iter()
+            .map(|a| a.session.session_id.as_str())
+            .collect::<Vec<_>>(),
         ["mine"],
         "another host's account must not be folded into ours"
     );
@@ -696,11 +732,17 @@ fn the_same_address_on_two_providers_stays_two_accounts() {
         ],
     }]);
 
-    let claude = sessions_of_account(&tree, &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude"));
+    let claude = sessions_of_account(
+        &tree,
+        &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude"),
+    );
     assert_eq!(claude.len(), 1);
     assert_eq!(claude[0].session.session_id, "c");
 
-    let codex = sessions_of_account(&tree, &account(Provider::Codex, Some("me@x.de"), "/Users/me/.codex"));
+    let codex = sessions_of_account(
+        &tree,
+        &account(Provider::Codex, Some("me@x.de"), "/Users/me/.codex"),
+    );
     assert_eq!(codex.len(), 1);
     assert_eq!(codex[0].session.session_id, "x");
 }
@@ -737,7 +779,10 @@ fn an_account_without_an_email_claims_nothing() {
         sessions: vec![owned("anon", "/p/a", Provider::Claude, None, None)],
     }]);
 
-    assert!(sessions_of_account(&tree, &account(Provider::Claude, None, "/Users/me/.claude")).is_empty());
+    assert!(
+        sessions_of_account(&tree, &account(Provider::Claude, None, "/Users/me/.claude"))
+            .is_empty()
+    );
 }
 
 /// Both hosts read the address from the provider's own token, so it should
@@ -749,7 +794,13 @@ fn the_join_does_not_hinge_on_how_the_address_is_capitalised() {
         host: "devhost".into(),
         is_local: false,
         host_id: Some("daemon-1".into()),
-        sessions: vec![owned("remote", "/p/a", Provider::Claude, Some("Me@Example.DE"), None)],
+        sessions: vec![owned(
+            "remote",
+            "/p/a",
+            Provider::Claude,
+            Some("Me@Example.DE"),
+            None,
+        )],
     }]);
 
     let found = sessions_of_account(

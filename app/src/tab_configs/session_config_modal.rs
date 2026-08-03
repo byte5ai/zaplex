@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
 use warpui::elements::{
-    ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MouseStateHandle,
-    ParentElement,
+    ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MouseStateHandle, ParentElement,
 };
 use warpui::keymap::macros::id;
 use warpui::keymap::FixedBinding;

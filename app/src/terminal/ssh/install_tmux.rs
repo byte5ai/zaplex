@@ -24,8 +24,7 @@ use warpui::{
 };
 use warpui::{BlurContext, FocusContext};
 
-pub const WHY_INSTALL_TMUX_URL: &str =
-    "";
+pub const WHY_INSTALL_TMUX_URL: &str = "";
 
 #[derive(Debug, Clone)]
 pub struct TmuxInstallMethod {
@@ -403,8 +402,9 @@ impl View for SshInstallTmuxBlock {
         })
         .finish();
 
-        content
-            .add_child(render::apply_spacing_styles(Container::new(zaplexify_description)).finish());
+        content.add_child(
+            render::apply_spacing_styles(Container::new(zaplexify_description)).finish(),
+        );
 
         if let Some(root_install_state) = &self.system_install_state {
             content.add_child(self.render_system_install_ui(root_install_state, app));

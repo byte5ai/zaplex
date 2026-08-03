@@ -23,7 +23,7 @@ fn has_feature_matches_advertised_capabilities() {
 
 #[cfg(unix)]
 #[test]
-fn capability_negotiation_gates_pty_binding() {
+fn pty_binding_requires_negotiated_capability() {
     assert!(has_feature(
         &supported_features(),
         FEATURE_AGENT_PTY_BINDING
@@ -44,6 +44,33 @@ fn supported_features_advertises_retry_safe_startup_delivery_on_unix() {
     assert!(has_feature(
         &supported_features(),
         FEATURE_STARTUP_COMMAND_ACK
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn supported_features_advertises_typed_multiplexer_inventory_on_unix() {
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_MULTIPLEXER_INVENTORY_V1
+    ));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn supported_features_advertises_safe_file_transactions_on_supported_unix() {
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_SAFE_FILE_TRANSACTIONS_V1
+    ));
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[test]
+fn supported_features_omits_safe_file_transactions_when_unsupported() {
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_SAFE_FILE_TRANSACTIONS_V1
     ));
 }
 
@@ -88,5 +115,13 @@ fn supported_features_omits_session_host_on_non_unix() {
     assert!(!has_feature(
         &supported_features(),
         FEATURE_STARTUP_COMMAND_ACK
+    ));
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_SAFE_FILE_TRANSACTIONS_V1
+    ));
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_MULTIPLEXER_INVENTORY_V1
     ));
 }

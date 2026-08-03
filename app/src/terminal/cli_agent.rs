@@ -114,6 +114,14 @@ const ANTIGRAVITY_PURPLE: ColorU = ColorU {
     a: 255,
 };
 
+/// Grok/SpaceXAI brand background for the official white symbol.
+const GROK_BLACK: ColorU = ColorU {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 255,
+};
+
 /// Goose brand color (#101010, from Block's official Goose logo)
 const DEEPSEEK_COLOR: ColorU = ColorU {
     r: 53,
@@ -129,7 +137,7 @@ const GOOSE_COLOR: ColorU = ColorU {
     a: 255,
 };
 
-/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose)
+/// Represents a recognized CLI agent such as Claude Code, Codex, Grok, or OpenCode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
     Claude,
@@ -145,8 +153,43 @@ pub enum CLIAgent {
     Goose,
     DeepSeek,
     Antigravity,
+    Grok,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
     Unknown,
+}
+
+/// A routed agent launch before it is serialized for a shell-backed terminal.
+///
+/// Keeping program arguments and environment changes structured lets remote
+/// launches pass user-controlled paths as `sh -c` positional arguments rather
+/// than interpolating them into shell source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RoutedAgentLaunch {
+    pub(crate) program: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) environment: Vec<(&'static str, String)>,
+    pub(crate) unset_environment: Vec<&'static str>,
+}
+
+impl RoutedAgentLaunch {
+    fn shell_command(&self) -> String {
+        let mut command = String::new();
+        if !self.unset_environment.is_empty() {
+            command.push_str("unset ");
+            command.push_str(&self.unset_environment.join(" "));
+            command.push_str("; ");
+        }
+        for (name, value) in &self.environment {
+            let value = shell_words::quote(value).into_owned();
+            command.push_str(&format!("{name}={value} "));
+        }
+        command.push_str(&shell_words::quote(&self.program));
+        for arg in &self.args {
+            command.push(' ');
+            command.push_str(&shell_words::quote(arg));
+        }
+        command
+    }
 }
 
 impl CLIAgent {
@@ -166,13 +209,33 @@ impl CLIAgent {
             CLIAgent::Goose => "goose",
             CLIAgent::DeepSeek => "deepseek",
             CLIAgent::Antigravity => "agy",
+            CLIAgent::Grok => "grok",
             CLIAgent::Unknown => "",
+        }
+    }
+
+    /// Whether this agent may be offered by surfaces that start a new session.
+    ///
+    /// Gemini remains in the enum so already-running panes and persisted session
+    /// metadata can still be recognized. It is deliberately excluded from new
+    /// launchers because the standalone CLI is retired in favor of Antigravity.
+    pub fn is_available_for_new_launch(&self) -> bool {
+        !matches!(self, CLIAgent::Gemini | CLIAgent::Unknown)
+    }
+
+    /// Extra terms that may find this agent in command search without changing
+    /// command detection. In particular, a running `gemini` process must remain
+    /// identifiable as legacy Gemini while searches for that name lead to `agy`.
+    pub fn command_search_aliases(&self) -> &'static [&'static str] {
+        match self {
+            CLIAgent::Antigravity => &["gemini"],
+            _ => &[],
         }
     }
 
     fn command_prefix_aliases(&self) -> &'static [&'static str] {
         match self {
-            CLIAgent::DeepSeek => &["deepseek-tui"],
+            CLIAgent::DeepSeek => &["deepseek-tui", "codewhale", "codew", "codewhale-tui"],
             _ => &[],
         }
     }
@@ -185,8 +248,9 @@ impl CLIAgent {
     /// session — same history, divergent future; the original session stays
     /// untouched (fork/worktree design §2).
     ///
-    /// Verified against the current CLIs (2026-07-03):
-    /// `claude --resume <id> --fork-session` and `codex fork <id>`.
+    /// Verified against the current CLIs and official references (2026-07-30):
+    /// `claude --resume <id> --fork-session`, `codex fork <id>`, and
+    /// `grok --resume <id> --fork-session`.
     /// `None` = this agent has no known fork mechanism; surfaces stay
     /// visibly disabled rather than guessing (no fake fork).
     pub fn fork_command(&self, session_id: &str) -> Option<String> {
@@ -196,6 +260,7 @@ impl CLIAgent {
         match self {
             CLIAgent::Claude => Some(format!("claude --resume {id} --fork-session")),
             CLIAgent::Codex => Some(format!("codex fork {id}")),
+            CLIAgent::Grok => Some(format!("grok --resume {id} --fork-session")),
             _ => None,
         }
     }
@@ -220,8 +285,9 @@ impl CLIAgent {
     /// session). This is how an idle CLI session surfaced by the cockpit is
     /// *adopted* into a live pane: "open = focus/adopt" (audit (b)#13, (c)#4).
     ///
-    /// Verified against the current CLIs (2026-07-05):
-    /// `claude --resume <id>` and `codex resume <id>`.
+    /// Verified against the current CLIs and official references (2026-07-30):
+    /// `claude --resume <id>`, `codex resume <id>`,
+    /// `agy --conversation <id>`, and `grok --resume <id>`.
     /// `None` = this agent has no known resume mechanism; surfaces stay
     /// visibly disabled rather than guessing.
     pub fn resume_command(&self, session_id: &str) -> Option<String> {
@@ -231,6 +297,8 @@ impl CLIAgent {
         match self {
             CLIAgent::Claude => Some(format!("claude --resume {id}")),
             CLIAgent::Codex => Some(format!("codex resume {id}")),
+            CLIAgent::Antigravity => Some(format!("agy --conversation {id}")),
+            CLIAgent::Grok => Some(format!("grok --resume {id}")),
             _ => None,
         }
     }
@@ -249,12 +317,13 @@ impl CLIAgent {
     /// Whether this CLI takes **in-conversation slash commands** (`/compact`,
     /// `/clear`) typed into a resumed session.
     ///
-    /// Verified against the current CLIs (2026-07-16): Claude Code does; Codex
-    /// has no equivalent. Lives here beside `fork_command`/`resume_command` so
+    /// Verified against the current CLIs and official references (2026-07-30):
+    /// Claude Code and Grok do; Codex has no equivalent. Lives here beside
+    /// `fork_command`/`resume_command` so
     /// that what a given CLI can do is stated in one place — a caller asks
     /// rather than re-deciding it with a `provider ==` test of its own.
     pub fn supports_slash_commands(&self) -> bool {
-        matches!(self, CLIAgent::Claude)
+        matches!(self, CLIAgent::Claude | CLIAgent::Grok)
     }
 
     /// Prepend an account's config dir as an inline env assignment
@@ -271,6 +340,7 @@ impl CLIAgent {
         let var = match self {
             CLIAgent::Claude => "CLAUDE_CONFIG_DIR",
             CLIAgent::Codex => "CODEX_HOME",
+            CLIAgent::Grok => "GROK_HOME",
             _ => return cmd,
         };
         let dir = shell_words::quote(&dir.to_string_lossy()).into_owned();
@@ -307,6 +377,7 @@ impl CLIAgent {
     /// - **Codex:** `--model <model>` plus reasoning effort as a config override
     ///   `-c model_reasoning_effort="<low|medium|high>"` (Codex's documented way to
     ///   set effort non-interactively; it has no dedicated `--effort` flag).
+    /// - **Grok:** `--model <model>` and `--effort <effort>`.
     ///
     /// `model`/`effort` `None` = today's behavior verbatim (bare routed launch).
     /// Agents without a subscription/config-dir model launch bare (no scrub, no
@@ -317,64 +388,86 @@ impl CLIAgent {
         model: Option<&str>,
         effort: Option<&str>,
     ) -> String {
-        let cmd = self.command_prefix();
-        let (dir_var, key_vars): (&str, &[&str]) = match self {
-            CLIAgent::Claude => (
-                "CLAUDE_CONFIG_DIR",
-                &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
-            ),
-            CLIAgent::Codex => ("CODEX_HOME", &["OPENAI_API_KEY"]),
-            // No known subscription/config-dir routing for other agents.
-            _ => return cmd.to_string(),
-        };
-        // 1. Scrub inherited API-key env so the subscription authenticates.
-        let mut prefix = format!("unset {}; ", key_vars.join(" "));
-        // 2. Pin the chosen account's config dir, if any.
-        if let Some(dir) = config_dir {
-            let dir = shell_words::quote(&dir.to_string_lossy()).into_owned();
-            prefix.push_str(&format!("{dir_var}={dir} "));
-        }
-        // 3. Append the provider-correct model/effort flags, if chosen.
-        let flags = self.model_effort_flags(model, effort);
-        format!("{prefix}{cmd}{flags}")
+        self.routed_launch(config_dir, model, effort)
+            .shell_command()
     }
 
-    /// The provider-correct model + effort CLI flags (with a leading space each),
-    /// or an empty string when neither applies. Split out so it is unit-testable
-    /// in isolation and reused by any launch path. See
-    /// [`Self::launch_command_routed_with`] for the per-provider rationale.
-    fn model_effort_flags(&self, model: Option<&str>, effort: Option<&str>) -> String {
-        let mut flags = String::new();
+    /// The provider-correct launch as structured environment, program and argv.
+    /// Shell-backed callers serialize it only at their final execution boundary.
+    pub(crate) fn routed_launch(
+        &self,
+        config_dir: Option<&Path>,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> RoutedAgentLaunch {
+        let mut launch = RoutedAgentLaunch {
+            program: self.command_prefix().to_string(),
+            args: Vec::new(),
+            environment: Vec::new(),
+            unset_environment: Vec::new(),
+        };
         match self {
             CLIAgent::Claude => {
+                launch
+                    .unset_environment
+                    .extend(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
+                if let Some(dir) = config_dir {
+                    launch
+                        .environment
+                        .push(("CLAUDE_CONFIG_DIR", dir.to_string_lossy().into_owned()));
+                }
                 if let Some(model) = model {
-                    let model = shell_words::quote(model).into_owned();
-                    flags.push_str(&format!(" --model {model}"));
+                    launch
+                        .args
+                        .extend(["--model".to_string(), model.to_string()]);
                 }
                 // Claude Code has no reasoning-effort CLI flag: effort is tracked,
                 // not placed on the command line (no fake flag).
             }
             CLIAgent::Codex => {
+                launch.unset_environment.push("OPENAI_API_KEY");
+                if let Some(dir) = config_dir {
+                    launch
+                        .environment
+                        .push(("CODEX_HOME", dir.to_string_lossy().into_owned()));
+                }
                 if let Some(model) = model {
-                    let model = shell_words::quote(model).into_owned();
-                    flags.push_str(&format!(" --model {model}"));
+                    launch
+                        .args
+                        .extend(["--model".to_string(), model.to_string()]);
                 }
                 if let Some(effort) = effort {
                     // Codex sets reasoning effort via a config override, not a
                     // dedicated flag. `-c key=value` is parsed as TOML, so the
                     // value must itself be a TOML-quoted string (a bare `high`
-                    // is not valid TOML) — hence `model_reasoning_effort="high"`.
-                    // The outer `shell_words::quote` then wraps the whole
-                    // `key="value"` token in shell quoting so it survives as a
-                    // single argv token verbatim.
-                    let kv = shell_words::quote(&format!("model_reasoning_effort=\"{effort}\""))
-                        .into_owned();
-                    flags.push_str(&format!(" -c {kv}"));
+                    // is not valid TOML). It remains one argv token here; the
+                    // eventual shell boundary handles quoting generically.
+                    launch.args.extend([
+                        "-c".to_string(),
+                        format!("model_reasoning_effort=\"{effort}\""),
+                    ]);
+                }
+            }
+            CLIAgent::Grok => {
+                if let Some(dir) = config_dir {
+                    launch
+                        .environment
+                        .push(("GROK_HOME", dir.to_string_lossy().into_owned()));
+                }
+                if let Some(model) = model {
+                    launch
+                        .args
+                        .extend(["--model".to_string(), model.to_string()]);
+                }
+                if let Some(effort) = effort {
+                    launch
+                        .args
+                        .extend(["--effort".to_string(), effort.to_string()]);
                 }
             }
             _ => {}
         }
-        flags
+        launch
     }
 
     /// Serialized version of the CLIAgent name (e.g. "Claude", "Gemini"). Used for the
@@ -406,6 +499,7 @@ impl CLIAgent {
             CLIAgent::Goose => "Goose",
             CLIAgent::DeepSeek => "DeepSeek",
             CLIAgent::Antigravity => "Antigravity",
+            CLIAgent::Grok => "Grok",
             CLIAgent::Unknown => "CLI Agent",
         }
     }
@@ -426,6 +520,7 @@ impl CLIAgent {
             CLIAgent::Goose => Some(Icon::GooseLogo),
             CLIAgent::DeepSeek => Some(Icon::DeepSeekLogo),
             CLIAgent::Antigravity => Some(Icon::AntigravityLogo),
+            CLIAgent::Grok => Some(Icon::GrokLogo),
             CLIAgent::Unknown => None,
         }
     }
@@ -456,6 +551,7 @@ impl CLIAgent {
             CLIAgent::Goose => &[SkillProvider::Agents],
             CLIAgent::DeepSeek => &[SkillProvider::Agents],
             CLIAgent::Antigravity => &[SkillProvider::Agents],
+            CLIAgent::Grok => &[SkillProvider::Agents],
             CLIAgent::Unknown => &[],
         }
     }
@@ -498,6 +594,7 @@ impl CLIAgent {
             CLIAgent::Goose => Some(GOOSE_COLOR),
             CLIAgent::DeepSeek => Some(DEEPSEEK_COLOR),
             CLIAgent::Antigravity => Some(ANTIGRAVITY_PURPLE),
+            CLIAgent::Grok => Some(GROK_BLACK),
             CLIAgent::Unknown => None,
         }
     }
@@ -761,6 +858,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Goose => CLIAgentType::Goose,
             CLIAgent::DeepSeek => CLIAgentType::DeepSeek,
             CLIAgent::Antigravity => CLIAgentType::Antigravity,
+            CLIAgent::Grok => CLIAgentType::Grok,
             CLIAgent::Unknown => CLIAgentType::Unknown,
         }
     }
@@ -798,9 +896,7 @@ impl CLIAgentInstallModel {
 
     fn on_scan_complete(&mut self, results: HashMap<CLIAgent, bool>, ctx: &mut ModelContext<Self>) {
         let any_installed = results.values().any(|&v| v);
-        log::info!(
-            "cli-agent scan complete: any_installed={any_installed}, results={results:?}"
-        );
+        log::info!("cli-agent scan complete: any_installed={any_installed}, results={results:?}");
         self.cache = Some(results.clone());
 
         // Auto-sync to per-agent settings — but never *prune* per-agent settings
@@ -845,24 +941,29 @@ impl Entity for CLIAgentInstallModel {
 
 impl SingletonEntity for CLIAgentInstallModel {}
 
+fn agents_for_installation_scan() -> impl Iterator<Item = CLIAgent> {
+    enum_iterator::all::<CLIAgent>().filter(|agent| agent.is_available_for_new_launch())
+}
+
 /// Synchronous filesystem search detecting which agents are installed. Cheap
 /// (a handful of `is_file` probes) — safe to call directly on the main thread as
 /// a fallback when the async cache is not yet populated (see `open_spawn_card`).
 #[cfg(unix)]
 pub(crate) fn scan_cli_agent_installations() -> HashMap<CLIAgent, bool> {
     let search_dirs = cli_agent_search_dirs().collect::<Vec<_>>();
-    let map: HashMap<CLIAgent, bool> = enum_iterator::all::<CLIAgent>()
-        .filter(|a| !matches!(a, CLIAgent::Unknown))
+    let map: HashMap<CLIAgent, bool> = agents_for_installation_scan()
         .map(|a| (a, cli_agent_is_on_path_with_dirs(a, &search_dirs)))
         .collect();
     // Diagnostic: makes it unambiguous whether the scan runs, what it searched,
-    // and what it concluded for the two first-class agents — so a false
+    // and what it concluded for the first-class launch agents — so a false
     // "not installed" can be traced to either a missing dir or a failed probe.
     log::info!(
-        "cli-agent scan: {} search dirs; claude={} codex={}; dirs={:?}",
+        "cli-agent scan: {} search dirs; claude={} codex={} antigravity={} grok={}; dirs={:?}",
         search_dirs.len(),
         map.get(&CLIAgent::Claude).copied().unwrap_or(false),
         map.get(&CLIAgent::Codex).copied().unwrap_or(false),
+        map.get(&CLIAgent::Antigravity).copied().unwrap_or(false),
+        map.get(&CLIAgent::Grok).copied().unwrap_or(false),
         search_dirs,
     );
     map
@@ -872,8 +973,7 @@ pub(crate) fn scan_cli_agent_installations() -> HashMap<CLIAgent, bool> {
 /// directly as a fallback when the async cache is not yet populated.
 #[cfg(windows)]
 pub(crate) fn scan_cli_agent_installations() -> HashMap<CLIAgent, bool> {
-    enum_iterator::all::<CLIAgent>()
-        .filter(|a| !matches!(a, CLIAgent::Unknown))
+    agents_for_installation_scan()
         .map(|a| (a, cli_agent_is_on_path(a)))
         .collect()
 }
@@ -886,6 +986,9 @@ fn cli_agent_is_on_path_with_dirs(agent: CLIAgent, search_dirs: &[PathBuf]) -> b
         CLIAgent::DeepSeek => {
             is_on_path_in_dirs("deepseek", search_dirs)
                 || is_on_path_in_dirs("deepseek-tui", search_dirs)
+                || is_on_path_in_dirs("codewhale", search_dirs)
+                || is_on_path_in_dirs("codew", search_dirs)
+                || is_on_path_in_dirs("codewhale-tui", search_dirs)
         }
         other => is_on_path_in_dirs(other.command_prefix(), search_dirs),
     }
@@ -925,6 +1028,7 @@ fn extend_common_cli_dirs(dirs: &mut Vec<PathBuf>) {
     dirs.extend([
         home.join(".cargo/bin"),
         home.join(".bun/bin"),
+        home.join(".grok/bin"),
         home.join(".local/bin"),
     ]);
 
@@ -954,7 +1058,13 @@ fn cli_agent_is_on_path(agent: CLIAgent) -> bool {
     match agent {
         CLIAgent::Unknown => false,
         CLIAgent::CursorCli => is_on_path("cursor-agent"),
-        CLIAgent::DeepSeek => is_on_path("deepseek") || is_on_path("deepseek-tui"),
+        CLIAgent::DeepSeek => {
+            is_on_path("deepseek")
+                || is_on_path("deepseek-tui")
+                || is_on_path("codewhale")
+                || is_on_path("codew")
+                || is_on_path("codewhale-tui")
+        }
         other => is_on_path(other.command_prefix()),
     }
 }

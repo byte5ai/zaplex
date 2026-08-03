@@ -10,19 +10,21 @@ use futures::io::{AsyncRead, AsyncWrite};
 use warpui::r#async::{executor, FutureExt as _};
 
 use crate::proto::{
-    client_message, read_file_chunk_response, server_message, Abort, AgentProcessSignal,
-    AgentProcessSignalRequest, AgentProcessSignalResponse, AgentProcessSignalStatus,
-    AgentPtyBindingResponse, AgentSessionIdentity, AgentSessionList, AttachSession, Authenticate,
-    BindAgentPty, BufferEdit, ClientMessage, CloseBuffer, CreateDirectory, CreateDirectoryResponse,
-    DeleteFile, DetachSession, ErrorCode, HostExec, HostExecResult, Initialize, InitializeResponse,
-    ListAgentSessions, ListDirectory, ListDirectoryResponse, ListSessions,
-    LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, OpenBuffer,
-    OpenBufferResponse, OpenSession, ReadFileChunk, ReadFileChunkResponse, ReadFileContextRequest,
-    ReadFileContextResponse, ResizeSession, ResolveConflict, ResolveConflictResponse, ResolvePath,
-    ResolvePathResponse, RunCommandRequest, RunCommandResponse, SaveBuffer, SaveBufferResponse,
-    ServerMessage, SessionAttached, SessionBootstrapped, SessionInput, SessionList, SessionOpened,
-    SessionSize, SetBootstrapPreamble, StartupCommandAck, TextEdit, UnbindAgentPty, WriteFile,
-    WriteFileChunk, WriteFileChunkResponse,
+    client_message, read_file_chunk_response, safe_file_request, server_message, Abort,
+    AgentProcessSignal, AgentProcessSignalRequest, AgentProcessSignalResponse,
+    AgentProcessSignalStatus, AgentPtyBindingResponse, AgentSessionIdentity, AgentSessionList,
+    AttachSession, Authenticate, BindAgentPty, BufferEdit, ClientMessage, CloseBuffer,
+    CreateDirectory, CreateDirectoryResponse, DeleteFile, DetachSession, ErrorCode, HostExec,
+    HostExecResult, Initialize, InitializeResponse, ListAgentSessions, ListDirectory,
+    ListDirectoryResponse, ListMultiplexerSessions, ListSessions,
+    LoadRepoMetadataDirectoryResponse, MultiplexerSessionList, NavigatedToDirectoryResponse,
+    OpenBuffer, OpenBufferResponse, OpenSession, ReadFileChunk, ReadFileChunkResponse,
+    ReadFileContextRequest, ReadFileContextResponse, ResizeSession, ResolveConflict,
+    ResolveConflictResponse, ResolvePath, ResolvePathResponse, RunCommandRequest,
+    RunCommandResponse, SafeFileCloseHandle, SafeFileRequest, SafeFileResponse, SaveBuffer,
+    SaveBufferResponse, ServerMessage, SessionAttached, SessionBootstrapped, SessionInput,
+    SessionList, SessionOpened, SessionSize, SetBootstrapPreamble, StartupCommandAck, TextEdit,
+    UnbindAgentPty, WriteFile, WriteFileChunk, WriteFileChunkResponse,
 };
 
 use crate::protocol::{self, ProtocolError, RequestId};
@@ -569,6 +571,51 @@ impl RemoteServerClient {
         }
     }
 
+    /// Executes one descriptor-bound safe-file operation.
+    ///
+    /// Callers must first require the daemon's
+    /// `safe-file-transactions-v1` capability. This method deliberately has no
+    /// path-based fallback.
+    pub async fn safe_file(
+        &self,
+        request: SafeFileRequest,
+    ) -> Result<SafeFileResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::SafeFile(request)),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::SafeFileResponse(response)) => Ok(response),
+            other => {
+                log::error!("Unexpected response variant for SafeFile: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Closes a descriptor-bound safe-file handle without blocking the caller.
+    ///
+    /// Handle teardown runs from ownership-anchor `Drop` implementations, so it
+    /// must never wait for the normal two-minute request timeout. The daemon
+    /// treats an empty-request-id close as a notification and sends no reply.
+    pub fn close_safe_file_handle(&self, handle_id: String) -> Result<(), ClientError> {
+        let msg = ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::SafeFile(SafeFileRequest {
+                operation_id: String::new(),
+                operation: Some(safe_file_request::Operation::CloseHandle(
+                    SafeFileCloseHandle { handle_id },
+                )),
+            })),
+        };
+        self.outbound_tx.try_send(msg).map_err(|error| {
+            log::debug!("Failed to enqueue safe-file handle close: {error}");
+            ClientError::Disconnected
+        })
+    }
+
     /// Opens a buffer on the remote host for bidirectional syncing.
     pub async fn open_buffer(&self, path: String) -> Result<OpenBufferResponse, ClientError> {
         let request_id = RequestId::new();
@@ -827,6 +874,29 @@ impl RemoteServerClient {
             Some(server_message::Message::SessionList(resp)) => Ok(resp),
             other => {
                 log::error!("Unexpected response variant for ListSessions: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Lists existing tmux/byobu sessions as typed data.
+    ///
+    /// Capability-gated: callers must require
+    /// [`FEATURE_MULTIPLEXER_INVENTORY_V1`](zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1)
+    /// and must never fall back to a generic host-shell scan.
+    pub async fn list_multiplexer_sessions(&self) -> Result<MultiplexerSessionList, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::ListMultiplexerSessions(
+                ListMultiplexerSessions {},
+            )),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::MultiplexerSessionList(response)) => Ok(response),
+            other => {
+                log::error!("Unexpected response variant for ListMultiplexerSessions: {other:?}");
                 Err(ClientError::UnexpectedResponse)
             }
         }

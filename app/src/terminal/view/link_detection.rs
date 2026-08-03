@@ -432,12 +432,7 @@ impl super::TerminalView {
                     );
                 } else {
                     // Rich-content link (no grid block) → active-block session.
-                    self.open_file_path(
-                        absolute_path.clone(),
-                        *line_and_column_num,
-                        None,
-                        ctx,
-                    );
+                    self.open_file_path(absolute_path.clone(), *line_and_column_num, None, ctx);
                 }
             }
             RichContentLink::Url(url) => {

@@ -96,6 +96,7 @@ use crate::settings::cloud_preferences::{PreferenceObject, PreferenceObjectModel
 use crate::settings_view::SettingsSection;
 use crate::suggestions::ignored_suggestions_model::SuggestionType;
 use crate::tab::SelectedTabColor;
+use crate::terminal::cli_agent_sessions::PersistedCLIAgentBinding;
 use crate::terminal::history::PersistedCommand;
 use crate::terminal::ShellLaunchData;
 use crate::themes::theme::AnsiColorIdentifier;
@@ -1015,12 +1016,76 @@ struct SaveAppStateNodeTraversal<'a> {
     parent_pane_node_id: Option<i32>,
 }
 
+#[derive(diesel::QueryableByName)]
+struct TerminalPaneCliAgentBindingRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    binding_json: String,
+}
+
+#[derive(diesel::QueryableByName)]
+struct TabPinRow {
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    tab_id: i32,
+}
+
+fn save_terminal_pane_cli_agent_binding(
+    conn: &mut SqliteConnection,
+    terminal_pane_id: i32,
+    binding: &PersistedCLIAgentBinding,
+) -> Result<(), Error> {
+    let binding_json = match serde_json::to_string(binding) {
+        Ok(binding_json) => binding_json,
+        Err(error) => {
+            log::warn!("Failed to serialize CLI agent restore binding: {error}");
+            return Ok(());
+        }
+    };
+
+    diesel::sql_query(
+        "INSERT INTO terminal_pane_cli_agent_bindings (terminal_pane_id, binding_json) VALUES (?, ?)",
+    )
+    .bind::<diesel::sql_types::Integer, _>(terminal_pane_id)
+    .bind::<diesel::sql_types::Text, _>(binding_json)
+    .execute(conn)?;
+    Ok(())
+}
+
+fn read_terminal_pane_cli_agent_binding(
+    conn: &mut SqliteConnection,
+    terminal_pane_id: i32,
+) -> Result<Option<PersistedCLIAgentBinding>> {
+    let row = diesel::sql_query(
+        "SELECT binding_json FROM terminal_pane_cli_agent_bindings WHERE terminal_pane_id = ?",
+    )
+    .bind::<diesel::sql_types::Integer, _>(terminal_pane_id)
+    .get_result::<TerminalPaneCliAgentBindingRow>(conn)
+    .optional()?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let binding = match serde_json::from_str::<PersistedCLIAgentBinding>(&row.binding_json) {
+        Ok(binding) if binding.resume_command().is_some() => binding,
+        Ok(_) => {
+            log::warn!("Discarded invalid CLI agent restore binding from SQLite");
+            return Ok(None);
+        }
+        Err(error) => {
+            log::warn!("Failed to deserialize CLI agent restore binding: {error}");
+            return Ok(None);
+        }
+    };
+    Ok(Some(binding))
+}
+
 // Saves the app state snapshot in the sqlite database. Removes any old app state.
 // Does so in a transaction so we're never in a partial state.
 fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<()> {
     conn.transaction::<(), Error, _>(|conn| {
         // Remove old app state
         diesel::delete(schema::app::dsl::app).execute(conn)?;
+        diesel::sql_query("DELETE FROM tab_pins").execute(conn)?;
+        diesel::sql_query("DELETE FROM terminal_pane_cli_agent_bindings").execute(conn)?;
         diesel::delete(schema::terminal_panes::dsl::terminal_panes).execute(conn)?;
         diesel::delete(schema::notebook_panes::dsl::notebook_panes).execute(conn)?;
         diesel::delete(schema::code_panes::dsl::code_panes).execute(conn)?;
@@ -1130,6 +1195,12 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
             // Since we retrieved the tab ids in descending order, we need to reverse them when we
             // iterate to restore the correct order.
             for (tab_id, tab) in tab_ids.iter().rev().zip(window.tabs.iter()) {
+                if tab.is_pinned {
+                    diesel::sql_query("INSERT INTO tab_pins (tab_id) VALUES (?)")
+                        .bind::<diesel::sql_types::Integer, _>(*tab_id)
+                        .execute(conn)?;
+                }
+
                 let mut pane_nodes = VecDeque::new();
                 pane_nodes.push_back(SaveAppStateNodeTraversal {
                     node: &tab.root,
@@ -1348,6 +1419,9 @@ fn save_pane_state(
             diesel::insert_into(schema::terminal_panes::dsl::terminal_panes)
                 .values(terminal)
                 .execute(conn)?;
+            if let Some(binding) = terminal_snapshot.cli_agent_binding.as_ref() {
+                save_terminal_pane_cli_agent_binding(conn, id, binding)?;
+            }
         }
         LeafContents::Notebook(notebook_snapshot) => {
             let (notebook_id, local_path) = match notebook_snapshot {
@@ -2462,10 +2536,12 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                     let active_conversation_id = terminal_pane
                         .active_conversation_id
                         .and_then(|id_str| AIConversationId::try_from(id_str).ok());
+                    let cli_agent_binding = read_terminal_pane_cli_agent_binding(conn, node.id)?;
 
                     LeafContents::Terminal(TerminalPaneSnapshot {
                         uuid: terminal_pane.uuid,
                         cwd: terminal_pane.cwd,
+                        cli_agent_binding,
                         is_active: terminal_pane.is_active,
                         is_read_only: false,
                         shell_launch_data,
@@ -2721,6 +2797,12 @@ fn read_sqlite_data(
         .load::<Tab>(conn)?
         .grouped_by(&db_windows);
 
+    let pinned_tab_ids = diesel::sql_query("SELECT tab_id FROM tab_pins")
+        .load::<TabPinRow>(conn)?
+        .into_iter()
+        .map(|row| row.tab_id)
+        .collect::<HashSet<_>>();
+
     let db_panels = schema::panels::dsl::panels
         .load::<model::Panel>(conn)?
         .into_iter()
@@ -2749,6 +2831,7 @@ fn read_sqlite_data(
                     Some(TabSnapshot {
                         root,
                         custom_title: tab.custom_title,
+                        is_pinned: pinned_tab_ids.contains(&tab.id),
                         default_directory_color: None,
                         selected_color: tab
                             .color

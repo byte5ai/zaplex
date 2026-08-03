@@ -452,7 +452,7 @@ Phase B — approved build and runtime:
 
 - start CI/DMG only after that approval;
 - verify the delivered artifact through clean install, first run, keychain,
-  SSH, devhost, agenthost, hal9000, Claude/Codex, restart, network loss, file
+  SSH, devhost, agenthost, Claude/Codex, restart, network loss, file
   manager, and damaged settings;
 - require no visible script text, correct file-manager navigation and marking,
   reliable agent launch/resume, and coherent UI.

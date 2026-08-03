@@ -25,6 +25,8 @@ pub enum ConflictDecision {
     Skip,
     Overwrite,
     MergeSkip,
+    Rename,
+    NewerOnly,
 }
 
 #[derive(Clone)]
@@ -37,10 +39,66 @@ pub struct TransferJob {
     pub conflict: ConflictDecision,
 }
 
+fn conflict_name(path: &Path, is_directory: bool, sequence: usize) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "entry".to_string());
+    let suffix = if sequence == 1 {
+        "copy".to_string()
+    } else {
+        format!("copy {sequence}")
+    };
+    let renamed = if is_directory {
+        format!("{name} ({suffix})")
+    } else {
+        let name_path = Path::new(&name);
+        match (name_path.file_stem(), name_path.extension()) {
+            (Some(stem), Some(extension)) => format!(
+                "{} ({suffix}).{}",
+                stem.to_string_lossy(),
+                extension.to_string_lossy()
+            ),
+            (Some(stem), None) => format!("{} ({suffix})", stem.to_string_lossy()),
+            (None, Some(_)) | (None, None) => format!("{name} ({suffix})"),
+        }
+    };
+    path.with_file_name(renamed)
+}
+
+fn available_conflict_name(
+    backend: &dyn SftpBackend,
+    path: &Path,
+    is_directory: bool,
+) -> Result<PathBuf, SftpOpsError> {
+    for sequence in 1..=10_000 {
+        let candidate = conflict_name(path, is_directory, sequence);
+        if !backend.entry_exists(&candidate)? {
+            return Ok(candidate);
+        }
+    }
+    Err(SftpOpsError::Operation(format!(
+        "Could not find an available conflict name for {}",
+        path.display()
+    )))
+}
+
+fn path_is_strictly_newer(
+    source_backend: &dyn SftpBackend,
+    source_path: &Path,
+    target_backend: &dyn SftpBackend,
+    target_path: &Path,
+) -> Result<bool, SftpOpsError> {
+    let source = source_backend.modification_time(source_path)?;
+    let target = target_backend.modification_time(target_path)?;
+    Ok(matches!((source, target), (Some(source), Some(target)) if source > target))
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TransferProgress {
     pub transferred: u64,
     pub total: u64,
+    pub bytes_per_second: u64,
     pub eta: Option<Duration>,
     pub phase: TransferPhase,
 }
@@ -55,6 +113,15 @@ impl ProgressTracker {
     }
 
     pub fn record_at(&mut self, transferred: u64, elapsed: Duration) -> TransferProgress {
+        let bytes_per_second = if transferred == 0 || elapsed.is_zero() {
+            0
+        } else {
+            (transferred as u128)
+                .saturating_mul(1_000_000_000)
+                .checked_div(elapsed.as_nanos())
+                .unwrap_or(0)
+                .min(u64::MAX as u128) as u64
+        };
         let eta = if transferred == 0 || transferred >= self.total {
             None
         } else {
@@ -70,6 +137,7 @@ impl ProgressTracker {
         TransferProgress {
             transferred,
             total: self.total,
+            bytes_per_second,
             eta,
             phase: TransferPhase::Transferring,
         }
@@ -81,6 +149,7 @@ pub struct TransferControl {
     resumed: Condvar,
     transferred: AtomicU64,
     total: AtomicU64,
+    bytes_per_second: AtomicU64,
     eta_nanos_plus_one: AtomicU64,
     phase: AtomicU8,
     #[cfg(test)]
@@ -105,6 +174,7 @@ impl Default for TransferControl {
             resumed: Condvar::new(),
             transferred: AtomicU64::new(0),
             total: AtomicU64::new(0),
+            bytes_per_second: AtomicU64::new(0),
             eta_nanos_plus_one: AtomicU64::new(0),
             phase: AtomicU8::new(0),
             #[cfg(test)]
@@ -161,6 +231,7 @@ impl TransferControl {
         TransferProgress {
             transferred: self.transferred.load(Ordering::SeqCst),
             total: self.total.load(Ordering::SeqCst),
+            bytes_per_second: self.bytes_per_second.load(Ordering::SeqCst),
             eta: eta_nanos_plus_one.checked_sub(1).map(Duration::from_nanos),
             phase: match self.phase.load(Ordering::SeqCst) {
                 0 => TransferPhase::Transferring,
@@ -271,6 +342,8 @@ impl TransferControl {
         self.transferred
             .store(progress.transferred, Ordering::SeqCst);
         self.total.store(progress.total, Ordering::SeqCst);
+        self.bytes_per_second
+            .store(progress.bytes_per_second, Ordering::SeqCst);
         self.eta_nanos_plus_one.store(
             progress
                 .eta
@@ -305,6 +378,7 @@ pub enum TransferOutcome {
 pub enum RecoveryOutcome {
     CleanupCompleted,
     SourceRestored,
+    DestinationCommittedSourcePreserved,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -622,18 +696,23 @@ fn retry_cleanup(
                     }
                 }
             }
-            CleanupRecoveryUnit::Unresolved { backend, ownership } => {
-                if cleanup_owned_manifest(
-                    &**backend,
-                    ownership,
-                    control,
-                    progress_callback,
-                    TransferPhase::Finalizing,
-                )? == RecoveryOutcome::SourceRestored
-                {
-                    outcome = RecoveryOutcome::SourceRestored;
+            CleanupRecoveryUnit::Unresolved { backend, ownership } => match cleanup_owned_manifest(
+                &**backend,
+                ownership,
+                control,
+                progress_callback,
+                TransferPhase::Finalizing,
+            )? {
+                RecoveryOutcome::CleanupCompleted => {}
+                RecoveryOutcome::SourceRestored => {
+                    if outcome != RecoveryOutcome::DestinationCommittedSourcePreserved {
+                        outcome = RecoveryOutcome::SourceRestored;
+                    }
                 }
-            }
+                RecoveryOutcome::DestinationCommittedSourcePreserved => {
+                    outcome = RecoveryOutcome::DestinationCommittedSourcePreserved;
+                }
+            },
         }
     }
     recovery.units.clear();
@@ -898,6 +977,9 @@ pub fn run_transfer(
     control: &TransferControl,
     mut progress_callback: Option<&mut dyn FnMut(TransferProgress)>,
 ) -> Result<TransferOutcome, SftpOpsError> {
+    if Arc::ptr_eq(&job.source_backend, &job.target_backend) {
+        super::sftp_backend::validate_copy_destination(&job.source_path, &job.target_path, false)?;
+    }
     let source_identity = stable_identity_now(&*job.source_backend, &job.source_path)?;
     if source_identity.file_type != FileEntryType::File {
         return Err(SftpOpsError::Operation(format!(
@@ -916,7 +998,24 @@ pub fn run_transfer(
         &mut progress_callback,
         TransferPhase::Verifying,
     )?;
+    if original_target.is_some() && job.conflict == ConflictDecision::Rename {
+        let mut renamed_job = job.clone();
+        renamed_job.target_path =
+            available_conflict_name(&*job.target_backend, &job.target_path, false)?;
+        return run_transfer(&renamed_job, control, progress_callback);
+    }
     if original_target.is_some() && job.conflict == ConflictDecision::Skip {
+        return Ok(TransferOutcome::Skipped);
+    }
+    if original_target.is_some()
+        && job.conflict == ConflictDecision::NewerOnly
+        && !path_is_strictly_newer(
+            &*job.source_backend,
+            &job.source_path,
+            &*job.target_backend,
+            &job.target_path,
+        )?
+    {
         return Ok(TransferOutcome::Skipped);
     }
     if original_target
@@ -955,6 +1054,7 @@ pub fn run_transfer(
     let initial = TransferProgress {
         transferred: 0,
         total: source_identity.size,
+        bytes_per_second: 0,
         eta: None,
         phase: TransferPhase::Transferring,
     };
@@ -1015,6 +1115,20 @@ pub fn run_transfer(
             &mut progress_callback,
         );
     }
+    let published_target_anchor = match owned_root_anchor(&stage_ownership, &staged_path) {
+        Ok(anchor) => anchor,
+        Err(error) => {
+            return cleanup_failed_stage(
+                error,
+                job.target_backend.clone(),
+                &staged_path,
+                stage_ownership.clone(),
+                false,
+                control,
+                &mut progress_callback,
+            );
+        }
+    };
     let staged_publication = match capture_publication_snapshot_controlled(
         &*job.target_backend,
         &staged_path,
@@ -1266,6 +1380,22 @@ pub fn run_transfer(
         }
     };
     let published_snapshot = capture_snapshot(&*job.target_backend, &job.target_path)?;
+    if let Err(error) = verify_anchor_at_path(
+        &published_target_anchor,
+        &job.target_path,
+        published_snapshot.root_identity(),
+    ) {
+        return Err(rollback_file_publish(
+            job,
+            error,
+            &published_snapshot,
+            &expected_publication,
+            displaced.as_ref(),
+            backup.as_ref(),
+            control,
+            &mut progress_callback,
+        ));
+    }
     let published_publication = capture_publication_snapshot_controlled(
         &*job.target_backend,
         &job.target_path,
@@ -1296,6 +1426,11 @@ pub fn run_transfer(
     }
 
     let pre_delete = (|| {
+        verify_anchor_at_path(
+            &published_target_anchor,
+            &job.target_path,
+            published_snapshot.root_identity(),
+        )?;
         validate_snapshot(&*job.target_backend, &published_snapshot)?;
         control.wait_until_runnable()?;
         let current_source = stable_identity_now(&*job.source_backend, &job.source_path)?;
@@ -1480,8 +1615,48 @@ pub fn run_transfer(
                 &mut progress_callback,
             ));
         }
+        if let Err(error) = verify_anchor_at_path(
+            &published_target_anchor,
+            &job.target_path,
+            published_snapshot.root_identity(),
+        ) {
+            return Err(restore_quarantine_after_validation_failure(
+                job,
+                &quarantine,
+                &source_anchor,
+                &quarantined_snapshot,
+                &expected_quarantine_publication,
+                error,
+                &published_snapshot,
+                &expected_publication,
+                displaced.as_ref(),
+                backup.as_ref(),
+                control,
+                &mut progress_callback,
+            ));
+        }
         if let Err(error) = begin_finalizing(control, &mut progress_callback, source_identity.size)
         {
+            return Err(restore_quarantine_after_validation_failure(
+                job,
+                &quarantine,
+                &source_anchor,
+                &quarantined_snapshot,
+                &expected_quarantine_publication,
+                error,
+                &published_snapshot,
+                &expected_publication,
+                displaced.as_ref(),
+                backup.as_ref(),
+                control,
+                &mut progress_callback,
+            ));
+        }
+        if let Err(error) = verify_anchor_at_path(
+            &published_target_anchor,
+            &job.target_path,
+            published_snapshot.root_identity(),
+        ) {
             return Err(restore_quarantine_after_validation_failure(
                 job,
                 &quarantine,
@@ -1608,11 +1783,104 @@ pub fn run_transfer(
     Ok(TransferOutcome::Completed)
 }
 
+fn try_atomic_same_backend_directory_move(
+    job: &TransferJob,
+    control: &TransferControl,
+    progress_callback: &mut Option<&mut dyn FnMut(TransferProgress)>,
+) -> Result<Option<TransferOutcome>, SftpOpsError> {
+    if job.operation != TransferOperation::Move
+        || !Arc::ptr_eq(&job.source_backend, &job.target_backend)
+    {
+        return Ok(None);
+    }
+    let source_identity = stable_identity_now(&*job.source_backend, &job.source_path)?;
+    if source_identity.file_type != FileEntryType::Directory
+        || source_identity.object_id.is_empty()
+        || job.target_backend.entry_exists(&job.target_path)?
+    {
+        return Ok(None);
+    }
+    let Some(source_anchor) = job
+        .source_backend
+        .existing_entry_ownership_anchor(&job.source_path)?
+    else {
+        return Ok(None);
+    };
+
+    job.source_backend
+        .preflight_safe_mutation(&job.target_path, false)?;
+    control.begin_finalizing()?;
+    let progress = TransferProgress {
+        transferred: 0,
+        total: 0,
+        bytes_per_second: 0,
+        eta: None,
+        phase: TransferPhase::Finalizing,
+    };
+    control.record(progress);
+    if let Some(callback) = progress_callback.as_mut() {
+        callback(progress);
+    }
+    job.source_backend
+        .rename_if_matches(&job.source_path, &job.target_path, source_anchor)?;
+
+    let target_identity =
+        stable_identity_now(&*job.target_backend, &job.target_path).map_err(|error| {
+            SftpOpsError::RecoveryRequired {
+                message: format!(
+                    "Atomic directory move destination verification failed for {} -> {}: {error}",
+                    job.source_path.display(),
+                    job.target_path.display()
+                ),
+                recovery_id: None,
+                paths: vec![job.source_path.clone(), job.target_path.clone()],
+                committed: true,
+            }
+        })?;
+    let source_absent = !job
+        .source_backend
+        .entry_exists(&job.source_path)
+        .map_err(|error| SftpOpsError::RecoveryRequired {
+            message: format!(
+                "Atomic directory move source verification failed for {} -> {}: {error}",
+                job.source_path.display(),
+                job.target_path.display()
+            ),
+            recovery_id: None,
+            paths: vec![job.source_path.clone(), job.target_path.clone()],
+            committed: true,
+        })?;
+    if source_absent
+        && target_identity.file_type == FileEntryType::Directory
+        && target_identity.object_id == source_identity.object_id
+    {
+        return Ok(Some(TransferOutcome::Completed));
+    }
+    Err(SftpOpsError::RecoveryRequired {
+        message: format!(
+            "Atomic directory move could not be verified: {} -> {}",
+            job.source_path.display(),
+            job.target_path.display()
+        ),
+        recovery_id: None,
+        paths: vec![job.source_path.clone(), job.target_path.clone()],
+        committed: true,
+    })
+}
+
 pub fn run_directory_transfer(
     job: &TransferJob,
     control: &TransferControl,
     mut progress_callback: Option<&mut dyn FnMut(TransferProgress)>,
 ) -> Result<TransferOutcome, SftpOpsError> {
+    if Arc::ptr_eq(&job.source_backend, &job.target_backend) {
+        super::sftp_backend::validate_copy_destination(&job.source_path, &job.target_path, true)?;
+    }
+    if let Some(outcome) =
+        try_atomic_same_backend_directory_move(job, control, &mut progress_callback)?
+    {
+        return Ok(outcome);
+    }
     let source_snapshot = capture_snapshot(&*job.source_backend, &job.source_path)?;
     if source_snapshot.root_identity().file_type != FileEntryType::Directory {
         return Err(SftpOpsError::Operation(format!(
@@ -1628,7 +1896,19 @@ pub fn run_directory_transfer(
         &mut progress_callback,
         TransferPhase::Verifying,
     )?;
+    if original_target.is_some() && job.conflict == ConflictDecision::Rename {
+        let mut renamed_job = job.clone();
+        renamed_job.target_path =
+            available_conflict_name(&*job.target_backend, &job.target_path, true)?;
+        return run_directory_transfer(&renamed_job, control, progress_callback);
+    }
     if original_target.is_some() && job.conflict == ConflictDecision::Skip {
+        return Ok(TransferOutcome::Skipped);
+    }
+    // A directory has no single recency value that can safely decide whether
+    // replacing its entire tree is newer. Keep an existing target intact;
+    // NewerOnly remains an exact, per-file policy.
+    if original_target.is_some() && job.conflict == ConflictDecision::NewerOnly {
         return Ok(TransferOutcome::Skipped);
     }
     if original_target
@@ -1661,6 +1941,7 @@ pub fn run_directory_transfer(
     let initial = TransferProgress {
         transferred: 0,
         total,
+        bytes_per_second: 0,
         eta: None,
         phase: TransferPhase::Transferring,
     };
@@ -1770,6 +2051,20 @@ pub fn run_directory_transfer(
             &mut progress_callback,
         );
     }
+    let published_target_anchor = match owned_root_anchor(&stage_ownership, &staged_path) {
+        Ok(anchor) => anchor,
+        Err(error) => {
+            return cleanup_failed_stage(
+                error,
+                job.target_backend.clone(),
+                &staged_path,
+                stage_ownership.clone(),
+                false,
+                control,
+                &mut progress_callback,
+            );
+        }
+    };
     let staged_publication = match capture_publication_snapshot_controlled(
         &*job.target_backend,
         &staged_path,
@@ -2075,6 +2370,22 @@ pub fn run_directory_transfer(
         }
     };
     let published_snapshot = capture_snapshot(&*job.target_backend, &job.target_path)?;
+    if let Err(error) = verify_anchor_at_path(
+        &published_target_anchor,
+        &job.target_path,
+        published_snapshot.root_identity(),
+    ) {
+        return Err(rollback_directory_publish(
+            job,
+            error,
+            &published_snapshot,
+            &expected_publication,
+            displaced.as_ref(),
+            backup.as_ref(),
+            control,
+            &mut progress_callback,
+        ));
+    }
     let published_publication = capture_publication_snapshot_controlled(
         &*job.target_backend,
         &job.target_path,
@@ -2111,6 +2422,11 @@ pub fn run_directory_transfer(
             .clone();
         let before_quarantine = (|| {
             control.wait_until_runnable()?;
+            verify_anchor_at_path(
+                &published_target_anchor,
+                &job.target_path,
+                published_snapshot.root_identity(),
+            )?;
             validate_snapshot(&*job.source_backend, &source_snapshot)?;
             if capture_publication_snapshot_controlled(
                 &*job.source_backend,
@@ -2281,6 +2597,26 @@ pub fn run_directory_transfer(
                 &mut progress_callback,
             ));
         }
+        if let Err(error) = verify_anchor_at_path(
+            &published_target_anchor,
+            &job.target_path,
+            published_snapshot.root_identity(),
+        ) {
+            return Err(restore_quarantine_after_validation_failure(
+                job,
+                &quarantine,
+                &source_anchor,
+                &quarantined_snapshot,
+                &expected_quarantine_publication,
+                error,
+                &published_snapshot,
+                &expected_publication,
+                displaced.as_ref(),
+                backup.as_ref(),
+                control,
+                &mut progress_callback,
+            ));
+        }
         if let Err(error) = validate_snapshot(&*job.source_backend, &quarantined_snapshot) {
             return Err(restore_quarantine_after_validation_failure(
                 job,
@@ -2298,6 +2634,26 @@ pub fn run_directory_transfer(
             ));
         }
         if let Err(error) = begin_finalizing(control, &mut progress_callback, total) {
+            return Err(restore_quarantine_after_validation_failure(
+                job,
+                &quarantine,
+                &source_anchor,
+                &quarantined_snapshot,
+                &expected_quarantine_publication,
+                error,
+                &published_snapshot,
+                &expected_publication,
+                displaced.as_ref(),
+                backup.as_ref(),
+                control,
+                &mut progress_callback,
+            ));
+        }
+        if let Err(error) = verify_anchor_at_path(
+            &published_target_anchor,
+            &job.target_path,
+            published_snapshot.root_identity(),
+        ) {
             return Err(restore_quarantine_after_validation_failure(
                 job,
                 &quarantine,
@@ -3791,6 +4147,38 @@ fn same_reserved_object(
         && expected.object_id == actual.object_id
 }
 
+fn owned_root_anchor(
+    ownership: &PathOwnership,
+    path: &Path,
+) -> Result<Arc<dyn BackendOwnershipAnchor>, SftpOpsError> {
+    ownership
+        .owned
+        .get(path)
+        .map(|entry| entry.anchor.clone())
+        .ok_or_else(|| {
+            SftpOpsError::Operation(format!(
+                "Transfer root has no immutable ownership anchor at {}",
+                path.display()
+            ))
+        })
+}
+
+fn verify_anchor_at_path(
+    anchor: &Arc<dyn BackendOwnershipAnchor>,
+    path: &Path,
+    expected: &super::sftp_backend::StableEntryIdentity,
+) -> Result<(), SftpOpsError> {
+    let actual = anchor.identity()?;
+    if anchor.matches_path(path)? && same_reserved_object(expected, &actual) {
+        Ok(())
+    } else {
+        Err(SftpOpsError::Operation(format!(
+            "Published transfer ownership changed at {}",
+            path.display()
+        )))
+    }
+}
+
 fn refresh_owned_path(
     backend: &dyn SftpBackend,
     path: &Path,
@@ -4284,10 +4672,12 @@ fn begin_finalizing(
     progress_callback: &mut Option<&mut dyn FnMut(TransferProgress)>,
     total: u64,
 ) -> Result<(), SftpOpsError> {
+    let bytes_per_second = control.progress().bytes_per_second;
     control.begin_finalizing()?;
     let progress = TransferProgress {
         transferred: total,
         total,
+        bytes_per_second,
         eta: None,
         phase: TransferPhase::Finalizing,
     };
@@ -4303,10 +4693,12 @@ fn begin_required_cleanup(
     progress_callback: &mut Option<&mut dyn FnMut(TransferProgress)>,
     total: u64,
 ) -> Result<(), SftpOpsError> {
+    let bytes_per_second = control.progress().bytes_per_second;
     control.begin_finalizing()?;
     let progress = TransferProgress {
         transferred: total,
         total,
+        bytes_per_second,
         eta: None,
         phase: TransferPhase::Finalizing,
     };
@@ -4386,6 +4778,8 @@ fn cleanup_owned_manifest(
     let unresolved = ownership.unresolved.iter().cloned().collect::<Vec<_>>();
     for path in unresolved {
         if let Some(replacements) = backend.retry_unresolved_recovery(&path)? {
+            let source_preserved = backend.take_recovery_source_preserved(&path);
+            let source_restored = backend.take_recovery_source_restored(&path);
             ownership.unresolved.remove(&path);
             let mut anchored = None;
             for replacement in &replacements {
@@ -4408,6 +4802,13 @@ fn cleanup_owned_manifest(
                 }
             } else {
                 ownership.unresolved.extend(replacements);
+            }
+            if source_preserved {
+                outcome = RecoveryOutcome::DestinationCommittedSourcePreserved;
+            } else if source_restored
+                && outcome != RecoveryOutcome::DestinationCommittedSourcePreserved
+            {
+                outcome = RecoveryOutcome::SourceRestored;
             }
             continue;
         }

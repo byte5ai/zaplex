@@ -71,6 +71,104 @@ pub fn build_ssh_args(server: &SshServerInfo) -> Vec<String> {
     args
 }
 
+/// The only multiplexer attach modes Zaplex may issue over classic SSH.
+///
+/// Screen's attached and detached modes are intentionally separate: `-x`
+/// preserves an existing display, while `-r` resumes a detached session. The
+/// destructive `-d`/`-D` and session-creating `-R`/`-RR` variants are not
+/// representable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MultiplexerAttachMode {
+    Tmux,
+    ScreenAttached,
+    ScreenDetached,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidMultiplexerTarget;
+
+impl std::fmt::Display for InvalidMultiplexerTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "multiplexer target must be non-empty, must not start with '-', and must contain no control characters",
+        )
+    }
+}
+
+impl std::error::Error for InvalidMultiplexerTarget {}
+
+fn build_multiplexer_ssh_args(
+    server: &SshServerInfo,
+    mode: MultiplexerAttachMode,
+    target: &str,
+) -> Result<Vec<String>, InvalidMultiplexerTarget> {
+    if target.is_empty() || target.starts_with('-') || target.chars().any(char::is_control) {
+        return Err(InvalidMultiplexerTarget);
+    }
+
+    let (program, attach_flag) = match mode {
+        MultiplexerAttachMode::Tmux => ("tmux", "attach-session"),
+        MultiplexerAttachMode::ScreenAttached => ("screen", "-x"),
+        MultiplexerAttachMode::ScreenDetached => ("screen", "-r"),
+    };
+    let remote_argv = [
+        "env",
+        "ZAPLEX_SESSION=1",
+        "BYOBU_DISABLE=1",
+        "LC_BYOBU=0",
+        program,
+        attach_flag,
+        if mode == MultiplexerAttachMode::Tmux {
+            "-t"
+        } else {
+            target
+        },
+        target,
+    ];
+    let remote_argv = if mode == MultiplexerAttachMode::Tmux {
+        remote_argv.as_slice()
+    } else {
+        &remote_argv[..remote_argv.len() - 1]
+    };
+    let remote_command = remote_argv
+        .iter()
+        .map(|arg| shell_escape::unix::escape(Cow::Borrowed(*arg)).to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let mut args = build_ssh_args(server);
+    let destination_delimiter = args
+        .iter()
+        .position(|arg| arg == "--")
+        .expect("SSH args always contain a destination delimiter");
+    args.splice(
+        destination_delimiter..destination_delimiter,
+        [
+            "-o".to_string(),
+            "RequestTTY=force".to_string(),
+            "-o".to_string(),
+            "SetEnv=ZAPLEX_SESSION=1 BYOBU_DISABLE=1 LC_BYOBU=0".to_string(),
+        ],
+    );
+    args.push(remote_command);
+    Ok(args)
+}
+
+/// Build a classic SSH command that attaches one exact existing multiplexer
+/// session. The target is shell-quoted once for the remote login shell, then the
+/// complete SSH argv is independently quoted for Zaplex's local shell.
+pub fn build_multiplexer_ssh_command_line(
+    server: &SshServerInfo,
+    mode: MultiplexerAttachMode,
+    target: &str,
+) -> Result<String, InvalidMultiplexerTarget> {
+    Ok(build_multiplexer_ssh_args(server, mode, target)?
+        .iter()
+        .map(|arg| shell_escape::unix::escape(Cow::Borrowed(arg.as_str())).to_string())
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
 pub fn build_ssh_command_line(server: &SshServerInfo) -> String {
     let args = build_ssh_args(server);
     args.iter()
@@ -775,7 +873,10 @@ impl AskpassSession {
             .write(true)
             .create_new(true)
             .open(&password_path)?;
-        if let Err(e) = pw.write_all(password.as_bytes()).and_then(|()| pw.sync_all()) {
+        if let Err(e) = pw
+            .write_all(password.as_bytes())
+            .and_then(|()| pw.sync_all())
+        {
             let _ = std::fs::remove_file(&password_path);
             return Err(e);
         }
@@ -791,7 +892,10 @@ impl AskpassSession {
                 return Err(e);
             }
         };
-        if let Err(e) = script.write_all(body.as_bytes()).and_then(|()| script.sync_all()) {
+        if let Err(e) = script
+            .write_all(body.as_bytes())
+            .and_then(|()| script.sync_all())
+        {
             let _ = std::fs::remove_file(&password_path);
             let _ = std::fs::remove_file(&script_path);
             return Err(e);
@@ -843,7 +947,10 @@ impl AskpassSession {
             .create_new(true)
             .mode(0o600)
             .open(&password_path)?;
-        if let Err(e) = secret.write_all(password.as_bytes()).and_then(|()| secret.sync_all()) {
+        if let Err(e) = secret
+            .write_all(password.as_bytes())
+            .and_then(|()| secret.sync_all())
+        {
             let _ = std::fs::remove_file(&password_path);
             return Err(e);
         }
@@ -860,7 +967,10 @@ impl AskpassSession {
                 return Err(e);
             }
         };
-        if let Err(e) = script.write_all(body.as_bytes()).and_then(|()| script.sync_all()) {
+        if let Err(e) = script
+            .write_all(body.as_bytes())
+            .and_then(|()| script.sync_all())
+        {
             let _ = std::fs::remove_file(&password_path);
             let _ = std::fs::remove_file(&script_path);
             return Err(e);

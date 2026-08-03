@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn empty_host_is_rejected_everywhere() {
+fn empty_host_is_rejected_by_save_test_and_connect() {
     for endpoint_use in [EndpointUse::Save, EndpointUse::Test, EndpointUse::Connect] {
         assert_eq!(
             validate_ssh_endpoint(endpoint_use, "   ", "22"),
@@ -11,7 +11,7 @@ fn empty_host_is_rejected_everywhere() {
 }
 
 #[test]
-fn invalid_port_never_falls_back_to_22() {
+fn port_zero_and_out_of_range_are_rejected_without_fallback() {
     for port in ["", "0", "65536", "not-a-port"] {
         for endpoint_use in [EndpointUse::Save, EndpointUse::Test, EndpointUse::Connect] {
             assert_eq!(

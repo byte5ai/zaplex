@@ -14,6 +14,8 @@ use super::super::protocol::RequestId;
 use super::super::server_buffer_tracker::ServerBufferTracker;
 use super::{execute_agent_process_signal_with, PendingFileOps, ServerModel};
 use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
+#[cfg(unix)]
+use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 
 fn test_model() -> ServerModel {
     ServerModel {
@@ -34,6 +36,11 @@ fn test_model() -> ServerModel {
         agent_pty_bindings: Default::default(),
         #[cfg(unix)]
         next_pty_generation: 1,
+        #[cfg(unix)]
+        safe_files: super::super::safe_file::SafeFileServer::unavailable_for_test(),
+        agent_transcript_cache: std::sync::Arc::new(std::sync::Mutex::new(
+            zaplex_cockpit::TranscriptScanCache::default(),
+        )),
     }
 }
 
@@ -86,6 +93,20 @@ fn empty_initialize_preserves_existing_auth_token() {
     );
 
     assert_eq!(model.auth_token(), Some("initial-token"));
+}
+
+#[cfg(unix)]
+#[test]
+fn multiplexer_inventory_requires_client_capability_negotiation() {
+    let mut model = test_model();
+    let conn = uuid::Uuid::new_v4();
+
+    assert!(!model.client_supports_multiplexer_inventory(conn));
+    model.connection_features.insert(
+        conn,
+        HashSet::from([FEATURE_MULTIPLEXER_INVENTORY_V1.to_string()]),
+    );
+    assert!(model.client_supports_multiplexer_inventory(conn));
 }
 
 #[test]
@@ -365,7 +386,10 @@ fn resolve_path_reports_file_metadata() {
         success.canonical_path,
         fs::canonicalize(&file_path).unwrap().to_string_lossy()
     );
-    assert_eq!(success.kind, super::super::proto::FileSystemEntryKind::File as i32);
+    assert_eq!(
+        success.kind,
+        super::super::proto::FileSystemEntryKind::File as i32
+    );
     assert_eq!(success.size_bytes, Some(5));
 }
 
@@ -481,6 +505,7 @@ fn create_directory_creates_nested_directories() {
 
 #[cfg(unix)]
 mod daemon_session {
+    use super::super::HOST_RING_CAP_BYTES;
     use super::{binding_identity, binding_status, test_model};
     use crate::remote_server::proto::{
         client_message, server_message, AttachSession, BindAgentPty, ClientMessage, CloseSession,
@@ -531,6 +556,30 @@ mod daemon_session {
         match futures::future::select(std::pin::pin!(collect), std::pin::pin!(timer)).await {
             Either::Left((found, _)) => found,
             Either::Right(_) => false,
+        }
+    }
+
+    async fn collect_output_until(
+        rx: &async_channel::Receiver<ServerMessage>,
+        needle: &[u8],
+        total: Duration,
+    ) -> Option<Vec<u8>> {
+        let collect = async {
+            let mut output = Vec::new();
+            loop {
+                let message = rx.recv().await.ok()?;
+                if let Some(server_message::Message::SessionOutput(chunk)) = message.message {
+                    output.extend_from_slice(&chunk.bytes);
+                    if output.windows(needle.len()).any(|window| window == needle) {
+                        return Some(output);
+                    }
+                }
+            }
+        };
+        let timer = async_io::Timer::after(total);
+        match futures::future::select(std::pin::pin!(collect), std::pin::pin!(timer)).await {
+            Either::Left((output, _)) => output,
+            Either::Right(_) => None,
         }
     }
 
@@ -587,10 +636,14 @@ mod daemon_session {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
             let conn_id = uuid::Uuid::new_v4();
-            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
 
             // OpenSession -> spawns PTY+shell, replies SessionOpened.
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_session_msg(), ctx)
+            });
 
             let session_id = {
                 let msg = recv_deadline(&conn_rx, Duration::from_secs(10))
@@ -642,6 +695,94 @@ mod daemon_session {
                 wait_for_exit(&conn_rx, &session_id, Duration::from_secs(10)).await,
                 "expected SessionExited after CloseSession"
             );
+        });
+    }
+
+    /// Regression for #132: the daemon writes both the bootstrap and the
+    /// post-bootstrap startup command into a remote PTY. Those control inputs
+    /// may execute, but their source bytes must never become observable
+    /// SessionOutput, even when the shell has restored ECHO before startup.
+    #[test]
+    fn bootstrap_and_startup_input_bytes_are_not_observable_output() {
+        App::test((), |mut app| async move {
+            const BOOTSTRAPPED_HEX: &[u8] = b"426f6f747374726170706564";
+            const BOOTSTRAP_SOURCE: &[u8] = b"read -r -d '' ZAPLEX_BOOTSTRAP_VAR";
+            const STARTUP_SOURCE: &[u8] = b"ZAPLEX_STARTUP_ECHO_MUST_NOT_RENDER";
+            const STARTUP_RESULT: &[u8] = b"ZAPLEX_STARTUP_EXECUTED";
+
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_session_msg(), ctx)
+            });
+
+            let mut observed = Vec::new();
+            let session_id = loop {
+                let message = recv_deadline(&conn_rx, Duration::from_secs(10))
+                    .await
+                    .expect("session opened before the deadline");
+                match message.message {
+                    Some(server_message::Message::SessionOpened(opened)) => {
+                        break opened.session_id;
+                    }
+                    Some(server_message::Message::SessionOutput(output)) => {
+                        observed.extend_from_slice(&output.bytes);
+                    }
+                    _ => {}
+                }
+            };
+            if !observed
+                .windows(BOOTSTRAPPED_HEX.len())
+                .any(|window| window == BOOTSTRAPPED_HEX)
+            {
+                observed.extend(
+                    collect_output_until(&conn_rx, BOOTSTRAPPED_HEX, Duration::from_secs(20))
+                        .await
+                        .expect("daemon shell reached the Bootstrapped hook"),
+                );
+            }
+            assert!(
+                !observed
+                    .windows(BOOTSTRAP_SOURCE.len())
+                    .any(|window| window == BOOTSTRAP_SOURCE),
+                "bootstrap source bytes must not be visible terminal output"
+            );
+
+            let startup = format!(
+                "printf 'ZAPLEX_STARTUP_%s\\n' EXECUTED # {}",
+                String::from_utf8_lossy(STARTUP_SOURCE)
+            );
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id,
+                    startup_input_msg(
+                        "hidden-startup-request",
+                        &session_id,
+                        "hidden-startup-command",
+                        format!("{startup}\n").as_bytes(),
+                    ),
+                    ctx,
+                )
+            });
+
+            let startup_output =
+                collect_output_until(&conn_rx, STARTUP_RESULT, Duration::from_secs(15))
+                    .await
+                    .expect("startup command executed and produced its result");
+            assert!(
+                !startup_output
+                    .windows(STARTUP_SOURCE.len())
+                    .any(|window| window == STARTUP_SOURCE),
+                "startup command source bytes must not be visible terminal output"
+            );
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, close_msg(&session_id), ctx)
+            });
         });
     }
 
@@ -704,19 +845,24 @@ mod daemon_session {
     /// keystroke. The daemon acknowledges every accepted request while using
     /// the stable command id to enqueue identical retries exactly once.
     #[test]
-    fn lost_ack_retry_is_deduplicated_by_command_id() {
+    fn lost_ack_after_execution_is_deduplicated_on_retry() {
         App::test((), |mut app| async move {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
             let conn_id = uuid::Uuid::new_v4();
-            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_session_msg(), ctx)
+            });
             let session_id = recv_session_opened(&conn_rx).await.expect("session opened");
 
             // Replace only the ordered writer queue with a probe. This keeps the
             // real server routing and per-session state while making the number
             // and exact contents of accepted writes deterministic.
-            let (writer_tx, writer_rx) = async_channel::unbounded::<Vec<u8>>();
+            let (writer_tx, writer_rx) =
+                async_channel::unbounded::<crate::remote_server::session_host::PtyInput>();
             model.update(&mut app, |m, _ctx| {
                 m.sessions.get_mut(&session_id).unwrap().input_tx = writer_tx;
             });
@@ -780,9 +926,9 @@ mod daemon_session {
                 "a different command id is accepted independently"
             );
 
-            assert_eq!(writer_rx.recv().await.unwrap(), bytes);
+            assert_eq!(writer_rx.recv().await.unwrap().into_bytes(), bytes);
             assert_eq!(
-                writer_rx.recv().await.unwrap(),
+                writer_rx.recv().await.unwrap().into_bytes(),
                 b"claude --resume another-session\n"
             );
             assert!(
@@ -796,20 +942,79 @@ mod daemon_session {
         });
     }
 
-    /// A command id becomes complete only after the ordered writer accepted its
-    /// bytes. Recording it before `try_send` succeeds would turn a transient
-    /// queue failure into permanent command loss on retry.
     #[test]
-    fn failed_startup_enqueue_is_not_acknowledged_or_deduplicated() {
+    fn malformed_startup_input_is_rejected_before_enqueue() {
         App::test((), |mut app| async move {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
             let conn_id = uuid::Uuid::new_v4();
-            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_session_msg(), ctx)
+            });
             let session_id = recv_session_opened(&conn_rx).await.expect("session opened");
 
-            let (failed_tx, failed_rx) = async_channel::unbounded::<Vec<u8>>();
+            let (writer_tx, writer_rx) =
+                async_channel::unbounded::<crate::remote_server::session_host::PtyInput>();
+            model.update(&mut app, |m, _ctx| {
+                m.sessions.get_mut(&session_id).unwrap().input_tx = writer_tx;
+            });
+
+            for (index, bytes) in [
+                &b""[..],
+                &b"missing-final-newline"[..],
+                &b"first\nsecond\n"[..],
+                &b"first\r\nsecond\n"[..],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let request_id = format!("malformed-{index}");
+                let command_id = format!("malformed-command-{index}");
+                model.update(&mut app, |m, ctx| {
+                    m.handle_message(
+                        conn_id,
+                        startup_input_msg(&request_id, &session_id, &command_id, bytes),
+                        ctx,
+                    )
+                });
+                assert_eq!(
+                    recv_startup_command_ack(&conn_rx).await,
+                    Some((request_id, session_id.clone(), command_id, false,))
+                );
+            }
+
+            assert!(
+                writer_rx.try_recv().is_err(),
+                "malformed startup input must never reach the PTY writer"
+            );
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, close_msg(&session_id), ctx)
+            });
+        });
+    }
+
+    /// A command id becomes complete only after the ordered writer accepted its
+    /// bytes. Recording it before `try_send` succeeds would turn a transient
+    /// queue failure into permanent command loss on retry.
+    #[test]
+    fn startup_command_is_retained_when_writer_is_closed() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_session_msg(), ctx)
+            });
+            let session_id = recv_session_opened(&conn_rx).await.expect("session opened");
+
+            let (failed_tx, failed_rx) =
+                async_channel::unbounded::<crate::remote_server::session_host::PtyInput>();
             drop(failed_rx);
             model.update(&mut app, |m, _ctx| {
                 m.sessions.get_mut(&session_id).unwrap().input_tx = failed_tx;
@@ -836,7 +1041,8 @@ mod daemon_session {
 
             // Repair the writer and retry the same stable command id. Acceptance
             // proves the failed attempt did not poison the deduplication ledger.
-            let (healthy_tx, healthy_rx) = async_channel::unbounded::<Vec<u8>>();
+            let (healthy_tx, healthy_rx) =
+                async_channel::unbounded::<crate::remote_server::session_host::PtyInput>();
             model.update(&mut app, |m, _ctx| {
                 m.sessions.get_mut(&session_id).unwrap().input_tx = healthy_tx;
             });
@@ -857,7 +1063,7 @@ mod daemon_session {
                     true,
                 ))
             );
-            assert_eq!(healthy_rx.recv().await.unwrap(), bytes);
+            assert_eq!(healthy_rx.recv().await.unwrap().into_bytes(), bytes);
             assert!(
                 healthy_rx.try_recv().is_err(),
                 "the successful retry is enqueued exactly once"
@@ -875,11 +1081,16 @@ mod daemon_session {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
             let conn_id = uuid::Uuid::new_v4();
-            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_session_msg(), ctx)
+            });
             let session_id = recv_session_opened(&conn_rx).await.expect("session opened");
 
-            let (writer_tx, writer_rx) = async_channel::unbounded::<Vec<u8>>();
+            let (writer_tx, writer_rx) =
+                async_channel::unbounded::<crate::remote_server::session_host::PtyInput>();
             model.update(&mut app, |m, _ctx| {
                 m.sessions.get_mut(&session_id).unwrap().input_tx = writer_tx;
             });
@@ -891,12 +1102,7 @@ mod daemon_session {
                 model.update(&mut app, |m, ctx| {
                     m.handle_message(
                         conn_id,
-                        startup_input_msg(
-                            &request_id,
-                            &session_id,
-                            &command_id,
-                            bytes.as_bytes(),
-                        ),
+                        startup_input_msg(&request_id, &session_id, &command_id, bytes.as_bytes()),
                         ctx,
                     )
                 });
@@ -938,7 +1144,7 @@ mod daemon_session {
                     ))
                 );
                 assert_eq!(
-                    writer_rx.try_recv().unwrap(),
+                    writer_rx.try_recv().unwrap().into_bytes(),
                     format!("command-{index}\n").into_bytes()
                 );
             }
@@ -1005,7 +1211,8 @@ mod daemon_session {
 
             let (second_tx, _second_rx) = async_channel::unbounded::<ServerMessage>();
             let second = uuid::Uuid::new_v4();
-            let (probe_tx, probe_rx) = async_channel::unbounded::<Vec<u8>>();
+            let (probe_tx, probe_rx) =
+                async_channel::unbounded::<crate::remote_server::session_host::PtyInput>();
             model.update(&mut app, |m, ctx| {
                 m.register_connection(second, second_tx, ctx)
             });
@@ -1107,8 +1314,7 @@ mod daemon_session {
                 };
                 assert!(error.message.contains("foreground agent changed"));
                 assert_eq!(
-                    m.sessions[&session_id].attached,
-                    first,
+                    m.sessions[&session_id].attached, first,
                     "a rejected stale row must not transfer session ownership"
                 );
                 assert_eq!(
@@ -1156,7 +1362,7 @@ mod daemon_session {
                     None
                 );
                 assert_eq!(
-                    probe_rx.try_recv(),
+                    probe_rx.try_recv().map(|input| input.into_bytes()),
                     Ok(b"owned".to_vec()),
                     "only the connection that completed attach may write to the PTY"
                 );
@@ -1225,8 +1431,12 @@ mod daemon_session {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
             let conn_id = uuid::Uuid::new_v4();
-            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_session_msg(), ctx)
+            });
 
             let session_id = match recv_deadline(&conn_rx, Duration::from_secs(10)).await {
                 Some(m) => match m.message {
@@ -1258,7 +1468,9 @@ mod daemon_session {
             // must contain both pre-drop and while-detached output.
             let (conn_tx2, conn_rx2) = async_channel::unbounded::<ServerMessage>();
             let conn_id2 = uuid::Uuid::new_v4();
-            model.update(&mut app, |m, ctx| m.register_connection(conn_id2, conn_tx2, ctx));
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id2, conn_tx2, ctx)
+            });
 
             let mut replay_ok = false;
             for _ in 0..50 {
@@ -1289,7 +1501,9 @@ mod daemon_session {
                 "live output should re-route to the re-attached connection"
             );
 
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id2, close_msg(&session_id), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id2, close_msg(&session_id), ctx)
+            });
         });
     }
 
@@ -1356,7 +1570,9 @@ mod daemon_session {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
             let conn_id = uuid::Uuid::new_v4();
-            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
 
             // Real, existing working directories — the daemon chdirs the PTY in.
             let dir_a = tempfile::tempdir().unwrap();
@@ -1364,16 +1580,30 @@ mod daemon_session {
             let path_a = dir_a.path().to_string_lossy().to_string();
             let path_b = dir_b.path().to_string_lossy().to_string();
 
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_in(&path_a), ctx));
-            let id_a = recv_session_opened(&conn_rx).await.expect("session A opened");
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_in(&path_b), ctx));
-            let id_b = recv_session_opened(&conn_rx).await.expect("session B opened");
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in(&path_a), ctx)
+            });
+            let id_a = recv_session_opened(&conn_rx)
+                .await
+                .expect("session A opened");
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in(&path_b), ctx)
+            });
+            let id_b = recv_session_opened(&conn_rx)
+                .await
+                .expect("session B opened");
             assert_ne!(id_a, id_b);
 
             // ListSessions reports both, each with its cwd, all alive.
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, list_msg(), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, list_msg(), ctx)
+            });
             let list = recv_session_list(&conn_rx).await.expect("SessionList");
             assert_eq!(list.sessions.len(), 2, "two sessions listed");
+            assert_eq!(
+                list.host_ring_cap_bytes, HOST_RING_CAP_BYTES as u64,
+                "the UI must receive the daemon's actual host-wide ring cap"
+            );
             let by_id: std::collections::HashMap<&str, &str> = list
                 .sessions
                 .iter()
@@ -1384,13 +1614,21 @@ mod daemon_session {
             assert!(list.sessions.iter().all(|s| s.alive));
 
             // Closing one shrinks the list to the survivor.
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, close_msg(&id_a), ctx));
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, list_msg(), ctx));
-            let list2 = recv_session_list(&conn_rx).await.expect("SessionList after close");
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, close_msg(&id_a), ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, list_msg(), ctx)
+            });
+            let list2 = recv_session_list(&conn_rx)
+                .await
+                .expect("SessionList after close");
             assert_eq!(list2.sessions.len(), 1);
             assert_eq!(list2.sessions[0].session_id, id_b);
 
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, close_msg(&id_b), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, close_msg(&id_b), ctx)
+            });
         });
     }
 
@@ -1402,14 +1640,24 @@ mod daemon_session {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
             let conn_id = uuid::Uuid::new_v4();
-            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
 
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().to_string_lossy().to_string();
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_in(&path), ctx));
-            let id1 = recv_session_opened(&conn_rx).await.expect("session 1 opened");
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_in(&path), ctx));
-            let id2 = recv_session_opened(&conn_rx).await.expect("session 2 opened");
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in(&path), ctx)
+            });
+            let id1 = recv_session_opened(&conn_rx)
+                .await
+                .expect("session 1 opened");
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in(&path), ctx)
+            });
+            let id2 = recv_session_opened(&conn_rx)
+                .await
+                .expect("session 2 opened");
 
             // Drop the connection: both sessions detach but keep running (the
             // grace guard keeps the daemon up).
@@ -1436,15 +1684,21 @@ mod daemon_session {
             });
             let mut reaped2 = 0;
             for _ in 0..50 {
-                reaped2 =
-                    model.update(&mut app, |m, _ctx| m.gc_sessions(1_000_000_000_000, u64::MAX, 0));
+                reaped2 = model.update(&mut app, |m, _ctx| {
+                    m.gc_sessions(1_000_000_000_000, u64::MAX, 0)
+                });
                 if reaped2 == 1 {
                     break;
                 }
                 async_io::Timer::after(Duration::from_millis(100)).await;
             }
-            assert_eq!(reaped2, 1, "over-cap detached session reaped once it has ring bytes");
-            model.update(&mut app, |m, _ctx| assert!(m.sessions.is_empty(), "all sessions reaped"));
+            assert_eq!(
+                reaped2, 1,
+                "over-cap detached session reaped once it has ring bytes"
+            );
+            model.update(&mut app, |m, _ctx| {
+                assert!(m.sessions.is_empty(), "all sessions reaped")
+            });
         });
     }
 
@@ -1458,11 +1712,15 @@ mod daemon_session {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
             let conn_a = uuid::Uuid::new_v4();
-            model.update(&mut app, |m, ctx| m.register_connection(conn_a, conn_tx, ctx));
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_a, conn_tx, ctx)
+            });
 
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().to_string_lossy().to_string();
-            model.update(&mut app, |m, ctx| m.handle_message(conn_a, open_in(&path), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_a, open_in(&path), ctx)
+            });
             let id = recv_session_opened(&conn_rx).await.expect("session opened");
 
             // A newer tab (conn_b) adopts the session — it now owns the attachment.
@@ -1472,7 +1730,9 @@ mod daemon_session {
             });
 
             // A stale detach from the OLD connection must NOT clear it.
-            model.update(&mut app, |m, ctx| m.handle_message(conn_a, detach_msg(&id), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_a, detach_msg(&id), ctx)
+            });
             model.update(&mut app, |m, _| {
                 assert_eq!(
                     m.sessions.get(&id).unwrap().attached,
@@ -1482,7 +1742,9 @@ mod daemon_session {
             });
 
             // The current owner's detach does clear it.
-            model.update(&mut app, |m, ctx| m.handle_message(conn_b, detach_msg(&id), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_b, detach_msg(&id), ctx)
+            });
             model.update(&mut app, |m, _| {
                 assert_eq!(
                     m.sessions.get(&id).unwrap().attached,
@@ -1504,11 +1766,15 @@ mod daemon_session {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
             let conn_id = uuid::Uuid::new_v4();
-            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
 
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().to_string_lossy().to_string();
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_in(&path), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in(&path), ctx)
+            });
             let _id = recv_session_opened(&conn_rx).await.expect("session opened");
 
             // Client drops but the session keeps running: no grace timer yet.
@@ -1561,8 +1827,12 @@ mod daemon_session {
             let model = app.add_singleton_model(|_ctx| test_model());
             let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
             let conn_id = uuid::Uuid::new_v4();
-            model.update(&mut app, |m, ctx| m.register_connection(conn_id, conn_tx, ctx));
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, open_session_msg(), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_session_msg(), ctx)
+            });
             let session_id = recv_session_opened(&conn_rx).await.expect("session opened");
 
             // (1) The integration script runs on open and emits the InitShell DCS
@@ -1575,7 +1845,11 @@ mod daemon_session {
 
             // (2) The shell carries the Zaplex terminal identity env.
             model.update(&mut app, |m, ctx| {
-                m.handle_message(conn_id, input_msg(&session_id, b"echo TP=$TERM_PROGRAM\n"), ctx)
+                m.handle_message(
+                    conn_id,
+                    input_msg(&session_id, b"echo TP=$TERM_PROGRAM\n"),
+                    ctx,
+                )
             });
             assert!(
                 wait_for_output(&conn_rx, b"TP=ZaplexTerminal", Duration::from_secs(20)).await,
@@ -1587,14 +1861,20 @@ mod daemon_session {
             // it joins the user's existing session group and cross-contaminates
             // I/O. `BYOBU_DISABLE=1` must be set in the spawn env.
             model.update(&mut app, |m, ctx| {
-                m.handle_message(conn_id, input_msg(&session_id, b"echo BD=$BYOBU_DISABLE\n"), ctx)
+                m.handle_message(
+                    conn_id,
+                    input_msg(&session_id, b"echo BD=$BYOBU_DISABLE\n"),
+                    ctx,
+                )
             });
             assert!(
                 wait_for_output(&conn_rx, b"BD=1", Duration::from_secs(20)).await,
                 "daemon shell must set BYOBU_DISABLE=1 (no multiplexer auto-attach)"
             );
 
-            model.update(&mut app, |m, ctx| m.handle_message(conn_id, close_msg(&session_id), ctx));
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, close_msg(&session_id), ctx)
+            });
         });
     }
 }

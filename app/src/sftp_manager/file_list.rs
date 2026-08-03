@@ -11,15 +11,16 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
-    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex,
-    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
-    SavePosition, Text,
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition, Text,
 };
 use warpui::platform::Cursor;
 use warpui::Element;
 
 use crate::sftp_manager::browser::{SftpBrowserAction, SortColumn, SortState};
-use crate::sftp_manager::types::{format_size, FileEntry, FileEntryType};
+use crate::sftp_manager::types::{
+    format_size, EntryIdentity, EntryReference, FileEntry, FileEntryType,
+};
 use crate::ui_components::icons::Icon;
 
 /// File size column width
@@ -52,7 +53,7 @@ pub fn file_icon(entry_type: &FileEntryType) -> Icon {
 /// marks are colour, not a checkmark). The check glyph appears only under the
 /// pointer, as the toggle affordance.
 fn mark_cell(
-    index: usize,
+    entry: EntryReference,
     entry_type: FileEntryType,
     is_marked: bool,
     icon_color: Fill,
@@ -77,7 +78,7 @@ fn mark_cell(
     })
     .with_cursor(Cursor::PointingHand)
     .on_click(move |ctx, _, _| {
-        ctx.dispatch_typed_action(SftpBrowserAction::ToggleMark(index));
+        ctx.dispatch_typed_action(SftpBrowserAction::ToggleMark(entry.clone()));
     })
     .finish()
 }
@@ -97,6 +98,7 @@ fn mark_cell(
 pub fn render_file_row(
     entry: &FileEntry,
     index: usize,
+    listing_generation: u64,
     position_prefix: &str,
     panel_position_id: &str,
     is_selected: bool,
@@ -123,6 +125,10 @@ pub fn render_file_row(
 
     let name = entry.name.clone();
     let file_type = entry.file_type;
+    let entry_reference = entry.entry_reference(listing_generation);
+    let mark_reference = entry_reference.clone();
+    let open_reference = entry_reference.clone();
+    let context_reference = entry_reference.clone();
     let size = entry.size;
     let modified = entry.modified.clone();
     let ui_font = appearance.ui_font_family();
@@ -203,7 +209,7 @@ pub fn render_file_row(
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(ROW_SPACING)
             .with_child(mark_cell(
-                index,
+                mark_reference.clone(),
                 file_type,
                 is_selected,
                 icon_fill,
@@ -232,10 +238,10 @@ pub fn render_file_row(
     .with_defer_events_to_children()
     .with_cursor(Cursor::PointingHand)
     .on_click(move |ctx, _, _| {
-        ctx.dispatch_typed_action(SftpBrowserAction::SelectEntry(index));
+        ctx.dispatch_typed_action(SftpBrowserAction::SelectEntry(entry_reference.clone()));
     })
     .on_double_click(move |ctx, _, _| {
-        ctx.dispatch_typed_action(SftpBrowserAction::OpenEntry(index));
+        ctx.dispatch_typed_action(SftpBrowserAction::OpenEntry(open_reference.clone()));
     })
     .on_right_click(move |ctx, _, position| {
         let offset = match ctx.element_position_by_id(&panel_position_id) {
@@ -243,7 +249,7 @@ pub fn render_file_row(
             None => position,
         };
         ctx.dispatch_typed_action(SftpBrowserAction::ContextMenu {
-            index,
+            entry: context_reference.clone(),
             position: offset,
         });
     })
@@ -469,13 +475,9 @@ pub fn render_selection_status(
         size = format_size(bytes)
     );
     Container::new(
-        Text::new_inline(
-            text,
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(theme.accent().into())
-        .finish(),
+        Text::new_inline(text, appearance.ui_font_family(), appearance.ui_font_size())
+            .with_color(theme.accent().into())
+            .finish(),
     )
     .with_padding_left(8.0)
     .with_padding_right(8.0)
@@ -493,7 +495,8 @@ pub fn render_selection_status(
 pub fn render_file_rows(
     entries: &[FileEntry],
     filtered_indices: &[usize],
-    selected: &HashSet<usize>,
+    selected: &HashSet<EntryIdentity>,
+    listing_generation: u64,
     cursor_row: usize,
     has_parent_row: bool,
     position_prefix: &str,
@@ -503,8 +506,7 @@ pub fn render_file_rows(
     parent_row_handle: MouseStateHandle,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let mut col = Flex::column()
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+    let mut col = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
     if has_parent_row {
         // The `..` row's handle is a PERSISTENT one from the browser state —
@@ -523,13 +525,14 @@ pub fn render_file_rows(
     let offset = usize::from(has_parent_row);
     for (row_position, &index) in filtered_indices.iter().enumerate() {
         let entry = &entries[index];
-        let is_selected = selected.contains(&index);
+        let is_selected = selected.contains(&entry.entry_identity());
         let is_cursor = cursor_row == row_position + offset;
         let mouse_handle = mouse_handles.get(&entry.path).cloned().unwrap_or_default();
         let mark_handle = mark_handles.get(&entry.path).cloned().unwrap_or_default();
         let row = render_file_row(
             entry,
             index,
+            listing_generation,
             position_prefix,
             panel_position_id,
             is_selected,

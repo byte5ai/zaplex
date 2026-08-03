@@ -77,7 +77,11 @@ fn read_registry(config_dir: &Path) -> Vec<RegEntry> {
             started_at: int_of("startedAt"),
             updated_at: {
                 let u = int_of("updatedAt");
-                if u > 0 { u } else { int_of("statusUpdatedAt") }
+                if u > 0 {
+                    u
+                } else {
+                    int_of("statusUpdatedAt")
+                }
             },
             pid: v.get("pid").and_then(Value::as_u64).unwrap_or(0) as u32,
             proc_start: v
@@ -247,15 +251,19 @@ fn reg_updated(r: &RegEntry, now: DateTime<Utc>) -> DateTime<Utc> {
         .unwrap_or(now)
 }
 
-/// Join one registry entry to its transcript tail and build the snapshot.
-/// `state` is derived from the tail unless the caller overrides it (a dormant
-/// session's state is decided by its dead process, not by its last turn).
+/// Join one registry entry to its transcript and build the snapshot.
+///
+/// Coarse state/model/context come from the bounded tail; structured tasks need
+/// a complete replay because their creates may predate the tail. `state` is
+/// derived from the tail unless the caller overrides it (a dormant session's
+/// state is decided by its dead process, not by its last turn).
 fn snapshot_of(
     r: RegEntry,
     transcript: &Path,
     now: DateTime<Utc>,
     force_state: Option<SessionState>,
     process_fingerprint: Option<String>,
+    task_cache: &mut crate::transcript::TaskStateCache,
 ) -> SessionSnapshot {
     let tail = read_transcript_tail(transcript);
     let updated = reg_updated(&r, now);
@@ -286,6 +294,7 @@ fn snapshot_of(
         pty_session_id: None,
         pty_session_generation: None,
         pty_foreground: false,
+        task_state: task_cache.parse_file(Provider::Claude, transcript),
         last_activity,
         pid: r.pid,
     }
@@ -304,11 +313,7 @@ fn snapshot_of(
 /// file's mtime if the two clocks disagree, or if the transcript was restored or
 /// back-dated. Ranking is then off by that skew. Reading every tail to rule it
 /// out is precisely the cost this exists to avoid.
-fn recency_estimate(
-    r: &RegEntry,
-    transcript: &Path,
-    now: DateTime<Utc>,
-) -> DateTime<Utc> {
+fn recency_estimate(r: &RegEntry, transcript: &Path, now: DateTime<Utc>) -> DateTime<Utc> {
     let updated = reg_updated(r, now);
     std::fs::metadata(transcript)
         .and_then(|m| m.modified())
@@ -347,18 +352,19 @@ pub struct SessionScan {
 /// - At most `limit`, most-recent first.
 ///
 /// Cost: a heavy user has hundreds of dead entries, and reading every transcript
-/// *tail* on each refresh would be real I/O. So dormant candidates are ranked and
+/// on each refresh would be real I/O. So dormant candidates are ranked and
 /// capped on [`recency_estimate`] — registry time plus one `stat` — and only the
 /// surviving `limit` transcripts are opened and read. Live entries are few (a
 /// running process each), so all of them are read. What this does **not** avoid:
 /// [`transcripts_by_id`] still walks the whole `projects/` tree to build the id
 /// index, as it must for any lookup, and `read_registry` still parses every
 /// entry. The saving is on transcript *contents*, not on the directory scan.
-pub fn scan_sessions(
+pub(crate) fn scan_sessions_with_cache(
     config_dir: &Path,
     now: DateTime<Utc>,
     max_age: Duration,
     limit: usize,
+    task_cache: &mut crate::transcript::TaskStateCache,
 ) -> SessionScan {
     let transcripts = transcripts_by_id(config_dir);
     let cutoff = now - max_age;
@@ -393,7 +399,7 @@ pub fn scan_sessions(
 
     let mut live: Vec<SessionSnapshot> = live_entries
         .into_iter()
-        .map(|(r, path, fingerprint)| snapshot_of(r, &path, now, None, fingerprint))
+        .map(|(r, path, fingerprint)| snapshot_of(r, &path, now, None, fingerprint, task_cache))
         .collect();
     // Waiting first (they need the user), then by recency.
     live.sort_by(|a, b| {
@@ -412,11 +418,26 @@ pub fn scan_sessions(
     idle_candidates.truncate(limit);
     let mut idle: Vec<SessionSnapshot> = idle_candidates
         .into_iter()
-        .map(|(_, r, path)| snapshot_of(r, &path, now, Some(SessionState::Idle), None))
+        .map(|(_, r, path)| snapshot_of(r, &path, now, Some(SessionState::Idle), None, task_cache))
         .collect();
     idle.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
 
     SessionScan { live, idle }
+}
+
+pub fn scan_sessions(
+    config_dir: &Path,
+    now: DateTime<Utc>,
+    max_age: Duration,
+    limit: usize,
+) -> SessionScan {
+    scan_sessions_with_cache(
+        config_dir,
+        now,
+        max_age,
+        limit,
+        &mut crate::transcript::TaskStateCache::default(),
+    )
 }
 
 /// The live sessions of a Claude Code account: registry entries that are real,

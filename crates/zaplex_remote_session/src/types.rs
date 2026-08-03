@@ -60,6 +60,15 @@ pub const FEATURE_AGENT_PROCESS_SIGNAL_V1: &str = "agent-process-signal-v1";
 /// operations or trust PTY ids returned in agent inventory.
 pub const FEATURE_AGENT_PTY_BINDING: &str = "agent-pty-binding";
 
+/// Capability identifier for descriptor-bound, journaled remote file
+/// transactions used by the file manager.
+///
+/// Clients must require this exact version before trusting remote identities,
+/// opening transfer handles, or issuing destructive file mutations. Plain
+/// SFTP has no immutable object identity or no-follow open primitive, so an
+/// older daemon must never be treated as an equivalent fallback.
+pub const FEATURE_SAFE_FILE_TRANSACTIONS_V1: &str = "safe-file-transactions-v1";
+
 /// Capability identifier advertised by the daemon in `InitializeResponse.features`:
 /// it signals that the daemon can run a **session-less one-shot host command**
 /// via `HostExec` → `HostExecResult` — a command that needs no bootstrapped
@@ -68,6 +77,12 @@ pub const FEATURE_AGENT_PTY_BINDING: &str = "agent-pty-binding";
 /// Like [`FEATURE_AGENT_INVENTORY`] this is not PTY-bound (the command runs in a
 /// forked subshell), so it is advertised on all platforms.
 pub const FEATURE_HOST_EXEC: &str = "host-exec";
+
+/// Capability identifier for typed discovery of existing tmux/byobu sessions.
+///
+/// Session names stay protocol data from discovery through attach; clients must
+/// never downgrade this to a generic shell-command scan against older daemons.
+pub const FEATURE_MULTIPLEXER_INVENTORY_V1: &str = "multiplexer-inventory-v1";
 
 /// A persistent session identifier assigned by the daemon.
 ///
@@ -135,6 +150,11 @@ pub fn supported_features() -> Vec<String> {
         features.push(FEATURE_SESSION_HOST.to_string());
         features.push(FEATURE_STARTUP_COMMAND_ACK.to_string());
         features.push(FEATURE_AGENT_PTY_BINDING.to_string());
+        features.push(FEATURE_MULTIPLEXER_INVENTORY_V1.to_string());
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        features.push(FEATURE_SAFE_FILE_TRANSACTIONS_V1.to_string());
     }
     features
 }

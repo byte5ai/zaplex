@@ -4,17 +4,43 @@
 //! date: 2026-05-26
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// File entry type (UI layer)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileEntryType {
     File,
     Directory,
     Symlink,
     Other,
+}
+
+/// Backend-provided identity for one filesystem object and its current revision.
+///
+/// `object_id` identifies the object independently of its list position, while
+/// `revision` changes when the backend can observe that the object changed.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct StableEntryIdentity {
+    pub file_type: FileEntryType,
+    pub size: u64,
+    pub object_id: String,
+    pub revision: String,
+}
+
+/// Stable key used by marks across list refreshes.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct EntryIdentity {
+    pub path: PathBuf,
+    pub backend: StableEntryIdentity,
+}
+
+/// Generation-bound reference captured by a rendered row action.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct EntryReference {
+    pub listing_generation: u64,
+    pub identity: EntryIdentity,
 }
 
 /// File entry (for UI display)
@@ -32,6 +58,24 @@ pub struct FileEntry {
     pub modified: Option<String>,
     /// Permission string
     pub permissions: Option<String>,
+    /// Stable backend identity captured with this listing entry.
+    pub identity: StableEntryIdentity,
+}
+
+impl FileEntry {
+    pub fn entry_identity(&self) -> EntryIdentity {
+        EntryIdentity {
+            path: self.path.clone(),
+            backend: self.identity.clone(),
+        }
+    }
+
+    pub fn entry_reference(&self, listing_generation: u64) -> EntryReference {
+        EntryReference {
+            listing_generation,
+            identity: self.entry_identity(),
+        }
+    }
 }
 
 /// Transfer direction
@@ -88,6 +132,8 @@ pub struct TransferTask {
     pub total_size: u64,
     /// Transferred size (bytes)
     pub transferred: u64,
+    /// Current average transfer throughput in bytes per second.
+    pub bytes_per_second: u64,
     /// Estimated time remaining while the transfer is active.
     pub eta: Option<Duration>,
     /// Current streaming or verification phase.
@@ -119,6 +165,7 @@ impl TransferTask {
             direction,
             total_size,
             transferred: 0,
+            bytes_per_second: 0,
             eta: None,
             phase: TransferPhase::Transferring,
             state: TransferState::Pending,
@@ -203,7 +250,9 @@ pub enum Dialog {
         /// Move vs copy (wording only).
         is_move: bool,
     },
-    FileDetails { entry: FileEntry },
+    FileDetails {
+        entry: FileEntry,
+    },
     /// Confirm closing transfer panel (when active transfers exist)
     CloseTransferPanelConfirm,
 }
@@ -435,6 +484,12 @@ mod tests {
                 size: 100,
                 modified: None,
                 permissions: None,
+                identity: StableEntryIdentity {
+                    file_type: FileEntryType::File,
+                    size: 100,
+                    object_id: "test".into(),
+                    revision: "1".into(),
+                },
             },
         };
         assert!(matches!(details, Dialog::FileDetails { .. }));
@@ -466,7 +521,10 @@ mod tests {
     #[test]
     fn test_transfer_state_variants() {
         assert!(matches!(TransferState::Pending, TransferState::Pending));
-        assert!(matches!(TransferState::InProgress, TransferState::InProgress));
+        assert!(matches!(
+            TransferState::InProgress,
+            TransferState::InProgress
+        ));
         assert!(matches!(TransferState::Completed, TransferState::Completed));
         assert!(matches!(TransferState::Cancelled, TransferState::Cancelled));
         let failed = TransferState::Failed("io error".into());
@@ -536,6 +594,12 @@ mod tests {
             size: 2048,
             modified: Some("2026-01-01".into()),
             permissions: Some("rw-r--r--".into()),
+            identity: StableEntryIdentity {
+                file_type: FileEntryType::File,
+                size: 2048,
+                object_id: "doc".into(),
+                revision: "1".into(),
+            },
         };
         let cloned = entry.clone();
         assert_eq!(cloned.name, "doc.txt");
@@ -549,7 +613,10 @@ mod tests {
     #[test]
     fn test_format_size_u64_max() {
         let result = format_size(u64::MAX);
-        assert!(result.contains("GB"), "u64::MAX should be in GB units: {result}");
+        assert!(
+            result.contains("GB"),
+            "u64::MAX should be in GB units: {result}"
+        );
     }
 
     /// Test format_size near MB boundary
@@ -571,7 +638,10 @@ mod tests {
         );
         task.transferred = 200;
         let pct = task.progress_percent();
-        assert_eq!(pct, 100, "when transferred > total_size progress is capped to 100%");
+        assert_eq!(
+            pct, 100,
+            "when transferred > total_size progress is capped to 100%"
+        );
     }
 
     /// Test TransferTask progress_percent fractional truncation
@@ -625,7 +695,10 @@ mod tests {
     /// Test Dialog::DeleteConfirm with empty paths list
     #[test]
     fn test_dialog_delete_confirm_empty_paths() {
-        let dialog = Dialog::DeleteConfirm { paths: vec![], is_dirs: vec![] };
+        let dialog = Dialog::DeleteConfirm {
+            paths: vec![],
+            is_dirs: vec![],
+        };
         assert!(matches!(dialog, Dialog::DeleteConfirm { .. }));
     }
 
@@ -639,6 +712,12 @@ mod tests {
             size: 0,
             modified: None,
             permissions: None,
+            identity: StableEntryIdentity {
+                file_type: FileEntryType::Other,
+                size: 0,
+                object_id: String::new(),
+                revision: String::new(),
+            },
         };
         assert!(entry.name.is_empty());
         assert_eq!(entry.size, 0);

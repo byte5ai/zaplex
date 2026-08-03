@@ -4662,3 +4662,252 @@ fn review27_distinct_failed_writes_use_a_global_bounded_temp_pool() {
     assert_eq!(fs::read(committed).unwrap(), b"committed");
     assert_eq!(fs::read(foreign).unwrap(), b"foreign");
 }
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum LiveRenameFault {
+    BeforeMutation,
+    AfterMutation,
+}
+
+#[cfg(unix)]
+fn live_sftp_configuration() -> (String, u16, String, PathBuf, PathBuf) {
+    let host = std::env::var("ZAPLEX_LIVE_SFTP_HOST")
+        .expect("ZAPLEX_LIVE_SFTP_HOST is required for the ignored live SFTP tests");
+    let port = std::env::var("ZAPLEX_LIVE_SFTP_PORT")
+        .expect("ZAPLEX_LIVE_SFTP_PORT is required for the ignored live SFTP tests")
+        .parse()
+        .expect("ZAPLEX_LIVE_SFTP_PORT must be a valid u16");
+    let username = std::env::var("ZAPLEX_LIVE_SFTP_USERNAME")
+        .expect("ZAPLEX_LIVE_SFTP_USERNAME is required for the ignored live SFTP tests");
+    let key_path = PathBuf::from(
+        std::env::var("ZAPLEX_LIVE_SFTP_KEY_PATH")
+            .expect("ZAPLEX_LIVE_SFTP_KEY_PATH is required for the ignored live SFTP tests"),
+    );
+    let root = PathBuf::from(
+        std::env::var("ZAPLEX_LIVE_SFTP_ROOT")
+            .expect("ZAPLEX_LIVE_SFTP_ROOT is required for the ignored live SFTP tests"),
+    );
+    (host, port, username, key_path, root)
+}
+
+#[cfg(unix)]
+fn spawn_live_safe_file_client(
+    journal_path: PathBuf,
+    fault: Option<LiveRenameFault>,
+) -> (
+    Arc<remote_server::client::RemoteServerClient>,
+    warpui::r#async::executor::Background,
+    tokio::task::JoinHandle<()>,
+) {
+    use remote_server::proto::{client_message, safe_file_request, server_message, ServerMessage};
+    use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+
+    let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
+    let (server_read, server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let connection_id = uuid::Uuid::new_v4();
+    let server_task = tokio::spawn(async move {
+        let mut reader = server_read.compat();
+        let mut writer = server_write.compat_write();
+        let mut server =
+            crate::remote_server::safe_file::SafeFileServer::new_for_test(journal_path);
+        loop {
+            let message = match remote_server::protocol::read_client_message(&mut reader).await {
+                Ok(message) => message,
+                Err(remote_server::protocol::ProtocolError::UnexpectedEof) => break,
+                Err(error) => panic!("live safe-file test transport failed: {error}"),
+            };
+            let Some(client_message::Message::SafeFile(request)) = message.message else {
+                panic!("live safe-file test received an unexpected request");
+            };
+            let is_rename = matches!(
+                request.operation.as_ref(),
+                Some(safe_file_request::Operation::Rename(_))
+            );
+            if is_rename && matches!(fault, Some(LiveRenameFault::BeforeMutation)) {
+                break;
+            }
+            let response = server.handle(connection_id, request);
+            if is_rename && matches!(fault, Some(LiveRenameFault::AfterMutation)) {
+                break;
+            }
+            remote_server::protocol::write_server_message(
+                &mut writer,
+                &ServerMessage {
+                    request_id: message.request_id,
+                    message: Some(server_message::Message::SafeFileResponse(response)),
+                },
+            )
+            .await
+            .expect("live safe-file test response should be writable");
+        }
+        server.close_connection(connection_id);
+    });
+
+    let executor = warpui::r#async::executor::Background::default();
+    let (client, _events) = remote_server::client::RemoteServerClient::new(
+        client_read.compat(),
+        client_write.compat_write(),
+        &executor,
+    );
+    (Arc::new(client), executor, server_task)
+}
+
+#[cfg(unix)]
+async fn verify_live_sftp_rename_recovery(fault: LiveRenameFault) {
+    let (host, port, username, key_path, root) = live_sftp_configuration();
+    let case_root = root.join(format!("zaplex-live-sftp-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&case_root).unwrap();
+    let staged = case_root.join(".payload.zaplex-transfer-live");
+    let destination = case_root.join("payload.bin");
+    let local = tempdir().unwrap();
+    let local_source = local.path().join("source.bin");
+    fs::write(&local_source, b"live-sftp-payload").unwrap();
+
+    let session = zap_sftp::SftpSession::connect(
+        &host,
+        port,
+        &username,
+        zap_sftp::AuthMethod::PublicKey {
+            key_path,
+            passphrase: None,
+        },
+        Some(std::time::Duration::from_secs(10)),
+    )
+    .expect("the CI OpenSSH fixture must accept the configured key");
+    let sftp = session.sftp().expect("the live SFTP subsystem must open");
+    let journal = tempdir().unwrap();
+    let slot = SafeFileClientSlot::default();
+    let (first_client, _first_executor, first_server) =
+        spawn_live_safe_file_client(journal.path().to_path_buf(), Some(fault));
+    slot.set(Some(first_client));
+    let backend = LiveSftpBackend::new_with_safe_file_slot(sftp, slot.clone());
+
+    let mut writer = backend
+        .create_file_writer(&staged)
+        .expect("the daemon must exclusively create the remote staging file");
+    writer.write_chunk(b"live-sftp-payload").unwrap();
+    writer.flush().unwrap();
+    let anchor = writer
+        .ownership_anchor()
+        .unwrap()
+        .expect("the live writer must retain an immutable daemon handle");
+    let error = backend
+        .rename_if_matches(&staged, &destination, anchor)
+        .expect_err("the injected transport loss must require recovery");
+    assert!(matches!(error, SftpOpsError::RecoveryRequired { .. }));
+    assert_eq!(fs::read(&local_source).unwrap(), b"live-sftp-payload");
+    drop(writer);
+    first_server.await.unwrap();
+
+    let (second_client, _second_executor, second_server) =
+        spawn_live_safe_file_client(journal.path().to_path_buf(), None);
+    slot.set(Some(second_client));
+    assert_eq!(
+        backend.retry_unresolved_recovery(&destination).unwrap(),
+        Some(Vec::new())
+    );
+
+    match fault {
+        LiveRenameFault::BeforeMutation => {
+            assert!(backend.take_recovery_source_restored(&destination));
+            assert!(!backend.take_recovery_source_preserved(&destination));
+            assert!(!backend.entry_exists(&destination).unwrap());
+        }
+        LiveRenameFault::AfterMutation => {
+            assert!(backend.take_recovery_source_preserved(&destination));
+            assert!(!backend.take_recovery_source_restored(&destination));
+            let downloaded = local.path().join("downloaded.bin");
+            backend
+                .download_file(&destination, &downloaded, None, None)
+                .expect("the real SFTP channel must read the recovered destination");
+            assert_eq!(fs::read(downloaded).unwrap(), b"live-sftp-payload");
+        }
+    }
+    assert_eq!(fs::read(&local_source).unwrap(), b"live-sftp-payload");
+    assert!(backend
+        .list_dir(&case_root)
+        .unwrap()
+        .iter()
+        .all(|entry| !entry.name.contains(".zaplex")));
+
+    slot.set(None);
+    second_server.abort();
+    let _ = second_server.await;
+    fs::remove_dir_all(case_root).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the isolated OpenSSH fixture from live-sftp-safety.yml"]
+async fn live_sftp_remote_safe_rename_replays_when_request_was_not_applied() {
+    verify_live_sftp_rename_recovery(LiveRenameFault::BeforeMutation).await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the isolated OpenSSH fixture from live-sftp-safety.yml"]
+async fn live_sftp_remote_safe_rename_recovers_when_response_was_lost() {
+    verify_live_sftp_rename_recovery(LiveRenameFault::AfterMutation).await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the isolated OpenSSH fixture from live-sftp-safety.yml"]
+async fn live_sftp_remote_safe_rename_does_not_claim_a_missing_user_source_was_restored() {
+    let (host, port, username, key_path, root) = live_sftp_configuration();
+    let case_root = root.join(format!("zaplex-live-sftp-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&case_root).unwrap();
+    let source = case_root.join("source.bin");
+    let destination = case_root.join("destination.bin");
+    fs::write(&source, b"user-payload").unwrap();
+
+    let session = zap_sftp::SftpSession::connect(
+        &host,
+        port,
+        &username,
+        zap_sftp::AuthMethod::PublicKey {
+            key_path,
+            passphrase: None,
+        },
+        Some(std::time::Duration::from_secs(10)),
+    )
+    .expect("the CI OpenSSH fixture must accept the configured key");
+    let sftp = session.sftp().expect("the live SFTP subsystem must open");
+    let journal = tempdir().unwrap();
+    let slot = SafeFileClientSlot::default();
+    let (first_client, _first_executor, first_server) = spawn_live_safe_file_client(
+        journal.path().to_path_buf(),
+        Some(LiveRenameFault::BeforeMutation),
+    );
+    slot.set(Some(first_client));
+    let backend = LiveSftpBackend::new_with_safe_file_slot(sftp, slot.clone());
+    let anchor = backend
+        .existing_entry_ownership_anchor(&source)
+        .unwrap()
+        .expect("an existing remote file must have a daemon ownership anchor");
+
+    let error = backend
+        .rename_if_matches(&source, &destination, anchor)
+        .expect_err("the injected transport loss must require recovery");
+    assert!(matches!(error, SftpOpsError::RecoveryRequired { .. }));
+    first_server.await.unwrap();
+    fs::remove_file(&source).unwrap();
+
+    let (second_client, _second_executor, second_server) =
+        spawn_live_safe_file_client(journal.path().to_path_buf(), None);
+    slot.set(Some(second_client));
+    let error = backend
+        .retry_unresolved_recovery(&destination)
+        .expect_err("two missing user paths must remain unresolved");
+    assert!(error
+        .to_string()
+        .contains("source and destination are both missing"));
+    assert!(!backend.take_recovery_source_restored(&destination));
+
+    slot.set(None);
+    second_server.abort();
+    let _ = second_server.await;
+    fs::remove_dir_all(case_root).unwrap();
+}

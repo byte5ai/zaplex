@@ -200,8 +200,11 @@ launch-on-freest, per `claudeplex` `usage.ts:57-66`.
   with a **fixed `now`** (5h/today/week boundaries), cost against golden numbers, heat
   = work/budget. Pin one known model's cost so a pricing-table edit is a conscious
   test change.
-- **Secrets:** the parser must read only token counts + account metadata; a test
-  asserts no token/secret field is ever surfaced. Never require a real `~/.claude`/`~/.codex`.
+- **Secrets:** usage parsing reads only token counts + account metadata; the
+  later #114 task-progress extension additionally projects only titles/statuses
+  deliberately emitted through structured task tools. A test asserts no
+  token/secret field is ever surfaced. Never require a real
+  `~/.claude`/`~/.codex`.
 - Runs locally (`cargo test -p zaplex_cockpit`); no GUI/network. **Run the full
   affected-crate suite, not just `-p warp`** (lesson from the remote-session work —
   a sibling crate's tests silently broke when only the app crate was run).
@@ -220,8 +223,11 @@ launch-on-freest, per `claudeplex` `usage.ts:57-66`.
 4. **Pricing & budget are approximations** (both flagged). Keep the pricing table
    centralized + refresh on model launches; map tier→budget where possible, else the
    flat guess, both overridable.
-5. **Privacy.** Read only token counts + account metadata — **never transcript
-   content**. Document this prominently; it's a trust point for the product.
+5. **Privacy.** Read only token counts + account metadata — **never
+   conversational transcript content**. The later #114 task-progress extension
+   permits only the titles/statuses deliberately emitted through structured
+   task tools; token strings and credentials remain excluded. Document this
+   prominently; it's a trust point for the product.
 6. **Performance/footprint.** Many large transcripts → `(mtime,size)` cache + week
    cutoff; the watcher must debounce (transcripts are appended frequently during an
    active session).

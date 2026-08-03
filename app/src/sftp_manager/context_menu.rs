@@ -17,20 +17,21 @@ use warpui::Element;
 const CONTEXT_MENU_WIDTH: f32 = 150.0;
 
 use crate::sftp_manager::browser::SftpBrowserAction;
+use crate::sftp_manager::types::EntryReference;
 
 /// Right-click menu state
 #[derive(Debug)]
 pub struct ContextMenuState {
-    /// Associated file entry index
-    pub entry_index: usize,
+    /// Exact entry the menu was opened for.
+    pub entry: EntryReference,
     /// Menu popup position
     pub position: Vector2F,
 }
 
 impl ContextMenuState {
     /// Create a new right-click menu state
-    pub fn new(entry_index: usize, position: Vector2F) -> Self {
-        Self { entry_index, position }
+    pub fn new(entry: EntryReference, position: Vector2F) -> Self {
+        Self { entry, position }
     }
 }
 
@@ -43,27 +44,27 @@ struct MenuItem {
 }
 
 /// Build file right-click menu items list
-fn build_file_menu_items(entry_index: usize) -> Vec<MenuItem> {
+fn build_file_menu_items(entry: &EntryReference) -> Vec<MenuItem> {
     vec![
         MenuItem {
             label: crate::t!("sftp-context-menu-open"),
-            action: SftpBrowserAction::OpenEntry(entry_index),
+            action: SftpBrowserAction::OpenEntry(entry.clone()),
         },
         MenuItem {
             label: crate::t!("sftp-context-menu-download"),
-            action: SftpBrowserAction::DownloadEntry(entry_index),
+            action: SftpBrowserAction::DownloadEntry(entry.clone()),
         },
         MenuItem {
             label: crate::t!("sftp-context-menu-rename"),
-            action: SftpBrowserAction::RenameEntry(entry_index),
+            action: SftpBrowserAction::RenameEntry(entry.clone()),
         },
         MenuItem {
             label: crate::t!("sftp-context-menu-delete"),
-            action: SftpBrowserAction::DeleteEntry(entry_index),
+            action: SftpBrowserAction::DeleteEntry(entry.clone()),
         },
         MenuItem {
             label: crate::t!("sftp-context-menu-details"),
-            action: SftpBrowserAction::DetailsEntry(entry_index),
+            action: SftpBrowserAction::DetailsEntry(entry.clone()),
         },
     ]
 }
@@ -113,7 +114,7 @@ fn render_menu_item(
 /// Render right-click context menu
 pub fn render_context_menu(state: &ContextMenuState, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let menu_items = build_file_menu_items(state.entry_index);
+    let menu_items = build_file_menu_items(&state.entry);
 
     let mut col = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -172,6 +173,8 @@ pub fn render_context_menu(state: &ContextMenuState, appearance: &Appearance) ->
             | SftpBrowserAction::CloseFileManager
             | SftpBrowserAction::OverwriteConflict { .. }
             | SftpBrowserAction::SkipConflict { .. }
+            | SftpBrowserAction::RenameConflict { .. }
+            | SftpBrowserAction::NewerOnlyConflict { .. }
             | SftpBrowserAction::PickCopyMoveTarget(_)
             | SftpBrowserAction::ResolveCrossConnConflict { .. }
             | SftpBrowserAction::ViewCursorDetails
@@ -209,8 +212,24 @@ pub fn render_context_menu(state: &ContextMenuState, appearance: &Appearance) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sftp_manager::types::{EntryIdentity, FileEntryType, StableEntryIdentity};
     use pathfinder_geometry::vector::Vector2F;
-    use warpui::TypedActionView;
+    use std::path::PathBuf;
+
+    fn entry_reference(index: usize) -> EntryReference {
+        EntryReference {
+            listing_generation: 7,
+            identity: EntryIdentity {
+                path: PathBuf::from(format!("/entry-{index}")),
+                backend: StableEntryIdentity {
+                    file_type: FileEntryType::File,
+                    size: index as u64,
+                    object_id: format!("entry-{index}"),
+                    revision: "1".to_string(),
+                },
+            },
+        }
+    }
 
     // ============================================================
     // ContextMenuState tests
@@ -220,8 +239,9 @@ mod tests {
     #[test]
     fn test_context_menu_state_new() {
         let position = Vector2F::new(100.0, 200.0);
-        let state = ContextMenuState::new(3, position);
-        assert_eq!(state.entry_index, 3);
+        let entry = entry_reference(3);
+        let state = ContextMenuState::new(entry.clone(), position);
+        assert_eq!(state.entry, entry);
         assert_eq!(state.position, position);
     }
 
@@ -229,24 +249,24 @@ mod tests {
     #[test]
     fn test_context_menu_state_zero_index() {
         let position = Vector2F::new(0.0, 0.0);
-        let state = ContextMenuState::new(0, position);
-        assert_eq!(state.entry_index, 0);
+        let state = ContextMenuState::new(entry_reference(0), position);
         assert_eq!(state.position, position);
     }
 
-    /// Test ContextMenuState with large index value
+    /// Test ContextMenuState with a large synthetic identity
     #[test]
     fn test_context_menu_state_large_index() {
         let position = Vector2F::new(500.0, 600.0);
-        let state = ContextMenuState::new(usize::MAX, position);
-        assert_eq!(state.entry_index, usize::MAX);
+        let entry = entry_reference(usize::MAX);
+        let state = ContextMenuState::new(entry.clone(), position);
+        assert_eq!(state.entry, entry);
     }
 
     /// Test ContextMenuState with negative coordinates (Vector2F supports negative values)
     #[test]
     fn test_context_menu_state_negative_position() {
         let position = Vector2F::new(-50.0, -100.0);
-        let state = ContextMenuState::new(1, position);
+        let state = ContextMenuState::new(entry_reference(1), position);
         assert_eq!(state.position, position);
     }
 
@@ -257,7 +277,7 @@ mod tests {
     /// Test that menu item count is 5
     #[test]
     fn test_build_file_menu_items_count() {
-        let items = build_file_menu_items(0);
+        let items = build_file_menu_items(&entry_reference(0));
         assert_eq!(items.len(), 5, "should have 5 menu items");
     }
 
@@ -270,33 +290,53 @@ mod tests {
     /// `test_build_file_menu_items_actions_index`.
     #[test]
     fn test_build_file_menu_items_labels() {
-        let items = build_file_menu_items(0);
+        let items = build_file_menu_items(&entry_reference(0));
         assert_eq!(items.len(), 5, "should have 5 menu items");
         for item in &items {
-            assert!(!item.label.is_empty(), "menu item must have a non-empty label");
+            assert!(
+                !item.label.is_empty(),
+                "menu item must have a non-empty label"
+            );
         }
     }
 
     /// Test menu item actions bind to correct index
     #[test]
     fn test_build_file_menu_items_actions_index() {
-        let index = 7;
-        let items = build_file_menu_items(index);
+        let entry = entry_reference(7);
+        let items = build_file_menu_items(&entry);
 
-        assert!(matches!(&items[0].action, SftpBrowserAction::OpenEntry(7)));
-        assert!(matches!(&items[1].action, SftpBrowserAction::DownloadEntry(7)));
-        assert!(matches!(&items[2].action, SftpBrowserAction::RenameEntry(7)));
-        assert!(matches!(&items[3].action, SftpBrowserAction::DeleteEntry(7)));
-        assert!(matches!(&items[4].action, SftpBrowserAction::DetailsEntry(7)));
+        assert!(
+            matches!(&items[0].action, SftpBrowserAction::OpenEntry(actual) if actual == &entry)
+        );
+        assert!(
+            matches!(&items[1].action, SftpBrowserAction::DownloadEntry(actual) if actual == &entry)
+        );
+        assert!(
+            matches!(&items[2].action, SftpBrowserAction::RenameEntry(actual) if actual == &entry)
+        );
+        assert!(
+            matches!(&items[3].action, SftpBrowserAction::DeleteEntry(actual) if actual == &entry)
+        );
+        assert!(
+            matches!(&items[4].action, SftpBrowserAction::DetailsEntry(actual) if actual == &entry)
+        );
     }
 
     /// Test menu item actions are correct with index=0
     #[test]
     fn test_build_file_menu_items_zero_index() {
-        let items = build_file_menu_items(0);
-        assert!(matches!(&items[0].action, SftpBrowserAction::OpenEntry(0)));
-        assert!(matches!(&items[3].action, SftpBrowserAction::DeleteEntry(0)));
-        assert!(matches!(&items[4].action, SftpBrowserAction::DetailsEntry(0)));
+        let entry = entry_reference(0);
+        let items = build_file_menu_items(&entry);
+        assert!(
+            matches!(&items[0].action, SftpBrowserAction::OpenEntry(actual) if actual == &entry)
+        );
+        assert!(
+            matches!(&items[3].action, SftpBrowserAction::DeleteEntry(actual) if actual == &entry)
+        );
+        assert!(
+            matches!(&items[4].action, SftpBrowserAction::DetailsEntry(actual) if actual == &entry)
+        );
     }
 
     // ============================================================
@@ -320,20 +360,21 @@ mod tests {
             let temp_db = std::env::temp_dir().join("warp_sftp_ctx_test.sqlite");
             let _ = warp_ssh_manager::set_database_path(temp_db);
 
-            let (_, view) = app.add_window(
-                warpui::platform::WindowStyle::NotStealFocus,
-                |ctx| crate::sftp_manager::browser::SftpBrowserView::new("test-node".to_string(), None, ctx),
-            );
+            let (_, view) = app.add_window(warpui::platform::WindowStyle::NotStealFocus, |ctx| {
+                crate::sftp_manager::browser::SftpBrowserView::new(
+                    "test-node".to_string(),
+                    None,
+                    ctx,
+                )
+            });
 
             // Trigger right-click menu
             view.update(&mut app, |view, ctx| {
-                view.handle_action(
-                    &SftpBrowserAction::ContextMenu {
-                        index: 2,
-                        position: Vector2F::new(150.0, 250.0),
-                    },
-                    ctx,
-                );
+                view.context_menu = Some(ContextMenuState::new(
+                    entry_reference(2),
+                    Vector2F::new(150.0, 250.0),
+                ));
+                ctx.notify();
             });
 
             // Rendering should not panic (view auto-rerenders)

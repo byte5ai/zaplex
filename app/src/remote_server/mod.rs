@@ -10,14 +10,18 @@ pub mod auth_context;
 pub mod embedded;
 #[cfg(unix)]
 pub mod headless_connect;
+#[cfg(unix)]
+pub mod multiplexer;
+#[cfg(unix)]
+pub mod safe_file;
 #[cfg(not(target_family = "wasm"))]
 pub mod server_buffer_tracker;
 #[cfg(not(target_family = "wasm"))]
 pub mod server_model;
-#[cfg(not(target_family = "wasm"))]
-pub mod ssh_transport;
 #[cfg(unix)]
 pub mod session_host;
+#[cfg(not(target_family = "wasm"))]
+pub mod ssh_transport;
 #[cfg(unix)]
 pub mod unix;
 

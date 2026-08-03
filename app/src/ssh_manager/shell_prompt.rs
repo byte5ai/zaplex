@@ -22,7 +22,8 @@ pub fn bytes_look_like_shell_prompt(bytes: &[u8]) -> bool {
         || tail.ends_with(&[0xe2, 0x96, 0xb6, 0x20])  // ▶
         || tail.ends_with(&[0xc2, 0xbb, 0x20])  // »
         || tail.ends_with(&[0xce, 0xbb, 0x20])  // λ
-        || tail.ends_with(&[0xe2, 0x86, 0x92, 0x20])  // →
+        || tail.ends_with(&[0xe2, 0x86, 0x92, 0x20])
+    // →
     {
         return true;
     }

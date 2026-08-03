@@ -14,9 +14,11 @@
 //! remains unsignalable without a process fingerprint.
 
 use chrono::{TimeZone, Utc};
-use zaplex_cockpit::types::{Provider, SessionSnapshot, SessionState};
+use zaplex_cockpit::types::{
+    Provider, SessionSnapshot, SessionState, TaskItem, TaskState, TaskStatus,
+};
 
-use super::proto::{AgentSessionIdentity, AgentSessionInfo};
+use super::proto::{AgentSessionIdentity, AgentSessionInfo, AgentTaskItem};
 
 /// Lowercase wire string for a session state.
 pub fn state_to_str(state: SessionState) -> &'static str {
@@ -45,7 +47,24 @@ pub fn state_from_str(s: &str) -> SessionState {
 pub fn provider_from_str(s: &str) -> Provider {
     match s {
         "codex" => Provider::Codex,
+        "antigravity" => Provider::Antigravity,
         _ => Provider::Claude,
+    }
+}
+
+fn task_status_to_str(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Pending => "pending",
+        TaskStatus::InProgress => "in_progress",
+        TaskStatus::Completed => "completed",
+    }
+}
+
+fn task_status_from_str(status: &str) -> TaskStatus {
+    match status {
+        "in_progress" => TaskStatus::InProgress,
+        "completed" => TaskStatus::Completed,
+        _ => TaskStatus::Pending,
     }
 }
 
@@ -75,6 +94,22 @@ pub fn snapshot_to_proto(s: &SessionSnapshot) -> AgentSessionInfo {
         pty_session_id: s.pty_session_id.clone().unwrap_or_default(),
         pty_session_generation: s.pty_session_generation.unwrap_or_default(),
         pty_foreground: s.pty_foreground,
+        has_task_state: s.task_state.is_some(),
+        task_items: s
+            .task_state
+            .as_ref()
+            .map(|state| {
+                state
+                    .tasks
+                    .iter()
+                    .map(|task| AgentTaskItem {
+                        id: task.id.clone(),
+                        title: task.title.clone(),
+                        status: task_status_to_str(task.status).to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -124,6 +159,17 @@ pub fn proto_to_snapshot(p: &AgentSessionInfo) -> SessionSnapshot {
         pty_session_id: (!p.pty_session_id.is_empty()).then(|| p.pty_session_id.clone()),
         pty_session_generation: (p.pty_session_generation != 0).then_some(p.pty_session_generation),
         pty_foreground: p.pty_foreground,
+        task_state: p.has_task_state.then(|| TaskState {
+            tasks: p
+                .task_items
+                .iter()
+                .map(|task| TaskItem {
+                    id: task.id.clone(),
+                    title: task.title.clone(),
+                    status: task_status_from_str(&task.status),
+                })
+                .collect(),
+        }),
         last_activity,
         pid: p.pid,
     }

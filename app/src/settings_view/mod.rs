@@ -46,7 +46,6 @@ use warp_core::{
     settings::ToggleableSetting as _, ui::theme::color::internal_colors,
 };
 use warp_editor::editor::NavigationKey;
-use zaplexify_page::{ZaplexifyPageAction, ZaplexifyPageView};
 use warpui::Element;
 use warpui::{
     elements::{
@@ -62,13 +61,14 @@ use warpui::{
     Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView as _,
     View, ViewContext, ViewHandle,
 };
+use zaplexify_page::{ZaplexifyPageAction, ZaplexifyPageView};
 
 mod about_page;
 mod agent_providers_widget;
 mod ai_page;
 mod appearance_page;
-mod code_page;
 mod cloud_sync_page;
+mod code_page;
 mod directory_color_add_picker;
 mod execution_profile_view;
 mod features;
@@ -2259,7 +2259,8 @@ impl TypedActionView for SettingsView {
             }
             SettingsAction::ZaplexDrive(warp_drive_action) => {
                 if let Some(warp_drive_page) = self.settings_page(SettingsSection::ZaplexDrive) {
-                    if let SettingsPageViewHandle::ZaplexDrive(view) = &warp_drive_page.view_handle {
+                    if let SettingsPageViewHandle::ZaplexDrive(view) = &warp_drive_page.view_handle
+                    {
                         view.update(ctx, |view, ctx| {
                             view.handle_action(warp_drive_action, ctx);
                         })

@@ -18,25 +18,30 @@ use std::sync::Arc;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    AcceptedByDropTarget, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Dismiss, Draggable, DraggableState, DropTarget, DropTargetData, Element,
-    Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
-    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition, Stack, Text,
+    AcceptedByDropTarget, Border, ChildAnchor, ChildView, ClippedScrollStateHandle,
+    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
+    Draggable, DraggableState, DropTarget, DropTargetData, Element, Empty, Fill as ElementFill,
+    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Stack,
+    Text,
 };
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::units::Pixels;
 use warpui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
 
 use warp_ssh_manager::{
-    AuthType, DefaultWorkspaceCommandFactory, EndpointUse, KeychainSecretStore, NodeKind, SshNode,
-    SshRepository, SshServerInfo, WorkspaceCommandFactory, clone_server_with_secrets,
-    delete_node_and_secrets, validate_ssh_endpoint,
+    clone_server_with_secrets, delete_node_and_secrets, validate_ssh_endpoint, AuthType,
+    DefaultWorkspaceCommandFactory, EndpointUse, KeychainSecretStore, MultiplexerAttachMode,
+    NodeKind, SshNode, SshRepository, SshServerInfo, WorkspaceCommandFactory,
 };
 
-use remote_server::proto::SessionInfo;
+use remote_server::proto::{
+    MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList, SessionList,
+};
 
 use settings::Setting;
 
@@ -46,8 +51,12 @@ use crate::editor::{
 use crate::settings::SshSettings;
 use crate::ssh_manager::candidates::{CandidateRow, CandidatesViewModel};
 use crate::ssh_manager::{
-    SshTreeChangedEvent, SshTreeChangedNotifier, credential_operation_message,
-    endpoint_validation_message,
+    credential_operation_message, endpoint_validation_message, SshTreeChangedEvent,
+    SshTreeChangedNotifier,
+};
+use crate::ui_components::modal_frame;
+use crate::view_components::action_button::{
+    ActionButton, ButtonSize, DangerPrimaryTheme, NakedTheme,
 };
 
 // ---- visual constants (see Drive) ----
@@ -66,6 +75,16 @@ const CONTEXT_MENU_ITEM_PADDING_V: f32 = 7.0;
 const CONTEXT_MENU_ITEM_PADDING_H: f32 = 12.0;
 const MAX_CONTEXT_MENU_ITEMS: usize = 6;
 const SSH_PANEL_POSITION_ID: &str = "ssh_manager_panel_root";
+const DELETE_CONFIRM_BODY_MAX_HEIGHT: f32 = 320.0;
+
+fn tailscale_status_output(
+    command_factory: &dyn WorkspaceCommandFactory,
+) -> std::io::Result<std::process::Output> {
+    command_factory
+        .blocking_command("tailscale")
+        .args(["status", "--json"])
+        .output()
+}
 
 #[derive(Clone, Debug)]
 pub enum SshManagerPanelAction {
@@ -77,11 +96,11 @@ pub enum SshManagerPanelAction {
     /// Add-block button: discover Tailscale peers (`tailscale status --json`) and
     /// add the online ones as SSH servers (skipping hosts already saved).
     DiscoverTailscale,
-    /// Context menu "Delete": opens the confirmation overlay (does not delete).
+    /// Context menu "Delete": opens the shared confirmation modal (does not delete).
     DeleteSelected,
     /// Confirm the pending host/folder deletion (the actual, irreversible delete).
     ConfirmDelete,
-    /// Dismiss the delete confirmation without deleting.
+    /// Dismiss the shared delete confirmation without deleting.
     CancelDelete,
     Connect,
     Edit,
@@ -94,6 +113,13 @@ pub enum SshManagerPanelAction {
         node_id: String,
         pty_session_id: String,
         pty_generation: u64,
+    },
+    /// Open one exact existing tmux/byobu session in a new classic SSH tab.
+    OpenMultiplexerSession {
+        node_id: String,
+        kind: i32,
+        target: String,
+        attached_clients: u32,
     },
     /// Click a row; the handling depends on the node kind:
     /// - server: select + emit OpenSshTerminal (connect directly)
@@ -160,6 +186,12 @@ pub enum SshManagerPanelEvent {
         pty_session_id: String,
         pty_generation: u64,
     },
+    OpenMultiplexerSession {
+        node_id: String,
+        server: SshServerInfo,
+        mode: MultiplexerAttachMode,
+        target: String,
+    },
     PersistenceError(String),
 }
 
@@ -168,6 +200,21 @@ struct RenameState {
     editor: ViewHandle<EditorView>,
     /// Whether the rename was auto-triggered by creating a new folder.
     is_newly_created: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeleteCredentialAssignment {
+    host_name: String,
+    credential_label: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeleteImpact {
+    node_id: String,
+    node_name: String,
+    node_kind: NodeKind,
+    host_names: Vec<String>,
+    credential_assignments: Vec<DeleteCredentialAssignment>,
 }
 
 /// Content fields for a single candidate row — bundles the few Options that rendering cares about into one struct,
@@ -217,20 +264,14 @@ pub struct SshManagerPanel {
     context_menu_position: Option<Vector2F>,
     context_menu_target: Option<String>,
     context_menu_item_states: Vec<MouseStateHandle>,
-    /// The last context-menu anchor, kept even after the menu is dismissed. The
-    /// menu's click queues `<action>` then `DismissContextMenu`, and WarpUI runs
-    /// queued actions in reverse, so `DismissContextMenu` clears
-    /// `context_menu_position` *before* `on_request_delete` runs — this field
-    /// preserves the position for the delete-confirmation overlay.
-    context_menu_anchor: Option<Vector2F>,
-
-    /// A delete awaiting confirmation: `(node_id, anchor_position)`. Deleting a
-    /// host or folder wipes the DB node plus its three keychain secrets — and a
-    /// folder's whole subtree — with no undo, so it is gated behind an explicit
-    /// confirmation overlay rather than firing on a single context-menu click.
-    pending_delete: Option<(String, Vector2F)>,
-    delete_confirm_cancel_btn: MouseStateHandle,
-    delete_confirm_confirm_btn: MouseStateHandle,
+    /// A delete awaiting confirmation, including the exact hosts and OneKey
+    /// assignments affected. The impact is captured before the shared modal is
+    /// shown, so the user never confirms an opaque folder-wide deletion.
+    pending_delete: Option<DeleteImpact>,
+    delete_confirm_scroll_state: ClippedScrollStateHandle,
+    delete_confirm_close_btn: ViewHandle<ActionButton>,
+    delete_confirm_cancel_btn: ViewHandle<ActionButton>,
+    delete_confirm_confirm_btn: ViewHandle<ActionButton>,
 
     /// The node currently being renamed (editor + node_id).
     rename_state: Option<RenameState>,
@@ -260,7 +301,10 @@ pub struct SshManagerPanel {
     /// Running daemon sessions per server node, fetched on demand via
     /// `headless_connect::list_daemon_sessions` (connect-to-list, so it also
     /// surfaces sessions that survived a restart / drop — the main use case).
-    host_sessions: HashMap<String, Vec<SessionInfo>>,
+    host_sessions: HashMap<String, SessionList>,
+    /// Existing tmux/byobu sessions from the same typed inventory fetch. Kept
+    /// separate from native sessions because adoption uses a classic SSH tab.
+    host_multiplexer_sessions: HashMap<String, MultiplexerSessionList>,
     /// Server node_ids whose session list is currently shown (expanded).
     sessions_expanded: std::collections::HashSet<String>,
     /// Server node_ids with an in-flight session fetch.
@@ -277,6 +321,8 @@ pub struct SshManagerPanel {
     sessions_error: HashMap<String, String>,
     /// Hover/click state per session row (key = "<node_id>:<pty_session_id>").
     session_row_states: HashMap<String, MouseStateHandle>,
+    /// Visible first-level actions for existing tmux/byobu sessions.
+    multiplexer_open_buttons: HashMap<String, ViewHandle<ActionButton>>,
     command_factory: Arc<dyn WorkspaceCommandFactory>,
 }
 
@@ -290,6 +336,18 @@ impl SshManagerPanel {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let candidates = ctx.add_model(|_| CandidatesViewModel::new());
+        let delete_confirm_close_btn =
+            ctx.add_view(|_| modal_frame::close_button(SshManagerPanelAction::CancelDelete));
+        let delete_confirm_cancel_btn = ctx.add_typed_action_view(|_| {
+            ActionButton::new(crate::t!("common-cancel"), NakedTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(SshManagerPanelAction::CancelDelete);
+            })
+        });
+        let delete_confirm_confirm_btn = ctx.add_typed_action_view(|_| {
+            ActionButton::new(crate::t!("common-delete"), DangerPrimaryTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(SshManagerPanelAction::ConfirmDelete);
+            })
+        });
 
         let mut me = Self {
             nodes: Vec::new(),
@@ -302,10 +360,11 @@ impl SshManagerPanel {
             row_drag_states: HashMap::new(),
             context_menu_position: None,
             context_menu_target: None,
-            context_menu_anchor: None,
             pending_delete: None,
-            delete_confirm_cancel_btn: MouseStateHandle::default(),
-            delete_confirm_confirm_btn: MouseStateHandle::default(),
+            delete_confirm_scroll_state: ClippedScrollStateHandle::default(),
+            delete_confirm_close_btn,
+            delete_confirm_cancel_btn,
+            delete_confirm_confirm_btn,
             context_menu_item_states: (0..MAX_CONTEXT_MENU_ITEMS)
                 .map(|_| MouseStateHandle::default())
                 .collect(),
@@ -320,12 +379,14 @@ impl SshManagerPanel {
             add_tailscale_btn: MouseStateHandle::default(),
             add_cancel_btn: MouseStateHandle::default(),
             host_sessions: HashMap::new(),
+            host_multiplexer_sessions: HashMap::new(),
             sessions_expanded: std::collections::HashSet::new(),
             sessions_loading: std::collections::HashSet::new(),
             connecting: std::collections::HashSet::new(),
             resilient_hosts: std::collections::HashSet::new(),
             sessions_error: HashMap::new(),
             session_row_states: HashMap::new(),
+            multiplexer_open_buttons: HashMap::new(),
             command_factory,
         };
         // `~/.ssh/config` is read on-demand only when the user opens the "Add a
@@ -366,12 +427,11 @@ impl SshManagerPanel {
                         self.rename_state = None;
                     }
                 }
-                // Likewise drop a pending delete whose target vanished, so no stale
-                // (empty) confirmation overlay lingers.
-                if let Some((id, _)) = self.pending_delete.as_ref() {
-                    if !self.nodes.iter().any(|n| n.id == *id) {
-                        self.pending_delete = None;
-                    }
+                // Any tree mutation invalidates the captured host/credential
+                // impact. Close the modal rather than let the user confirm
+                // against a stale folder snapshot.
+                if self.pending_delete.is_some() {
+                    self.pending_delete = None;
                 }
                 // Refresh which hosts have Zaplexify persistence enabled (mark).
                 let server_ids: Vec<String> = self
@@ -415,6 +475,8 @@ impl SshManagerPanel {
         // row-state map is keyed by "<node_id>:<pty_session_id>").
         self.host_sessions
             .retain(|k, _| active_ids.contains(k.as_str()));
+        self.host_multiplexer_sessions
+            .retain(|k, _| active_ids.contains(k.as_str()));
         self.sessions_expanded
             .retain(|k| active_ids.contains(k.as_str()));
         self.sessions_loading
@@ -423,6 +485,11 @@ impl SshManagerPanel {
             .retain(|k, _| active_ids.contains(k.as_str()));
         self.session_row_states.retain(|k, _| {
             k.split(':')
+                .next()
+                .is_some_and(|node_id| active_ids.contains(node_id))
+        });
+        self.multiplexer_open_buttons.retain(|key, _| {
+            key.split(':')
                 .next()
                 .is_some_and(|node_id| active_ids.contains(node_id))
         });
@@ -624,11 +691,7 @@ impl SshManagerPanel {
     /// explicit, reversible action — the button is the user's intent.
     fn on_discover_tailscale(&mut self, ctx: &mut ViewContext<Self>) {
         self.adding_mode = false;
-        let output = self
-            .command_factory
-            .blocking_command("tailscale")
-            .args(["status", "--json"])
-            .output();
+        let output = tailscale_status_output(self.command_factory.as_ref());
         let json = match output {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
             Ok(_) | Err(_) => {
@@ -744,9 +807,8 @@ impl SshManagerPanel {
         }
     }
 
-    /// Context-menu "Delete": open the confirmation overlay anchored where the
-    /// menu was, instead of deleting immediately. A single misclick must not wipe
-    /// a host (or a folder's whole subtree) and its keychain secrets.
+    /// Context-menu "Delete": resolve the complete impact, then open the shared
+    /// confirmation modal instead of deleting immediately.
     fn on_request_delete(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(id) = self.selected_id.clone() else {
             return;
@@ -756,11 +818,46 @@ impl SshManagerPanel {
         if !self.nodes.iter().any(|n| n.id == id) {
             return;
         }
-        // Anchor the confirmation where the context menu was. `context_menu_anchor`
-        // (not `context_menu_position`) because the menu's `DismissContextMenu` has
-        // already cleared the latter by the time this runs (reverse dispatch).
-        let position = self.context_menu_anchor.unwrap_or_default();
-        self.pending_delete = Some((id, position));
+
+        let descendant_server_ids = descendant_server_nodes(&self.nodes, &id)
+            .into_iter()
+            .map(|node| node.id.clone())
+            .collect::<Vec<_>>();
+        let credential_labels_by_host = warp_ssh_manager::with_conn(|conn| {
+            let credentials = SshRepository::list_onekey_credentials(conn)?
+                .into_iter()
+                .map(|credential| (credential.id, credential.display_label()))
+                .collect::<HashMap<_, _>>();
+            let mut labels_by_host = HashMap::new();
+            for server_id in &descendant_server_ids {
+                let Some(server) = SshRepository::get_server(conn, server_id)? else {
+                    anyhow::bail!("SSH host disappeared while preparing delete confirmation");
+                };
+                let Some(credential_id) = server.credential_id else {
+                    continue;
+                };
+                let label = credentials.get(&credential_id).cloned().unwrap_or_else(|| {
+                    crate::t!("workspace-left-panel-ssh-manager-delete-credential-unavailable")
+                });
+                labels_by_host.insert(server_id.clone(), label);
+            }
+            Ok(labels_by_host)
+        });
+        let credential_labels_by_host = match credential_labels_by_host {
+            Ok(labels) => labels,
+            Err(error) => {
+                log::error!("ssh_manager: failed to prepare delete confirmation: {error:?}");
+                ctx.emit(SshManagerPanelEvent::PersistenceError(crate::t!(
+                    "common-error"
+                )));
+                return;
+            }
+        };
+        let Some(impact) = build_delete_impact(&self.nodes, &id, &credential_labels_by_host) else {
+            return;
+        };
+        self.delete_confirm_scroll_state.scroll_to(Pixels::zero());
+        self.pending_delete = Some(impact);
         ctx.notify();
     }
 
@@ -774,9 +871,10 @@ impl SshManagerPanel {
     /// (and, for a folder, its whole subtree via the repository) plus the node's
     /// three keychain secrets.
     fn on_confirm_delete(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some((id, _)) = self.pending_delete.take() else {
+        let Some(pending) = self.pending_delete.take() else {
             return;
         };
+        let id = pending.node_id;
         ctx.notify();
         let result = warp_ssh_manager::with_conn(|c| {
             Ok(delete_node_and_secrets(c, &KeychainSecretStore, &id)?)
@@ -884,7 +982,7 @@ impl SshManagerPanel {
     /// them in `host_sessions` (or records `sessions_error`).
     #[allow(unused_variables)]
     fn fetch_sessions(&mut self, id: String, ctx: &mut ViewContext<Self>) {
-        let server = warp_ssh_manager::with_conn(|c| Ok(SshRepository::get_server(c, &id)?))
+        let server = warp_ssh_manager::with_conn(|c| resolve_server_for_node(c, &id))
             .ok()
             .flatten();
         let Some(server) = server else {
@@ -905,31 +1003,17 @@ impl SshManagerPanel {
                 );
                 return;
             }
-            // Resolve OneKey → effective auth. The daemon listing runs headless
-            // (BatchMode), which only works with key auth, AND it must use the
-            // resolved username/key_path so it targets the SAME per-host
-            // ControlMaster the connect path uses (`control_socket_path` keys on
-            // user@host:port, and `open_ssh_terminal` connects with the resolved
-            // server). Using the unresolved record would key a different socket
-            // and/or fail auth for OneKey-key hosts.
-            let resolved = warp_ssh_manager::with_conn(|c| {
-                let auth = SshRepository::resolve_server_auth(c, &server)?;
-                let mut resolved = server.clone();
-                resolved.username = auth.username;
-                resolved.key_path = auth.key_path;
-                resolved.auth_type = auth.auth_type;
-                Ok(resolved)
-            });
-            let server = match resolved {
-                Ok(s) if s.auth_type == AuthType::Key => s,
-                _ => {
-                    self.sessions_error.insert(
-                        id,
-                        crate::t!("workspace-left-panel-ssh-manager-sessions-needs-key"),
-                    );
-                    return;
-                }
-            };
+            // The daemon listing runs headless (BatchMode), which only works
+            // with effective key auth. `resolve_server_for_node` also ensures
+            // that OneKey hosts target the same user@host ControlMaster as the
+            // normal connection path.
+            if server.auth_type != AuthType::Key {
+                self.sessions_error.insert(
+                    id,
+                    crate::t!("workspace-left-panel-ssh-manager-sessions-needs-key"),
+                );
+                return;
+            }
             self.sessions_loading.insert(id.clone());
             let auth_context = std::sync::Arc::new(server_api_auth_context(
                 AuthStateProvider::as_ref(ctx).get().clone(),
@@ -941,8 +1025,11 @@ impl SshManagerPanel {
                 move |me, result, ctx| {
                     me.sessions_loading.remove(&id);
                     match result {
-                        Ok(sessions) => {
-                            me.host_sessions.insert(id, sessions);
+                        Ok(inventory) => {
+                            me.host_sessions.insert(id.clone(), inventory.daemon);
+                            me.host_multiplexer_sessions
+                                .insert(id.clone(), inventory.multiplexers);
+                            me.sync_multiplexer_open_buttons(&id, ctx);
                         }
                         Err(e) => {
                             me.sessions_error.insert(id, e);
@@ -972,19 +1059,9 @@ impl SshManagerPanel {
         // Resolve OneKey → effective auth so the adopt connects with the same
         // username/key_path the listing + connect paths use — otherwise an
         // OneKey-key host would target a different ControlMaster / fail auth.
-        let server = warp_ssh_manager::with_conn(|c| {
-            let Some(server) = SshRepository::get_server(c, &node_id)? else {
-                return Ok(None);
-            };
-            let auth = SshRepository::resolve_server_auth(c, &server)?;
-            let mut resolved = server;
-            resolved.username = auth.username;
-            resolved.key_path = auth.key_path;
-            resolved.auth_type = auth.auth_type;
-            Ok(Some(resolved))
-        })
-        .ok()
-        .flatten();
+        let server = warp_ssh_manager::with_conn(|c| resolve_server_for_node(c, &node_id))
+            .ok()
+            .flatten();
         if let Some(server) = server {
             ctx.emit(SshManagerPanelEvent::AdoptDaemonSession {
                 server,
@@ -992,6 +1069,74 @@ impl SshManagerPanel {
                 pty_generation,
             });
         }
+    }
+
+    fn sync_multiplexer_open_buttons(&mut self, node_id: &str, ctx: &mut ViewContext<Self>) {
+        let prefix = format!("{node_id}:mux:");
+        self.multiplexer_open_buttons
+            .retain(|key, _| !key.starts_with(&prefix));
+        let sessions = self
+            .host_multiplexer_sessions
+            .get(node_id)
+            .map(|inventory| inventory.sessions.clone())
+            .unwrap_or_default();
+        for session in sessions {
+            let key = multiplexer_row_key(node_id, &session);
+            let action = SshManagerPanelAction::OpenMultiplexerSession {
+                node_id: node_id.to_string(),
+                kind: session.kind,
+                target: session.target,
+                attached_clients: session.attached_clients,
+            };
+            let button = ctx.add_typed_action_view(|_| {
+                ActionButton::new(
+                    crate::t!("workspace-left-panel-ssh-manager-multiplexer-open"),
+                    NakedTheme,
+                )
+                .with_size(ButtonSize::XSmall)
+                .on_click(move |ctx| ctx.dispatch_typed_action(action.clone()))
+            });
+            self.multiplexer_open_buttons.insert(key, button);
+        }
+    }
+
+    fn on_open_multiplexer_session(
+        &mut self,
+        node_id: String,
+        kind: i32,
+        target: String,
+        attached_clients: u32,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(mode) = multiplexer_attach_mode(kind, attached_clients) else {
+            ctx.emit(SshManagerPanelEvent::PersistenceError(crate::t!(
+                "workspace-left-panel-ssh-manager-multiplexer-invalid"
+            )));
+            return;
+        };
+        let server = warp_ssh_manager::with_conn(|conn| resolve_server_for_node(conn, &node_id))
+            .ok()
+            .flatten();
+        let Some(server) = server else {
+            ctx.emit(SshManagerPanelEvent::PersistenceError(crate::t!(
+                "workspace-left-panel-ssh-manager-multiplexer-host-missing"
+            )));
+            return;
+        };
+        if let Err(error) =
+            validate_ssh_endpoint(EndpointUse::Connect, &server.host, &server.port.to_string())
+        {
+            ctx.emit(SshManagerPanelEvent::PersistenceError(
+                endpoint_validation_message(error),
+            ));
+            return;
+        }
+        ctx.emit(SshManagerPanelEvent::OpenMultiplexerSession {
+            node_id,
+            server,
+            mode,
+            target,
+        });
     }
 
     fn on_edit(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1132,7 +1277,6 @@ impl SshManagerPanel {
         }
         self.context_menu_target = target;
         self.context_menu_position = Some(position);
-        self.context_menu_anchor = Some(position);
         ctx.notify();
     }
 
@@ -1997,9 +2141,9 @@ impl SshManagerPanel {
         .finish()
     }
 
-    /// Renders the inline running-daemon-session rows shown under an expanded
-    /// host: a loading / error / empty message, or one clickable row per session
-    /// (click → adopt). Indented one level past the host row.
+    /// Renders one host's native daemon sessions followed by its separately
+    /// labelled existing tmux/byobu sessions. Host RAM is derived solely from
+    /// daemon-ring bytes and the daemon-reported cap.
     fn render_session_rows(
         &self,
         node: &SshNode,
@@ -2040,19 +2184,31 @@ impl SshManagerPanel {
             // color, matching the candidates error row (no glyph needed).
             return vec![message(err.clone(), theme.ui_error_color())];
         }
-        let sessions = match self.host_sessions.get(&node.id) {
-            Some(sessions) if !sessions.is_empty() => sessions,
-            _ => {
-                return vec![message(
-                    crate::t!("workspace-left-panel-ssh-manager-sessions-empty"),
-                    muted,
-                )]
-            }
-        };
+        let mut rows = Vec::new();
+        let daemon_inventory = self.host_sessions.get(&node.id);
+        if let Some(usage) = daemon_inventory.and_then(host_ring_usage) {
+            let color = match usage.tone {
+                HostRingTone::Calm => theme.accent().into_solid(),
+                HostRingTone::Warning => theme.ui_warning_color(),
+                HostRingTone::Critical => theme.ui_error_color(),
+            };
+            let used = format_ring_bytes(usage.used_bytes).unwrap_or_else(|| "0 KB".to_string());
+            let cap = format_ring_bytes(usage.cap_bytes).unwrap_or_else(|| "0 KB".to_string());
+            rows.push(message(
+                crate::t!(
+                    "workspace-left-panel-ssh-manager-host-ram",
+                    used = used,
+                    cap = cap
+                ),
+                color,
+            ));
+        }
 
-        sessions
-            .iter()
-            .map(|session| {
+        if let Some(sessions) = daemon_inventory
+            .map(|inventory| inventory.sessions.as_slice())
+            .filter(|sessions| !sessions.is_empty())
+        {
+            for session in sessions {
                 let key = format!("{}:{}", node.id, session.session_id);
                 let state = self
                     .session_row_states
@@ -2072,7 +2228,7 @@ impl SshManagerPanel {
                 // Per-session RAM (the daemon's output-ring footprint the memory
                 // governor accounts against the host cap) — muted, trailing.
                 let ram_text = format_ring_bytes(session.ring_bytes);
-                let mut row = Flex::row()
+                let left = Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_spacing(ITEM_ICON_TEXT_SPACING)
                     .with_child(
@@ -2088,7 +2244,14 @@ impl SshManagerPanel {
                         )
                         .with_color(theme.main_text_color(theme.background()).into())
                         .finish(),
-                    );
+                    )
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .finish();
+                let mut row = Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                    .with_child(left);
                 if let Some(ram) = ram_text {
                     row = row.with_child(
                         Text::new_inline(
@@ -2100,31 +2263,120 @@ impl SshManagerPanel {
                         .finish(),
                     );
                 }
-                let row = row.with_main_axis_size(MainAxisSize::Max).finish();
-                Hoverable::new(state, move |mouse| {
-                    let mut c = Container::new(row)
-                        .with_padding_top(ITEM_PADDING_VERTICAL)
-                        .with_padding_bottom(ITEM_PADDING_VERTICAL)
-                        .with_padding_left(ITEM_PADDING_HORIZONTAL)
-                        .with_padding_right(ITEM_PADDING_HORIZONTAL)
-                        .with_margin_bottom(ITEM_MARGIN_BOTTOM)
-                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
-                    if mouse.is_hovered() {
-                        c = c.with_background(internal_colors::fg_overlay_3(theme));
+                let row = row.finish();
+                rows.push(
+                    Hoverable::new(state, move |mouse| {
+                        let mut c = Container::new(row)
+                            .with_padding_top(ITEM_PADDING_VERTICAL)
+                            .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                            .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                            .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                            .with_margin_bottom(ITEM_MARGIN_BOTTOM)
+                            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+                        if mouse.is_hovered() {
+                            c = c.with_background(internal_colors::fg_overlay_3(theme));
+                        }
+                        c.finish()
+                    })
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(SshManagerPanelAction::AdoptSession {
+                            node_id: node_id.clone(),
+                            pty_session_id: pty_session_id.clone(),
+                            pty_generation,
+                        });
+                    })
+                    .finish(),
+                );
+            }
+        } else {
+            rows.push(message(
+                crate::t!("workspace-left-panel-ssh-manager-sessions-empty"),
+                muted,
+            ));
+        }
+
+        if let Some(inventory) = self.host_multiplexer_sessions.get(&node.id) {
+            if !inventory.sessions.is_empty() || !inventory.warnings.is_empty() {
+                rows.push(message(
+                    crate::t!("workspace-left-panel-ssh-manager-multiplexer-heading"),
+                    theme.main_text_color(theme.background()).into(),
+                ));
+                for warning in &inventory.warnings {
+                    rows.push(message(
+                        crate::t!(
+                            "workspace-left-panel-ssh-manager-multiplexer-scan-error",
+                            detail = warning.clone()
+                        ),
+                        theme.ui_error_color(),
+                    ));
+                }
+                for session in &inventory.sessions {
+                    let key = multiplexer_row_key(&node.id, session);
+                    let title = if session.name.is_empty() {
+                        session.target.clone()
+                    } else {
+                        session.name.clone()
+                    };
+                    let metadata = crate::t!(
+                        "workspace-left-panel-ssh-manager-multiplexer-metadata",
+                        kind = multiplexer_kind_label(session.kind),
+                        windows = session.windows,
+                        clients = session.attached_clients
+                    );
+                    let details = Flex::column()
+                        .with_main_axis_size(MainAxisSize::Min)
+                        .with_child(
+                            Text::new_inline(
+                                title,
+                                appearance.ui_font_family(),
+                                appearance.ui_font_subheading(),
+                            )
+                            .with_color(theme.main_text_color(theme.background()).into())
+                            .finish(),
+                        )
+                        .with_child(
+                            Text::new_inline(
+                                metadata,
+                                appearance.ui_font_family(),
+                                appearance.ui_font_body(),
+                            )
+                            .with_color(muted)
+                            .finish(),
+                        )
+                        .finish();
+                    let left = Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(ITEM_ICON_TEXT_SPACING)
+                        .with_child(
+                            ConstrainedBox::new(Empty::new().finish())
+                                .with_width(indent)
+                                .finish(),
+                        )
+                        .with_child(details)
+                        .with_main_axis_size(MainAxisSize::Min)
+                        .finish();
+                    let mut row = Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                        .with_main_axis_size(MainAxisSize::Max)
+                        .with_child(left);
+                    if let Some(button) = self.multiplexer_open_buttons.get(&key) {
+                        row = row.with_child(ChildView::new(button).finish());
                     }
-                    c.finish()
-                })
-                .with_cursor(Cursor::PointingHand)
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(SshManagerPanelAction::AdoptSession {
-                        node_id: node_id.clone(),
-                        pty_session_id: pty_session_id.clone(),
-                        pty_generation,
-                    });
-                })
-                .finish()
-            })
-            .collect()
+                    rows.push(
+                        Container::new(row.finish())
+                            .with_padding_top(ITEM_PADDING_VERTICAL)
+                            .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                            .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                            .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                            .with_margin_bottom(ITEM_MARGIN_BOTTOM)
+                            .finish(),
+                    );
+                }
+            }
+        }
+        rows
     }
 
     fn render_tree(&self, appearance: &warp_core::ui::appearance::Appearance) -> Box<dyn Element> {
@@ -2540,137 +2792,128 @@ impl SshManagerPanel {
             .finish()
     }
 
-    /// The delete-confirmation overlay for the host/folder in `pending_delete`.
-    /// A neutral Cancel and a destructive (red) Delete; clicking outside cancels.
-    fn render_delete_confirm(
-        &self,
-        node_id: &str,
-        appearance: &warp_core::ui::appearance::Appearance,
-    ) -> Box<dyn Element> {
+    /// Shared confirmation modal for deleting a host or folder.
+    fn render_delete_confirm(&self, impact: &DeleteImpact, app: &AppContext) -> Box<dyn Element> {
+        let appearance = warp_core::ui::appearance::Appearance::as_ref(app);
         let theme = appearance.theme();
-        let text_color = theme.main_text_color(theme.background()).into();
-        // Fail closed: if the target vanished (deleted elsewhere while the dialog
-        // is open) render nothing rather than a nameless destructive confirmation.
-        let Some(node) = self.nodes.iter().find(|n| n.id == node_id) else {
-            return Empty::new().finish();
+        let family = appearance.ui_font_family();
+        let main = theme.main_text_color(theme.background()).into_solid();
+        let muted = theme.sub_text_color(theme.background()).into_solid();
+
+        let title = crate::t!(
+            "workspace-left-panel-ssh-manager-delete-title",
+            name = impact.node_name.clone()
+        );
+        let summary = match impact.node_kind {
+            NodeKind::Folder if impact.host_names.is_empty() => {
+                crate::t!("workspace-left-panel-ssh-manager-delete-folder-empty")
+            }
+            NodeKind::Folder => crate::t!(
+                "workspace-left-panel-ssh-manager-delete-folder-summary",
+                count = impact.host_names.len() as u64
+            ),
+            NodeKind::Server => crate::t!("workspace-left-panel-ssh-manager-delete-host-summary"),
         };
-        let name = node.name.clone();
-        let is_folder = matches!(node.kind, NodeKind::Folder);
-
-        let title = Text::new_inline(
-            format!("Delete \u{201c}{name}\u{201d}?"),
-            appearance.ui_font_family(),
-            appearance.ui_font_subheading(),
-        )
-        .with_color(text_color)
-        .finish();
-
-        let detail_str = if is_folder {
-            "This deletes the folder and everything inside it, and cannot be undone."
+        let hosts = if matches!(impact.node_kind, NodeKind::Folder) && !impact.host_names.is_empty()
+        {
+            Some(crate::t!(
+                "workspace-left-panel-ssh-manager-delete-contained-hosts",
+                hosts = impact.host_names.join(", ")
+            ))
         } else {
-            "This deletes the saved host and its stored credentials, and cannot be undone."
+            None
         };
-        let detail = Container::new(
-            Text::new_inline(
-                detail_str.to_string(),
-                appearance.ui_font_family(),
+        let credentials = if impact.credential_assignments.is_empty() {
+            crate::t!("workspace-left-panel-ssh-manager-delete-credential-assignments-none")
+        } else {
+            let assignments = impact
+                .credential_assignments
+                .iter()
+                .map(|assignment| {
+                    format!(
+                        "{} \u{2192} {}",
+                        assignment.host_name, assignment.credential_label
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            crate::t!(
+                "workspace-left-panel-ssh-manager-delete-credential-assignments",
+                assignments = assignments
+            )
+        };
+
+        let mut body = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(8.0)
+            .with_child(
+                Text::new(summary, family, appearance.ui_font_body())
+                    .with_color(main)
+                    .finish(),
+            );
+        if let Some(hosts) = hosts {
+            body.add_child(
+                Text::new(hosts, family, appearance.ui_font_body())
+                    .with_color(muted)
+                    .finish(),
+            );
+        }
+        body.add_child(
+            Text::new(credentials, family, appearance.ui_font_body())
+                .with_color(muted)
+                .finish(),
+        );
+        body.add_child(
+            Text::new(
+                crate::t!("workspace-left-panel-ssh-manager-delete-cannot-undo"),
+                family,
                 appearance.ui_font_body(),
             )
-            .with_color(text_color)
+            .with_color(main)
             .finish(),
+        );
+        let scrollable_body = ClippedScrollable::vertical(
+            self.delete_confirm_scroll_state.clone(),
+            body.finish(),
+            ScrollbarWidth::Auto,
+            theme.disabled_text_color(theme.background()).into(),
+            theme.main_text_color(theme.background()).into(),
+            ElementFill::None,
         )
-        .with_padding_top(6.0)
-        .with_padding_bottom(12.0)
+        .with_overlayed_scrollbar()
         .finish();
-
-        // Cancel — neutral.
-        let cancel_label = Text::new_inline(
-            "Cancel".to_string(),
-            appearance.ui_font_family(),
-            appearance.ui_font_subheading(),
-        )
-        .with_color(text_color)
-        .finish();
-        let cancel_btn = Hoverable::new(self.delete_confirm_cancel_btn.clone(), move |mouse| {
-            let mut c = Container::new(cancel_label)
-                .with_padding_top(CONTEXT_MENU_ITEM_PADDING_V)
-                .with_padding_bottom(CONTEXT_MENU_ITEM_PADDING_V)
-                .with_padding_left(CONTEXT_MENU_ITEM_PADDING_H)
-                .with_padding_right(CONTEXT_MENU_ITEM_PADDING_H)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                .with_border(Border::all(1.0).with_border_color(theme.surface_3().into()));
-            if mouse.is_hovered() {
-                c = c.with_background(internal_colors::fg_overlay_3(theme));
-            }
-            c.finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(SshManagerPanelAction::CancelDelete);
-        })
-        .finish();
-
-        // Delete — destructive; red label and red border.
-        let delete_label = Text::new_inline(
-            "Delete".to_string(),
-            appearance.ui_font_family(),
-            appearance.ui_font_subheading(),
-        )
-        .with_color(theme.ui_error_color())
-        .finish();
-        let delete_btn = Hoverable::new(self.delete_confirm_confirm_btn.clone(), move |mouse| {
-            let mut c = Container::new(delete_label)
-                .with_padding_top(CONTEXT_MENU_ITEM_PADDING_V)
-                .with_padding_bottom(CONTEXT_MENU_ITEM_PADDING_V)
-                .with_padding_left(CONTEXT_MENU_ITEM_PADDING_H)
-                .with_padding_right(CONTEXT_MENU_ITEM_PADDING_H)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                .with_border(Border::all(1.0).with_border_color(theme.ui_error_color()));
-            if mouse.is_hovered() {
-                c = c.with_background(internal_colors::fg_overlay_3(theme));
-            }
-            c.finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(SshManagerPanelAction::ConfirmDelete);
-        })
-        .finish();
+        let bounded_body = ConstrainedBox::new(scrollable_body)
+            .with_max_height(DELETE_CONFIRM_BODY_MAX_HEIGHT)
+            .finish();
 
         let buttons = Flex::row()
-            .with_child(cancel_btn)
-            .with_child(Container::new(delete_btn).with_padding_left(8.0).finish())
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_child(ChildView::new(&self.delete_confirm_cancel_btn).finish())
+            .with_child(
+                Container::new(ChildView::new(&self.delete_confirm_confirm_btn).finish())
+                    .with_margin_left(8.0)
+                    .finish(),
+            )
             .finish();
-
-        let col = Flex::column()
+        let content = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
-            .with_child(title)
-            .with_child(detail)
-            .with_child(buttons)
+            .with_child(
+                Container::new(modal_frame::modal_header(
+                    title,
+                    None,
+                    ChildView::new(&self.delete_confirm_close_btn).finish(),
+                    appearance,
+                ))
+                .with_margin_bottom(16.0)
+                .finish(),
+            )
+            .with_child(bounded_body)
+            .with_child(Container::new(buttons).with_margin_top(20.0).finish())
             .finish();
 
-        let dialog_inner = ConstrainedBox::new(
-            Container::new(col)
-                .with_background(theme.surface_2())
-                .with_border(Border::all(1.0).with_border_color(theme.surface_3().into()))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.0)))
-                .with_uniform_padding(16.0)
-                .finish(),
-        )
-        .with_width(300.0)
-        .finish();
-
-        Dismiss::new(dialog_inner)
-            // Modal: block clicks from passing through to the tree behind (so an
-            // outside click cancels cleanly and can't, e.g., open another context
-            // menu while a delete is pending). Matches the app's other
-            // destructive dialogs.
-            .prevent_interaction_with_other_elements()
-            .on_dismiss(|ctx, _| {
-                ctx.dispatch_typed_action(SshManagerPanelAction::CancelDelete);
-            })
-            .finish()
+        let card = modal_frame::modal_card(content, modal_frame::MODAL_WIDTH_STANDARD, appearance);
+        modal_frame::modal_overlay(card, Some(SshManagerPanelAction::CancelDelete), app)
     }
 }
 
@@ -2706,6 +2949,18 @@ impl TypedActionView for SshManagerPanel {
                 node_id.clone(),
                 pty_session_id.clone(),
                 *pty_generation,
+                ctx,
+            ),
+            SshManagerPanelAction::OpenMultiplexerSession {
+                node_id,
+                kind,
+                target,
+                attached_clients,
+            } => self.on_open_multiplexer_session(
+                node_id.clone(),
+                *kind,
+                target.clone(),
+                *attached_clients,
                 ctx,
             ),
             SshManagerPanelAction::Click(id) => self.on_click(id.clone(), ctx),
@@ -2814,15 +3069,8 @@ impl View for SshManagerPanel {
             );
             stack.add_positioned_overlay_child(menu_el, positioning);
         }
-        if let Some((node_id, position)) = self.pending_delete.clone() {
-            let confirm_el = self.render_delete_confirm(&node_id, appearance);
-            let positioning = OffsetPositioning::offset_from_parent(
-                position,
-                ParentOffsetBounds::ParentByPosition,
-                ParentAnchor::TopLeft,
-                ChildAnchor::TopLeft,
-            );
-            stack.add_positioned_overlay_child(confirm_el, positioning);
+        if let Some(impact) = self.pending_delete.as_ref() {
+            stack.add_overlay_child(self.render_delete_confirm(impact, app));
         }
         stack.finish()
     }
@@ -2841,6 +3089,57 @@ fn resolve_parent_for_new_node(selected_id: Option<&str>, nodes: &[SshNode]) -> 
         NodeKind::Folder => Some(node.id.clone()),
         NodeKind::Server => node.parent_id.clone(),
     }
+}
+
+fn descendant_server_nodes<'a>(nodes: &'a [SshNode], node_id: &str) -> Vec<&'a SshNode> {
+    let mut subtree_ids = std::collections::HashSet::from([node_id.to_string()]);
+    loop {
+        let mut changed = false;
+        for node in nodes {
+            if node
+                .parent_id
+                .as_ref()
+                .is_some_and(|parent_id| subtree_ids.contains(parent_id))
+            {
+                changed |= subtree_ids.insert(node.id.clone());
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    nodes
+        .iter()
+        .filter(|node| subtree_ids.contains(&node.id) && matches!(node.kind, NodeKind::Server))
+        .collect()
+}
+
+fn build_delete_impact(
+    nodes: &[SshNode],
+    node_id: &str,
+    credential_labels_by_host: &HashMap<String, String>,
+) -> Option<DeleteImpact> {
+    let target = nodes.iter().find(|node| node.id == node_id)?;
+    let hosts = descendant_server_nodes(nodes, node_id);
+    let host_names = hosts.iter().map(|host| host.name.clone()).collect();
+    let credential_assignments = hosts
+        .into_iter()
+        .filter_map(|host| {
+            credential_labels_by_host
+                .get(&host.id)
+                .map(|credential_label| DeleteCredentialAssignment {
+                    host_name: host.name.clone(),
+                    credential_label: credential_label.clone(),
+                })
+        })
+        .collect();
+    Some(DeleteImpact {
+        node_id: target.id.clone(),
+        node_name: target.name.clone(),
+        node_kind: target.kind,
+        host_names,
+        credential_assignments,
+    })
 }
 
 fn sort_for_display(nodes: Vec<SshNode>, depths: &HashMap<String, usize>) -> Vec<SshNode> {
@@ -2928,6 +3227,20 @@ fn list_server_hosts() -> Vec<String> {
     })
 }
 
+fn resolve_server_for_node(
+    conn: &mut diesel::sqlite::SqliteConnection,
+    node_id: &str,
+) -> anyhow::Result<Option<SshServerInfo>> {
+    let Some(mut server) = SshRepository::get_server(conn, node_id)? else {
+        return Ok(None);
+    };
+    let auth = SshRepository::resolve_server_auth(conn, &server)?;
+    server.username = auth.username;
+    server.key_path = auth.key_path;
+    server.auth_type = auth.auth_type;
+    Ok(Some(server))
+}
+
 /// Create a blank registered SSH host at the top level (the "New server" path)
 /// and return its `node_id`. Shared by this panel's add button and the Conductor
 /// spine's "＋ Add host" (design §10 folds host add/edit onto the spine). The
@@ -2983,6 +3296,68 @@ fn format_ring_bytes(bytes: u64) -> Option<String> {
         Some(format!("{:.1} MB", b / (1024.0 * 1024.0)))
     } else {
         Some(format!("{} KB", (b / 1024.0).ceil() as u64))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HostRingTone {
+    Calm,
+    Warning,
+    Critical,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HostRingUsage {
+    used_bytes: u64,
+    cap_bytes: u64,
+    tone: HostRingTone,
+}
+
+fn host_ring_usage(inventory: &SessionList) -> Option<HostRingUsage> {
+    let cap_bytes = inventory.host_ring_cap_bytes;
+    if cap_bytes == 0 {
+        return None;
+    }
+    let used_bytes = inventory
+        .sessions
+        .iter()
+        .fold(0_u64, |sum, session| sum.saturating_add(session.ring_bytes));
+    let ratio = used_bytes as u128 * 100 / cap_bytes as u128;
+    let tone = if ratio >= 100 {
+        HostRingTone::Critical
+    } else if ratio >= 80 {
+        HostRingTone::Warning
+    } else {
+        HostRingTone::Calm
+    };
+    Some(HostRingUsage {
+        used_bytes,
+        cap_bytes,
+        tone,
+    })
+}
+
+fn multiplexer_row_key(node_id: &str, session: &MultiplexerSessionInfo) -> String {
+    format!("{node_id}:mux:{}:{}", session.kind, session.target)
+}
+
+fn multiplexer_attach_mode(kind: i32, attached_clients: u32) -> Option<MultiplexerAttachMode> {
+    match MultiplexerKind::try_from(kind).ok()? {
+        MultiplexerKind::Tmux | MultiplexerKind::ByobuTmux => Some(MultiplexerAttachMode::Tmux),
+        MultiplexerKind::ByobuScreen if attached_clients > 0 => {
+            Some(MultiplexerAttachMode::ScreenAttached)
+        }
+        MultiplexerKind::ByobuScreen => Some(MultiplexerAttachMode::ScreenDetached),
+        MultiplexerKind::Unspecified => None,
+    }
+}
+
+fn multiplexer_kind_label(kind: i32) -> &'static str {
+    match MultiplexerKind::try_from(kind) {
+        Ok(MultiplexerKind::Tmux) => "tmux",
+        Ok(MultiplexerKind::ByobuTmux) => "byobu (tmux)",
+        Ok(MultiplexerKind::ByobuScreen) => "byobu (screen)",
+        Ok(MultiplexerKind::Unspecified) | Err(_) => "unknown",
     }
 }
 

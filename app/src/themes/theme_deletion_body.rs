@@ -1,7 +1,7 @@
 use crate::appearance::Appearance;
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
-use crate::settings::{active_theme_kind, ThemeSettings};
+use crate::settings::{ThemeSettings, active_theme_kind};
 use crate::themes::theme::{ThemeKind, WarpTheme};
 use crate::user_config;
 use crate::user_config::util::from_yaml;
@@ -17,8 +17,8 @@ use warpui::fonts::Weight;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    platform::Cursor, AppContext, Element, Entity, SingletonEntity, TypedActionView, View,
-    ViewContext,
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+    platform::Cursor,
 };
 
 const BUTTON_PADDING: f32 = 12.;
@@ -84,7 +84,9 @@ impl ThemeDeletionBody {
                             let image_path_in_themes_dir = dir.join(path.as_str());
                             let _ = remove_file(image_path_in_themes_dir);
                         } else {
-                            log::warn!("Attempted to delete a custom theme image with an unexpected image source");
+                            log::warn!(
+                                "Attempted to delete a custom theme image with an unexpected image source"
+                            );
                         }
                     }
 

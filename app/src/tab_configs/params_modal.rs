@@ -6,8 +6,8 @@ use warpui::{
     elements::{
         Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
         CrossAxisAlignment, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, Padding, ParentElement, SavePosition, ScrollTarget,
-        ScrollToPositionMode, ScrollbarWidth, Text,
+        MouseStateHandle, Padding, ParentElement, SavePosition, ScrollTarget, ScrollToPositionMode,
+        ScrollbarWidth, Text,
     },
     keymap::{macros::*, FixedBinding, Keystroke},
     platform::Cursor,

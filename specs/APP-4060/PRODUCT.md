@@ -1,5 +1,12 @@
 # APP-4060: Allow selection of specific CLI agent for custom toolbar commands
 
+> **Zaplex v1 supersession:** The legacy Gemini CLI was discontinued and is
+> replaced by Antigravity (`agy`). For Zaplex's custom-command selector,
+> "all known agents" therefore means all available first-class agents:
+> Antigravity is included, while the retained compatibility-only
+> `CLIAgent::Gemini` variant and `Unknown` are not offered. This matches the
+> v1 release decision recorded in `CHANGELOG.md`.
+
 ## Summary
 
 Allow users to specify which CLI agent (Claude Code, Gemini, Codex, etc.) a custom toolbar command maps to. Today, user-configured regex patterns in "Commands that enable the toolbar" always produce a generic `Unknown` agent session, which means they lack agent-specific features like the correct icon, rich input submit strategy, plugin support, and brand styling. This change adds a per-pattern agent selector dropdown to the settings UI so that custom commands can receive the full agent experience.
@@ -111,4 +118,3 @@ When a user-configured regex matches a running command AND the pattern has a spe
 3. **Default behavior**: Add a command pattern with "CLI Agent" and verify it shows the generic toolbar (same as today).
 4. **Persistence**: Change an agent selection, restart Warp, and verify the selection is preserved.
 5. **Removal**: Remove a command and verify its agent mapping is gone (re-add the same command and confirm it defaults to "CLI Agent").
-

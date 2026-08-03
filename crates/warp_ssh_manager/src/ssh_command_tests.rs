@@ -147,6 +147,81 @@ fn shell_escapes_spaces_in_path() {
 }
 
 #[test]
+fn multiplexer_attach_keeps_target_as_remote_shell_data() {
+    let target = "release candidate; touch /tmp/never";
+    let args = build_multiplexer_ssh_args(&server(), MultiplexerAttachMode::Tmux, target).unwrap();
+    let destination_delimiter = args.iter().position(|arg| arg == "--").unwrap();
+
+    assert!(args[..destination_delimiter]
+        .windows(2)
+        .any(|pair| pair == ["-o", "RequestTTY=force"]));
+    assert!(args[..destination_delimiter]
+        .windows(2)
+        .any(|pair| { pair == ["-o", "SetEnv=ZAPLEX_SESSION=1 BYOBU_DISABLE=1 LC_BYOBU=0",] }));
+    assert_eq!(
+        &args[destination_delimiter + 1..],
+        &[
+            "alice@1.2.3.4".to_string(),
+            "env ZAPLEX_SESSION=1 BYOBU_DISABLE=1 LC_BYOBU=0 tmux attach-session -t \
+             'release candidate; touch /tmp/never'"
+                .to_string(),
+        ]
+    );
+}
+
+#[test]
+fn screen_attach_never_detaches_other_displays_or_creates_sessions() {
+    let attached =
+        build_multiplexer_ssh_args(&server(), MultiplexerAttachMode::ScreenAttached, "1234.ops")
+            .unwrap();
+    let detached = build_multiplexer_ssh_args(
+        &server(),
+        MultiplexerAttachMode::ScreenDetached,
+        "5678.release",
+    )
+    .unwrap();
+
+    assert_eq!(
+        attached.last().unwrap(),
+        "env ZAPLEX_SESSION=1 BYOBU_DISABLE=1 LC_BYOBU=0 screen -x 1234.ops"
+    );
+    assert_eq!(
+        detached.last().unwrap(),
+        "env ZAPLEX_SESSION=1 BYOBU_DISABLE=1 LC_BYOBU=0 screen -r 5678.release"
+    );
+    for command in [attached.last().unwrap(), detached.last().unwrap()] {
+        assert!(!command.contains(" -d"));
+        assert!(!command.contains(" -D"));
+        assert!(!command.contains(" -R"));
+    }
+}
+
+#[test]
+fn multiplexer_attach_rejects_empty_control_or_option_like_targets() {
+    for mode in [
+        MultiplexerAttachMode::Tmux,
+        MultiplexerAttachMode::ScreenAttached,
+        MultiplexerAttachMode::ScreenDetached,
+    ] {
+        for target in [
+            "",
+            "-d",
+            "-D",
+            "-R",
+            "-RR",
+            "line\nbreak",
+            "tab\ttarget",
+            "nul\0target",
+        ] {
+            assert_eq!(
+                build_multiplexer_ssh_command_line(&server(), mode, target),
+                Err(InvalidMultiplexerTarget)
+            );
+        }
+    }
+}
+
+#[test]
 fn test_connection_requires_password_for_password_auth() {
     let s = server();
     // test_connection should return Offline + error message when password is missing
@@ -270,8 +345,14 @@ fn unix_askpass_files_are_owner_only() {
         .permissions()
         .mode()
         & 0o777;
-    assert_eq!(secret_mode, 0o600, "secret file must be 0600, got {secret_mode:o}");
-    assert_eq!(script_mode, 0o700, "script file must be 0700, got {script_mode:o}");
+    assert_eq!(
+        secret_mode, 0o600,
+        "secret file must be 0600, got {secret_mode:o}"
+    );
+    assert_eq!(
+        script_mode, 0o700,
+        "script file must be 0700, got {script_mode:o}"
+    );
 }
 
 /// Dropping the session removes both temp files — the secret must not linger.
@@ -505,7 +586,7 @@ fn key_auth_args_destination_comes_after_options() {
 }
 
 #[test]
-fn test_never_disables_host_key_verification() {
+fn connection_test_never_disables_host_key_verification() {
     let s = server();
     for args in [
         build_password_auth_cmd_args(&s),
@@ -568,7 +649,7 @@ fn failed_output(stderr: &str) -> std::process::Output {
 
 #[cfg(unix)]
 #[test]
-fn changed_key_is_hard_failure() {
+fn changed_host_key_is_a_hard_failure() {
     let result = finalize_password_test_result(&failed_output(
         "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!",
     ));
@@ -620,11 +701,9 @@ fn confirmed_unknown_host_key_never_uses_accept_new() {
     apply_host_key_file(&mut args, &pinned_host_key, true);
     assert!(!args.iter().any(|arg| arg.contains("accept-new")));
     assert!(args.iter().any(|arg| arg == "StrictHostKeyChecking=yes"));
-    assert!(
-        args.iter().any(|arg| {
-            arg == &format!("UserKnownHostsFile={}", pinned_host_key.path.display())
-        })
-    );
+    assert!(args
+        .iter()
+        .any(|arg| { arg == &format!("UserKnownHostsFile={}", pinned_host_key.path.display()) }));
     assert!(!args.iter().any(|arg| arg == "StrictHostKeyChecking=no"));
 }
 
@@ -679,6 +758,13 @@ fn source_uses_direct_std_process_command(source: &str) -> bool {
 
 #[test]
 fn ssh_workspace_has_no_direct_std_process_command() {
+    fn inspect_file(path: &std::path::Path, violations: &mut Vec<String>) {
+        let source = std::fs::read_to_string(path).unwrap();
+        if source_uses_direct_std_process_command(&source) {
+            violations.push(path.display().to_string());
+        }
+    }
+
     fn inspect(path: &std::path::Path, violations: &mut Vec<String>) {
         for entry in std::fs::read_dir(path).unwrap() {
             let path = entry.unwrap().path();
@@ -690,10 +776,7 @@ fn ssh_workspace_has_no_direct_std_process_command() {
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.ends_with("_tests.rs"))
             {
-                let source = std::fs::read_to_string(&path).unwrap();
-                if source_uses_direct_std_process_command(&source) {
-                    violations.push(path.display().to_string());
-                }
+                inspect_file(&path, violations);
             }
         }
     }
@@ -703,6 +786,10 @@ fn ssh_workspace_has_no_direct_std_process_command() {
     let mut violations = Vec::new();
     inspect(&crate_dir.join("src"), &mut violations);
     inspect(&repo_dir.join("app/src/ssh_manager"), &mut violations);
+    inspect_file(
+        &repo_dir.join("app/src/remote_server/headless_connect.rs"),
+        &mut violations,
+    );
     assert_eq!(violations, Vec::<String>::new());
 }
 

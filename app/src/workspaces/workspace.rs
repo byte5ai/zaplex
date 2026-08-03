@@ -2,9 +2,7 @@ use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
 use crate::ai::llms::LLMModelHost;
-use crate::{
-    auth::UserUid, server::ids::ServerId, settings::AgentModeCommandExecutionPredicate,
-};
+use crate::{auth::UserUid, server::ids::ServerId, settings::AgentModeCommandExecutionPredicate};
 use chrono::Utc;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
