@@ -543,15 +543,15 @@ fn deepseek_osc9_response_text_becomes_notification_title() {
     let event = handler
         .try_parse(
             None,
-            "最新回复内容\ndeepseek: turn complete (1m 15s, $0.01)",
+            "Latest reply content\ndeepseek: turn complete (1m 15s, $0.01)",
         )
         .expect("DeepSeek OSC 9 body should parse");
 
     assert_eq!(event.event, CLIAgentEventType::Stop);
-    assert_eq!(event.payload.query.as_deref(), Some("最新回复内容"));
+    assert_eq!(event.payload.query.as_deref(), Some("Latest reply content"));
     assert_eq!(
         event.payload.response.as_deref(),
-        Some("最新回复内容\ndeepseek: turn complete (1m 15s, $0.01)")
+        Some("Latest reply content\ndeepseek: turn complete (1m 15s, $0.01)")
     );
 }
 
@@ -559,12 +559,15 @@ fn deepseek_osc9_response_text_becomes_notification_title() {
 fn deepseek_osc9_plain_response_text_becomes_notification_title() {
     let handler = DeepSeekSessionHandler;
     let event = handler
-        .try_parse(None, "最新回复内容")
+        .try_parse(None, "Latest reply content")
         .expect("DeepSeek OSC 9 body should parse");
 
     assert_eq!(event.event, CLIAgentEventType::Stop);
-    assert_eq!(event.payload.query.as_deref(), Some("最新回复内容"));
-    assert_eq!(event.payload.response.as_deref(), Some("最新回复内容"));
+    assert_eq!(event.payload.query.as_deref(), Some("Latest reply content"));
+    assert_eq!(
+        event.payload.response.as_deref(),
+        Some("Latest reply content")
+    );
 }
 
 #[test]
