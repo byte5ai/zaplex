@@ -148,6 +148,7 @@ prepare_distribution_signing_inputs() {
   CERTIFICATE_SUBJECT="$(
     openssl pkcs12 \
       -in "$CODESIGN_CERT_PATH" \
+      -legacy \
       -clcerts \
       -nokeys \
       -passin env:MACOS_CERTIFICATE_PASSWORD 2>/dev/null \
@@ -159,6 +160,7 @@ prepare_distribution_signing_inputs() {
   fi
   openssl pkcs12 \
     -in "$CODESIGN_CERT_PATH" \
+    -legacy \
     -nocerts \
     -nodes \
     -passin env:MACOS_CERTIFICATE_PASSWORD 2>/dev/null \
