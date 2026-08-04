@@ -91,7 +91,10 @@ fn repeated_recovery_scans_report_each_operation_only_once() {
     };
     routes.insert(PathBuf::from("/replay"), vec![replay.clone()]);
     assert!(replace_recovery_routes(&mut routes, []).is_empty());
-    assert_eq!(routes.get(Path::new("/replay")), Some(&vec![replay]));
+    assert_eq!(
+        routes.get(Path::new("/replay")),
+        Some(&vec![replay.clone()])
+    );
 
     let server_record = RemoteRecoveryOperation {
         operation_id: "operation-replay".to_string(),

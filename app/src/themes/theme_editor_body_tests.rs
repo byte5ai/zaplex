@@ -4,7 +4,7 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::default_themes::dark_theme;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::platform::WindowStyle;
-use warpui::{App, SingletonEntity as _, View as _};
+use warpui::App;
 
 #[test]
 fn window_close_clears_transient_theme_preview() {
@@ -16,8 +16,9 @@ fn window_close_clears_transient_theme_preview() {
         let (_, editor) = app.add_window(WindowStyle::NotStealFocus, ThemeEditorBody::new);
         editor.update(&mut app, |editor, ctx| {
             let mut preview = light_theme();
-            preview.set_name("Transient window-close preview");
-            editor.load_theme(preview.clone(), preview.name().to_owned(), true, None, ctx);
+            let preview_name = "Transient window-close preview".to_string();
+            preview.set_name(preview_name.clone());
+            editor.load_theme(preview.clone(), preview_name, true, None, ctx);
             assert_eq!(Appearance::as_ref(ctx).theme().name(), preview.name());
 
             editor.on_window_closed(ctx);

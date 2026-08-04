@@ -6436,7 +6436,7 @@ impl View for PaneGroup {
         {
             let attention = crate::cockpit::style::attention_coloru(appearance);
             Container::new(main_content)
-                .with_border(Border::all(1.).with_border_fill(attention.into()))
+                .with_border(Border::all(1.).with_border_fill(attention))
                 .with_drop_shadow(DropShadow {
                     color: crate::cockpit::style::attention_halo_coloru(appearance),
                     offset: Vector2F::zero(),

@@ -380,6 +380,7 @@ mockall = "0.13.1"
 mockito.workspace = true
 serial_test = "0.8.0"
 sum_tree = { workspace = true, features = ["test-util"] }
+tokio-util = { workspace = true, features = ["compat"] }
 virtual-fs.workspace = true
 warp_completer = { workspace = true, features = ["test-util"] }
 warp_core = { workspace = true, features = ["test-util"] }

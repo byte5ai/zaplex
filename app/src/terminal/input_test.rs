@@ -571,7 +571,7 @@ fn clipboard_png_paste_in_cli_input_creates_thumbnail_without_inserting_a_path()
         terminal.update(&mut app, |terminal, ctx| {
             CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
                 sessions.set_session(
-                    terminal.view_id,
+                    terminal.view_id(),
                     CLIAgentSession {
                         agent: CLIAgent::Codex,
                         status: CLIAgentSessionStatus::InProgress,
