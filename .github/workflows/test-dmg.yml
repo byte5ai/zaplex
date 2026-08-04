@@ -177,8 +177,8 @@ jobs:
 
   build_dmg:
     name: Build Test DMG (macOS Apple Silicon)
-    # macOS is required to build, sign, notarize and staple the DMG.
-    runs-on: blacksmith-12vcpu-macos-26
+    # GitHub's pinned macOS 26 image provisions Xcode's optional Metal toolchain.
+    runs-on: macos-26
     timeout-minutes: 360
     needs: build_remote_server
     steps:

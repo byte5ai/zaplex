@@ -2,4 +2,8 @@
 #
 # Installs macOS-specific build dependencies required to build Warp.
 
+set -eu
+
+sudo xcodebuild -runFirstLaunch
 xcodebuild -downloadComponent MetalToolchain
+xcrun --find metal >/dev/null

@@ -289,8 +289,8 @@ jobs:
       - prepare_metadata
       - signing_preflight
       - build_remote_server
-    # Native arm64 build on Blacksmith Apple Silicon (M4) — no cross-compile. Full cargo build +
-    # bundle + create-dmg with no sccache is still time-consuming; keep a generous timeout to be safe.
+    # Native arm64 build on GitHub's pinned macOS 26 image. Full cargo build + bundle +
+    # create-dmg with no sccache is still time-consuming; keep a generous timeout to be safe.
     timeout-minutes: 360
     strategy:
       fail-fast: true
@@ -298,7 +298,7 @@ jobs:
         include:
           - arch: aarch64
             dmg_name_suffix: arm64
-            runner: blacksmith-12vcpu-macos-26 # Blacksmith Apple Silicon (M4), native arm64
+            runner: macos-26
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
