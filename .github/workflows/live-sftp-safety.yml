@@ -46,34 +46,32 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends openssh-server
 
-          test_user=zaplex-sftp-ci
+          test_user="$(id -un)"
           test_port=22222
           test_key="${RUNNER_TEMP}/live-sftp-id"
+          authorized_keys="${HOME}/.ssh/zaplex-live-sftp-authorized-keys"
+          test_root="${RUNNER_TEMP}/live-sftp-root"
           sshd_config="${RUNNER_TEMP}/live-sftp-sshd_config"
           sshd_log="${RUNNER_TEMP}/live-sftp-sshd.log"
           sshd_pid_file="${RUNNER_TEMP}/live-sftp-sshd.pid"
 
           ssh-keygen -q -t ed25519 -N "" -f "${test_key}"
           ssh-keygen -q -t ed25519 -N "" -f "${RUNNER_TEMP}/live-sftp-host-key"
-          sudo useradd --create-home --user-group --shell /bin/bash "${test_user}"
-          test_home="$(getent passwd "${test_user}" | cut -d: -f6)"
-          test_root="${test_home}/live-sftp-root"
+          # Unlock sshd's account check while password authentication remains disabled.
           test_password="$(openssl rand -hex 32)"
           printf '%s:%s\n' "${test_user}" "${test_password}" | sudo chpasswd
           unset test_password
-          sudo mkdir -p "${test_home}/.ssh" "${test_root}"
-          ssh-keygen -y -f "${test_key}" | \
-            sudo tee "${test_home}/.ssh/authorized_keys" > /dev/null
-          sudo chown -R "${test_user}:${test_user}" "${test_home}" "${test_root}"
-          sudo chmod 700 "${test_home}/.ssh"
-          sudo chmod 600 "${test_home}/.ssh/authorized_keys"
+          mkdir -p "${HOME}/.ssh" "${test_root}"
+          chmod 700 "${HOME}/.ssh"
+          ssh-keygen -y -f "${test_key}" > "${authorized_keys}"
+          chmod 600 "${authorized_keys}"
 
           {
             echo "Port ${test_port}"
             echo "ListenAddress 127.0.0.1"
             echo "HostKey ${RUNNER_TEMP}/live-sftp-host-key"
             echo "PidFile ${sshd_pid_file}"
-            echo "AuthorizedKeysFile ${test_home}/.ssh/authorized_keys"
+            echo "AuthorizedKeysFile ${authorized_keys}"
             echo "PasswordAuthentication no"
             echo "KbdInteractiveAuthentication no"
             echo "UsePAM no"
