@@ -95,6 +95,9 @@ fn secure_compare(left: &str, right: &str) -> bool {
 pub trait BackendOwnershipAnchor: Send + Sync {
     fn identity(&self) -> Result<StableEntryIdentity, SftpOpsError>;
     fn matches_path(&self, path: &Path) -> Result<bool, SftpOpsError>;
+    fn is_backend_owned_artifact(&self) -> bool {
+        false
+    }
     fn link_count(&self) -> Result<Option<u64>, SftpOpsError> {
         Ok(None)
     }
@@ -1333,6 +1336,7 @@ impl LiveSftpBackend {
         new_path: &Path,
         mode: SafeFileRenameMode,
         expected_target: Option<SafeFileIdentity>,
+        source_is_owned_artifact: bool,
     ) -> Result<(), SftpOpsError> {
         let operation_id = uuid::Uuid::new_v4().to_string();
         let recovery_path = new_path.to_path_buf();
@@ -1353,7 +1357,7 @@ impl LiveSftpBackend {
                 mode: mode as i32,
                 expected_target,
                 source,
-                source_is_owned_artifact: handle.owned_artifact,
+                source_is_owned_artifact,
             },
         };
         let response = journaled_safe_file_call(
@@ -1789,6 +1793,10 @@ impl BackendOwnershipAnchor for RemoteSafeHandle {
         Ok(self.inspect(Some(path))?.matches_path)
     }
 
+    fn is_backend_owned_artifact(&self) -> bool {
+        self.owned_artifact
+    }
+
     fn link_count(&self) -> Result<Option<u64>, SftpOpsError> {
         Ok(self.inspect(None)?.link_count)
     }
@@ -2038,6 +2046,7 @@ impl SftpBackend for LiveSftpBackend {
             new_path,
             SafeFileRenameMode::NoReplace,
             None,
+            handle.owned_artifact,
         )
     }
 
@@ -2054,6 +2063,7 @@ impl SftpBackend for LiveSftpBackend {
             )));
         }
         let expected = anchor.identity()?;
+        let source_is_owned_artifact = anchor.is_backend_owned_artifact();
         let handle = self.open_safe_handle(old_path, expected.file_type)?;
         let actual = handle.identity()?;
         if !same_immutable_object(&expected, &actual) {
@@ -2068,6 +2078,7 @@ impl SftpBackend for LiveSftpBackend {
             new_path,
             SafeFileRenameMode::NoReplace,
             None,
+            source_is_owned_artifact,
         )
     }
 
@@ -2081,6 +2092,7 @@ impl SftpBackend for LiveSftpBackend {
             new_path,
             SafeFileRenameMode::Exchange,
             Some(safe_identity_from_stable(&target_identity)?),
+            source.owned_artifact,
         )
     }
 
