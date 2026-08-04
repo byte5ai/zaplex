@@ -150,7 +150,7 @@ struct ButtonStates {
     guard_cancel: MouseStateHandle,
 }
 
-pub struct ThemeEditorBody {
+pub(crate) struct ThemeEditorBody {
     scroll: ClippedScrollStateHandle,
     buttons: ButtonStates,
     name_editor: ViewHandle<EditorView>,
