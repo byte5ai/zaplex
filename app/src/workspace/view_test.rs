@@ -2292,6 +2292,27 @@ fn set_left_panel_visibility_across_tabs(is_enabled: bool, ctx: &mut ViewContext
     });
 }
 
+#[test]
+fn markdown_viewer_window_starts_without_vertical_tabs_sidebar() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(|ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
+            });
+
+            assert!(!Workspace::initial_vertical_tabs_panel_open(
+                &NewWorkspaceSource::NotebookFromFilePath {
+                    file_path: Some(PathBuf::from("README.md")),
+                },
+                ctx,
+            ));
+        });
+    });
+}
+
 fn add_get_started_tab(workspace: &mut Workspace, ctx: &mut ViewContext<Workspace>) {
     workspace.add_tab_with_pane_layout(
         PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {

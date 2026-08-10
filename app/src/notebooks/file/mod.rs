@@ -21,9 +21,12 @@ use warpui::{
         button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
         components::{UiComponent, UiComponentStyles},
     },
+    units::IntoPixels,
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
+
+const FILE_VIEWER_BOTTOM_PADDING: f32 = 24.;
 
 #[cfg(feature = "local_fs")]
 use crate::notebooks::post_process_notebook;
@@ -246,6 +249,13 @@ impl FileNotebookView {
             let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
             NotebooksEditorModel::new(styles, window_id, ctx)
         });
+        editor_model
+            .as_ref(ctx)
+            .render_state()
+            .update(ctx, |render_state, ctx| {
+                render_state.set_bottom_padding(FILE_VIEWER_BOTTOM_PADDING.into_pixels());
+                ctx.notify();
+            });
         let editor = ctx.add_typed_action_view(|ctx| {
             let mut view = RichTextEditorView::new(
                 view_position_id.clone(),

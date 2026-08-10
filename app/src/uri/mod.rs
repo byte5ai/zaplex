@@ -1,5 +1,8 @@
 mod docker;
 pub mod parse_url_paths;
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
 pub mod web_intent_parser;
 
 #[cfg(target_family = "wasm")]
@@ -590,7 +593,7 @@ impl Action {
                     log::warn!("Could not parse path to open a new tab/window");
                     return;
                 };
-                open_file(window_id, path, ctx);
+                open_file(window_id, path, false, ctx);
             }
             Action::Docker => {
                 if let Err(err) = open_docker_container(url, ctx) {
@@ -688,7 +691,7 @@ pub fn handle_incoming_uri(url: &Url, ctx: &mut AppContext) {
     #[cfg(feature = "local_tty")]
     if url.scheme() == "file" {
         if let Ok(path) = url.to_file_path() {
-            open_file(primary_window_id, path, ctx);
+            open_file(primary_window_id, path, true, ctx);
         }
         return;
     }
@@ -776,7 +779,16 @@ fn classify_open_file_action(path: &Path) -> OpenFileAction {
 /// * For directories, open a new session at the directory path.
 /// * For other files, open a new session at the parent directory path, then possibly execute the
 ///   file.
-fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
+fn should_open_notebook_in_new_window(dedicated_viewer: bool, has_primary_window: bool) -> bool {
+    dedicated_viewer || !has_primary_window
+}
+
+fn open_file(
+    window_id: Option<WindowId>,
+    path: PathBuf,
+    dedicated_markdown_viewer: bool,
+    ctx: &mut AppContext,
+) {
     let primary_window_and_view = window_id.and_then(|window_id| {
         ctx.root_view_id(window_id)
             .map(|view_id| (window_id, view_id))
@@ -784,7 +796,12 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
 
     let action = classify_open_file_action(&path);
     if action == OpenFileAction::Notebook {
-        if let Some((primary_window_id, root_view_id)) = primary_window_and_view {
+        if should_open_notebook_in_new_window(
+            dedicated_markdown_viewer,
+            primary_window_and_view.is_some(),
+        ) {
+            ctx.dispatch_global_action("root_view:open_new_with_file_notebook", &path);
+        } else if let Some((primary_window_id, root_view_id)) = primary_window_and_view {
             ctx.dispatch_action(
                 primary_window_id,
                 &[root_view_id],
@@ -792,8 +809,6 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
                 &path,
                 log::Level::Info,
             );
-        } else {
-            ctx.dispatch_global_action("root_view:open_new_with_file_notebook", &path);
         }
     } else if action == OpenFileAction::Editor {
         #[cfg(feature = "local_fs")]

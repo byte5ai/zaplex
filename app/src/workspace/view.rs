@@ -4231,8 +4231,8 @@ impl Workspace {
             NewWorkspaceSource::Empty { .. }
             | NewWorkspaceSource::FromTemplate { .. }
             | NewWorkspaceSource::Session { .. }
-            | NewWorkspaceSource::AgentSession { .. }
-            | NewWorkspaceSource::NotebookFromFilePath { .. } => should_default_open,
+            | NewWorkspaceSource::AgentSession { .. } => should_default_open,
+            NewWorkspaceSource::NotebookFromFilePath { .. } => false,
             #[cfg(not(target_family = "wasm"))]
             NewWorkspaceSource::FromCloudConversationId { .. }
             | NewWorkspaceSource::NotebookById { .. }

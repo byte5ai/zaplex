@@ -20,6 +20,8 @@ This document records key changes: the Zap/Warp release history inherited before
   Quelle, bis der daemonseitige Commit ausdrücklich bestätigt ist.
 - **Oberfläche:** englische und deutsche Kernoberflächen, gemeinsame
   Modal-/Status-Komponenten und responsive Cockpit- und Dateimanager-Panes.
+- **Markdown-Viewer:** extern geöffnete Markdown-Dokumente starten in einem
+  eigenen Fenster ohne Sidebar und behalten am Dokumentende sichtbaren Abstand.
 - **Agenten:** Antigravity ersetzt die eingestellte Gemini CLI; Claude Code,
   Codex, Grok und DeepSeek/CodeWhale liefern über lokale, selbst verwaltete
   Integrationen verlässliche Arbeits-, Freigabe- und Abschlusszustände.

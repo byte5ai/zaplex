@@ -413,6 +413,11 @@ pub struct RenderState {
     /// State of the current viewport, which determines which items are visible.
     viewport: ViewportState,
 
+    /// Additional blank space after the final rendered block. This is part of the
+    /// scrollable content height, so document viewers can keep the last line away
+    /// from the viewport edge without shrinking the scrollbar track.
+    bottom_padding: Pixels,
+
     styles: RichTextStyles,
 
     /// A terminal trailing newline is added after a styled block (for example, a code block)
@@ -1761,6 +1766,7 @@ impl RenderState {
             show_final_trailing_newline_when_non_empty: true,
             has_final_trailing_newline: Cell::new(true),
             viewport: ViewportState::new(viewport_width, viewport_height),
+            bottom_padding: Pixels::zero(),
             selections: Default::default(),
             decorations: Default::default(),
             content: RefCell::new(content),
@@ -1890,7 +1896,14 @@ impl RenderState {
 
     /// The complete height of all laid-out content.
     pub fn height(&self) -> Pixels {
-        (self.content.borrow().summary().height as f32).into_pixels()
+        (self.content.borrow().summary().height as f32).into_pixels() + self.bottom_padding
+    }
+
+    /// Reserve scrollable blank space after the final rendered block.
+    pub fn set_bottom_padding(&mut self, bottom_padding: Pixels) {
+        self.bottom_padding = bottom_padding.max(Pixels::zero());
+        let content_height = self.height();
+        self.viewport.update_content_height(content_height);
     }
 
     pub fn width(&self) -> Pixels {

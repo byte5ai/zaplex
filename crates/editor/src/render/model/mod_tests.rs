@@ -80,6 +80,17 @@ fn test_height() {
 }
 
 #[test]
+fn bottom_padding_extends_scrollable_content_height() {
+    let mut render_state =
+        RenderState::new_for_test(TEST_STYLES, 100.0.into_pixels(), 100.0.into_pixels());
+    let initial_height = render_state.height();
+
+    render_state.set_bottom_padding(24.0.into_pixels());
+
+    assert_eq!(render_state.height(), initial_height + 24.0.into_pixels());
+}
+
+#[test]
 fn test_is_entire_range_of_type_matches_exact_block_ranges() {
     let mut model = RenderState::new_for_test(
         TEST_STYLES.clone(),
