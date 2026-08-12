@@ -22,10 +22,11 @@ use warpui::elements::{
     ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
     Draggable, DraggableState, DropTarget, DropTargetData, Element, Empty, Fill as ElementFill,
     Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
-    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Stack,
-    Text,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth,
+    Shrinkable, Stack, Text,
 };
 use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
 use warpui::{
@@ -54,10 +55,9 @@ use crate::ssh_manager::{
     credential_operation_message, endpoint_validation_message, SshTreeChangedEvent,
     SshTreeChangedNotifier,
 };
+use crate::ui_components::compact_row_action::CompactRowAction;
 use crate::ui_components::modal_frame;
-use crate::view_components::action_button::{
-    ActionButton, ButtonSize, DangerPrimaryTheme, NakedTheme,
-};
+use crate::view_components::action_button::{ActionButton, DangerPrimaryTheme, NakedTheme};
 
 // ---- visual constants (see Drive) ----
 const TOOLBAR_BUTTON_SIZE: f32 = 26.0;
@@ -321,8 +321,8 @@ pub struct SshManagerPanel {
     sessions_error: HashMap<String, String>,
     /// Hover/click state per session row (key = "<node_id>:<pty_session_id>").
     session_row_states: HashMap<String, MouseStateHandle>,
-    /// Visible first-level actions for existing tmux/byobu sessions.
-    multiplexer_open_buttons: HashMap<String, ViewHandle<ActionButton>>,
+    /// Fixed-width icon actions for existing tmux/byobu sessions.
+    multiplexer_open_actions: HashMap<String, CompactRowAction>,
     command_factory: Arc<dyn WorkspaceCommandFactory>,
 }
 
@@ -386,7 +386,7 @@ impl SshManagerPanel {
             resilient_hosts: std::collections::HashSet::new(),
             sessions_error: HashMap::new(),
             session_row_states: HashMap::new(),
-            multiplexer_open_buttons: HashMap::new(),
+            multiplexer_open_actions: HashMap::new(),
             command_factory,
         };
         // `~/.ssh/config` is read on-demand only when the user opens the "Add a
@@ -488,7 +488,7 @@ impl SshManagerPanel {
                 .next()
                 .is_some_and(|node_id| active_ids.contains(node_id))
         });
-        self.multiplexer_open_buttons.retain(|key, _| {
+        self.multiplexer_open_actions.retain(|key, _| {
             key.split(':')
                 .next()
                 .is_some_and(|node_id| active_ids.contains(node_id))
@@ -1032,7 +1032,7 @@ impl SshManagerPanel {
                             me.host_sessions.insert(id.clone(), inventory.daemon);
                             me.host_multiplexer_sessions
                                 .insert(id.clone(), inventory.multiplexers);
-                            me.sync_multiplexer_open_buttons(&id, ctx);
+                            me.sync_multiplexer_open_actions(&id, ctx);
                         }
                         Err(e) => {
                             me.sessions_error.insert(id, e);
@@ -1074,9 +1074,9 @@ impl SshManagerPanel {
         }
     }
 
-    fn sync_multiplexer_open_buttons(&mut self, node_id: &str, ctx: &mut ViewContext<Self>) {
+    fn sync_multiplexer_open_actions(&mut self, node_id: &str, ctx: &mut ViewContext<Self>) {
         let prefix = format!("{node_id}:mux:");
-        self.multiplexer_open_buttons
+        self.multiplexer_open_actions
             .retain(|key, _| !key.starts_with(&prefix));
         let sessions = self
             .host_multiplexer_sessions
@@ -1091,15 +1091,15 @@ impl SshManagerPanel {
                 target: session.target,
                 attached_clients: session.attached_clients,
             };
-            let button = ctx.add_typed_action_view(|_| {
-                ActionButton::new(
+            self.multiplexer_open_actions.insert(
+                key,
+                CompactRowAction::new(
+                    crate::ui_components::icons::Icon::Terminal,
                     crate::t!("workspace-left-panel-ssh-manager-multiplexer-open"),
-                    NakedTheme,
-                )
-                .with_size(ButtonSize::XSmall)
-                .on_click(move |ctx| ctx.dispatch_typed_action(action.clone()))
-            });
-            self.multiplexer_open_buttons.insert(key, button);
+                    action,
+                    ctx,
+                ),
+            );
         }
     }
 
@@ -2246,6 +2246,7 @@ impl SshManagerPanel {
                             appearance.ui_font_subheading(),
                         )
                         .with_color(theme.main_text_color(theme.background()).into())
+                        .with_clip(ClipConfig::ellipsis())
                         .finish(),
                     )
                     .with_main_axis_size(MainAxisSize::Min)
@@ -2254,7 +2255,7 @@ impl SshManagerPanel {
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_main_axis_size(MainAxisSize::Max)
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                    .with_child(left);
+                    .with_child(Shrinkable::new(1.0, left).finish());
                 if let Some(ram) = ram_text {
                     row = row.with_child(
                         Text::new_inline(
@@ -2336,6 +2337,7 @@ impl SshManagerPanel {
                                 appearance.ui_font_subheading(),
                             )
                             .with_color(theme.main_text_color(theme.background()).into())
+                            .with_clip(ClipConfig::ellipsis())
                             .finish(),
                         )
                         .with_child(
@@ -2356,17 +2358,20 @@ impl SshManagerPanel {
                                 .with_width(indent)
                                 .finish(),
                         )
-                        .with_child(details)
+                        .with_child(Shrinkable::new(1.0, details).finish())
                         .with_main_axis_size(MainAxisSize::Min)
                         .finish();
+                    // ui-contract: compact-row-actions:start
                     let mut row = Flex::row()
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
                         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                         .with_main_axis_size(MainAxisSize::Max)
-                        .with_child(left);
-                    if let Some(button) = self.multiplexer_open_buttons.get(&key) {
-                        row = row.with_child(ChildView::new(button).finish());
+                        .with_child(Shrinkable::new(1.0, left).finish());
+                    debug_assert!(self.multiplexer_open_actions.contains_key(&key));
+                    if let Some(action) = self.multiplexer_open_actions.get(&key) {
+                        row = row.with_child(action.render());
                     }
+                    // ui-contract: compact-row-actions:end
                     rows.push(
                         Container::new(row.finish())
                             .with_padding_top(ITEM_PADDING_VERTICAL)

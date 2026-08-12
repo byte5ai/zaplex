@@ -1,10 +1,10 @@
 # Cockpit sidebar redesign (B2 / B3 / B4 / D1+C2)
 
-Status: **design spec — awaiting owner sign-off before any code** (process rule:
-UI/UX gets a concept + explicit approval first). This file is the re-established
-WS4 opening step for the RC master plan (`2026-07-12-rc-master-plan.md`); the
-original 2026-07-11 draft was lost from the working tree before it was committed.
-Reconstructed faithfully from the converged design decisions.
+Status: **implemented; compact-row amendment approved 2026-08-12**. This file is
+the re-established WS4 opening step for the RC master plan
+(`2026-07-12-rc-master-plan.md`); the original 2026-07-11 draft was lost from the
+working tree before it was committed. Reconstructed faithfully from the
+converged design decisions.
 
 > Trigger: the owner vetoed the rendered cockpit on the `v0.rc-spine` DMG (main
 > `8a7f94eb`): a chaotic host↔agent style mix, an overloaded status line, a false
@@ -66,6 +66,15 @@ Hover changes **colour / fill only** — never a layout-shifting reveal. The lis
 must never jump on hover. (This is the rule the owner called out on the vetoed
 build.)
 
+### 2.8 Compact-row width priority (binding amendment, 2026-08-12)
+The host identity receives the entire flexible width. Status, count and
+secondary actions use fixed slots. Repeated secondary actions are icon-only:
+`AiAssistant` opens an agent, `Folder` opens files, and `DotsHorizontal` manages
+the host; their localized text appears in tooltips, never as repeated row
+labels. Favorite and secondary actions share the same 20 px square and hover
+grammar. At the 250 px minimum width, the host name may ellipsize only after
+the fixed slots have been reserved, and hover must not change geometry.
+
 ## 3. §12 — supaterm learnings folded in (additive; §0–§2 unchanged)
 - **L1** computed semantic palette with a contrast test (generalize `heat_coloru`;
   fold into the tokens step).
@@ -86,6 +95,8 @@ spaces + tab pinning (#117), per-event notifications (the ambient bit stays).
   account `render_card`, `heat_bar`.
 - Tokens: `app/src/cockpit/style.rs` — `heat_coloru`, `icon_verb_button`,
   `icon_word_verb`, `GLYPH_COL_WIDTH`.
+- Compact row actions: `app/src/ui_components/compact_row_action.rs` — the
+  icon-only API shared by Cockpit and SSH-manager rows.
 - Format: `crates/zaplex_cockpit/src/format.rs` — `binding_window`, `format_reset`.
 - Pane (detail target): `app/src/cockpit/pane.rs`.
 - Data model: the `zaplex_cockpit` snapshot types (worktree/branch exposure; the
@@ -96,7 +107,9 @@ S1 tokens (fold in L1) → S2 data model (worktree/branch + provider≠plan) →
 S3 Hosts card → S4 Accounts card → S5 pane detail → S6 polish (empty states,
 scrim) → S7 runtime acceptance on the RC DMG.
 
-## 6. Approval gate
-No sidebar code lands until the owner signs off on this spec. On approval,
-implement S1–S7 on `rc/master-plan` (green `cargo check` per step, codex/grok
-read-only review), then fold into the single RC DMG.
+## 6. Approval history
+The original redesign was approved and implemented on the V1 line. The
+compact-row amendment in §2.8 was explicitly requested on 2026-08-12 after the
+first V1 start exposed repeated text actions crowding out host identities. This
+user-visible correction advances the source version to 1.0.1 under the project
+versioning policy; it does not release 1.0.1, whose runtime matrix remains open.

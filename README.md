@@ -75,8 +75,8 @@ zaplex is a fork of [Zap](https://github.com/zerx-lab/zap) — the open-source, 
 
 ## Status & roadmap
 
-Zaplex 1.0.0 is in final validation. No public binary has been released yet;
-the table reflects the integrated source state, not an unperformed runtime
+Zaplex 1.0.1 source is in final validation. No public binary has been released
+yet; the table reflects the integrated source state, not an unperformed runtime
 acceptance:
 
 | Area | State |
@@ -101,7 +101,7 @@ Every designed item has a dated design doc in [`docs/superpowers/`](docs/superpo
 
 ## Install
 
-The first public Zaplex 1.0.0 binary will appear on
+The first public Zaplex 1.0.1 binary will appear on
 [Releases](https://github.com/byte5ai/zaplex/releases) after the documented
 runtime matrix passes. The macOS DMG is built in GitHub Actions, signed with
 Developer ID, notarized by Apple, and shipped together with its matching Linux

@@ -115,14 +115,18 @@
       font: 8px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     .attach {
-      padding: 4px 8px;
-      border: 1px solid #6559b5;
+      display: grid;
+      width: 20px;
+      height: 20px;
+      padding: 0;
+      place-items: center;
+      border: 0;
       border-radius: 5px;
-      color: #ddd9ff;
-      background: var(--accent-soft);
-      font-size: 10px;
-      white-space: nowrap;
+      color: var(--muted);
+      background: transparent;
     }
+    .attach:hover { color: #ddd9ff; background: var(--accent-soft); }
+    .attach svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
     .hint {
       margin: 8px 8px 4px 36px;
       padding: 8px 9px;
@@ -188,7 +192,8 @@
       <div>
         <h2>Aktion</h2>
         <ul>
-          <li>„In neuem Tab öffnen“ bleibt pro Zeile sichtbar und tastaturerreichbar.</li>
+          <li>Ein festes Terminal-Icon bleibt pro Zeile sichtbar und tastaturerreichbar; der lokalisierte Tooltip lautet „In neuem Tab öffnen“.</li>
+          <li>Der Sessionname erhält die flexible Breite; die Aktion verdrängt ihn nicht mit wiederholtem Text.</li>
           <li>Öffnet eine klassische SSH-Session mit <code>ZAPLEX_SESSION=1</code> und exakt adressiertem Ziel.</li>
           <li>Nie innerhalb einer bereits laufenden Zaplex-Session verschachteln.</li>
         </ul>
@@ -237,12 +242,12 @@
           <div class="session">
             <span class="multiplexer-badge">tm</span>
             <span class="title"><strong>legacy-api</strong><small>tmux · 3 Fenster · 1 Client</small></span>
-            <span class="attach">In neuem Tab öffnen</span>
+            <button class="attach" title="In neuem Tab öffnen" aria-label="In neuem Tab öffnen"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="10" rx="1.5"/><path d="m4 6 2 2-2 2M8 10h3"/></svg></button>
           </div>
           <div class="session">
             <span class="multiplexer-badge">by</span>
             <span class="title"><strong>ops</strong><small>byobu · 2 Fenster · getrennt</small></span>
-            <span class="attach">In neuem Tab öffnen</span>
+            <button class="attach" title="In neuem Tab öffnen" aria-label="In neuem Tab öffnen"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="10" rx="1.5"/><path d="m4 6 2 2-2 2M8 10h3"/></svg></button>
           </div>
 
           <div class="host" style="margin-top:10px;background:transparent"><span>⌄</span><span>◉</span><strong>agenthost</strong><small>verbunden</small></div>

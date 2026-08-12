@@ -7,6 +7,7 @@ pub(crate) mod blended_colors;
 pub(crate) mod breadcrumb;
 pub mod buttons;
 pub(crate) mod color_dot;
+pub(crate) mod compact_row_action;
 pub(crate) mod dialog;
 pub(crate) mod icon_with_status;
 pub(crate) mod item_highlight;

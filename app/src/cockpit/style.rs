@@ -1,12 +1,13 @@
-//! Cockpit **style vocabulary** — the one shared set of visual tokens the
-//! cockpit surfaces render with (Step 9, visual design pass).
+//! Cockpit **style vocabulary** — the shared set of domain-specific visual
+//! tokens the cockpit surfaces render with (Step 9, visual design pass).
 //!
 //! The pane, the sidebar, the Spawn-Karte, the attention inbox and the titlebar
 //! pulse all draw the same things: status glyphs, heat-colored percentages,
 //! muted-at-rest verb clusters, modal chrome. Before this module each surface
 //! carried its own inline copy (two `heat_coloru` duplicates, eight hand-rolled
-//! hover-verb closures, two different modal scrims). Centralizing them here is
-//! what makes the cockpit read as *one* calm language:
+//! hover-verb closures, two different modal scrims). Centralizing them here,
+//! while using app-wide components such as `CompactRowAction` for generic
+//! compact-list controls, makes the cockpit read as *one* calm language:
 //!
 //! - **Calm by default**: verbs rest in the muted sub-text color and only take
 //!   their accent on hover; destructive verbs hover into the single attention
@@ -426,11 +427,10 @@ pub fn icon_verb_button<A: Action + Clone>(
     .finish()
 }
 
-/// An icon verb button ([`icon_verb_button`]) **with a hover tooltip** — every
-/// icon-only affordance on the cockpit surfaces should carry one so the meaning
-/// is discoverable (a bare clickable glyph without a label is not). The tooltip
-/// floats above the icon on hover only (respects the hover rule — it's an
-/// overlay, it doesn't re-lay-out the row).
+/// A Cockpit-domain icon verb ([`icon_verb_button`]) **with a hover tooltip**.
+/// Use it for pane and zone affordances that follow the 14 px glyph grid;
+/// compact repeated rows use the app-wide `CompactRowAction` and its fixed
+/// 20 px action slot. The tooltip is an overlay and never re-lays out the row.
 pub fn icon_verb_button_tooltip<A: Action + Clone>(
     state: MouseStateHandle,
     icon: icons::Icon,
