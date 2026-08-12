@@ -278,18 +278,34 @@ impl CockpitPanel {
     /// Keep one stable row handle per live fleet session (hover needs a stable
     /// handle across renders); drop handles of sessions that disappeared.
     fn sync_conductor_states(&mut self, ctx: &mut ViewContext<Self>) {
-        let inv = CockpitModel::as_ref(ctx).inventory();
-        let live: std::collections::HashSet<String> = inv
-            .hosts
-            .iter()
-            .flat_map(|h| {
-                h.projects.iter().flat_map(move |p| {
-                    p.sessions
-                        .iter()
-                        .map(move |s| session_key(h.is_local, h.host_id.as_deref(), s))
+        let (live, host_nodes, project_keys) = {
+            let inv = CockpitModel::as_ref(ctx).inventory();
+            let live: std::collections::HashSet<String> = inv
+                .hosts
+                .iter()
+                .flat_map(|h| {
+                    h.projects.iter().flat_map(move |p| {
+                        p.sessions
+                            .iter()
+                            .map(move |s| session_key(h.is_local, h.host_id.as_deref(), s))
+                    })
                 })
-            })
-            .collect();
+                .collect();
+            let host_nodes: std::collections::HashSet<String> = inv
+                .hosts
+                .iter()
+                .filter_map(|h| h.registry_node_id.clone())
+                .collect();
+            let project_keys: std::collections::HashSet<String> = inv
+                .hosts
+                .iter()
+                .flat_map(|h| {
+                    let ident = host_ident(h.is_local, h.host_id.as_deref());
+                    h.projects.iter().map(move |p| project_key(&ident, &p.root))
+                })
+                .collect();
+            (live, host_nodes, project_keys)
+        };
         self.conductor_row_states.retain(|k, _| live.contains(k));
         self.conductor_peek_states.retain(|k, _| live.contains(k));
         for key in live {
@@ -310,11 +326,6 @@ impl CockpitPanel {
         }
         // Registered-host row handles, keyed by registry `node_id` (one stable
         // handle per clickable host header); drop handles of hosts that vanished.
-        let host_nodes: std::collections::HashSet<String> = inv
-            .hosts
-            .iter()
-            .filter_map(|h| h.registry_node_id.clone())
-            .collect();
         self.conductor_host_states
             .retain(|k, _| host_nodes.contains(k));
         self.conductor_host_favorite_actions
@@ -394,14 +405,6 @@ impl CockpitPanel {
         // `project_key` (host identity + project name — never the label alone).
         // Drop projects that vanished so the maps don't grow unbounded; the
         // collapse map keeps only live keys, so absent still means "expanded".
-        let project_keys: std::collections::HashSet<String> = inv
-            .hosts
-            .iter()
-            .flat_map(|h| {
-                let ident = host_ident(h.is_local, h.host_id.as_deref());
-                h.projects.iter().map(move |p| project_key(&ident, &p.root))
-            })
-            .collect();
         self.conductor_project_states
             .retain(|k, _| project_keys.contains(k));
         self.expanded_projects
