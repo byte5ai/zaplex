@@ -33,3 +33,15 @@ Red flags that you're about to make buttons inconsistent:
 - Naming a theme after a feature or view (`FooPrimaryTheme`, `BarSubmitTheme`) rather than a design-system role.
 
 If an existing theme genuinely doesn't fit and you think the shared theme should change, surface that to the user before editing it, rather than either editing it unilaterally or papering over it with a one-off.
+
+---
+
+## Guideline: Protect identity in compact repeated rows
+
+In a narrow sidebar or another compact repeated list, the row's unique object identity is the primary content. Give that identity the flexible slot (`Shrinkable` with weight `1.0`) and keep status, metrics, and secondary actions in fixed-width slots. A hostname, session name, branch, or file name must never be truncated merely because every row repeats the same action words.
+
+Repeated secondary actions in these rows are **icon-only**. Build them with `CompactRowAction` from `app/src/ui_components/compact_row_action.rs`; its API deliberately accepts an icon and localized tooltip, but no visible label, and reuses `PaneHeaderTheme` unchanged. Use a stable, domain-matching icon everywhere, and do not reveal or replace actions on hover because that changes row geometry.
+
+Visible text buttons remain appropriate for forms, dialogs, empty states, roomy toolbars, and a single primary action whose meaning would otherwise be unclear. They are not appropriate for the same secondary verb repeated on every row of a width-constrained list.
+
+Before delivery, inspect the minimum supported panel width with the longest realistic identity and the longest supported translation. The identity should consume all remaining width, action geometry must stay constant across locales and hover states, and each icon must retain its localized tooltip.

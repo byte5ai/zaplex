@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$repo_root"
+
+fail=0
+region_count=0
+ui_files="$(rg -l 'ui-contract: compact-row-actions:start' app/src --glob '*.rs' || true)"
+
+if [ -z "$ui_files" ]; then
+    echo "compact-row check: no guarded row regions found" >&2
+    exit 1
+fi
+
+while IFS= read -r ui_file; do
+    [ -n "$ui_file" ] || continue
+    file_regions="$(rg -c 'ui-contract: compact-row-actions:start' "$ui_file")"
+    region_count=$((region_count + file_regions))
+    if ! awk '
+        /ui-contract: compact-row-actions:start/ { inside = 1; next }
+        /ui-contract: compact-row-actions:end/ { inside = 0; next }
+        inside && /(verb_button[[:space:]]*\(|verb_button_colored[[:space:]]*\(|icon_word_verb[[:space:]]*\(|ActionButton::new[[:space:]]*\(|Text::new[[:space:]]*\(|Text::new_inline[[:space:]]*\(|Self::text[[:space:]]*\(|message[[:space:]]*\()/ {
+            printf "%s:%d: visible text-button API inside compact row\n", FILENAME, FNR > "/dev/stderr"
+            failed = 1
+        }
+        END {
+            if (inside) {
+                printf "%s: unterminated compact-row guard region\n", FILENAME > "/dev/stderr"
+                failed = 1
+            }
+            exit failed
+        }
+    ' "$ui_file"; then
+        fail=1
+    fi
+done <<EOF
+$ui_files
+EOF
+
+require_compact_action() {
+    ui_file="$1"
+    translation_key="$2"
+    pattern="CompactRowAction::new\\([^;]*crate::t!\\(\"${translation_key}\"\\)"
+    key_count="$( (rg -o "$translation_key" "$ui_file" || true) | awk 'END { print NR }')"
+    if [ "$key_count" -ne 1 ]; then
+        echo "$ui_file: '$translation_key' must occur exactly once (found $key_count)" >&2
+        fail=1
+    fi
+    if ! rg --quiet --multiline --pcre2 "$pattern" "$ui_file"; then
+        echo "$ui_file: '$translation_key' must be supplied to CompactRowAction" >&2
+        fail=1
+    fi
+}
+
+require_compact_action app/src/cockpit/panel.rs cockpit-host-action-agent
+require_compact_action app/src/cockpit/panel.rs cockpit-host-action-files
+require_compact_action app/src/cockpit/panel.rs cockpit-tt-manage-host
+require_compact_action app/src/cockpit/panel.rs cockpit-tt-favorite-add
+require_compact_action app/src/cockpit/panel.rs cockpit-tt-favorite-remove
+require_compact_action app/src/ssh_manager/panel.rs workspace-left-panel-ssh-manager-multiplexer-open
+
+if ! rg --quiet 'ActionButton::new\("", PaneHeaderTheme\)' app/src/ui_components/compact_row_action.rs; then
+    echo "CompactRowAction must reuse the existing muted button theme" >&2
+    fail=1
+fi
+
+if ! rg --quiet 'Shrinkable::new\(1\.0, label_el\)' app/src/cockpit/panel.rs; then
+    echo "cockpit host identity must own the flexible row width" >&2
+    fail=1
+fi
+if ! rg --quiet 'with_clip\(ClipConfig::ellipsis\(\)\)' app/src/cockpit/panel.rs; then
+    echo "cockpit host identity must ellipsize at the final boundary" >&2
+    fail=1
+fi
+ssh_identity_slots="$( (rg -o 'with_child\(Shrinkable::new\(1\.0, left\)\.finish\(\)\)' app/src/ssh_manager/panel.rs || true) | awk 'END { print NR }')"
+if [ "$ssh_identity_slots" -lt 2 ]; then
+    echo "SSH daemon and multiplexer identities must own the flexible row width" >&2
+    fail=1
+fi
+ssh_ellipsis_count="$( (rg -o 'with_clip\(ClipConfig::ellipsis\(\)\)' app/src/ssh_manager/panel.rs || true) | awk 'END { print NR }')"
+if [ "$ssh_ellipsis_count" -lt 2 ]; then
+    echo "SSH daemon and multiplexer identities must ellipsize at the final boundary" >&2
+    fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+    exit 1
+fi
+
+echo "compact-row check: ${region_count} guarded regions passed"

@@ -2,6 +2,15 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.0.1] — unreleased
+
+- **Sidebar:** Host-, Daemon- und Multiplexer-Zeilen reservieren die flexible
+  Breite für ihre Identität; wiederholte Sekundäraktionen erscheinen als feste
+  Icons mit lokalisierten Tooltips statt als platzraubende Textbuttons.
+- **UI-Qualität:** Ein gemeinsamer `CompactRowAction`-Baustein, ein verbindliches
+  HTML-Artefakt, Entwicklungsrichtlinien und ein billiger PR-Frühcheck schützen
+  die migrierten kompakten Sidebar-Zeilen mechanisch vor Regressionen.
+
 ## [1.0.0] — 2026-07-30
 
 - **Remote-Sitzungen:** versionsgebundener Host-Dienst, persistente PTYs,
@@ -128,7 +137,8 @@ First preview release of the Zap community fork.
 - **AI**: CJK input classification, reasoning split out, BYOP `tool_call` diagnostics, LRC tag-in synthesizes a virtual subagent + floating spawn flow
 - **CI**: Release workflow explicitly declares `contents: write` permission, fixing a 403
 
-[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/byte5ai/zaplex/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/byte5ai/zaplex/releases/tag/v1.0.0
 [v2026.05.06.preview]: https://github.com/zerx-lab/warp/compare/v2026.05.04.preview...v2026.05.06.preview
 [v2026.05.04.preview]: https://github.com/zerx-lab/warp/compare/v2026.05.03.preview.4...v2026.05.04.preview

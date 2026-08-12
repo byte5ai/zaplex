@@ -11,7 +11,6 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
 use warpui::elements::{
     ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable,
@@ -20,6 +19,7 @@ use warpui::elements::{
     Stack, Text,
 };
 use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 use zaplex_cockpit::{
     fleet_is_large, format_cost, format_relative, heat_fill, heat_pct_label_with_provenance,
@@ -32,9 +32,10 @@ use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
     attention_coloru, ctx_pct_element, glyph_cell, hover_row, icon_verb_button_tooltip,
     provider_color_on, provider_label, session_metric_column_width, status_dot_coloru,
-    utilisation_coloru, verb_button, verb_button_colored, zone_card, VerbKind, BLOCK_RADIUS,
-    CONTROL_RADIUS, GLYPH_COL_WIDTH,
+    utilisation_coloru, verb_button_colored, zone_card, BLOCK_RADIUS, CONTROL_RADIUS,
+    GLYPH_COL_WIDTH,
 };
+use crate::ui_components::compact_row_action::CompactRowAction;
 use crate::ui_components::icons;
 use crate::WorkspaceAction;
 
@@ -122,17 +123,17 @@ pub struct CockpitPanel {
     /// `node_id`. Clicking a registered host row (with no live agent) opens a
     /// terminal on that host.
     conductor_host_states: HashMap<String, MouseStateHandle>,
-    /// Hover/click state per host ★ (favorite toggle), keyed by registry
-    /// `node_id`. The ★ curates a host favorite (design §10).
-    conductor_host_star_states: HashMap<String, MouseStateHandle>,
-    /// Hover/click state per host "⋯ manage" affordance, keyed by registry
-    /// `node_id`. Opens the SSH-manager editor for the host (design §10 folds
-    /// the SSH-manager add/edit function onto the host nodes).
-    conductor_host_manage_states: HashMap<String, MouseStateHandle>,
-    /// Stable handles for the visible "Agent" action on each registered host.
-    conductor_host_agent_states: HashMap<String, MouseStateHandle>,
-    /// Stable handles for the visible "Files" action on each registered host.
-    conductor_host_files_states: HashMap<String, MouseStateHandle>,
+    /// Fixed-width ☆ actions for adding a host favorite.
+    conductor_host_favorite_actions: HashMap<String, CompactRowAction>,
+    /// Fixed-width ★ actions for removing a host favorite.
+    conductor_host_unfavorite_actions: HashMap<String, CompactRowAction>,
+    /// Fixed-width icon actions for host management, keyed by registry
+    /// `node_id`. Compact rows never spend identity width on repeated labels.
+    conductor_host_manage_actions: HashMap<String, CompactRowAction>,
+    /// Fixed-width icon actions for opening an agent on each registered host.
+    conductor_host_agent_actions: HashMap<String, CompactRowAction>,
+    /// Fixed-width icon actions for opening files on each registered host.
+    conductor_host_files_actions: HashMap<String, CompactRowAction>,
     /// Hover state of the „VERBINDUNGEN" zone-header gear (opens the SSH manager,
     /// which owns host add/edit — spec v3 §S1/§S2).
     zone_gear_btn: MouseStateHandle,
@@ -259,10 +260,11 @@ impl CockpitPanel {
             conductor_peek_states: HashMap::new(),
             card_states: HashMap::new(),
             conductor_host_states: HashMap::new(),
-            conductor_host_star_states: HashMap::new(),
-            conductor_host_manage_states: HashMap::new(),
-            conductor_host_agent_states: HashMap::new(),
-            conductor_host_files_states: HashMap::new(),
+            conductor_host_favorite_actions: HashMap::new(),
+            conductor_host_unfavorite_actions: HashMap::new(),
+            conductor_host_manage_actions: HashMap::new(),
+            conductor_host_agent_actions: HashMap::new(),
+            conductor_host_files_actions: HashMap::new(),
             zone_gear_btn: MouseStateHandle::default(),
             fleet_total_btn: MouseStateHandle::default(),
             rescan_btn: MouseStateHandle::default(),
@@ -276,18 +278,34 @@ impl CockpitPanel {
     /// Keep one stable row handle per live fleet session (hover needs a stable
     /// handle across renders); drop handles of sessions that disappeared.
     fn sync_conductor_states(&mut self, ctx: &mut ViewContext<Self>) {
-        let inv = CockpitModel::as_ref(ctx).inventory();
-        let live: std::collections::HashSet<String> = inv
-            .hosts
-            .iter()
-            .flat_map(|h| {
-                h.projects.iter().flat_map(move |p| {
-                    p.sessions
-                        .iter()
-                        .map(move |s| session_key(h.is_local, h.host_id.as_deref(), s))
+        let (live, host_nodes, project_keys) = {
+            let inv = CockpitModel::as_ref(ctx).inventory();
+            let live: std::collections::HashSet<String> = inv
+                .hosts
+                .iter()
+                .flat_map(|h| {
+                    h.projects.iter().flat_map(move |p| {
+                        p.sessions
+                            .iter()
+                            .map(move |s| session_key(h.is_local, h.host_id.as_deref(), s))
+                    })
                 })
-            })
-            .collect();
+                .collect();
+            let host_nodes: std::collections::HashSet<String> = inv
+                .hosts
+                .iter()
+                .filter_map(|h| h.registry_node_id.clone())
+                .collect();
+            let project_keys: std::collections::HashSet<String> = inv
+                .hosts
+                .iter()
+                .flat_map(|h| {
+                    let ident = host_ident(h.is_local, h.host_id.as_deref());
+                    h.projects.iter().map(move |p| project_key(&ident, &p.root))
+                })
+                .collect();
+            (live, host_nodes, project_keys)
+        };
         self.conductor_row_states.retain(|k, _| live.contains(k));
         self.conductor_peek_states.retain(|k, _| live.contains(k));
         for key in live {
@@ -308,46 +326,85 @@ impl CockpitPanel {
         }
         // Registered-host row handles, keyed by registry `node_id` (one stable
         // handle per clickable host header); drop handles of hosts that vanished.
-        let host_nodes: std::collections::HashSet<String> = inv
-            .hosts
-            .iter()
-            .filter_map(|h| h.registry_node_id.clone())
-            .collect();
         self.conductor_host_states
             .retain(|k, _| host_nodes.contains(k));
-        self.conductor_host_star_states
+        self.conductor_host_favorite_actions
             .retain(|k, _| host_nodes.contains(k));
-        self.conductor_host_manage_states
+        self.conductor_host_unfavorite_actions
             .retain(|k, _| host_nodes.contains(k));
-        self.conductor_host_agent_states
+        self.conductor_host_manage_actions
             .retain(|k, _| host_nodes.contains(k));
-        self.conductor_host_files_states
+        self.conductor_host_agent_actions
             .retain(|k, _| host_nodes.contains(k));
-        for key in host_nodes {
-            self.conductor_host_states.entry(key.clone()).or_default();
-            self.conductor_host_star_states
-                .entry(key.clone())
+        self.conductor_host_files_actions
+            .retain(|k, _| host_nodes.contains(k));
+        for node_id in host_nodes {
+            self.conductor_host_states
+                .entry(node_id.clone())
                 .or_default();
-            self.conductor_host_manage_states
-                .entry(key.clone())
-                .or_default();
-            self.conductor_host_agent_states
-                .entry(key.clone())
-                .or_default();
-            self.conductor_host_files_states.entry(key).or_default();
+            if !self.conductor_host_favorite_actions.contains_key(&node_id) {
+                self.conductor_host_favorite_actions.insert(
+                    node_id.clone(),
+                    CompactRowAction::new(
+                        icons::Icon::Star,
+                        crate::t!("cockpit-tt-favorite-add"),
+                        CockpitPanelAction::ToggleHostFavorite(node_id.clone()),
+                        ctx,
+                    ),
+                );
+            }
+            if !self
+                .conductor_host_unfavorite_actions
+                .contains_key(&node_id)
+            {
+                self.conductor_host_unfavorite_actions.insert(
+                    node_id.clone(),
+                    CompactRowAction::new(
+                        icons::Icon::StarFilled,
+                        crate::t!("cockpit-tt-favorite-remove"),
+                        CockpitPanelAction::ToggleHostFavorite(node_id.clone()),
+                        ctx,
+                    ),
+                );
+            }
+            if !self.conductor_host_agent_actions.contains_key(&node_id) {
+                self.conductor_host_agent_actions.insert(
+                    node_id.clone(),
+                    CompactRowAction::new(
+                        icons::Icon::AiAssistant,
+                        crate::t!("cockpit-host-action-agent"),
+                        CockpitPanelAction::OpenHostAgent(node_id.clone()),
+                        ctx,
+                    ),
+                );
+            }
+            if !self.conductor_host_files_actions.contains_key(&node_id) {
+                self.conductor_host_files_actions.insert(
+                    node_id.clone(),
+                    CompactRowAction::new(
+                        icons::Icon::Folder,
+                        crate::t!("cockpit-host-action-files"),
+                        CockpitPanelAction::OpenHostFiles(node_id.clone()),
+                        ctx,
+                    ),
+                );
+            }
+            if !self.conductor_host_manage_actions.contains_key(&node_id) {
+                self.conductor_host_manage_actions.insert(
+                    node_id.clone(),
+                    CompactRowAction::new(
+                        icons::Icon::DotsHorizontal,
+                        crate::t!("cockpit-tt-manage-host"),
+                        CockpitPanelAction::ManageHost(node_id),
+                        ctx,
+                    ),
+                );
+            }
         }
         // Project-group header handles + collapse overrides, keyed by
         // `project_key` (host identity + project name — never the label alone).
         // Drop projects that vanished so the maps don't grow unbounded; the
         // collapse map keeps only live keys, so absent still means "expanded".
-        let project_keys: std::collections::HashSet<String> = inv
-            .hosts
-            .iter()
-            .flat_map(|h| {
-                let ident = host_ident(h.is_local, h.host_id.as_deref());
-                h.projects.iter().map(move |p| project_key(&ident, &p.root))
-            })
-            .collect();
         self.conductor_project_states
             .retain(|k, _| project_keys.contains(k));
         self.expanded_projects
@@ -364,6 +421,18 @@ impl CockpitPanel {
         color: ColorU,
     ) -> Box<dyn Element> {
         Text::new_inline(s, family, size).with_color(color).finish()
+    }
+
+    fn identity_text(
+        s: String,
+        family: warpui::fonts::FamilyId,
+        size: f32,
+        color: ColorU,
+    ) -> Box<dyn Element> {
+        Text::new_inline(s, family, size)
+            .with_color(color)
+            .with_clip(ClipConfig::ellipsis())
+            .finish()
     }
 
     /// The account-zone placeholder, disambiguated by scan health so an empty
@@ -731,8 +800,11 @@ impl CockpitPanel {
                 .with_spacing(6.0)
                 .with_child(Self::host_status_dot(host, appearance))
                 .with_child(
-                    Shrinkable::new(1.0, Self::text(host.host.clone(), family, body, main))
-                        .finish(),
+                    Shrinkable::new(
+                        1.0,
+                        Self::identity_text(host.host.clone(), family, body, main),
+                    )
+                    .finish(),
                 );
             if collapsed {
                 head = head.with_child(Self::text(
@@ -759,56 +831,41 @@ impl CockpitPanel {
                 }
                 None => hover_row(head_el, false, appearance),
             };
-            // Compose the header: the glance span (flex), then the ★ favorite
-            // toggle and the ⋯ manage verb for registered hosts — beside the
-            // click target, not inside it, so the clicks never collide.
+            // Compose the header: identity takes every flexible pixel; repeated
+            // secondary actions occupy fixed icon squares. Keeping the actions
+            // outside the click target also prevents click collisions.
+            // ui-contract: compact-row-actions:start
             let mut header_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
                 .with_child(Shrinkable::new(1.0, label_el).finish());
             if let Some(node_id) = host.registry_node_id.clone() {
-                if let Some(star_state) = self.conductor_host_star_states.get(&node_id).cloned() {
-                    let is_fav = favorites
-                        .iter()
-                        .any(|f| f.same_target(FavoriteKind::Host, &node_id));
-                    let action = toggle_host_favorite_action(&node_id, &host.host);
-                    header_row = header_row
-                        .with_child(Self::star_button(star_state, is_fav, appearance, action));
+                let is_fav = favorites
+                    .iter()
+                    .any(|f| f.same_target(FavoriteKind::Host, &node_id));
+                let favorite_action = if is_fav {
+                    self.conductor_host_unfavorite_actions.get(&node_id)
+                } else {
+                    self.conductor_host_favorite_actions.get(&node_id)
+                };
+                debug_assert!(favorite_action.is_some());
+                if let Some(action) = favorite_action {
+                    header_row = header_row.with_child(action.render());
                 }
-                if let Some(agent_state) = self.conductor_host_agent_states.get(&node_id).cloned() {
-                    header_row = header_row.with_child(verb_button(
-                        agent_state,
-                        crate::t!("cockpit-host-action-agent"),
-                        VerbKind::Constructive,
-                        appearance,
-                        open_registered_host_agent_action(&node_id, &host.host),
-                    ));
+                debug_assert!(self.conductor_host_agent_actions.contains_key(&node_id));
+                if let Some(action) = self.conductor_host_agent_actions.get(&node_id) {
+                    header_row = header_row.with_child(action.render());
                 }
-                if let Some(files_state) = self.conductor_host_files_states.get(&node_id).cloned() {
-                    header_row = header_row.with_child(verb_button(
-                        files_state,
-                        crate::t!("cockpit-host-action-files"),
-                        VerbKind::Constructive,
-                        appearance,
-                        open_registered_host_files_action(&node_id),
-                    ));
+                debug_assert!(self.conductor_host_files_actions.contains_key(&node_id));
+                if let Some(action) = self.conductor_host_files_actions.get(&node_id) {
+                    header_row = header_row.with_child(action.render());
                 }
-                // ⋯ manage: open the SSH-manager editor for this host (design §10
-                // folds host add/edit onto the spine's host nodes).
-                if let Some(manage_state) = self.conductor_host_manage_states.get(&node_id).cloned()
-                {
-                    let action = manage_registered_host_action(&node_id);
-                    header_row = header_row.with_child(icon_verb_button_tooltip(
-                        manage_state,
-                        icons::Icon::DotsHorizontal,
-                        theme.sub_text_color(theme.background()),
-                        theme.accent(),
-                        crate::t!("cockpit-tt-manage-host"),
-                        appearance,
-                        action,
-                    ));
+                debug_assert!(self.conductor_host_manage_actions.contains_key(&node_id));
+                if let Some(action) = self.conductor_host_manage_actions.get(&node_id) {
+                    header_row = header_row.with_child(action.render());
                 }
             }
+            // ui-contract: compact-row-actions:end
             col = col.with_child(header_row.with_main_axis_size(MainAxisSize::Max).finish());
 
             // Sessions grouped by project — the Host → Projekt → Session tree
@@ -1286,41 +1343,6 @@ impl CockpitPanel {
         .finish()
     }
 
-    /// The favorite toggle for a Conductor tree node (design §10) — the
-    /// conventional star: a **filled gold star** when favorited (hover dims to
-    /// hint un-star), a **hollow outline star** otherwise (hover → gold to hint
-    /// add). A tooltip names the action, since a bare star is otherwise ambiguous.
-    fn star_button(
-        state: MouseStateHandle,
-        is_fav: bool,
-        appearance: &Appearance,
-        action: WorkspaceAction,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let gold = Fill::Solid(theme.ui_yellow_color());
-        let muted = theme.sub_text_color(theme.background());
-        // A not-yet-favourited star recedes (very faint) so the rows stay calm;
-        // it brightens to gold on hover, hinting the add. A favourited star is
-        // always the full gold.
-        let faint = theme.sub_text_color(theme.background()).with_opacity(38);
-        let (icon, rest, hover, tooltip) = if is_fav {
-            (
-                icons::Icon::StarFilled,
-                gold,
-                muted,
-                crate::t!("cockpit-tt-favorite-remove"),
-            )
-        } else {
-            (
-                icons::Icon::Star,
-                faint,
-                gold,
-                crate::t!("cockpit-tt-favorite-add"),
-            )
-        };
-        icon_verb_button_tooltip(state, icon, rest, hover, tooltip, appearance, action)
-    }
-
     /// The „KI-KONTEN" zone header: label + count like the connections zone, plus
     /// the **fleet total** — the one cross-account number (spec v3 §S1).
     ///
@@ -1495,6 +1517,10 @@ impl Entity for CockpitPanel {
 #[derive(Clone, Debug)]
 pub enum CockpitPanelAction {
     OpenDashboardPane,
+    ToggleHostFavorite(String),
+    OpenHostAgent(String),
+    OpenHostFiles(String),
+    ManageHost(String),
     /// Collapse/expand a project group in the Host → Projekt → Session tree,
     /// keyed by `project_key`. Toggles between absent/`true` (expanded, the
     /// default) and `false` (collapsed).
@@ -1515,6 +1541,38 @@ impl TypedActionView for CockpitPanel {
         match action {
             CockpitPanelAction::OpenDashboardPane => {
                 ctx.emit(CockpitPanelEvent::OpenCockpitPane(None));
+            }
+            CockpitPanelAction::ToggleHostFavorite(node_id) => {
+                let host = CockpitModel::as_ref(ctx)
+                    .inventory()
+                    .hosts
+                    .iter()
+                    .find(|host| host.registry_node_id.as_deref() == Some(node_id.as_str()))
+                    .map(|host| host.host.clone());
+                if let Some(host) = host {
+                    ctx.dispatch_typed_action(&toggle_host_favorite_action(node_id, &host));
+                } else {
+                    log::warn!("favorite action ignored for missing host node {node_id}");
+                }
+            }
+            CockpitPanelAction::OpenHostAgent(node_id) => {
+                let host = CockpitModel::as_ref(ctx)
+                    .inventory()
+                    .hosts
+                    .iter()
+                    .find(|host| host.registry_node_id.as_deref() == Some(node_id.as_str()))
+                    .map(|host| host.host.clone());
+                if let Some(host) = host {
+                    ctx.dispatch_typed_action(&open_registered_host_agent_action(node_id, &host));
+                } else {
+                    log::warn!("agent action ignored for missing host node {node_id}");
+                }
+            }
+            CockpitPanelAction::OpenHostFiles(node_id) => {
+                ctx.dispatch_typed_action(&open_registered_host_files_action(node_id));
+            }
+            CockpitPanelAction::ManageHost(node_id) => {
+                ctx.dispatch_typed_action(&manage_registered_host_action(node_id));
             }
             CockpitPanelAction::ToggleProject(key) => {
                 // Absent = expanded (default); the first toggle collapses to false.

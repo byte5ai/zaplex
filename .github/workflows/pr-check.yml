@@ -95,6 +95,13 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      # Keep this inside the required cargo-check job: a regression fails the
+      # required context before setup/compilation instead of failing `changes`
+      # and turning this job into a branch-protection-passing "skipped" check.
+      - name: Enforce compact sidebar row actions
+        run: script/check-compact-row-actions
+        shell: bash
+
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: linux
@@ -125,6 +132,10 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Enforce compact sidebar row actions
+        run: script/check-compact-row-actions
+        shell: bash
 
       - uses: ./.github/actions/prepare_environment
         with:

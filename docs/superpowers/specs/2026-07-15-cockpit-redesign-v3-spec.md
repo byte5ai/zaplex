@@ -85,7 +85,7 @@ Plexing).
 | Attention | Amber als **Status** ausschließlich für „wartet auf Dich". Stille Punkt-Spur Host-Punkt → Session-Punkt. **Nichts codiert doppelt** → needs-me-Zähler-Badge am Host **entfällt**, Amber-Chevron eingeklappter Projekte **entfällt**; stattdessen färbt sich der **Zähler** des eingeklappten Projekts amber (ein Signal, am Ort der Verbergung). → **E2** · **Carve-out:** destruktive Verben (Stop/Kill/Stop-all) dürfen **beim Hover** amber werden — das ist eine transiente Gefahren-*Affordanz* („du bist dabei, etwas Destruktives zu tun"), kein Dauer-Status; sie kollidiert nicht mit dem Warte-Status, weil sie nur unter dem Cursor und nur momentan erscheint (`VerbKind::Destructive`, style.rs:281). |
 | Provider | Farbkachel **nur** in Konten-Cards, nie im Tree. Zwei Paletten wie beim Heat (`PROVIDER_ON_DARK` Clay `#C8724A` / Blau `#3D9BF0`, `PROVIDER_ON_LIGHT` `#9A4F2B` / `#1D6FBF`), aufgelöst über denselben Kontrast-Pick (`provider_color_on`) — der erste Wurf hatte **einen festen Dark-Hex ohne Light-Pfad** und wäre auf hellem Theme abgesoffen. |
 | Auswahl | **`theme.accent()`-Overlay** — v2s Hex `#6b74e8` ist gestrichen (App ist themebar; Code macht es bereits richtig, panel.rs:397). |
-| Verwaltungs-Icons Sidebar | Erlaubt sind genau: **Zahnrad** (Zonen-Header), **★** (Host), **⋯** (Host). v2s Ausnahmeliste war unvollständig. ⋯ ist **immer gerendert** (faint, Hover färbt) — „Hover färbt um, re-layoutet nie" gilt weiter; v2s „nur bei Hover" ist gestrichen (Code macht es bereits richtig, style.rs:310ff). |
+| Aktions-Icons Cockpit-Sidebar | Erlaubt sind genau: **Zahnrad** (Zonen-Header), **★** (Host-Favorit), **AiAssistant** (Agent öffnen), **Folder** (Dateien öffnen), **⋯** (Host verwalten). Wiederholte Sekundäraktionen in kompakten Hostzeilen sind Icon-only mit lokalisiertem Tooltip und einheitlichem 20-px-Slot; der Hostname besitzt die flexible Breite. v2s Ausnahmeliste war unvollständig. Alle Aktionen sind **immer gerendert** (muted; Hover ergänzt ausschließlich den bestehenden `fg_overlay_2`-Control-Fill) — kein Reveal und kein Re-Layout. *Bindende Ergänzung 2026-08-12.* |
 
 ---
 
@@ -348,9 +348,9 @@ Abgleich hat sich gelohnt: drei Verben hatten keinen Nachfolger, darunter eines,
 | `OpenSpawnCard` **projekt**-gebunden | **neu:** „+" in der Tabellen-Gruppenzeile |
 | `OpenSpawnCard` **host**-gebunden | **neu:** „Neuer Agent auf ‹Host›" im Titelleisten-„+"-Menü, aus dem Inventar, skopiert per `host_id` (nie per Label) |
 
-**Warum das „+"-Menü und nicht die Sidebar:** §1.3 listet die Sidebar-Icons
-abschließend (Zahnrad · ★ · ⋯) — ein „+" dort bräuchte eine Spec-Änderung, keine
-stille Ausnahme. Das Startmenü trägt ohnehin die unskopierte Karte und die
+**Warum das „+"-Menü und nicht die Cockpit-Sidebar:** §1.3 listet deren Icons
+abschließend (Zahnrad · ★ · AiAssistant · Folder · ⋯) — ein „+" dort bräuchte
+eine Spec-Änderung, keine stille Ausnahme. Das Startmenü trägt ohnehin die unskopierte Karte und die
 projekt-gebundenen Favoriten; der host-gebundene Eintrag ist die Zeile, die
 dazwischen fehlte. Nur **Remote**-Hosts: die lokale Maschine ist das, worauf die
 unskopierte Karte ohnehin fällt.

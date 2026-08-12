@@ -767,10 +767,15 @@ def run_self_test() -> None:
         )
 
         cargo_manifest = fixture / "app/Cargo.toml"
+        fixture_version = read_text(fixture / "VERSION").strip()
+        manifest_text = read_text(cargo_manifest)
+        version_marker = f'version = "{fixture_version}"'
+        if version_marker not in manifest_text:
+            raise ReadinessError(
+                "self-test could not locate VERSION in the fixture Cargo manifest"
+            )
         cargo_manifest.write_text(
-            read_text(cargo_manifest).replace(
-                'version = "1.0.0"', 'version = "0.1.0"', 1
-            ),
+            manifest_text.replace(version_marker, 'version = "0.1.0"', 1),
             encoding="utf-8",
         )
         expect_readiness_failure(

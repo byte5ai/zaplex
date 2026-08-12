@@ -42,7 +42,9 @@ sie wurden nur nicht überall benutzt.
   Detail-Card übergibt die langen Spaltentitel (`pane.rs:2133-2151`).
 - **Soll:** Detail nutzt dieselben Kurzlabels wie das Flotten-Card („5h"/„wk")
   — Meter-Labels sind Vokabeln, keine Sätze; die langen Titel gehören der
-  Zahlen-Matrix. Keine Truncation in Labels, nirgends.
+  Zahlen-Matrix. Keine Truncation in Labels; einzig kompakte, wiederholte
+  Sidebar-Identitäten dürfen seit der bindenden Ergänzung vom 2026-08-12 am
+  realen 250-px-Minimum nach Reservierung aller festen Slots ellipsieren.
 
 ### P0.4 Nackte Reset-Zeiten ohne Kontext („3h40m", „40m")
 - **Ist:** `pane.rs:2140-2155` rendert `format_reset` roh als eigene Zeile.
@@ -159,11 +161,15 @@ Review.
 
 ## Abnahme-Definition für diesen Polish-Pass
 1. Jede sichtbare Cockpit-/Sidebar-Fläche benutzt ausschließlich Bausteine aus
-   `style.rs`/bestehenden Komponenten (SearchBar, zone_card, verb_buttons).
-2. Kein abgeschnittenes Label, kein leeres Eingabefeld ohne Placeholder, kein
-   unbenannter Tab, kein unerklärtes `~`.
-3. Hover/Fokus: EINE Grammatik (volle Zeile/Card, `fg_overlay_1`,
-   Control-Radius) — nachweisbar identisch zwischen Hosts, Sessions, Cards.
+   `style.rs` oder geteilte App-Komponenten (SearchBar, zone_card, verb_buttons,
+   CompactRowAction). *CompactRowAction ergänzt diese Liste bindend seit
+   2026-08-12 für wiederholte Sekundäraktionen in schmalen Listen.*
+2. Kein abgeschnittenes Label außerhalb der dokumentierten Ellipsis-Ausnahme
+   für kompakte Sidebar-Identitäten; kein leeres Eingabefeld ohne Placeholder,
+   kein unbenannter Tab, kein unerklärtes `~`.
+3. Hover/Fokus: EINE Flächengrammatik für Zeilen/Cards (`fg_overlay_1`,
+   Control-Radius); darin liegende 20-px-Kompaktaktionen nutzen den bestehenden
+   `fg_overlay_2`-Control-Fill. Keine der beiden Ebenen verändert Geometrie.
 4. codex-Review (Korrektheit + Faktentreue) VOR Commit; pane.rs/panel.rs haben
    keinen Test-Harnisch.
 5. EIN DMG erst nach User-Freigabe.
