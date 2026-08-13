@@ -272,6 +272,12 @@ Session-Zeile = Branch + Punkt + ctx %, Konten-Cards mit 5h-Signal + Provider-Ka
 - **S1 · Zonen-Header.** `VERBINDUNGEN` / `KI-KONTEN` als Kapitälchen-Label + Zähler
   (heute: `cockpit-conductor-title = Hosts`, de/warp.ftl:37). Zahnrad (SVG,
   Stern-Größe) rechts im VERBINDUNGEN-Header → öffnet SSH-Manager (nie togglen).
+  Der SSH-Manager ist dabei ein **Drill-in aus Verbindungen**, kein paralleler
+  Navigations-Root: Sein Panel-Header ersetzt die globale Werkzeugleiste durch
+  die sichtbare Aktion `← Verbindungen`, die ins Cockpit zurückführt. Das `×`
+  schließt weiterhin das ganze Panel und ist kein Ersatz für diesen Rückweg.
+  Ist das Cockpit deaktiviert und der SSH-Manager selbst der primäre Root,
+  erscheint kein künstlicher Zurück-Button.
   **KI-KONTEN-Header behält die Flotten-Summe** („heute $X" über alle Konten) und
   **die Summe ist selbst der Einstieg** ins Flotten-Pane — das Maximize-**Icon**
   entfällt, die Flotten-**Sicht** nicht.

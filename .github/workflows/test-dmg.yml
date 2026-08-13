@@ -6,7 +6,7 @@
 # test-dispatch.yml für Rust-Tests.
 #
 # Aufruf:  gh workflow run test-dmg.yml -R byte5ai/zaplex --ref <branch> \
-#            [-f dmg_tag=v1.0.1]
+#            [-f dmg_tag=v1.0.2]
 #
 # Das .dmg wird mit Developer ID signiert, über App Store Connect notarisiert
 # und mit dem Notarisierungs-Ticket versehen.
@@ -29,7 +29,7 @@ on:
       dmg_tag:
         description: "GIT_RELEASE_TAG (bestimmt den remote-server-Pfad auf dem Ziel-Host)"
         type: string
-        default: v1.0.1
+        default: v1.0.2
       fast:
         description: "Nur für schnelle Entwicklerprüfung: Debug-Profil statt release-lto. Für ein Abnahme-DMG ausgeschaltet lassen."
         type: boolean

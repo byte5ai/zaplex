@@ -5,7 +5,7 @@ description = "The terminal cockpit for AI coding agents on remote machines"
 edition = "2021"
 autobins = false
 name = "warp"
-version = "1.0.1"
+version = "1.0.2"
 publish.workspace = true
 license.workspace = true
 

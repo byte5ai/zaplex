@@ -2,7 +2,13 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
-## [1.0.1] — unreleased
+## [1.0.2] — unreleased
+
+- **Sidebar-Navigation:** Die aus „Verbindungen“ geöffnete Hostverwaltung zeigt
+  im Panel-Header einen sichtbaren Rückweg zu „Verbindungen“; das Schließen des
+  Panels bleibt davon klar getrennt.
+
+## [1.0.1] — 2026-08-13
 
 - **Sidebar:** Host-, Daemon- und Multiplexer-Zeilen reservieren die flexible
   Breite für ihre Identität; wiederholte Sekundäraktionen erscheinen als feste
@@ -137,7 +143,8 @@ First preview release of the Zap community fork.
 - **AI**: CJK input classification, reasoning split out, BYOP `tool_call` diagnostics, LRC tag-in synthesizes a virtual subagent + floating spawn flow
 - **CI**: Release workflow explicitly declares `contents: write` permission, fixing a 403
 
-[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/byte5ai/zaplex/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/byte5ai/zaplex/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/byte5ai/zaplex/releases/tag/v1.0.0
 [v2026.05.06.preview]: https://github.com/zerx-lab/warp/compare/v2026.05.04.preview...v2026.05.06.preview
