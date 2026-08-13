@@ -48,7 +48,7 @@ and override the hardcoded defaults.
 Usage: `iscc <script path> /D<name>[=<value>]`
 
 The following constants can be overwritten:
-* `MyAppVersion` (default: `1.0.1`)
+* `MyAppVersion` (default: `1.0.2`)
 * `MyAppExeName` (default: `warp.exe`)
 * `ReleaseChannel` (default: `dev`)
 * `TargetProfileDir` (default: `debug`)
