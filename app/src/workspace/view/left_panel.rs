@@ -284,6 +284,16 @@ fn secondary_return_target(
         .then_some(ToolPanelView::Cockpit)
 }
 
+fn view_remains_available(active_view: ToolPanelView, available_views: &[ToolPanelView]) -> bool {
+    available_views
+        .iter()
+        .any(|view| match (view, active_view) {
+            (ToolPanelView::GlobalSearch { .. }, ToolPanelView::GlobalSearch { .. }) => true,
+            _ => std::mem::discriminant(view) == std::mem::discriminant(&active_view),
+        })
+        || secondary_return_target(active_view, available_views).is_some()
+}
+
 impl LeftPanelView {
     pub fn new(
         working_directories_model: ModelHandle<WorkingDirectoriesModel>,
@@ -521,17 +531,7 @@ impl LeftPanelView {
     ) {
         // Check if the current active view is still available
         let current_view = self.active_view.get();
-        let is_current_view_available = views.iter().any(|v| {
-            // Use discriminant comparison for GlobalSearch since it has inner data
-            match (v, &current_view) {
-                (ToolPanelView::GlobalSearch { .. }, ToolPanelView::GlobalSearch { .. }) => true,
-                (ToolPanelView::SshManager, ToolPanelView::SshManager) => true,
-                (ToolPanelView::ServerFileBrowser, ToolPanelView::ServerFileBrowser) => true,
-                (ToolPanelView::SkillManager, ToolPanelView::SkillManager) => true,
-                (ToolPanelView::Cockpit, ToolPanelView::Cockpit) => true,
-                _ => std::mem::discriminant(v) == std::mem::discriminant(&current_view),
-            }
-        });
+        let is_current_view_available = view_remains_available(current_view, &views);
 
         // Rebuild toolbelt buttons
         self.toolbelt_buttons = views
