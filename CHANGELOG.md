@@ -4,6 +4,8 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.0.1] — unreleased
 
+- **Cockpit:** Account-Panes mit vorhandenen Sessions stürzen beim Layout der
+  virtualisierten Sitzungstabelle nicht mehr ab.
 - **Sidebar:** Host-, Daemon- und Multiplexer-Zeilen reservieren die flexible
   Breite für ihre Identität; wiederholte Sekundäraktionen erscheinen als feste
   Icons mit lokalisierten Tooltips statt als platzraubende Textbuttons.
