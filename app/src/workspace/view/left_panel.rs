@@ -3,18 +3,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::{HostId, SessionId, send_telemetry_from_ctx, ui::Icon};
+use warp_core::{send_telemetry_from_ctx, ui::Icon, HostId, SessionId};
 use warp_util::path::LineAndColumnArg;
 use warpui::{
-    AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle, WeakViewHandle,
     elements::{
-        ChildView, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide, Element, Empty,
-        Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Resizable,
-        ResizableStateHandle, Shrinkable, resizable_state_handle,
+        resizable_state_handle, ChildView, ConstrainedBox, Container, CrossAxisAlignment,
+        DragBarSide, Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+        ParentElement, Resizable, ResizableStateHandle, Shrinkable,
     },
     platform::Cursor,
     ui_components::components::{Coords, UiComponent, UiComponentStyles},
+    AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -37,9 +37,10 @@ use crate::ssh_manager::SshManagerPanel;
 use crate::terminal::model::session::Session;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
-use crate::util::openable_file_type::FileTarget;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::resolve_file_target_with_editor_choice;
+use crate::util::openable_file_type::FileTarget;
+use crate::view_components::action_button::{ActionButton, ButtonSize, PaneHeaderTheme};
 use crate::workspace::view::conversation_list::view::{
     ConversationListView, Event as ConversationListViewEvent,
 };
@@ -55,11 +56,10 @@ use crate::workspace::view::{
     TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_ZAPLEX_DRIVE_BINDING_NAME,
 };
 use crate::{
-    TelemetryEvent,
     appearance::Appearance,
     code::file_tree::FileTreeView,
     drive::panel::{MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH},
-    pane_group::pane::view::header::{PANE_HEADER_HEIGHT, components::HEADER_EDGE_PADDING},
+    pane_group::pane::view::header::{components::HEADER_EDGE_PADDING, PANE_HEADER_HEIGHT},
     pane_group::{self},
     terminal::resizable_data::{ModalType, ResizableData},
     ui_components::{
@@ -68,6 +68,7 @@ use crate::{
     },
     util::bindings::keybinding_name_to_display_string,
     workspace::WorkspaceAction,
+    TelemetryEvent,
 };
 
 #[derive(Default)]
@@ -92,6 +93,7 @@ pub enum LeftPanelAction {
     ServerFileBrowser,
     SkillManager,
     Cockpit,
+    ReturnFromSecondaryView,
 }
 
 pub enum LeftPanelEvent {
@@ -235,6 +237,7 @@ pub struct LeftPanelView {
     resizable_state_handle: ResizableStateHandle,
     mouse_state_handles: MouseStateHandles,
     close_button_mouse_state: MouseStateHandle,
+    secondary_back_button: ViewHandle<ActionButton>,
     warp_drive_view: ViewHandle<DrivePanel>,
     conversation_list_view: ViewHandle<ConversationListView>,
     ssh_manager_view: ViewHandle<SshManagerPanel>,
@@ -242,6 +245,7 @@ pub struct LeftPanelView {
     skill_manager_view: ViewHandle<SkillManagerPanel>,
     cockpit_view: ViewHandle<CockpitPanel>,
     active_view: active_view_state::ActiveViewState,
+    available_views: Vec<ToolPanelView>,
     toolbelt_buttons: Vec<ToolbeltButtonConfig>,
     active_pane_group: Option<WeakViewHandle<PaneGroup>>,
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
@@ -266,6 +270,30 @@ fn toolbelt_tooltip_keybinding(binding_names: &[&'static str], app: &AppContext)
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
+/// Secondary panels are drill-ins, not parallel navigation roots. Deriving the
+/// return target from the configured primary views keeps the back path intact
+/// after panel close/reopen and after restoring a persisted active view.
+fn secondary_return_target(
+    active_view: ToolPanelView,
+    available_views: &[ToolPanelView],
+) -> Option<ToolPanelView> {
+    let cockpit_is_primary = available_views.contains(&ToolPanelView::Cockpit);
+    let ssh_manager_is_primary = available_views.contains(&ToolPanelView::SshManager);
+
+    (active_view == ToolPanelView::SshManager && cockpit_is_primary && !ssh_manager_is_primary)
+        .then_some(ToolPanelView::Cockpit)
+}
+
+fn view_remains_available(active_view: ToolPanelView, available_views: &[ToolPanelView]) -> bool {
+    available_views
+        .iter()
+        .any(|view| match (view, active_view) {
+            (ToolPanelView::GlobalSearch { .. }, ToolPanelView::GlobalSearch { .. }) => true,
+            _ => std::mem::discriminant(view) == std::mem::discriminant(&active_view),
+        })
+        || secondary_return_target(active_view, available_views).is_some()
+}
+
 impl LeftPanelView {
     pub fn new(
         working_directories_model: ModelHandle<WorkingDirectoriesModel>,
@@ -284,6 +312,13 @@ impl LeftPanelView {
             }
         };
         let warp_drive_view = ctx.add_typed_action_view(DrivePanel::new);
+        let secondary_back_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new(crate::t!("cockpit-zone-connections"), PaneHeaderTheme)
+                .with_size(ButtonSize::XSmall)
+                .with_icon(Icon::ArrowLeft)
+                .with_tooltip(crate::t!("workspace-left-panel-back-to-connections"))
+                .on_click(|ctx| ctx.dispatch_typed_action(LeftPanelAction::ReturnFromSecondaryView))
+        });
         let conversation_list_view = ctx.add_typed_action_view(ConversationListView::new);
         let ssh_manager_view = ctx.add_typed_action_view(SshManagerPanel::new);
         let server_file_browser_view = ctx.add_typed_action_view(ServerFileBrowserView::new);
@@ -453,6 +488,7 @@ impl LeftPanelView {
             resizable_state_handle,
             mouse_state_handles: Default::default(),
             close_button_mouse_state: Default::default(),
+            secondary_back_button,
             warp_drive_view,
             conversation_list_view,
             ssh_manager_view,
@@ -460,6 +496,7 @@ impl LeftPanelView {
             skill_manager_view,
             cockpit_view,
             active_view: active_view_state::new(active_view),
+            available_views: views,
             toolbelt_buttons,
             active_pane_group: None,
             working_directories_model,
@@ -494,17 +531,7 @@ impl LeftPanelView {
     ) {
         // Check if the current active view is still available
         let current_view = self.active_view.get();
-        let is_current_view_available = views.iter().any(|v| {
-            // Use discriminant comparison for GlobalSearch since it has inner data
-            match (v, &current_view) {
-                (ToolPanelView::GlobalSearch { .. }, ToolPanelView::GlobalSearch { .. }) => true,
-                (ToolPanelView::SshManager, ToolPanelView::SshManager) => true,
-                (ToolPanelView::ServerFileBrowser, ToolPanelView::ServerFileBrowser) => true,
-                (ToolPanelView::SkillManager, ToolPanelView::SkillManager) => true,
-                (ToolPanelView::Cockpit, ToolPanelView::Cockpit) => true,
-                _ => std::mem::discriminant(v) == std::mem::discriminant(&current_view),
-            }
-        });
+        let is_current_view_available = view_remains_available(current_view, &views);
 
         // Rebuild toolbelt buttons
         self.toolbelt_buttons = views
@@ -520,6 +547,7 @@ impl LeftPanelView {
         } else {
             self.update_button_active_states();
         }
+        self.available_views = views;
 
         ctx.notify();
     }
@@ -1102,6 +1130,7 @@ impl LeftPanelView {
                     self.active_view.get() == ToolPanelView::SkillManager
                 }
                 LeftPanelAction::Cockpit => self.active_view.get() == ToolPanelView::Cockpit,
+                LeftPanelAction::ReturnFromSecondaryView => false,
             };
         }
     }
@@ -1254,6 +1283,14 @@ impl LeftPanelView {
             }
             LeftPanelAction::Cockpit => {
                 active_view_state::set(self, ToolPanelView::Cockpit, ctx);
+            }
+            LeftPanelAction::ReturnFromSecondaryView => {
+                if let Some(return_target) =
+                    secondary_return_target(self.active_view.get(), &self.available_views)
+                {
+                    active_view_state::set(self, return_target, ctx);
+                    self.focus_active_view_on_entry(ctx);
+                }
             }
         }
     }
@@ -1471,11 +1508,15 @@ impl View for LeftPanelView {
         let panel_content = Container::new({
             let column = Flex::column();
 
-            let header_left = if let Some(row) = toolbelt_button_row {
-                row
-            } else {
-                Flex::row().finish()
-            };
+            let header_left =
+                if secondary_return_target(self.active_view.get(), &self.available_views).is_some()
+                {
+                    ChildView::new(&self.secondary_back_button).finish()
+                } else if let Some(row) = toolbelt_button_row {
+                    row
+                } else {
+                    Flex::row().finish()
+                };
 
             let header_row = Container::new(
                 ConstrainedBox::new(
@@ -1531,3 +1572,7 @@ fn deduplicate_by_directory_name(directories: Vec<PathBuf>) -> Vec<PathBuf> {
         .filter(|path| seen_paths.insert(path.clone()))
         .collect()
 }
+
+#[cfg(test)]
+#[path = "left_panel_tests.rs"]
+mod tests;

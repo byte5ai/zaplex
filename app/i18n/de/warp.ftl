@@ -557,6 +557,7 @@ terminal-input-enter-prompt-for-agent = Prompt für { $agent } eingeben…
 terminal-input-no-skills-found = Keine Skills gefunden
 workspace-left-panel-agent-conversations = Agent-Unterhaltungen
 workspace-left-panel-close-panel = Panel schließen
+workspace-left-panel-back-to-connections = Zurück zu Verbindungen
 workspace-left-panel-global-search = Globale Suche
 workspace-left-panel-project-explorer = Projekt-Explorer
 workspace-left-panel-server-file-browser = Server-Dateien
