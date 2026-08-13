@@ -1,4 +1,8 @@
+use std::collections::HashSet;
+
 use super::*;
+use crate::platform::WindowStyle;
+use crate::{App, AppContext, Entity, TypedActionView, WindowInvalidation};
 
 fn create_empty_element() -> Box<dyn Element> {
     Box::new(super::super::Empty::new())
@@ -10,6 +14,30 @@ fn create_header(width: TableColumnWidth) -> TableHeader {
 
 fn create_test_state() -> TableStateHandle {
     TableStateHandle::new(0, |_, _| vec![])
+}
+
+struct ViewportedTableTestView {
+    state: TableStateHandle,
+}
+
+impl Entity for ViewportedTableTestView {
+    type Event = ();
+}
+
+impl crate::core::View for ViewportedTableTestView {
+    fn ui_name() -> &'static str {
+        "viewported_table_test_view"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Table::new(self.state.clone(), 200.0, 100.0)
+            .with_headers(vec![create_header(TableColumnWidth::Flex(1.0))])
+            .finish()
+    }
+}
+
+impl TypedActionView for ViewportedTableTestView {
+    type Action = ();
 }
 
 // ============================================================================
@@ -346,6 +374,39 @@ fn test_max_scroll_offset_respects_viewport() {
 // ============================================================================
 // Multiple Layout Tests
 // ============================================================================
+
+#[test]
+fn test_viewported_table_layout_releases_state_borrow() {
+    App::test((), |mut app| async move {
+        let state = TableStateHandle::new(1, |_, _| vec![create_empty_element()]);
+        let view_state = state.clone();
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, move |_| {
+            ViewportedTableTestView { state: view_state }
+        });
+        let root_view_id = view.id();
+
+        app.update(move |ctx| {
+            let presenter = ctx.presenter(window_id).expect("window should exist");
+            for _ in 0..2 {
+                let mut updated = HashSet::new();
+                updated.insert(root_view_id);
+                presenter.borrow_mut().invalidate(
+                    WindowInvalidation {
+                        updated,
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                presenter
+                    .borrow_mut()
+                    .build_scene(vec2f(200.0, 100.0), 1.0, None, ctx);
+            }
+        });
+
+        assert_eq!(state.column_widths(), vec![200.0]);
+        assert_eq!(state.inner.borrow().rows.summary().measured_count, 1);
+    });
+}
 
 #[test]
 fn test_visible_row_count_starts_at_zero() {
