@@ -3929,6 +3929,7 @@ cockpit-host-action-agent = Open agent
 cockpit-host-action-files = Open files
 cockpit-tt-review = Review changes
 cockpit-host-no-agents = No running sessions
+cockpit-host-removed = removed from Connections
 cockpit-conductor-rest-show-both = { $running } running · { $idle } idle — show
 cockpit-conductor-rest-show-running = { $running } running — show
 cockpit-conductor-rest-show-idle = { $idle } idle — show

@@ -1067,7 +1067,7 @@ message AgentSessionInfo {
   // unknown and therefore unsignalable. Additive so older daemons decode as the
   // safe empty value.
   string process_fingerprint = 18;
-  // Present only for clients that negotiated "agent-pty-binding". Empty/zero
+  // Present only for clients that negotiated "agent-pty-binding-v2". Empty/zero
   // values are the safe unbound defaults for old clients and daemons.
   string pty_session_id = 19;
   uint64 pty_session_generation = 20;
@@ -1097,8 +1097,10 @@ message AgentSessionList {
 // live foreground agent. Switching foreground identity requires an explicit
 // handoff from the identity currently reported by the daemon.
 //
-// Capability: both peers must advertise "agent-pty-binding". Older clients
-// decode the additive inventory fields as unbound and never send these ops.
+// Capability: "agent-pty-binding" documents the additive base schema;
+// mutations and trusted attach require both peers to advertise
+// "agent-pty-binding-v2". Older clients decode the additive inventory fields
+// as unbound and never send these ops.
 
 message AgentSessionIdentity {
   string session_id = 1;
@@ -1112,12 +1114,18 @@ message BindAgentPty {
   string pty_session_id = 2;
   uint64 pty_session_generation = 3;
   AgentSessionIdentity handoff_from = 4;
+  // Exact daemon process identity returned by InitializeResponse.host_id.
+  // Additive: legacy payloads decode with the safe empty value and are
+  // rejected rather than mutating a PTY on an unintended daemon instance.
+  string host_id = 5;
 }
 
 message UnbindAgentPty {
   AgentSessionIdentity agent = 1;
   string pty_session_id = 2;
   uint64 pty_session_generation = 3;
+  // Exact daemon process identity returned by InitializeResponse.host_id.
+  string host_id = 4;
 }
 
 enum AgentPtyBindingStatus {
@@ -1133,6 +1141,8 @@ enum AgentPtyBindingStatus {
   AGENT_PTY_BINDING_STATUS_IDENTITY_NOT_BOUND = 9;
   AGENT_PTY_BINDING_STATUS_INVALID_REQUEST = 10;
   AGENT_PTY_BINDING_STATUS_IDENTITY_ALREADY_BOUND = 11;
+  AGENT_PTY_BINDING_STATUS_FOREIGN_DAEMON = 12;
+  AGENT_PTY_BINDING_STATUS_IDENTITY_NOT_DISCOVERED = 13;
 }
 
 message AgentPtyBindingResponse {

@@ -107,6 +107,40 @@ fn host_node_exposes_manage_terminal_agent_and_files_actions() {
     ));
 }
 
+#[test]
+fn removed_host_is_marked_and_exposes_no_registered_route() {
+    let host = HostNode {
+        host: "devhost".to_string(),
+        is_local: false,
+        host_id: Some("daemon-dev".to_string()),
+        availability: HostAvailability::Removed,
+        // Deliberately retain a stale id in this presentation-level test: the
+        // explicit state, not incidental id clearing, must close every route.
+        registry_node_id: Some("node-dev".to_string()),
+        needs_me: 1,
+        projects: Vec::new(),
+    };
+    let tree = FleetTree {
+        hosts: vec![host.clone()],
+        needs_me: 0,
+    };
+
+    assert_eq!(
+        host_display_label(&host, "removed from Connections"),
+        "devhost — removed from Connections"
+    );
+    assert_eq!(available_registry_node_id(&host), None);
+    assert_eq!(available_registered_host(&tree, "node-dev"), None);
+    assert!(
+        !host.is_available(),
+        "removed daemon data is visible but cannot seed session click routes"
+    );
+    assert!(matches!(
+        open_removed_host_repair_action(),
+        WorkspaceAction::OpenSshManager
+    ));
+}
+
 struct HostRowTestView {
     state: MouseStateHandle,
     opened: usize,

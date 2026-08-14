@@ -106,6 +106,11 @@ async fn initialize_sends_empty_auth_token_when_none() {
                     .features
                     .iter()
                     .any(|feature| feature == "agent-pty-binding"));
+                #[cfg(unix)]
+                assert!(init
+                    .features
+                    .iter()
+                    .any(|feature| feature == "agent-pty-binding-v2"));
             }
             other => panic!("Expected Initialize, got {other:?}"),
         }
@@ -626,6 +631,7 @@ async fn agent_pty_bind_and_unbind_reach_wire() {
     };
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| match &msg.message {
         Some(client_message::Message::BindAgentPty(bind)) => {
+            assert_eq!(bind.host_id, "daemon-host-1");
             assert_eq!(bind.agent.as_ref().unwrap().session_id, "agent-1");
             assert_eq!(bind.pty_session_id, "pty-1");
             assert_eq!(bind.pty_session_generation, 9);
@@ -635,6 +641,7 @@ async fn agent_pty_bind_and_unbind_reach_wire() {
             })
         }
         Some(client_message::Message::UnbindAgentPty(unbind)) => {
+            assert_eq!(unbind.host_id, "daemon-host-1");
             assert_eq!(unbind.agent.as_ref().unwrap().session_id, "agent-1");
             assert_eq!(unbind.pty_session_id, "pty-1");
             assert_eq!(unbind.pty_session_generation, 9);
@@ -647,7 +654,13 @@ async fn agent_pty_bind_and_unbind_reach_wire() {
     });
 
     let bound = client
-        .bind_agent_pty(identity.clone(), "pty-1".to_string(), 9, None)
+        .bind_agent_pty(
+            "daemon-host-1".to_string(),
+            identity.clone(),
+            "pty-1".to_string(),
+            9,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -655,7 +668,12 @@ async fn agent_pty_bind_and_unbind_reach_wire() {
         AgentPtyBindingStatus::Bound
     );
     let unbound = client
-        .unbind_agent_pty(identity, "pty-1".to_string(), 9)
+        .unbind_agent_pty(
+            "daemon-host-1".to_string(),
+            identity,
+            "pty-1".to_string(),
+            9,
+        )
         .await
         .unwrap();
     assert_eq!(

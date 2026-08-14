@@ -48,6 +48,7 @@ fn host(name: &str, sessions: Vec<SessionSnapshot>) -> HostSessions {
         host: name.into(),
         is_local: false,
         host_id: None,
+        registry_node_id: None,
         sessions,
     }
 }
@@ -60,6 +61,7 @@ fn remote_host(name: &str, host_id: &str, sessions: Vec<SessionSnapshot>) -> Hos
         host: name.into(),
         is_local: false,
         host_id: Some(host_id.into()),
+        registry_node_id: None,
         sessions,
     }
 }

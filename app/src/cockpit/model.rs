@@ -34,7 +34,7 @@ use zaplex_cockpit::{
 // are gated to match.
 #[cfg(not(target_family = "wasm"))]
 use zaplex_remote_session::types::{
-    has_feature, FEATURE_AGENT_INVENTORY, FEATURE_AGENT_PTY_BINDING,
+    has_feature, FEATURE_AGENT_INVENTORY, FEATURE_AGENT_PTY_BINDING_V2,
 };
 
 use crate::cockpit::oauth::{self, CachedOauth};
@@ -45,7 +45,7 @@ use crate::remote_server::manager::{ConnectedDaemon, RemoteServerManager};
 
 #[cfg(not(target_family = "wasm"))]
 fn retain_negotiated_agent_pty_routes(features: &[String], sessions: &mut [SessionSnapshot]) {
-    if has_feature(features, FEATURE_AGENT_PTY_BINDING) {
+    if has_feature(features, FEATURE_AGENT_PTY_BINDING_V2) {
         return;
     }
     for session in sessions {
@@ -341,6 +341,7 @@ impl CockpitModel {
                                     RemoteHost {
                                         label: daemon.host_label,
                                         host_id: daemon.host_id,
+                                        registry_node_id: daemon.registry_node_id,
                                     },
                                     sessions,
                                 ));
@@ -582,6 +583,7 @@ fn fleet_transitions_to_waiting(old: &FleetTree, new: &FleetTree) -> Vec<String>
     let old_states: HashMap<String, SessionState> = old
         .hosts
         .iter()
+        .filter(|h| h.is_available())
         .flat_map(|h| {
             let is_local = h.is_local;
             let host_id = h.host_id.clone();
@@ -592,7 +594,7 @@ fn fleet_transitions_to_waiting(old: &FleetTree, new: &FleetTree) -> Vec<String>
         })
         .collect();
     let mut became_waiting = Vec::new();
-    for host in &new.hosts {
+    for host in new.hosts.iter().filter(|host| host.is_available()) {
         for session in host.projects.iter().flat_map(|p| &p.sessions) {
             if session.state != SessionState::Waiting {
                 continue;

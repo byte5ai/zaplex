@@ -1,9 +1,9 @@
 use prost::Message;
 
 use crate::proto::{
-    client_message, server_message, AgentSessionInfo, AgentTaskItem, ClientMessage, Initialize,
-    InitializeResponse, MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList,
-    ServerMessage,
+    client_message, server_message, AgentSessionInfo, AgentTaskItem, BindAgentPty, ClientMessage,
+    Initialize, InitializeResponse, MultiplexerKind, MultiplexerSessionInfo,
+    MultiplexerSessionList, ServerMessage,
 };
 
 use super::*;
@@ -92,6 +92,27 @@ fn real_legacy_client_fixture_interoperates() {
 }
 
 #[test]
+fn real_pre_host_identity_bind_fixture_decodes_to_safe_empty_host() {
+    // Frozen ClientMessage { request_id: "legacy", bind_agent_pty: ... }
+    // bytes from the schema immediately before BindAgentPty.host_id was added.
+    // The fixture is old wire data, not produced by today's encoder.
+    const LEGACY_BIND_AGENT_PTY: &[u8] = &[
+        0x0a, 0x06, b'l', b'e', b'g', b'a', b'c', b'y', 0x92, 0x02, 0x1b, 0x0a, 0x10, 0x0a, 0x07,
+        b'a', b'g', b'e', b'n', b't', b'-', b'1', 0x12, 0x05, b'c', b'o', b'd', b'e', b'x', 0x12,
+        0x05, b'p', b't', b'y', b'-', b'1', 0x18, 0x09,
+    ];
+
+    let decoded = ClientMessage::decode(LEGACY_BIND_AGENT_PTY).unwrap();
+    let Some(client_message::Message::BindAgentPty(bind)) = decoded.message else {
+        panic!("legacy fixture must decode as BindAgentPty");
+    };
+    assert_eq!(bind.agent.unwrap().session_id, "agent-1");
+    assert_eq!(bind.pty_session_id, "pty-1");
+    assert_eq!(bind.pty_session_generation, 9);
+    assert!(bind.host_id.is_empty());
+}
+
+#[test]
 fn real_legacy_schema_fixture_decodes_without_pty_binding() {
     // Captured old ServerMessage { request_id: "legacy", agent_session_list:
     // [AgentSessionInfo { session_id: "agent-1", cwd: "/tmp" }] }. This full
@@ -127,6 +148,34 @@ struct LegacyAgentSessionInfo {
 struct LegacyServerEnvelope {
     #[prost(string, tag = "1")]
     request_id: String,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct LegacyBindAgentPty {
+    #[prost(message, optional, tag = "1")]
+    agent: Option<crate::proto::AgentSessionIdentity>,
+    #[prost(string, tag = "2")]
+    pty_session_id: String,
+    #[prost(uint64, tag = "3")]
+    pty_session_generation: u64,
+    #[prost(message, optional, tag = "4")]
+    handoff_from: Option<crate::proto::AgentSessionIdentity>,
+}
+
+#[test]
+fn older_client_schema_ignores_new_bind_host_identity() {
+    let current = BindAgentPty {
+        agent: None,
+        pty_session_id: "pty-7".to_string(),
+        pty_session_generation: 42,
+        handoff_from: None,
+        host_id: "daemon-host-1".to_string(),
+    };
+
+    let legacy = LegacyBindAgentPty::decode(current.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(legacy.pty_session_id, "pty-7");
+    assert_eq!(legacy.pty_session_generation, 42);
 }
 
 #[test]

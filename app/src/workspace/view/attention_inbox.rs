@@ -104,6 +104,7 @@ impl AttentionInbox {
             .inventory()
             .hosts
             .iter()
+            .filter(|h| h.is_available())
             .flat_map(|h| {
                 h.projects.iter().flat_map(move |p| {
                     p.sessions
@@ -259,7 +260,12 @@ impl AttentionInbox {
         } else {
             // Inventory is already ordered waiting-first, needs-me-heavy hosts
             // and projects on top — just render its waiting leaves in order.
-            for host in &model.inventory().hosts {
+            for host in model
+                .inventory()
+                .hosts
+                .iter()
+                .filter(|host| host.is_available())
+            {
                 for project in &host.projects {
                     for session in &project.sessions {
                         if session.state != SessionState::Waiting {

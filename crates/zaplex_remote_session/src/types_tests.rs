@@ -29,6 +29,11 @@ fn pty_binding_requires_negotiated_capability() {
         FEATURE_AGENT_PTY_BINDING
     ));
     assert!(!has_feature(&[], FEATURE_AGENT_PTY_BINDING));
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_AGENT_PTY_BINDING_V2
+    ));
+    assert!(!has_feature(&[], FEATURE_AGENT_PTY_BINDING_V2));
 }
 
 #[cfg(unix)]
@@ -115,6 +120,7 @@ fn supported_client_features_are_explicit_and_platform_independent() {
         FEATURE_AGENT_INVENTORY,
         FEATURE_AGENT_PROCESS_SIGNAL_V1,
         FEATURE_AGENT_PTY_BINDING,
+        FEATURE_AGENT_PTY_BINDING_V2,
         FEATURE_SAFE_FILE_TRANSACTIONS_V1,
         FEATURE_HOST_EXEC,
         FEATURE_MULTIPLEXER_INVENTORY_V1,
@@ -133,6 +139,14 @@ fn supported_features_omits_session_host_on_non_unix() {
     assert!(!has_feature(
         &supported_features(),
         FEATURE_STARTUP_COMMAND_ACK
+    ));
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_AGENT_PTY_BINDING
+    ));
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_AGENT_PTY_BINDING_V2
     ));
     assert!(!has_feature(
         &supported_features(),

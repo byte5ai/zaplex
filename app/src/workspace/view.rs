@@ -1090,6 +1090,33 @@ fn send_local_guardrail_signal(
     )
 }
 
+fn inventory_guardrail_session_is_available(
+    tree: &zaplex_cockpit::FleetTree,
+    host_id: Option<&str>,
+    session_id: &str,
+    is_local: bool,
+    pid: u32,
+    expected_fingerprint: Option<&str>,
+) -> bool {
+    tree.hosts
+        .iter()
+        .filter(|host| host.is_available())
+        .filter(|host| {
+            if is_local {
+                host.is_local
+            } else {
+                !host.is_local && host_id.is_some() && host.host_id.as_deref() == host_id
+            }
+        })
+        .flat_map(|host| host.projects.iter())
+        .flat_map(|project| project.sessions.iter())
+        .any(|session| {
+            session.session_id == session_id
+                && session.pid == pid
+                && session.process_fingerprint.as_deref() == expected_fingerprint
+        })
+}
+
 /// Ask a remote daemon to signal the exact process identity discovered for one
 /// agent session.
 ///
@@ -1475,17 +1502,27 @@ fn favorite_host_menu_item(
                     .into_item(),
             ]),
         },
-        None => MenuItemFields::new(format!(
-            "{} — {}",
-            favorite.display_label(),
-            crate::t!("workspace-favorite-unavailable")
-        ))
-        .with_on_select_action(WorkspaceAction::RemoveFavorite {
-            kind: favorite.kind,
-            target: favorite.target.clone(),
-        })
-        .with_icon(icons::Icon::AlertTriangle)
-        .into_item(),
+        None => MenuItem::Submenu {
+            fields: MenuItemFields::new_submenu(format!(
+                "{} — {}",
+                favorite.display_label(),
+                crate::t!("workspace-favorite-unavailable")
+            ))
+            .with_icon(icons::Icon::AlertTriangle),
+            menu: SubMenu::new(vec![
+                MenuItemFields::new(crate::t!("workspace-favorite-unavailable"))
+                    .with_disabled(true)
+                    .with_icon(icons::Icon::AlertTriangle)
+                    .into_item(),
+                MenuItemFields::new(crate::t!("cockpit-tt-favorite-remove"))
+                    .with_on_select_action(WorkspaceAction::RemoveFavorite {
+                        kind: favorite.kind,
+                        target: favorite.target.clone(),
+                    })
+                    .with_icon(icons::Icon::Trash)
+                    .into_item(),
+            ]),
+        },
     }
 }
 
@@ -4892,6 +4929,7 @@ impl Workspace {
             .inventory()
             .hosts
             .iter()
+            .filter(|host| host.is_available())
             .flat_map(|host| {
                 let expected_key = &expected_key;
                 host.projects.iter().flat_map(move |project| {
@@ -6920,9 +6958,10 @@ impl Workspace {
             .hosts
             .iter()
             .filter(|candidate| {
-                candidate.host == host
-                    || candidate.host_id.as_deref() == Some(host)
-                    || (candidate.is_local && host == "local")
+                candidate.is_available()
+                    && (candidate.host == host
+                        || candidate.host_id.as_deref() == Some(host)
+                        || (candidate.is_local && host == "local"))
             })
             .flat_map(|candidate| {
                 candidate.projects.iter().flat_map(move |project| {
@@ -8755,7 +8794,7 @@ impl Workspace {
         let manager = crate::remote_server::manager::RemoteServerManager::as_ref(ctx);
         if !manager.session_supports_feature(
             connection_session_id,
-            zaplex_remote_session::types::FEATURE_AGENT_PTY_BINDING,
+            zaplex_remote_session::types::FEATURE_AGENT_PTY_BINDING_V2,
         ) || !manager.session_supports_feature(
             connection_session_id,
             zaplex_remote_session::types::FEATURE_AGENT_INVENTORY,
@@ -13025,6 +13064,18 @@ impl Workspace {
             return;
         }
 
+        if !inventory_guardrail_session_is_available(
+            crate::cockpit::CockpitModel::as_ref(ctx).inventory(),
+            host_id,
+            session_id,
+            is_local,
+            pid,
+            expected_fingerprint.as_deref(),
+        ) {
+            self.session_not_found_toast(host, ctx);
+            return;
+        }
+
         // Route by the explicit `is_local` marker from the inventory, never by
         // comparing `host` against the local label: a remote daemon whose label
         // collides with the local hostname must NOT be signaled locally (its
@@ -13128,6 +13179,7 @@ impl Workspace {
                 .inventory()
                 .hosts
                 .iter()
+                .filter(|h| h.is_available())
                 .flat_map(|h| {
                     h.projects.iter().flat_map(move |p| {
                         p.sessions.iter().map(move |s| {
@@ -23601,6 +23653,7 @@ impl TypedActionView for Workspace {
                     .inventory()
                     .hosts
                     .iter()
+                    .filter(|h| h.is_available())
                     .flat_map(|h| h.projects.iter())
                     .flat_map(|p| p.sessions.iter())
                     .filter(|s| {

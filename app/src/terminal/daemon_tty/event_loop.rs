@@ -17,7 +17,7 @@ use std::io;
 use std::sync::Arc;
 use warp_core::SessionId;
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
-use zaplex_remote_session::types::{FEATURE_AGENT_PTY_BINDING, FEATURE_STARTUP_COMMAND_ACK};
+use zaplex_remote_session::types::{FEATURE_AGENT_PTY_BINDING_V2, FEATURE_STARTUP_COMMAND_ACK};
 
 use super::terminal_manager::OpenSessionParams;
 
@@ -481,9 +481,9 @@ impl EventLoop {
             let provider = match session.agent {
                 CLIAgent::Claude => "claude",
                 CLIAgent::Codex => "codex",
-                CLIAgent::Grok => "grok",
-                CLIAgent::Antigravity => "antigravity",
-                CLIAgent::Gemini
+                unsupported @ (CLIAgent::Grok
+                | CLIAgent::Antigravity
+                | CLIAgent::Gemini
                 | CLIAgent::Amp
                 | CLIAgent::Droid
                 | CLIAgent::OpenCode
@@ -493,7 +493,13 @@ impl EventLoop {
                 | CLIAgent::CursorCli
                 | CLIAgent::Goose
                 | CLIAgent::DeepSeek
-                | CLIAgent::Unknown => return None,
+                | CLIAgent::Unknown) => {
+                    log::debug!(
+                        "daemon_tty: skipping PTY binding for unsupported live-verification \
+                         provider {unsupported:?}"
+                    );
+                    return None;
+                }
             };
             let account = sessions.account_identity(terminal_view_id)?;
             if account.agent() != session.agent {
@@ -514,17 +520,19 @@ impl EventLoop {
     fn agent_binding_client(
         &self,
         ctx: &mut ModelContext<Self>,
-    ) -> Option<(Arc<RemoteServerClient>, bool)> {
+    ) -> Option<(Arc<RemoteServerClient>, bool, String)> {
         let session_id = self.connection_session_id;
         let manager = RemoteServerManager::handle(ctx);
         manager.read(ctx, |manager, _ctx| {
             manager
                 .client_for_session(session_id)
                 .cloned()
-                .map(|client| {
-                    let supported =
-                        manager.session_supports_feature(session_id, FEATURE_AGENT_PTY_BINDING);
-                    (client, supported)
+                .and_then(|client| {
+                    manager.host_id_for_session(session_id).map(|host_id| {
+                        let supported = manager
+                            .session_supports_feature(session_id, FEATURE_AGENT_PTY_BINDING_V2);
+                        (client, supported, host_id.as_str().to_string())
+                    })
                 })
         })
     }
@@ -541,7 +549,7 @@ impl EventLoop {
         else {
             return;
         };
-        let Some((client, supported)) = self.agent_binding_client(ctx) else {
+        let Some((client, supported, host_id)) = self.agent_binding_client(ctx) else {
             return;
         };
         if !supported {
@@ -559,7 +567,7 @@ impl EventLoop {
                 let sent = current.clone();
                 let future = async move {
                     client
-                        .unbind_agent_pty(current, pty_session_id, pty_generation)
+                        .unbind_agent_pty(host_id, current, pty_session_id, pty_generation)
                         .await
                 };
                 ctx.spawn(future, move |me, result, ctx| {
@@ -590,7 +598,7 @@ impl EventLoop {
                 let sent = desired.clone();
                 let future = async move {
                     client
-                        .bind_agent_pty(desired, pty_session_id, pty_generation, current)
+                        .bind_agent_pty(host_id, desired, pty_session_id, pty_generation, current)
                         .await
                 };
                 ctx.spawn(future, move |me, result, ctx| {
@@ -703,7 +711,7 @@ impl EventLoop {
         let expected_generation = self.pty_generation;
         let supports_agent_binding = self
             .agent_binding_client(ctx)
-            .is_some_and(|(_, supported)| supported);
+            .is_some_and(|(_, supported, _)| supported);
         if !Self::attach_generation_is_valid(expected_generation, supports_agent_binding) {
             self.write_notice(
                 "could not re-attach session: the daemon returned an invalid PTY generation",
