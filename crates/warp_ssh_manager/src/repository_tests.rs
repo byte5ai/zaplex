@@ -254,6 +254,37 @@ fn sync_meta_get_version_default() {
 }
 
 #[test]
+fn invalid_sync_version_is_reported_without_fallback() {
+    use diesel::connection::SimpleConnection as _;
+
+    let mut conn = setup_in_memory();
+    conn.batch_execute(
+        "INSERT INTO sync_meta (key, value) VALUES ('sync_version', 'not-a-version');",
+    )
+    .unwrap();
+
+    assert!(matches!(
+        SyncMetaRepository::get_sync_version(&mut conn),
+        Err(SshRepositoryError::InvalidSyncVersion(value)) if value == "not-a-version"
+    ));
+}
+
+#[test]
+fn sync_version_overflow_is_reported_without_mutation() {
+    let mut conn = setup_in_memory();
+    SyncMetaRepository::set_sync_version(&mut conn, i64::MAX).unwrap();
+
+    assert!(matches!(
+        SyncMetaRepository::increment_sync_version(&mut conn),
+        Err(SshRepositoryError::InvalidSyncVersion(value)) if value == i64::MAX.to_string()
+    ));
+    assert_eq!(
+        SyncMetaRepository::get_sync_version(&mut conn).unwrap(),
+        i64::MAX
+    );
+}
+
+#[test]
 fn sync_meta_set_and_get_version() {
     let mut conn = setup_in_memory();
     SyncMetaRepository::set_sync_version(&mut conn, 42).unwrap();

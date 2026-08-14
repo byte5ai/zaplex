@@ -25,6 +25,9 @@ pub struct SshConfigCandidate {
     pub hostname: Option<String>,
     pub user: Option<String>,
     pub port: Option<u16>,
+    /// The first declared Port value when it is not in 1..=65535.
+    /// Kept separate from a missing Port so import cannot silently substitute 22.
+    pub invalid_port: Option<String>,
     pub identity_file: Option<PathBuf>,
 }
 
@@ -51,9 +54,7 @@ pub fn parse_ssh_config(content: &str) -> Vec<SshConfigCandidate> {
             continue;
         }
 
-        let mut parts = trimmed.splitn(2, char::is_whitespace);
-        let keyword = parts.next().unwrap_or("");
-        let value = parts.next().unwrap_or("").trim();
+        let (keyword, value) = split_directive(trimmed);
 
         if keyword.eq_ignore_ascii_case("Host") {
             flush(&mut state, &mut out);
@@ -96,6 +97,21 @@ pub fn parse_ssh_config(content: &str) -> Vec<SshConfigCandidate> {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+fn split_directive(line: &str) -> (&str, &str) {
+    if let Some((keyword, value)) = line.split_once('=') {
+        let keyword = keyword.trim();
+        if !keyword.is_empty() && !keyword.chars().any(char::is_whitespace) {
+            return (keyword, value.trim());
+        }
+    }
+
+    let mut parts = line.splitn(2, char::is_whitespace);
+    (
+        parts.next().unwrap_or(""),
+        parts.next().unwrap_or("").trim(),
+    )
+}
+
 enum ParseState {
     /// Haven't encountered any Host / Match yet.
     Outside,
@@ -114,6 +130,8 @@ struct BodyFields {
     hostname: Option<String>,
     user: Option<String>,
     port: Option<u16>,
+    port_declared: bool,
+    invalid_port: Option<String>,
     identity_file: Option<PathBuf>,
 }
 
@@ -126,6 +144,7 @@ fn flush(state: &mut ParseState, out: &mut Vec<SshConfigCandidate>) {
                 hostname: body.hostname.clone(),
                 user: body.user.clone(),
                 port: body.port,
+                invalid_port: body.invalid_port.clone(),
                 identity_file: body.identity_file.clone(),
             });
         }
@@ -152,11 +171,12 @@ fn apply_body_field(body: &mut BodyFields, keyword: &str, value: &str) {
             body.user = Some(value.to_string());
         }
     } else if keyword.eq_ignore_ascii_case("Port") {
-        // Note: first "declaration" wins, not first "valid" — but because Port parsing
-        // failure returns None (PRODUCT.md decision K), the "already declared" state in
-        // first-wins is equivalent to "value is not None". Use is_none guard for simplicity.
-        if body.port.is_none() {
-            body.port = value.parse::<u16>().ok();
+        if !body.port_declared {
+            body.port_declared = true;
+            match value.parse::<u16>().ok().filter(|port| *port != 0) {
+                Some(port) => body.port = Some(port),
+                None => body.invalid_port = Some(value.to_string()),
+            }
         }
     } else if keyword.eq_ignore_ascii_case("IdentityFile") && body.identity_file.is_none() {
         let unquoted = strip_surrounding_quotes(value);
@@ -247,6 +267,7 @@ mod tests {
             hostname: None,
             user: None,
             port: None,
+            invalid_port: None,
             identity_file: None,
         }
     }
@@ -271,6 +292,7 @@ Host prodbox
                 hostname: Some("prod.example.com".into()),
                 user: Some("alice".into()),
                 port: Some(2222),
+                invalid_port: None,
                 identity_file: Some(PathBuf::from("/home/alice/.ssh/id_ed25519")),
             }]
         );
@@ -397,7 +419,10 @@ Host b
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].alias, "a");
         assert_eq!(got[0].user.as_deref(), Some("u_a"));
-        assert_eq!(got[0].port, None, "Match block's Port 9999 should not leak into a");
+        assert_eq!(
+            got[0].port, None,
+            "Match block's Port 9999 should not leak into a"
+        );
         assert_eq!(got[1].alias, "b");
         assert_eq!(got[1].user.as_deref(), Some("u_b"));
     }
@@ -436,15 +461,80 @@ Host a
 
     #[test]
     fn port_invalid_string_yields_none() {
-        // PRODUCT.md decision K: do not silently fall back to 22; UI displays the empty port to the user.
+        // Preserve the invalid declaration so import can report it instead of silently using 22.
         let input = "Host a\n    Port not-a-number\n";
-        assert_eq!(parse_ssh_config(input)[0].port, None);
+        let candidate = &parse_ssh_config(input)[0];
+        assert_eq!(candidate.port, None);
+        assert_eq!(candidate.invalid_port.as_deref(), Some("not-a-number"));
+    }
+
+    #[test]
+    fn port_equals_out_of_range_is_preserved_as_invalid() {
+        let candidate = &parse_ssh_config("Host=a\nPort=70000\n")[0];
+        assert_eq!(candidate.alias, "a");
+        assert_eq!(candidate.port, None);
+        assert_eq!(candidate.invalid_port.as_deref(), Some("70000"));
+    }
+
+    #[test]
+    fn port_equals_zero_is_preserved_as_invalid() {
+        let candidate = &parse_ssh_config("Host = a\nPort = 0\n")[0];
+        assert_eq!(candidate.alias, "a");
+        assert_eq!(candidate.port, None);
+        assert_eq!(candidate.invalid_port.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn port_equals_valid_value_is_parsed() {
+        for directive in ["Port=2222", "Port =2222", "Port= 2222", "Port = 2222"] {
+            let input = format!("Host=a\n{directive}\n");
+            let candidate = &parse_ssh_config(&input)[0];
+            assert_eq!(candidate.port, Some(2222), "failed for {directive}");
+            assert_eq!(candidate.invalid_port, None);
+        }
+    }
+
+    #[test]
+    fn equals_port_still_obeys_first_declaration_wins() {
+        let candidate = &parse_ssh_config("Host=a\nPort=70000\nPort=2222\n")[0];
+        assert_eq!(candidate.port, None);
+        assert_eq!(candidate.invalid_port.as_deref(), Some("70000"));
+    }
+
+    #[test]
+    fn equals_in_directive_value_is_preserved() {
+        let candidate =
+            &parse_ssh_config("Host=production\nIdentityFile=~/.ssh/id=production\n")[0];
+        let expected_path = dirs::home_dir()
+            .expect("test runner has home dir")
+            .join(".ssh/id=production");
+
+        assert_eq!(candidate.alias, "production");
+        assert_eq!(candidate.identity_file.as_ref(), Some(&expected_path));
     }
 
     #[test]
     fn port_out_of_u16_range_yields_none() {
         let input = "Host a\n    Port 70000\n";
-        assert_eq!(parse_ssh_config(input)[0].port, None);
+        let candidate = &parse_ssh_config(input)[0];
+        assert_eq!(candidate.port, None);
+        assert_eq!(candidate.invalid_port.as_deref(), Some("70000"));
+    }
+
+    #[test]
+    fn port_zero_is_preserved_as_invalid() {
+        let input = "Host a\n    Port 0\n";
+        let candidate = &parse_ssh_config(input)[0];
+        assert_eq!(candidate.port, None);
+        assert_eq!(candidate.invalid_port.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn invalid_first_port_cannot_be_replaced_by_a_later_valid_port() {
+        let input = "Host a\n    Port invalid\n    Port 22\n";
+        let candidate = &parse_ssh_config(input)[0];
+        assert_eq!(candidate.port, None);
+        assert_eq!(candidate.invalid_port.as_deref(), Some("invalid"));
     }
 
     #[test]
@@ -491,6 +581,7 @@ Host a
                 hostname: Some("example.com".into()),
                 user: Some("alice".into()),
                 port: Some(22),
+                invalid_port: None,
                 identity_file: None,
             }]
         );

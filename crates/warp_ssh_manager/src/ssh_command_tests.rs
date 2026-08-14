@@ -152,12 +152,16 @@ fn multiplexer_attach_keeps_target_as_remote_shell_data() {
     let args = build_multiplexer_ssh_args(&server(), MultiplexerAttachMode::Tmux, target).unwrap();
     let destination_delimiter = args.iter().position(|arg| arg == "--").unwrap();
 
-    assert!(args[..destination_delimiter]
-        .windows(2)
-        .any(|pair| pair == ["-o", "RequestTTY=force"]));
-    assert!(args[..destination_delimiter]
-        .windows(2)
-        .any(|pair| { pair == ["-o", "SetEnv=ZAPLEX_SESSION=1 BYOBU_DISABLE=1 LC_BYOBU=0",] }));
+    assert!(
+        args[..destination_delimiter]
+            .windows(2)
+            .any(|pair| pair == ["-o", "RequestTTY=force"])
+    );
+    assert!(
+        args[..destination_delimiter]
+            .windows(2)
+            .any(|pair| { pair == ["-o", "SetEnv=ZAPLEX_SESSION=1 BYOBU_DISABLE=1 LC_BYOBU=0",] })
+    );
     assert_eq!(
         &args[destination_delimiter + 1..],
         &[
@@ -228,10 +232,12 @@ fn test_connection_requires_password_for_password_auth() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(test_connection(&s, None));
     assert_eq!(result.status, ConnectionStatus::Offline);
-    assert!(result
-        .error_message
-        .unwrap()
-        .contains("Password not provided"));
+    assert!(
+        result
+            .error_message
+            .unwrap()
+            .contains("Password not provided")
+    );
 }
 
 #[test]
@@ -241,10 +247,12 @@ fn test_connection_requires_password_for_onekey_auth() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(test_connection(&s, None));
     assert_eq!(result.status, ConnectionStatus::Offline);
-    assert!(result
-        .error_message
-        .unwrap()
-        .contains("Password not provided"));
+    assert!(
+        result
+            .error_message
+            .unwrap()
+            .contains("Password not provided")
+    );
 }
 
 #[test]
@@ -701,9 +709,11 @@ fn confirmed_unknown_host_key_never_uses_accept_new() {
     apply_host_key_file(&mut args, &pinned_host_key, true);
     assert!(!args.iter().any(|arg| arg.contains("accept-new")));
     assert!(args.iter().any(|arg| arg == "StrictHostKeyChecking=yes"));
-    assert!(args
-        .iter()
-        .any(|arg| { arg == &format!("UserKnownHostsFile={}", pinned_host_key.path.display()) }));
+    assert!(
+        args.iter().any(|arg| {
+            arg == &format!("UserKnownHostsFile={}", pinned_host_key.path.display())
+        })
+    );
     assert!(!args.iter().any(|arg| arg == "StrictHostKeyChecking=no"));
 }
 

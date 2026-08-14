@@ -1,6 +1,7 @@
 use std::fs::{self, File};
 use std::os::unix::fs::symlink;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 
@@ -120,6 +121,349 @@ fn nofollow_open_rejects_symlink_and_descriptor_survives_path_replacement() {
     assert!(inspected.matches_path);
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn identity_bound_symlink_delete_removes_only_the_link() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let target = directory.path().join("target-dir");
+    let link = directory.path().join("link-dir");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("keep.txt"), b"keep").unwrap();
+    symlink(&target, &link).unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let opened = match call(
+        &mut server,
+        owner,
+        "",
+        safe_file_request::Operation::OpenExisting(SafeFileOpenExisting {
+            path: path_string(&link),
+            expected_kind: SafeFileEntryKind::Symlink as i32,
+        }),
+    ) {
+        safe_file_response::Result::Opened(opened) => opened,
+        other => panic!("expected symlink handle, got {other:?}"),
+    };
+    let result = call(
+        &mut server,
+        owner,
+        "delete-symlink",
+        safe_file_request::Operation::Delete(SafeFileDelete {
+            path: path_string(&link),
+            expected: opened.identity,
+            expected_sha256: None,
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Mutation(_)));
+    assert!(fs::symlink_metadata(&link).is_err());
+    assert_eq!(fs::read(target.join("keep.txt")).unwrap(), b"keep");
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn identity_bound_symlink_delete_preserves_a_replacement() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let original_target = directory.path().join("original-target");
+    let replacement_target = directory.path().join("replacement-target");
+    let link = directory.path().join("link");
+    fs::create_dir(&original_target).unwrap();
+    fs::create_dir(&replacement_target).unwrap();
+    symlink(&original_target, &link).unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let opened = match call(
+        &mut server,
+        owner,
+        "",
+        safe_file_request::Operation::OpenExisting(SafeFileOpenExisting {
+            path: path_string(&link),
+            expected_kind: SafeFileEntryKind::Symlink as i32,
+        }),
+    ) {
+        safe_file_response::Result::Opened(opened) => opened,
+        other => panic!("expected symlink handle, got {other:?}"),
+    };
+    fs::remove_file(&link).unwrap();
+    symlink(&replacement_target, &link).unwrap();
+
+    let result = call(
+        &mut server,
+        owner,
+        "delete-replaced-symlink",
+        safe_file_request::Operation::Delete(SafeFileDelete {
+            path: path_string(&link),
+            expected: opened.identity,
+            expected_sha256: None,
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Error(_)));
+    assert_eq!(fs::read_link(&link).unwrap(), replacement_target);
+    assert!(original_target.is_dir());
+    assert!(replacement_target.is_dir());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn private_delete_unlink_detects_a_final_symlink_replacement() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let target = directory.path().join("target");
+    let replacement_target = directory.path().join("replacement-target");
+    let link = directory.path().join("link");
+    fs::create_dir(&target).unwrap();
+    fs::create_dir(&replacement_target).unwrap();
+    symlink(&target, &link).unwrap();
+    let observed = Arc::new(Mutex::new(None));
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal.clone());
+    let opened = match call(
+        &mut server,
+        owner,
+        "",
+        safe_file_request::Operation::OpenExisting(SafeFileOpenExisting {
+            path: path_string(&link),
+            expected_kind: SafeFileEntryKind::Symlink as i32,
+        }),
+    ) {
+        safe_file_response::Result::Opened(opened) => opened,
+        other => panic!("expected symlink handle, got {other:?}"),
+    };
+    server.before_private_delete_unlink = Some(Box::new({
+        let observed = observed.clone();
+        let replacement_target = replacement_target.clone();
+        move |private| {
+            let retained = private.with_extension("retained");
+            fs::rename(private, &retained).unwrap();
+            symlink(&replacement_target, private).unwrap();
+            *observed.lock().unwrap() = Some((private.to_path_buf(), retained));
+        }
+    }));
+
+    let result = call(
+        &mut server,
+        owner,
+        "delete-final-race",
+        safe_file_request::Operation::Delete(SafeFileDelete {
+            path: path_string(&link),
+            expected: opened.identity,
+            expected_sha256: None,
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Error(_)));
+    let (replacement, retained) = observed.lock().unwrap().clone().unwrap();
+    assert!(!replacement.exists());
+    assert_eq!(fs::read_link(retained).unwrap(), target);
+    assert!(replacement_target.is_dir());
+
+    drop(server);
+    let recovered = SafeFileServer::new_for_test(journal);
+    let recoveries = recovered.list_recoveries().unwrap().recoveries;
+    assert!(recoveries
+        .iter()
+        .any(|recovery| recovery.operation_id == "delete-final-race"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn delete_restores_a_replacement_from_the_public_isolation_boundary() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let target = directory.path().join("target");
+    let replacement_target = directory.path().join("replacement-target");
+    let retained = directory.path().join("retained-link");
+    let link = directory.path().join("link");
+    fs::create_dir(&target).unwrap();
+    fs::create_dir(&replacement_target).unwrap();
+    symlink(&target, &link).unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let opened = match call(
+        &mut server,
+        owner,
+        "",
+        safe_file_request::Operation::OpenExisting(SafeFileOpenExisting {
+            path: path_string(&link),
+            expected_kind: SafeFileEntryKind::Symlink as i32,
+        }),
+    ) {
+        safe_file_response::Result::Opened(opened) => opened,
+        other => panic!("expected symlink handle, got {other:?}"),
+    };
+    server.before_delete_isolation = Some(Box::new({
+        let link = link.clone();
+        let retained = retained.clone();
+        let replacement_target = replacement_target.clone();
+        move |_| {
+            fs::rename(&link, &retained).unwrap();
+            symlink(&replacement_target, &link).unwrap();
+        }
+    }));
+
+    let result = call(
+        &mut server,
+        owner,
+        "delete-public-race",
+        safe_file_request::Operation::Delete(SafeFileDelete {
+            path: path_string(&link),
+            expected: opened.identity,
+            expected_sha256: None,
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Error(_)));
+    assert_eq!(fs::read_link(link).unwrap(), replacement_target);
+    assert_eq!(fs::read_link(retained).unwrap(), target);
+}
+
+#[test]
+fn rename_restores_a_replacement_from_the_final_mutation_boundary() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let source = directory.path().join("source.bin");
+    let retained = directory.path().join("retained.bin");
+    let destination = directory.path().join("destination.bin");
+    fs::write(&source, b"original").unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let opened = open_regular(&mut server, owner, &source);
+    server.before_rename_mutation = Some(Box::new({
+        let source = source.clone();
+        let retained = retained.clone();
+        move |_, _| {
+            fs::rename(&source, &retained).unwrap();
+            fs::write(&source, b"replacement").unwrap();
+        }
+    }));
+
+    let result = call(
+        &mut server,
+        owner,
+        "rename-final-race",
+        safe_file_request::Operation::Rename(SafeFileRename {
+            handle_id: opened.handle_id,
+            old_path: path_string(&source),
+            new_path: path_string(&destination),
+            mode: SafeFileRenameMode::NoReplace as i32,
+            expected_target: None,
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Error(_)));
+    assert_eq!(fs::read(source).unwrap(), b"replacement");
+    assert_eq!(fs::read(retained).unwrap(), b"original");
+    assert!(!destination.exists());
+}
+
+#[test]
+fn exchange_restores_a_target_replacement_from_the_mutation_boundary() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let source = directory.path().join("source.bin");
+    let target = directory.path().join("target.bin");
+    let retained_target = directory.path().join("retained-target.bin");
+    fs::write(&source, b"source").unwrap();
+    fs::write(&target, b"target").unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let opened = open_regular(&mut server, owner, &source);
+    let expected_target = identity_for_path(&target).unwrap();
+    server.before_rename_mutation = Some(Box::new({
+        let target = target.clone();
+        let retained_target = retained_target.clone();
+        move |_, _| {
+            fs::rename(&target, &retained_target).unwrap();
+            fs::write(&target, b"replacement").unwrap();
+        }
+    }));
+
+    let result = call(
+        &mut server,
+        owner,
+        "exchange-final-race",
+        safe_file_request::Operation::Rename(SafeFileRename {
+            handle_id: opened.handle_id,
+            old_path: path_string(&source),
+            new_path: path_string(&target),
+            mode: SafeFileRenameMode::Exchange as i32,
+            expected_target: Some(expected_target),
+        }),
+    );
+
+    assert!(matches!(result, safe_file_response::Result::Error(_)));
+    assert_eq!(fs::read(source).unwrap(), b"source");
+    assert_eq!(fs::read(target).unwrap(), b"replacement");
+    assert_eq!(fs::read(retained_target).unwrap(), b"target");
+}
+
+#[test]
+fn recovery_rolls_back_a_boundary_replacement_after_a_post_syscall_crash() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = directory.path().join("journal");
+    let source = directory.path().join("source.bin");
+    let retained = directory.path().join("retained.bin");
+    let destination = directory.path().join("destination.bin");
+    fs::write(&source, b"original").unwrap();
+
+    let owner = ConnectionId::new_v4();
+    let mut server = SafeFileServer::new_for_test(journal);
+    let opened = open_regular(&mut server, owner, &source);
+    server.before_rename_mutation = Some(Box::new({
+        let source = source.clone();
+        let retained = retained.clone();
+        move |_, _| {
+            fs::rename(&source, &retained).unwrap();
+            fs::write(&source, b"replacement").unwrap();
+        }
+    }));
+    server.after_rename_mutation = Some(Box::new(|_, _| {
+        panic!("simulated crash after the rename syscall")
+    }));
+    let request = SafeFileRename {
+        handle_id: opened.handle_id,
+        old_path: path_string(&source),
+        new_path: path_string(&destination),
+        mode: SafeFileRenameMode::NoReplace as i32,
+        expected_target: None,
+    };
+
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        call(
+            &mut server,
+            owner,
+            "rename-post-syscall-crash",
+            safe_file_request::Operation::Rename(request.clone()),
+        )
+    }));
+    assert!(crashed.is_err());
+    assert!(!source.exists());
+    assert_eq!(fs::read(&destination).unwrap(), b"replacement");
+
+    server.before_rename_mutation = None;
+    server.after_rename_mutation = None;
+    let recovered = call(
+        &mut server,
+        owner,
+        "rename-post-syscall-crash",
+        safe_file_request::Operation::Rename(request),
+    );
+
+    assert!(matches!(recovered, safe_file_response::Result::Error(_)));
+    assert_eq!(fs::read(source).unwrap(), b"replacement");
+    assert_eq!(fs::read(retained).unwrap(), b"original");
+    assert!(!destination.exists());
+}
+
 #[test]
 fn abandoned_created_artifact_is_reaped_but_a_replacement_is_preserved() {
     let directory = tempfile::tempdir().unwrap();
@@ -229,6 +573,10 @@ fn started_rename_is_retried_with_the_same_operation_id() {
                 mode: SafeFileRenameMode::NoReplace as i32,
                 source: JournalIdentity::from(&identity),
                 target: None,
+                boundary: Some(JournalRenameBoundary {
+                    old: Some(JournalIdentity::from(&identity)),
+                    new: None,
+                }),
             },
             recovery_paths: vec![path_string(&source), path_string(&destination)],
             failure: None,

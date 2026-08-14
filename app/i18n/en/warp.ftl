@@ -2931,8 +2931,13 @@ workspace-left-panel-ssh-manager-delete-folder-summary =
        *[other] This permanently deletes this folder, all { $count } saved hosts it contains, and their stored credentials.
     }
 workspace-left-panel-ssh-manager-delete-contained-hosts = Contained hosts: { $hosts }
-workspace-left-panel-ssh-manager-delete-credential-assignments-none = Credential assignments affected: none.
-workspace-left-panel-ssh-manager-delete-credential-assignments = Credential assignments affected: { $assignments }. The shared OneKey credentials themselves remain available.
+workspace-left-panel-ssh-manager-delete-credential-assignments-none = Stored credentials affected: none.
+workspace-left-panel-ssh-manager-delete-credential-assignments = Stored credentials affected: { $assignments }.
+workspace-left-panel-ssh-manager-delete-credential-password = stored password (removed)
+workspace-left-panel-ssh-manager-delete-credential-passphrase = stored key passphrase (removed)
+workspace-left-panel-ssh-manager-delete-credential-root-password = stored root password (removed)
+workspace-left-panel-ssh-manager-delete-credential-identity-file = identity file reference “{ $path }” (file remains on disk)
+workspace-left-panel-ssh-manager-delete-credential-onekey-assignment = OneKey assignment “{ $label }” (shared credential remains available)
 workspace-left-panel-ssh-manager-delete-credential-unavailable = unavailable credential
 workspace-left-panel-ssh-manager-delete-cannot-undo = This action cannot be undone.
 workspace-left-panel-ssh-manager-menu-new-folder = New folder

@@ -5,15 +5,19 @@ use std::fs;
 use super::super::proto::{
     list_directory_response, read_file_chunk_response, resolve_path_response, server_message,
     write_file_chunk_response, AgentProcessSignal, AgentProcessSignalRequest,
-    AgentProcessSignalStatus, AgentPtyBindingStatus, AgentSessionIdentity, Authenticate,
-    BindAgentPty, CreateDirectory, Initialize, ListDirectory, ReadFileChunk, ResolvePath,
-    UnbindAgentPty, WriteFileChunk,
+    AgentProcessSignalStatus, AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo,
+    Authenticate, BindAgentPty, CreateDirectory, Initialize, ListDirectory, ReadFileChunk,
+    ResolvePath, UnbindAgentPty, WriteFileChunk,
 };
 use super::super::protocol::RequestId;
 #[cfg(feature = "local_fs")]
 use super::super::server_buffer_tracker::ServerBufferTracker;
-use super::{execute_agent_process_signal_with, PendingFileOps, ServerModel};
+use super::{
+    execute_agent_process_signal_with, server_features_with_runtime_support, PendingFileOps,
+    ServerModel,
+};
 use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
+use zaplex_remote_session::types::FEATURE_AGENT_PROCESS_SIGNAL_V1;
 #[cfg(unix)]
 use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 
@@ -110,6 +114,38 @@ fn multiplexer_inventory_requires_client_capability_negotiation() {
 }
 
 #[test]
+fn agent_process_signal_requires_client_capability_negotiation() {
+    let mut model = test_model();
+    let conn = uuid::Uuid::new_v4();
+
+    assert!(!model.client_supports_agent_process_signal(conn));
+    model.connection_features.insert(
+        conn,
+        HashSet::from([FEATURE_AGENT_PROCESS_SIGNAL_V1.to_string()]),
+    );
+    assert_eq!(
+        model.client_supports_agent_process_signal(conn),
+        zaplex_cockpit::local_process_signalling_supported()
+    );
+}
+
+#[test]
+fn daemon_signal_advertisement_requires_runtime_backend_support() {
+    let unsupported = server_features_with_runtime_support(false, true);
+    assert!(!unsupported
+        .iter()
+        .any(|feature| feature == FEATURE_AGENT_PROCESS_SIGNAL_V1));
+
+    let supported = server_features_with_runtime_support(true, true);
+    assert_eq!(
+        supported
+            .iter()
+            .any(|feature| feature == FEATURE_AGENT_PROCESS_SIGNAL_V1),
+        cfg!(target_os = "linux")
+    );
+}
+
+#[test]
 fn authenticate_with_auth_token_replaces_auth_token() {
     let mut model = test_model();
     model.handle_initialize(
@@ -153,6 +189,15 @@ fn process_signal_request(signal: AgentProcessSignal) -> AgentProcessSignalReque
         pid: 4242,
         expected_process_fingerprint: "linux-v1:boot-id:12345".to_string(),
         signal: signal.into(),
+    }
+}
+
+fn current_process_session() -> AgentSessionInfo {
+    AgentSessionInfo {
+        session_id: "agent-session-1".to_string(),
+        pid: 4242,
+        process_fingerprint: "linux-v1:boot-id:12345".to_string(),
+        ..Default::default()
     }
 }
 
@@ -279,8 +324,11 @@ fn daemon_rejects_stale_and_foreign_agent_pty_bindings() {
 
 #[test]
 fn verified_agent_process_signal_calls_only_the_typed_backend() {
+    let current_sessions = [current_process_session()];
     let response = execute_agent_process_signal_with(
         process_signal_request(AgentProcessSignal::Interrupt),
+        &current_sessions,
+        true,
         |pid, fingerprint, signal| {
             assert_eq!(pid, 4242);
             assert_eq!(fingerprint, "linux-v1:boot-id:12345");
@@ -302,9 +350,11 @@ fn verified_agent_process_signal_calls_only_the_typed_backend() {
 fn verified_agent_process_signal_rejects_unknown_signal_before_backend() {
     let mut request = process_signal_request(AgentProcessSignal::Kill);
     request.signal = 999;
-    let response = execute_agent_process_signal_with(request, |_, _, _| {
-        panic!("invalid signal must never reach the process backend")
-    });
+    let current_sessions = [current_process_session()];
+    let response =
+        execute_agent_process_signal_with(request, &current_sessions, true, |_, _, _| {
+            panic!("invalid signal must never reach the process backend")
+        });
 
     assert_eq!(
         AgentProcessSignalStatus::try_from(response.status),
@@ -316,13 +366,80 @@ fn verified_agent_process_signal_rejects_unknown_signal_before_backend() {
 fn signal_fails_closed_without_provable_process_identity() {
     let mut request = process_signal_request(AgentProcessSignal::Interrupt);
     request.expected_process_fingerprint = String::new();
-    let response = execute_agent_process_signal_with(request, |_, _, _| {
-        panic!("missing identity must never reach the process backend")
-    });
+    let current_sessions = [current_process_session()];
+    let response =
+        execute_agent_process_signal_with(request, &current_sessions, true, |_, _, _| {
+            panic!("missing identity must never reach the process backend")
+        });
 
     assert_eq!(
         AgentProcessSignalStatus::try_from(response.status),
         Ok(AgentProcessSignalStatus::IdentityUnverifiable)
+    );
+}
+
+#[test]
+fn agent_process_signal_rejects_unnegotiated_capability_before_backend() {
+    let current_sessions = [current_process_session()];
+    let response = execute_agent_process_signal_with(
+        process_signal_request(AgentProcessSignal::Interrupt),
+        &current_sessions,
+        false,
+        |_, _, _| panic!("an unnegotiated request must never reach the process backend"),
+    );
+
+    assert_eq!(
+        AgentProcessSignalStatus::try_from(response.status),
+        Ok(AgentProcessSignalStatus::InvalidRequest)
+    );
+    assert!(response.error_message.contains("not negotiated"));
+}
+
+#[test]
+fn agent_process_signal_rejects_foreign_session_id_before_backend() {
+    let mut request = process_signal_request(AgentProcessSignal::Interrupt);
+    request.session_id = "foreign-session".to_string();
+    let current_sessions = [current_process_session()];
+    let response =
+        execute_agent_process_signal_with(request, &current_sessions, true, |_, _, _| {
+            panic!("a foreign session must never reach the process backend")
+        });
+
+    assert_eq!(
+        AgentProcessSignalStatus::try_from(response.status),
+        Ok(AgentProcessSignalStatus::InvalidRequest)
+    );
+}
+
+#[test]
+fn agent_process_signal_rejects_inventory_pid_mismatch_before_backend() {
+    let mut request = process_signal_request(AgentProcessSignal::Interrupt);
+    request.pid += 1;
+    let current_sessions = [current_process_session()];
+    let response =
+        execute_agent_process_signal_with(request, &current_sessions, true, |_, _, _| {
+            panic!("a mismatched pid must never reach the process backend")
+        });
+
+    assert_eq!(
+        AgentProcessSignalStatus::try_from(response.status),
+        Ok(AgentProcessSignalStatus::StaleIdentity)
+    );
+}
+
+#[test]
+fn agent_process_signal_rejects_inventory_fingerprint_mismatch_before_backend() {
+    let mut request = process_signal_request(AgentProcessSignal::Interrupt);
+    request.expected_process_fingerprint = "linux-v1:boot-id:foreign".to_string();
+    let current_sessions = [current_process_session()];
+    let response =
+        execute_agent_process_signal_with(request, &current_sessions, true, |_, _, _| {
+            panic!("a mismatched fingerprint must never reach the process backend")
+        });
+
+    assert_eq!(
+        AgentProcessSignalStatus::try_from(response.status),
+        Ok(AgentProcessSignalStatus::StaleIdentity)
     );
 }
 
@@ -354,6 +471,8 @@ fn verified_agent_process_signal_returns_typed_failure_reasons() {
     for (error, expected_status) in cases {
         let response = execute_agent_process_signal_with(
             process_signal_request(AgentProcessSignal::Kill),
+            &[current_process_session()],
+            true,
             |_, _, _| Err(error.clone()),
         );
         assert_eq!(

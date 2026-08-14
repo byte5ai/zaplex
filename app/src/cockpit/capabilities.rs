@@ -166,11 +166,12 @@ impl SessionCapabilities {
         let can_resume = matches!(session.state, SessionState::Idle)
             && agent.resume_command(&session.session_id).is_some();
         Self {
-            // The one honest test: a pid we can actually signal. Asked of the
-            // same helper the signal path itself uses, so the verb we offer and
-            // the action we'd take cannot disagree.
+            // Local signals require a process-bound platform primitive. Remote
+            // sessions rely on the daemon that supplied the fingerprint and
+            // perform this support check on that host.
             can_signal: zaplex_cockpit::pid_signalable(session.pid)
-                && session.process_fingerprint.is_some(),
+                && session.process_fingerprint.is_some()
+                && (!is_local || zaplex_cockpit::local_process_signalling_supported()),
             can_fork: agent.fork_command(&session.session_id).is_some(),
             can_resume,
             // A known live pane receives the command directly; an idle session

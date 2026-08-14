@@ -62,6 +62,12 @@ impl From<&JournalIdentity> for SafeFileIdentity {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+struct JournalRenameBoundary {
+    old: Option<JournalIdentity>,
+    new: Option<JournalIdentity>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum JournalOperation {
     Create {
@@ -74,6 +80,8 @@ enum JournalOperation {
         mode: i32,
         source: JournalIdentity,
         target: Option<JournalIdentity>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        boundary: Option<JournalRenameBoundary>,
     },
     Delete {
         path: String,
@@ -303,6 +311,14 @@ pub struct SafeFileServer {
     journal: Option<Journal>,
     initialization_error: Option<String>,
     handles: HashMap<String, SafeHandle>,
+    #[cfg(test)]
+    before_rename_mutation: Option<Box<dyn Fn(&Path, &Path) + Send + Sync>>,
+    #[cfg(test)]
+    after_rename_mutation: Option<Box<dyn Fn(&Path, &Path) + Send + Sync>>,
+    #[cfg(test)]
+    before_delete_isolation: Option<Box<dyn Fn(&Path) + Send + Sync>>,
+    #[cfg(test)]
+    before_private_delete_unlink: Option<Box<dyn Fn(&Path) + Send + Sync>>,
 }
 
 impl SafeFileServer {
@@ -313,6 +329,14 @@ impl SafeFileServer {
                     journal: Some(journal),
                     initialization_error: None,
                     handles: HashMap::new(),
+                    #[cfg(test)]
+                    before_rename_mutation: None,
+                    #[cfg(test)]
+                    after_rename_mutation: None,
+                    #[cfg(test)]
+                    before_delete_isolation: None,
+                    #[cfg(test)]
+                    before_private_delete_unlink: None,
                 };
                 server.recover_abandoned_records();
                 server
@@ -321,6 +345,14 @@ impl SafeFileServer {
                 journal: None,
                 initialization_error: Some(error.to_string()),
                 handles: HashMap::new(),
+                #[cfg(test)]
+                before_rename_mutation: None,
+                #[cfg(test)]
+                after_rename_mutation: None,
+                #[cfg(test)]
+                before_delete_isolation: None,
+                #[cfg(test)]
+                before_private_delete_unlink: None,
             },
         }
     }
@@ -335,6 +367,10 @@ impl SafeFileServer {
             journal: None,
             initialization_error: Some("disabled in unrelated unit test".to_string()),
             handles: HashMap::new(),
+            before_rename_mutation: None,
+            after_rename_mutation: None,
+            before_delete_isolation: None,
+            before_private_delete_unlink: None,
         }
     }
 
@@ -345,6 +381,10 @@ impl SafeFileServer {
             journal: Some(journal),
             initialization_error: None,
             handles: HashMap::new(),
+            before_rename_mutation: None,
+            after_rename_mutation: None,
+            before_delete_isolation: None,
+            before_private_delete_unlink: None,
         };
         server.recover_abandoned_records();
         server
@@ -753,6 +793,7 @@ impl SafeFileServer {
                 mode: request.mode,
                 source: JournalIdentity::from(&source),
                 target: target.as_ref().map(JournalIdentity::from),
+                boundary: None,
             },
             recovery_paths: vec![
                 old_path.to_string_lossy().into_owned(),
@@ -763,11 +804,30 @@ impl SafeFileServer {
         self.journal()?
             .save(&record)
             .map_err(|error| error.to_string())?;
+        #[cfg(test)]
+        if let Some(hook) = &self.before_rename_mutation {
+            hook(&old_path, &new_path);
+        }
+        let pre_old = identity_for_path(&old_path).ok();
+        let pre_new = identity_for_path(&new_path).ok();
+        if let JournalOperation::Rename { boundary, .. } = &mut record.operation {
+            *boundary = Some(JournalRenameBoundary {
+                old: pre_old.as_ref().map(JournalIdentity::from),
+                new: pre_new.as_ref().map(JournalIdentity::from),
+            });
+        }
+        self.journal()?
+            .save(&record)
+            .map_err(|error| error.to_string())?;
         let mutation = match mode {
             SafeFileRenameMode::NoReplace => rename_noreplace(&old_path, &new_path),
             SafeFileRenameMode::Exchange => rename_exchange(&old_path, &new_path),
             SafeFileRenameMode::Unspecified => unreachable!(),
         };
+        #[cfg(test)]
+        if let Some(hook) = &self.after_rename_mutation {
+            hook(&old_path, &new_path);
+        }
         self.reconcile_rename(
             &mut record,
             mutation.as_ref().err().map(ToString::to_string),
@@ -811,6 +871,7 @@ impl SafeFileServer {
         }
         let tombstone = delete_tombstone(&path, operation_id);
         let tombstone_string = path_to_string(&tombstone)?;
+        let private_tombstone_string = path_to_string(&private_delete_entry(&tombstone))?;
         let file = open_nofollow(&path, kind, false).map_err(|error| error.to_string())?;
         let actual = identity_for_file(&file, kind)?;
         if !matches_delete_identity(&expected, &actual) {
@@ -832,6 +893,11 @@ impl SafeFileServer {
                     return Err("Safe-file directory is not empty".to_string());
                 }
             }
+            SafeFileEntryKind::Symlink => {
+                if request.expected_sha256.is_some() {
+                    return Err("Safe-file symlink delete cannot carry a digest".to_string());
+                }
+            }
             SafeFileEntryKind::Unspecified => {
                 return Err("Safe-file delete kind is unspecified".to_string());
             }
@@ -845,7 +911,11 @@ impl SafeFileServer {
                 expected: JournalIdentity::from(&expected),
                 expected_sha256: request.expected_sha256,
             },
-            recovery_paths: vec![path.to_string_lossy().into_owned(), tombstone_string],
+            recovery_paths: vec![
+                path.to_string_lossy().into_owned(),
+                tombstone_string,
+                private_tombstone_string,
+            ],
             failure: None,
         };
         journal.save(&record).map_err(|error| error.to_string())?;
@@ -889,6 +959,7 @@ impl SafeFileServer {
             mode,
             source,
             target,
+            boundary,
         } = record.operation.clone()
         else {
             return Err("Safe-file journal kind mismatch".to_string());
@@ -918,93 +989,99 @@ impl SafeFileServer {
                 state: SafeFileMutationState::AlreadyApplied as i32,
             });
         }
-        let source_still_at_old = old
-            .as_ref()
-            .is_some_and(|actual| same_identity(&source, actual));
-        if old
-            .as_ref()
-            .is_some_and(|actual| same_object(&source, actual))
-            && !source_still_at_old
-        {
-            let error = "Safe-file rename source content changed before mutation".to_string();
-            record.state = JournalState::Rejected;
-            record.failure = Some(error.clone());
+        let Some(boundary) = boundary else {
+            record.state = JournalState::Recovery;
+            record.failure = Some(
+                "Safe-file rename journal predates boundary snapshots and requires recovery"
+                    .to_string(),
+            );
             self.journal()?
                 .save(record)
-                .map_err(|save_error| save_error.to_string())?;
-            return Err(error);
-        }
-        if let Some(error) = primary_error.as_ref() {
-            if source_still_at_old {
-                record.state = JournalState::Rejected;
-                record.failure = Some(error.clone());
-                self.journal()?
-                    .save(record)
-                    .map_err(|save_error| save_error.to_string())?;
-                return Err(error.clone());
+                .map_err(|error| error.to_string())?;
+            return Err("Safe-file rename boundary state is unavailable".to_string());
+        };
+        let boundary_old = boundary.old.as_ref().map(SafeFileIdentity::from);
+        let boundary_new = boundary.new.as_ref().map(SafeFileIdentity::from);
+        let boundary_applied = match mode {
+            SafeFileRenameMode::NoReplace => {
+                boundary_new.is_none()
+                    && path_is_absent(&old_path)
+                    && boundary_old.as_ref().is_some_and(|expected| {
+                        new.as_ref()
+                            .is_some_and(|actual| same_identity(expected, actual))
+                    })
             }
-        } else if source_still_at_old {
-            let retryable = match mode {
-                SafeFileRenameMode::NoReplace => path_is_absent(&new_path),
-                SafeFileRenameMode::Exchange => target.as_ref().is_some_and(|target| {
+            SafeFileRenameMode::Exchange => {
+                boundary_old.as_ref().is_some_and(|expected| {
                     new.as_ref()
-                        .is_some_and(|actual| same_identity(target, actual))
-                }),
+                        .is_some_and(|actual| same_identity(expected, actual))
+                }) && boundary_new.as_ref().is_some_and(|expected| {
+                    old.as_ref()
+                        .is_some_and(|actual| same_identity(expected, actual))
+                })
+            }
+            SafeFileRenameMode::Unspecified => false,
+        };
+        if boundary_applied {
+            let restored = match mode {
+                SafeFileRenameMode::NoReplace => {
+                    rename_noreplace(&new_path, &old_path).is_ok()
+                        && boundary_state_matches(
+                            &old_path,
+                            &new_path,
+                            boundary_old.as_ref(),
+                            boundary_new.as_ref(),
+                        )
+                }
+                SafeFileRenameMode::Exchange => {
+                    rename_exchange(&old_path, &new_path).is_ok()
+                        && boundary_state_matches(
+                            &old_path,
+                            &new_path,
+                            boundary_old.as_ref(),
+                            boundary_new.as_ref(),
+                        )
+                }
                 SafeFileRenameMode::Unspecified => false,
             };
-            if retryable {
-                let retry = match mode {
-                    SafeFileRenameMode::NoReplace => rename_noreplace(&old_path, &new_path),
-                    SafeFileRenameMode::Exchange => rename_exchange(&old_path, &new_path),
-                    SafeFileRenameMode::Unspecified => unreachable!(),
-                };
-                if retry.is_ok() {
-                    record.state = JournalState::Applied;
-                    record.failure = None;
-                    self.journal()?
-                        .save(record)
-                        .map_err(|error| error.to_string())?;
-                    return Ok(SafeFileMutationResult {
-                        state: SafeFileMutationState::AlreadyApplied as i32,
-                    });
-                }
-                let old_after = identity_for_path(&old_path).ok();
-                let new_after = identity_for_path(&new_path).ok();
-                if rename_was_applied(
-                    mode,
-                    &source,
-                    target.as_ref(),
-                    path_is_absent(&old_path),
-                    old_after.as_ref(),
-                    new_after.as_ref(),
-                ) {
-                    record.state = JournalState::Applied;
-                    record.failure = None;
-                    self.journal()?
-                        .save(record)
-                        .map_err(|error| error.to_string())?;
-                    return Ok(SafeFileMutationResult {
-                        state: SafeFileMutationState::AlreadyApplied as i32,
-                    });
-                }
-                if old_after
-                    .as_ref()
-                    .is_some_and(|actual| same_identity(&source, actual))
-                {
-                    let error = retry
-                        .expect_err("failed safe-file rename retry should carry an error")
-                        .to_string();
-                    record.state = JournalState::Rejected;
-                    record.failure = Some(error.clone());
-                    self.journal()?
-                        .save(record)
-                        .map_err(|save_error| save_error.to_string())?;
-                    return Err(error);
-                }
+            record.state = if restored {
+                JournalState::Rejected
             } else {
-                let error =
-                    "Safe-file rename destination changed before the journaled mutation ran"
-                        .to_string();
+                JournalState::Recovery
+            };
+            record.failure = Some(if restored {
+                "Safe-file rename input changed at the mutation boundary; namespace restored"
+                    .to_string()
+            } else {
+                "Safe-file rename boundary mutation requires recovery".to_string()
+            });
+            self.journal()?
+                .save(record)
+                .map_err(|error| error.to_string())?;
+            return Err(record.failure.clone().unwrap());
+        }
+        if boundary_state_matches(
+            &old_path,
+            &new_path,
+            boundary_old.as_ref(),
+            boundary_new.as_ref(),
+        ) {
+            let boundary_matches_request = boundary_old
+                .as_ref()
+                .is_some_and(|actual| same_identity(&source, actual))
+                && match mode {
+                    SafeFileRenameMode::NoReplace => boundary_new.is_none(),
+                    SafeFileRenameMode::Exchange => target.as_ref().is_some_and(|expected| {
+                        boundary_new
+                            .as_ref()
+                            .is_some_and(|actual| same_identity(expected, actual))
+                    }),
+                    SafeFileRenameMode::Unspecified => false,
+                };
+            if !boundary_matches_request || primary_error.is_some() {
+                let error = primary_error.unwrap_or_else(|| {
+                    "Safe-file rename inputs changed before the journaled mutation".to_string()
+                });
                 record.state = JournalState::Rejected;
                 record.failure = Some(error.clone());
                 self.journal()?
@@ -1012,6 +1089,12 @@ impl SafeFileServer {
                     .map_err(|save_error| save_error.to_string())?;
                 return Err(error);
             }
+            let retry = match mode {
+                SafeFileRenameMode::NoReplace => rename_noreplace(&old_path, &new_path),
+                SafeFileRenameMode::Exchange => rename_exchange(&old_path, &new_path),
+                SafeFileRenameMode::Unspecified => unreachable!(),
+            };
+            return self.reconcile_rename(record, retry.as_ref().err().map(ToString::to_string));
         }
         record.state = JournalState::Recovery;
         record.failure = primary_error;
@@ -1040,7 +1123,26 @@ impl SafeFileServer {
         let expected = SafeFileIdentity::from(&expected);
         let current = identity_for_path(&path).ok();
         let isolated = identity_for_path(&tombstone).ok();
-        if path_is_absent(&path) && path_is_absent(&tombstone) {
+        let private = identity_for_path(&private_delete_entry(&tombstone)).ok();
+        if private
+            .as_ref()
+            .is_some_and(|actual| matches_delete_identity(&expected, actual))
+        {
+            let outcome = delete_exact_path(
+                &tombstone,
+                &expected,
+                expected_sha256.as_deref(),
+                None,
+                None,
+            )?;
+            if let DeleteExactOutcome::Unattributed(error) = outcome {
+                record.state = JournalState::Recovery;
+                record.failure = Some(error.clone());
+                self.journal()?
+                    .save(record)
+                    .map_err(|save_error| save_error.to_string())?;
+                return Err(error);
+            }
             record.state = JournalState::Applied;
             record.failure = None;
             self.journal()?
@@ -1050,12 +1152,39 @@ impl SafeFileServer {
                 state: SafeFileMutationState::AlreadyApplied as i32,
             });
         }
+        if private.is_some() {
+            record.state = JournalState::Recovery;
+            record.failure = Some("Private safe-file delete entry changed".to_string());
+            self.journal()?
+                .save(record)
+                .map_err(|error| error.to_string())?;
+            return Err("Private safe-file delete entry requires recovery".to_string());
+        }
+        if path_is_absent(&path) && path_is_absent(&tombstone) {
+            let error = "Safe-file delete objects are absent without a verified committed unlink"
+                .to_string();
+            record.state = JournalState::Recovery;
+            record.failure = Some(error.clone());
+            self.journal()?
+                .save(record)
+                .map_err(|save_error| save_error.to_string())?;
+            return Err(error);
+        }
         if isolated
             .as_ref()
             .is_some_and(|actual| matches_delete_identity(&expected, actual))
         {
-            match delete_exact_path(&tombstone, &expected, expected_sha256.as_deref()) {
-                Ok(()) => {
+            match delete_exact_path(
+                &tombstone,
+                &expected,
+                expected_sha256.as_deref(),
+                None,
+                #[cfg(test)]
+                self.before_private_delete_unlink.as_deref(),
+                #[cfg(not(test))]
+                None,
+            ) {
+                Ok(DeleteExactOutcome::Committed) => {
                     record.state = JournalState::Applied;
                     record.failure = None;
                     self.journal()?
@@ -1065,16 +1194,24 @@ impl SafeFileServer {
                         state: SafeFileMutationState::AlreadyApplied as i32,
                     });
                 }
+                Ok(DeleteExactOutcome::Unattributed(error)) => {
+                    record.state = JournalState::Recovery;
+                    record.failure = Some(error.clone());
+                    self.journal()?
+                        .save(record)
+                        .map_err(|save_error| save_error.to_string())?;
+                    return Err(error);
+                }
                 Err(error) => {
-                    if path_is_absent(&tombstone) {
-                        record.state = JournalState::Applied;
-                        record.failure = None;
+                    if path_is_absent(&tombstone)
+                        && path_is_absent(&private_delete_entry(&tombstone))
+                    {
+                        record.state = JournalState::Recovery;
+                        record.failure = Some(error.clone());
                         self.journal()?
                             .save(record)
                             .map_err(|save_error| save_error.to_string())?;
-                        return Ok(SafeFileMutationResult {
-                            state: SafeFileMutationState::AlreadyApplied as i32,
-                        });
+                        return Err(error);
                     }
                     if identity_for_path(&tombstone)
                         .as_ref()
@@ -1126,8 +1263,42 @@ impl SafeFileServer {
                     .map_err(|save_error| save_error.to_string())?;
                 return Err(error.clone());
             }
+            #[cfg(test)]
+            if let Some(hook) = &self.before_delete_isolation {
+                hook(&path);
+            }
             match rename_noreplace(&path, &tombstone) {
-                Ok(()) => return self.reconcile_delete(record, None),
+                Ok(()) => {
+                    let isolated_matches = identity_for_path(&tombstone)
+                        .as_ref()
+                        .is_ok_and(|actual| matches_delete_identity(&expected, actual));
+                    if !isolated_matches {
+                        let isolated = identity_for_path(&tombstone).ok();
+                        let restored = path_is_absent(&path)
+                            && rename_noreplace(&tombstone, &path).is_ok()
+                            && isolated.as_ref().is_some_and(|isolated| {
+                                identity_for_path(&path)
+                                    .as_ref()
+                                    .is_ok_and(|actual| same_identity(isolated, actual))
+                            });
+                        record.state = if restored {
+                            JournalState::Rejected
+                        } else {
+                            JournalState::Recovery
+                        };
+                        record.failure = Some(if restored {
+                            "Safe-file delete replacement was restored before mutation".to_string()
+                        } else {
+                            "Safe-file delete isolated an unexpected object and requires recovery"
+                                .to_string()
+                        });
+                        self.journal()?
+                            .save(record)
+                            .map_err(|error| error.to_string())?;
+                        return Err(record.failure.clone().unwrap());
+                    }
+                    return self.reconcile_delete(record, None);
+                }
                 Err(error) => return self.reconcile_delete(record, Some(error.to_string())),
             }
         }
@@ -1459,7 +1630,7 @@ fn delete_owned_tombstone(tombstone: &Path, expected: &SafeFileIdentity) -> Resu
         );
     }
     match kind {
-        Some(SafeFileEntryKind::Regular) => fs::remove_file(tombstone),
+        Some(SafeFileEntryKind::Regular | SafeFileEntryKind::Symlink) => fs::remove_file(tombstone),
         Some(SafeFileEntryKind::Directory) => fs::remove_dir(tombstone),
         Some(SafeFileEntryKind::Unspecified) | None => {
             return Err("Owned safe-file artifact kind is invalid".to_string());
@@ -1501,6 +1672,29 @@ fn open_nofollow(
             }
             result
         }
+        SafeFileEntryKind::Symlink => {
+            if create_exclusive {
+                return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+            }
+            #[cfg(target_os = "linux")]
+            {
+                OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                    .open(path)
+            }
+            #[cfg(target_os = "macos")]
+            {
+                OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_SYMLINK | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                    .open(path)
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            {
+                Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+            }
+        }
         SafeFileEntryKind::Unspecified => {
             Err(std::io::Error::from(std::io::ErrorKind::InvalidInput))
         }
@@ -1517,12 +1711,16 @@ fn identity_for_file(
 
 fn identity_for_path(path: &Path) -> Result<SafeFileIdentity, String> {
     let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
-    let kind = if metadata.is_file() {
+    let kind = if metadata.file_type().is_symlink() {
+        SafeFileEntryKind::Symlink
+    } else if metadata.is_file() {
         SafeFileEntryKind::Regular
     } else if metadata.is_dir() {
         SafeFileEntryKind::Directory
     } else {
-        return Err("Safe-file path is neither a regular file nor a directory".to_string());
+        return Err(
+            "Safe-file path is neither a regular file, directory, nor symbolic link".to_string(),
+        );
     };
     identity_from_metadata(&metadata, kind)
 }
@@ -1531,12 +1729,16 @@ fn identity_from_metadata(
     metadata: &fs::Metadata,
     expected_kind: SafeFileEntryKind,
 ) -> Result<SafeFileIdentity, String> {
-    let actual_kind = if metadata.is_file() {
+    let actual_kind = if metadata.file_type().is_symlink() {
+        SafeFileEntryKind::Symlink
+    } else if metadata.is_file() {
         SafeFileEntryKind::Regular
     } else if metadata.is_dir() {
         SafeFileEntryKind::Directory
     } else {
-        return Err("Safe-file object is neither a regular file nor a directory".to_string());
+        return Err(
+            "Safe-file object is neither a regular file, directory, nor symbolic link".to_string(),
+        );
     };
     if actual_kind != expected_kind {
         return Err("Safe-file object kind changed".to_string());
@@ -1571,7 +1773,9 @@ fn same_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool
 fn matches_delete_identity(expected: &SafeFileIdentity, actual: &SafeFileIdentity) -> bool {
     match SafeFileEntryKind::try_from(expected.kind).ok() {
         Some(SafeFileEntryKind::Regular) => same_identity(expected, actual),
-        Some(SafeFileEntryKind::Directory) => same_object(expected, actual),
+        Some(SafeFileEntryKind::Directory | SafeFileEntryKind::Symlink) => {
+            same_object(expected, actual)
+        }
         Some(SafeFileEntryKind::Unspecified) | None => false,
     }
 }
@@ -1596,14 +1800,110 @@ fn rename_was_applied(
     }
 }
 
+fn boundary_state_matches(
+    old_path: &Path,
+    new_path: &Path,
+    expected_old: Option<&SafeFileIdentity>,
+    expected_new: Option<&SafeFileIdentity>,
+) -> bool {
+    let old_matches = match expected_old {
+        Some(expected) => identity_for_path(old_path)
+            .as_ref()
+            .is_ok_and(|actual| same_identity(expected, actual)),
+        None => path_is_absent(old_path),
+    };
+    let new_matches = match expected_new {
+        Some(expected) => identity_for_path(new_path)
+            .as_ref()
+            .is_ok_and(|actual| same_identity(expected, actual)),
+        None => path_is_absent(new_path),
+    };
+    old_matches && new_matches
+}
+
+fn private_delete_directory(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "entry".to_string());
+    path.with_file_name(format!(".{name}.private"))
+}
+
+fn private_delete_entry(path: &Path) -> PathBuf {
+    private_delete_directory(path).join("entry")
+}
+
+enum DeleteExactOutcome {
+    Committed,
+    Unattributed(String),
+}
+
 fn delete_exact_path(
     path: &Path,
     expected: &SafeFileIdentity,
     expected_sha256: Option<&str>,
-) -> Result<(), String> {
+    before_isolation: Option<&(dyn Fn(&Path) + Send + Sync)>,
+    before_unlink: Option<&(dyn Fn(&Path) + Send + Sync)>,
+) -> Result<DeleteExactOutcome, String> {
     let kind = SafeFileEntryKind::try_from(expected.kind)
         .map_err(|_| "Invalid journaled safe-file delete kind".to_string())?;
-    let file = open_nofollow(path, kind, false).map_err(|error| error.to_string())?;
+    let private_directory = private_delete_directory(path);
+    let private_entry = private_delete_entry(path);
+    if path_is_absent(&private_entry) {
+        match fs::create_dir(&private_directory) {
+            Ok(()) => fs::set_permissions(&private_directory, fs::Permissions::from_mode(0o700))
+                .map_err(|error| error.to_string())?,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        let metadata =
+            fs::symlink_metadata(&private_directory).map_err(|error| error.to_string())?;
+        if !metadata.is_dir()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o777 != 0o700
+        {
+            return Err("Private safe-file delete directory is not authenticated".to_string());
+        }
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_DIRECTORY)
+            .open(&private_directory)
+            .map_err(|error| error.to_string())?;
+        let name =
+            std::ffi::CString::new(b"entry".as_slice()).map_err(|error| error.to_string())?;
+        if let Some(hook) = before_isolation {
+            hook(path);
+        }
+        rename_noreplace_into_directory(path, &directory, &name)
+            .map_err(|error| error.to_string())?;
+        let isolated = identity_for_path(&private_entry)?;
+        if !matches_delete_identity(expected, &isolated) {
+            let restored = path_is_absent(path)
+                && rename_noreplace_from_directory(&directory, &name, path).is_ok()
+                && identity_for_path(path)
+                    .as_ref()
+                    .is_ok_and(|actual| same_object(&isolated, actual));
+            let _ = fs::remove_dir(&private_directory);
+            return Err(if restored {
+                "Safe-file delete replacement was restored before mutation".to_string()
+            } else {
+                "Safe-file delete isolated an unexpected object and requires recovery".to_string()
+            });
+        }
+    }
+    let metadata = fs::symlink_metadata(&private_directory).map_err(|error| error.to_string())?;
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o777 != 0o700
+    {
+        return Err("Private safe-file delete directory is not authenticated".to_string());
+    }
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_DIRECTORY)
+        .open(&private_directory)
+        .map_err(|error| error.to_string())?;
+    let file = open_nofollow(&private_entry, kind, false).map_err(|error| error.to_string())?;
     let actual = identity_for_file(&file, kind)?;
     if !matches_delete_identity(expected, &actual) {
         return Err("Safe-file delete identity changed".to_string());
@@ -1614,27 +1914,81 @@ fn delete_exact_path(
             if expected_sha256 != Some(digest.as_str()) {
                 return Err("Safe-file delete content digest changed".to_string());
             }
-            let current = identity_for_path(path)?;
-            if !matches_delete_identity(expected, &current) {
-                return Err("Safe-file delete identity changed before removal".to_string());
-            }
-            fs::remove_file(path).map_err(|error| error.to_string())
         }
         SafeFileEntryKind::Directory => {
-            if fs::read_dir(path)
+            if fs::read_dir(&private_entry)
                 .map_err(|error| error.to_string())?
                 .next()
                 .is_some()
             {
                 return Err("Safe-file directory is not empty".to_string());
             }
-            let current = identity_for_path(path)?;
-            if !matches_delete_identity(expected, &current) {
-                return Err("Safe-file delete identity changed before removal".to_string());
-            }
-            fs::remove_dir(path).map_err(|error| error.to_string())
         }
-        SafeFileEntryKind::Unspecified => Err("Safe-file delete kind is unspecified".to_string()),
+        SafeFileEntryKind::Symlink => {
+            if expected_sha256.is_some() {
+                return Err("Safe-file symlink delete cannot carry a digest".to_string());
+            }
+        }
+        SafeFileEntryKind::Unspecified => {
+            return Err("Safe-file delete kind is unspecified".to_string());
+        }
+    }
+    let current = identity_for_path(&private_entry)?;
+    if !matches_delete_identity(expected, &current) {
+        return Err("Private safe-file delete identity changed before removal".to_string());
+    }
+    let expected_links_before = file.metadata().map_err(|error| error.to_string())?.nlink();
+    if let Some(hook) = before_unlink {
+        hook(&private_entry);
+    }
+    let name = std::ffi::CString::new(b"entry".as_slice()).map_err(|error| error.to_string())?;
+    let flags = if kind == SafeFileEntryKind::Directory {
+        libc::AT_REMOVEDIR
+    } else {
+        0
+    };
+    // Linux and macOS do not provide an `unlinkat` equivalent of opening an
+    // object handle and unlinking that exact handle (`AT_EMPTY_PATH` is not an
+    // unlink flag). The final operation is therefore anchored to the private
+    // directory descriptor and entry name, not to `file` itself. A same-UID
+    // process can still race that last name lookup. Keep the cutpoint after the
+    // final identity check and classify the held object's link-count change and
+    // the anchored name afterward; any mismatch remains durable recovery work.
+    let result = unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), flags) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let expected_links_after = file.metadata().map_err(|error| error.to_string())?.nlink();
+    if expected_links_after >= expected_links_before
+        || !directory_entry_is_absent(&directory, &name)?
+    {
+        return Ok(DeleteExactOutcome::Unattributed(
+            "Safe-file final unlink could not be attributed to the held object; recovery required"
+                .to_string(),
+        ));
+    }
+    fs::remove_dir(private_delete_directory(path)).map_err(|error| error.to_string())?;
+    Ok(DeleteExactOutcome::Committed)
+}
+
+fn directory_entry_is_absent(directory: &File, name: &std::ffi::CStr) -> Result<bool, String> {
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let result = unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == 0 {
+        return Ok(false);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        Ok(true)
+    } else {
+        Err(error.to_string())
     }
 }
 
@@ -1652,6 +2006,130 @@ fn sha256_file(file: &File) -> Result<String, String> {
         digest.update(&buffer[..read]);
     }
     Ok(format!("{:x}", digest.finalize()))
+}
+
+#[cfg(target_os = "linux")]
+fn rename_noreplace_into_directory(
+    old_path: &Path,
+    directory: &File,
+    name: &std::ffi::CStr,
+) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let old_path = std::ffi::CString::new(old_path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            old_path.as_ptr(),
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn rename_noreplace_from_directory(
+    directory: &File,
+    name: &std::ffi::CStr,
+    new_path: &Path,
+) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let new_path = std::ffi::CString::new(new_path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::AT_FDCWD,
+            new_path.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_noreplace_into_directory(
+    old_path: &Path,
+    directory: &File,
+    name: &std::ffi::CStr,
+) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let old_path = std::ffi::CString::new(old_path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let result = unsafe {
+        libc::renameatx_np(
+            libc::AT_FDCWD,
+            old_path.as_ptr(),
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_noreplace_from_directory(
+    directory: &File,
+    name: &std::ffi::CStr,
+    new_path: &Path,
+) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let new_path = std::ffi::CString::new(new_path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let result = unsafe {
+        libc::renameatx_np(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::AT_FDCWD,
+            new_path.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn rename_noreplace_into_directory(
+    _old_path: &Path,
+    _directory: &File,
+    _name: &std::ffi::CStr,
+) -> std::io::Result<()> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn rename_noreplace_from_directory(
+    _directory: &File,
+    _name: &std::ffi::CStr,
+    _new_path: &Path,
+) -> std::io::Result<()> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }
 
 #[cfg(target_os = "linux")]

@@ -619,8 +619,13 @@ workspace-left-panel-ssh-manager-delete-folder-summary =
        *[other] Dieser Ordner, alle { $count } darin enthaltenen gespeicherten Hosts und deren lokal gespeicherte Zugangsdaten werden dauerhaft gelöscht.
     }
 workspace-left-panel-ssh-manager-delete-contained-hosts = Enthaltene Hosts: { $hosts }
-workspace-left-panel-ssh-manager-delete-credential-assignments-none = Betroffene Credential-Zuordnungen: keine.
-workspace-left-panel-ssh-manager-delete-credential-assignments = Betroffene Credential-Zuordnungen: { $assignments }. Die gemeinsam genutzten OneKey-Zugangsdaten selbst bleiben verfügbar.
+workspace-left-panel-ssh-manager-delete-credential-assignments-none = Betroffene gespeicherte Zugangsdaten: keine.
+workspace-left-panel-ssh-manager-delete-credential-assignments = Betroffene gespeicherte Zugangsdaten: { $assignments }.
+workspace-left-panel-ssh-manager-delete-credential-password = gespeichertes Passwort (wird gelöscht)
+workspace-left-panel-ssh-manager-delete-credential-passphrase = gespeicherte Schlüssel-Passphrase (wird gelöscht)
+workspace-left-panel-ssh-manager-delete-credential-root-password = gespeichertes Root-Passwort (wird gelöscht)
+workspace-left-panel-ssh-manager-delete-credential-identity-file = Verweis auf die Identity-Datei „{ $path }“ (Datei bleibt auf dem Datenträger)
+workspace-left-panel-ssh-manager-delete-credential-onekey-assignment = OneKey-Zuordnung „{ $label }“ (gemeinsam genutzte Zugangsdaten bleiben verfügbar)
 workspace-left-panel-ssh-manager-delete-credential-unavailable = nicht verfügbare Zugangsdaten
 workspace-left-panel-ssh-manager-delete-cannot-undo = Diese Aktion kann nicht rückgängig gemacht werden.
 workspace-left-panel-ssh-manager-onekey-manage = OneKey verwalten

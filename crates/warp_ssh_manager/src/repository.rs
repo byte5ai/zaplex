@@ -28,13 +28,13 @@ pub enum SshRepositoryError {
     Db(#[from] DieselError),
     #[error("node not found: {0}")]
     NotFound(String),
-    #[error(
-        "OneKey credential {credential_id} is still referenced by {reference_count} server(s)"
-    )]
+    #[error("OneKey credential {credential_id} is still referenced by {reference_count} server(s)")]
     CredentialInUse {
         credential_id: String,
         reference_count: i64,
     },
+    #[error("invalid SSH sync version: {0}")]
+    InvalidSyncVersion(String),
     #[error("invalid value in db column `{column}`: {value}")]
     InvalidEnum { column: &'static str, value: String },
 }
@@ -536,13 +536,21 @@ impl SyncMetaRepository {
             .find("sync_version")
             .first(conn)
             .optional()?;
-        Ok(row.and_then(|r| r.value.parse().ok()).unwrap_or(0))
+        match row {
+            Some(row) => row
+                .value
+                .parse()
+                .map_err(|_| SshRepositoryError::InvalidSyncVersion(row.value)),
+            None => Ok(0),
+        }
     }
 
     /// Increment sync version number and return the new value.
     pub fn increment_sync_version(conn: &mut SqliteConnection) -> Result<i64, SshRepositoryError> {
         let current = Self::get_sync_version(conn)?;
-        let new_version = current + 1;
+        let new_version = current
+            .checked_add(1)
+            .ok_or_else(|| SshRepositoryError::InvalidSyncVersion(current.to_string()))?;
         let val = new_version.to_string();
         diesel::replace_into(sync_meta::table)
             .values(NewSyncMeta {

@@ -199,11 +199,15 @@ impl TransferTask {
 #[derive(Debug, Clone)]
 pub enum Dialog {
     DeleteConfirm {
+        /// Generation-bound identities captured when the dialog was opened.
+        entries: Vec<EntryReference>,
         paths: Vec<PathBuf>,
         /// Whether each path is a directory, corresponding 1-to-1 with paths
         is_dirs: Vec<bool>,
     },
     Rename {
+        /// Generation-bound identity captured when the dialog was opened.
+        entry: EntryReference,
         path: PathBuf,
         original_name: String,
     },
@@ -460,12 +464,36 @@ mod tests {
     #[test]
     fn test_dialog_variants() {
         let delete = Dialog::DeleteConfirm {
+            entries: vec![EntryReference {
+                listing_generation: 1,
+                identity: EntryIdentity {
+                    path: PathBuf::from("/foo"),
+                    backend: StableEntryIdentity {
+                        file_type: FileEntryType::File,
+                        size: 0,
+                        object_id: "foo".into(),
+                        revision: "1".into(),
+                    },
+                },
+            }],
             paths: vec![PathBuf::from("/foo")],
             is_dirs: vec![false],
         };
         assert!(matches!(delete, Dialog::DeleteConfirm { .. }));
 
         let rename = Dialog::Rename {
+            entry: EntryReference {
+                listing_generation: 1,
+                identity: EntryIdentity {
+                    path: PathBuf::from("/old"),
+                    backend: StableEntryIdentity {
+                        file_type: FileEntryType::File,
+                        size: 0,
+                        object_id: "old".into(),
+                        revision: "1".into(),
+                    },
+                },
+            },
             path: PathBuf::from("/old"),
             original_name: "old".into(),
         };
@@ -696,6 +724,7 @@ mod tests {
     #[test]
     fn test_dialog_delete_confirm_empty_paths() {
         let dialog = Dialog::DeleteConfirm {
+            entries: vec![],
             paths: vec![],
             is_dirs: vec![],
         };

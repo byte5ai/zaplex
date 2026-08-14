@@ -61,8 +61,8 @@ pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
 pub use overrides::{set_label_override, AccountOverride, AccountOverrides};
 pub use pricing::{ModelPrice, PricingTable};
 pub use process_identity::{
-    current_process_fingerprint, probe_registered_process, send_verified_process_signal,
-    ProcessProbe, ProcessSignalError,
+    current_process_fingerprint, local_process_signalling_supported, probe_registered_process,
+    send_verified_process_signal, ProcessProbe, ProcessSignalError,
 };
 pub use project::{resolve_project, ResolvedProject};
 pub use review::{git_commit_all_cmd, git_diff_cmd, render_review_markdown, WorkingChanges};

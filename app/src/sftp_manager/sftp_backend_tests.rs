@@ -6,6 +6,118 @@ use std::sync::{Arc, Barrier};
 use super::*;
 use tempfile::tempdir;
 
+#[cfg(unix)]
+#[test]
+fn identity_bound_delete_preserves_replacement_at_mutation_boundary() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source.bin");
+    fs::write(&source, b"source").unwrap();
+    let backend = InMemorySftpBackend::new(root.path().to_path_buf()).with_before_guarded_delete({
+        let source = source.clone();
+        move |_| {
+            fs::remove_file(&source).unwrap();
+            fs::write(&source, b"replacement").unwrap();
+        }
+    });
+    let listed = backend.lstat(Path::new("/source.bin")).unwrap().identity;
+    let anchor = backend
+        .ownership_anchor_for_listed_entry(Path::new("/source.bin"), &listed)
+        .unwrap();
+
+    backend
+        .delete_entry_if_matches(Path::new("/source.bin"), anchor, false)
+        .expect_err("the guarded delete must reject a replacement before mutation");
+
+    assert_eq!(fs::read(source).unwrap(), b"replacement");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn unsupported_delete_type_is_rejected_before_any_rename() {
+    use std::os::unix::fs::FileTypeExt;
+
+    use nix::sys::stat::Mode;
+    use nix::unistd::mkfifo;
+
+    let root = tempdir().unwrap();
+    let fifo = root.path().join("pipe");
+    mkfifo(&fifo, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
+    let rename_called = Arc::new(AtomicBool::new(false));
+    let backend = InMemorySftpBackend::new(root.path().to_path_buf()).with_before_rename({
+        let rename_called = rename_called.clone();
+        move |_| {
+            rename_called.store(true, Ordering::SeqCst);
+        }
+    });
+    let listed = backend.lstat(Path::new("/pipe")).unwrap().identity;
+    let anchor = backend
+        .ownership_anchor_for_listed_entry(Path::new("/pipe"), &listed)
+        .unwrap();
+
+    backend
+        .delete_entry_if_matches(Path::new("/pipe"), anchor, false)
+        .expect_err("special files must be rejected before mutation");
+
+    assert!(!rename_called.load(Ordering::SeqCst));
+    assert!(backend.startup_recovery_paths().is_empty());
+    assert_eq!(
+        fs::symlink_metadata(fifo).unwrap().file_type().is_fifo(),
+        true
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn symlink_replacement_before_private_unlink_is_preserved() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let link = root.path().join("link");
+    fs::create_dir(root.path().join("original-target")).unwrap();
+    fs::create_dir(root.path().join("replacement-target")).unwrap();
+    symlink("original-target", &link).unwrap();
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let replacement = observed.clone();
+    let backend = InMemorySftpBackend::new(root.path().to_path_buf())
+        .with_before_private_placeholder_unlink(move |_, private| {
+            if !fs::symlink_metadata(private)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+            {
+                return;
+            }
+            let retained = private.with_extension("retained-link");
+            fs::rename(private, &retained).unwrap();
+            symlink("replacement-target", private).unwrap();
+            *replacement.lock().unwrap() = Some((private.to_path_buf(), retained));
+        });
+    let listed = backend.lstat(Path::new("/link")).unwrap().identity;
+    let anchor = backend
+        .ownership_anchor_for_listed_entry(Path::new("/link"), &listed)
+        .unwrap();
+
+    backend
+        .delete_entry_if_matches(Path::new("/link"), anchor, false)
+        .expect_err("a replacement at the final private unlink boundary must survive");
+
+    let (foreign, retained) = observed.lock().unwrap().clone().unwrap();
+    assert!(fs::symlink_metadata(&foreign)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(
+        fs::read_link(foreign).unwrap(),
+        PathBuf::from("replacement-target")
+    );
+    assert_eq!(
+        fs::read_link(retained).unwrap(),
+        PathBuf::from("original-target")
+    );
+    assert!(root.path().join("original-target").is_dir());
+    assert!(root.path().join("replacement-target").is_dir());
+}
+
 #[test]
 fn copy_temp_id_exhaustion_is_fallible_and_never_reuses_an_id() {
     let counter = AtomicU64::new(u64::MAX);
@@ -18,22 +130,21 @@ fn copy_temp_id_exhaustion_is_fallible_and_never_reuses_an_id() {
 }
 
 #[test]
-fn tokenless_file_and_directory_never_authorize_identity_bound_cleanup() {
-    let file = StableEntryIdentity {
+fn legacy_listing_without_object_id_never_authorizes_mutation() {
+    let root = tempdir().unwrap();
+    let replacement = root.path().join("replacement.bin");
+    fs::write(&replacement, b"replacement").unwrap();
+    let legacy_listing = StableEntryIdentity {
         file_type: FileEntryType::File,
-        size: 4,
-        object_id: String::new(),
-        revision: "same-metadata".to_string(),
-    };
-    let directory = StableEntryIdentity {
-        file_type: FileEntryType::Directory,
-        size: 0,
+        size: 11,
         object_id: String::new(),
         revision: "same-metadata".to_string(),
     };
 
-    assert!(!has_immutable_object_token(&file));
-    assert!(!has_immutable_object_token(&directory));
+    require_mutation_ready_remote_listing(Path::new("/replacement.bin"), &legacy_listing)
+        .expect_err("legacy path-derived metadata must not authorize a mutation");
+
+    assert_eq!(fs::read(replacement).unwrap(), b"replacement");
 }
 
 #[cfg(unix)]

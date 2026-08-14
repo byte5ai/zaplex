@@ -32,25 +32,11 @@ fn session(name: &str, cwd: &str, pid: u32) -> SessionSnapshot {
 #[test]
 fn interrupt_maps_to_sigint() {
     assert_eq!(GuardrailSignal::Interrupt.signal_number(), 2);
-    assert_eq!(GuardrailSignal::Interrupt.shell_flag(), "INT");
 }
 
 #[test]
 fn kill_maps_to_sigkill() {
     assert_eq!(GuardrailSignal::Kill.signal_number(), 9);
-    assert_eq!(GuardrailSignal::Kill.shell_flag(), "KILL");
-}
-
-#[test]
-fn remote_kill_command_is_a_plain_kill_invocation() {
-    assert_eq!(
-        GuardrailSignal::Interrupt.remote_kill_command(4242),
-        "kill -INT 4242"
-    );
-    assert_eq!(
-        GuardrailSignal::Kill.remote_kill_command(4242),
-        "kill -KILL 4242"
-    );
 }
 
 #[test]

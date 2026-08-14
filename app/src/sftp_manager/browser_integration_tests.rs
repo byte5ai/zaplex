@@ -1798,6 +1798,160 @@ fn removed_entry_aborts_pending_action() {
     });
 }
 
+/// A confirmation dialog can outlive the listing that created it. Replacing
+/// the source at the same path must not let ConfirmDelete delete the new file.
+#[test]
+fn confirmed_delete_rejects_a_same_path_replacement() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, root) = create_connected_view(&mut app, &[("replace.txt", b"old")]);
+        let path = root.path().join("replace.txt");
+
+        view.update(&mut app, |view, ctx| {
+            let entry = view.entry_reference(0).unwrap();
+            view.handle_action(&SftpBrowserAction::DeleteEntry(entry), ctx);
+        });
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"replacement content").unwrap();
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ConfirmDelete, ctx);
+        });
+
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"replacement content",
+            "delete confirmation must remain bound to the original entry identity"
+        );
+    });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn confirmed_delete_of_directory_symlink_removes_only_the_link() {
+    use std::os::unix::fs::symlink;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("target-dir/keep.txt", b"keep")]);
+        let link = temp.path().join("link-dir");
+        symlink("target-dir", &link).unwrap();
+        let backend =
+            Arc::new(InMemorySftpBackend::new(temp.path().to_path_buf())) as Arc<dyn SftpBackend>;
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend, PathBuf::from("/"), ctx);
+        });
+        let link_index = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "link-dir")
+                .unwrap()
+        });
+
+        view.update(&mut app, |view, ctx| {
+            let entry = view.entry_reference(link_index).unwrap();
+            view.handle_action(&SftpBrowserAction::DeleteEntry(entry), ctx);
+            view.handle_action(&SftpBrowserAction::ConfirmDelete, ctx);
+        });
+
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        assert_eq!(
+            std::fs::read(temp.path().join("target-dir/keep.txt")).unwrap(),
+            b"keep",
+            "deleting a directory symlink must never recurse into its target"
+        );
+    });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn confirmed_symlink_delete_preserves_replacement_at_mutation_boundary() {
+    use std::os::unix::fs::symlink;
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("original-target/keep.txt", b"original"),
+            ("replacement-target/keep.txt", b"replacement"),
+        ]);
+        let link = temp.path().join("link-dir");
+        symlink("original-target", &link).unwrap();
+        let backend = InMemorySftpBackend::new(temp.path().to_path_buf())
+            .with_after_guarded_rename_check_before_mutation({
+                let link = link.clone();
+                move |_, _| {
+                    std::fs::remove_file(&link).unwrap();
+                    symlink("replacement-target", &link).unwrap();
+                }
+            });
+        let backend = Arc::new(backend) as Arc<dyn SftpBackend>;
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend, PathBuf::from("/"), ctx);
+        });
+        let link_index = view.read(&app, |view, _| {
+            view.entries
+                .iter()
+                .position(|entry| entry.name == "link-dir")
+                .unwrap()
+        });
+
+        view.update(&mut app, |view, ctx| {
+            let entry = view.entry_reference(link_index).unwrap();
+            view.handle_action(&SftpBrowserAction::DeleteEntry(entry), ctx);
+            view.handle_action(&SftpBrowserAction::ConfirmDelete, ctx);
+        });
+
+        assert_eq!(
+            std::fs::read_link(&link).unwrap(),
+            PathBuf::from("replacement-target")
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("original-target/keep.txt")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("replacement-target/keep.txt")).unwrap(),
+            b"replacement"
+        );
+    });
+}
+
+/// Rename confirmation carries the same identity guarantee as delete. A path
+/// reused while the editor is open is a different entry and must be preserved.
+#[test]
+fn confirmed_rename_rejects_a_same_path_replacement() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, root) = create_connected_view(&mut app, &[("replace.txt", b"old")]);
+        let source = root.path().join("replace.txt");
+        let renamed = root.path().join("renamed.txt");
+
+        view.update(&mut app, |view, ctx| {
+            let entry = view.entry_reference(0).unwrap();
+            view.handle_action(&SftpBrowserAction::RenameEntry(entry), ctx);
+            view.rename_editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text("renamed.txt", ctx)
+            });
+        });
+        std::fs::remove_file(&source).unwrap();
+        std::fs::write(&source, b"replacement content").unwrap();
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ConfirmRename, ctx);
+        });
+
+        assert_eq!(
+            std::fs::read(&source).unwrap(),
+            b"replacement content",
+            "rename confirmation must preserve a same-path replacement"
+        );
+        assert!(
+            !renamed.exists(),
+            "a stale rename confirmation must not create its destination"
+        );
+    });
+}
+
 /// Reusing the same path for a different filesystem object during a press must
 /// also abort. A path alone is not an object identity.
 #[test]
@@ -3697,6 +3851,7 @@ fn test_render_with_all_overlays_connected() {
             ));
             // Open a dialog
             v.dialog = Some(Dialog::DeleteConfirm {
+                entries: vec![v.entry_reference(0).unwrap()],
                 paths: vec![PathBuf::from("/overlay.txt")],
                 is_dirs: vec![false],
             });

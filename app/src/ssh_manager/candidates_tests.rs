@@ -20,6 +20,7 @@ fn cand(alias: &str) -> SshConfigCandidate {
         hostname: None,
         user: None,
         port: None,
+        invalid_port: None,
         identity_file: None,
     }
 }
@@ -30,6 +31,7 @@ fn full_cand() -> SshConfigCandidate {
         hostname: Some("prod.example.com".into()),
         user: Some("alice".into()),
         port: Some(2222),
+        invalid_port: None,
         identity_file: Some(PathBuf::from("/home/alice/.ssh/id_ed25519")),
     }
 }
