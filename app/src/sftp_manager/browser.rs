@@ -1355,7 +1355,7 @@ impl SftpBrowserView {
         }
     }
 
-    fn refresh_safe_file_client(&mut self, ctx: &AppContext) {
+    fn refresh_safe_file_client(&mut self, ctx: &mut ViewContext<Self>) {
         let client = RemoteServerManager::as_ref(ctx)
             .connected_daemons()
             .into_iter()
@@ -1365,9 +1365,12 @@ impl SftpBrowserView {
             })
             .map(|daemon| daemon.client);
         if self.safe_file_client.set(client) {
+            self.dialog = None;
+            self.selected.clear();
             if let Some(backend) = self.sftp.clone() {
                 super::transfer_queue::TransferQueue::as_ref(ctx)
                     .register_backend_recoveries_async(backend);
+                self.refresh_dir(ctx);
             }
         }
     }
@@ -1846,6 +1849,7 @@ impl SftpBrowserView {
             return;
         };
         let path = entry.path.clone();
+        let entry_reference = entry.entry_reference(self.refresh_generation);
         let sftp = match &self.sftp {
             Some(sftp) => sftp.clone(),
             None => {
@@ -1858,15 +1862,12 @@ impl SftpBrowserView {
             ctx,
             move || sftp.stat(&stat_path),
             move |me, result, ctx| {
-                // A stat response can arrive after a refresh/navigation. Raw
-                // indices are not stable across listings, so act only if the
-                // same link is still at the same index.
-                let link_is_current = me.entries.get(index).is_some_and(|entry| {
-                    entry.path == path && entry.file_type == FileEntryType::Symlink
-                });
-                if !link_is_current {
+                // A stat response can arrive after a refresh/navigation. The
+                // same path may now name a different symlink, so path and type
+                // are insufficient: re-resolve the complete captured identity.
+                let Some(index) = me.resolve_entry_reference(&entry_reference) else {
                     return;
-                }
+                };
 
                 match result {
                     Ok(Ok(target)) => match action_for_symlink_target(target.file_type, intent) {
@@ -3558,25 +3559,33 @@ impl SftpBrowserView {
     /// Open the delete confirmation dialog
     fn delete_selected(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         if let Some(entry) = self.entries.get(index) {
-            let (paths, is_dirs) = if self.selected.contains(&entry.entry_identity()) {
-                // Delete all selected entries
-                self.entries
-                    .iter()
-                    .filter(|entry| self.selected.contains(&entry.entry_identity()))
-                    .map(|entry| {
-                        (
-                            entry.path.clone(),
-                            matches!(entry.file_type, FileEntryType::Directory),
-                        )
-                    })
-                    .unzip()
-            } else {
-                (
-                    vec![entry.path.clone()],
-                    vec![matches!(entry.file_type, FileEntryType::Directory)],
-                )
-            };
-            self.dialog = Some(Dialog::DeleteConfirm { paths, is_dirs });
+            let selected_entries: Vec<&FileEntry> =
+                if self.selected.contains(&entry.entry_identity()) {
+                    // Delete all selected entries
+                    self.entries
+                        .iter()
+                        .filter(|entry| self.selected.contains(&entry.entry_identity()))
+                        .collect()
+                } else {
+                    vec![entry]
+                };
+            let entries = selected_entries
+                .iter()
+                .map(|entry| entry.entry_reference(self.refresh_generation))
+                .collect();
+            let paths = selected_entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect();
+            let is_dirs = selected_entries
+                .iter()
+                .map(|entry| matches!(entry.file_type, FileEntryType::Directory))
+                .collect();
+            self.dialog = Some(Dialog::DeleteConfirm {
+                entries,
+                paths,
+                is_dirs,
+            });
             ctx.notify();
         }
     }
@@ -3593,8 +3602,8 @@ impl SftpBrowserView {
             }
         };
 
-        let (paths, is_dirs) = match &self.dialog {
-            Some(Dialog::DeleteConfirm { paths, is_dirs }) => (paths.clone(), is_dirs.clone()),
+        let entries = match &self.dialog {
+            Some(Dialog::DeleteConfirm { entries, .. }) => entries.clone(),
             Some(Dialog::Rename { .. })
             | Some(Dialog::CreateFolder { .. })
             | Some(Dialog::Move { .. })
@@ -3611,6 +3620,23 @@ impl SftpBrowserView {
             }
         };
 
+        if entries.is_empty()
+            || entries
+                .iter()
+                .any(|entry| self.resolve_entry_reference(entry).is_none())
+        {
+            self.dialog = None;
+            self.show_error_toast(
+                crate::t!(
+                    "fm-toast-delete-failed",
+                    err = crate::t!("fm-error-not-found")
+                ),
+                ctx,
+            );
+            ctx.notify();
+            return;
+        }
+
         self.dialog = None;
         self.is_loading = true;
         ctx.notify();
@@ -3618,15 +3644,25 @@ impl SftpBrowserView {
         self.run_blocking(
             ctx,
             move || {
-                for (path, is_dir) in paths.iter().zip(is_dirs.iter()) {
-                    let result = if *is_dir {
-                        sftp.delete_dir_recursive(path)
-                    } else {
-                        sftp.delete_file(path)
-                    };
-                    if let Err(e) = result {
-                        return Err(e);
-                    }
+                // Acquire every ownership handle before the first mutation.
+                // The backend normalizes legacy listing identities here and
+                // binds each later delete to the captured object, not its path.
+                let anchored = entries
+                    .iter()
+                    .map(|entry| {
+                        sftp.ownership_anchor_for_listed_entry(
+                            &entry.identity.path,
+                            &entry.identity.backend,
+                        )
+                        .map(|anchor| (entry, anchor))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                for (entry, anchor) in anchored {
+                    sftp.delete_entry_if_matches(
+                        &entry.identity.path,
+                        anchor,
+                        matches!(entry.identity.backend.file_type, FileEntryType::Directory),
+                    )?;
                 }
                 Ok(())
             },
@@ -3710,6 +3746,7 @@ impl SftpBrowserView {
     fn rename_entry(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         if let Some(entry) = self.entries.get(index) {
             self.dialog = Some(Dialog::Rename {
+                entry: entry.entry_reference(self.refresh_generation),
                 path: entry.path.clone(),
                 original_name: entry.name.clone(),
             });
@@ -5119,18 +5156,43 @@ impl TypedActionView for SftpBrowserView {
                 self.confirm_delete(ctx);
             }
             SftpBrowserAction::ConfirmRename => {
-                if let Some(Dialog::Rename {
-                    path: original_path,
-                    ..
-                }) = &self.dialog
-                {
+                let pending_rename = match &self.dialog {
+                    Some(Dialog::Rename {
+                        entry,
+                        path: original_path,
+                        ..
+                    }) => Some((entry.clone(), original_path.clone())),
+                    Some(Dialog::DeleteConfirm { .. })
+                    | Some(Dialog::CreateFolder { .. })
+                    | Some(Dialog::Move { .. })
+                    | Some(Dialog::OverwriteConfirm { .. })
+                    | Some(Dialog::CopyMoveConflict { .. })
+                    | Some(Dialog::CopyMoveTargetPicker { .. })
+                    | Some(Dialog::CrossConnConflict { .. })
+                    | Some(Dialog::FileDetails { .. })
+                    | Some(Dialog::CloseTransferPanelConfirm)
+                    | None => None,
+                };
+                if let Some((entry, original_path)) = pending_rename {
+                    if self.resolve_entry_reference(&entry).is_none() {
+                        self.dialog = None;
+                        self.show_error_toast(
+                            crate::t!(
+                                "fm-toast-rename-failed",
+                                err = crate::t!("fm-error-not-found")
+                            ),
+                            ctx,
+                        );
+                        ctx.notify();
+                        return;
+                    }
                     let new_name = self.rename_editor.as_ref(ctx).buffer_text(ctx);
                     let new_name = new_name.trim().to_string();
                     if new_name.is_empty() {
                         self.show_error_toast(crate::t!("fm-toast-name-empty"), ctx);
                         return;
                     }
-                    let new_path = match build_rename_path(original_path, &new_name) {
+                    let new_path = match build_rename_path(&original_path, &new_name) {
                         Some(p) => p,
                         None => {
                             self.show_error_toast(
@@ -5143,12 +5205,18 @@ impl TypedActionView for SftpBrowserView {
 
                     if let Some(sftp) = &self.sftp {
                         let sftp = sftp.clone();
-                        let original_path = original_path.clone();
+                        let expected_identity = entry.identity.backend;
                         self.dialog = None;
                         ctx.notify();
                         self.run_blocking(
                             ctx,
-                            move || sftp.rename(&original_path, &new_path),
+                            move || {
+                                let anchor = sftp.ownership_anchor_for_listed_entry(
+                                    &original_path,
+                                    &expected_identity,
+                                )?;
+                                sftp.rename_if_matches(&original_path, &new_path, anchor)
+                            },
                             move |me, result, ctx| {
                                 match result {
                                     Ok(Ok(())) => {

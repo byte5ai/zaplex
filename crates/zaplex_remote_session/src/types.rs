@@ -129,9 +129,9 @@ impl std::fmt::Display for SessionId {
 /// to populate `InitializeResponse.features`.
 ///
 /// Every daemon advertises its cross-platform inventory and host-command
-/// support. Linux/macOS daemons additionally advertise identity-verified
-/// process signalling, while Unix daemons advertise the native PTY session
-/// host and retry-safe startup delivery.
+/// support. Linux daemons additionally advertise identity-verified process
+/// signalling, while Unix daemons advertise the native PTY session host and
+/// retry-safe startup delivery.
 pub fn supported_features() -> Vec<String> {
     // Agent-session inventory and session-less host-exec are both
     // filesystem/subshell-based (no PTY), so every daemon build advertises them
@@ -140,7 +140,7 @@ pub fn supported_features() -> Vec<String> {
         FEATURE_AGENT_INVENTORY.to_string(),
         FEATURE_HOST_EXEC.to_string(),
     ];
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     features.push(FEATURE_AGENT_PROCESS_SIGNAL_V1.to_string());
     // The native PTY session host is unix-only: non-unix targets do not own
     // PTYs, so they advertise nothing more — honest advertisement, never claim
@@ -159,7 +159,26 @@ pub fn supported_features() -> Vec<String> {
     features
 }
 
-/// Returns whether `feature` appears in the daemon-advertised `features` list.
+/// Returns the protocol capabilities understood by a connecting client.
+///
+/// A client can request identity-verified signalling from a remote Linux
+/// daemon regardless of the client's own platform. Daemon advertisement stays
+/// stricter in [`supported_features`], because actual signal execution requires
+/// the daemon-local process-bound backend.
+pub fn supported_client_features() -> Vec<String> {
+    vec![
+        FEATURE_SESSION_HOST.to_string(),
+        FEATURE_STARTUP_COMMAND_ACK.to_string(),
+        FEATURE_AGENT_INVENTORY.to_string(),
+        FEATURE_AGENT_PROCESS_SIGNAL_V1.to_string(),
+        FEATURE_AGENT_PTY_BINDING.to_string(),
+        FEATURE_SAFE_FILE_TRANSACTIONS_V1.to_string(),
+        FEATURE_HOST_EXEC.to_string(),
+        FEATURE_MULTIPLEXER_INVENTORY_V1.to_string(),
+    ]
+}
+
+/// Returns whether `feature` appears in a peer's advertised `features` list.
 pub fn has_feature(features: &[String], feature: &str) -> bool {
     features.iter().any(|f| f == feature)
 }

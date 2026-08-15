@@ -25,25 +25,11 @@ impl GuardrailSignal {
             GuardrailSignal::Kill => 9,
         }
     }
-
-    /// The `kill(1)` flag (`INT` / `KILL`) used to build the remote shell
-    /// command for the daemon's `RunCommandRequest` path.
-    pub fn shell_flag(self) -> &'static str {
-        match self {
-            GuardrailSignal::Interrupt => "INT",
-            GuardrailSignal::Kill => "KILL",
-        }
-    }
-
-    /// The shell command that sends this signal to `pid` on a remote host.
-    pub fn remote_kill_command(self, pid: u32) -> String {
-        format!("kill -{} {pid}", self.shell_flag())
-    }
 }
 
-/// Where a guardrail signal for a given host executes: `Local` uses
-/// `libc::kill` directly in-process; `Remote` needs the daemon's
-/// `RunCommandRequest` on that host.
+/// Where a guardrail signal for a given host executes: `Local` uses verified
+/// in-process signalling; `Remote` asks that host's daemon to perform the same
+/// identity verification before signalling.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GuardrailTarget {
     Local,

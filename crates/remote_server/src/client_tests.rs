@@ -17,6 +17,7 @@ use crate::proto::{
 use crate::protocol;
 use warp_core::SessionId;
 use warpui::r#async::executor;
+use zaplex_remote_session::types::FEATURE_AGENT_PROCESS_SIGNAL_V1;
 
 use super::*;
 
@@ -96,6 +97,10 @@ async fn initialize_sends_empty_auth_token_when_none() {
         match &msg.message {
             Some(client_message::Message::Initialize(init)) => {
                 assert!(init.auth_token.is_empty());
+                assert!(init
+                    .features
+                    .iter()
+                    .any(|feature| feature == FEATURE_AGENT_PROCESS_SIGNAL_V1));
                 #[cfg(unix)]
                 assert!(init
                     .features

@@ -13,9 +13,9 @@ pub mod types;
 pub mod validation;
 
 pub use credential_lifecycle::{
-    CredentialOperationError, SaveServerRequest, clone_server_with_secrets,
-    delete_node_and_secrets, delete_onekey_credential_and_secrets,
-    save_onekey_credential_with_secret, save_server_with_secrets,
+    CredentialOperationError, DeleteHostExpectation, DeleteNodeExpectation, SaveServerRequest,
+    clone_server_with_secrets, delete_node_and_secrets, delete_onekey_credential_and_secrets,
+    prepare_delete_node, save_onekey_credential_with_secret, save_server_with_secrets,
 };
 pub use db::{set_database_path, with_conn};
 pub use repository::{SshRepository, SshRepositoryError, SyncMetaRepository};

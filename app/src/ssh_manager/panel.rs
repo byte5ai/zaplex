@@ -35,9 +35,11 @@ use warpui::{
 };
 
 use warp_ssh_manager::{
-    clone_server_with_secrets, delete_node_and_secrets, validate_ssh_endpoint, AuthType,
-    DefaultWorkspaceCommandFactory, EndpointUse, KeychainSecretStore, MultiplexerAttachMode,
-    NodeKind, SshNode, SshRepository, SshServerInfo, WorkspaceCommandFactory,
+    clone_server_with_secrets, delete_node_and_secrets, prepare_delete_node, validate_ssh_endpoint,
+    AuthType, CredentialOperationError, DefaultWorkspaceCommandFactory, DeleteHostExpectation,
+    DeleteNodeExpectation, EndpointUse, KeychainSecretStore, MultiplexerAttachMode, NodeKind,
+    SecretKind, SshConfigCandidate, SshEndpointValidationError, SshNode, SshRepository,
+    SshServerInfo, ValidatedSshEndpoint, WorkspaceCommandFactory,
 };
 
 use remote_server::proto::{
@@ -203,7 +205,7 @@ struct RenameState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct DeleteCredentialAssignment {
+struct DeleteCredentialImpact {
     host_name: String,
     credential_label: String,
 }
@@ -214,7 +216,12 @@ struct DeleteImpact {
     node_name: String,
     node_kind: NodeKind,
     host_names: Vec<String>,
-    credential_assignments: Vec<DeleteCredentialAssignment>,
+    credential_impacts: Vec<DeleteCredentialImpact>,
+}
+
+struct PendingDelete {
+    impact: DeleteImpact,
+    expectation: DeleteNodeExpectation,
 }
 
 /// Content fields for a single candidate row — bundles the few Options that rendering cares about into one struct,
@@ -264,10 +271,10 @@ pub struct SshManagerPanel {
     context_menu_position: Option<Vector2F>,
     context_menu_target: Option<String>,
     context_menu_item_states: Vec<MouseStateHandle>,
-    /// A delete awaiting confirmation, including the exact hosts and OneKey
-    /// assignments affected. The impact is captured before the shared modal is
+    /// A delete awaiting confirmation, including the exact hosts and credentials
+    /// affected. The impact is captured before the shared modal is
     /// shown, so the user never confirms an opaque folder-wide deletion.
-    pending_delete: Option<DeleteImpact>,
+    pending_delete: Option<PendingDelete>,
     delete_confirm_scroll_state: ClippedScrollStateHandle,
     delete_confirm_close_btn: ViewHandle<ActionButton>,
     delete_confirm_cancel_btn: ViewHandle<ActionButton>,
@@ -563,7 +570,7 @@ impl SshManagerPanel {
     /// Field mapping follows TECH.md §3.3 / PRODUCT.md decision I/J/K strictly:
     /// - `server.host = alias` (preserves OpenSSH alias semantics, so launching `ssh` can still apply
     ///   `ProxyJump` and other directives from `~/.ssh/config`);
-    /// - `port = candidate.port.unwrap_or(22)` (decision K's "port=None → 22");
+    /// - a missing Port defaults to 22, while a declared invalid Port is rejected;
     /// - `auth_type = Key if identity_file.is_some() else Password` (decision J);
     /// - `notes = "Imported from <resolved path>"` (so the user can later trace the source).
     ///
@@ -586,6 +593,15 @@ impl SshManagerPanel {
             .read(ctx, |vm, _| vm.path_display())
             .unwrap_or_default();
 
+        let endpoint = match validate_candidate_endpoint(&c) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                ctx.emit(SshManagerPanelEvent::PersistenceError(
+                    endpoint_validation_message(error),
+                ));
+                return;
+            }
+        };
         let auth_type = if c.identity_file.is_some() {
             AuthType::Key
         } else {
@@ -594,8 +610,8 @@ impl SshManagerPanel {
         let info = SshServerInfo {
             node_id: String::new(),
             // PRODUCT.md decision I: store the alias rather than the resolved HostName.
-            host: c.alias.clone(),
-            port: c.port.unwrap_or(22),
+            host: endpoint.host,
+            port: endpoint.port,
             username: c.user.clone().unwrap_or_default(),
             auth_type,
             key_path: c
@@ -807,23 +823,12 @@ impl SshManagerPanel {
         }
     }
 
-    /// Context-menu "Delete": resolve the complete impact, then open the shared
-    /// confirmation modal instead of deleting immediately.
-    fn on_request_delete(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(id) = self.selected_id.clone() else {
-            return;
-        };
-        // Fail closed: never open an irreversible confirmation whose target we
-        // can't identify (e.g. the node vanished between menu-open and click).
-        if !self.nodes.iter().any(|n| n.id == id) {
-            return;
-        }
-
-        let descendant_server_ids = descendant_server_nodes(&self.nodes, &id)
-            .into_iter()
-            .map(|node| node.id.clone())
-            .collect::<Vec<_>>();
-        let credential_labels_by_host = warp_ssh_manager::with_conn(|conn| {
+    fn prepare_delete_impact(&self, id: &str) -> anyhow::Result<Option<PendingDelete>> {
+        warp_ssh_manager::with_conn(|conn| {
+            let Some(expectation) = prepare_delete_node(conn, &KeychainSecretStore, id)? else {
+                return Ok(None);
+            };
+            let nodes = SshRepository::list_nodes(conn)?;
             let credentials = SshRepository::list_onekey_credentials(conn)?
                 .into_iter()
                 .map(|credential| {
@@ -831,37 +836,48 @@ impl SshManagerPanel {
                     (credential.id, label)
                 })
                 .collect::<HashMap<_, _>>();
-            let mut labels_by_host = HashMap::new();
-            for server_id in &descendant_server_ids {
-                let Some(server) = SshRepository::get_server(conn, server_id)? else {
-                    anyhow::bail!("SSH host disappeared while preparing delete confirmation");
-                };
-                let Some(credential_id) = server.credential_id else {
-                    continue;
-                };
-                let label = credentials.get(&credential_id).cloned().unwrap_or_else(|| {
-                    crate::t!("workspace-left-panel-ssh-manager-delete-credential-unavailable")
-                });
-                labels_by_host.insert(server_id.clone(), label);
+            let mut credential_impacts_by_host = HashMap::new();
+            for host in &expectation.hosts {
+                let impacts = delete_credential_impacts(host, &credentials);
+                if !impacts.is_empty() {
+                    credential_impacts_by_host.insert(host.node_id.clone(), impacts);
+                }
             }
-            Ok(labels_by_host)
-        });
-        let credential_labels_by_host = match credential_labels_by_host {
-            Ok(labels) => labels,
+            Ok(
+                build_delete_impact(&nodes, id, &credential_impacts_by_host).map(|impact| {
+                    PendingDelete {
+                        impact,
+                        expectation,
+                    }
+                }),
+            )
+        })
+    }
+
+    fn show_delete_confirmation(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
+        match self.prepare_delete_impact(id) {
+            Ok(Some(pending)) => {
+                self.delete_confirm_scroll_state.scroll_to(Pixels::zero());
+                self.pending_delete = Some(pending);
+                ctx.notify();
+            }
+            Ok(None) => {}
             Err(error) => {
                 log::error!("ssh_manager: failed to prepare delete confirmation: {error:?}");
                 ctx.emit(SshManagerPanelEvent::PersistenceError(crate::t!(
                     "common-error"
                 )));
-                return;
             }
-        };
-        let Some(impact) = build_delete_impact(&self.nodes, &id, &credential_labels_by_host) else {
+        }
+    }
+
+    /// Context-menu "Delete": resolve the complete impact, then open the shared
+    /// confirmation modal instead of deleting immediately.
+    fn on_request_delete(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(id) = self.selected_id.clone() else {
             return;
         };
-        self.delete_confirm_scroll_state.scroll_to(Pixels::zero());
-        self.pending_delete = Some(impact);
-        ctx.notify();
+        self.show_delete_confirmation(&id, ctx);
     }
 
     fn on_cancel_delete(&mut self, ctx: &mut ViewContext<Self>) {
@@ -877,12 +893,23 @@ impl SshManagerPanel {
         let Some(pending) = self.pending_delete.take() else {
             return;
         };
-        let id = pending.node_id;
+        let id = pending.expectation.node_id.clone();
         ctx.notify();
         let result = warp_ssh_manager::with_conn(|c| {
-            Ok(delete_node_and_secrets(c, &KeychainSecretStore, &id)?)
+            Ok(delete_node_and_secrets(
+                c,
+                &KeychainSecretStore,
+                &pending.expectation,
+            )?)
         });
         if let Err(e) = result {
+            if matches!(
+                e.downcast_ref::<CredentialOperationError>(),
+                Some(CredentialOperationError::ImpactChanged { .. })
+            ) {
+                self.show_delete_confirmation(&id, ctx);
+                return;
+            }
             log::error!("ssh_manager: delete failed: {e:?}");
             ctx.emit(SshManagerPanelEvent::PersistenceError(
                 credential_operation_message(&e),
@@ -2831,11 +2858,11 @@ impl SshManagerPanel {
         } else {
             None
         };
-        let credentials = if impact.credential_assignments.is_empty() {
+        let credentials = if impact.credential_impacts.is_empty() {
             crate::t!("workspace-left-panel-ssh-manager-delete-credential-assignments-none")
         } else {
             let assignments = impact
-                .credential_assignments
+                .credential_impacts
                 .iter()
                 .map(|assignment| {
                     format!(
@@ -3077,8 +3104,8 @@ impl View for SshManagerPanel {
             );
             stack.add_positioned_overlay_child(menu_el, positioning);
         }
-        if let Some(impact) = self.pending_delete.as_ref() {
-            stack.add_overlay_child(self.render_delete_confirm(impact, app));
+        if let Some(pending) = self.pending_delete.as_ref() {
+            stack.add_overlay_child(self.render_delete_confirm(&pending.impact, app));
         }
         stack.finish()
     }
@@ -3096,6 +3123,21 @@ fn resolve_parent_for_new_node(selected_id: Option<&str>, nodes: &[SshNode]) -> 
     match node.kind {
         NodeKind::Folder => Some(node.id.clone()),
         NodeKind::Server => node.parent_id.clone(),
+    }
+}
+
+fn validate_candidate_endpoint(
+    candidate: &SshConfigCandidate,
+) -> Result<ValidatedSshEndpoint, SshEndpointValidationError> {
+    match candidate.invalid_port.as_deref() {
+        Some(invalid_port) => {
+            validate_ssh_endpoint(EndpointUse::Save, &candidate.alias, invalid_port)
+        }
+        None => validate_ssh_endpoint(
+            EndpointUse::Save,
+            &candidate.alias,
+            &candidate.port.unwrap_or(22).to_string(),
+        ),
     }
 }
 
@@ -3125,17 +3167,19 @@ fn descendant_server_nodes<'a>(nodes: &'a [SshNode], node_id: &str) -> Vec<&'a S
 fn build_delete_impact(
     nodes: &[SshNode],
     node_id: &str,
-    credential_labels_by_host: &HashMap<String, String>,
+    credential_impacts_by_host: &HashMap<String, Vec<String>>,
 ) -> Option<DeleteImpact> {
     let target = nodes.iter().find(|node| node.id == node_id)?;
     let hosts = descendant_server_nodes(nodes, node_id);
     let host_names = hosts.iter().map(|host| host.name.clone()).collect();
-    let credential_assignments = hosts
+    let credential_impacts = hosts
         .into_iter()
-        .filter_map(|host| {
-            credential_labels_by_host
+        .flat_map(|host| {
+            credential_impacts_by_host
                 .get(&host.id)
-                .map(|credential_label| DeleteCredentialAssignment {
+                .into_iter()
+                .flatten()
+                .map(move |credential_label| DeleteCredentialImpact {
                     host_name: host.name.clone(),
                     credential_label: credential_label.clone(),
                 })
@@ -3146,8 +3190,56 @@ fn build_delete_impact(
         node_name: target.name.clone(),
         node_kind: target.kind,
         host_names,
-        credential_assignments,
+        credential_impacts,
     })
+}
+
+fn delete_credential_impacts(
+    host: &DeleteHostExpectation,
+    onekey_labels: &HashMap<String, String>,
+) -> Vec<String> {
+    let mut impacts = Vec::new();
+    match host.auth_type {
+        AuthType::Password => {}
+        AuthType::Key => {
+            if let Some(path) = &host.key_path {
+                impacts.push(crate::t!(
+                    "workspace-left-panel-ssh-manager-delete-credential-identity-file",
+                    path = path.clone()
+                ));
+            }
+        }
+        AuthType::OneKey => {
+            if let Some(credential_id) = &host.credential_id {
+                let label = onekey_labels
+                    .get(credential_id)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        crate::t!("workspace-left-panel-ssh-manager-delete-credential-unavailable")
+                    });
+                impacts.push(crate::t!(
+                    "workspace-left-panel-ssh-manager-delete-credential-onekey-assignment",
+                    label = label
+                ));
+            }
+        }
+    }
+    for kind in &host.secret_kinds {
+        let impact = match kind {
+            SecretKind::Password => {
+                crate::t!("workspace-left-panel-ssh-manager-delete-credential-password")
+            }
+            SecretKind::Passphrase => {
+                crate::t!("workspace-left-panel-ssh-manager-delete-credential-passphrase")
+            }
+            SecretKind::RootPassword => {
+                crate::t!("workspace-left-panel-ssh-manager-delete-credential-root-password")
+            }
+            SecretKind::OneKeyPassword => continue,
+        };
+        impacts.push(impact);
+    }
+    impacts
 }
 
 fn sort_for_display(nodes: Vec<SshNode>, depths: &HashMap<String, usize>) -> Vec<SshNode> {

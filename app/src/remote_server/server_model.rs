@@ -21,12 +21,13 @@ use super::proto::{
     client_message, delete_file_response, run_command_response, server_message,
     write_file_response, Abort, AgentProcessSignal, AgentProcessSignalRequest,
     AgentProcessSignalResponse, AgentProcessSignalStatus, AgentPtyBindingResponse,
-    AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionList, Authenticate, ClientMessage,
-    DeleteFile, DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse, FailedFileRead,
-    FileContextProto, FileOperationError, HostExec, HostExecResult, Initialize, InitializeResponse,
-    NavigatedToDirectory, NavigatedToDirectoryResponse, ReadFileContextResponse, RunCommandError,
-    RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess, ServerMessage,
-    SessionBootstrapped, StartupCommandAck, WriteFile, WriteFileResponse, WriteFileSuccess,
+    AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo, AgentSessionList, Authenticate,
+    ClientMessage, DeleteFile, DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse,
+    FailedFileRead, FileContextProto, FileOperationError, HostExec, HostExecResult, Initialize,
+    InitializeResponse, NavigatedToDirectory, NavigatedToDirectoryResponse,
+    ReadFileContextResponse, RunCommandError, RunCommandErrorCode, RunCommandRequest,
+    RunCommandResponse, RunCommandSuccess, ServerMessage, SessionBootstrapped, StartupCommandAck,
+    WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 #[cfg(unix)]
 use super::proto::{
@@ -41,10 +42,11 @@ use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
 use zaplex_remote_session::agent_binding::{
     AgentIdentity, AgentPtyBindings, BindingError, BindingRequest,
 };
-use zaplex_remote_session::types::{supported_features, FEATURE_AGENT_PTY_BINDING};
 #[cfg(unix)]
+use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
-    FEATURE_MULTIPLEXER_INVENTORY_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
+    supported_features, FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_PTY_BINDING,
+    FEATURE_SAFE_FILE_TRANSACTIONS_V1,
 };
 
 // Buffer-sync related: depends on GlobalBufferModel, which server-local operations are only
@@ -126,6 +128,8 @@ impl HandlerOutcome {
 
 fn execute_agent_process_signal_with<F>(
     req: AgentProcessSignalRequest,
+    current_sessions: &[AgentSessionInfo],
+    capability_negotiated: bool,
     send: F,
 ) -> AgentProcessSignalResponse
 where
@@ -146,6 +150,12 @@ where
             error_message,
         };
 
+    if !capability_negotiated {
+        return failure(
+            AgentProcessSignalStatus::InvalidRequest,
+            "agent-process-signal-v1 capability was not negotiated".to_string(),
+        );
+    }
     if session_id.trim().is_empty() {
         return failure(
             AgentProcessSignalStatus::InvalidRequest,
@@ -170,7 +180,41 @@ where
         }
     };
 
-    match send(pid, &expected_process_fingerprint, signal) {
+    let mut matching_sessions = current_sessions
+        .iter()
+        .filter(|session| session.session_id == session_id);
+    let Some(registered) = matching_sessions.next() else {
+        return failure(
+            AgentProcessSignalStatus::InvalidRequest,
+            "agent session is not present in the current inventory".to_string(),
+        );
+    };
+    if matching_sessions.next().is_some() {
+        return failure(
+            AgentProcessSignalStatus::InvalidRequest,
+            "agent session id is ambiguous in the current inventory".to_string(),
+        );
+    }
+    if registered.pid != pid {
+        return failure(
+            AgentProcessSignalStatus::StaleIdentity,
+            "process id no longer matches the current agent inventory".to_string(),
+        );
+    }
+    if registered.process_fingerprint.trim().is_empty() {
+        return failure(
+            AgentProcessSignalStatus::IdentityUnverifiable,
+            "current agent inventory has no verified process fingerprint".to_string(),
+        );
+    }
+    if registered.process_fingerprint != expected_process_fingerprint {
+        return failure(
+            AgentProcessSignalStatus::StaleIdentity,
+            "process fingerprint no longer matches the current agent inventory".to_string(),
+        );
+    }
+
+    match send(registered.pid, &registered.process_fingerprint, signal) {
         Ok(()) => AgentProcessSignalResponse {
             session_id: session_id.clone(),
             pid,
@@ -192,6 +236,20 @@ where
             failure(status, error.to_string())
         }
     }
+}
+
+fn server_features_with_runtime_support(
+    process_signalling_supported: bool,
+    safe_file_transactions_supported: bool,
+) -> Vec<String> {
+    let mut features = supported_features();
+    if !process_signalling_supported {
+        features.retain(|feature| feature != FEATURE_AGENT_PROCESS_SIGNAL_V1);
+    }
+    if !safe_file_transactions_supported {
+        features.retain(|feature| feature != FEATURE_SAFE_FILE_TRANSACTIONS_V1);
+    }
+    features
 }
 
 /// Tracks an in-flight file write or delete so the async completion
@@ -777,7 +835,7 @@ impl ServerModel {
                 self.handle_run_command(req, &request_id, conn_id, ctx)
             }
             Some(client_message::Message::AgentProcessSignal(req)) => {
-                self.handle_agent_process_signal(req)
+                self.handle_agent_process_signal(req, &request_id, conn_id, ctx)
             }
             Some(client_message::Message::HostExec(req)) => {
                 self.handle_host_exec(req, &request_id, conn_id, ctx)
@@ -1131,11 +1189,14 @@ impl ServerModel {
             self.auth_token = Some(msg.auth_token);
         }
         let server_version = ChannelState::app_version().unwrap_or("").to_string();
-        let mut features = supported_features();
         #[cfg(unix)]
-        if !self.safe_files.is_available() {
-            features.retain(|feature| feature != FEATURE_SAFE_FILE_TRANSACTIONS_V1);
-        }
+        let safe_file_transactions_supported = self.safe_files.is_available();
+        #[cfg(not(unix))]
+        let safe_file_transactions_supported = false;
+        let features = server_features_with_runtime_support(
+            zaplex_cockpit::local_process_signalling_supported(),
+            safe_file_transactions_supported,
+        );
         HandlerOutcome::Sync(server_message::Message::InitializeResponse(
             InitializeResponse {
                 server_version,
@@ -1152,6 +1213,14 @@ impl ServerModel {
         self.connection_features
             .get(&conn_id)
             .is_some_and(|features| features.contains(FEATURE_AGENT_PTY_BINDING))
+    }
+
+    fn client_supports_agent_process_signal(&self, conn_id: ConnectionId) -> bool {
+        zaplex_cockpit::local_process_signalling_supported()
+            && self
+                .connection_features
+                .get(&conn_id)
+                .is_some_and(|features| features.contains(FEATURE_AGENT_PROCESS_SIGNAL_V1))
     }
 
     #[cfg(unix)]
@@ -1332,14 +1401,57 @@ impl ServerModel {
 
     /// Handles the narrow Agent-Cockpit process-signal RPC.
     ///
-    /// No command text reaches a shell or `HostExec`: the daemon maps the
-    /// protocol enum to [`GuardrailSignal`] and delegates only to
-    /// [`zaplex_cockpit::send_verified_process_signal`], which re-verifies the
-    /// process identity immediately before signalling.
-    fn handle_agent_process_signal(&mut self, req: AgentProcessSignalRequest) -> HandlerOutcome {
-        HandlerOutcome::Sync(server_message::Message::AgentProcessSignalResponse(
-            execute_agent_process_signal_with(req, zaplex_cockpit::send_verified_process_signal),
-        ))
+    /// The negotiated capability and a fresh daemon-local agent inventory must
+    /// bind the requested session id, pid, and fingerprint before dispatch.
+    /// No command text reaches a shell or `HostExec`: the daemon then delegates
+    /// only to [`zaplex_cockpit::send_verified_process_signal`], which re-verifies
+    /// the process identity immediately before signalling.
+    fn handle_agent_process_signal(
+        &mut self,
+        req: AgentProcessSignalRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let capability_negotiated = self.client_supports_agent_process_signal(conn_id);
+        if !capability_negotiated {
+            return HandlerOutcome::Sync(server_message::Message::AgentProcessSignalResponse(
+                execute_agent_process_signal_with(req, &[], false, |_, _, _| {
+                    unreachable!("capability rejection cannot dispatch a process signal")
+                }),
+            ));
+        }
+
+        let request_id_for_response = request_id.clone();
+        let transcript_cache = Arc::clone(&self.agent_transcript_cache);
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let mut cache = transcript_cache.lock().unwrap_or_else(|poisoned| {
+                    log::warn!(
+                        "Daemon: agent transcript cache mutex was poisoned; recovering its state"
+                    );
+                    poisoned.into_inner()
+                });
+                let current_sessions = collect_agent_sessions(&mut cache);
+                drop(cache);
+                execute_agent_process_signal_with(
+                    req,
+                    &current_sessions,
+                    true,
+                    zaplex_cockpit::send_verified_process_signal,
+                )
+            },
+            move |me, response, _ctx| {
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::AgentProcessSignalResponse(response),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
     }
 
     /// Handles `HostExec` — a **session-less** one-shot host command. Unlike

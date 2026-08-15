@@ -30,6 +30,8 @@ pub enum CredentialOperationError {
         failure: String,
         compensation_failures: Vec<String>,
     },
+    #[error("SSH delete impact changed for node {node_id}; confirmation must be refreshed")]
+    ImpactChanged { node_id: String },
 }
 
 impl From<DieselError> for CredentialOperationError {
@@ -38,39 +40,112 @@ impl From<DieselError> for CredentialOperationError {
     }
 }
 
-pub fn delete_node_and_secrets(
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeleteHostExpectation {
+    pub node_id: String,
+    pub auth_type: AuthType,
+    pub key_path: Option<String>,
+    pub credential_id: Option<String>,
+    pub secret_kinds: Vec<SecretKind>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeleteNodeExpectation {
+    pub node_id: String,
+    pub descendant_node_ids: Vec<String>,
+    pub hosts: Vec<DeleteHostExpectation>,
+}
+
+pub fn prepare_delete_node(
     conn: &mut SqliteConnection,
     store: &dyn SshSecretStore,
     node_id: &str,
-) -> Result<(), CredentialOperationError> {
+) -> Result<Option<DeleteNodeExpectation>, CredentialOperationError> {
     let nodes = SshRepository::list_nodes(conn)?;
     if !nodes.iter().any(|node| node.id == node_id) {
-        return Ok(());
+        return Ok(None);
     }
-    let owner_ids = descendant_server_ids(&nodes, node_id);
-    let snapshots = snapshot_secrets(store, &owner_ids)?;
-    let mut deleted = Vec::new();
-    for snapshot in snapshots.iter().filter(|snapshot| snapshot.value.is_some()) {
-        deleted.push(snapshot.clone());
-        if let Err(source) = store.delete(&snapshot.owner_id, snapshot.kind) {
-            return Err(compensation_error(
-                "delete SSH node",
-                format!(
-                    "keychain delete failed for {}/{:?}: {source}",
-                    snapshot.owner_id, snapshot.kind
-                ),
-                restore_secrets(store, &deleted),
-            ));
+    let mut descendant_node_ids = descendant_node_ids(&nodes, node_id);
+    descendant_node_ids.sort();
+    let mut hosts = Vec::new();
+    for descendant_id in &descendant_node_ids {
+        let Some(node) = nodes.iter().find(|node| node.id == *descendant_id) else {
+            continue;
+        };
+        if node.kind != NodeKind::Server {
+            continue;
         }
+        let server = SshRepository::get_server(conn, descendant_id)?
+            .ok_or_else(|| SshRepositoryError::NotFound(descendant_id.clone()))?;
+        hosts.push(DeleteHostExpectation {
+            node_id: descendant_id.clone(),
+            auth_type: server.auth_type,
+            key_path: server.key_path,
+            credential_id: server.credential_id,
+            secret_kinds: present_secret_kinds(store, descendant_id)?,
+        });
     }
-    if let Err(error) = SshRepository::delete_node(conn, node_id) {
-        return Err(compensation_error(
-            "delete SSH node",
-            error.to_string(),
-            restore_secrets(store, &deleted),
-        ));
-    }
-    Ok(())
+    hosts.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+    Ok(Some(DeleteNodeExpectation {
+        node_id: node_id.to_string(),
+        descendant_node_ids,
+        hosts,
+    }))
+}
+
+pub fn delete_node_and_secrets(
+    conn: &mut SqliteConnection,
+    store: &dyn SshSecretStore,
+    expected: &DeleteNodeExpectation,
+) -> Result<(), CredentialOperationError> {
+    // The transaction pins one SQLite snapshot from impact validation through
+    // repository deletion. Keychain changes remain explicitly compensated;
+    // this does not claim cross-store transactionality.
+    // Keep attempted deletions outside the closure so a COMMIT failure can
+    // restore them after Diesel returns the transaction error.
+    let mut deleted = Vec::new();
+    let result = conn.transaction::<(), CredentialOperationError, _>(|conn| {
+        let Some(current) = prepare_delete_node(conn, store, &expected.node_id)? else {
+            return Ok(());
+        };
+        if current != *expected {
+            return Err(CredentialOperationError::ImpactChanged {
+                node_id: expected.node_id.clone(),
+            });
+        }
+        let owner_ids = current
+            .hosts
+            .iter()
+            .map(|host| host.node_id.clone())
+            .collect::<Vec<_>>();
+        let snapshots = snapshot_secrets(store, &owner_ids)?;
+        for host in &current.hosts {
+            let secret_kinds = snapshots
+                .iter()
+                .filter(|snapshot| snapshot.owner_id == host.node_id && snapshot.value.is_some())
+                .map(|snapshot| snapshot.kind)
+                .collect::<Vec<_>>();
+            if secret_kinds != host.secret_kinds {
+                return Err(CredentialOperationError::ImpactChanged {
+                    node_id: expected.node_id.clone(),
+                });
+            }
+        }
+        for snapshot in snapshots.iter().filter(|snapshot| snapshot.value.is_some()) {
+            deleted.push(snapshot.clone());
+            store
+                .delete(&snapshot.owner_id, snapshot.kind)
+                .map_err(|source| CredentialOperationError::Secret {
+                    operation: "delete",
+                    owner_id: snapshot.owner_id.clone(),
+                    kind: snapshot.kind,
+                    source,
+                })?;
+        }
+        SshRepository::delete_node(conn, &expected.node_id)?;
+        Ok(())
+    });
+    finish_delete_transaction(store, &deleted, result)
 }
 
 pub fn clone_server_with_secrets(
@@ -428,7 +503,7 @@ struct SecretSnapshot {
     value: Option<Zeroizing<String>>,
 }
 
-fn descendant_server_ids(nodes: &[SshNode], root_id: &str) -> Vec<String> {
+fn descendant_node_ids(nodes: &[SshNode], root_id: &str) -> Vec<String> {
     let mut descendants = vec![root_id.to_string()];
     let mut index = 0;
     while index < descendants.len() {
@@ -443,11 +518,7 @@ fn descendant_server_ids(nodes: &[SshNode], root_id: &str) -> Vec<String> {
         }
         index += 1;
     }
-    nodes
-        .iter()
-        .filter(|node| node.kind == NodeKind::Server && descendants.contains(&node.id))
-        .map(|node| node.id.clone())
-        .collect()
+    descendants
 }
 
 fn snapshot_secrets(
@@ -474,6 +545,33 @@ fn snapshot_secrets(
         }
     }
     Ok(snapshots)
+}
+
+fn present_secret_kinds(
+    store: &dyn SshSecretStore,
+    owner_id: &str,
+) -> Result<Vec<SecretKind>, CredentialOperationError> {
+    Ok(snapshot_secrets(store, &[owner_id.to_string()])?
+        .into_iter()
+        .filter(|snapshot| snapshot.value.is_some())
+        .map(|snapshot| snapshot.kind)
+        .collect())
+}
+
+fn finish_delete_transaction(
+    store: &dyn SshSecretStore,
+    deleted: &[SecretSnapshot],
+    result: Result<(), CredentialOperationError>,
+) -> Result<(), CredentialOperationError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if deleted.is_empty() => Err(error),
+        Err(error) => Err(compensation_error(
+            "delete SSH node",
+            error.to_string(),
+            restore_secrets(store, deleted),
+        )),
+    }
 }
 
 fn restore_secrets(store: &dyn SshSecretStore, snapshots: &[SecretSnapshot]) -> Vec<String> {

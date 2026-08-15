@@ -147,6 +147,19 @@ fn has_immutable_object_token(identity: &StableEntryIdentity) -> bool {
     !identity.object_id.is_empty()
 }
 
+fn require_mutation_ready_remote_listing(
+    path: &Path,
+    identity: &StableEntryIdentity,
+) -> Result<(), SftpOpsError> {
+    if !has_immutable_object_token(identity) {
+        return Err(SftpOpsError::Operation(format!(
+            "Remote listing identity requires refresh before mutation at {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 fn same_immutable_object(expected: &StableEntryIdentity, actual: &StableEntryIdentity) -> bool {
     expected.file_type == actual.file_type
         && has_immutable_object_token(expected)
@@ -482,6 +495,36 @@ pub trait SftpBackend: Send + Sync {
         Ok(None)
     }
 
+    /// Resolves a listing identity to a live ownership handle. The default
+    /// requires the backend's current lstat identity to match exactly; remote
+    /// backends may additionally normalize legacy metadata-only listings.
+    fn ownership_anchor_for_listed_entry(
+        &self,
+        path: &Path,
+        expected: &StableEntryIdentity,
+    ) -> Result<Arc<dyn BackendOwnershipAnchor>, SftpOpsError> {
+        let current = self.lstat(path)?.identity;
+        if current != *expected {
+            return Err(SftpOpsError::Operation(format!(
+                "Listed entry identity changed at {}",
+                path.display()
+            )));
+        }
+        let anchor = self.existing_entry_ownership_anchor(path)?.ok_or_else(|| {
+            SftpOpsError::Operation(format!(
+                "Identity-bound mutation is unsupported for {}",
+                path.display()
+            ))
+        })?;
+        if anchor.identity()? != *expected || !anchor.matches_path(path)? {
+            return Err(SftpOpsError::Operation(format!(
+                "Listed entry ownership changed at {}",
+                path.display()
+            )));
+        }
+        Ok(anchor)
+    }
+
     /// Releases a backend-owned cleanup identity after it has been transferred
     /// into the process-wide recovery registry.
     fn forget_cleanup_recovery_identity(&self, _path: &Path) {}
@@ -552,6 +595,106 @@ pub trait SftpBackend: Send + Sync {
             old_path.display(),
             new_path.display()
         )))
+    }
+
+    /// Deletes a symbolic link through a no-follow ownership check.
+    fn delete_symlink_if_matches(
+        &self,
+        path: &Path,
+        _anchor: Arc<dyn BackendOwnershipAnchor>,
+    ) -> Result<(), SftpOpsError> {
+        Err(SftpOpsError::Operation(format!(
+            "Identity-bound symlink deletion is unsupported for {}",
+            path.display()
+        )))
+    }
+
+    /// Deletes the entry currently held by `anchor`, never whichever object a
+    /// reused source path happens to name later. The guarded rename is the
+    /// mutation boundary; deletion proceeds only from its unique quarantine.
+    fn delete_entry_if_matches(
+        &self,
+        path: &Path,
+        anchor: Arc<dyn BackendOwnershipAnchor>,
+        recursive: bool,
+    ) -> Result<(), SftpOpsError> {
+        let identity = anchor.identity()?;
+        match (identity.file_type, recursive) {
+            (FileEntryType::File, false)
+            | (FileEntryType::Directory, true)
+            | (FileEntryType::Symlink, false) => {}
+            (FileEntryType::Directory, false)
+            | (FileEntryType::File, true)
+            | (FileEntryType::Symlink, true)
+            | (FileEntryType::Other, false)
+            | (FileEntryType::Other, true) => {
+                return Err(SftpOpsError::Operation(format!(
+                    "Identity-bound delete type is unsupported at {}",
+                    path.display()
+                )));
+            }
+        }
+        match (identity.file_type, recursive) {
+            (FileEntryType::File, false) => {
+                let mut reader = self.open_file_reader(path)?;
+                let mut digest = Sha256::new();
+                let mut buffer = [0_u8; 64 * 1024];
+                loop {
+                    let read = reader.read_chunk(&mut buffer)?;
+                    if read == 0 {
+                        break;
+                    }
+                    digest.update(&buffer[..read]);
+                }
+                drop(reader);
+                if anchor.identity()? != identity || !anchor.matches_path(path)? {
+                    return Err(SftpOpsError::Operation(format!(
+                        "File ownership changed before deletion at {}",
+                        path.display()
+                    )));
+                }
+                self.delete_file_if_matches(path, &identity, &format!("{:x}", digest.finalize()))
+            }
+            (FileEntryType::Directory, true) => {
+                let entries = self.list_dir(path)?;
+                let mut children = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    validated_child_path(path, &entry)?;
+                    let child =
+                        self.ownership_anchor_for_listed_entry(&entry.path, &entry.identity)?;
+                    children.push((entry, child));
+                }
+                if !anchor.matches_path(path)? {
+                    return Err(SftpOpsError::Operation(format!(
+                        "Directory ownership changed before deletion at {}",
+                        path.display()
+                    )));
+                }
+                for (entry, child) in children {
+                    self.delete_entry_if_matches(
+                        &entry.path,
+                        child,
+                        entry.file_type == FileEntryType::Directory,
+                    )?;
+                }
+                if !anchor.matches_path(path)? {
+                    return Err(SftpOpsError::Operation(format!(
+                        "Directory ownership changed before final deletion at {}",
+                        path.display()
+                    )));
+                }
+                self.delete_empty_dir_if_matches(path, &identity)
+            }
+            (FileEntryType::Symlink, false) => self.delete_symlink_if_matches(path, anchor),
+            (FileEntryType::Directory, false)
+            | (FileEntryType::File, true)
+            | (FileEntryType::Symlink, true)
+            | (FileEntryType::Other, false)
+            | (FileEntryType::Other, true) => Err(SftpOpsError::Operation(format!(
+                "Identity-bound delete type changed at {}",
+                path.display()
+            ))),
+        }
     }
 
     /// Atomically exchanges two existing paths.
@@ -852,6 +995,11 @@ fn open_local_cleanup_anchor(path: &Path) -> Result<fs::File, SftpOpsError> {
     }
     #[cfg(not(target_os = "linux"))]
     {
+        #[cfg(target_os = "macos")]
+        options
+            .read(true)
+            .custom_flags(libc::O_SYMLINK | libc::O_NOFOLLOW);
+        #[cfg(not(target_os = "macos"))]
         options.read(true).custom_flags(libc::O_NOFOLLOW);
     }
     options.open(path).map_err(|error| {
@@ -1619,8 +1767,9 @@ fn safe_kind(file_type: FileEntryType) -> Result<SafeFileEntryKind, SftpOpsError
     match file_type {
         FileEntryType::File => Ok(SafeFileEntryKind::Regular),
         FileEntryType::Directory => Ok(SafeFileEntryKind::Directory),
-        FileEntryType::Symlink | FileEntryType::Other => Err(SftpOpsError::Operation(
-            "Secure remote file transactions refuse links and special files".to_string(),
+        FileEntryType::Symlink => Ok(SafeFileEntryKind::Symlink),
+        FileEntryType::Other => Err(SftpOpsError::Operation(
+            "Secure remote file transactions refuse special files".to_string(),
         )),
     }
 }
@@ -1629,6 +1778,7 @@ fn stable_identity_from_safe(identity: SafeFileIdentity) -> StableEntryIdentity 
     let file_type = match SafeFileEntryKind::try_from(identity.kind).ok() {
         Some(SafeFileEntryKind::Regular) => FileEntryType::File,
         Some(SafeFileEntryKind::Directory) => FileEntryType::Directory,
+        Some(SafeFileEntryKind::Symlink) => FileEntryType::Symlink,
         Some(SafeFileEntryKind::Unspecified) | None => FileEntryType::Other,
     };
     StableEntryIdentity {
@@ -2000,6 +2150,30 @@ impl SftpBackend for LiveSftpBackend {
             .map(|handle| Some(handle as Arc<dyn BackendOwnershipAnchor>))
     }
 
+    fn ownership_anchor_for_listed_entry(
+        &self,
+        path: &Path,
+        expected: &StableEntryIdentity,
+    ) -> Result<Arc<dyn BackendOwnershipAnchor>, SftpOpsError> {
+        require_mutation_ready_remote_listing(path, expected)?;
+        let raw_before = stable_identity_from_remote_metadata(&self.sftp.lstat(path)?);
+        let expected_kind = raw_before.file_type;
+        let anchor = self.open_safe_handle(path, expected_kind)?;
+        let normalized = anchor.identity()?;
+        let raw_after = stable_identity_from_remote_metadata(&self.sftp.lstat(path)?);
+        if raw_before.file_type != expected.file_type
+            || raw_after.file_type != expected.file_type
+            || normalized != *expected
+            || !anchor.matches_path(path)?
+        {
+            return Err(SftpOpsError::Operation(format!(
+                "Listed remote entry identity changed at {}",
+                path.display()
+            )));
+        }
+        Ok(anchor as Arc<dyn BackendOwnershipAnchor>)
+    }
+
     fn preflight_safe_mutation(
         &self,
         path: &Path,
@@ -2014,7 +2188,18 @@ impl SftpBackend for LiveSftpBackend {
     }
 
     fn list_dir(&self, path: &Path) -> Result<Vec<FileEntry>, SftpOpsError> {
-        sftp_ops::list_dir(&self.sftp, path)
+        let mut entries = sftp_ops::list_dir(&self.sftp, path)?;
+        if self.safe_files.is_available() {
+            for entry in &mut entries {
+                if matches!(
+                    entry.file_type,
+                    FileEntryType::File | FileEntryType::Directory | FileEntryType::Symlink
+                ) {
+                    entry.identity = self.stable_identity(&entry.path)?;
+                }
+            }
+        }
+        Ok(entries)
     }
 
     fn delete_file(&self, path: &Path) -> Result<(), SftpOpsError> {
@@ -2080,6 +2265,21 @@ impl SftpBackend for LiveSftpBackend {
             None,
             source_is_owned_artifact,
         )
+    }
+
+    fn delete_symlink_if_matches(
+        &self,
+        path: &Path,
+        anchor: Arc<dyn BackendOwnershipAnchor>,
+    ) -> Result<(), SftpOpsError> {
+        let expected = anchor.identity()?;
+        if expected.file_type != FileEntryType::Symlink || !anchor.matches_path(path)? {
+            return Err(SftpOpsError::Operation(format!(
+                "Remote symlink ownership changed at {}",
+                path.display()
+            )));
+        }
+        self.delete_empty_dir_if_matches(path, &expected)
     }
 
     fn replace(&self, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
@@ -2262,7 +2462,7 @@ impl SftpBackend for LiveSftpBackend {
         if self.safe_files.is_available()
             && matches!(
                 entry.file_type,
-                FileEntryType::File | FileEntryType::Directory
+                FileEntryType::File | FileEntryType::Directory | FileEntryType::Symlink
             )
         {
             entry.identity = self.stable_identity(path)?;
@@ -2282,12 +2482,7 @@ impl SftpBackend for LiveSftpBackend {
         let kind = match metadata.file_type {
             zap_sftp::types::FileType::File => FileEntryType::File,
             zap_sftp::types::FileType::Dir => FileEntryType::Directory,
-            zap_sftp::types::FileType::Symlink => {
-                return Err(SftpOpsError::Operation(format!(
-                    "Refusing to identify remote symbolic link {}",
-                    path.display()
-                )))
-            }
+            zap_sftp::types::FileType::Symlink => FileEntryType::Symlink,
             zap_sftp::types::FileType::Other => {
                 return Err(SftpOpsError::Operation(format!(
                     "Refusing to identify remote special file {}",
@@ -2679,8 +2874,7 @@ impl BackendOwnershipAnchor for LocalOwnershipAnchor {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
                 Err(error) => return Err(error.into()),
             };
-            Ok(!current.file_type().is_symlink()
-                && anchored.dev() == current.dev()
+            Ok(anchored.dev() == current.dev()
                 && anchored.ino() == current.ino()
                 && anchored.file_type() == current.file_type())
         }
@@ -5934,7 +6128,11 @@ impl InMemorySftpBackend {
             });
         }
         self.transition_exchange_phase(&exchange_path, PersistentExchangePhase::Applied)?;
-        if identity.file_type == FileEntryType::File && anchor.link_count()? != Some(1) {
+        if matches!(
+            identity.file_type,
+            FileEntryType::File | FileEntryType::Symlink
+        ) && anchor.link_count()? != Some(1)
+        {
             return Err(SftpOpsError::RecoveryRequired {
                 message: format!(
                     "Public cleanup placeholder gained another hardlink before private deletion at {}",
@@ -5982,7 +6180,9 @@ impl InMemorySftpBackend {
         let local_tombstone = self.to_local(&tombstone)?;
         self.persist_artifact_intent(&tombstone)?;
         let placeholder_file = match identity.file_type {
-            FileEntryType::File => open_confined_new_file(&self.root, &tombstone)?,
+            FileEntryType::File | FileEntryType::Symlink => {
+                open_confined_new_file(&self.root, &tombstone)?
+            }
             FileEntryType::Directory => create_local_directory_with_anchor(
                 &local_tombstone,
                 #[cfg(test)]
@@ -5995,7 +6195,7 @@ impl InMemorySftpBackend {
                     error.source
                 ))
             })?,
-            FileEntryType::Symlink | FileEntryType::Other => {
+            FileEntryType::Other => {
                 return Err(SftpOpsError::Operation(format!(
                     "Unsupported isolation placeholder at {}",
                     path.display()
@@ -6191,7 +6391,7 @@ impl InMemorySftpBackend {
             });
         }
         let directory_entry = match identity.file_type {
-            FileEntryType::File => false,
+            FileEntryType::File | FileEntryType::Symlink => false,
             FileEntryType::Directory => {
                 if fs::read_dir(&local_tombstone)?.next().is_some() {
                     return Err(SftpOpsError::RecoveryRequired {
@@ -6206,7 +6406,7 @@ impl InMemorySftpBackend {
                 }
                 true
             }
-            FileEntryType::Symlink | FileEntryType::Other => {
+            FileEntryType::Other => {
                 return Err(SftpOpsError::Operation(format!(
                     "Unsupported isolation placeholder at {}",
                     tombstone.display()
@@ -6232,7 +6432,7 @@ impl InMemorySftpBackend {
                 .path
                 .join(format!(".placeholder-cleanup-{}", uuid::Uuid::new_v4()));
             let private_sentinel_file = match identity.file_type {
-                FileEntryType::File => {
+                FileEntryType::File | FileEntryType::Symlink => {
                     let mut options = fs::OpenOptions::new();
                     options.read(true).write(true).create_new(true);
                     use std::os::unix::fs::OpenOptionsExt;
@@ -6245,7 +6445,7 @@ impl InMemorySftpBackend {
                     None,
                 )
                 .map_err(|error| error.source)?,
-                FileEntryType::Symlink | FileEntryType::Other => unreachable!(),
+                FileEntryType::Other => unreachable!(),
             };
             let private_sentinel_anchor: Arc<dyn BackendOwnershipAnchor> =
                 Arc::new(LocalOwnershipAnchor {
@@ -10409,7 +10609,9 @@ impl SftpBackend for InMemorySftpBackend {
         let new_is_artifact = self.persist_artifact_intent(new_path)?;
         let source_identity = anchor.identity()?;
         let placeholder_file = match source_identity.file_type {
-            FileEntryType::File => open_confined_new_file(&self.root, new_path)?,
+            FileEntryType::File | FileEntryType::Symlink => {
+                open_confined_new_file(&self.root, new_path)?
+            }
             FileEntryType::Directory => create_local_directory_with_anchor(
                 &new_local,
                 #[cfg(test)]
@@ -10422,7 +10624,7 @@ impl SftpBackend for InMemorySftpBackend {
                     error.source
                 ))
             })?,
-            FileEntryType::Symlink | FileEntryType::Other => {
+            FileEntryType::Other => {
                 return Err(SftpOpsError::Operation(format!(
                     "Identity-bound isolation is unsupported for {:?} at {}",
                     source_identity.file_type,
@@ -10596,6 +10798,41 @@ impl SftpBackend for InMemorySftpBackend {
         }
         self.release_persistent_artifact(old_path)?;
         Ok(())
+    }
+
+    fn delete_symlink_if_matches(
+        &self,
+        path: &Path,
+        anchor: Arc<dyn BackendOwnershipAnchor>,
+    ) -> Result<(), SftpOpsError> {
+        let identity = anchor.identity()?;
+        if identity.file_type != FileEntryType::Symlink || !anchor.matches_path(path)? {
+            return Err(SftpOpsError::Operation(format!(
+                "Symlink ownership changed before isolation at {}",
+                path.display()
+            )));
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "link".to_string());
+        let quarantine = path.with_file_name(format!(
+            ".{name}.zaplex-delete-symlink-{}",
+            uuid::Uuid::new_v4()
+        ));
+        self.rename_if_matches(path, &quarantine, anchor.clone())?;
+        if !anchor.matches_path(&quarantine)? {
+            return Err(SftpOpsError::RecoveryRequired {
+                message: format!(
+                    "Deleted symlink ownership became indeterminate at {}",
+                    path.display()
+                ),
+                recovery_id: None,
+                paths: vec![path.to_path_buf(), quarantine],
+                committed: false,
+            });
+        }
+        self.cleanup_isolation_placeholder(&quarantine, anchor, &identity)
     }
 
     fn replace(&self, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {

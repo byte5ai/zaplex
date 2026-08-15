@@ -808,6 +808,7 @@ fn test_confirm_delete_no_connection_with_dialog() {
 
         view.update(&mut app, |view, ctx| {
             view.dialog = Some(Dialog::DeleteConfirm {
+                entries: vec![test_entry_reference(0)],
                 paths: vec![PathBuf::from("/tmp/test")],
                 is_dirs: vec![false],
             });
@@ -846,6 +847,7 @@ fn test_confirm_rename_no_connection_with_dialog() {
 
         view.update(&mut app, |view, ctx| {
             view.dialog = Some(Dialog::Rename {
+                entry: test_entry_reference(0),
                 path: PathBuf::from("/home/old.txt"),
                 original_name: "old.txt".to_string(),
             });

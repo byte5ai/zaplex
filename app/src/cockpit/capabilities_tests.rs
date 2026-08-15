@@ -59,14 +59,17 @@ fn missing_process_fingerprint_disables_signal_fail_closed() {
 }
 
 #[test]
-fn a_fingerprinted_pid_is_signalable_independent_of_host_locality() {
+fn a_fingerprinted_pid_requires_local_platform_support() {
     let mut session = session(Provider::Claude, SessionState::Active, 4242);
     session.process_fingerprint = Some("linux-v1:boot:start".to_string());
 
-    assert!(SessionCapabilities::of(&session, true).can_signal);
+    assert_eq!(
+        SessionCapabilities::of(&session, true).can_signal,
+        zaplex_cockpit::local_process_signalling_supported()
+    );
     assert!(
         SessionCapabilities::of(&session, false).can_signal,
-        "remote capability negotiation happens in the signal path, not here"
+        "the remote daemon checks support on the process's actual host"
     );
 }
 

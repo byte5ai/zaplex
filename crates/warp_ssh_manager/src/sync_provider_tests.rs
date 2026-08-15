@@ -279,10 +279,12 @@ fn sync_failure_preserves_recoverable_state() {
             .as_deref(),
         Some("old-password")
     );
-    assert!(store
-        .get("server", SecretKind::Passphrase)
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .get("server", SecretKind::Passphrase)
+            .unwrap()
+            .is_none()
+    );
 
     // Retrying the compensation must converge on the same pre-sync state.
     assert!(rollback_keychain_writes(&store, &mutations).is_empty());
@@ -293,10 +295,12 @@ fn sync_failure_preserves_recoverable_state() {
             .as_deref(),
         Some("old-password")
     );
-    assert!(store
-        .get("server", SecretKind::Passphrase)
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .get("server", SecretKind::Passphrase)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

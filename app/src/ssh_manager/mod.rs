@@ -32,6 +32,7 @@ fn credential_operation_message(error: &anyhow::Error) -> String {
     };
     match error {
         CredentialOperationError::Repository(_) => crate::t!("common-error"),
+        CredentialOperationError::ImpactChanged { .. } => crate::t!("common-retry"),
         CredentialOperationError::Secret { source, .. } => {
             crate::t!("ssh-keychain-error", err = source.to_string())
         }

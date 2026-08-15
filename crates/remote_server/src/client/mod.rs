@@ -229,7 +229,7 @@ impl RemoteServerClient {
             request_id: request_id.to_string(),
             message: Some(client_message::Message::Initialize(Initialize {
                 auth_token: auth_token.unwrap_or_default().to_owned(),
-                features: zaplex_remote_session::types::supported_features(),
+                features: zaplex_remote_session::types::supported_client_features(),
             })),
         };
 

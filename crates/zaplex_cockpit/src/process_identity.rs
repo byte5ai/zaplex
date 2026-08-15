@@ -6,16 +6,15 @@
 //!
 //! Linux fingerprints a process with the current boot id plus the raw start
 //! ticks from `/proc/<pid>/stat`. Signalling uses a pidfd so the process cannot
-//! change between the identity check and `pidfd_send_signal`. macOS uses the
-//! microsecond process start time from `proc_pidinfo` and checks it immediately
-//! before `kill`. Unsupported or unreadable identity always fails closed.
+//! change between the identity check and `pidfd_send_signal`. macOS has no
+//! equivalent process-bound signalling primitive, so local signalling is not
+//! offered there. Unsupported or unreadable identity always fails closed.
 
-use std::fmt;
+use std::{fmt, sync::OnceLock};
 
 use crate::guardrails::{pid_signalable, GuardrailSignal};
 
 const LINUX_FINGERPRINT_VERSION: &str = "linux-v1";
-const MACOS_FINGERPRINT_VERSION: &str = "macos-v1";
 
 /// Result of probing one registry pid during discovery.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,11 +57,67 @@ impl fmt::Display for ProcessSignalError {
 
 impl std::error::Error for ProcessSignalError {}
 
+/// Whether this host can signal a process through an identity-bound target.
+///
+/// Linux support is probed once because old kernels or a seccomp policy can
+/// reject the pidfd syscalls even when the binary compiled successfully.
+pub fn local_process_signalling_supported() -> bool {
+    static SUPPORTED: OnceLock<bool> = OnceLock::new();
+    *SUPPORTED.get_or_init(|| process_signalling_supported_with(probe_linux_pidfd_signal_support))
+}
+
+fn process_signalling_supported_with(probe: impl FnOnce() -> bool) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        probe()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = probe;
+        false
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn probe_linux_pidfd_signal_support() -> bool {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    // SAFETY: the current process id is positive and flags must be zero.
+    let raw_fd = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_open,
+            std::process::id() as libc::pid_t,
+            0 as libc::c_uint,
+        )
+    };
+    if raw_fd < 0 {
+        return false;
+    }
+    // SAFETY: a successful pidfd_open returns a new owned file descriptor.
+    let pidfd = unsafe { OwnedFd::from_raw_fd(raw_fd as libc::c_int) };
+    // SAFETY: signal 0 performs only permission/existence validation. It has
+    // no signal effect; siginfo is null and flags must be zero.
+    unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            pidfd.as_raw_fd(),
+            0,
+            std::ptr::null::<libc::siginfo_t>(),
+            0 as libc::c_uint,
+        ) == 0
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn probe_linux_pidfd_signal_support() -> bool {
+    false
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreciseProcessStart {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Linux { ticks: u64 },
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[allow(dead_code)]
     MacOs { seconds: u64, microseconds: u64 },
 }
 
@@ -78,13 +133,7 @@ pub fn current_process_fingerprint(pid: u32) -> Option<String> {
             let boot_id = linux_boot_id()?;
             Some(linux_fingerprint(&boot_id, ticks))
         }
-        PreciseProcessStart::MacOs {
-            seconds,
-            microseconds,
-        } => {
-            let boot_time = system_boot_time()?;
-            Some(macos_fingerprint(boot_time, seconds, microseconds))
-        }
+        PreciseProcessStart::MacOs { .. } => None,
     }
 }
 
@@ -143,20 +192,8 @@ pub fn probe_registered_process(
         {
             linux_boot_id().map(|boot_id| linux_fingerprint(&boot_id, ticks))
         }
-        PreciseProcessStart::MacOs {
-            seconds,
-            microseconds,
-        } if macos_registry_binding_matches(
-            registry_proc_start,
-            seconds,
-            microseconds,
-            registry_started_at_millis,
-            boot_time,
-        ) =>
-        {
-            Some(macos_fingerprint(boot_time, seconds, microseconds))
-        }
-        PreciseProcessStart::Linux { .. } | PreciseProcessStart::MacOs { .. } => None,
+        PreciseProcessStart::MacOs { .. } => None,
+        PreciseProcessStart::Linux { .. } => None,
     };
 
     ProcessProbe { alive, fingerprint }
@@ -165,35 +202,63 @@ pub fn probe_registered_process(
 /// Sends a guardrail signal only to the process identified by `expected`.
 ///
 /// Linux opens a pidfd before re-reading the fingerprint and sends through that
-/// descriptor, closing the pid-reuse race completely. macOS has no pidfd, so it
-/// performs the precise `proc_pidinfo` re-probe immediately before `kill`.
+/// descriptor, closing the pid-reuse race completely. Platforms without an
+/// identity-bound signalling primitive return [`ProcessSignalError::UnsupportedPlatform`].
 pub fn send_verified_process_signal(
     pid: u32,
     expected: &str,
     signal: GuardrailSignal,
 ) -> Result<(), ProcessSignalError> {
-    if !pid_signalable(pid) {
-        return Err(ProcessSignalError::InvalidPid);
-    }
-    if expected.is_empty() {
-        return Err(ProcessSignalError::IdentityUnavailable(
-            "the discovery fingerprint is empty".to_string(),
-        ));
-    }
-
     #[cfg(target_os = "linux")]
     {
         return send_verified_linux_signal(pid, expected, signal);
     }
     #[cfg(target_os = "macos")]
     {
-        return send_verified_macos_signal(pid, expected, signal);
+        validate_signal_request(pid, expected)?;
+        let _ = signal;
+        return Err(ProcessSignalError::UnsupportedPlatform);
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (pid, expected, signal);
+        validate_signal_request(pid, expected)?;
+        let _ = signal;
         Err(ProcessSignalError::UnsupportedPlatform)
     }
+}
+
+fn validate_signal_request(pid: u32, expected: &str) -> Result<(), ProcessSignalError> {
+    if !pid_signalable(pid) {
+        return Err(ProcessSignalError::InvalidPid);
+    }
+    if expected.trim().is_empty() {
+        return Err(ProcessSignalError::IdentityUnavailable(
+            "the discovery fingerprint is empty".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Re-probes a process identity and reaches `dispatch` only on an exact match.
+///
+/// `acquire` returns an identity-bound target together with the fingerprint
+/// observed while acquiring it. On Linux that target is a pidfd; tests inject
+/// a harmless token and a spy dispatcher to prove every rejection fails closed.
+fn send_verified_process_signal_with<T>(
+    pid: u32,
+    expected: &str,
+    signal: GuardrailSignal,
+    acquire: impl FnOnce(u32) -> Result<(T, String), ProcessSignalError>,
+    dispatch: impl FnOnce(T, GuardrailSignal) -> Result<(), ProcessSignalError>,
+) -> Result<(), ProcessSignalError> {
+    validate_signal_request(pid, expected)?;
+
+    let (target, observed) = acquire(pid)?;
+    if observed != expected {
+        return Err(ProcessSignalError::IdentityChanged);
+    }
+
+    dispatch(target, signal)
 }
 
 #[cfg(target_os = "linux")]
@@ -204,71 +269,52 @@ fn send_verified_linux_signal(
 ) -> Result<(), ProcessSignalError> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
-    // SAFETY: pid and flags match pidfd_open(2). `pid_signalable` above has
-    // already guaranteed a positive value that fits pid_t.
-    let raw_fd =
-        unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0 as libc::c_uint) };
-    if raw_fd < 0 {
-        return Err(ProcessSignalError::IdentityUnavailable(
-            std::io::Error::last_os_error().to_string(),
-        ));
-    }
-    // SAFETY: a successful pidfd_open returns a new owned file descriptor.
-    let pidfd = unsafe { OwnedFd::from_raw_fd(raw_fd as libc::c_int) };
-
-    let observed = current_process_fingerprint(pid).ok_or_else(|| {
-        ProcessSignalError::IdentityUnavailable(
-            "the current process fingerprint could not be read".to_string(),
-        )
-    })?;
-    if observed != expected {
-        return Err(ProcessSignalError::IdentityChanged);
-    }
-
-    // SAFETY: pidfd is owned and valid, the signal is one of the two guardrail
-    // signals, siginfo is intentionally null, and flags must be zero.
-    let rc = unsafe {
-        libc::syscall(
-            libc::SYS_pidfd_send_signal,
-            pidfd.as_raw_fd(),
-            signal.signal_number(),
-            std::ptr::null::<libc::siginfo_t>(),
-            0 as libc::c_uint,
-        )
-    };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(ProcessSignalError::SignalFailed(
-            std::io::Error::last_os_error().to_string(),
-        ))
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn send_verified_macos_signal(
-    pid: u32,
-    expected: &str,
-    signal: GuardrailSignal,
-) -> Result<(), ProcessSignalError> {
-    let observed = current_process_fingerprint(pid).ok_or_else(|| {
-        ProcessSignalError::IdentityUnavailable(
-            "the current process fingerprint could not be read".to_string(),
-        )
-    })?;
-    if observed != expected {
-        return Err(ProcessSignalError::IdentityChanged);
-    }
-
-    // SAFETY: pid is a validated positive pid_t and signal is SIGINT/SIGKILL.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, signal.signal_number()) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(ProcessSignalError::SignalFailed(
-            std::io::Error::last_os_error().to_string(),
-        ))
-    }
+    send_verified_process_signal_with(
+        pid,
+        expected,
+        signal,
+        |pid| {
+            // SAFETY: pid and flags match pidfd_open(2). The shared verifier
+            // has guaranteed a positive value that fits pid_t before calling
+            // this acquisition closure.
+            let raw_fd = unsafe {
+                libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0 as libc::c_uint)
+            };
+            if raw_fd < 0 {
+                return Err(ProcessSignalError::IdentityUnavailable(
+                    std::io::Error::last_os_error().to_string(),
+                ));
+            }
+            // SAFETY: a successful pidfd_open returns a new owned file descriptor.
+            let pidfd = unsafe { OwnedFd::from_raw_fd(raw_fd as libc::c_int) };
+            let observed = current_process_fingerprint(pid).ok_or_else(|| {
+                ProcessSignalError::IdentityUnavailable(
+                    "the current process fingerprint could not be read".to_string(),
+                )
+            })?;
+            Ok((pidfd, observed))
+        },
+        |pidfd, signal| {
+            // SAFETY: pidfd is owned and valid, the signal is one of the two
+            // guardrail signals, siginfo is intentionally null, and flags are zero.
+            let rc = unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    pidfd.as_raw_fd(),
+                    signal.signal_number(),
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0 as libc::c_uint,
+                )
+            };
+            if rc == 0 {
+                Ok(())
+            } else {
+                Err(ProcessSignalError::SignalFailed(
+                    std::io::Error::last_os_error().to_string(),
+                ))
+            }
+        },
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -347,10 +393,6 @@ fn linux_fingerprint(boot_id: &str, ticks: u64) -> String {
     format!("{LINUX_FINGERPRINT_VERSION}:{boot_id}:{ticks}")
 }
 
-fn macos_fingerprint(boot_time: u64, seconds: u64, microseconds: u64) -> String {
-    format!("{MACOS_FINGERPRINT_VERSION}:{boot_time}:{seconds}:{microseconds}")
-}
-
 fn registration_is_from_current_boot(started_at_millis: i64, boot_time: u64) -> bool {
     started_at_millis > 0 && i128::from(started_at_millis) >= i128::from(boot_time) * 1_000
 }
@@ -363,28 +405,6 @@ fn linux_registry_binding_matches(
 ) -> bool {
     registration_is_from_current_boot(started_at_millis, boot_time)
         && registry_proc_start.trim().parse::<u64>().ok() == Some(ticks)
-}
-
-fn parse_macos_registry_start(value: &str) -> Option<i64> {
-    chrono::NaiveDateTime::parse_from_str(value.trim(), "%a %b %e %H:%M:%S %Y")
-        .ok()
-        .map(|value| value.and_utc().timestamp())
-}
-
-fn macos_registry_binding_matches(
-    registry_proc_start: &str,
-    seconds: u64,
-    microseconds: u64,
-    started_at_millis: i64,
-    boot_time: u64,
-) -> bool {
-    if !registration_is_from_current_boot(started_at_millis, boot_time)
-        || parse_macos_registry_start(registry_proc_start) != i64::try_from(seconds).ok()
-    {
-        return false;
-    }
-    let process_start_micros = i128::from(seconds) * 1_000_000 + i128::from(microseconds);
-    process_start_micros <= i128::from(started_at_millis) * 1_000
 }
 
 fn parse_linux_proc_start(stat: &str) -> Option<u64> {
