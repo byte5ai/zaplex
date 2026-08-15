@@ -177,8 +177,6 @@ pub enum SettingsSection {
     WarpAgent,
     AgentProfiles,
     AgentMCPServers,
-    /// Custom AI provider configuration (BYOP), Providers subpage in Agents secondary menu.
-    AgentProviders,
     Knowledge,
     ThirdPartyCLIAgents,
     /// Global HTTP proxy settings page. Gated by `FeatureFlag::HttpProxySettings`.
@@ -212,7 +210,6 @@ impl Display for SettingsSection {
             SettingsSection::WarpAgent => crate::t!("settings-section-warp-agent"),
             SettingsSection::AgentProfiles => crate::t!("settings-section-agent-profiles"),
             SettingsSection::AgentMCPServers => crate::t!("settings-section-agent-mcp-servers"),
-            SettingsSection::AgentProviders => crate::t!("settings-section-agent-providers"),
             SettingsSection::Knowledge => crate::t!("settings-section-knowledge"),
             SettingsSection::ThirdPartyCLIAgents => {
                 crate::t!("settings-section-third-party-cli-agents")
@@ -244,7 +241,6 @@ impl SettingsSection {
             Self::WarpAgent
                 | Self::AgentProfiles
                 | Self::AgentMCPServers
-                | Self::AgentProviders
                 | Self::Knowledge
                 | Self::ThirdPartyCLIAgents
         )
@@ -271,7 +267,6 @@ impl SettingsSection {
         &[
             Self::WarpAgent,
             Self::AgentProfiles,
-            Self::AgentProviders,
             Self::AgentMCPServers,
             Self::Knowledge,
             Self::ThirdPartyCLIAgents,
@@ -297,7 +292,7 @@ impl FromStr for SettingsSection {
             "Oz" | "Zaplex Agent" => Ok(Self::WarpAgent),
             "Profiles" | "AgentProfiles" => Ok(Self::AgentProfiles),
             "MCP servers" | "AgentMCPServers" => Ok(Self::AgentMCPServers),
-            "Providers" | "AgentProviders" => Ok(Self::AgentProviders),
+            "Providers" | "AgentProviders" => Ok(Self::WarpAgent),
             "Knowledge" => Ok(Self::Knowledge),
             "Third party CLI agents" | "ThirdPartyCLIAgents" => Ok(Self::ThirdPartyCLIAgents),
             "Editor and Code Review" | "EditorAndCodeReview" => Ok(Self::EditorAndCodeReview),

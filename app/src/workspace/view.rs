@@ -19456,6 +19456,161 @@ impl Workspace {
     /// (agent, model, effort, account, host, project) into a routed launch.
     fn handle_spawn_card_event(&mut self, event: &SpawnCardEvent, ctx: &mut ViewContext<Self>) {
         match event {
+            #[cfg(not(target_family = "wasm"))]
+            SpawnCardEvent::DiscoverModels {
+                generation,
+                agent,
+                config_dir,
+                node_id,
+                host_name,
+                working_directory,
+            } => {
+                let generation = *generation;
+                let agent = *agent;
+                let config_dir = config_dir.clone();
+                let node_id = node_id.clone();
+                let host_name = host_name.clone();
+                let working_directory = working_directory.clone();
+                let account_name = if node_id.is_some() {
+                    format!("{host_name} login")
+                } else {
+                    Self::account_email_for_route(agent, config_dir.as_deref(), &*ctx)
+                        .unwrap_or_else(|| {
+                            config_dir
+                                .as_ref()
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_else(|| "Default subscription".to_string())
+                        })
+                };
+                let location = match node_id.as_deref() {
+                    Some(node_id) => warp_ssh_manager::with_conn(|connection| {
+                        let server =
+                            warp_ssh_manager::SshRepository::get_server(connection, node_id)?
+                                .ok_or_else(|| {
+                                    warp_ssh_manager::SshRepositoryError::NotFound(
+                                        node_id.to_string(),
+                                    )
+                                })?;
+                        Ok(crate::ai::subscription_agent::ProcessLocation::Remote {
+                            ssh_argv: warp_ssh_manager::ssh_command::build_ssh_args(&server),
+                        })
+                    })
+                    .map_err(|error| error.to_string()),
+                    None => Ok(crate::ai::subscription_agent::ProcessLocation::Local),
+                };
+                let executable = if node_id.is_some() {
+                    PathBuf::from(agent.command_prefix())
+                } else {
+                    match crate::util::path::resolve_executable(agent.command_prefix()) {
+                        Some(path) => path.into_owned(),
+                        None => {
+                            self.spawn_card.update(ctx, |card, ctx| {
+                                card.apply_model_capabilities(
+                                    agent,
+                                    generation,
+                                    Err(format!(
+                                        "{} executable is no longer available",
+                                        agent.display_name()
+                                    )),
+                                    ctx,
+                                );
+                            });
+                            return;
+                        }
+                    }
+                };
+                let subscription_agent = match agent {
+                    CLIAgent::Claude => {
+                        crate::ai::subscription_agent::SubscriptionAgent::ClaudeCode
+                    }
+                    CLIAgent::Codex => crate::ai::subscription_agent::SubscriptionAgent::Codex,
+                    CLIAgent::Gemini
+                    | CLIAgent::Amp
+                    | CLIAgent::Droid
+                    | CLIAgent::OpenCode
+                    | CLIAgent::Copilot
+                    | CLIAgent::Pi
+                    | CLIAgent::Auggie
+                    | CLIAgent::CursorCli
+                    | CLIAgent::Goose
+                    | CLIAgent::DeepSeek
+                    | CLIAgent::Antigravity
+                    | CLIAgent::Grok
+                    | CLIAgent::Unknown => return,
+                };
+                let installation = crate::ai::subscription_agent::InstallationIdentity {
+                    agent: subscription_agent,
+                    host: crate::ai::subscription_agent::HostIdentity {
+                        id: node_id.clone().unwrap_or_else(|| "local".to_string()),
+                        display_name: host_name,
+                    },
+                    account: crate::ai::subscription_agent::AccountIdentity {
+                        id: account_name.clone(),
+                        display_name: account_name,
+                        config_dir,
+                    },
+                    executable,
+                    version: String::new(),
+                };
+                let discovery = async move {
+                    let location = location.map_err(anyhow::Error::msg)?;
+                    let version = crate::ai::subscription_agent::query_cli_version(
+                        &installation,
+                        working_directory.clone(),
+                        location.clone(),
+                    )
+                    .await?;
+                    let installation =
+                        crate::ai::subscription_agent::InstallationIdentity {
+                            version,
+                            ..installation
+                        };
+                    crate::ai::subscription_agent::discover_capabilities(
+                        installation,
+                        working_directory,
+                        location,
+                    )
+                    .await
+                    .map(|capability| capability.models)
+                };
+                let discovery_with_timeout = async move {
+                    match futures_util::future::select(
+                        Box::pin(discovery),
+                        Box::pin(warpui::r#async::Timer::after(Duration::from_secs(15))),
+                    )
+                    .await
+                    {
+                        futures_util::future::Either::Left((result, _)) => result,
+                        futures_util::future::Either::Right((_, _)) => {
+                            Err(anyhow::anyhow!("Model discovery timed out after 15 seconds"))
+                        }
+                    }
+                };
+                ctx.spawn(discovery_with_timeout, move |workspace, result, ctx| {
+                    workspace.spawn_card.update(ctx, |card, ctx| {
+                        card.apply_model_capabilities(
+                            agent,
+                            generation,
+                            result.map_err(|error| error.to_string()),
+                            ctx,
+                        );
+                    });
+                });
+            }
+            #[cfg(target_family = "wasm")]
+            SpawnCardEvent::DiscoverModels {
+                generation, agent, ..
+            } => {
+                self.spawn_card.update(ctx, |card, ctx| {
+                    card.apply_model_capabilities(
+                        *agent,
+                        *generation,
+                        Err("Subscription-agent model discovery requires the native app"
+                            .to_string()),
+                        ctx,
+                    );
+                });
+            }
             SpawnCardEvent::Close => {
                 self.current_workspace_state.is_spawn_card_open = false;
                 self.focus_active_tab(ctx);

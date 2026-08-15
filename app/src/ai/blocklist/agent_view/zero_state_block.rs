@@ -637,8 +637,7 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
         ) {
         vec![recent_conversations_section]
     } else {
-        let mut body_items = vec![
-            render_standard_message(
+        let mut body_items = vec![render_standard_message(
                 Message::new(vec![MessageItem::clickable(
                     vec![
                         MessageItem::keystroke(ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone()),
@@ -650,24 +649,7 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
                     state_handles.start_new_conversation.clone(),
                 )]),
                 app,
-            ),
-            render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(Keystroke {
-                            key: "/model".to_owned(),
-                            ..Default::default()
-                        }),
-                        MessageItem::text(crate::t!("agent-zero-state-switch-model")),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::OpenModelSelector);
-                    },
-                    state_handles.switch_model.clone(),
-                )]),
-                app,
-            ),
-        ];
+            )];
 
         // Only show "escape to go back" if there's a parent terminal
         if has_parent_terminal {
