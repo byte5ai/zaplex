@@ -85,9 +85,13 @@ fn initialize_app(app: &mut warpui::App) {
 
 /// Creates a SftpBrowserView and places it in a window (Disconnected state)
 fn create_view(app: &mut warpui::App) -> (warpui::WindowId, warpui::ViewHandle<SftpBrowserView>) {
-    app.add_window(WindowStyle::NotStealFocus, |ctx| {
+    let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
         SftpBrowserView::new("test-node".to_string(), None, ctx)
-    })
+    });
+    view.update(app, |view, ctx| {
+        view.set_pane_group_id(Some(warpui::EntityId::from_usize(usize::MAX)), ctx)
+    });
+    (window_id, view)
 }
 
 /// Creates a temporary directory with a file structure
@@ -4210,6 +4214,101 @@ fn test_f5_copies_cursor_file_into_other_pane() {
 }
 
 #[test]
+fn shift_f5_keeps_hidden_tab_targets_reachable() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("left/foo.txt", b"hello"),
+            ("visible/.keep", b""),
+            ("hidden/.keep", b""),
+        ]);
+        let root = temp.path().to_path_buf();
+
+        let (_, source) = create_view(&mut app);
+        source.update(&mut app, |view, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/left"), ctx);
+        });
+        let (_, visible) = create_view(&mut app);
+        visible.update(&mut app, |view, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/visible"), ctx);
+        });
+        let (_, hidden) = create_view(&mut app);
+        hidden.update(&mut app, |view, ctx| {
+            view.set_pane_group_id(Some(warpui::EntityId::from_usize(1)), ctx);
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/hidden"), ctx);
+        });
+
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ChooseCopyTarget, ctx);
+        });
+
+        source.read(&app, |view, _| match &view.dialog {
+            Some(Dialog::CopyMoveTargetPicker { labels, is_move }) => {
+                assert_eq!(labels.len(), 2);
+                assert!(!is_move);
+                assert!(labels.iter().any(|label| label.ends_with(":/hidden")));
+            }
+            _ => panic!("expected the target picker dialog"),
+        });
+        assert!(!root.join("visible/foo.txt").exists());
+        assert!(!root.join("hidden/foo.txt").exists());
+    });
+}
+
+#[test]
+fn detached_file_manager_is_removed_from_target_registry() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("closing/.keep", b"")]);
+        let root = temp.path().to_path_buf();
+        let (_, closing) = create_view(&mut app);
+        closing.update(&mut app, |view, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root)) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/closing"), ctx);
+        });
+
+        let pane_id = app.read(|ctx| {
+            super::fm_registry::FileManagerRegistry::as_ref(ctx)
+                .panes()
+                .iter()
+                .find(|pane| pane.current_path == PathBuf::from("/closing"))
+                .expect("registered file manager")
+                .id
+        });
+        closing.update(&mut app, |view, ctx| view.set_pane_group_id(None, ctx));
+
+        app.read(|ctx| {
+            let registry = super::fm_registry::FileManagerRegistry::as_ref(ctx);
+            assert!(registry.panes().iter().all(|pane| pane.id != pane_id));
+            assert!(registry.backend_for(pane_id).is_none());
+        });
+    });
+}
+
+#[test]
+fn disconnected_file_manager_is_not_a_transfer_target() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, disconnected) = create_view(&mut app);
+
+        app.read(|ctx| {
+            assert!(super::fm_registry::FileManagerRegistry::as_ref(ctx)
+                .panes()
+                .is_empty());
+        });
+        disconnected.update(&mut app, |view, ctx| view.disconnect_for_test(ctx));
+        app.read(|ctx| {
+            assert!(super::fm_registry::FileManagerRegistry::as_ref(ctx)
+                .panes()
+                .is_empty());
+        });
+    });
+}
+
+#[test]
 fn same_fs_target_probe_error_aborts_without_copying() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -4365,6 +4464,47 @@ fn test_f5_with_multiple_panes_opens_target_picker() {
     });
 }
 
+#[test]
+fn target_picker_rejects_a_pane_closed_after_opening() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("left/foo.txt", b"hello"),
+            ("right/.keep", b""),
+            ("third/.keep", b""),
+        ]);
+        let root = temp.path().to_path_buf();
+
+        let (_, source) = create_view(&mut app);
+        source.update(&mut app, |view, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/left"), ctx);
+        });
+        let (_, closing_target) = create_view(&mut app);
+        closing_target.update(&mut app, |view, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/right"), ctx);
+        });
+        let (_, remaining_target) = create_view(&mut app);
+        remaining_target.update(&mut app, |view, ctx| {
+            let backend = Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+            view.set_backend_for_test(backend, PathBuf::from("/third"), ctx);
+        });
+
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        closing_target.update(&mut app, |view, ctx| view.set_pane_group_id(None, ctx));
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::PickCopyMoveTarget(0), ctx);
+        });
+
+        assert!(!root.join("right/foo.txt").exists());
+        assert!(!root.join("third/foo.txt").exists());
+        assert!(root.join("left/foo.txt").exists());
+    });
+}
+
 /// Cancelling the destination picker discards the pending pick and copies nothing.
 #[test]
 fn test_target_picker_cancel_copies_nothing() {
@@ -4466,9 +4606,13 @@ fn create_view_with_node(
     app: &mut warpui::App,
     node_id: &str,
 ) -> (warpui::WindowId, warpui::ViewHandle<SftpBrowserView>) {
-    app.add_window(WindowStyle::NotStealFocus, |ctx| {
+    let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
         SftpBrowserView::new(node_id.to_string(), None, ctx)
-    })
+    });
+    view.update(app, |view, ctx| {
+        view.set_pane_group_id(Some(warpui::EntityId::from_usize(usize::MAX)), ctx)
+    });
+    (window_id, view)
 }
 
 /// F5 from a local pane to a remote pane routes through the transfer engine

@@ -30,8 +30,8 @@ use warpui::{
 use zaplex_cockpit::{
     fleet_is_large, format_cost, format_relative, format_reset, format_tokens, heat_fill,
     heat_pct_label_with_provenance, host_auto_collapsed, host_ident, host_key, session_glyph,
-    session_key, AccountStatus, AccountUsage, FleetTree, HeatLevel, HostNode, Provider,
-    SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
+    session_key, AccountStatus, AccountUsage, FleetTree, HeatLevel, HostNode, PricingSource,
+    Provider, SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
 };
 
 use crate::cockpit::capabilities::SessionCapabilities;
@@ -2869,7 +2869,13 @@ impl View for CockpitPaneView {
                             if acct.provenance == UsageProvenance::Estimate {
                                 col = col.with_child(
                                     Container::new(Self::text(
-                                        crate::t!("cockpit-pane-provenance-legend"),
+                                        crate::t!(
+                                            "cockpit-pane-provenance-legend",
+                                            date = PricingSource::BundledListPrice
+                                                .as_of()
+                                                .unwrap_or_default()
+                                                .to_string()
+                                        ),
                                         family,
                                         body,
                                         muted,
@@ -2998,7 +3004,13 @@ impl View for CockpitPaneView {
                 .any(|a| a.provenance == UsageProvenance::Estimate)
             {
                 col = col.with_child(Self::text(
-                    crate::t!("cockpit-pane-provenance-legend"),
+                    crate::t!(
+                        "cockpit-pane-provenance-legend",
+                        date = PricingSource::BundledListPrice
+                            .as_of()
+                            .unwrap_or_default()
+                            .to_string()
+                    ),
                     family,
                     body,
                     muted,

@@ -355,6 +355,19 @@ fn f5_f6_f7_f8_f10_dispatch_documented_actions() {
 }
 
 #[test]
+fn shift_f5_f6_open_the_target_picker() {
+    assert!(matches!(
+        shifted_function_key_action("f5", true),
+        Some(SftpBrowserAction::ChooseCopyTarget)
+    ));
+    assert!(matches!(
+        shifted_function_key_action("F6", true),
+        Some(SftpBrowserAction::ChooseMoveTarget)
+    ));
+    assert!(shifted_function_key_action("f5", false).is_none());
+}
+
+#[test]
 fn pane_function_legend_drops_captions_before_overlap() {
     let full_width = FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_CAPTION_MIN_WIDTH
         + FUNCTION_LEGEND_HORIZONTAL_PADDING;

@@ -76,6 +76,18 @@ fn function_key_action(key: &str) -> Option<SftpBrowserAction> {
         .map(|(_, action)| action())
 }
 
+fn shifted_function_key_action(key: &str, shift: bool) -> Option<SftpBrowserAction> {
+    if !shift {
+        None
+    } else if key.eq_ignore_ascii_case("f5") {
+        Some(SftpBrowserAction::ChooseCopyTarget)
+    } else if key.eq_ignore_ascii_case("f6") {
+        Some(SftpBrowserAction::ChooseMoveTarget)
+    } else {
+        None
+    }
+}
+
 fn pane_cycle_action(key: &str, shift: bool) -> Option<crate::pane_group::PaneGroupAction> {
     match (key, shift) {
         ("tab", true) => Some(crate::pane_group::PaneGroupAction::NavigatePrev),
@@ -351,11 +363,16 @@ pub enum SftpBrowserAction {
     PickCurrentDir,
     /// Rename the row under the cursor (F6 in the single-pane case).
     RenameCursor,
-    /// Copy the selection to another file-manager pane (F5) — cross-pane
-    /// transfer is the next increment; today this explains itself.
+    /// Copy the selection to another file-manager pane (F5).
     CopyToOtherPane,
     /// Move the selection to another file-manager pane (F6 cross-pane).
     MoveToOtherPane,
+    /// Open the destination picker for a copy (Shift-F5), even when a visible
+    /// peer would otherwise be selected automatically.
+    ChooseCopyTarget,
+    /// Open the destination picker for a move (Shift-F6), even when a visible
+    /// peer would otherwise be selected automatically.
+    ChooseMoveTarget,
     /// Close the file manager (F10), reverting the pane to its terminal.
     CloseFileManager,
     /// Resolve a copy/move conflict: overwrite this target (`all` = the rest too).
@@ -779,6 +796,9 @@ pub struct SftpBrowserView {
     /// Process-unique id for the cross-pane file-manager registry (F5/F6
     /// copy/move target discovery).
     fm_id: u64,
+    /// Owning pane group. Peers in this group are visible beside this pane;
+    /// panes in other groups are explicit-only transfer destinations.
+    pane_group_id: Option<warpui::EntityId>,
     /// An in-progress same-fs copy/move batch, paused on a conflict dialog.
     pending_copy_move: Option<PendingCopyMove>,
     /// Sources + candidate panes held while the target-picker dialog is up
@@ -982,6 +1002,7 @@ impl SftpBrowserView {
                 .map(|_| MouseStateHandle::default())
                 .collect(),
             fm_id: super::fm_registry::next_fm_id(),
+            pane_group_id: None,
             pending_copy_move: None,
             pending_target_pick: None,
             pending_cross_conn: None,
@@ -1254,6 +1275,7 @@ impl SftpBrowserView {
         self.sftp = None;
         self.entries.clear();
         self.selected.clear();
+        self.deregister_from_registry(ctx);
         ctx.notify();
     }
 
@@ -1265,6 +1287,8 @@ impl SftpBrowserView {
         if node_id.is_empty() {
             return;
         }
+        self.sftp = None;
+        self.deregister_from_registry(ctx);
         let result = warp_ssh_manager::with_conn(|c| {
             let server = SshRepository::get_server(c, &node_id)?;
             Ok(server)
@@ -2031,19 +2055,28 @@ impl SftpBrowserView {
     /// Publish this pane's live descriptor (and backend handle) into the
     /// cross-pane registry, so others can target — and transfer through — it.
     fn publish_to_registry(&self, ctx: &mut ViewContext<Self>) {
+        let Some(pane_group_id) = self.pane_group_id else {
+            return;
+        };
+        let Some(backend) = self.sftp.clone() else {
+            self.deregister_from_registry(ctx);
+            return;
+        };
+        if !matches!(&self.connection, ConnectionState::Connected) {
+            self.deregister_from_registry(ctx);
+            return;
+        }
         let descriptor = FmPaneDescriptor {
             id: self.fm_id,
             label: self.fm_label(),
             fs: self.fs_namespace(),
             current_path: self.current_path.clone(),
+            pane_group_id: Some(pane_group_id),
         };
         let id = self.fm_id;
-        let backend = self.sftp.clone();
         FileManagerRegistry::handle(ctx).update(ctx, move |reg, _| {
             reg.upsert(descriptor);
-            if let Some(backend) = backend {
-                reg.set_backend(id, backend);
-            }
+            reg.set_backend(id, backend);
         });
     }
 
@@ -2051,6 +2084,22 @@ impl SftpBrowserView {
     fn deregister_from_registry(&self, ctx: &mut ViewContext<Self>) {
         let id = self.fm_id;
         FileManagerRegistry::handle(ctx).update(ctx, move |reg, _| reg.remove(id));
+    }
+
+    /// Keep target visibility tied to pane-group ownership rather than focus.
+    /// All panes in the active split group are visible; panes in other tabs
+    /// remain valid explicit destinations.
+    pub(crate) fn set_pane_group_id(
+        &mut self,
+        pane_group_id: Option<warpui::EntityId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.pane_group_id = pane_group_id;
+        if pane_group_id.is_some() {
+            self.publish_to_registry(ctx);
+        } else {
+            self.deregister_from_registry(ctx);
+        }
     }
 
     /// The paths this operation acts on: the multi-selection if any, otherwise
@@ -2071,12 +2120,15 @@ impl SftpBrowserView {
     }
 
     /// F5/F6: copy (or move) the operation's sources into another file-manager
-    /// pane. Chooses the single other pane automatically (the MC two-panel
-    /// case); 0 or >1 candidates are reported rather than guessed. Routes by
-    /// filesystem: same fs → a direct backend copy/rename; local↔remote → an
-    /// upload/download through the transfer engine (with progress). Two
-    /// different remote hosts is a later increment.
-    fn copy_or_move_to_other_pane(&mut self, is_move: bool, ctx: &mut ViewContext<Self>) {
+    /// pane. Chooses the sole visible peer automatically (the MC two-panel
+    /// case), unless the caller explicitly requests the complete target picker.
+    /// All transfer topologies route through the safe transfer engine.
+    fn copy_or_move_to_other_pane(
+        &mut self,
+        is_move: bool,
+        choose_target: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let sources = self.operation_sources();
         if sources.is_empty() {
             let msg = if is_move {
@@ -2089,8 +2141,14 @@ impl SftpBrowserView {
         }
 
         let self_id = self.fm_id;
-        let candidates = FileManagerRegistry::as_ref(ctx).others(self_id);
-        match candidates.as_slice() {
+        let targets = FileManagerRegistry::as_ref(ctx).transfer_targets(self_id);
+        if !choose_target {
+            if let Some(target) = targets.default {
+                self.route_copy_move(&sources, &target, is_move, ctx);
+                return;
+            }
+        }
+        match targets.selectable.as_slice() {
             [] => {
                 let msg = if is_move {
                     crate::t!("fm-toast-open-second-pane-move")
@@ -2099,15 +2157,7 @@ impl SftpBrowserView {
                 };
                 self.show_error_toast(msg, ctx);
             }
-            [only] => {
-                let target = only.clone();
-                self.route_copy_move(&sources, &target, is_move, ctx);
-            }
-            _ => {
-                // More than one other pane open — let the user pick which one
-                // (MC never guesses the target).
-                self.open_target_picker(sources, candidates, is_move, ctx);
-            }
+            _ => self.open_target_picker(sources, targets.selectable, is_move, ctx),
         }
     }
 
@@ -5492,8 +5542,14 @@ impl TypedActionView for SftpBrowserView {
             SftpBrowserAction::EnterCursorDir => self.enter_cursor_dir(ctx),
             SftpBrowserAction::ToggleSelectCursor => self.toggle_select_cursor(ctx),
             SftpBrowserAction::RenameCursor => self.rename_cursor(ctx),
-            SftpBrowserAction::CopyToOtherPane => self.copy_or_move_to_other_pane(false, ctx),
-            SftpBrowserAction::MoveToOtherPane => self.copy_or_move_to_other_pane(true, ctx),
+            SftpBrowserAction::CopyToOtherPane => {
+                self.copy_or_move_to_other_pane(false, false, ctx)
+            }
+            SftpBrowserAction::MoveToOtherPane => self.copy_or_move_to_other_pane(true, false, ctx),
+            SftpBrowserAction::ChooseCopyTarget => {
+                self.copy_or_move_to_other_pane(false, true, ctx)
+            }
+            SftpBrowserAction::ChooseMoveTarget => self.copy_or_move_to_other_pane(true, true, ctx),
             SftpBrowserAction::PickCurrentDir => {
                 // Return the browsed directory to the spawn card and close (#105).
                 self.pick_resolved = true;
@@ -5538,8 +5594,20 @@ impl TypedActionView for SftpBrowserView {
                 let index = *index;
                 self.dialog = None;
                 if let Some(pick) = self.pending_target_pick.take() {
-                    if let Some(target) = pick.candidates.get(index).cloned() {
-                        self.route_copy_move(&pick.sources, &target, pick.is_move, ctx);
+                    if let Some(candidate) = pick.candidates.get(index) {
+                        let target = FileManagerRegistry::as_ref(ctx)
+                            .panes()
+                            .iter()
+                            .find(|pane| pane.id == candidate.id)
+                            .cloned();
+                        if let Some(target) = target {
+                            self.route_copy_move(&pick.sources, &target, pick.is_move, ctx);
+                        } else {
+                            self.show_error_toast(
+                                crate::t!("fm-toast-other-pane-disconnected"),
+                                ctx,
+                            );
+                        }
                     }
                 }
                 ctx.notify();
@@ -5997,8 +6065,9 @@ impl View for SftpBrowserView {
                     ctx.dispatch_typed_action(action);
                     return DispatchEventResult::StopPropagation;
                 }
-                let action =
-                    function_key_action(&keystroke.key).or_else(|| match keystroke.key.as_str() {
+                let action = shifted_function_key_action(&keystroke.key, keystroke.shift)
+                    .or_else(|| function_key_action(&keystroke.key))
+                    .or_else(|| match keystroke.key.as_str() {
                         // Cursor movement
                         "down" => Some(SftpBrowserAction::CursorDown),
                         "up" => Some(SftpBrowserAction::CursorUp),
