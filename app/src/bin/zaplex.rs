@@ -9,13 +9,19 @@ use warp_core::{
     AppId,
 };
 
-#[cfg(all(target_os = "windows", feature = "windows_high_performance_gpu_default"))]
+#[cfg(all(
+    target_os = "windows",
+    feature = "windows_high_performance_gpu_default"
+))]
 #[allow(non_upper_case_globals)]
 #[no_mangle]
 #[used]
 pub static NvOptimusEnablement: u32 = 1;
 
-#[cfg(all(target_os = "windows", feature = "windows_high_performance_gpu_default"))]
+#[cfg(all(
+    target_os = "windows",
+    feature = "windows_high_performance_gpu_default"
+))]
 #[allow(non_upper_case_globals)]
 #[no_mangle]
 #[used]
@@ -68,13 +74,16 @@ embed_plist::embed_info_plist_bytes!(r#"
     <key>CFBundleLocalizations</key>
     <array>
     <string>en</string>
+    <string>de</string>
     </array>
     <key>CFBundleName</key>
     <string>Zaplex</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>1.0.2</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.2</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key>

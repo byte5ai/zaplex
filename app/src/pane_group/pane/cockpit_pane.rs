@@ -20,8 +20,17 @@ pub struct CockpitPane {
 }
 
 impl CockpitPane {
+    /// The fleet dashboard — every account at once.
     pub fn new<V: View>(ctx: &mut ViewContext<V>) -> Self {
-        let cockpit_view = ctx.add_typed_action_view(CockpitPaneView::new);
+        Self::for_account(None, ctx)
+    }
+
+    /// A pane for one account (`None` = the fleet dashboard). The key travels
+    /// with the pane so [`Self::account_key`] can answer which account this is,
+    /// which is how opening dedupes: one pane per account, several side by side.
+    pub fn for_account<V: View>(account_key: Option<String>, ctx: &mut ViewContext<V>) -> Self {
+        let cockpit_view =
+            ctx.add_typed_action_view(move |ctx| CockpitPaneView::for_account(account_key, ctx));
         let pane_configuration = cockpit_view.as_ref(ctx).pane_configuration();
         let pane_view = ctx.add_typed_action_view(|ctx| {
             let pane_id = PaneId::from_cockpit_pane_ctx(ctx);
@@ -31,6 +40,20 @@ impl CockpitPane {
             view: pane_view,
             pane_configuration,
         }
+    }
+}
+
+impl CockpitPane {
+    /// Which account this pane shows (`None` = the fleet dashboard) — read when
+    /// opening, to find an existing pane for the same account instead of
+    /// stacking another identical one.
+    pub fn account_key(&self, ctx: &AppContext) -> Option<String> {
+        self.view
+            .as_ref(ctx)
+            .child(ctx)
+            .as_ref(ctx)
+            .account_key()
+            .map(str::to_string)
     }
 }
 

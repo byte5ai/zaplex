@@ -48,6 +48,7 @@ use crate::{
 
 use super::{
     ai_queries::AIQueriesDataSource,
+    cli_agents::CliAgentsDataSource,
     env_var_collections::EnvVarCollectionDataSource,
     history::history_data_source_for_session,
     notebooks::notebooks_data_source,
@@ -221,6 +222,8 @@ impl CommandSearchView {
             // Add data sources in lowest->highest priority order.  If results from two
             // data sources produce the same ranking score, the data source added first
             // will show up higher in the list (i.e.: further away from the input).
+            mixer.add_sync_source(CliAgentsDataSource, HashSet::new());
+
             if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                 mixer.add_sync_source(
                     WarpAIDataSource::new(),

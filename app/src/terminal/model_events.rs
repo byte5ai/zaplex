@@ -81,6 +81,7 @@ impl ModelEventDispatcher {
         let event_to_emit = match event {
             Event::Handler(HandlerEvent::InitShell {
                 pending_session_info,
+                suppress_bootstrap_write,
             }) => {
                 self.sessions.update(ctx, |sessions, ctx| {
                     sessions.register_pending_session(pending_session_info.as_ref(), ctx);
@@ -90,12 +91,16 @@ impl ModelEventDispatcher {
                     IsLegacySSHSession::Yes { .. }
                 );
                 if FeatureFlag::SshRemoteServer.is_enabled() && is_legacy_ssh {
+                    // The legacy-SSH path bootstraps via RemoteServerController and
+                    // is never an adopt preamble, so the T1.3 suppression bit does
+                    // not apply here.
                     ModelEvent::SshInitShell {
                         pending_session_info,
                     }
                 } else {
                     ModelEvent::Handler(AnsiHandlerEvent::InitShell {
                         pending_session_info,
+                        suppress_bootstrap_write,
                     })
                 }
             }
@@ -493,6 +498,9 @@ pub enum ModelEvent {
 pub enum AnsiHandlerEvent {
     InitShell {
         pending_session_info: Box<SessionInfo>,
+        /// T1.3: suppress the client-side bootstrap-body write for this re-fed
+        /// adopt preamble `InitShell` (see [`super::terminal_model::HandlerEvent`]).
+        suppress_bootstrap_write: bool,
     },
     Bootstrapped {
         session_id: SessionId,

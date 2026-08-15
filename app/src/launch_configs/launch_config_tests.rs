@@ -16,6 +16,7 @@ fn single_tab_snapshot(root: PaneNodeSnapshot) -> AppState {
         windows: vec![WindowSnapshot {
             tabs: vec![TabSnapshot {
                 custom_title: None,
+                is_pinned: false,
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),
                 root,
@@ -93,6 +94,7 @@ fn test_config_from_snapshot_flattens_single_pane() {
                     contents: LeafContents::Terminal(TerminalPaneSnapshot {
                         uuid: vec![],
                         cwd: Some("/some/dir".into()),
+                        cli_agent_binding: None,
                         is_active: true,
                         is_read_only: false,
                         shell_launch_data: None,
@@ -133,6 +135,7 @@ fn test_config_from_snapshot_filters_panes() {
                     contents: LeafContents::Terminal(TerminalPaneSnapshot {
                         uuid: vec![],
                         cwd: Some("/path/to/dir".into()),
+                        cli_agent_binding: None,
                         is_active: true,
                         is_read_only: false,
                         shell_launch_data: None,
@@ -163,6 +166,7 @@ fn test_config_from_snapshot_filters_panes() {
                     contents: LeafContents::Terminal(TerminalPaneSnapshot {
                         uuid: vec![],
                         cwd: Some("/some/dir".into()),
+                        cli_agent_binding: None,
                         is_active: true,
                         is_read_only: false,
                         shell_launch_data: None,
@@ -226,12 +230,39 @@ fn test_config_from_snapshot_filters_tabs() {
 }
 
 #[test]
+fn test_config_from_snapshot_preserves_tab_pin() {
+    let mut state = single_tab_snapshot(PaneNodeSnapshot::Leaf(LeafSnapshot {
+        is_focused: true,
+        custom_vertical_tabs_title: None,
+        contents: LeafContents::Terminal(TerminalPaneSnapshot {
+            uuid: vec![],
+            cwd: Some("/path/to/dir".into()),
+            cli_agent_binding: None,
+            is_active: true,
+            is_read_only: false,
+            shell_launch_data: None,
+            input_config: None,
+            llm_model_override: None,
+            active_profile_id: None,
+            conversation_ids_to_restore: vec![],
+            active_conversation_id: None,
+        }),
+    }));
+    state.windows[0].tabs[0].is_pinned = true;
+
+    let template = LaunchConfig::from_snapshot("Pinned".into(), &state);
+
+    assert!(template.windows[0].tabs[0].is_pinned);
+}
+
+#[test]
 fn test_config_with_active_tab_index() {
     let state = multi_tab_snapshot(
         1,
         vec![
             TabSnapshot {
                 custom_title: None,
+                is_pinned: false,
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),
                 root: PaneNodeSnapshot::Branch(BranchSnapshot {
@@ -244,6 +275,7 @@ fn test_config_with_active_tab_index() {
                             contents: LeafContents::Terminal(TerminalPaneSnapshot {
                                 uuid: vec![],
                                 cwd: Some("/path/to/dir".into()),
+                                cli_agent_binding: None,
                                 is_active: true,
                                 is_read_only: false,
                                 shell_launch_data: None,
@@ -274,6 +306,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
         vec![
             TabSnapshot {
                 custom_title: None,
+                is_pinned: false,
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),
                 root: PaneNodeSnapshot::Branch(BranchSnapshot {
@@ -297,6 +330,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
             },
             TabSnapshot {
                 custom_title: None,
+                is_pinned: false,
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),
                 root: PaneNodeSnapshot::Branch(BranchSnapshot {
@@ -309,6 +343,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
                             contents: LeafContents::Terminal(TerminalPaneSnapshot {
                                 uuid: vec![],
                                 cwd: Some("/path/to/dir".into()),
+                                cli_agent_binding: None,
                                 is_active: true,
                                 is_read_only: false,
                                 shell_launch_data: None,
@@ -338,6 +373,7 @@ fn test_config_with_active_tab_being_filtered() {
         vec![
             TabSnapshot {
                 custom_title: None,
+                is_pinned: false,
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),
                 root: PaneNodeSnapshot::Branch(BranchSnapshot {
@@ -350,6 +386,7 @@ fn test_config_with_active_tab_being_filtered() {
                             contents: LeafContents::Terminal(TerminalPaneSnapshot {
                                 uuid: vec![],
                                 cwd: Some("/path/to/dir".into()),
+                                cli_agent_binding: None,
                                 is_active: true,
                                 is_read_only: false,
                                 shell_launch_data: None,
@@ -367,6 +404,7 @@ fn test_config_with_active_tab_being_filtered() {
             },
             TabSnapshot {
                 custom_title: None,
+                is_pinned: false,
                 default_directory_color: None,
                 selected_color: SelectedTabColor::default(),
                 root: PaneNodeSnapshot::Branch(BranchSnapshot {
@@ -442,4 +480,39 @@ fn test_ssh_host_reference_serde_round_trips_and_does_not_collide() {
         serde_yaml::from_str::<PaneTemplateType>(&template_yaml).unwrap(),
         template
     );
+}
+
+/// A branch with no panes is not an openable layout.
+///
+/// Such a template comes from hand-edited or older-version TOML. Opening it
+/// produced a tab with zero panes, and startup then died on the "at least one
+/// pane should have been created" expectation — a dock bounce with no window in
+/// the dev-profile builds the test DMGs ship with. It must be rejected before
+/// it reaches the pane tree.
+#[test]
+fn empty_pane_branch_is_not_openable() {
+    let empty_branch = PaneTemplateType::PaneBranchTemplate {
+        split_direction: crate::launch_configs::launch_config::SplitDirection::Vertical,
+        panes: Vec::new(),
+    };
+    assert!(
+        !empty_branch.is_openable(),
+        "an empty branch must be rejected"
+    );
+
+    // Nested, too: a valid outer branch containing a broken inner one.
+    let nested = PaneTemplateType::PaneBranchTemplate {
+        split_direction: crate::launch_configs::launch_config::SplitDirection::Horizontal,
+        panes: vec![empty_branch],
+    };
+    assert!(
+        !nested.is_openable(),
+        "a branch containing an empty branch must be rejected"
+    );
+
+    // A plain SSH-host reference stays openable.
+    assert!(PaneTemplateType::SshHost {
+        node_id: "some-host".to_string(),
+    }
+    .is_openable());
 }

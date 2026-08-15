@@ -159,7 +159,9 @@ impl ShellStarter {
         if let Some(warp_shell_env_var) = warp_shell_path() {
             let (warp_shell_path, shell_type) = supported_shell_path_and_type(&warp_shell_env_var)
                 .unwrap_or_else(|| {
-                    panic!("Cannot spawn shell; $ZAPLEX_SHELL_PATH is invalid: {warp_shell_env_var}")
+                    panic!(
+                        "Cannot spawn shell; $ZAPLEX_SHELL_PATH is invalid: {warp_shell_env_var}"
+                    )
                 });
             return Some(
                 ShellStarterSource::Environment(DirectShellStarter {
@@ -552,7 +554,10 @@ fn parse_shell_type_from_path(path: &Path) -> Option<(PathBuf, ShellType)> {
         .map(|shell_type| (path.to_path_buf(), shell_type))
 }
 
-fn arguments_for_session_spawning_command(
+// `pub(super)` so the daemon shell spawn (`local_tty::unix::spawn_session_pty`)
+// can reuse the exact same RC-suppressing launch contract the local app uses,
+// keeping local and remote bootstrap in lockstep.
+pub(super) fn arguments_for_session_spawning_command(
     resolved_shell_path: &str,
     shell_type: ShellType,
 ) -> Vec<OsString> {

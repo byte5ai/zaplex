@@ -127,7 +127,7 @@ impl Input {
             && matches!(ai_input_model.input_type(), InputType::AI)
             && !FeatureFlag::AgentView.is_enabled()
         {
-            if let Some(images) = self.render_attachment_chips(appearance) {
+            if let Some(images) = self.render_attachment_chips(appearance, false) {
                 column.add_child(
                     Container::new(images)
                         .with_padding_bottom(spacing::CLASSIC_PROMPT_ATTACH_IMAGES_BOTTOM_PADDING)

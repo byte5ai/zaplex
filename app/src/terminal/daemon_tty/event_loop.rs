@@ -1,15 +1,23 @@
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::terminal::{
-    event_listener::ChannelEventListener, model::ansi::Processor,
-    writeable_pty::Message as EventLoopMessage, SizeInfo, TerminalModel,
+    cli_agent::CLIAgent,
+    cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent},
+    event_listener::ChannelEventListener,
+    model::ansi::Processor,
+    writeable_pty::Message as EventLoopMessage,
+    SizeInfo, TerminalModel,
 };
 use async_channel::Receiver;
 use parking_lot::FairMutex;
-use remote_server::client::RemoteServerClient;
+use remote_server::{
+    client::{ClientError, RemoteServerClient},
+    proto::{AgentPtyBindingStatus, AgentSessionIdentity, SessionAttached},
+};
 use std::io;
 use std::sync::Arc;
 use warp_core::SessionId;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
+use zaplex_remote_session::types::{FEATURE_AGENT_PTY_BINDING_V2, FEATURE_STARTUP_COMMAND_ACK};
 
 use super::terminal_manager::OpenSessionParams;
 
@@ -51,6 +59,33 @@ pub(super) struct EventLoop {
     /// The daemon's PTY session id (from `OpenSession`). `None` until the open
     /// request resolves; until then input is buffered in `pending_input`.
     pty_session_id: Option<String>,
+    /// Exact daemon generation paired with `pty_session_id`. Present for
+    /// capability-aware sessions and required for inventory-driven adopts.
+    pty_generation: Option<u64>,
+    /// Optional foreground identity captured from the inventory row that
+    /// initiated this adopt. Cleared after the first validated attach.
+    expected_attach_agent_binding: Option<AgentSessionIdentity>,
+    /// Adopt/reconnect output stays buffered until `SessionAttached` supplies
+    /// the capability-checked authoritative binding snapshot.
+    awaiting_attach_snapshot: bool,
+    /// Attach/replay request token. A reconnect invalidates an older callback.
+    attach_in_flight: Option<u64>,
+    next_attach_attempt: u64,
+    /// Terminal view whose CLI-agent lifecycle is mirrored to the daemon.
+    terminal_view_id: Option<EntityId>,
+    /// Binding desired from the latest CLI-agent/account model state.
+    desired_agent_binding: Option<AgentSessionIdentity>,
+    /// Whether `desired_agent_binding` came from an observed local lifecycle
+    /// event. Only such a request may survive an authoritative attach snapshot
+    /// and become an explicit handoff.
+    desired_agent_binding_from_lifecycle: bool,
+    /// Binding most recently acknowledged by the daemon as foreground.
+    agent_binding: Option<AgentSessionIdentity>,
+    /// Monotonic attempt currently awaiting a daemon response. A reconnect
+    /// invalidates the attempt so a callback from the dead transport cannot
+    /// overwrite a retry on the new transport.
+    agent_binding_in_flight: Option<u64>,
+    next_agent_binding_attempt: u64,
     /// Input/resize messages received before the session id is known. Flushed,
     /// in order, once `OpenSession` resolves.
     pending_input: Vec<EventLoopMessage>,
@@ -59,22 +94,61 @@ pub(super) struct EventLoop {
     /// shell immediately). Rendered, in order, in `on_session_opened`, so the
     /// initial shell/bootstrap output isn't lost on a fresh tab.
     pending_output: Vec<(String, u64, Vec<u8>)>,
+    /// The bounded output buffer dropped at least one byte; another daemon
+    /// replay is required before live delivery may reopen.
+    pending_output_overflowed: bool,
+    /// Exit observed while an attach snapshot was in flight. It is applied
+    /// after the matching replay callback, never before it.
+    pending_exit: Option<Option<i32>>,
     /// The `OpenSession` request, held until the transport is `Connected`. Taken
     /// (once) by `try_open`. `None` after the session has been opened.
     pending_open: Option<(OpenSessionParams, SizeInfo)>,
     /// The host's startup command, captured from `OpenSessionParams` and run once
-    /// (taken) when the session opens — the daemon-path analog of the local-PTY
-    /// SSH startup-command injector. `None` for adopted sessions.
+    /// (taken) only after the terminal model confirms that shell bootstrap has
+    /// completed — the daemon-path analog of the local-PTY SSH startup-command
+    /// injector. `None` for adopted sessions.
     startup_command: Option<String>,
+    /// Stable logical delivery id for `startup_command`. It survives transport
+    /// retries and reconnects so the daemon can acknowledge a lost-Ack retry
+    /// without executing the command again.
+    startup_command_id: Option<String>,
+    /// Monotonic local attempt token currently awaiting a daemon Ack. An attempt
+    /// token prevents a late callback from an old transport from clearing the
+    /// state of a newer reconnect attempt.
+    startup_command_in_flight: Option<u64>,
+    next_startup_command_attempt: u64,
+    /// A negative or malformed Ack indicates that retrying on the same live
+    /// transport would only create a tight loop. Reconnect clears this latch.
+    startup_retry_requires_reconnect: bool,
+    /// Avoids repeating the same actionable compatibility notice on every
+    /// output chunk from an older daemon.
+    startup_capability_notice_shown: bool,
     /// Byte offset just past the last `SessionOutput` byte we've rendered. Sent
     /// as `last_seq` on re-attach so the daemon replays only what we missed.
     last_seq: u64,
-    /// Human-readable host label for in-tab status lines ("⚡ … on <host>").
+    /// Human-readable host label for in-tab status lines ("… on <host>").
     host_label: String,
-    /// Whether the one-time "⚡ Zaplexify active" welcome has been shown, so an
+    /// Whether the one-time "Zaplexify active" welcome has been shown, so an
     /// adopt's first attach welcomes while later re-attaches announce the
     /// reconnect instead.
     welcomed: bool,
+    /// Whether a *terminal* end-state notice has already been surfaced — a clean
+    /// `session ended` (`SessionExited`) or a `connection lost`
+    /// (`SessionDisconnected` with no reconnect left). Guards against a second,
+    /// contradictory notice when both terminal signals reach this loop: e.g. the
+    /// shell exits (`SessionExited`) and then the transport drops afterwards
+    /// (`SessionDisconnected`) before the tab is closed. Whichever lands first
+    /// wins; the latch swallows the other so we never tell the user the
+    /// connection was lost right after telling them the session ended.
+    terminated: bool,
+    /// Whether this loop should still report its session's bootstrap boundary to
+    /// the daemon (T1.3). True only for a session this loop *opened* (the client
+    /// that witnesses the real handshake from seq 0); set false once reported, and
+    /// false from the start for an *adopted* session, which did not see the
+    /// handshake from seq 0 and so cannot define the boundary (by convention only
+    /// the opener does). Lets the daemon freeze an eviction-proof preamble so a
+    /// future adopt can arm bootstrap.
+    report_bootstrap_boundary: bool,
 }
 
 impl EventLoop {
@@ -88,17 +162,70 @@ impl EventLoop {
         connection_session_id: SessionId,
         open_params: OpenSessionParams,
         adopt_pty_session_id: Option<String>,
+        adopt_pty_generation: Option<u64>,
+        expected_attach_agent_binding: Option<AgentSessionIdentity>,
         install_progress_rx: Option<Receiver<String>>,
         host_label: String,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let mut event_loop = Self::new(model, channel_event_listener, connection_session_id);
+        // Every session this loop drives is daemon-hosted; for bash/zsh the
+        // daemon delivers the root shell's complete bootstrap (bash/zsh through
+        // ordered input; fish/PowerShell through guarded body files) server-side.
+        // Mark the model before any byte is
+        // parsed so the root-shell `InitShell` it emits — the fresh open's live
+        // handshake as much as an adopt preamble — is stamped
+        // `suppress_bootstrap_write`. Without this, the client re-types the
+        // ~90 KB body into the already-bootstrapped shell, where it executes a
+        // second time visibly as command blocks (echo restored by the
+        // server-side pass's `stty sane`): the connect-time script dump on
+        // every fresh connect (RC 2026-07-21). `init_shell` scopes the stamp to
+        // what the daemon actually delivers — root shells only; subshells and
+        // legacy-SSH sessions keep their client-side write.
+        event_loop
+            .terminal_model
+            .lock()
+            .mark_bootstrap_delivered_server_side();
         event_loop.host_label = host_label;
-        match adopt_pty_session_id {
+        // Name the tab from second 0: an OSC-0 title through the normal ANSI
+        // path, so a connecting tab reads its host instead of sitting nameless
+        // until the session opens (polish audit P0.5). Deliberately NOT the
+        // sticky pane `custom_title` — the session's own title updates (the
+        // bootstrap's precmd metadata drives title events once the shell is
+        // up) must keep replacing this naturally. Control
+        // characters are stripped: a label containing ESC/BEL would otherwise
+        // terminate the sequence and inject terminal control through the
+        // parser.
+        let safe_label: String = event_loop
+            .host_label
+            .chars()
+            .filter(|c| !c.is_control())
+            .collect();
+        let title_seq = format!("\x1b]0;{safe_label}\x07");
+        event_loop.process_pty_bytes(title_seq.as_bytes());
+        match (adopt_pty_session_id, adopt_pty_generation) {
             // Adopt an existing daemon session: attach + replay on connect.
-            Some(id) => event_loop.pty_session_id = Some(id),
-            // Open a fresh session once the transport is connected.
-            None => event_loop.pending_open = Some((open_params, size_info)),
+            (Some(id), generation) if !id.is_empty() => {
+                event_loop.pty_session_id = Some(id);
+                // A legacy daemon predates PTY generations and reports zero.
+                // Preserve its id-only attach path; capability-aware inventory
+                // requires and supplies a nonzero generation.
+                event_loop.pty_generation = generation.filter(|generation| *generation != 0);
+                event_loop.expected_attach_agent_binding = expected_attach_agent_binding;
+                event_loop.awaiting_attach_snapshot = true;
+            }
+            (Some(_), _) | (None, Some(_)) => {
+                event_loop
+                    .write_notice("could not re-attach session: a non-empty PTY id is required");
+                event_loop.terminated = true;
+            }
+            // Open a fresh session once the transport is connected. Only a
+            // fresh open witnesses the real bootstrap handshake from seq 0, so
+            // only it reports the boundary the daemon freezes (T1.3).
+            (None, None) => {
+                event_loop.pending_open = Some((open_params, size_info));
+                event_loop.report_bootstrap_boundary = true;
+            }
         }
 
         // First-connect auto-install: render the install ladder's phase messages
@@ -124,20 +251,20 @@ impl EventLoop {
                 bytes,
                 ..
             } => {
-                if me.is_our_session(pty_session_id) {
+                if me.is_our_session(pty_session_id) && !me.awaiting_attach_snapshot {
                     me.process_pty_bytes(bytes);
                     me.last_seq = *seq + bytes.len() as u64;
-                } else if me.pty_session_id.is_none() && *session_id == me.connection_session_id {
+                    me.maybe_report_bootstrap_boundary(ctx);
+                    me.maybe_dispatch_startup_command(ctx);
+                } else if (me.is_our_session(pty_session_id) && me.awaiting_attach_snapshot)
+                    || (me.pty_session_id.is_none() && *session_id == me.connection_session_id)
+                {
                     // Output for our connection before `OpenSession` resolved — the
                     // daemon auto-attaches and starts the shell/bootstrap before the
                     // response reaches us. Buffer it (drained in `on_session_opened`)
                     // so the initial output isn't lost; stop past the cap so a hung
                     // open can't grow this without bound.
-                    let buffered: usize = me.pending_output.iter().map(|(_, _, b)| b.len()).sum();
-                    if buffered < MAX_PENDING_OUTPUT_BYTES {
-                        me.pending_output
-                            .push((pty_session_id.clone(), *seq, bytes.clone()));
-                    }
+                    me.buffer_pending_output(pty_session_id, *seq, bytes);
                 }
             }
             RemoteServerManagerEvent::SessionExited {
@@ -145,7 +272,11 @@ impl EventLoop {
                 exit_code,
                 ..
             } if me.is_our_session(pty_session_id) => {
-                me.on_session_exited(*exit_code);
+                if me.awaiting_attach_snapshot {
+                    me.pending_exit = Some(*exit_code);
+                } else {
+                    me.on_session_exited(*exit_code);
+                }
             }
             RemoteServerManagerEvent::SessionConnected { session_id, .. }
                 if *session_id == me.connection_session_id =>
@@ -157,14 +288,17 @@ impl EventLoop {
             RemoteServerManagerEvent::SessionReconnected { session_id, .. }
                 if *session_id == me.connection_session_id =>
             {
+                // The old transport cannot complete its request anymore. Keep
+                // the logical command and id, but let the reconnected client
+                // issue a new correlated attempt after attach.
+                me.begin_transport_reconnect();
                 me.reattach(ctx);
             }
             RemoteServerManagerEvent::SessionConnectionFailed {
                 session_id,
                 phase,
                 error,
-            } if *session_id == me.connection_session_id =>
-            {
+            } if *session_id == me.connection_session_id => {
                 me.on_connect_failed(&format!("{phase:?}"), error);
             }
             // Advisory from the daemon: this session landed inside a terminal
@@ -182,6 +316,17 @@ impl EventLoop {
                      login profile). zaplex already keeps this session alive natively — \
                      two persistence layers are nested."
                 ));
+            }
+            // The transport went away for good: a spontaneous drop with no
+            // reconnect possible, or reconnect attempts exhausted (§9). A mere
+            // blip never reaches here — it arrives as `SessionReconnected` and is
+            // handled above. Nothing will bring this view back on its own, so
+            // surface it instead of freezing the grid on its last frame and
+            // silently swallowing everything the user types.
+            RemoteServerManagerEvent::SessionDisconnected { session_id, .. }
+                if *session_id == me.connection_session_id =>
+            {
+                me.on_transport_lost();
             }
             _ => {}
         });
@@ -218,14 +363,333 @@ impl EventLoop {
             channel_event_listener,
             connection_session_id,
             pty_session_id: None,
+            pty_generation: None,
+            expected_attach_agent_binding: None,
+            awaiting_attach_snapshot: false,
+            attach_in_flight: None,
+            next_attach_attempt: 0,
+            terminal_view_id: None,
+            desired_agent_binding: None,
+            desired_agent_binding_from_lifecycle: false,
+            agent_binding: None,
+            agent_binding_in_flight: None,
+            next_agent_binding_attempt: 0,
             pending_input: Vec::new(),
             pending_output: Vec::new(),
+            pending_output_overflowed: false,
+            pending_exit: None,
             pending_open: None,
             startup_command: None,
+            startup_command_id: None,
+            startup_command_in_flight: None,
+            next_startup_command_attempt: 0,
+            startup_retry_requires_reconnect: false,
+            startup_capability_notice_shown: false,
             last_seq: 0,
             host_label: String::new(),
             welcomed: false,
+            terminated: false,
+            report_bootstrap_boundary: false,
         }
+    }
+
+    /// Starts mirroring this terminal's CLI-agent lifecycle to the daemon PTY.
+    pub(super) fn bind_terminal_view(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.terminal_view_id = Some(terminal_view_id);
+        let sessions = CLIAgentSessionsModel::handle(ctx);
+        ctx.subscribe_to_model(&sessions, |me, event, ctx| {
+            if me.terminal_view_id != Some(event.terminal_view_id()) {
+                return;
+            }
+            match event {
+                CLIAgentSessionsModelEvent::Started { .. }
+                | CLIAgentSessionsModelEvent::StatusChanged { .. }
+                | CLIAgentSessionsModelEvent::SessionUpdated { .. } => {
+                    me.refresh_desired_agent_binding(ctx);
+                }
+                CLIAgentSessionsModelEvent::Ended { .. } => {
+                    me.desired_agent_binding_from_lifecycle = true;
+                    me.desired_agent_binding = None;
+                    if !me.awaiting_attach_snapshot {
+                        me.drive_agent_binding(ctx);
+                    }
+                }
+                CLIAgentSessionsModelEvent::InputSessionChanged { .. } => {}
+            }
+        });
+    }
+
+    fn apply_authoritative_agent_binding_state(
+        &mut self,
+        agent_binding: Option<AgentSessionIdentity>,
+    ) {
+        self.agent_binding = agent_binding.clone();
+        if !self.desired_agent_binding_from_lifecycle {
+            self.desired_agent_binding = agent_binding;
+        }
+    }
+
+    fn apply_authoritative_agent_binding(
+        &mut self,
+        agent_binding: Option<AgentSessionIdentity>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !self.desired_agent_binding_from_lifecycle {
+            if let Some(terminal_view_id) = self.terminal_view_id {
+                CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, _ctx| {
+                    if let Some(identity) = agent_binding.as_ref() {
+                        let agent = match identity.provider.as_str() {
+                            "claude" => Some(CLIAgent::Claude),
+                            "codex" => Some(CLIAgent::Codex),
+                            "grok" => Some(CLIAgent::Grok),
+                            "antigravity" => Some(CLIAgent::Antigravity),
+                            _ => None,
+                        };
+                        if let Some(agent) = agent {
+                            sessions.bind_account_identity(
+                                terminal_view_id,
+                                agent,
+                                (!identity.config_dir.is_empty())
+                                    .then(|| identity.config_dir.clone()),
+                                (!identity.account_email.is_empty())
+                                    .then(|| identity.account_email.clone()),
+                            );
+                        } else {
+                            sessions.unbind_account_identity(terminal_view_id);
+                        }
+                    } else {
+                        sessions.unbind_account_identity(terminal_view_id);
+                    }
+                });
+            }
+        }
+        self.apply_authoritative_agent_binding_state(agent_binding);
+    }
+
+    fn refresh_desired_agent_binding(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(terminal_view_id) = self.terminal_view_id else {
+            return;
+        };
+        let sessions = CLIAgentSessionsModel::handle(ctx);
+        self.desired_agent_binding_from_lifecycle = true;
+        self.desired_agent_binding = sessions.read(ctx, |sessions, _ctx| {
+            let session = sessions.session(terminal_view_id)?;
+            let provider = match session.agent {
+                CLIAgent::Claude => "claude",
+                CLIAgent::Codex => "codex",
+                unsupported @ (CLIAgent::Grok
+                | CLIAgent::Antigravity
+                | CLIAgent::Gemini
+                | CLIAgent::Amp
+                | CLIAgent::Droid
+                | CLIAgent::OpenCode
+                | CLIAgent::Copilot
+                | CLIAgent::Pi
+                | CLIAgent::Auggie
+                | CLIAgent::CursorCli
+                | CLIAgent::Goose
+                | CLIAgent::DeepSeek
+                | CLIAgent::Unknown) => {
+                    log::debug!(
+                        "daemon_tty: skipping PTY binding for unsupported live-verification \
+                         provider {unsupported:?}"
+                    );
+                    return None;
+                }
+            };
+            let account = sessions.account_identity(terminal_view_id)?;
+            if account.agent() != session.agent {
+                return None;
+            }
+            Some(AgentSessionIdentity {
+                session_id: session.session_context.session_id.clone()?,
+                provider: provider.to_string(),
+                account_email: account.account_email.clone().unwrap_or_default(),
+                config_dir: account.config_dir.clone().unwrap_or_default(),
+            })
+        });
+        if !self.awaiting_attach_snapshot {
+            self.drive_agent_binding(ctx);
+        }
+    }
+
+    fn agent_binding_client(
+        &self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<(Arc<RemoteServerClient>, bool, String)> {
+        let session_id = self.connection_session_id;
+        let manager = RemoteServerManager::handle(ctx);
+        manager.read(ctx, |manager, _ctx| {
+            manager
+                .client_for_session(session_id)
+                .cloned()
+                .and_then(|client| {
+                    manager.host_id_for_session(session_id).map(|host_id| {
+                        let supported = manager
+                            .session_supports_feature(session_id, FEATURE_AGENT_PTY_BINDING_V2);
+                        (client, supported, host_id.as_str().to_string())
+                    })
+                })
+        })
+    }
+
+    /// Serializes bind/unbind requests so rapid lifecycle changes cannot race a
+    /// stale callback into becoming foreground.
+    fn drive_agent_binding(&mut self, ctx: &mut ModelContext<Self>) {
+        self.settle_agent_binding_if_converged();
+        if self.agent_binding_in_flight.is_some() {
+            return;
+        }
+        let (Some(pty_session_id), Some(pty_generation)) =
+            (self.pty_session_id.clone(), self.pty_generation)
+        else {
+            return;
+        };
+        let Some((client, supported, host_id)) = self.agent_binding_client(ctx) else {
+            return;
+        };
+        if !supported {
+            return;
+        }
+
+        match (
+            self.agent_binding.clone(),
+            self.desired_agent_binding.clone(),
+        ) {
+            (None, None) => {}
+            (Some(current), Some(desired)) if current == desired => {}
+            (Some(current), None) => {
+                let attempt = self.start_agent_binding_attempt();
+                let sent = current.clone();
+                let future = async move {
+                    client
+                        .unbind_agent_pty(host_id, current, pty_session_id, pty_generation)
+                        .await
+                };
+                ctx.spawn(future, move |me, result, ctx| {
+                    if !me.finish_agent_binding_attempt(attempt) {
+                        return;
+                    }
+                    let retry_immediately = result
+                        .as_ref()
+                        .err()
+                        .is_some_and(Self::agent_binding_error_retries_immediately);
+                    let accepted =
+                        result.as_ref().ok().and_then(|response| {
+                            AgentPtyBindingStatus::try_from(response.status).ok()
+                        }) == Some(AgentPtyBindingStatus::Unbound);
+                    if accepted && me.agent_binding.as_ref() == Some(&sent) {
+                        me.agent_binding = None;
+                        me.settle_agent_binding_if_converged();
+                    } else if !accepted {
+                        log::warn!("daemon_tty: agent PTY unbind failed: {result:?}");
+                    }
+                    if accepted || retry_immediately || me.desired_agent_binding.is_some() {
+                        me.drive_agent_binding(ctx);
+                    }
+                });
+            }
+            (current, Some(desired)) => {
+                let attempt = self.start_agent_binding_attempt();
+                let sent = desired.clone();
+                let future = async move {
+                    client
+                        .bind_agent_pty(host_id, desired, pty_session_id, pty_generation, current)
+                        .await
+                };
+                ctx.spawn(future, move |me, result, ctx| {
+                    if !me.finish_agent_binding_attempt(attempt) {
+                        return;
+                    }
+                    let retry_immediately = result
+                        .as_ref()
+                        .err()
+                        .is_some_and(Self::agent_binding_error_retries_immediately);
+                    let accepted =
+                        result.as_ref().ok().and_then(|response| {
+                            AgentPtyBindingStatus::try_from(response.status).ok()
+                        }) == Some(AgentPtyBindingStatus::Bound);
+                    if accepted {
+                        me.agent_binding = Some(sent.clone());
+                        me.settle_agent_binding_if_converged();
+                    } else {
+                        log::warn!("daemon_tty: agent PTY bind failed: {result:?}");
+                    }
+                    if accepted
+                        || retry_immediately
+                        || me.desired_agent_binding.as_ref() != Some(&sent)
+                    {
+                        me.drive_agent_binding(ctx);
+                    }
+                });
+            }
+        }
+    }
+
+    fn settle_agent_binding_if_converged(&mut self) {
+        if self.agent_binding == self.desired_agent_binding {
+            self.desired_agent_binding_from_lifecycle = false;
+        }
+    }
+
+    fn start_agent_binding_attempt(&mut self) -> u64 {
+        self.next_agent_binding_attempt = self.next_agent_binding_attempt.wrapping_add(1);
+        let attempt = self.next_agent_binding_attempt;
+        self.agent_binding_in_flight = Some(attempt);
+        attempt
+    }
+
+    fn finish_agent_binding_attempt(&mut self, attempt: u64) -> bool {
+        if self.agent_binding_in_flight != Some(attempt) {
+            return false;
+        }
+        self.agent_binding_in_flight = None;
+        true
+    }
+
+    fn allow_agent_binding_retry(&mut self) {
+        self.agent_binding_in_flight = None;
+    }
+
+    fn agent_binding_error_retries_immediately(error: &ClientError) -> bool {
+        matches!(error, ClientError::Timeout(_))
+    }
+
+    fn attach_generation_is_valid(
+        expected_generation: Option<u64>,
+        supports_agent_binding: bool,
+    ) -> bool {
+        expected_generation.is_some() || !supports_agent_binding
+    }
+
+    fn attach_error_waits_for_reconnect(error: &ClientError) -> bool {
+        matches!(
+            error,
+            ClientError::Disconnected | ClientError::ResponseChannelClosed
+        )
+    }
+
+    fn start_attach_attempt(&mut self) -> u64 {
+        self.next_attach_attempt = self.next_attach_attempt.wrapping_add(1);
+        let attempt = self.next_attach_attempt;
+        self.attach_in_flight = Some(attempt);
+        attempt
+    }
+
+    fn finish_attach_attempt(&mut self, attempt: u64) -> bool {
+        if self.attach_in_flight != Some(attempt) {
+            return false;
+        }
+        self.attach_in_flight = None;
+        true
+    }
+
+    fn allow_attach_retry(&mut self) {
+        self.attach_in_flight = None;
     }
 
     /// On transport reconnect: re-attach to the still-running daemon session and
@@ -233,6 +697,9 @@ impl EventLoop {
     /// Falls back to opening the session if it was never opened (reconnect raced
     /// the initial open).
     fn reattach(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.attach_in_flight.is_some() {
+            return;
+        }
         let Some(pty_session_id) = self.pty_session_id.clone() else {
             self.try_open(ctx);
             return;
@@ -241,48 +708,154 @@ impl EventLoop {
             return; // The reconnected client isn't registered yet.
         };
         let last_seq = self.last_seq;
+        let expected_generation = self.pty_generation;
+        let supports_agent_binding = self
+            .agent_binding_client(ctx)
+            .is_some_and(|(_, supported, _)| supported);
+        if !Self::attach_generation_is_valid(expected_generation, supports_agent_binding) {
+            self.write_notice(
+                "could not re-attach session: the daemon returned an invalid PTY generation",
+            );
+            self.terminated = true;
+            return;
+        }
+        if self.expected_attach_agent_binding.is_some() && !supports_agent_binding {
+            self.write_notice(
+                "could not re-attach agent: the host does not support validated agent routing",
+            );
+            self.terminated = true;
+            return;
+        }
         log::info!("daemon_tty: re-attaching pty_session_id={pty_session_id} from seq {last_seq}");
-        let future = async move { client.attach_session(pty_session_id, last_seq).await };
-        ctx.spawn(future, |me, result, ctx| match result {
+        let expected_agent_binding = self.expected_attach_agent_binding.clone();
+        let attempt = self.start_attach_attempt();
+        let future = async move {
+            match expected_generation {
+                Some(generation) => {
+                    client
+                        .attach_session_generation_and_agent(
+                            pty_session_id,
+                            last_seq,
+                            Some(generation),
+                            expected_agent_binding,
+                        )
+                        .await
+                }
+                None => client.attach_session(pty_session_id, last_seq).await,
+            }
+        };
+        ctx.spawn(future, move |me, result, ctx| match result {
             Ok(attached) => {
-                // If the daemon's ring evicted output we never saw, the replay
-                // starts past our cursor (base_seq > last_seq) — a hole. Applying
-                // post-gap bytes (which may omit the clears/cursor moves that were
-                // evicted) onto the stale grid corrupts it, so reset the screen
-                // first and tell the user scrollback was truncated.
-                if attached.base_seq > me.last_seq {
-                    me.process_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
-                    me.write_notice("scrollback truncated during a long disconnect");
+                if !me.finish_attach_attempt(attempt) || me.terminated {
+                    return;
                 }
-                if !attached.replay.is_empty() {
-                    me.process_pty_bytes(&attached.replay);
-                }
-                me.last_seq = attached.base_seq + attached.replay.len() as u64;
-                // Stage the payoff moment: an adopt's first attach welcomes the
-                // user into their running session; a reconnect after a drop
-                // states plainly that nothing was lost.
-                if me.welcomed {
-                    me.write_zaplexify(&format!(
-                        "Reconnected to {} — session restored, nothing lost.",
-                        me.host_label
-                    ));
-                } else {
-                    me.write_zaplexify(&format!(
-                        "Re-attached to your running session on {} — right where you left off.",
-                        me.host_label
-                    ));
-                    me.welcomed = true;
-                }
-                // Transport is back and we're re-attached — flush input buffered
-                // during the outage so keystrokes/resizes aren't lost (§9).
-                me.flush_pending_input(ctx);
+                me.on_session_attached(attached, supports_agent_binding, ctx);
             }
             Err(err) => {
-                // Surface attach failure (e.g. the session exited in the race
-                // between listing and adopting) instead of a blank tab.
-                log::error!("Failed to re-attach daemon session: {err:?}");
-                me.write_notice(&format!("could not re-attach session: {err}"));
+                if !me.finish_attach_attempt(attempt) {
+                    return;
+                }
+                if Self::attach_error_waits_for_reconnect(&err) {
+                    // A transport drop clears the old client's pending request
+                    // before the manager finishes reconnecting. Keep this loop
+                    // provisional; SessionReconnected starts a fresh attach.
+                    log::warn!("Session attach interrupted; waiting to retry: {err:?}");
+                } else {
+                    // A live connection will not emit SessionReconnected for a
+                    // timeout, malformed response, or authoritative rejection.
+                    // Fail visibly and release the provisional dedupe route.
+                    log::error!("Session attach failed: {err:?}");
+                    me.write_notice(&format!("could not re-attach session: {err}"));
+                    me.abandon_failed_attach(ctx);
+                    if let Some(exit_code) = me.pending_exit.take() {
+                        me.awaiting_attach_snapshot = false;
+                        me.on_session_exited(exit_code);
+                    }
+                }
             }
+        });
+    }
+
+    fn on_session_attached(
+        &mut self,
+        attached: SessionAttached,
+        supports_agent_binding: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self
+            .pty_generation
+            .is_some_and(|expected| attached.generation != expected)
+        {
+            log::error!(
+                "daemon_tty: rejected attach response with generation {} (expected {:?})",
+                attached.generation,
+                self.pty_generation
+            );
+            self.write_notice("could not re-attach session: daemon generation mismatch");
+            self.terminated = true;
+            self.abandon_failed_attach(ctx);
+            return;
+        }
+        let pending_exit = self.pending_exit.take();
+        if pending_exit.is_none() && supports_agent_binding {
+            self.apply_authoritative_agent_binding(attached.agent_binding.clone(), ctx);
+        } else {
+            self.apply_authoritative_agent_binding(None, ctx);
+        }
+        self.expected_attach_agent_binding = None;
+        self.apply_attach(
+            &attached.bootstrap_preamble,
+            attached.base_seq,
+            &attached.replay,
+        );
+        let replay_again = self.drain_pending_output();
+        if let Some(exit_code) = pending_exit {
+            self.awaiting_attach_snapshot = false;
+            if replay_again {
+                self.write_warning(
+                    "some final session output was truncated before the exit notification",
+                );
+            }
+            self.on_session_exited(exit_code);
+            return;
+        }
+        if replay_again {
+            self.awaiting_attach_snapshot = true;
+            self.reattach(ctx);
+            return;
+        }
+        self.awaiting_attach_snapshot = false;
+        // If bootstrap only completed now — a fresh open that dropped
+        // mid-handshake and finished it from this reconnect's replay — the
+        // live-output path never saw the flip, so report the boundary here
+        // too (a no-op for adopted sessions and once already reported).
+        self.maybe_report_bootstrap_boundary(ctx);
+        self.maybe_dispatch_startup_command(ctx);
+        // Stage the payoff moment: an adopt's first attach welcomes the
+        // user into their running session; a reconnect after a drop
+        // states plainly that nothing was lost.
+        if self.welcomed {
+            self.write_zaplexify(&format!(
+                "Reconnected to {} — session restored, nothing lost.",
+                self.host_label
+            ));
+        } else {
+            self.write_zaplexify(&format!(
+                "Re-attached to your running session on {} — right where you left off.",
+                self.host_label
+            ));
+            self.welcomed = true;
+        }
+        // Transport is back and we're re-attached — flush input buffered
+        // during the outage so keystrokes/resizes aren't lost (§9).
+        self.flush_pending_input(ctx);
+        self.drive_agent_binding(ctx);
+    }
+
+    fn abandon_failed_attach(&mut self, ctx: &mut ModelContext<Self>) {
+        let session_id = self.connection_session_id;
+        RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.deregister_session(session_id, false, ctx);
         });
     }
 
@@ -296,6 +869,26 @@ impl EventLoop {
         let manager = RemoteServerManager::handle(ctx);
         manager.read(ctx, |manager, _ctx| {
             manager.client_for_session(session_id).cloned()
+        })
+    }
+
+    /// Resolves both the live client and the negotiated retry-safe startup
+    /// capability from the same manager state snapshot.
+    fn startup_client(
+        &self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<(Arc<RemoteServerClient>, bool)> {
+        let session_id = self.connection_session_id;
+        let manager = RemoteServerManager::handle(ctx);
+        manager.read(ctx, |manager, _ctx| {
+            manager
+                .client_for_session(session_id)
+                .cloned()
+                .map(|client| {
+                    let supported =
+                        manager.session_supports_feature(session_id, FEATURE_STARTUP_COMMAND_ACK);
+                    (client, supported)
+                })
         })
     }
 
@@ -334,15 +927,23 @@ impl EventLoop {
             ring_ceiling_bytes,
             startup_command,
         } = open_params;
-        // Run once when the session opens (see `on_session_opened`).
-        self.startup_command = startup_command;
+        // Run once after this shell reaches the real bootstrap boundary (see
+        // `maybe_dispatch_startup_command`).
+        self.startup_command = startup_command.filter(|command| !command.is_empty());
+        self.startup_command_id = self
+            .startup_command
+            .as_ref()
+            .map(|_| uuid::Uuid::new_v4().to_string());
         let rows = size_info.rows as u32;
         let cols = size_info.columns as u32;
         log::info!("daemon_tty: issuing OpenSession (cwd={cwd:?}, shell={shell:?}, {rows}x{cols}, ring_ceiling={ring_ceiling_bytes:?})");
-        let future =
-            async move { client.open_session(cwd, shell, env, rows, cols, ring_ceiling_bytes).await };
+        let future = async move {
+            client
+                .open_session(cwd, shell, env, rows, cols, ring_ceiling_bytes)
+                .await
+        };
         ctx.spawn(future, |me, result, ctx| match result {
-            Ok(opened) => me.on_session_opened(opened.session_id, ctx),
+            Ok(opened) => me.on_session_opened(opened.session_id, opened.generation, ctx),
             Err(err) => {
                 // The transport is up (so the connect-failure path never fired),
                 // but the daemon refused to open the session (bad cwd, unspawnable
@@ -367,9 +968,22 @@ impl EventLoop {
         self.pending_open = None;
     }
 
-    fn on_session_opened(&mut self, pty_session_id: String, ctx: &mut ModelContext<Self>) {
+    fn on_session_opened(
+        &mut self,
+        pty_session_id: String,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
         log::info!("daemon_tty: session opened, pty_session_id={pty_session_id}");
         self.pty_session_id = Some(pty_session_id.clone());
+        self.pty_generation = (generation != 0).then_some(generation);
+        if self.drain_pending_output() {
+            self.awaiting_attach_snapshot = true;
+            self.reattach(ctx);
+            return;
+        }
+        self.awaiting_attach_snapshot = false;
+        self.drive_agent_binding(ctx);
         // Stage the moment: the user should SEE they're in a persistent session
         // (the whole point of zaplex), not have to infer it. One line, once.
         self.write_zaplexify(&format!(
@@ -380,30 +994,58 @@ impl EventLoop {
         // Render output the daemon produced before this response arrived (it
         // auto-attaches and starts the shell immediately), so the initial
         // shell/bootstrap output isn't missing from a fresh tab. In seq order.
-        let pending = std::mem::take(&mut self.pending_output);
-        for (pty, seq, bytes) in pending {
-            if pty == pty_session_id {
-                self.process_pty_bytes(&bytes);
-                self.last_seq = seq + bytes.len() as u64;
-            }
-        }
-        // Run the host's startup command once, after the session is open — the
-        // daemon-path analog of the local-PTY SSH startup-command injector. Sent
-        // as input + newline (bash/zsh execute byte), the same way the daemon
-        // injects its own bootstrap. `take()` ensures it never re-runs on reattach.
-        if let Some(cmd) = self.startup_command.take() {
-            if !cmd.is_empty() {
-                let mut bytes = cmd.into_bytes();
-                bytes.push(b'\n');
-                self.dispatch_message(
-                    &pty_session_id,
-                    EventLoopMessage::Input(std::borrow::Cow::Owned(bytes)),
-                    ctx,
-                );
-            }
-        }
+        // The bootstrap handshake may already be complete in that pre-open burst
+        // (the daemon auto-attaches and starts the shell before this response
+        // lands), so report the boundary now if so (T1.3).
+        self.maybe_report_bootstrap_boundary(ctx);
+        // The pending burst can already contain the full shell handshake. If it
+        // does, start now; otherwise live output will retry at the exact boundary.
+        self.maybe_dispatch_startup_command(ctx);
         // Flush any input that arrived before the session was addressable.
         self.flush_pending_input(ctx);
+    }
+
+    fn buffer_pending_output(&mut self, pty_session_id: &str, seq: u64, bytes: &[u8]) {
+        let buffered: usize = self
+            .pending_output
+            .iter()
+            .map(|(_, _, bytes)| bytes.len())
+            .sum();
+        if buffered.saturating_add(bytes.len()) <= MAX_PENDING_OUTPUT_BYTES {
+            self.pending_output
+                .push((pty_session_id.to_string(), seq, bytes.to_vec()));
+        } else {
+            self.pending_output_overflowed = true;
+        }
+    }
+
+    /// Drains only a contiguous sequence. `true` means overflow or a gap was
+    /// observed and the caller must request another daemon replay before live
+    /// output resumes.
+    fn drain_pending_output(&mut self) -> bool {
+        let Some(pty_session_id) = self.pty_session_id.clone() else {
+            return false;
+        };
+        let mut replay_required = std::mem::take(&mut self.pending_output_overflowed);
+        let mut pending = std::mem::take(&mut self.pending_output);
+        pending.sort_by_key(|(_, seq, _)| *seq);
+        for (pty, seq, bytes) in pending {
+            if pty != pty_session_id {
+                continue;
+            }
+            let end_seq = seq + bytes.len() as u64;
+            if end_seq <= self.last_seq {
+                continue;
+            }
+            if seq > self.last_seq {
+                replay_required = true;
+                break;
+            }
+            let offset = self.last_seq.saturating_sub(seq).min(bytes.len() as u64) as usize;
+            self.process_pty_bytes(&bytes[offset..]);
+            self.last_seq = end_seq;
+        }
+        replay_required
     }
 
     /// Flush input buffered while the session wasn't addressable — either before
@@ -422,6 +1064,10 @@ impl EventLoop {
     }
 
     fn on_event_loop_message(&mut self, message: EventLoopMessage, ctx: &mut ModelContext<Self>) {
+        if self.awaiting_attach_snapshot {
+            self.buffer_pending(message);
+            return;
+        }
         match self.pty_session_id.clone() {
             Some(pty_session_id) => self.dispatch_message(&pty_session_id, message, ctx),
             None => self.buffer_pending(message),
@@ -471,6 +1117,10 @@ impl EventLoop {
         message: EventLoopMessage,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.awaiting_attach_snapshot {
+            self.buffer_pending(message);
+            return;
+        }
         let Some(client) = self.client(ctx) else {
             // Transport is down (e.g. an SSH blip mid-session). Buffer instead of
             // dropping so keystrokes/resizes survive the outage — `reattach`
@@ -508,11 +1158,33 @@ impl EventLoop {
             "Daemon session {:?} exited (code {exit_code:?})",
             self.pty_session_id
         );
+        // A clean exit is a terminal state: latch it so that if the transport
+        // later drops (a `SessionDisconnected` reaching this still-open tab) we
+        // don't append a contradictory "connection lost" line under this one.
+        self.terminated = true;
         let notice = match exit_code {
             Some(code) => format!("session ended (exit code {code})"),
             None => "session ended".to_string(),
         };
         self.write_notice(&notice);
+    }
+
+    /// A terminal transport loss with no auto-reconnect left (spontaneous drop
+    /// or reconnect exhausted). Tell the user once instead of leaving a frozen
+    /// grid that quietly eats keystrokes — and be honest about the payoff: the
+    /// daemon owns the PTY, so a persistent session is very likely still running
+    /// on the host and reopening it reattaches. No-op if a terminal state was
+    /// already surfaced (a clean `SessionExited`, or a prior disconnect).
+    fn on_transport_lost(&mut self) {
+        if self.terminated {
+            return;
+        }
+        self.terminated = true;
+        self.write_notice(&format!(
+            "connection to {} lost. Your persistent session may still be running there — \
+             reopen the host to reattach.",
+            self.host_label
+        ));
     }
 
     /// Writes a Zaplex notice line (e.g. a connection error or session-ended
@@ -537,10 +1209,10 @@ impl EventLoop {
         self.process_pty_bytes(line.as_bytes());
     }
 
-    /// The Zaplexify signature line — bold cyan with the ⚡ mark. Used for the
-    /// persistent-session welcome and the reconnect/re-attach payoff moments.
+    /// The Zaplexify signature line — bold cyan. Used for the persistent-session
+    /// welcome and the reconnect/re-attach payoff moments.
     fn write_zaplexify(&mut self, text: &str) {
-        let line = format!("\r\n\x1b[1;36m⚡ {text}\x1b[0m\r\n");
+        let line = format!("\r\n\x1b[1;36m{text}\x1b[0m\r\n");
         self.process_pty_bytes(line.as_bytes());
     }
 
@@ -552,6 +1224,270 @@ impl EventLoop {
             .parse_bytes(&mut *terminal_model, bytes, &mut io::sink());
         self.channel_event_listener.send_wakeup_event();
     }
+
+    /// Applies an attach reply's bootstrap preamble and replay to the terminal,
+    /// advancing the `last_seq` replay cursor. Split out of `reattach` so the
+    /// preamble/gap/replay bookkeeping (the T1.3-sensitive part) is unit-testable
+    /// without a live client.
+    ///
+    /// - **Preamble** (T1.3): on an adopt whose ring already evicted the bootstrap
+    ///   handshake, the daemon ships it as `bootstrap_preamble`. Feed it through
+    ///   the normal parser path first — arming bootstrap exactly as a fresh
+    ///   session would — but only if we aren't already bootstrapped (a reconnect
+    ///   is). `base_seq` already points past the preamble range, so preamble and
+    ///   replay never overlap.
+    /// - **Gap**: if the ring evicted output we never saw (`base_seq > last_seq`),
+    ///   applying post-gap bytes onto the stale grid would corrupt it, so reset
+    ///   the screen — and, if a preamble was just fed, the parser too, so a
+    ///   preamble that ended mid-sequence can't bleed into the replay — then note
+    ///   the truncation.
+    fn apply_attach(&mut self, bootstrap_preamble: &[u8], base_seq: u64, replay: &[u8]) {
+        let fed_preamble = !bootstrap_preamble.is_empty() && !self.is_bootstrapped();
+        if fed_preamble {
+            // The daemon already bootstrapped this shell server-side, so arming
+            // bootstrap from the re-fed preamble must NOT make the client write
+            // the bootstrap body back into the running shell (T1.3). Arm the
+            // one-shot latch: the preamble's `InitShell` — parsed synchronously by
+            // the line below — consumes it and stamps *its* event so only that
+            // event skips the write.
+            self.terminal_model.lock().suppress_next_bootstrap_write();
+            self.process_pty_bytes(bootstrap_preamble);
+            // Belt-and-suspenders: if the preamble somehow carried no `InitShell`
+            // the latch is still armed; clear it so it can never leak onto a later
+            // genuine `InitShell`. (A frozen preamble always contains the
+            // handshake, so this is normally a no-op.)
+            self.terminal_model
+                .lock()
+                .take_suppress_next_bootstrap_write();
+            self.last_seq = bootstrap_preamble.len() as u64;
+        }
+        if base_seq > self.last_seq {
+            if fed_preamble {
+                self.reset_parser();
+            }
+            self.process_pty_bytes(b"\x1b[H\x1b[2J\x1b[3J");
+            self.write_notice("scrollback truncated during a long disconnect");
+        }
+        if !replay.is_empty() {
+            self.process_pty_bytes(replay);
+        }
+        self.last_seq = base_seq + replay.len() as u64;
+    }
+
+    /// Whether the terminal model has completed the Zaplexify bootstrap.
+    fn is_bootstrapped(&self) -> bool {
+        self.terminal_model.lock().block_list().is_bootstrapped()
+    }
+
+    /// Dispatches the host's startup command exactly once, but only after the
+    /// shell has completed its real bootstrap boundary. `SessionOpened` merely
+    /// means the PTY is addressable, and `InitShell` is still too early because
+    /// the daemon-delivered body has not yet emitted `Bootstrapped`.
+    fn maybe_dispatch_startup_command(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.startup_command.is_none()
+            || self.startup_command_in_flight.is_some()
+            || self.startup_retry_requires_reconnect
+            || !self.is_bootstrapped()
+        {
+            return;
+        }
+        let Some((client, supports_retry_safe_startup)) = self.startup_client(ctx) else {
+            return; // Transport down; reconnect will retry with the same id.
+        };
+        if !supports_retry_safe_startup {
+            if !self.startup_capability_notice_shown {
+                self.write_notice(
+                    "this host needs a newer Zaplex helper before it can start the requested \
+                     command safely. Update the host helper and reconnect.",
+                );
+                self.startup_capability_notice_shown = true;
+            }
+            return;
+        }
+        self.startup_capability_notice_shown = false;
+
+        let Some((pty_session_id, command_id, bytes, attempt)) =
+            self.prepare_startup_command_delivery()
+        else {
+            return;
+        };
+        let future = async move {
+            client
+                .send_startup_command(pty_session_id, command_id, bytes)
+                .await
+        };
+        ctx.spawn(future, move |me, result, ctx| {
+            if me.startup_command_in_flight != Some(attempt) {
+                return; // A newer reconnect attempt owns the state now.
+            }
+            match result {
+                Ok(ack)
+                    if ack.accepted
+                        && me.pty_session_id.as_deref() == Some(ack.session_id.as_str())
+                        && me.startup_command_id.as_deref()
+                            == Some(ack.startup_command_id.as_str()) =>
+                {
+                    me.acknowledge_startup_command(&ack.startup_command_id);
+                }
+                Ok(ack)
+                    if me.pty_session_id.as_deref() == Some(ack.session_id.as_str())
+                        && me.startup_command_id.as_deref()
+                            == Some(ack.startup_command_id.as_str()) =>
+                {
+                    me.startup_command_in_flight = None;
+                    me.startup_retry_requires_reconnect = true;
+                    log::warn!(
+                        "daemon_tty: daemon rejected startup command {} for session {}",
+                        ack.startup_command_id,
+                        ack.session_id
+                    );
+                    me.write_notice(
+                        "the requested startup command was not accepted and remains pending. \
+                         Reconnect after the session helper recovers to retry it safely.",
+                    );
+                }
+                Ok(ack) => {
+                    me.startup_command_in_flight = None;
+                    me.startup_retry_requires_reconnect = true;
+                    log::error!(
+                        "daemon_tty: mismatched startup Ack: session={}, command_id={}",
+                        ack.session_id,
+                        ack.startup_command_id
+                    );
+                    me.write_notice(
+                        "the host returned an invalid startup confirmation; the requested \
+                         command remains pending.",
+                    );
+                }
+                Err(err) => {
+                    me.startup_command_in_flight = None;
+                    log::warn!(
+                        "daemon_tty: startup command delivery attempt failed; retaining it for \
+                         retry: {err:?}"
+                    );
+                    // A timeout is exactly the lost-Ack case: retry immediately
+                    // with the same logical id so the daemon can return its
+                    // cached positive Ack. Disconnect errors wait for the
+                    // manager's SessionReconnected event to avoid spinning on a
+                    // dead client.
+                    if matches!(err, ClientError::Timeout(_)) {
+                        me.maybe_dispatch_startup_command(ctx);
+                    }
+                }
+            }
+        });
+    }
+
+    /// Claims one local delivery attempt while preserving the logical command
+    /// and id until a matching positive daemon Ack arrives.
+    fn prepare_startup_command_delivery(&mut self) -> Option<(String, String, Vec<u8>, u64)> {
+        if self.startup_command_in_flight.is_some()
+            || self.startup_retry_requires_reconnect
+            || !self.is_bootstrapped()
+        {
+            return None;
+        }
+        let pty_session_id = self.pty_session_id.clone()?;
+        let command = self.startup_command.as_ref()?;
+        let command_id = self
+            .startup_command_id
+            .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+            .clone();
+        let mut bytes = command.as_bytes().to_vec();
+        bytes.push(b'\n');
+        self.next_startup_command_attempt = self
+            .next_startup_command_attempt
+            .checked_add(1)
+            .unwrap_or(1);
+        let attempt = self.next_startup_command_attempt;
+        self.startup_command_in_flight = Some(attempt);
+        Some((pty_session_id, command_id, bytes, attempt))
+    }
+
+    /// Testable synchronous transport seam. A local enqueue error releases only
+    /// the attempt latch; the command and stable id stay pending.
+    fn try_dispatch_startup_command_with<E>(
+        &mut self,
+        dispatch: impl FnOnce(&str, &str, &[u8]) -> Result<(), E>,
+    ) {
+        let Some((pty_session_id, command_id, bytes, attempt)) =
+            self.prepare_startup_command_delivery()
+        else {
+            return;
+        };
+        if dispatch(&pty_session_id, &command_id, &bytes).is_err()
+            && self.startup_command_in_flight == Some(attempt)
+        {
+            self.startup_command_in_flight = None;
+        }
+    }
+
+    /// Completes the logical startup delivery only for its exact stable id.
+    fn acknowledge_startup_command(&mut self, command_id: &str) {
+        if self.startup_command_id.as_deref() != Some(command_id) {
+            return;
+        }
+        self.startup_command = None;
+        self.startup_command_id = None;
+        self.startup_command_in_flight = None;
+        self.startup_retry_requires_reconnect = false;
+    }
+
+    /// Releases an attempt tied to a dead transport without changing the
+    /// logical command id. The next connected transport can safely retry it.
+    fn allow_startup_command_retry(&mut self) {
+        if self.startup_command.is_some() {
+            self.startup_command_in_flight = None;
+            self.startup_retry_requires_reconnect = false;
+        }
+    }
+
+    /// Invalidates operations owned by the dead transport before re-attaching
+    /// them through the replacement connection.
+    fn begin_transport_reconnect(&mut self) {
+        self.allow_startup_command_retry();
+        self.allow_agent_binding_retry();
+        self.allow_attach_retry();
+        self.awaiting_attach_snapshot = true;
+    }
+
+    /// Resets the ANSI parser to its ground state without touching the terminal
+    /// model. Used between a bootstrap preamble and a post-gap replay so a
+    /// preamble that ended mid-sequence can't corrupt the replay (T1.3); the
+    /// model's bootstrap arming lives in the block list, not the parser, so it
+    /// survives this reset.
+    fn reset_parser(&mut self) {
+        self.parser = Processor::default();
+    }
+
+    /// Reports this session's bootstrap boundary to the daemon exactly once —
+    /// only for a session this loop opened, only after the model is bootstrapped,
+    /// and only with a live client (T1.3). The daemon freezes the output up to
+    /// `last_seq` as an eviction-proof preamble for future adopts. A no-op
+    /// afterwards, for adopted sessions, and while not yet bootstrapped; if the
+    /// transport is momentarily down it stays pending and retries on the next
+    /// output chunk.
+    fn maybe_report_bootstrap_boundary(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.report_bootstrap_boundary {
+            return;
+        }
+        let Some(pty_session_id) = self.pty_session_id.clone() else {
+            return;
+        };
+        if !self.is_bootstrapped() {
+            return;
+        }
+        let Some(client) = self.client(ctx) else {
+            return; // Transport down; retry on the next output chunk.
+        };
+        // Only latch off once the report is actually enqueued; a lost send (closed
+        // or full channel) leaves the flag set so a later output chunk retries —
+        // otherwise the daemon never freezes the preamble and a future adopt hits
+        // T1.3 again.
+        if client.set_bootstrap_preamble(pty_session_id, self.last_seq) {
+            self.report_bootstrap_boundary = false;
+        }
+    }
 }
 
 impl Entity for EventLoop {
@@ -559,413 +1495,5 @@ impl Entity for EventLoop {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::borrow::Cow;
-    use warp_core::HostId;
-    use warpui::{App, ModelHandle};
-
-    const OUR_PTY: &str = "pty-ours";
-    const HOST: &str = "test-host";
-
-    /// A [`ChannelEventListener`] whose wakeup channel we keep. `process_pty_bytes`
-    /// fires a wakeup *after* feeding the bytes through the ANSI processor into the
-    /// terminal model, so an observed wakeup proves the output reached the parser
-    /// and model for our session (the shared parser's rendering itself is covered
-    /// by the terminal-model / ANSI tests — here we test daemon-session routing).
-    fn test_listener() -> (ChannelEventListener, async_channel::Receiver<()>) {
-        let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
-        let (events_tx, _events_rx) = async_channel::unbounded();
-        let (pty_reads_tx, _pty_reads_rx) = async_broadcast::broadcast(1);
-        (
-            ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx),
-            wakeups_rx,
-        )
-    }
-
-    fn output_event(
-        conn: SessionId,
-        pty: &str,
-        seq: u64,
-        bytes: &[u8],
-    ) -> RemoteServerManagerEvent {
-        RemoteServerManagerEvent::SessionOutput {
-            session_id: conn,
-            host_id: HostId::new(HOST.to_string()),
-            pty_session_id: pty.to_string(),
-            seq,
-            bytes: bytes.to_vec(),
-        }
-    }
-
-    fn drain<T>(rx: &async_channel::Receiver<T>) {
-        while rx.try_recv().is_ok() {}
-    }
-
-    /// Starts an EventLoop that has *adopted* `OUR_PTY` (so it is immediately
-    /// addressable without a connected client to open) on a real
-    /// `RemoteServerManager` singleton. The manager is what the loop subscribes
-    /// to for live `SessionOutput`, so emitting from it drives the real path.
-    fn start_adopted_loop(
-        app: &mut App,
-        conn: SessionId,
-    ) -> (
-        ModelHandle<RemoteServerManager>,
-        ModelHandle<EventLoop>,
-        Arc<FairMutex<TerminalModel>>,
-        async_channel::Receiver<()>,
-    ) {
-        let manager = app.add_singleton_model(RemoteServerManager::new);
-        let (listener, wakeups_rx) = test_listener();
-        let model = Arc::new(FairMutex::new(TerminalModel::mock(None, Some(listener.clone()))));
-        // The input stream isn't exercised here; dropping the sender just closes it.
-        let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
-        let size = SizeInfo::new_without_font_metrics(24, 80);
-        let model_for_loop = model.clone();
-        let event_loop = app.add_model(|ctx| {
-            EventLoop::start(
-                model_for_loop,
-                event_loop_rx,
-                listener,
-                size,
-                conn,
-                OpenSessionParams::default(),
-                Some(OUR_PTY.to_string()),
-                None,
-                "test-host".to_string(),
-                ctx,
-            )
-        });
-        (manager, event_loop, model, wakeups_rx)
-    }
-
-    /// The core client-side output path: a live `SessionOutput` push for our
-    /// daemon session is fed to the terminal (proven by the repaint wakeup) and
-    /// advances `last_seq` (= seq + len, the replay cursor) — while a push for a
-    /// *different* `pty_session_id` on the same connection is ignored.
-    #[test]
-    fn session_output_routes_to_terminal_and_filters_by_pty() {
-        App::test((), |mut app| async move {
-            let conn = SessionId::from(7u64);
-            let (manager, event_loop, _model, wakeups_rx) = start_adopted_loop(&mut app, conn);
-
-            // Delivery is synchronous: `ctx.emit` queues an effect that
-            // `flush_effects` dispatches to subscribers before `update` returns.
-            manager.update(&mut app, |_m, ctx| {
-                ctx.emit(output_event(conn, OUR_PTY, 0, b"hello-daemon"));
-            });
-
-            assert!(
-                !wakeups_rx.is_empty(),
-                "our SessionOutput must reach the parser/model and request a repaint"
-            );
-            assert_eq!(
-                event_loop.read(&app, |me, _| me.last_seq),
-                b"hello-daemon".len() as u64,
-                "last_seq must advance to seq + bytes.len() (the replay cursor)"
-            );
-
-            // A push for another session on the same connection is filtered out.
-            drain(&wakeups_rx);
-            manager.update(&mut app, |_m, ctx| {
-                ctx.emit(output_event(conn, "pty-someone-else", 999, b"NOT-OURS"));
-            });
-            assert!(
-                wakeups_rx.is_empty(),
-                "output for a foreign pty_session_id must not reach our terminal"
-            );
-            assert_eq!(
-                event_loop.read(&app, |me, _| me.last_seq),
-                b"hello-daemon".len() as u64,
-                "foreign output must not advance our last_seq"
-            );
-
-            // A contiguous follow-up chunk for our session advances the cursor by
-            // its own length from the new seq.
-            manager.update(&mut app, |_m, ctx| {
-                ctx.emit(output_event(conn, OUR_PTY, 12, b"-more"));
-            });
-            assert_eq!(
-                event_loop.read(&app, |me, _| me.last_seq),
-                (b"hello-daemon".len() + b"-more".len()) as u64,
-                "last_seq tracks the latest seq + len"
-            );
-        });
-    }
-
-    /// Keystrokes that arrive before `OpenSession` resolves are buffered in order
-    /// so nothing typed during the connect window is lost. On open we attempt to
-    /// flush; with no live client the input is *retained* (re-buffered), never
-    /// dropped — it flushes for real once a client is available.
-    #[test]
-    fn input_before_session_open_is_buffered_and_not_lost() {
-        App::test((), |mut app| async move {
-            // Held for the duration so the singleton stays registered.
-            let _manager = app.add_singleton_model(RemoteServerManager::new);
-            let conn = SessionId::from(9u64);
-            let (listener, _wakeups_rx) = test_listener();
-            let model = Arc::new(FairMutex::new(TerminalModel::mock(None, Some(listener.clone()))));
-            let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
-            let size = SizeInfo::new_without_font_metrics(24, 80);
-            let model_for_loop = model.clone();
-            // `None` = open a fresh session; with no connected client it never
-            // resolves, so `pty_session_id` stays `None` and input must buffer.
-            let event_loop = app.add_model(|ctx| {
-                EventLoop::start(
-                    model_for_loop,
-                    event_loop_rx,
-                    listener,
-                    size,
-                    conn,
-                    OpenSessionParams::default(),
-                    None,
-                    None,
-                    "test-host".to_string(),
-                    ctx,
-                )
-            });
-
-            event_loop.update(&mut app, |me, ctx| {
-                me.on_event_loop_message(EventLoopMessage::Input(Cow::Owned(b"a".to_vec())), ctx);
-                me.on_event_loop_message(EventLoopMessage::Input(Cow::Owned(b"b".to_vec())), ctx);
-            });
-            event_loop.read(&app, |me, _| {
-                assert!(me.pty_session_id.is_none(), "session not opened yet");
-                assert_eq!(me.pending_input.len(), 2, "input must be buffered before open");
-            });
-
-            // Opening records the id and attempts to flush. With no live client
-            // the input can't be sent yet, so it must be *retained* (re-buffered),
-            // not dropped — preserving the no-loss guarantee until a client exists.
-            event_loop.update(&mut app, |me, ctx| {
-                me.on_session_opened("pty-late".to_string(), ctx);
-            });
-            event_loop.read(&app, |me, _| {
-                assert_eq!(me.pty_session_id.as_deref(), Some("pty-late"));
-                assert_eq!(
-                    me.pending_input.len(),
-                    2,
-                    "without a live client the flushed input must be retained, not lost"
-                );
-            });
-        });
-    }
-
-    /// Regression (§9 resilience): once a session is open, input that arrives
-    /// while the transport is down (the reconnect window) must be buffered, not
-    /// dropped — otherwise keystrokes typed during an SSH blip are lost. The
-    /// adopted loop has a `pty_session_id` but no registered client, which is
-    /// exactly the "session open, transport down" state.
-    #[test]
-    fn input_during_transport_outage_is_buffered_not_dropped() {
-        App::test((), |mut app| async move {
-            let conn = SessionId::from(13u64);
-            let (_manager, event_loop, _model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
-
-            event_loop.read(&app, |me, _| {
-                assert_eq!(
-                    me.pty_session_id.as_deref(),
-                    Some(OUR_PTY),
-                    "adopted loop is open (has a pty id) but has no live client"
-                );
-            });
-
-            // Session is open, transport is down (no client): input must buffer.
-            event_loop.update(&mut app, |me, ctx| {
-                me.on_event_loop_message(EventLoopMessage::Input(Cow::Owned(b"x".to_vec())), ctx);
-                me.on_event_loop_message(
-                    EventLoopMessage::Resize(SizeInfo::new_without_font_metrics(40, 100)),
-                    ctx,
-                );
-            });
-            event_loop.read(&app, |me, _| {
-                assert_eq!(
-                    me.pending_input.len(),
-                    2,
-                    "input during the outage must be buffered (flushed on reattach), not dropped"
-                );
-            });
-        });
-    }
-
-    /// The host's startup command runs once when the session opens — the
-    /// daemon-path analog of the local-PTY SSH startup-command injector. With no
-    /// live client the queued command lands in `pending_input` (sent for real on
-    /// reattach), so we assert it was queued as `command + "\n"`.
-    #[test]
-    fn startup_command_is_queued_as_input_on_open() {
-        App::test((), |mut app| async move {
-            let _manager = app.add_singleton_model(RemoteServerManager::new);
-            let conn = SessionId::from(17u64);
-            let (listener, _wakeups_rx) = test_listener();
-            let model = Arc::new(FairMutex::new(TerminalModel::mock(None, Some(listener.clone()))));
-            let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
-            let size = SizeInfo::new_without_font_metrics(24, 80);
-            let model_for_loop = model.clone();
-            let event_loop = app.add_model(|ctx| {
-                EventLoop::start(
-                    model_for_loop,
-                    event_loop_rx,
-                    listener,
-                    size,
-                    conn,
-                    OpenSessionParams::default(),
-                    None,
-                    None,
-                    "test-host".to_string(),
-                    ctx,
-                )
-            });
-
-            event_loop.update(&mut app, |me, ctx| {
-                me.startup_command = Some("tmux attach".to_string());
-                me.on_session_opened("pty-x".to_string(), ctx);
-            });
-
-            event_loop.read(&app, |me, _| {
-                assert!(me.startup_command.is_none(), "startup command must be taken (run once)");
-                assert_eq!(me.pending_input.len(), 1, "startup command queued as input");
-                match &me.pending_input[0] {
-                    EventLoopMessage::Input(bytes) => {
-                        assert_eq!(&**bytes, b"tmux attach\n", "command + execute newline");
-                    }
-                    other => panic!("expected Input, got {other:?}"),
-                }
-            });
-        });
-    }
-
-    /// During a long outage the buffered input must stay bounded: consecutive
-    /// resizes coalesce to the latest, and input past the byte cap drops oldest-
-    /// first — so a sleeping laptop can't grow `pending_input` without limit.
-    #[test]
-    fn buffered_input_is_capped_and_resizes_coalesce() {
-        App::test((), |mut app| async move {
-            let conn = SessionId::from(19u64);
-            // Adopted loop: pty id set, no live client → everything buffers.
-            let (_manager, event_loop, _model, _wakeups_rx) = start_adopted_loop(&mut app, conn);
-
-            event_loop.update(&mut app, |me, ctx| {
-                me.on_event_loop_message(
-                    EventLoopMessage::Resize(SizeInfo::new_without_font_metrics(20, 60)),
-                    ctx,
-                );
-                me.on_event_loop_message(
-                    EventLoopMessage::Resize(SizeInfo::new_without_font_metrics(30, 90)),
-                    ctx,
-                );
-                // 5 x 100 KiB = 500 KiB of input, over the 256 KiB cap.
-                for _ in 0..5 {
-                    me.on_event_loop_message(
-                        EventLoopMessage::Input(Cow::Owned(vec![b'x'; 100 * 1024])),
-                        ctx,
-                    );
-                }
-            });
-
-            event_loop.read(&app, |me, _| {
-                let resizes = me
-                    .pending_input
-                    .iter()
-                    .filter(|m| matches!(m, EventLoopMessage::Resize(_)))
-                    .count();
-                assert_eq!(resizes, 1, "consecutive resizes coalesce to the latest");
-                let input_bytes: usize = me
-                    .pending_input
-                    .iter()
-                    .map(|m| match m {
-                        EventLoopMessage::Input(b) => b.len(),
-                        _ => 0,
-                    })
-                    .sum();
-                assert!(
-                    input_bytes <= MAX_PENDING_INPUT_BYTES,
-                    "buffered input must be capped (was {input_bytes})"
-                );
-            });
-        });
-    }
-
-    /// Output the daemon pushes before `OpenSession` resolves (it auto-attaches
-    /// and starts the shell immediately) must not be lost: it is buffered while
-    /// the pty id is unknown, then rendered when `on_session_opened` records the id.
-    #[test]
-    fn output_before_open_is_buffered_then_rendered() {
-        App::test((), |mut app| async move {
-            let manager = app.add_singleton_model(RemoteServerManager::new);
-            let conn = SessionId::from(23u64);
-            let (listener, wakeups_rx) = test_listener();
-            let model = Arc::new(FairMutex::new(TerminalModel::mock(None, Some(listener.clone()))));
-            let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
-            let size = SizeInfo::new_without_font_metrics(24, 80);
-            let model_for_loop = model.clone();
-            // Fresh open (adopt = None): with no live client the open never
-            // resolves, so pty_session_id stays None and output must buffer.
-            let event_loop = app.add_model(|ctx| {
-                EventLoop::start(
-                    model_for_loop,
-                    event_loop_rx,
-                    listener,
-                    size,
-                    conn,
-                    OpenSessionParams::default(),
-                    None,
-                    None,
-                    "test-host".to_string(),
-                    ctx,
-                )
-            });
-
-            // Daemon pushes output for our connection before OpenSession resolves.
-            manager.update(&mut app, |_m, ctx| {
-                ctx.emit(output_event(conn, "pty-late", 0, b"BOOT"));
-            });
-            event_loop.read(&app, |me, _| {
-                assert!(me.pty_session_id.is_none(), "not opened yet");
-                assert_eq!(
-                    me.pending_output.len(),
-                    1,
-                    "pre-open output must be buffered, not dropped"
-                );
-            });
-
-            // Opening renders the buffered output (proven by the repaint wakeup),
-            // advances last_seq, and clears the buffer.
-            drain(&wakeups_rx);
-            event_loop.update(&mut app, |me, ctx| {
-                me.on_session_opened("pty-late".to_string(), ctx)
-            });
-            assert!(
-                !wakeups_rx.is_empty(),
-                "buffered pre-open output must be rendered on open"
-            );
-            event_loop.read(&app, |me, _| {
-                assert!(me.pending_output.is_empty(), "buffer drained on open");
-                assert_eq!(
-                    me.last_seq,
-                    b"BOOT".len() as u64,
-                    "last_seq advances past the replayed pre-open output"
-                );
-            });
-        });
-    }
-
-    /// A connect failure must surface in the tab — `on_connect_failed` renders a
-    /// notice through the terminal (so the user sees *why* instead of a blank /
-    /// hung view), which requests a repaint.
-    #[test]
-    fn connect_failure_writes_a_visible_notice() {
-        App::test((), |mut app| async move {
-            let conn = SessionId::from(11u64);
-            let (_manager, event_loop, _model, wakeups_rx) = start_adopted_loop(&mut app, conn);
-            drain(&wakeups_rx);
-            event_loop.update(&mut app, |me, _| {
-                me.on_connect_failed("Connect", "ssh: connect timed out")
-            });
-            assert!(
-                !wakeups_rx.is_empty(),
-                "a connect failure must render a notice and request a repaint"
-            );
-        });
-    }
-}
+#[path = "event_loop_tests.rs"]
+mod tests;

@@ -19,8 +19,8 @@ const SAMPLE: &str = r#"{
       "TailscaleIPs": ["100.64.0.1", "fd7a:1::1"]
     },
     "nodekey:bbb": {
-      "HostName": "macmini",
-      "DNSName": "macmini.tail1234.ts.net.",
+      "HostName": "agenthost",
+      "DNSName": "agenthost.tail1234.ts.net.",
       "OS": "macOS",
       "Online": false,
       "TailscaleIPs": ["100.64.0.2", "fd7a:1::2"]
@@ -51,9 +51,9 @@ fn strips_trailing_dot_and_picks_ipv4() {
 #[test]
 fn sorts_online_first_then_by_hostname() {
     let hosts = parse_tailscale_status(SAMPLE);
-    // devhost (online) before macmini (offline), regardless of alpha order.
+    // devhost (online) before agenthost (offline), regardless of alpha order.
     assert_eq!(hosts[0].hostname, "devhost");
-    assert_eq!(hosts[1].hostname, "macmini");
+    assert_eq!(hosts[1].hostname, "agenthost");
     assert!(hosts[0].online && !hosts[1].online);
 }
 
@@ -97,5 +97,8 @@ fn ipv6_only_peer_still_candidate_via_dns() {
 fn empty_and_garbage_input_yield_no_candidates() {
     assert!(parse_tailscale_status("").is_empty());
     assert!(parse_tailscale_status("not json").is_empty());
-    assert!(parse_tailscale_status("{}").is_empty(), "no Peer key → empty");
+    assert!(
+        parse_tailscale_status("{}").is_empty(),
+        "no Peer key → empty"
+    );
 }

@@ -5,7 +5,7 @@ description = "The terminal cockpit for AI coding agents on remote machines"
 edition = "2021"
 autobins = false
 name = "warp"
-version = "0.1.0"
+version = "1.0.2"
 publish.workspace = true
 license.workspace = true
 
@@ -182,6 +182,7 @@ tikv-jemallocator = { version = "0.6", optional = true, features = [
     "override_allocator_on_supported_platforms",
 ] }
 toml = "0.8.13"
+toml_edit.workspace = true
 tracing.workspace = true
 ui_components.workspace = true
 unicase = "2.7.0"
@@ -255,6 +256,7 @@ wgpu.workspace = true
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 app-installation-detection.workspace = true
 async-io.workspace = true
+async-process.workspace = true
 axum.workspace = true
 comfy-table = "7.1.4"
 inquire = "0.9.1"
@@ -369,7 +371,6 @@ winreg.workspace = true
 
 [dev-dependencies]
 ai = { workspace = true, features = ["test-util"] }
-async-process.workspace = true
 jsonschema = { workspace = true, default-features = false }
 async-executor = "1.5.1"
 command = { workspace = true, features = ["test-util"] }
@@ -379,6 +380,7 @@ mockall = "0.13.1"
 mockito.workspace = true
 serial_test = "0.8.0"
 sum_tree = { workspace = true, features = ["test-util"] }
+tokio-util = { workspace = true, features = ["compat"] }
 virtual-fs.workspace = true
 warp_completer = { workspace = true, features = ["test-util"] }
 warp_core = { workspace = true, features = ["test-util"] }

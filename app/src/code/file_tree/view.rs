@@ -726,8 +726,10 @@ impl FileTreeView {
     fn schedule_loading_deadline_tick(ctx: &mut ViewContext<Self>) {
         ctx.spawn(
             async {
-                async_io::Timer::after(LOADING_STATE_TIMEOUT + std::time::Duration::from_millis(250))
-                    .await;
+                async_io::Timer::after(
+                    LOADING_STATE_TIMEOUT + std::time::Duration::from_millis(250),
+                )
+                .await;
             },
             |_, (), ctx| ctx.notify(),
         );

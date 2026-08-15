@@ -83,7 +83,11 @@ pub fn discover_accounts(codex_home: &Path) -> Vec<Account> {
         email,
         org: None,
         role: None,
-        plan_tier: auth_mode, // best-effort until plan claim is confirmed (§10)
+        // Provider ≠ plan (WS4 S2): `auth_mode` ("chatgpt" / "apikey") is *how* you
+        // authenticate, not a subscription plan. Leaking it into `plan_tier` made
+        // the sidebar render "Codex · chatgpt" (provider in the plan slot). Codex
+        // exposes no plan claim yet, so the plan is honestly unknown (`None`).
+        plan_tier: None,
         is_default: true,
     }]
 }
@@ -92,10 +96,15 @@ pub fn discover_accounts(codex_home: &Path) -> Vec<Account> {
 /// `reasoning_output_tokens` from a token-usage object.
 fn tokens_from(obj: &Value) -> (u64, u64, u64, u64) {
     let n = |k: &str| obj.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    let input = n("input_tokens");
+    let cached = n("cached_input_tokens");
     (
-        n("input_tokens"),
+        // Codex reports cached input as part of `input_tokens`. Store only the
+        // uncached remainder here; `cache_read` owns the cached part so totals,
+        // work, and pricing each count every token once.
+        input.saturating_sub(cached),
         n("output_tokens"),
-        n("cached_input_tokens"),
+        cached,
         n("reasoning_output_tokens"),
     )
 }
@@ -111,12 +120,21 @@ pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry
     };
     let mut current_model = String::from("unknown");
     let mut current_ts = file_date;
+    // Same rule discovery uses, from the same function: the file name names the
+    // session until a `session_meta` line does it properly. Deriving it any other
+    // way here would stamp spend with an id no session row carries.
+    let mut session_id = crate::codex_sessions::session_id_from_path(path);
     let mut entries = Vec::new();
 
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if v.get("type").and_then(Value::as_str) == Some("session_meta") {
+            if let Some(id) = find(&v, "id").and_then(|x| x.as_str()) {
+                session_id = id.to_string();
+            }
+        }
         if let Some(m) = find(&v, "model").and_then(|x| x.as_str()) {
             current_model = m.to_string();
         }
@@ -129,7 +147,10 @@ pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry
         // Per-turn usage; ignore cumulative `total_token_usage` to avoid double counts.
         if let Some(usage) = find(&v, "last_token_usage") {
             let (input, output, cached, reasoning) = tokens_from(usage);
-            if input + output + cached + reasoning > 0 {
+            if [input, output, cached, reasoning]
+                .into_iter()
+                .any(|n| n > 0)
+            {
                 entries.push(UsageEntry {
                     ts: current_ts,
                     provider: Provider::Codex,
@@ -139,6 +160,7 @@ pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry
                     cache_create: 0, // Codex has no separate cache-write concept
                     cache_read: cached,
                     reasoning,
+                    session_id: session_id.clone(),
                 });
             }
         }
@@ -163,14 +185,33 @@ fn date_from_path(path: &Path) -> Option<DateTime<Utc>> {
 }
 
 /// All Codex usage entries newer than `since`, from `<config_dir>/sessions/**/rollout-*.jsonl`.
-pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> Vec<UsageEntry> {
+///
+/// The returned bool is `true` when the walk hit an I/O error other than a missing
+/// `sessions/` dir — see [`crate::claude::usage_for_account`] for why the caller then
+/// marks the snapshot degraded.
+pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> (Vec<UsageEntry>, bool) {
     let sessions = account.config_dir.join("sessions");
     let mut entries = Vec::new();
-    for file in WalkDir::new(&sessions)
-        .into_iter()
-        .flatten()
-        .filter(|e| e.file_type().is_file())
-    {
+    let mut io_error = false;
+    for result in WalkDir::new(&sessions) {
+        let file = match result {
+            Ok(f) => f,
+            Err(e) => {
+                // Only a missing `sessions/` root (depth 0, NotFound) is exempt; a
+                // NotFound below it or any other error truncates the walk. See
+                // `claude::usage_for_account`.
+                let missing_root = e.depth() == 0
+                    && e.io_error().map(std::io::Error::kind)
+                        == Some(std::io::ErrorKind::NotFound);
+                if !missing_root {
+                    io_error = true;
+                }
+                continue;
+            }
+        };
+        if !file.file_type().is_file() {
+            continue;
+        }
         let name = file.file_name().to_str().unwrap_or("");
         if !(name.starts_with("rollout-") && name.ends_with(".jsonl")) {
             continue;
@@ -190,7 +231,7 @@ pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> Vec<UsageEn
                 .filter(|e| e.ts >= since),
         );
     }
-    entries
+    (entries, io_error)
 }
 
 #[cfg(test)]

@@ -147,14 +147,22 @@ fn version_is_compatible(client: Option<&str>, server: &str) -> bool {
 
 /// Whether to enforce strict tag matching for the remote `server_version`.
 ///
-/// For [`Channel::Oss`](Zaplex), locally-built source has no `GIT_RELEASE_TAG`,
-/// but SSH Extension may install a latest-release remote-server.
-/// Enforcing strict version check would cause a delete/reinstall/mismatch loop
-/// when client is `None` and server has a non-empty tag. Release builds avoid stale binaries
-/// via versioned install paths; local builds continue to skip strict version checking.
+/// For [`Channel::Oss`](Zaplex), **release** builds (a `GIT_RELEASE_TAG` is
+/// present) enforce: they install versioned binaries AND rendezvous on
+/// versioned daemon sockets (`setup::daemon_runtime_filename`), so a version
+/// mismatch in the handshake means a genuinely wrong daemon answered — a path
+/// bug that must surface as a connect error, never silently serve old code
+/// (the stale-daemon trap, RC finding 2026-07-19).
+///
+/// Zaplex **source** builds keep skipping: locally-built source has no
+/// `GIT_RELEASE_TAG`, but may talk to an installed release daemon — enforcing
+/// would make the `deploy_remote_server` dev loop fail on `None` vs tag.
 #[cfg(not(target_family = "wasm"))]
 fn should_enforce_remote_version_check(channel: Channel) -> bool {
-    !matches!(channel, Channel::Oss)
+    match channel {
+        Channel::Oss => ChannelState::app_version().is_some(),
+        _ => true,
+    }
 }
 
 /// Per-session connection state. Encodes which data is available at each
@@ -472,12 +480,29 @@ pub struct ConnectedDaemon {
     /// host even when labels collide — the correct key for resolving *which*
     /// daemon a guardrail Stop/Kill or attach targets.
     pub host_id: String,
+    /// Stable SSH-registry node that established this daemon connection.
+    ///
+    /// This is the only safe bridge from the live daemon inventory back to the
+    /// registered host navigator. It is absent for legacy/classic connections
+    /// that were not opened from a registry node.
+    pub registry_node_id: Option<String>,
     /// Live client handle — call e.g. `list_agent_sessions()` on it.
     pub client: Arc<RemoteServerClient>,
     /// Capabilities the daemon advertised at handshake. Gate feature-specific
     /// requests on this (e.g. `agent-inventory`) so an old daemon is skipped
     /// rather than erroring.
     pub features: Vec<String>,
+}
+
+fn preferred_registry_node_id(
+    existing: Option<&str>,
+    candidate: Option<&str>,
+) -> Option<String> {
+    match (existing, candidate) {
+        (None, None) => None,
+        (Some(node_id), None) | (None, Some(node_id)) => Some(node_id.to_string()),
+        (Some(existing), Some(candidate)) => Some(existing.min(candidate).to_string()),
+    }
 }
 
 /// Singleton model that manages connections to `remote_server` processes on
@@ -516,6 +541,10 @@ pub struct RemoteServerManager {
     /// `Connected → Reconnecting → Connected` cycle (the reconnect path only
     /// carries the `HostId`); cleared on `deregister_session`.
     session_host_labels: HashMap<SessionId, String>,
+    /// Stable SSH-registry node used to establish each session. Kept outside
+    /// `RemoteSessionState` so it survives reconnects and can join live daemon
+    /// inventory to the registry without comparing display labels.
+    session_registry_node_ids: HashMap<SessionId, String>,
     /// Sessions backed by a persistent daemon (native remote-session layer). For
     /// these, a transport-child exit on a network blip does NOT mean the remote
     /// session died — the daemon keeps it running — so `mark_session_disconnected`
@@ -541,6 +570,7 @@ impl RemoteServerManager {
             auth_context: None,
             session_platforms: HashMap::new(),
             session_host_labels: HashMap::new(),
+            session_registry_node_ids: HashMap::new(),
             persistent_session_ids: HashSet::new(),
         }
     }
@@ -773,6 +803,7 @@ impl RemoteServerManager {
         transport: T,
         auth_context: Arc<RemoteServerAuthContext>,
         host_label: String,
+        registry_node_id: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) where
         T: RemoteTransport + 'static,
@@ -782,6 +813,14 @@ impl RemoteServerManager {
         // the cross-host Agent-Inventory fold.
         if !host_label.is_empty() {
             self.session_host_labels.insert(session_id, host_label);
+        }
+        match registry_node_id {
+            Some(node_id) => {
+                self.session_registry_node_ids.insert(session_id, node_id);
+            }
+            None => {
+                self.session_registry_node_ids.remove(&session_id);
+            }
         }
 
         #[cfg(target_family = "wasm")]
@@ -941,35 +980,47 @@ impl RemoteServerManager {
             .await
             .map_err(|e| ConnectAndHandshakeError::Initialize(anyhow::anyhow!("{e:#}")))?;
 
-        // Version compatibility check. If the server reports a different release
-        // tag than the client expects, the binary on disk is stale. Remove it so
-        // the next reconnect (or explicit reconnect by the user) will reinstall.
+        // Version compatibility check — see [`should_enforce_remote_version_check`]
+        // for when it is armed. What a mismatch MEANS differs by channel:
         //
-        // Under `Channel::Oss`(Zaplex), we temporarily reuse the official release binary;
-        // the client has no `GIT_RELEASE_TAG`, so it will never match the server.
-        // Therefore, strict version checking is skipped. See [`should_enforce_remote_version_check`] for details.
+        // - Non-Oss channels keep their original recovery semantics: treat
+        //   the on-disk binary as the stale artefact, remove it so the next
+        //   reconnect reinstalls (upstream behavior, unchanged here).
+        // - Zaplex release builds (versioned install slot + versioned daemon
+        //   socket, both keyed on the same tag): the on-disk binary is the
+        //   right one for this client by construction; a mismatch means a
+        //   wrong RUNNING daemon answered our socket. Removing the binary
+        //   would delete a good install and buy nothing — fail the connect
+        //   loudly instead (the daemon tab shows it via the connect-failed
+        //   path and the caller falls back to classic SSH).
         let client_version = ChannelState::app_version();
         let enforce_version_check = should_enforce_remote_version_check(ChannelState::channel());
         if enforce_version_check && !version_is_compatible(client_version, &resp.server_version) {
             log::warn!(
                 "Remote server version mismatch for session {session_id:?}: \
-                 client={client_version:?}, server={:?}. Removing stale binary.",
+                 client={client_version:?}, server={:?}.",
                 resp.server_version
             );
 
-            const REMOVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+            if !matches!(ChannelState::channel(), Channel::Oss) {
+                const REMOVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-            if let Err(e) = transport
-                .remove_remote_server_binary()
-                .with_timeout(REMOVAL_TIMEOUT)
-                .await
-                .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out after {REMOVAL_TIMEOUT:?}")))
-            {
-                log::warn!("Failed to remove stale remote binary for session {session_id:?}: {e}");
+                if let Err(e) = transport
+                    .remove_remote_server_binary()
+                    .with_timeout(REMOVAL_TIMEOUT)
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(anyhow::anyhow!("timed out after {REMOVAL_TIMEOUT:?}"))
+                    })
+                {
+                    log::warn!(
+                        "Failed to remove stale remote binary for session {session_id:?}: {e}"
+                    );
+                }
             }
             return Err(ConnectAndHandshakeError::Initialize(anyhow::anyhow!(
                 "remote server version mismatch (client: {client_version:?}, \
-                 server: {:?}); reconnect to reinstall",
+                 server: {:?})",
                 resp.server_version
             )));
         }
@@ -1062,6 +1113,7 @@ impl RemoteServerManager {
         self.session_bootstrap_info.remove(&session_id);
         self.session_platforms.remove(&session_id);
         self.session_host_labels.remove(&session_id);
+        self.session_registry_node_ids.remove(&session_id);
         self.persistent_session_ids.remove(&session_id);
 
         // Remove the session entry. Dropping the `RemoteSessionState`
@@ -1127,9 +1179,8 @@ impl RemoteServerManager {
     /// per host is both sufficient and correct. Only `Connected` sessions are
     /// included; connecting/reconnecting/disconnected ones contribute nothing.
     pub fn connected_daemons(&self) -> Vec<ConnectedDaemon> {
-        let mut seen: HashSet<&HostId> = HashSet::new();
-        let mut out = Vec::new();
-        for state in self.sessions.values() {
+        let mut by_host: HashMap<&HostId, ConnectedDaemon> = HashMap::new();
+        for (session_id, state) in &self.sessions {
             if let RemoteSessionState::Connected {
                 client,
                 host_id,
@@ -1138,16 +1189,31 @@ impl RemoteServerManager {
                 ..
             } = state
             {
-                if seen.insert(host_id) {
-                    out.push(ConnectedDaemon {
-                        host_label: host_label.clone(),
-                        host_id: host_id.as_str().to_string(),
-                        client: Arc::clone(client),
-                        features: features.clone(),
-                    });
+                let registry_node_id = self.session_registry_node_ids.get(session_id).cloned();
+                match by_host.get_mut(host_id) {
+                    Some(existing) => {
+                        existing.registry_node_id = preferred_registry_node_id(
+                            existing.registry_node_id.as_deref(),
+                            registry_node_id.as_deref(),
+                        );
+                    }
+                    None => {
+                        by_host.insert(
+                            host_id,
+                            ConnectedDaemon {
+                                host_label: host_label.clone(),
+                                host_id: host_id.as_str().to_string(),
+                                registry_node_id,
+                                client: Arc::clone(client),
+                                features: features.clone(),
+                            },
+                        );
+                    }
                 }
             }
         }
+        let mut out: Vec<ConnectedDaemon> = by_host.into_values().collect();
+        out.sort_by(|a, b| a.host_id.cmp(&b.host_id));
         out
     }
 
@@ -1156,6 +1222,24 @@ impl RemoteServerManager {
         match self.sessions.get(&session_id) {
             Some(RemoteSessionState::Connected { client, .. }) => Some(client),
             _ => None,
+        }
+    }
+
+    /// Returns whether the connected daemon for `session_id` advertised
+    /// `feature`. Disconnected and pre-handshake states never imply support.
+    pub fn session_supports_feature(&self, session_id: SessionId, feature: &str) -> bool {
+        match self.sessions.get(&session_id) {
+            Some(RemoteSessionState::Connected { features, .. }) => {
+                features.iter().any(|advertised| advertised == feature)
+            }
+            Some(
+                RemoteSessionState::Connecting
+                | RemoteSessionState::Initializing { .. }
+                | RemoteSessionState::Disconnected,
+            ) => false,
+            #[cfg(not(target_family = "wasm"))]
+            Some(RemoteSessionState::Reconnecting { .. }) => false,
+            None => false,
         }
     }
 

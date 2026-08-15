@@ -15,6 +15,7 @@ pub(super) mod code_diff_pane_model;
 pub(super) mod code_pane;
 pub(super) mod env_var_collection_pane;
 // Zaplex Wave 7-3: `environment_management_pane` physically removed with ambient-agent UI subsystem.
+pub(crate) mod cockpit_pane;
 pub(super) mod execution_profile_editor_pane;
 pub(super) mod file_pane;
 pub(super) mod get_started_pane;
@@ -28,7 +29,6 @@ pub(crate) mod sftp_pane;
 pub(crate) mod ssh_server_pane;
 pub(super) mod terminal_pane;
 pub mod view;
-pub(crate) mod cockpit_pane;
 pub(super) mod welcome_pane;
 pub(crate) mod welcome_view;
 pub mod workflow_pane;
@@ -37,8 +37,8 @@ use std::{any::Any, fmt::Display};
 
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::get_started_view::GetStartedView;
-use crate::ssh_manager::server_view::SshServerView;
 use crate::sftp_manager::browser::SftpBrowserView;
+use crate::ssh_manager::server_view::SshServerView;
 use crate::view_components::action_button::ActionButton;
 use crate::{
     ai::execution_profiles::editor::ExecutionProfileEditorView,
@@ -388,9 +388,7 @@ impl PaneId {
     }
 
     /// Creates a [`PaneId`] from a [`PaneView<SftpBrowserView>`] entity ID.
-    pub fn from_sftp_pane_view(
-        sftp_pane_view: &ViewHandle<PaneView<SftpBrowserView>>,
-    ) -> Self {
+    pub fn from_sftp_pane_view(sftp_pane_view: &ViewHandle<PaneView<SftpBrowserView>>) -> Self {
         Self::new(IPaneType::Sftp, sftp_pane_view)
     }
 

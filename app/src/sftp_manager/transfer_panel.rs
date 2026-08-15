@@ -6,20 +6,64 @@
 
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
-    Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-    MainAxisSize, MainAxisAlignment, MouseStateHandle, ParentElement, Radius, SavePosition, Shrinkable, Text,
+    ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    ParentElement, Radius, SavePosition, ScrollbarWidth, Shrinkable, SizeConstraintCondition,
+    SizeConstraintSwitch, Text,
 };
 use warpui::platform::Cursor;
-use warpui::Element;
+use warpui::{AppContext, Element, SingletonEntity};
 
 use crate::sftp_manager::browser::SftpBrowserAction;
-use crate::sftp_manager::types::{TransferDirection, TransferState, TransferTask};
+use crate::sftp_manager::types::{TransferDirection, TransferPhase, TransferState, TransferTask};
 use crate::ui_components::icons::Icon;
 
 /// Progress bar height
 const PROGRESS_BAR_HEIGHT: f32 = 4.0;
 /// Panel inner padding
 const PANEL_PADDING: f32 = 8.0;
+
+fn completed_warning_label(warning: &str) -> String {
+    if warning == super::transfer_queue::SOURCE_RESTORED_WARNING {
+        crate::t!("fm-transfer-completed-source-restored").to_string()
+    } else {
+        crate::t!("fm-transfer-completed-cleanup-required").to_string()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum TransferPanelTarget {
+    Browser,
+    Workspace,
+}
+
+pub(super) fn transfer_state_from_queue_state(
+    state: super::transfer_queue::QueuedTransferState,
+) -> TransferState {
+    match state {
+        super::transfer_queue::QueuedTransferState::Running => TransferState::InProgress,
+        super::transfer_queue::QueuedTransferState::Paused => TransferState::Paused,
+        super::transfer_queue::QueuedTransferState::Cancelling => TransferState::Cancelling,
+        super::transfer_queue::QueuedTransferState::Completed => TransferState::Completed,
+        super::transfer_queue::QueuedTransferState::PartiallyCompleted {
+            transferred,
+            published,
+            skipped,
+            source_kept,
+        } => TransferState::PartiallyCompleted {
+            transferred,
+            published,
+            skipped,
+            source_kept,
+        },
+        super::transfer_queue::QueuedTransferState::CompletedWithWarning(error) => {
+            TransferState::CompletedWithWarning(error)
+        }
+        super::transfer_queue::QueuedTransferState::Failed(error) => TransferState::Failed(error),
+        super::transfer_queue::QueuedTransferState::Cancelled => TransferState::Cancelled,
+        super::transfer_queue::QueuedTransferState::Skipped => TransferState::Skipped,
+    }
+}
 
 /// Render transfer direction icon
 fn render_direction_icon(
@@ -32,6 +76,7 @@ fn render_direction_icon(
     let icon = match direction {
         TransferDirection::Upload => Icon::UploadCloud,
         TransferDirection::Download => Icon::Download,
+        TransferDirection::Copy => Icon::Copy,
     };
 
     ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
@@ -41,21 +86,69 @@ fn render_direction_icon(
 }
 
 /// Render transfer state label
-fn render_state_label(state: &TransferState, appearance: &Appearance) -> Box<dyn Element> {
+fn render_state_label(
+    state: &TransferState,
+    phase: TransferPhase,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
     let (label, color) = match state {
         TransferState::Pending => (
-            String::from("Waiting"),
+            crate::t!("fm-transfer-waiting").to_string(),
             theme.sub_text_color(theme.background()),
         ),
-        TransferState::InProgress => (String::from("Transferring"), theme.accent()),
-        TransferState::Completed => (String::from("Completed"), theme.ui_green_color().into()),
-        TransferState::Failed(_) => (String::from("Failed"), theme.ui_error_color().into()),
+        TransferState::InProgress => match phase {
+            TransferPhase::Transferring => (
+                crate::t!("fm-transfer-inprogress").to_string(),
+                theme.accent(),
+            ),
+            TransferPhase::Verifying => (
+                crate::t!("fm-transfer-verifying").to_string(),
+                theme.accent(),
+            ),
+            TransferPhase::Finalizing => (
+                crate::t!("fm-transfer-finalizing").to_string(),
+                theme.accent(),
+            ),
+        },
+        TransferState::Paused => (
+            crate::t!("fm-transfer-paused").to_string(),
+            theme.sub_text_color(theme.background()),
+        ),
+        TransferState::Cancelling => (
+            crate::t!("fm-transfer-cancelling").to_string(),
+            theme.sub_text_color(theme.background()),
+        ),
+        TransferState::Completed => (
+            crate::t!("fm-transfer-completed").to_string(),
+            theme.ui_green_color().into(),
+        ),
+        TransferState::Skipped => (
+            crate::t!("fm-transfer-skipped").to_string(),
+            theme.sub_text_color(theme.background()),
+        ),
+        TransferState::PartiallyCompleted {
+            transferred,
+            published,
+            skipped,
+            source_kept,
+        } => (
+            partial_state_label(*transferred, *published, *skipped, *source_kept),
+            theme.ui_warning_color().into(),
+        ),
+        TransferState::CompletedWithWarning(warning) => (
+            completed_warning_label(warning),
+            theme.ui_warning_color().into(),
+        ),
+        TransferState::Failed(_) => (
+            crate::t!("fm-transfer-failed").to_string(),
+            theme.ui_error_color().into(),
+        ),
         TransferState::Cancelled => (
-            String::from("Cancelled"),
+            crate::t!("fm-transfer-cancelled").to_string(),
             theme.sub_text_color(theme.background()),
         ),
     };
@@ -63,6 +156,29 @@ fn render_state_label(state: &TransferState, appearance: &Appearance) -> Box<dyn
     Text::new_inline(label, ui_font, ui_font_size)
         .with_color(color.into())
         .finish()
+}
+
+fn partial_state_label(
+    transferred: usize,
+    published: usize,
+    skipped: usize,
+    source_kept: bool,
+) -> String {
+    if source_kept {
+        crate::t!(
+            "fm-transfer-partial-source-kept",
+            transferred = transferred.to_string(),
+            published = published.to_string(),
+            skipped = skipped.to_string()
+        )
+    } else {
+        crate::t!(
+            "fm-transfer-partial",
+            transferred = transferred.to_string(),
+            published = published.to_string(),
+            skipped = skipped.to_string()
+        )
+    }
 }
 
 /// Render progress bar
@@ -118,7 +234,14 @@ fn render_progress_bar(progress: u8, appearance: &Appearance) -> Box<dyn Element
 }
 
 /// Render single transfer row
-fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn Element> {
+fn render_transfer_row(
+    task: &TransferTask,
+    cancel_btn_state: Option<MouseStateHandle>,
+    pause_btn_state: Option<MouseStateHandle>,
+    retry_btn_state: Option<MouseStateHandle>,
+    appearance: &Appearance,
+    target: TransferPanelTarget,
+) -> Box<dyn Element> {
     // Direction icon
     let dir_icon = render_direction_icon(&task.direction, appearance);
 
@@ -137,7 +260,7 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
     .finish();
 
     // State label
-    let state_el = render_state_label(&task.state, appearance);
+    let state_el = render_state_label(&task.state, task.phase, appearance);
 
     // First row: icon + filename + status + cancel button
     let mut top_row = Flex::row()
@@ -147,15 +270,19 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
         .with_child(Shrinkable::new(1.0, name_el).finish())
         .with_child(state_el);
 
-    // Tasks in progress show cancel button
-    if matches!(task.state, TransferState::InProgress) {
+    if let (TransferState::InProgress | TransferState::Paused, false, Some(cancel_btn_state)) = (
+        &task.state,
+        task.phase == TransferPhase::Finalizing,
+        cancel_btn_state,
+    ) {
         let task_id = task.id;
+        let control_epoch = task.control_epoch;
         let icon_color = appearance
             .theme()
             .sub_text_color(appearance.theme().background());
         let position_id = format!("sftp_btn:cancel_transfer:{task_id}");
 
-        let cancel_el = Hoverable::new(Default::default(), move |_| {
+        let cancel_el = Hoverable::new(cancel_btn_state, move |_| {
             let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(icon_color).finish())
                 .with_width(12.0)
                 .with_height(12.0)
@@ -163,13 +290,125 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
             Container::new(icon_el).with_uniform_padding(2.0).finish()
         })
         .with_cursor(Cursor::PointingHand)
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(SftpBrowserAction::CancelTransfer(task_id));
+        .on_click(move |ctx, _, _| match target {
+            TransferPanelTarget::Browser => {
+                ctx.dispatch_typed_action(SftpBrowserAction::CancelTransfer(
+                    task_id,
+                    control_epoch,
+                ));
+            }
+            TransferPanelTarget::Workspace => {
+                if let Some(control_epoch) = control_epoch {
+                    ctx.dispatch_typed_action(crate::WorkspaceAction::CancelTransfer(
+                        super::transfer_queue::TransferActionTarget {
+                            id: task_id as u64,
+                            control_epoch,
+                        },
+                    ));
+                }
+            }
         })
         .finish();
 
-        let positioned = SavePosition::new(cancel_el, &position_id).finish();
-        top_row = top_row.with_child(Clipped::new(positioned).finish());
+        let hit_target = ConstrainedBox::new(cancel_el)
+            .with_width(16.0)
+            .with_height(16.0)
+            .finish();
+        let positioned = SavePosition::new(hit_target, &position_id).finish();
+        top_row = top_row.with_child(positioned);
+    }
+    if let (TransferState::InProgress | TransferState::Paused, false, Some(pause_btn_state)) = (
+        &task.state,
+        task.phase == TransferPhase::Finalizing,
+        pause_btn_state,
+    ) {
+        let task_id = task.id;
+        let control_epoch = task.control_epoch;
+        let paused = matches!(task.state, TransferState::Paused);
+        let label = if paused {
+            crate::t!("fm-transfer-resume").to_string()
+        } else {
+            crate::t!("fm-transfer-pause").to_string()
+        };
+        let color = appearance
+            .theme()
+            .sub_text_color(appearance.theme().background());
+        let font = appearance.ui_font_family();
+        let size = appearance.ui_font_size();
+        let position_id = format!("sftp_btn:pause_transfer:{task_id}");
+        let pause = Hoverable::new(pause_btn_state, move |_| {
+            Text::new_inline(label.clone(), font, size)
+                .with_color(color.into())
+                .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| match target {
+            TransferPanelTarget::Browser => {
+                if paused {
+                    ctx.dispatch_typed_action(SftpBrowserAction::ResumeTransfer(
+                        task_id,
+                        control_epoch,
+                    ));
+                } else {
+                    ctx.dispatch_typed_action(SftpBrowserAction::PauseTransfer(
+                        task_id,
+                        control_epoch,
+                    ));
+                }
+            }
+            TransferPanelTarget::Workspace => {
+                if let Some(control_epoch) = control_epoch {
+                    let target = super::transfer_queue::TransferActionTarget {
+                        id: task_id as u64,
+                        control_epoch,
+                    };
+                    let action = if paused {
+                        crate::WorkspaceAction::ResumeTransfer(target)
+                    } else {
+                        crate::WorkspaceAction::PauseTransfer(target)
+                    };
+                    ctx.dispatch_typed_action(action);
+                }
+            }
+        })
+        .finish();
+        top_row = top_row.with_child(SavePosition::new(pause, &position_id).finish());
+    }
+    if let (
+        TransferState::Failed(_) | TransferState::CompletedWithWarning(_),
+        true,
+        Some(retry_btn_state),
+    ) = (&task.state, task.recovery_retryable, retry_btn_state)
+    {
+        let task_id = task.id;
+        let color = appearance
+            .theme()
+            .sub_text_color(appearance.theme().background());
+        let font = appearance.ui_font_family();
+        let size = appearance.ui_font_size();
+        let position_id = format!("sftp_btn:retry_transfer_recovery:{task_id}");
+        let retry = Hoverable::new(retry_btn_state, move |_| {
+            Text::new_inline(
+                crate::t!("fm-transfer-retry-cleanup").to_string(),
+                font,
+                size,
+            )
+            .with_color(color.into())
+            .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| match target {
+            TransferPanelTarget::Browser => {
+                ctx.dispatch_typed_action(SftpBrowserAction::RetryTransferRecovery(task_id));
+            }
+            TransferPanelTarget::Workspace => {
+                ctx.dispatch_typed_action(crate::WorkspaceAction::RetryTransferRecovery(
+                    task_id as u64,
+                ));
+            }
+        })
+        .finish();
+        top_row = top_row.with_child(SavePosition::new(retry, &position_id).finish());
     }
 
     let mut col = Flex::column()
@@ -178,9 +417,41 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
         .with_child(top_row.finish());
 
     // Progress bar (only shown when in progress)
-    if matches!(task.state, TransferState::InProgress) {
+    if matches!(
+        task.state,
+        TransferState::InProgress | TransferState::Paused | TransferState::Cancelling
+    ) {
         let bar = render_progress_bar(task.progress_percent(), appearance);
         col.add_child(bar);
+        if let Some(eta) = task.eta {
+            let eta_position_id = format!("sftp_text:transfer_eta:{}", task.id);
+            let eta_text = Text::new_inline(
+                crate::t!("fm-transfer-eta", seconds = eta.as_secs()),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(
+                appearance
+                    .theme()
+                    .sub_text_color(appearance.theme().background())
+                    .into(),
+            )
+            .finish();
+            col.add_child(SavePosition::new(eta_text, &eta_position_id).finish());
+        }
+    }
+    for path in &task.recovery_paths {
+        let recovery_text = Text::new_inline(
+            crate::t!(
+                "fm-transfer-recovery-path",
+                path = path.to_string_lossy().to_string()
+            ),
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(appearance.theme().ui_error_color().into())
+        .finish();
+        col.add_child(recovery_text);
     }
 
     Container::new(col.finish())
@@ -194,8 +465,135 @@ fn render_transfer_row(task: &TransferTask, appearance: &Appearance) -> Box<dyn 
 /// Always display the transfer task list, with close button on the right of the title bar.
 pub fn render_transfer_panel(
     transfers: &[TransferTask],
+    cancel_btn_states: &std::collections::HashMap<usize, MouseStateHandle>,
+    pause_btn_states: &std::collections::HashMap<usize, MouseStateHandle>,
+    retry_btn_states: &std::collections::HashMap<usize, MouseStateHandle>,
     appearance: &Appearance,
     close_btn_state: MouseStateHandle,
+    scroll_state: ClippedScrollStateHandle,
+    target: TransferPanelTarget,
+) -> Box<dyn Element> {
+    SizeConstraintSwitch::new(
+        render_transfer_panel_at_height(
+            transfers,
+            cancel_btn_states,
+            pause_btn_states,
+            retry_btn_states,
+            appearance,
+            close_btn_state.clone(),
+            scroll_state.clone(),
+            320.0,
+            target,
+        ),
+        vec![
+            (
+                SizeConstraintCondition::HeightLessThan(360.0),
+                render_transfer_panel_at_height(
+                    transfers,
+                    cancel_btn_states,
+                    pause_btn_states,
+                    retry_btn_states,
+                    appearance,
+                    close_btn_state.clone(),
+                    scroll_state.clone(),
+                    120.0,
+                    target,
+                ),
+            ),
+            (
+                SizeConstraintCondition::HeightLessThan(640.0),
+                render_transfer_panel_at_height(
+                    transfers,
+                    cancel_btn_states,
+                    pause_btn_states,
+                    retry_btn_states,
+                    appearance,
+                    close_btn_state,
+                    scroll_state,
+                    220.0,
+                    target,
+                ),
+            ),
+        ],
+    )
+    .finish()
+}
+
+pub fn render_workspace_transfer_panel(app: &AppContext) -> Option<Box<dyn Element>> {
+    let queue = super::transfer_queue::TransferQueue::as_ref(app);
+    let mut transfers = Vec::new();
+    let mut cancel_handles = std::collections::HashMap::new();
+    let mut pause_handles = std::collections::HashMap::new();
+    let mut retry_handles = std::collections::HashMap::new();
+    for activity in queue.activities() {
+        let Ok(task_id) = usize::try_from(activity.id) else {
+            continue;
+        };
+        let mut task = TransferTask::new(
+            task_id,
+            activity.source_path,
+            activity.target_path,
+            activity.direction,
+            activity.progress.total,
+        );
+        task.transferred = activity.progress.transferred;
+        task.bytes_per_second = activity.progress.bytes_per_second;
+        task.control_epoch = Some(activity.control_epoch);
+        task.eta = activity.progress.eta;
+        task.phase = activity.progress.phase;
+        task.recovery_paths = activity.recovery_paths;
+        task.recovery_retryable = activity.recovery_retryable;
+        task.state = transfer_state_from_queue_state(activity.state);
+        transfers.push(task);
+        if let Some(handle) = queue.cancel_handle(activity.id) {
+            cancel_handles.insert(task_id, handle);
+        }
+        if let Some(handle) = queue.pause_handle(activity.id) {
+            pause_handles.insert(task_id, handle);
+        }
+        if let Some(handle) = queue.retry_handle(activity.id) {
+            retry_handles.insert(task_id, handle);
+        }
+    }
+    if transfers.is_empty() {
+        return None;
+    }
+    transfers.sort_by_key(|task| {
+        let priority = if !task.recovery_paths.is_empty() {
+            0
+        } else if matches!(
+            task.state,
+            TransferState::InProgress | TransferState::Paused | TransferState::Cancelling
+        ) {
+            1
+        } else {
+            2
+        };
+        (priority, std::cmp::Reverse(task.id))
+    });
+    let (close_handle, scroll_handle) = queue.workspace_panel_handles();
+    Some(render_transfer_panel(
+        &transfers,
+        &cancel_handles,
+        &pause_handles,
+        &retry_handles,
+        Appearance::as_ref(app),
+        close_handle,
+        scroll_handle,
+        TransferPanelTarget::Workspace,
+    ))
+}
+
+fn render_transfer_panel_at_height(
+    transfers: &[TransferTask],
+    cancel_btn_states: &std::collections::HashMap<usize, MouseStateHandle>,
+    pause_btn_states: &std::collections::HashMap<usize, MouseStateHandle>,
+    retry_btn_states: &std::collections::HashMap<usize, MouseStateHandle>,
+    appearance: &Appearance,
+    close_btn_state: MouseStateHandle,
+    scroll_state: ClippedScrollStateHandle,
+    max_history_height: f32,
+    target: TransferPanelTarget,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
@@ -204,7 +602,7 @@ pub fn render_transfer_panel(
 
     // Title bar
     let count = transfers.len();
-    let title_text = format!("Transfer ({count})");
+    let title_text = crate::t!("fm-transfer-title", count = count).to_string();
 
     let title_el = Text::new_inline(title_text, ui_font, ui_font_size)
         .with_color(text_color.into())
@@ -225,8 +623,13 @@ pub fn render_transfer_panel(
             .finish()
     })
     .with_cursor(Cursor::PointingHand)
-    .on_click(|ctx, _, _| {
-        ctx.dispatch_typed_action(SftpBrowserAction::ToggleTransferPanel);
+    .on_click(move |ctx, _, _| match target {
+        TransferPanelTarget::Browser => {
+            ctx.dispatch_typed_action(SftpBrowserAction::ToggleTransferPanel);
+        }
+        TransferPanelTarget::Workspace => {
+            ctx.dispatch_typed_action(crate::WorkspaceAction::ClearTransferHistory);
+        }
     })
     .finish();
 
@@ -242,17 +645,37 @@ pub fn render_transfer_panel(
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_child(header);
 
-    let rows_col = {
+    let render_rows = || {
         let mut inner = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(4.0);
         for task in transfers {
-            let row = render_transfer_row(task, appearance);
+            let row = render_transfer_row(
+                task,
+                cancel_btn_states.get(&task.id).cloned(),
+                pause_btn_states.get(&task.id).cloned(),
+                retry_btn_states.get(&task.id).cloned(),
+                appearance,
+                target,
+            );
             inner.add_child(row);
         }
         inner.finish()
     };
-    col.add_child(rows_col);
+    let scroller = ConstrainedBox::new(
+        ClippedScrollable::vertical(
+            scroll_state,
+            render_rows(),
+            ScrollbarWidth::Auto,
+            theme.disabled_text_color(theme.background()).into(),
+            theme.main_text_color(theme.background()).into(),
+            Fill::None,
+        )
+        .finish(),
+    )
+    .with_max_height(max_history_height)
+    .finish();
+    col.add_child(SavePosition::new(scroller, "sftp_transfer_history_scroll").finish());
 
     Container::new(col.finish())
         .with_uniform_padding(PANEL_PADDING)
@@ -262,129 +685,5 @@ pub fn render_transfer_panel(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use std::cell::RefCell;
-    use std::collections::HashSet;
-    use std::path::PathBuf;
-    use std::rc::Rc;
-
-    use pathfinder_geometry::vector::vec2f;
-    use warpui::platform::WindowStyle;
-    use warpui::{
-        App, AppContext, Entity, Event, Presenter, SingletonEntity, TypedActionView, View,
-        ViewContext, WindowInvalidation,
-    };
-
-    struct TransferPanelTestView {
-        transfers: Vec<TransferTask>,
-        close_btn_state: MouseStateHandle,
-    }
-
-    impl TransferPanelTestView {
-        /// Create test view to verify transfer panel click behavior
-        fn new() -> Self {
-            Self {
-                transfers: vec![make_transfer_task(1)],
-                close_btn_state: MouseStateHandle::default(),
-            }
-        }
-    }
-
-    impl Entity for TransferPanelTestView {
-        type Event = ();
-    }
-
-    impl TypedActionView for TransferPanelTestView {
-        type Action = SftpBrowserAction;
-
-        /// Handle test actions dispatched by transfer panel
-        fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
-            if matches!(action, SftpBrowserAction::CancelTransfer(_)) {
-                ctx.notify();
-            }
-        }
-    }
-
-    impl View for TransferPanelTestView {
-        fn ui_name() -> &'static str {
-            "TransferPanelTestView"
-        }
-
-        /// Render transfer panel for testing
-        fn render(&self, app: &AppContext) -> Box<dyn Element> {
-            let appearance = Appearance::as_ref(app);
-            render_transfer_panel(&self.transfers, appearance, self.close_btn_state.clone())
-        }
-    }
-
-    /// Initialize Appearance singleton needed for transfer panel tests
-    fn initialize_app(app: &mut App) {
-        app.add_singleton_model(|_| Appearance::mock());
-    }
-
-    /// Create a test transfer task
-    fn make_transfer_task(id: usize) -> TransferTask {
-        TransferTask::new(
-            id,
-            PathBuf::from(format!("/remote/file_{id}.txt")),
-            PathBuf::from(format!("/local/file_{id}.txt")),
-            TransferDirection::Download,
-            1024,
-        )
-    }
-
-    /// Verify clicking transfer panel background does not affect transfer content display
-    #[test]
-    fn clicking_panel_background_does_not_toggle_transfer_panel() {
-        App::test((), |mut app| async move {
-            initialize_app(&mut app);
-            let (window_id, view) =
-                app.add_window(WindowStyle::NotStealFocus, |_| TransferPanelTestView::new());
-            let root_view_id = app.root_view_id(window_id).expect("test window should contain root view");
-            let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
-            let invalidation = WindowInvalidation {
-                updated: HashSet::from([root_view_id]),
-                ..Default::default()
-            };
-
-            app.update({
-                let presenter = presenter.clone();
-                move |ctx| {
-                    presenter.borrow_mut().invalidate(invalidation, ctx);
-                    presenter
-                        .borrow_mut()
-                        .build_scene(vec2f(320., 120.), 1., None, ctx);
-
-                    ctx.simulate_window_event(
-                        Event::LeftMouseDown {
-                            position: vec2f(4., 12.),
-                            modifiers: Default::default(),
-                            click_count: 1,
-                            is_first_mouse: false,
-                        },
-                        window_id,
-                        presenter.clone(),
-                    );
-                    ctx.simulate_window_event(
-                        Event::LeftMouseUp {
-                            position: vec2f(4., 12.),
-                            modifiers: Default::default(),
-                        },
-                        window_id,
-                        presenter,
-                    );
-                }
-            });
-
-            view.read(&app, |view, _| {
-                assert_eq!(
-                    view.transfers.len(),
-                    1,
-                    "transfer content should remain displayed after clicking transfer panel background"
-                );
-            });
-        });
-    }
-}
+#[path = "transfer_panel_tests.rs"]
+mod tests;

@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>UI-Spezifikation — Agent-Fortsetzung und Aufmerksamkeit</title>
+  <meta name="ui-spec-route" content="/native/agent-continuity-attention">
+  <meta name="ui-spec-viewports" content="1280x900,760x720">
+  <meta name="ui-spec-status" content="approved-2026-08-02">
+  <style>
+    :root {
+      --bg: #101217;
+      --surface: #181b21;
+      --surface-raised: #20242c;
+      --surface-soft: #252a33;
+      --border: #303641;
+      --text: #f1f3f7;
+      --muted: #9aa3b2;
+      --faint: #687181;
+      --accent: #8b7cf6;
+      --attention: #d8a44d;
+      --attention-soft: #d8a44d2b;
+      --success: #43c88a;
+      --danger: #ef717a;
+      --radius-card: 12px;
+      --radius-control: 6px;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      color-scheme: dark;
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: #0a0c10;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; }
+    #spec {
+      max-width: 1220px;
+      margin: 0 auto 24px;
+      padding: 16px 20px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      background: var(--surface);
+    }
+    #spec h1 { margin: 0 0 12px; font-size: 18px; }
+    .spec-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+    .spec-grid h2 {
+      margin: 0 0 5px;
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .spec-grid ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 11px; }
+    .spec-grid code { color: var(--text); }
+    #mockups { display: grid; gap: 24px; max-width: 1220px; margin: 0 auto; }
+    .viewport {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--bg);
+      box-shadow: 0 18px 58px #0009;
+    }
+    .viewport-label {
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--faint);
+      font-size: 11px;
+    }
+    .app { min-height: 560px; display: grid; grid-template-columns: 310px 1fr; }
+    .sidebar { padding: 14px 12px; border-right: 1px solid var(--border); background: #14171c; }
+    .sidebar-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .sidebar-title strong { font-size: 14px; }
+    .icon-button {
+      display: inline-flex;
+      width: 26px;
+      height: 26px;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-control);
+      color: var(--muted);
+      background: var(--surface);
+    }
+    .tree-line { display: grid; grid-template-columns: 1fr 70px; align-items: center; min-height: 30px; }
+    .tree-line.project { padding-left: 17px; color: var(--muted); }
+    .tree-line.session { padding-left: 34px; }
+    .tree-line.hovered { border-radius: var(--radius-control); background: var(--surface-raised); }
+    .tree-main { min-width: 0; display: flex; align-items: center; gap: 7px; }
+    .dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--success); }
+    .dot.attention { background: var(--attention); box-shadow: 0 0 0 3px var(--attention-soft); }
+    .truncate { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .metric { color: var(--faint); text-align: right; font-variant-numeric: tabular-nums; }
+    .task-inline { padding: 0 4px 6px 47px; color: var(--muted); font-size: 11px; }
+    .task-inline strong { color: var(--text); font-weight: 550; }
+    .content { position: relative; padding: 18px; }
+    .pane-title { margin: 0 0 14px; font-size: 18px; }
+    .card { border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface); }
+    .session-table { overflow: hidden; }
+    .row {
+      display: grid;
+      grid-template-columns: minmax(150px, 1.4fr) minmax(150px, 1fr) 100px 90px;
+      align-items: center;
+      min-height: 42px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .row:last-child { border-bottom: 0; }
+    .row.hovered { background: var(--surface-raised); }
+    .row small { color: var(--muted); }
+    .progress { color: var(--muted); }
+    .progress strong { color: var(--text); }
+    .peek {
+      position: absolute;
+      top: 118px;
+      left: 38px;
+      z-index: 3;
+      width: 390px;
+      padding: 14px;
+      border: 1px solid #464d5a;
+      border-radius: 10px;
+      background: #22262e;
+      box-shadow: 0 18px 48px #000c;
+    }
+    .peek-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .state { display: inline-flex; align-items: center; gap: 6px; color: var(--attention); }
+    .facts { display: grid; grid-template-columns: 74px 1fr; gap: 3px 8px; color: var(--muted); font-size: 11px; }
+    .facts b { color: var(--faint); font-weight: 500; }
+    .activity { margin: 11px 0; padding: 8px 10px; border-radius: var(--radius-control); background: var(--surface-soft); }
+    .activity small { display: block; margin-bottom: 3px; color: var(--faint); }
+    .todo-list { display: grid; gap: 5px; margin-top: 8px; font-size: 12px; }
+    .todo { display: grid; grid-template-columns: 16px 1fr; gap: 6px; color: var(--muted); }
+    .todo.done { color: var(--faint); }
+    .todo.current { color: var(--text); }
+    .check { color: var(--success); }
+    .arrow { color: var(--attention); }
+    .terminal-app { min-height: 570px; display: grid; grid-template-rows: 42px 1fr; }
+    .tabstrip { display: flex; align-items: end; gap: 3px; padding: 6px 8px 0; border-bottom: 1px solid var(--border); background: #14171c; }
+    .tab {
+      display: flex;
+      min-width: 150px;
+      height: 35px;
+      align-items: center;
+      gap: 7px;
+      padding: 0 10px;
+      border: 1px solid transparent;
+      border-bottom: 0;
+      border-radius: 8px 8px 0 0;
+      color: var(--muted);
+      background: var(--surface);
+    }
+    .tab.active { color: var(--text); background: var(--surface-raised); }
+    .tab.attention {
+      color: var(--text);
+      border-color: #9f793f;
+      background: linear-gradient(180deg, var(--attention-soft), var(--surface));
+      box-shadow: 0 -5px 18px #d8a44d24;
+    }
+    .pin { color: var(--faint); font-size: 12px; transform: rotate(-34deg); }
+    .workspace { position: relative; display: grid; grid-template-columns: 1.1fr .9fr; gap: 8px; padding: 8px; background: var(--bg); }
+    .terminal {
+      position: relative;
+      min-height: 490px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: #c9d0dc;
+      background: #0c0e12;
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .terminal.attention {
+      border-color: #9f793f;
+      box-shadow: inset 0 0 0 1px #d8a44d38, 0 0 22px #d8a44d26;
+    }
+    .waiting-label {
+      position: absolute;
+      top: 9px;
+      right: 9px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      color: #f1c775;
+      background: #4b3b22;
+      font: 11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .context-menu {
+      position: absolute;
+      top: 70px;
+      left: 172px;
+      width: 218px;
+      padding: 6px;
+      border: 1px solid #464d5a;
+      border-radius: 8px;
+      background: var(--surface-raised);
+      box-shadow: 0 16px 42px #000b;
+      font: 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .menu-item { padding: 7px 9px; border-radius: 5px; }
+    .menu-item.active { background: var(--surface-soft); }
+    .menu-item.danger { color: var(--danger); }
+    .restore { min-height: 500px; display: grid; place-items: center; padding: 24px; }
+    .restore-pane { width: 760px; max-width: 100%; overflow: hidden; }
+    .shell { min-height: 330px; padding: 18px; color: #aab2c0; background: #0c0e12; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .resume-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 14px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-raised);
+    }
+    .resume-copy strong { display: block; margin-bottom: 2px; }
+    .resume-copy small { color: var(--muted); }
+    .button {
+      flex: 0 0 auto;
+      padding: 7px 11px;
+      border: 1px solid var(--accent);
+      border-radius: var(--radius-control);
+      color: #fff;
+      background: var(--accent);
+    }
+    .settings-note { margin-top: 10px; color: var(--faint); font-size: 11px; text-align: center; }
+    body:has(.viewport:target) #spec,
+    body:has(.viewport:target) .viewport:not(:target) { display: none; }
+    .viewport:target { width: 100%; margin: 0; }
+    @media (max-width: 800px) {
+      body { padding: 10px; }
+      .spec-grid { grid-template-columns: 1fr 1fr; }
+      .app { grid-template-columns: 250px 1fr; }
+      .row { grid-template-columns: 1fr 90px; }
+      .row > :nth-child(2), .row > :nth-child(3) { display: none; }
+      .peek { width: min(360px, calc(100% - 36px)); left: 18px; }
+      .workspace { grid-template-columns: 1fr; }
+      .workspace .terminal:last-child { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .terminal.attention, .tab.attention { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <section id="spec">
+    <h1>UI-Spezifikation — Agent-Fortsetzung und Aufmerksamkeit (#114–#117, #120)</h1>
+    <div class="spec-grid">
+      <div>
+        <h2>Struktur</h2>
+        <ul>
+          <li>Session-Zeile bleibt ruhig; sie zeigt nur Fortschritt und aktuellen Schritt.</li>
+          <li>Hover-Peek ist fest 390 px breit, erscheint nach 350 ms und nimmt keinen Fokus.</li>
+          <li>Vollständiges Transcript bleibt Drill-down, nicht Voraussetzung fürs Verstehen.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Fortsetzung</h2>
+        <ul>
+          <li>Gespeicherte Bindung: Provider, Session-ID, cwd und Konto/Config.</li>
+          <li><code>off</code> = Shell, <code>prompt</code> = sichtbarer Ein-Klick-Banner, <code>auto</code> = gleicher sicherer Resume-Pfad automatisch; Standard ist <code>prompt</code> („Nachfragen“).</li>
+          <li>Fehlende Session endet ehrlich in der Shell mit verständlichem Hinweis.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Tabs und Aufmerksamkeit</h2>
+        <ul>
+          <li>Pin ist dauerhafter Status im Tab; Aktion heißt im Menü sichtbar „Tab anheften/lösen“.</li>
+          <li>Angeheftete Tabs stehen zuerst, speichern Pane-Layout und verlangen vor Schließen Bestätigung.</li>
+          <li>Nur „wartet auf Dich“ färbt Pane und Tab amber; laufend/idle leuchten nie.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Abnahme</h2>
+        <ul>
+          <li>Task-Liste aktualisiert sich geordnet; ohne Plan bleibt die heutige Zeile unverändert.</li>
+          <li>Peek verschwindet beim Verlassen und verändert weder Fokus noch Layout.</li>
+          <li>Reduced Motion zeigt statischen Halo; DND unterdrückt Halo vollständig.</li>
+          <li>Alle Zustände verwenden denselben exakt identitätsgebundenen OpenPlan.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <main id="mockups">
+    <article class="viewport" id="tasks-peek">
+      <div class="viewport-label">Conductor · kompakter Task-Fortschritt und geöffneter Hover-Peek</div>
+      <div class="app">
+        <aside class="sidebar">
+          <div class="sidebar-title"><strong>Hosts</strong><span class="icon-button" aria-label="Hosts verwalten">⚙</span></div>
+          <div class="tree-line"><div class="tree-main"><span class="dot attention"></span><strong>devhost</strong></div><span class="metric">3 Sitz.</span></div>
+          <div class="tree-line project"><div class="tree-main"><span>⌄</span><span class="truncate">zaplex</span></div><span class="metric">2/3</span></div>
+          <div class="tree-line session hovered"><div class="tree-main"><span class="dot attention"></span><span class="truncate">Release-Härtung</span></div><span class="metric">sol · 41%</span></div>
+          <div class="task-inline"><strong>3/7</strong> · Hook-Bridge verdrahten</div>
+          <div class="tree-line session"><div class="tree-main"><span class="dot"></span><span class="truncate">SFTP-Tests</span></div><span class="metric">terra · 28%</span></div>
+          <div class="tree-line project"><div class="tree-main"><span>›</span><span class="truncate">host-admin</span></div><span class="metric">1</span></div>
+        </aside>
+        <section class="content">
+          <h2 class="pane-title">Agent-Sessions</h2>
+          <div class="card session-table">
+            <div class="row hovered"><strong>Release-Härtung</strong><small>release/v1.0</small><small>devhost</small><span class="progress"><strong>3/7</strong> · wartet</span></div>
+            <div class="row"><strong>SFTP-Tests</strong><small>release/v1.0</small><small>devhost</small><span class="progress"><strong>8/8</strong> · fertig</span></div>
+            <div class="row"><strong>Session-Routing</strong><small>release/v1.0</small><small>agenthost</small><span class="progress">kein Plan · aktiv</span></div>
+          </div>
+          <aside class="peek" aria-label="Session-Vorschau">
+            <div class="peek-head"><strong>Release-Härtung</strong><span class="state"><span class="dot attention"></span>wartet auf Dich</span></div>
+            <div class="facts"><b>Konto</b><span>Codex · work@example.com</span><b>Host</b><span>devhost</span><b>Ordner</b><span>/projects/zaplex/release-v1.0</span></div>
+            <div class="activity"><small>Letzte Aktivität</small>Freigabe für die nächste UI-Runde angefordert.</div>
+            <div class="todo-list">
+              <div class="todo done"><span class="check">✓</span><span>Offene Issues abgleichen</span></div>
+              <div class="todo done"><span class="check">✓</span><span>SFTP-Sicherheitsfixes prüfen</span></div>
+              <div class="todo current"><span class="arrow">→</span><span>Hook-Bridge verdrahten</span></div>
+              <div class="todo"><span>○</span><span>Release-Gates ausführen</span></div>
+            </div>
+          </aside>
+        </section>
+      </div>
+    </article>
+
+    <article class="viewport" id="pin-glow">
+      <div class="viewport-label">Workspace · angehefteter Tab und ruhiger Pane-/Tab-Halo bei „wartet auf Dich“</div>
+      <div class="terminal-app">
+        <div class="tabstrip">
+          <div class="tab active"><span class="pin">◆</span><span>Release v1</span></div>
+          <div class="tab attention"><span class="dot attention"></span><span>Hook-Bridge</span></div>
+          <div class="tab"><span class="dot"></span><span>SFTP</span></div>
+        </div>
+        <div class="workspace">
+          <section class="terminal attention">
+            <span class="waiting-label">Wartet auf Dich</span>
+            <div>$ codex</div>
+            <div>Implementierung abgeschlossen.</div>
+            <div>Freigabe für UI-Änderung erforderlich.</div>
+            <div>▌</div>
+          </section>
+          <section class="terminal">
+            <div>$ cargo metadata --no-deps</div>
+            <div>…</div>
+          </section>
+          <div class="context-menu">
+            <div class="menu-item active">Tab lösen</div>
+            <div class="menu-item">Angeheftetes Layout aktualisieren</div>
+            <div class="menu-item danger">Tab schließen …</div>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <article class="viewport" id="restore-prompt">
+      <div class="viewport-label">Wiederhergestelltes Pane · Einstellung „Nachfragen“</div>
+      <div class="restore">
+        <div>
+          <div class="card restore-pane">
+            <div class="shell">$<br><br>Die Shell ist bereit; die vorige Agent-Session wurde noch nicht gestartet.</div>
+            <div class="resume-banner">
+              <div class="resume-copy">
+                <strong>Codex-Session „Release-Härtung“ hier fortsetzen?</strong>
+                <small>work@example.com · /projects/zaplex/release-v1.0</small>
+              </div>
+              <span class="button">Session fortsetzen</span>
+            </div>
+          </div>
+          <div class="settings-note">Modus „Automatisch“ verwendet denselben geprüften Resume-Pfad; „Aus“ zeigt keinen Banner.</div>
+        </div>
+      </div>
+    </article>
+  </main>
+</body>
+</html>

@@ -111,6 +111,7 @@ impl TerminalManager {
         let view = ctx.add_typed_action_view(window_id, |ctx| {
             TerminalView::new(
                 resources,
+                None,
                 wakeups_rx,
                 model_events.clone(),
                 cloned_model,

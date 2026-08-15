@@ -25,6 +25,7 @@ mod command_palette;
 mod completer;
 #[allow(dead_code)]
 mod context_chips;
+mod control_surface;
 #[cfg(enable_crash_recovery)]
 mod crash_recovery;
 #[cfg(feature = "crash_reporting")]
@@ -73,9 +74,9 @@ mod search_bar;
 mod server;
 mod server_time;
 mod session_management;
+mod sftp_manager;
 mod shell_indicator;
 mod skill_manager;
-mod sftp_manager;
 mod ssh_manager;
 mod suggestions;
 mod system;
@@ -298,7 +299,8 @@ use warpui::{AppContext, SingletonEntity, WindowId};
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "assets"]
 #[include = "bundled/**"] // Should be kept in sync with BUNDLED_ASSETS_DIR.
-#[include = "async/**"] // Should be kept in sync with ASYNC_ASSETS_DIR.
+#[include = "async/**"]
+// Should be kept in sync with ASYNC_ASSETS_DIR.
 // Splash artwork reused on the About page (same asset as the macOS DMG installer
 // background); `include` is an allowlist, so this file must be named explicitly.
 #[include = "resources/mac/zaplex_install_image.png"]
@@ -617,6 +619,14 @@ pub fn run() -> Result<()> {
                 .map_err(|err| anyhow!(err.to_string()))?;
                 return Ok(());
             }
+            #[cfg(not(target_family = "wasm"))]
+            warp_cli::Command::Worker(warp_cli::WorkerCommand::CliAgentHook(args)) => {
+                return crate::terminal::cli_agent_sessions::hook_bridge::run_hook_worker(
+                    args.agent,
+                    &args.managed_by,
+                    args.event.as_deref(),
+                );
+            }
             #[cfg(not(any(
                 feature = "local_tty",
                 feature = "plugin_host",
@@ -634,6 +644,10 @@ pub fn run() -> Result<()> {
                 return warp_cli::completions::generate_to_stdout(*shell);
             }
             warp_cli::Command::CommandLine(cmd) => {
+                #[cfg(not(target_family = "wasm"))]
+                if let warp_cli::CliCommand::Control(command) = cmd.as_ref() {
+                    return crate::control_surface::run_control_command(command.clone());
+                }
                 let (is_sandboxed, computer_use_override) = match cmd.as_ref() {
                     warp_cli::CliCommand::Agent(warp_cli::agent::AgentCommand::Run(run_args)) => (
                         run_args.sandboxed,
@@ -1191,8 +1205,7 @@ fn initialize_app(
         manager
     });
 
-    // Custom Agent Provider API keys are stored by an independent singleton in secure storage,
-    // decoupled from ApiKeyManager (BYOK forwarded to warp-server).
+    // Delete any API keys left by the retired custom-provider feature.
     ctx.add_singleton_model(crate::ai::agent_providers::AgentProviderSecrets::new);
 
     // Issue #72: global HTTP proxy Basic Auth password goes through OS keychain.
@@ -1499,6 +1512,18 @@ fn initialize_app(
 
     // Register CLI agent installation status model (background async scans PATH, auto-sync per-agent settings when done)
     ctx.add_singleton_model(crate::terminal::cli_agent::CLIAgentInstallModel::new);
+    #[cfg(not(target_family = "wasm"))]
+    if let Err(error) = crate::ai::agent_sdk::refresh_zaplex_skill_if_installed() {
+        log::warn!("failed to refresh the Zaplex agent skill: {error:#}");
+    }
+    #[cfg(not(target_family = "wasm"))]
+    if let Err(error) =
+        crate::terminal::cli_agent_sessions::hook_bridge::refresh_installed_for_current_user()
+    {
+        log::warn!("failed to refresh Zaplex-managed CLI-agent hooks: {error:#}");
+    }
+    #[cfg(not(target_family = "wasm"))]
+    ctx.add_singleton_model(crate::control_surface::ControlSurfaceServer::new);
 
     let display_count = ctx.windows().display_count();
     ctx.add_singleton_model(|_| DisplayCount(display_count));
@@ -1511,6 +1536,7 @@ fn initialize_app(
     ctx.add_singleton_model(|_| KeybindingChangedNotifier::new());
     ctx.add_singleton_model(|_| crate::ssh_manager::SshTreeChangedNotifier::new());
     ctx.add_singleton_model(crate::cockpit::favorites::FavoritesStore::new);
+    ctx.add_singleton_model(crate::cockpit::reviewed::ReviewedStore::new);
     ctx.add_singleton_model(|_| search::command_palette::SelectedItems::new());
     ctx.add_singleton_model(search::files::model::FileSearchModel::new);
     ctx.add_singleton_model(|_| VimRegisters::new());
@@ -1644,6 +1670,8 @@ fn initialize_app(
 
     // Cross-pane file-manager registry (F5/F6 copy/move target discovery).
     ctx.add_singleton_model(|_| sftp_manager::fm_registry::FileManagerRegistry::new());
+    // Process-wide file-manager transfers survive pane and tab changes.
+    ctx.add_singleton_model(sftp_manager::transfer_queue::TransferQueue::new_with_notifications);
 
     // TemplatableMCPServerManager must be registered after UpdateManager and MCPServerManager so it can migrate legacy MCPs on start up
     // It should also be registered after FileBasedMCPManager so it can receive file-based server updates.

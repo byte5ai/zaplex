@@ -150,6 +150,19 @@ pub fn init(app: &mut AppContext) {
     .with_context_predicate(id!("Workspace"))
     .with_mac_key_binding("cmd-shift-O")
     .with_linux_or_windows_key_binding("ctrl-shift-O")]);
+    // "Stop all": interrupt every signalable agent in the fleet. Registered so it
+    // is reachable by name and bindable, but with **no default key** — it is the
+    // broadest destructive act in the app, and a key you can hit by accident is
+    // not where it belongs. The confirm dialog stays regardless (spec v3 §4.4).
+    //
+    // This is the home the Conductor tree's `⏹ stop all` button needed before
+    // that tree could be de-duplicated against the sidebar (P6).
+    app.register_editable_bindings([EditableBinding::new(
+        "workspace:stop_all_agents",
+        crate::t!("keybinding-desc-workspace-stop-all-agents"),
+        WorkspaceAction::StopAllRequest,
+    )
+    .with_context_predicate(id!("Workspace"))]);
     app.register_fixed_bindings([
         FixedBinding::new(
             "escape",
@@ -637,7 +650,9 @@ pub fn init(app: &mut AppContext) {
             WorkspaceAction::CreatePersonalFolder,
         )
         .with_group(bindings::BindingGroup::Folders.as_str())
-        .with_context_predicate(id!("Workspace") & id!(flags::ENABLE_ZAPLEX_DRIVE) & id!("IsOnline")),
+        .with_context_predicate(
+            id!("Workspace") & id!(flags::ENABLE_ZAPLEX_DRIVE) & id!("IsOnline"),
+        ),
         EditableBinding::new(
             NEW_TAB_BINDING_NAME,
             BindingDescription::new(crate::t!("keybinding-desc-workspace-new-tab")),
@@ -1402,11 +1417,13 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
         .with_custom_action(CustomAction::ShowAboutWarp),
         EditableBinding::new(
             "workspace:show_settings_zaplexify_page",
-            BindingDescription::new(crate::t!("keybinding-desc-workspace-show-settings-zaplexify"))
-                .with_custom_description(
-                    bindings::MAC_MENUS_CONTEXT,
-                    crate::t!("keybinding-desc-workspace-show-settings-zaplexify-menu"),
-                ),
+            BindingDescription::new(crate::t!(
+                "keybinding-desc-workspace-show-settings-zaplexify"
+            ))
+            .with_custom_description(
+                bindings::MAC_MENUS_CONTEXT,
+                crate::t!("keybinding-desc-workspace-show-settings-zaplexify-menu"),
+            ),
             WorkspaceAction::ShowSettingsPage(SettingsSection::Zaplexify),
         )
         .with_group(bindings::BindingGroup::Settings.as_str())
@@ -1455,43 +1472,65 @@ fn add_overflow_menu_items_as_editable_binding(app: &mut AppContext) {
 
     // Add the ability to open all overflow menu items to the command palette.
     // Decentralization branch: "Invite People..." command mapped to ShowReferralSettingsPage, removed.
-    app.register_editable_bindings([
-        EditableBinding::new(
-            "workspace:link_to_slack",
-            crate::t!("keybinding-desc-workspace-link-to-slack"),
-            WorkspaceAction::JoinSlack,
-        )
-        .with_context_predicate(id!("Workspace")),
-        EditableBinding::new(
-            "workspace:link_to_user_docs",
-            crate::t!("keybinding-desc-workspace-link-to-user-docs"),
-            WorkspaceAction::ViewUserDocs,
-        )
-        .with_context_predicate(id!("Workspace")),
-        EditableBinding::new(
-            "workspace:send_feedback",
-            BindingDescription::new(crate::t!("keybinding-desc-workspace-send-feedback"))
-                .with_dynamic_override(|ctx| {
-                    is_feedback_skill_available(ctx)
-                        .then(|| crate::t!("keybinding-desc-workspace-send-feedback-oz"))
-                }),
-            WorkspaceAction::SendFeedback,
-        )
-        .with_context_predicate(id!("Workspace")),
-        #[cfg(not(target_family = "wasm"))]
+    //
+    // Feedback (and, off wasm, View Logs) always lead somewhere. The Docs / Slack /
+    // Privacy commands are registered only once Zaplex has a real destination for them;
+    // otherwise a test user invoking them from the palette would just open `""`.
+    let mut bindings = vec![EditableBinding::new(
+        "workspace:send_feedback",
+        BindingDescription::new(crate::t!("keybinding-desc-workspace-send-feedback"))
+            .with_dynamic_override(|ctx| {
+                is_feedback_skill_available(ctx)
+                    .then(|| crate::t!("keybinding-desc-workspace-send-feedback-oz"))
+            }),
+        WorkspaceAction::SendFeedback,
+    )
+    .with_context_predicate(id!("Workspace"))];
+
+    #[cfg(not(target_family = "wasm"))]
+    bindings.push(
         EditableBinding::new(
             "workspace:view_logs",
             crate::t!("keybinding-desc-workspace-view-logs"),
             WorkspaceAction::ViewLogs,
         )
         .with_context_predicate(id!("Workspace")),
-        EditableBinding::new(
-            "workspace:link_to_privacy_policy",
-            crate::t!("keybinding-desc-workspace-link-to-privacy-policy"),
-            WorkspaceAction::ViewPrivacyPolicy,
-        )
-        .with_context_predicate(id!("Workspace")),
-    ]);
+    );
+
+    if crate::util::links::has_user_docs() {
+        bindings.push(
+            EditableBinding::new(
+                "workspace:link_to_user_docs",
+                crate::t!("keybinding-desc-workspace-link-to-user-docs"),
+                WorkspaceAction::ViewUserDocs,
+            )
+            .with_context_predicate(id!("Workspace")),
+        );
+    }
+
+    if crate::util::links::has_slack() {
+        bindings.push(
+            EditableBinding::new(
+                "workspace:link_to_slack",
+                crate::t!("keybinding-desc-workspace-link-to-slack"),
+                WorkspaceAction::JoinSlack,
+            )
+            .with_context_predicate(id!("Workspace")),
+        );
+    }
+
+    if crate::util::links::has_privacy_policy() {
+        bindings.push(
+            EditableBinding::new(
+                "workspace:link_to_privacy_policy",
+                crate::t!("keybinding-desc-workspace-link-to-privacy-policy"),
+                WorkspaceAction::ViewPrivacyPolicy,
+            )
+            .with_context_predicate(id!("Workspace")),
+        );
+    }
+
+    app.register_editable_bindings(bindings);
 }
 
 #[derive(PartialEq, Copy, Clone, Debug)]

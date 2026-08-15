@@ -103,9 +103,45 @@ attention-inbox remote-row affordance with the sidebar (same object, same gramma
 - Runtime-accepted on a single RC DMG (About shows the RC build id).
 
 ## 6. Progress ledger
-- [ ] WS1 modal contract + migrations
-- [ ] WS2 i18n (rule+guard, primary German, bulk tail)
-- [ ] WS3 icon pass
-- [ ] WS4 sidebar redesign
-- [ ] WS5 nonfunctional/unsafe removal
+- [x] WS1 modal contract + migrations — `ui_components/modal_frame.rs` (one scrim /
+  radius 10 / width band / padding / header / close ✕ / dismiss policy); migrated
+  Spawn-Karte, attention inbox, session_config, new_worktree, params headers + enum
+  shell; aligned generic `Modal<T>` tokens. Reviewed read-only by codex + grok (no
+  blockers; both should-fix items applied). Branch `rc/master-plan`, all commits green.
+- [~] WS2 i18n (rule+guard, primary German, bulk tail) — the primary user-facing surfaces
+  are DONE (each fully German, committed green): migrated **dialogs** (session_config /
+  new_worktree / spawn_card placeholder, I2), **cockpit sidebar** runtime strings
+  (`panel.rs`, I1), **native_modal** + **ai_page** strings, and the **git dialog**
+  (`git_dialog/*` commit/push/publish/PR — errors, titles, labels, buttons, toasts, file
+  plural; I2/#6). Filled the two DE-fallback gaps (`session-config-get-warping`,
+  `workspace-left-panel-ssh-manager-connecting` / I4). Added the **literal guard**
+  (`scripts/check-i18n-literals.sh`, WS2 step 1). REMAINING, each with a concrete reason:
+  (a) `cockpit/settings.rs` descriptions (7, I5) — `&'static str` in the settings *schema*
+  (`crates/settings/src/schema.rs:18`) + macro takes a `literal`; genuinely blocked on a
+  settings-framework i18n change, scope separately; (b) 5 git-dialog strings behind
+  `&'static str` APIs (transient set_loading labels Committing/Publishing/Pushing/Creating
+  + the confirm-tooltip) — need `set_loading`/`confirm_tooltip` signature changes, small
+  follow-up; (c) the deep inherited-Warp long tail — post-RC bulk pass per §2. EN ~3260 /
+  DE ~410 keys now.
+- [x] WS3 icon pass — `⚡ ◈ ◇ ⑂` → `icons::*` (Eye/History/GitBranch/Lightning) via the
+  new `icon_word_verb` helper; stripped glyphs from `warp.ftl` (en+de) + doc comments.
+  Status vocab `● ✋ ◦` kept. Acceptance `rg '⚡|◈|◇|⑂' app/src` → 0. codex-reviewed, green.
+- [~] WS4 sidebar redesign — SPEC APPROVED (owner signed off), build in progress.
+  Spec `2026-07-11-cockpit-sidebar-redesign.md` is in the tree. **S2 data-model half
+  landed:** Codex `provider≠plan` fix (plan_tier no longer = auth_mode 'chatgpt' → None;
+  test updated), green. REMAINING = the large sidebar RENDER rebuild: S1 (tokens — L1
+  contrast-tested semantic palette generalizing `heat_coloru`), S2b (snapshot exposes
+  worktree/branch, not just cwd), S3 (two flat zone-cards / Hosts tree with a FIXED right
+  metric column), S4 (Accounts card, 5h+week meters, provider≠plan two-slot render),
+  S5 (click→detail in dashboard pane), S6 (polish). This is a several-hundred-line
+  `cockpit/panel.rs` rebuild that can only be visually verified on the RC DMG; do it with
+  adequate context headroom, green per step, codex/grok review, then the one RC DMG.
+- [~] WS5 nonfunctional/unsafe removal — PARTIAL. Fixed the one Class-A **safety** item:
+  the reachable `unimplemented!()` panic in `cockpit/pane.rs` → no-op. The remaining
+  items are non-crashing and need runtime verification to fix safely (better done against
+  the RC DMG): MCP Delete/Logs/Run are log-only *defensive* arms whose button visibility
+  is status-derived (gating needs runtime confirmation of what's actually offered per
+  item type); the attention-inbox remote-row ↔ sidebar reconcile is feature wiring; the
+  cockpit-off blind `AddSpecificAgentTab` (C4) is an intentional, documented fallback
+  (Class B).
 - [ ] Verification: one RC DMG, devhost acceptance

@@ -21,6 +21,12 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 pub enum AuthMethod {
     Password { password: String },
     PublicKey { key_path: PathBuf, passphrase: Option<String> },
+    /// Key authentication with no key file configured for the host — the
+    /// common case when the user relies on `~/.ssh/config` + `ssh-agent`, as
+    /// the terminal path does (it shells out to `ssh`, which reads both).
+    /// Tries the agent first, then OpenSSH's default identity files, so the
+    /// file manager reaches the same hosts the terminal can.
+    AgentOrDefaultKeys { passphrase: Option<String> },
 }
 
 /// SFTP session, wraps ssh2 connection
@@ -107,6 +113,9 @@ impl SftpSession {
                         }
                     })?;
             }
+            AuthMethod::AgentOrDefaultKeys { passphrase } => {
+                authenticate_like_openssh(&session, username, passphrase.as_deref())?;
+            }
         }
 
         if !session.authenticated() {
@@ -157,4 +166,90 @@ impl Drop for SftpSession {
 fn is_timeout_error(error: &ssh2::Error) -> bool {
     // ssh2 error code Session(-37) corresponds to LIBSSH2_ERROR_SOCKET_TIMEOUT
     error.code() == ssh2::ErrorCode::Session(-37)
+}
+
+/// What `ssh` itself does for a host with no explicit `IdentityFile`: try the
+/// agent (every identity it holds, not just the first), then the default
+/// identity files in `~/.ssh`. Returns the LAST error when everything fails,
+/// so the message names something actionable rather than "no key path".
+fn authenticate_like_openssh(
+    session: &ssh2::Session,
+    username: &str,
+    passphrase: Option<&str>,
+) -> Result<(), SftpError> {
+    // 1. ssh-agent. Every identity is tried: `userauth_agent` only ever
+    //    attempts the agent's FIRST key, so a user whose agent holds several
+    //    keys (the normal case) would fail here while plain `ssh` succeeds.
+    //    A missing SSH_AUTH_SOCK makes `connect` fail immediately.
+    if let Ok(mut agent) = session.agent() {
+        if agent.connect().is_ok() {
+            let mut authenticated = false;
+            if agent.list_identities().is_ok() {
+                if let Ok(identities) = agent.identities() {
+                    for identity in identities {
+                        if agent.userauth(username, &identity).is_ok() && session.authenticated() {
+                            authenticated = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            // libssh2's own example disconnects before the agent is freed;
+            // `Drop` only calls `libssh2_agent_free`.
+            let _ = agent.disconnect();
+            if authenticated {
+                return Ok(());
+            }
+        }
+    }
+
+    // 2. Default identity files, in ssh's own preference order (ssh_config(5)
+    //    IdentityFile defaults). Only files that exist are attempted, which
+    //    keeps us clear of the server's MaxAuthTries in the common case.
+    let home = match std::env::var("HOME") {
+        Ok(h) if !h.is_empty() => PathBuf::from(h),
+        _ => {
+            return Err(SftpError::AuthFailed(
+                "No SSH agent identity was accepted and $HOME is unset, so the \
+                 default keys in ~/.ssh cannot be located. Add a key file to \
+                 this host's settings."
+                    .to_string(),
+            ))
+        }
+    };
+    let mut last_err: Option<String> = None;
+    let mut tried_any = false;
+    for name in [
+        "id_rsa",
+        "id_ecdsa",
+        "id_ecdsa_sk",
+        "id_ed25519",
+        "id_ed25519_sk",
+        "id_dsa",
+    ] {
+        let key_path = home.join(".ssh").join(name);
+        if !key_path.exists() {
+            continue;
+        }
+        tried_any = true;
+        match session.userauth_pubkey_file(username, None, &key_path, passphrase) {
+            Ok(()) if session.authenticated() => return Ok(()),
+            Ok(()) => {}
+            Err(e) if is_timeout_error(&e) => return Err(SftpError::Timeout),
+            Err(e) => last_err = Some(format!("{name}: {e}")),
+        }
+    }
+
+    Err(SftpError::AuthFailed(match (tried_any, last_err) {
+        (true, Some(e)) => format!(
+            "No SSH agent identity was accepted and none of the default keys in \
+             ~/.ssh worked ({e}). Add the right key file to this host's settings."
+        ),
+        (true, None) => "No SSH agent identity and no default key in ~/.ssh was \
+             accepted. Add the right key file to this host's settings."
+            .to_string(),
+        (false, _) => "No SSH agent identity was accepted and no default key \
+             exists in ~/.ssh. Add a key file to this host's settings."
+            .to_string(),
+    }))
 }

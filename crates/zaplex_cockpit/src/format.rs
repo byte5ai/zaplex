@@ -63,7 +63,10 @@ pub fn heat_fill(fraction: f64) -> f64 {
 /// estimates keep their `~`. Kept `pub(crate)` (not exported) so the app can't
 /// reach the un-marked variant (#106).
 pub(crate) fn heat_pct_label(fraction: f64) -> String {
-    format!("{}%", (fraction * 100.0).round() as i64)
+    // Narrow no-break space before the percent sign (U+202F) — German premium
+    // typography, and it keeps "62 %" from wrapping between number and sign
+    // (spec v3 §7). Shared by every heat bar so the whole cockpit is consistent.
+    format!("{}\u{202f}%", (fraction * 100.0).round() as i64)
 }
 
 /// Percent label with provenance (C3b): real numbers get no extra chrome,
@@ -146,9 +149,16 @@ pub fn model_family(model: &str) -> &str {
     model
 }
 
-/// USD cost with 2 decimals: 4.2 -> "$4.20".
+/// A bundled-list-price estimate with 2 decimals: 4.2 -> "~$4.20".
+///
+/// Negative values mark a window containing an unpriced model and are never
+/// rendered as a fictional zero cost.
 pub fn format_cost(usd: f64) -> String {
-    format!("${usd:.2}")
+    if usd < 0.0 {
+        "unpriced".to_string()
+    } else {
+        format!("~${usd:.2}")
+    }
 }
 
 /// Humanized token count: 42 -> "42", 3400 -> "3.4k", 300000 -> "300k",
@@ -186,6 +196,29 @@ pub fn format_reset(reset: Option<DateTime<Utc>>, now: DateTime<Utc>) -> String 
     }
     let d = h / 24;
     format!("{}d{}h", d, h % 24)
+}
+
+/// How long ago something happened, as a short glance-value: `"jetzt"`-scale
+/// `now`, then `5m`, `3h`, `2d`.
+///
+/// The mirror of [`format_reset`], which counts forward — same units, same
+/// shortness, so a row's "last" and a meter's "resets in" read as one language.
+/// A future timestamp (a clock that disagrees with the host that wrote it) reads
+/// as `now` rather than a negative age: skew is not news.
+pub fn format_relative(ts: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let ms = (now - ts).num_milliseconds();
+    if ms < 60_000 {
+        return "now".to_string();
+    }
+    let total_min = ((ms as f64) / 60_000.0).floor() as i64;
+    if total_min < 60 {
+        return format!("{total_min}m");
+    }
+    let h = total_min / 60;
+    if h < 24 {
+        return format!("{h}h");
+    }
+    format!("{}d", h / 24)
 }
 
 #[cfg(test)]

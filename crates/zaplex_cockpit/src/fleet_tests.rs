@@ -37,7 +37,17 @@ fn session_in(
         effort: None,
         ctx_tokens: 0,
         project_root: root.into(),
+        repo_root: root.into(),
         project_name: name,
+        branch: None,
+        worktree: None,
+        config_dir: None,
+        account_email: None,
+        process_fingerprint: None,
+        pty_session_id: None,
+        pty_session_generation: None,
+        pty_foreground: false,
+        task_state: None,
         last_activity: at(activity),
         pid: 0,
     }
@@ -50,6 +60,7 @@ fn host(name: &str, sessions: Vec<SessionSnapshot>) -> HostSessions {
         // that care (see the fold + collision tests below).
         is_local: false,
         host_id: None,
+        registry_node_id: None,
         sessions,
     }
 }
@@ -59,6 +70,7 @@ fn remote_host(label: &str, host_id: &str) -> RemoteHost {
     RemoteHost {
         label: label.into(),
         host_id: host_id.into(),
+        registry_node_id: None,
     }
 }
 
@@ -91,17 +103,17 @@ fn needs_me_bubbles_session_to_project_to_host_to_fleet() {
             ],
         ),
         host(
-            "macmini",
+            "agenthost",
             vec![session("d", "/p/three", SessionState::Monitor, 8)],
         ),
     ]);
-    // devhost: 2 waiting (one in /p/one, one in /p/two); macmini: 0.
+    // devhost: 2 waiting (one in /p/one, one in /p/two); agenthost: 0.
     let dev = tree.hosts.iter().find(|h| h.host == "devhost").unwrap();
     assert_eq!(dev.needs_me, 2);
     let one = dev.projects.iter().find(|p| p.root == "/p/one").unwrap();
     assert_eq!(one.needs_me, 1);
-    let mac = tree.hosts.iter().find(|h| h.host == "macmini").unwrap();
-    assert_eq!(mac.needs_me, 0);
+    let agent = tree.hosts.iter().find(|h| h.host == "agenthost").unwrap();
+    assert_eq!(agent.needs_me, 0);
     assert_eq!(tree.needs_me, 2, "grand total across the fleet");
 }
 
@@ -195,6 +207,7 @@ fn fold_empty_remote_list_is_exactly_the_local_tree() {
         host: "local".into(),
         is_local: true, // fold marks the local contribution local
         host_id: None,  // the local node carries no daemon id
+        registry_node_id: None,
         sessions: local,
     }]);
     assert_eq!(folded, expected);
@@ -331,16 +344,16 @@ fn fold_needs_me_bubbles_across_the_whole_fleet() {
         session("b", "/p/two", SessionState::Waiting, 6),
         session("c", "/p/two", SessionState::Active, 7),
     ];
-    let mac = vec![session("d", "/p/three", SessionState::Monitor, 8)];
+    let agent = vec![session("d", "/p/three", SessionState::Monitor, 8)];
     let tree = fold_inventory(
         "local",
         local,
         vec![
             (remote_host("devhost", "devhost-id"), dev),
-            (remote_host("macmini", "macmini-id"), mac),
+            (remote_host("agenthost", "agenthost-id"), agent),
         ],
     );
-    // Grand total spans every host: 1 (local) + 1 (devhost) + 0 (macmini).
+    // Grand total spans every host: 1 (local) + 1 (devhost) + 0 (agenthost).
     assert_eq!(tree.needs_me, 2);
     assert_eq!(tree.hosts.len(), 3);
     // Hosts with waiting work sort ahead of the quiet one.
@@ -349,7 +362,7 @@ fn fold_needs_me_bubbles_across_the_whole_fleet() {
     assert_eq!(
         tree.hosts
             .iter()
-            .find(|h| h.host == "macmini")
+            .find(|h| h.host == "agenthost")
             .unwrap()
             .needs_me,
         0
@@ -378,7 +391,7 @@ fn fold_identity_is_host_scoped_session_id() {
 }
 
 #[test]
-fn empty_hosts_are_dropped_and_empty_fleet_is_zero() {
+fn empty_remote_hosts_are_dropped_and_empty_fleet_is_zero() {
     let tree = build_fleet_tree(vec![
         host("idle", vec![]),
         host("live", vec![session("a", "/p", SessionState::Active, 1)]),
@@ -392,33 +405,430 @@ fn empty_hosts_are_dropped_and_empty_fleet_is_zero() {
 }
 
 #[test]
-fn merge_registered_adds_agentless_hosts_and_dedups_by_label() {
-    // A tree with one session-backed host ("devhost").
-    let mut tree = build_fleet_tree(vec![host(
-        "devhost",
-        vec![session("a", "/p/x", SessionState::Active, 10)],
-    )]);
-    // Registry: devhost (already present, connected) + agenthost (registered, no
-    // live agent — build_fleet_tree would have dropped it).
-    let registered = vec![
-        ("node-dev".to_string(), "devhost".to_string()),
-        ("node-agent".to_string(), "agenthost".to_string()),
-    ];
+fn registered_and_live_host_snapshots_join_into_one_host_node() {
+    let mut tree = fold_inventory(
+        "local",
+        Vec::new(),
+        vec![(
+            remote_host("devhost", "daemon-dev"),
+            vec![session("a", "/p/x", SessionState::Active, 10)],
+        )],
+    );
+    let registered = vec![RegisteredHost {
+        node_id: "node-dev".to_string(),
+        label: "devhost".to_string(),
+        live_host_id: Some("daemon-dev".to_string()),
+    }];
+
     merge_registered_hosts(&mut tree, &registered);
 
-    assert_eq!(tree.hosts.len(), 2, "agenthost added, devhost not duplicated");
-    let dev = tree.hosts.iter().find(|h| h.host == "devhost").unwrap();
-    assert_eq!(dev.projects.len(), 1, "the connected host keeps its sessions");
-    assert_eq!(
-        dev.registry_node_id.as_deref(),
-        Some("node-dev"),
-        "a live registered host is back-filled with its registry id so host-row \
-         actions (open/manage/star) work"
+    let joined: Vec<&HostNode> = tree
+        .hosts
+        .iter()
+        .filter(|host| host.registry_node_id.as_deref() == Some("node-dev"))
+        .collect();
+    assert_eq!(joined.len(), 1);
+    assert_eq!(joined[0].host_id.as_deref(), Some("daemon-dev"));
+    assert_eq!(joined[0].projects.len(), 1);
+}
+
+#[test]
+fn registered_offline_host_remains_visible_without_live_inventory() {
+    let mut tree = fold_inventory("local", Vec::new(), Vec::new());
+    let registered = vec![RegisteredHost {
+        node_id: "node-offline".to_string(),
+        label: "offline".to_string(),
+        live_host_id: None,
+    }];
+
+    merge_registered_hosts(&mut tree, &registered);
+
+    let offline = tree
+        .hosts
+        .iter()
+        .find(|host| host.registry_node_id.as_deref() == Some("node-offline"))
+        .expect("registered offline host stays in the spine");
+    assert_eq!(offline.host, "offline");
+    assert!(offline.host_id.is_none());
+    assert!(offline.projects.is_empty());
+}
+
+#[test]
+fn live_status_enriches_registered_host_without_duplicate() {
+    let mut tree = fold_inventory(
+        "local",
+        Vec::new(),
+        vec![(
+            remote_host("renamed-live-label", "daemon-dev"),
+            vec![session("waiting", "/p/x", SessionState::Waiting, 10)],
+        )],
     );
-    let agent = tree.hosts.iter().find(|h| h.host == "agenthost").unwrap();
-    assert!(agent.projects.is_empty(), "a registry-only host has no sessions");
-    assert_eq!(agent.registry_node_id.as_deref(), Some("node-agent"));
-    assert!(!agent.is_local);
-    assert_eq!(agent.needs_me, 0);
-    assert_eq!(tree.needs_me, 0, "an agentless host adds no needs-me");
+    let registered = vec![RegisteredHost {
+        node_id: "node-dev".to_string(),
+        label: "registry-label".to_string(),
+        live_host_id: Some("daemon-dev".to_string()),
+    }];
+
+    merge_registered_hosts(&mut tree, &registered);
+
+    let remote: Vec<&HostNode> = tree.hosts.iter().filter(|host| !host.is_local).collect();
+    assert_eq!(remote.len(), 1, "stable ids join despite different labels");
+    assert_eq!(remote[0].registry_node_id.as_deref(), Some("node-dev"));
+    assert_eq!(remote[0].needs_me, 1, "live status survives the join");
+    assert_eq!(remote[0].projects[0].sessions[0].session_id, "waiting");
+}
+
+#[test]
+fn same_display_name_hosts_remain_distinct_by_stable_id() {
+    let mut tree = fold_inventory(
+        "local",
+        Vec::new(),
+        vec![
+            (
+                remote_host("box", "daemon-a"),
+                vec![session("a", "/p/a", SessionState::Active, 10)],
+            ),
+            (
+                remote_host("box", "daemon-b"),
+                vec![session("b", "/p/b", SessionState::Waiting, 20)],
+            ),
+        ],
+    );
+    let registered = vec![
+        RegisteredHost {
+            node_id: "node-a".to_string(),
+            label: "box".to_string(),
+            live_host_id: Some("daemon-a".to_string()),
+        },
+        RegisteredHost {
+            node_id: "node-b".to_string(),
+            label: "box".to_string(),
+            live_host_id: Some("daemon-b".to_string()),
+        },
+    ];
+
+    merge_registered_hosts(&mut tree, &registered);
+
+    let remotes: Vec<&HostNode> = tree.hosts.iter().filter(|host| !host.is_local).collect();
+    assert_eq!(remotes.len(), 2);
+    let a = remotes
+        .iter()
+        .find(|host| host.host_id.as_deref() == Some("daemon-a"))
+        .unwrap();
+    let b = remotes
+        .iter()
+        .find(|host| host.host_id.as_deref() == Some("daemon-b"))
+        .unwrap();
+    assert_eq!(a.registry_node_id.as_deref(), Some("node-a"));
+    assert_eq!(b.registry_node_id.as_deref(), Some("node-b"));
+}
+
+#[test]
+fn local_host_is_rendered_exactly_once() {
+    let mut tree = fold_inventory("box", Vec::new(), Vec::new());
+    merge_registered_hosts(
+        &mut tree,
+        &[RegisteredHost {
+            node_id: "remote-box".to_string(),
+            label: "box".to_string(),
+            live_host_id: None,
+        }],
+    );
+
+    assert_eq!(tree.hosts.iter().filter(|host| host.is_local).count(), 1);
+    assert_eq!(
+        tree.hosts
+            .iter()
+            .filter(|host| host.registry_node_id.as_deref() == Some("remote-box"))
+            .count(),
+        1,
+        "a same-named registered remote remains distinct from local"
+    );
+}
+
+#[test]
+fn removed_host_is_never_routed_as_available() {
+    let mut removed_remote = remote_host("devhost", "daemon-dev");
+    removed_remote.registry_node_id = Some("node-dev".to_string());
+    let mut removed_session = session("a", "/p/x", SessionState::Waiting, 10);
+    removed_session.account_email = Some("me@example.com".to_string());
+    let mut tree = fold_inventory(
+        "local",
+        Vec::new(),
+        vec![(removed_remote, vec![removed_session])],
+    );
+
+    merge_registered_hosts(&mut tree, &[]);
+    merge_registered_hosts(&mut tree, &[]);
+
+    let live = tree
+        .hosts
+        .iter()
+        .find(|host| host.host_id.as_deref() == Some("daemon-dev"))
+        .expect("live inventory remains visible");
+    assert_eq!(live.availability, HostAvailability::Removed);
+    assert!(live.registry_node_id.is_none());
+    assert_eq!(
+        live.projects[0].sessions[0].session_id, "a",
+        "observed sessions remain honestly visible on the removed reference"
+    );
+    assert_eq!(
+        tree.needs_me, 0,
+        "removed hosts do not contribute actionable attention"
+    );
+    assert!(
+        sessions_of_account(
+            &tree,
+            &account(
+                Provider::Claude,
+                Some("me@example.com"),
+                "/Users/me/.claude"
+            )
+        )
+        .is_empty(),
+        "account routing must not expose a removed host's sessions"
+    );
+    assert!(
+        crate::conductor::waiting_sessions(&tree).is_empty(),
+        "keyboard waiting-session routing must ignore removed hosts"
+    );
+}
+
+// ── Account ↔ fleet join (F5) ───────────────────────────────────────────────
+
+use crate::types::Account;
+
+fn account(provider: Provider, email: Option<&str>, config_dir: &str) -> Account {
+    Account {
+        provider,
+        key: format!("{}:{}", provider.as_str(), config_dir),
+        config_dir: config_dir.into(),
+        label: "acct".into(),
+        email: email.map(str::to_string),
+        org: None,
+        role: None,
+        plan_tier: None,
+        is_default: config_dir.ends_with(".claude") || config_dir.ends_with(".codex"),
+    }
+}
+
+/// A session as a host reports it: stamped with the account that owns it.
+fn owned(
+    id: &str,
+    cwd: &str,
+    provider: Provider,
+    email: Option<&str>,
+    config_dir: Option<&str>,
+) -> SessionSnapshot {
+    let mut s = session(id, cwd, SessionState::Active, 10);
+    s.provider = provider;
+    s.account_email = email.map(str::to_string);
+    s.config_dir = config_dir.map(str::to_string);
+    s
+}
+
+#[test]
+fn an_accounts_sessions_are_found_on_every_host() {
+    let tree = build_fleet_tree(vec![
+        HostSessions {
+            host: "mac".into(),
+            is_local: true,
+            host_id: None,
+            registry_node_id: None,
+            sessions: vec![owned(
+                "local",
+                "/p/a",
+                Provider::Claude,
+                Some("me@x.de"),
+                None,
+            )],
+        },
+        HostSessions {
+            host: "devhost".into(),
+            is_local: false,
+            host_id: Some("daemon-1".into()),
+            registry_node_id: None,
+            sessions: vec![owned(
+                "remote",
+                "/p/b",
+                Provider::Claude,
+                Some("me@x.de"),
+                // The host's own path — deliberately unlike anything local.
+                Some("/home/cwendler/.claude"),
+            )],
+        },
+    ]);
+
+    let found = sessions_of_account(
+        &tree,
+        &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude"),
+    );
+    // Rows come in tree order (hosts by needs-me, then name); the table sorts by
+    // its own columns anyway, so assert the set rather than that incidental order.
+    let mut ids: Vec<&str> = found
+        .iter()
+        .map(|a| a.session.session_id.as_str())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["local", "remote"], "both hosts contribute");
+
+    // The Host column, and the identity a remote action must route through.
+    let remote = found
+        .iter()
+        .find(|a| a.session.session_id == "remote")
+        .unwrap();
+    assert_eq!(remote.host, "devhost");
+    assert!(!remote.is_local);
+    assert_eq!(remote.host_id, Some("daemon-1"));
+    let local = found
+        .iter()
+        .find(|a| a.session.session_id == "local")
+        .unwrap();
+    assert!(local.is_local);
+    assert_eq!(local.host_id, None);
+}
+
+/// The bug the spec's "join on config_dir" would have shipped: a default account
+/// carries no pin at all, so every host's default sessions would land on the
+/// first default account — even when that host is signed into another
+/// subscription entirely.
+#[test]
+fn a_second_account_on_another_host_is_not_claimed_as_ours() {
+    let tree = build_fleet_tree(vec![
+        HostSessions {
+            host: "mac".into(),
+            is_local: true,
+            host_id: None,
+            registry_node_id: None,
+            sessions: vec![owned(
+                "mine",
+                "/p/a",
+                Provider::Claude,
+                Some("me@x.de"),
+                None,
+            )],
+        },
+        HostSessions {
+            host: "devhost".into(),
+            is_local: false,
+            host_id: Some("daemon-1".into()),
+            registry_node_id: None,
+            // Same provider, same (empty) pin — a different subscription.
+            sessions: vec![owned(
+                "theirs",
+                "/p/b",
+                Provider::Claude,
+                Some("other@x.de"),
+                None,
+            )],
+        },
+    ]);
+
+    let mine = sessions_of_account(
+        &tree,
+        &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude"),
+    );
+    assert_eq!(
+        mine.iter()
+            .map(|a| a.session.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["mine"],
+        "another host's account must not be folded into ours"
+    );
+}
+
+/// One address can hold both a Claude and a Codex subscription, so the provider
+/// is part of the key.
+#[test]
+fn the_same_address_on_two_providers_stays_two_accounts() {
+    let tree = build_fleet_tree(vec![HostSessions {
+        host: "mac".into(),
+        is_local: true,
+        host_id: None,
+        registry_node_id: None,
+        sessions: vec![
+            owned("c", "/p/a", Provider::Claude, Some("me@x.de"), None),
+            owned("x", "/p/b", Provider::Codex, Some("me@x.de"), None),
+        ],
+    }]);
+
+    let claude = sessions_of_account(
+        &tree,
+        &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude"),
+    );
+    assert_eq!(claude.len(), 1);
+    assert_eq!(claude[0].session.session_id, "c");
+
+    let codex = sessions_of_account(
+        &tree,
+        &account(Provider::Codex, Some("me@x.de"), "/Users/me/.codex"),
+    );
+    assert_eq!(codex.len(), 1);
+    assert_eq!(codex[0].session.session_id, "x");
+}
+
+/// An older daemon sends no email. Its sessions still belong in the host tree —
+/// they simply join no account, rather than being guessed onto one.
+#[test]
+fn a_session_that_names_no_account_joins_none() {
+    let tree = build_fleet_tree(vec![HostSessions {
+        host: "old-daemon".into(),
+        is_local: false,
+        host_id: Some("daemon-old".into()),
+        registry_node_id: None,
+        sessions: vec![owned("anon", "/p/a", Provider::Claude, None, None)],
+    }]);
+
+    assert!(sessions_of_account(
+        &tree,
+        &account(Provider::Claude, Some("me@x.de"), "/Users/me/.claude")
+    )
+    .is_empty());
+    // But it is still in the inventory, under its host.
+    assert_eq!(tree.hosts.len(), 1);
+    assert_eq!(tree.hosts[0].projects[0].sessions.len(), 1);
+}
+
+/// An account with no email of its own cannot claim anything — matching every
+/// unknown session would be worse than showing none.
+#[test]
+fn an_account_without_an_email_claims_nothing() {
+    let tree = build_fleet_tree(vec![HostSessions {
+        host: "mac".into(),
+        is_local: true,
+        host_id: None,
+        registry_node_id: None,
+        sessions: vec![owned("anon", "/p/a", Provider::Claude, None, None)],
+    }]);
+
+    assert!(
+        sessions_of_account(&tree, &account(Provider::Claude, None, "/Users/me/.claude"))
+            .is_empty()
+    );
+}
+
+/// Both hosts read the address from the provider's own token, so it should
+/// already match exactly. If it ever didn't, the join would fail with no symptom
+/// but the absence of rows — so it does not hinge on capitalisation.
+#[test]
+fn the_join_does_not_hinge_on_how_the_address_is_capitalised() {
+    let tree = build_fleet_tree(vec![HostSessions {
+        host: "devhost".into(),
+        is_local: false,
+        host_id: Some("daemon-1".into()),
+        registry_node_id: None,
+        sessions: vec![owned(
+            "remote",
+            "/p/a",
+            Provider::Claude,
+            Some("Me@Example.DE"),
+            None,
+        )],
+    }]);
+
+    let found = sessions_of_account(
+        &tree,
+        &account(Provider::Claude, Some("me@example.de"), "/Users/me/.claude"),
+    );
+    assert_eq!(found.len(), 1, "same account, differently spelled");
 }

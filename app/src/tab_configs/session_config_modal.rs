@@ -1,12 +1,8 @@
 use std::path::PathBuf;
 
-use pathfinder_geometry::vector::vec2f;
 use warpui::elements::{
-    ChildAnchor, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex,
-    FormattedTextElement, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Stack,
+    ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MouseStateHandle, ParentElement,
 };
-use warpui::fonts::Weight;
 use warpui::keymap::macros::id;
 use warpui::keymap::FixedBinding;
 use warpui::keymap::Keystroke;
@@ -17,7 +13,7 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
-use crate::ui_components::blended_colors;
+use crate::ui_components::modal_frame;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
@@ -163,36 +159,20 @@ impl SessionConfigModal {
     // ── Rendering ──
 
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let theme = appearance.theme();
-
-        let title = FormattedTextElement::from_str(
-            "Create your first tab config",
-            appearance.ui_font_family(),
-            24.,
-        )
-        .with_color(blended_colors::text_main(theme, theme.background()))
-        .with_weight(Weight::Semibold)
-        .finish();
-
         let subtitle_text = if self.show_session_type_row {
-            "Set up a reusable starting point for your tabs. \
-             Pick a repo, choose a session type, and optionally attach a worktree. \
-             Use it whenever you want to open a new tab with this setup."
+            crate::t!("session-config-modal-subtitle-with-type")
         } else {
-            "Set up a reusable starting point for your tabs. \
-             Pick a repo, optionally attach a worktree, and \
-             use it whenever you want to open a new tab with this setup."
+            crate::t!("session-config-modal-subtitle-no-type")
         };
-        let subtitle =
-            FormattedTextElement::from_str(subtitle_text, appearance.ui_font_family(), 14.)
-                .with_color(blended_colors::text_sub(theme, theme.background()))
-                .finish();
 
-        Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(title)
-            .with_child(Container::new(subtitle).with_margin_top(4.).finish())
-            .finish()
+        // The one shared modal header (title · subtitle · close ✕). The ✕ now
+        // lives in the header row rather than a separately-positioned overlay.
+        modal_frame::modal_header(
+            crate::t!("session-config-modal-title"),
+            Some(subtitle_text),
+            ChildView::new(&self.close_button).finish(),
+            appearance,
+        )
     }
 
     fn render_session_type_section(&self, appearance: &Appearance) -> Box<dyn Element> {
@@ -311,24 +291,9 @@ impl View for SessionConfigModal {
             .with_vertical_padding(40.)
             .finish();
 
-        let mut stack = Stack::new();
-        stack.add_child(body);
-        stack.add_positioned_overlay_child(
-            Container::new(ChildView::new(&self.close_button).finish())
-                .with_margin_top(12.)
-                .with_margin_right(12.)
-                .finish(),
-            OffsetPositioning::offset_from_parent(
-                vec2f(0., 0.),
-                ParentOffsetBounds::ParentByPosition,
-                ParentAnchor::TopRight,
-                ChildAnchor::TopRight,
-            ),
-        );
-
-        ConstrainedBox::new(stack.finish())
-            .with_width(420.)
-            .finish()
+        // The close ✕ now lives in the shared header (render_header), so the body
+        // no longer stacks a separately-positioned corner overlay.
+        ConstrainedBox::new(body).with_width(420.).finish()
     }
 }
 

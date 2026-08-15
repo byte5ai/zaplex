@@ -189,6 +189,12 @@ impl ZaplexifySuccessBlock {
             ZaplexificationSource::Subshell => SUBSHELL_DOCS_URL,
         };
 
+        // No Zaplex docs destination yet; render nothing rather than a "Learn more" link
+        // that opens an empty URL.
+        if url.is_empty() {
+            return warpui::elements::Empty::new().finish();
+        }
+
         let font_family_id = appearance.monospace_font_family();
         let font_size = appearance.monospace_font_size();
         appearance
@@ -252,7 +258,9 @@ impl ZaplexifySuccessBlock {
                         code_snippet.to_string(),
                     ));
 
-                    ctx.dispatch_typed_action(ZaplexifySuccessBlockAction::ClearAutoZaplexifySnippet);
+                    ctx.dispatch_typed_action(
+                        ZaplexifySuccessBlockAction::ClearAutoZaplexifySnippet,
+                    );
                 }
             })),
             Some(Box::new({

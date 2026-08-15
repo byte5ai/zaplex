@@ -537,6 +537,7 @@ pub fn create_transferred_window(
                 global_resource_handles.clone(),
                 NewWorkspaceSource::TransferredTab {
                     tab_color: transferred_tab.color,
+                    is_pinned: transferred_tab.is_pinned,
                     custom_title: transferred_tab.custom_title.clone(),
                     left_panel_open: transferred_tab.left_panel_open,
                     vertical_tabs_panel_open: transferred_tab.vertical_tabs_panel_open,
@@ -1326,6 +1327,8 @@ pub enum NewWorkspaceSource {
     TransferredTab {
         /// Tab color from the source tab
         tab_color: Option<AnsiColorIdentifier>,
+        /// Whether the source tab belongs to the pinned prefix.
+        is_pinned: bool,
         /// Custom title from the source tab
         custom_title: Option<String>,
         /// Whether the left panel was open in the source tab
@@ -2436,8 +2439,7 @@ impl RootView {
             return;
         };
 
-        if FeatureFlag::ZaplexNewSettingsModes.is_enabled()
-            && FeatureFlag::TabConfigs.is_enabled()
+        if FeatureFlag::ZaplexNewSettingsModes.is_enabled() && FeatureFlag::TabConfigs.is_enabled()
         {
             let intention = tutorial.intention();
             // Terminal-intent users skip the session config modal.

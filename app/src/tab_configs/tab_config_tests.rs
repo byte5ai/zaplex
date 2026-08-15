@@ -920,7 +920,9 @@ fn test_build_worktree_toml_appends_followup_command() {
     let (_, template) = render_tab_config(&config, &HashMap::new(), Some("obsidian-hawk"));
     if let PaneTemplateType::PaneTemplate { commands, .. } = template {
         assert_eq!(commands.len(), 3);
-        assert!(commands[0].exec.starts_with("git worktree add -b obsidian-hawk"));
+        assert!(commands[0]
+            .exec
+            .starts_with("git worktree add -b obsidian-hawk"));
         assert!(commands[1].exec.starts_with("cd "));
         assert_eq!(commands[2].exec, "claude --resume abc --fork-session");
     } else {

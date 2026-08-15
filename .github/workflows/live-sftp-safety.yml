@@ -1,0 +1,122 @@
+name: Live SFTP safety
+
+on:
+  pull_request:
+    paths:
+      - "app/src/remote_server/safe_file.rs"
+      - "app/src/remote_server/safe_file_tests.rs"
+      - "app/src/sftp_manager/**"
+      - "crates/remote_server/**"
+      - ".github/workflows/live-sftp-safety.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-sftp-safety-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CHANNEL: oss
+
+jobs:
+  live_sftp_safety:
+    name: OpenSSH/SFTP commit-boundary recovery
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          install_release_deps: false
+
+      - name: Ensure Rust target is installed
+        run: rustup target add x86_64-unknown-linux-gnu
+        shell: bash
+
+      - name: Exercise live SFTP before/after mutation acknowledgement loss
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends openssh-server
+
+          test_user="$(id -un)"
+          test_port=22222
+          test_key="${RUNNER_TEMP}/live-sftp-id"
+          authorized_keys="${HOME}/.ssh/zaplex-live-sftp-authorized-keys"
+          test_root="${RUNNER_TEMP}/live-sftp-root"
+          sshd_config="${RUNNER_TEMP}/live-sftp-sshd_config"
+          sshd_log="${RUNNER_TEMP}/live-sftp-sshd.log"
+          sshd_pid_file="${RUNNER_TEMP}/live-sftp-sshd.pid"
+
+          ssh-keygen -q -t ed25519 -N "" -f "${test_key}"
+          ssh-keygen -q -t ed25519 -N "" -f "${RUNNER_TEMP}/live-sftp-host-key"
+          # Unlock sshd's account check while password authentication remains disabled.
+          test_password="$(openssl rand -hex 32)"
+          printf '%s:%s\n' "${test_user}" "${test_password}" | sudo chpasswd
+          unset test_password
+          mkdir -p "${HOME}/.ssh" "${test_root}"
+          chmod 700 "${HOME}/.ssh"
+          ssh-keygen -y -f "${test_key}" > "${authorized_keys}"
+          chmod 600 "${authorized_keys}"
+
+          {
+            echo "Port ${test_port}"
+            echo "ListenAddress 127.0.0.1"
+            echo "HostKey ${RUNNER_TEMP}/live-sftp-host-key"
+            echo "PidFile ${sshd_pid_file}"
+            echo "AuthorizedKeysFile ${authorized_keys}"
+            echo "PasswordAuthentication no"
+            echo "KbdInteractiveAuthentication no"
+            echo "UsePAM no"
+            echo "PermitRootLogin no"
+            echo "AllowUsers ${test_user}"
+            echo "Subsystem sftp internal-sftp"
+            echo "LogLevel VERBOSE"
+          } > "${sshd_config}"
+
+          sudo mkdir -p /run/sshd
+          sshd_pid=""
+          cleanup() {
+            exit_status=$?
+            if [ -z "${sshd_pid}" ]; then
+              sshd_pid="$(sudo cat "${sshd_pid_file}" 2>/dev/null || true)"
+            fi
+            if [ -n "${sshd_pid}" ]; then
+              sudo kill "${sshd_pid}" 2>/dev/null || true
+            fi
+            cat "${sshd_log}" 2>/dev/null || true
+            return "${exit_status}"
+          }
+          trap cleanup EXIT
+          touch "${sshd_log}"
+          sudo /usr/sbin/sshd -E "${sshd_log}" -f "${sshd_config}"
+
+          if ! ssh -i "${test_key}" -p "${test_port}" \
+            -o BatchMode=yes -o StrictHostKeyChecking=no \
+            -o ConnectionAttempts=30 -o ConnectTimeout=1 \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile=/dev/null \
+            "${test_user}@127.0.0.1" true > /dev/null 2>&1; then
+            echo "OpenSSH fixture did not become ready" >&2
+            ssh -vv -i "${test_key}" -p "${test_port}" \
+              -o BatchMode=yes -o StrictHostKeyChecking=no \
+              -o ConnectionAttempts=1 -o ConnectTimeout=1 \
+              -o IdentitiesOnly=yes \
+              -o UserKnownHostsFile=/dev/null \
+              "${test_user}@127.0.0.1" true || true
+            exit 1
+          fi
+
+          export ZAPLEX_LIVE_SFTP_HOST=127.0.0.1
+          export ZAPLEX_LIVE_SFTP_PORT="${test_port}"
+          export ZAPLEX_LIVE_SFTP_USERNAME="${test_user}"
+          export ZAPLEX_LIVE_SFTP_KEY_PATH="${test_key}"
+          export ZAPLEX_LIVE_SFTP_ROOT="${test_root}"
+          cargo test --locked -p warp --lib live_sftp_remote_safe_rename -- --ignored

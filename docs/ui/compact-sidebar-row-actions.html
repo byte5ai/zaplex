@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="ui-spec-status" content="approved-2026-08-12">
+  <meta name="ui-spec-route" content="/native/compact-sidebar-rows">
+  <meta name="ui-spec-viewports" content="1000x800">
+  <title>UI-Spezifikation — Kompakte Sidebar-Zeilen</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --canvas: #0b0d12;
+      --panel: #11151f;
+      --surface: #181d28;
+      --hover: #212735;
+      --border: #2a3140;
+      --text: #e8ebf2;
+      --muted: #9aa4b5;
+      --faint: #667084;
+      --accent: #8f83ff;
+      --blue: #55b5ef;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 22px; color: var(--text); background: var(--canvas); }
+    #spec, #mockups { width: min(956px, 100%); margin: 0 auto 20px; }
+    #spec { padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+    h1 { margin: 0 0 12px; font-size: 18px; }
+    .spec-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+    h2 { margin: 0 0 5px; color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 11px; }
+    code { color: var(--text); }
+    #mockups { display: grid; grid-template-columns: 250px 320px 1fr; gap: 22px; align-items: start; }
+    .frame { overflow: hidden; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); box-shadow: 0 16px 44px #0007; }
+    .caption { padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--faint); font-size: 10px; }
+    .sidebar { min-height: 390px; padding: 10px; }
+    .zone { overflow: hidden; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+    .zone-head { display: flex; align-items: center; gap: 5px; padding: 8px 9px 6px; color: var(--muted); font-size: 10px; text-transform: uppercase; }
+    .zone-head .count { color: var(--faint); }
+    .zone-head .gear { margin-left: auto; }
+    .row { display: flex; min-width: 0; align-items: center; gap: 5px; height: 30px; padding: 3px 6px; border-radius: 4px; }
+    .row:hover { background: var(--hover); }
+    .status { flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+    .status.live { background: var(--blue); }
+    .identity { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .action { display: grid; flex: 0 0 20px; width: 20px; height: 20px; place-items: center; border: 0; border-radius: 4px; color: var(--muted); background: transparent; }
+    .action:hover { background: #ffffff0a; }
+    .action svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+    .legend { min-height: 390px; padding: 18px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+    .legend h3 { margin: 0 0 14px; font-size: 14px; }
+    .legend-row { display: grid; grid-template-columns: 28px 1fr; align-items: center; gap: 9px; margin: 10px 0; color: var(--muted); font-size: 12px; }
+    .legend-row .action { color: var(--text); background: var(--hover); }
+    .note { margin-top: 18px; padding-top: 13px; border-top: 1px solid var(--border); color: var(--faint); font-size: 11px; }
+  </style>
+</head>
+<body>
+  <section id="spec">
+    <h1>UI-Spezifikation — Kompakte Sidebar-Zeilen</h1>
+    <div class="spec-grid">
+      <div>
+        <h2>Priorität</h2>
+        <ul>
+          <li>Die Objektidentität erhält die gesamte flexible Breite.</li>
+          <li>Status und Zähler sind feste Slots; jede Zeilenaktion belegt ein einheitliches Quadrat von 20 px.</li>
+          <li>Ellipsis trifft den Namen erst, wenn die festen Slots wirklich Platz brauchen.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Aktionen</h2>
+        <ul>
+          <li>Wiederholte sekundäre Zeilenaktionen sind ausschließlich Icons.</li>
+          <li>Icon und Bedeutung bleiben pro Aktion appweit stabil.</li>
+          <li>Sichtbare Textbuttons sind in kompakten Listen unzulässig.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Semantik</h2>
+        <ul>
+          <li>Agent: <code>AiAssistant</code>; Dateien: <code>Folder</code>; Terminal: <code>Terminal</code>.</li>
+          <li>Jedes Icon besitzt einen lokalisierten Tooltip.</li>
+          <li>Favorit und Mehr-Menü bleiben ihre etablierten Symbole.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Abnahme</h2>
+        <ul>
+          <li>Bei 250 px bleibt der Name länger lesbar als jede Aktion.</li>
+          <li>Deutsch darf keine andere Geometrie als Englisch erzeugen.</li>
+          <li>Hover ändert Farbe/Füllung, niemals die Zeilenbreite.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <main id="mockups">
+    <section class="frame">
+      <div class="caption">Mindestbreite · 250 px</div>
+      <aside class="sidebar">
+        <div class="zone">
+          <div class="zone-head"><span>Verbindungen</span><span class="count">4</span><span class="gear">⚙</span></div>
+          <div class="row">
+            <span class="status"></span><span class="identity">Mac.local</span>
+          </div>
+          <div class="row">
+            <span class="status live"></span><span class="identity">agenthost-production-berlin</span>
+            <button class="action" title="Aus Favoriten entfernen" aria-label="Aus Favoriten entfernen">★</button>
+            <button class="action" title="Agent öffnen" aria-label="Agent öffnen"><svg viewBox="0 0 16 16"><circle cx="8" cy="5" r="2.5"/><path d="M3.5 14c.5-3 2-4.5 4.5-4.5s4 1.5 4.5 4.5"/></svg></button>
+            <button class="action" title="Dateien öffnen" aria-label="Dateien öffnen"><svg viewBox="0 0 16 16"><path d="M1.5 4h5l1.5 2h6.5v7.5h-13z"/><path d="M1.5 4V2.5h4l1.5 1.5"/></svg></button>
+            <button class="action" title="Host verwalten" aria-label="Host verwalten">•••</button>
+          </div>
+          <div class="row">
+            <span class="status"></span><span class="identity">development-orchestrator</span>
+            <button class="action" title="Zu Favoriten hinzufügen" aria-label="Zu Favoriten hinzufügen">☆</button>
+            <button class="action" title="Agent öffnen" aria-label="Agent öffnen"><svg viewBox="0 0 16 16"><circle cx="8" cy="5" r="2.5"/><path d="M3.5 14c.5-3 2-4.5 4.5-4.5s4 1.5 4.5 4.5"/></svg></button>
+            <button class="action" title="Dateien öffnen" aria-label="Dateien öffnen"><svg viewBox="0 0 16 16"><path d="M1.5 4h5l1.5 2h6.5v7.5h-13z"/><path d="M1.5 4V2.5h4l1.5 1.5"/></svg></button>
+            <button class="action" title="Host verwalten" aria-label="Host verwalten">•••</button>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="frame">
+      <div class="caption">Normale Breite · 320 px</div>
+      <aside class="sidebar">
+        <div class="zone">
+          <div class="zone-head"><span>Verbindungen</span><span class="count">4</span><span class="gear">⚙</span></div>
+          <div class="row">
+            <span class="status live"></span><span class="identity">agenthost-production-berlin</span>
+            <button class="action" title="Aus Favoriten entfernen" aria-label="Aus Favoriten entfernen">★</button>
+            <button class="action" title="Agent öffnen" aria-label="Agent öffnen"><svg viewBox="0 0 16 16"><circle cx="8" cy="5" r="2.5"/><path d="M3.5 14c.5-3 2-4.5 4.5-4.5s4 1.5 4.5 4.5"/></svg></button>
+            <button class="action" title="Dateien öffnen" aria-label="Dateien öffnen"><svg viewBox="0 0 16 16"><path d="M1.5 4h5l1.5 2h6.5v7.5h-13z"/><path d="M1.5 4V2.5h4l1.5 1.5"/></svg></button>
+            <button class="action" title="Host verwalten" aria-label="Host verwalten">•••</button>
+          </div>
+          <div class="row">
+            <span class="status"></span><span class="identity">development-orchestrator</span>
+            <button class="action" title="Zu Favoriten hinzufügen" aria-label="Zu Favoriten hinzufügen">☆</button>
+            <button class="action" title="Agent öffnen" aria-label="Agent öffnen"><svg viewBox="0 0 16 16"><circle cx="8" cy="5" r="2.5"/><path d="M3.5 14c.5-3 2-4.5 4.5-4.5s4 1.5 4.5 4.5"/></svg></button>
+            <button class="action" title="Dateien öffnen" aria-label="Dateien öffnen"><svg viewBox="0 0 16 16"><path d="M1.5 4h5l1.5 2h6.5v7.5h-13z"/><path d="M1.5 4V2.5h4l1.5 1.5"/></svg></button>
+            <button class="action" title="Host verwalten" aria-label="Host verwalten">•••</button>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <aside class="legend">
+      <h3>Feste Aktionssprache</h3>
+      <div class="legend-row"><button class="action"><svg viewBox="0 0 16 16"><circle cx="8" cy="5" r="2.5"/><path d="M3.5 14c.5-3 2-4.5 4.5-4.5s4 1.5 4.5 4.5"/></svg></button><span>Agent auf diesem Host öffnen</span></div>
+      <div class="legend-row"><button class="action"><svg viewBox="0 0 16 16"><path d="M1.5 4h5l1.5 2h6.5v7.5h-13z"/><path d="M1.5 4V2.5h4l1.5 1.5"/></svg></button><span>Dateien dieses Hosts öffnen</span></div>
+      <div class="legend-row"><button class="action"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="10" rx="1.5"/><path d="m4 6 2 2-2 2M8 10h3"/></svg></button><span>Session in einem Terminal öffnen</span></div>
+      <div class="note">Die Legende erklärt die Design-Sprache; sie wird nicht in jeder Sidebar-Zeile wiederholt. Dort übernehmen lokalisierte Tooltips die Benennung.</div>
+    </aside>
+  </main>
+</body>
+</html>

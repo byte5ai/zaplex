@@ -91,6 +91,15 @@ impl Favorites {
         self.items.len()
     }
 
+    /// Favorite hosts rendered in the "+" menu. This is a read-only projection:
+    /// project, session, launch, and flow records remain in the ordered store
+    /// even though they no longer appear as flat menu rows.
+    pub fn host_menu_items(&self) -> impl Iterator<Item = &Favorite> {
+        self.items
+            .iter()
+            .filter(|favorite| favorite.kind == FavoriteKind::Host)
+    }
+
     /// Whether a favorite with this `(kind, target)` is already curated.
     pub fn contains(&self, kind: FavoriteKind, target: &str) -> bool {
         self.items.iter().any(|f| f.same_target(kind, target))
@@ -147,94 +156,5 @@ impl Favorites {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn host(id: &str) -> Favorite {
-        Favorite::new(FavoriteKind::Host, id, format!("host-{id}"))
-    }
-
-    #[test]
-    fn add_is_idempotent_by_kind_and_target() {
-        let mut favs = Favorites::default();
-        assert!(favs.add(host("n1")));
-        assert!(!favs.add(host("n1"))); // same (kind,target) → not re-added
-        assert_eq!(favs.len(), 1);
-        // Same target but a different kind is a distinct favorite.
-        assert!(favs.add(Favorite::new(FavoriteKind::Project, "n1", "proj")));
-        assert_eq!(favs.len(), 2);
-    }
-
-    #[test]
-    fn re_add_refreshes_label_in_place_without_reordering() {
-        let mut favs = Favorites::default();
-        favs.add(host("a"));
-        favs.add(host("b"));
-        // Re-add "a" with a new label: label updates, order stays [a, b].
-        assert!(!favs.add(Favorite::new(FavoriteKind::Host, "a", "renamed")));
-        assert_eq!(favs.items[0].display_label(), "renamed");
-        assert_eq!(favs.items[1].target, "b");
-    }
-
-    #[test]
-    fn toggle_adds_then_removes() {
-        let mut favs = Favorites::default();
-        assert!(favs.toggle(host("x"))); // now a favorite
-        assert!(favs.contains(FavoriteKind::Host, "x"));
-        assert!(!favs.toggle(host("x"))); // toggled off
-        assert!(!favs.contains(FavoriteKind::Host, "x"));
-        assert!(favs.is_empty());
-    }
-
-    #[test]
-    fn remove_reports_membership() {
-        let mut favs = Favorites::default();
-        favs.add(host("x"));
-        assert!(favs.remove(FavoriteKind::Host, "x"));
-        assert!(!favs.remove(FavoriteKind::Host, "x")); // already gone
-    }
-
-    #[test]
-    fn display_label_falls_back_to_target() {
-        let bare = Favorite::new(FavoriteKind::Session, "sess-1", "");
-        assert_eq!(bare.display_label(), "sess-1");
-    }
-
-    #[test]
-    fn move_item_reorders_and_clamps() {
-        let mut favs = Favorites::default();
-        favs.add(host("a"));
-        favs.add(host("b"));
-        favs.add(host("c"));
-        favs.move_item(2, 0); // c to front
-        assert_eq!(
-            favs.items.iter().map(|f| f.target.clone()).collect::<Vec<_>>(),
-            vec!["c", "a", "b"]
-        );
-        favs.move_item(0, 99); // clamp to last
-        assert_eq!(
-            favs.items.iter().map(|f| f.target.clone()).collect::<Vec<_>>(),
-            vec!["a", "b", "c"]
-        );
-        favs.move_item(5, 0); // out-of-range from → no-op
-        assert_eq!(favs.len(), 3);
-    }
-
-    #[test]
-    fn json_round_trips() {
-        let mut favs = Favorites::default();
-        favs.add(Favorite::new(FavoriteKind::Host, "n1", "devhost"));
-        favs.add(Favorite::new(FavoriteKind::GithubFlow, "quick_issue", "Quick issue"));
-        let json = serde_json::to_string(&favs).unwrap();
-        let back: Favorites = serde_json::from_str(&json).unwrap();
-        assert_eq!(favs, back);
-    }
-
-    #[test]
-    fn missing_label_deserializes_to_empty() {
-        let json = r#"{"items":[{"kind":"host","target":"n1"}]}"#;
-        let favs: Favorites = serde_json::from_str(json).unwrap();
-        assert_eq!(favs.items[0].label, "");
-        assert_eq!(favs.items[0].display_label(), "n1");
-    }
-}
+#[path = "favorites_tests.rs"]
+mod tests;

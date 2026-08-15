@@ -731,34 +731,17 @@ impl CategoriesView {
         let no_workflows_text =
             CategoriesView::text_label("No matching workflows found.", appearance);
 
-        let mut workflow_documentation_link_text =
-            Flex::row().with_child(CategoriesView::text_label("Try ", appearance));
-
-        workflow_documentation_link_text.add_child(
-            appearance
-                .ui_builder()
-                .link(
-                    "creating your own workflow".into(),
-                    Some(
-                        ""
-                            .into(),
-                    ),
-                    None,
-                    self.link_mouse_state_handles
-                        .documentation_link_handle
-                        .clone(),
-                )
-                .soft_wrap(false)
-                .with_style(UiComponentStyles {
-                    font_size: Some(WORKFLOW_SUBTEXT_FONT_SIZE),
-                    ..Default::default()
-                })
-                .build()
-                .finish(),
-        );
+        // The "creating your own workflow" documentation link opened an empty URL
+        // (no Zaplex docs), so the suggestion stays as plain text.
+        let workflow_documentation_link_text = Flex::row()
+            .with_child(CategoriesView::text_label(
+                "Try creating your own workflow.",
+                appearance,
+            ))
+            .finish();
 
         let flex_column = Flex::column()
-            .with_children([no_workflows_text, workflow_documentation_link_text.finish()])
+            .with_children([no_workflows_text, workflow_documentation_link_text])
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
         Align::new(flex_column.finish()).finish()

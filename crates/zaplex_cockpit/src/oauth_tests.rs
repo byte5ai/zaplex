@@ -114,6 +114,7 @@ fn snapshot_with(accounts: Vec<Account>) -> CockpitSnapshot {
             .map(|a| build_account_usage(a, Vec::new(), now, 1_000, 10_000, &pricing))
             .collect(),
         generated_at: now,
+        health: crate::types::ScanHealth::Loaded,
     }
 }
 

@@ -13,6 +13,10 @@ use crate::{
             BlocklistAIInputModel,
         },
         execution_profiles::profiles::AIExecutionProfilesModel,
+        subscription_agent::{
+            AgentLifecycle, ApprovalDecision, SessionIdentity, SubscriptionAgent,
+            SubscriptionSessionRegistry, SubscriptionTarget,
+        },
         AIRequestUsageModel,
     },
     appearance::Appearance,
@@ -114,6 +118,8 @@ pub(crate) use self::reasoning_depth_selector::{
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::server::telemetry::PluginChipTelemetryAction;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::cli_agent_sessions::hook_bridge;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     compare_versions, plugin_manager_for, plugin_manager_for_with_shell, CliAgentPluginManager,
@@ -834,6 +840,11 @@ impl AgentInputFooter {
             }
 
             let session = CLIAgentSessionsModel::as_ref(app).session(self.terminal_view_id)?;
+            if !session.is_remote()
+                && hook_bridge::is_installed_for_agent(session.agent).unwrap_or(false)
+            {
+                return None;
+            }
 
             let manager = plugin_manager_for(session.agent)?;
             let min_version = manager.minimum_plugin_version();
@@ -1744,17 +1755,7 @@ impl AgentInputFooter {
                     .map(|chip| ChildView::new(chip).finish())
             }
             AgentToolbarItemKind::ModelSelector => {
-                let show = FeatureFlag::ProfilesDesignRevamp.is_enabled()
-                    || *SessionSettings::as_ref(app).show_model_selectors_in_prompt;
-                show.then(|| {
-                    Flex::row()
-                        .with_main_axis_size(MainAxisSize::Min)
-                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                        .with_spacing(4.)
-                        .with_child(ChildView::new(&self.reasoning_depth_selector).finish())
-                        .with_child(ChildView::new(&self.model_selector).finish())
-                        .finish()
-                })
+                None
             }
             AgentToolbarItemKind::NLDToggle => Some(ChildView::new(&self.nld_button).finish()),
             AgentToolbarItemKind::VoiceInput => {
@@ -1822,6 +1823,242 @@ impl AgentInputFooter {
     }
 }
 
+fn subscription_target_status(
+    target: &SubscriptionTarget,
+    session: Option<&SessionIdentity>,
+    lifecycle: &AgentLifecycle,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let lifecycle = subscription_lifecycle_label(lifecycle);
+    let session = match session {
+        Some(SessionIdentity::ClaudeCode(id)) => format!("Claude session {id}"),
+        Some(SessionIdentity::Codex(id)) => format!("Codex thread {id}"),
+        None => "new session".to_string(),
+    };
+    let label = format!(
+        "{} · {} · {} · {} · {} · {session} · {lifecycle}",
+        target.installation.agent.display_name(),
+        target.installation.account.display_name,
+        target.installation.host.display_name,
+        target.working_directory.display(),
+        target.model.display_name,
+    );
+    subscription_status_text(label, appearance)
+}
+
+fn subscription_lifecycle_status(
+    lifecycle: &AgentLifecycle,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    subscription_status_text(
+        subscription_lifecycle_label(lifecycle),
+        Appearance::as_ref(app),
+    )
+}
+
+fn subscription_lifecycle_label(lifecycle: &AgentLifecycle) -> String {
+    match lifecycle {
+        AgentLifecycle::NoAgentInstalled => "No agent installed".to_string(),
+        AgentLifecycle::NotSignedIn { agent } => {
+            format!("{} not signed in", agent.display_name())
+        }
+        AgentLifecycle::Ready => "Ready".to_string(),
+        AgentLifecycle::Starting => "Starting".to_string(),
+        AgentLifecycle::Responding => "Responding".to_string(),
+        AgentLifecycle::RunningTool { name } => format!("Running {name}"),
+        AgentLifecycle::WaitingForApproval { .. } => "Waiting for approval".to_string(),
+        AgentLifecycle::TurnCompleted { .. } => "Turn completed".to_string(),
+        AgentLifecycle::SessionEnded => "Session ended".to_string(),
+        AgentLifecycle::RecoverableError { .. } => "Retry available".to_string(),
+    }
+}
+
+fn subscription_status_text(label: String, appearance: &Appearance) -> Box<dyn Element> {
+    Container::new(
+        Text::new_inline(
+            label,
+            appearance.ui_font_family(),
+            appearance.monospace_font_size() - 2.,
+        )
+        .with_color(
+            appearance
+                .theme()
+                .sub_text_color(appearance.theme().background())
+                .into_solid(),
+        )
+        .finish(),
+    )
+    .with_horizontal_padding(6.)
+    .with_vertical_padding(3.)
+    .finish()
+}
+
+fn subscription_approval_actions(
+    conversation_id: &str,
+    request_id: &str,
+    agent: SubscriptionAgent,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let mut actions = Flex::row()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(4.);
+    actions.add_child(subscription_approval_button(
+        "Allow",
+        conversation_id,
+        request_id,
+        ApprovalDecision::Allow,
+        app,
+    ));
+    if agent == SubscriptionAgent::Codex {
+        actions.add_child(subscription_approval_button(
+            "Allow for session",
+            conversation_id,
+            request_id,
+            ApprovalDecision::AllowForSession,
+            app,
+        ));
+    }
+    actions.add_child(subscription_approval_button(
+        "Deny",
+        conversation_id,
+        request_id,
+        ApprovalDecision::Deny,
+        app,
+    ));
+    actions.add_child(subscription_approval_button(
+        "Cancel",
+        conversation_id,
+        request_id,
+        ApprovalDecision::Cancel,
+        app,
+    ));
+    actions.finish()
+}
+
+fn subscription_approval_button(
+    label: &str,
+    conversation_id: &str,
+    request_id: &str,
+    decision: ApprovalDecision,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let action = AgentInputFooterAction::ResolveSubscriptionApproval {
+        conversation_id: conversation_id.to_string(),
+        request_id: request_id.to_string(),
+        decision,
+    };
+    subscription_action_button(label, action, app)
+}
+
+fn subscription_session_actions(conversation_id: &str, app: &AppContext) -> Box<dyn Element> {
+    Flex::row()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(4.)
+        .with_child(subscription_action_button(
+            "Resume",
+            AgentInputFooterAction::ResumeSubscriptionSession {
+                conversation_id: conversation_id.to_string(),
+            },
+            app,
+        ))
+        .with_child(subscription_action_button(
+            "Restart",
+            AgentInputFooterAction::RestartSubscriptionSession {
+                conversation_id: conversation_id.to_string(),
+            },
+            app,
+        ))
+        .with_child(subscription_action_button(
+            "End",
+            AgentInputFooterAction::EndSubscriptionSession {
+                conversation_id: conversation_id.to_string(),
+            },
+            app,
+        ))
+        .finish()
+}
+
+fn subscription_agent_choices(
+    conversation_id: &str,
+    agents: &[SubscriptionAgent],
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let mut choices = Flex::row()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(4.);
+    for agent in agents {
+        choices.add_child(subscription_action_button(
+            agent.display_name(),
+            AgentInputFooterAction::SelectSubscriptionAgent {
+                conversation_id: conversation_id.to_string(),
+                agent: *agent,
+            },
+            app,
+        ));
+    }
+    choices.finish()
+}
+
+fn subscription_model_choices(
+    conversation_id: &str,
+    models: &[crate::ai::subscription_agent::ModelCapability],
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let mut choices = Flex::row()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(4.);
+    for model in models {
+        choices.add_child(subscription_action_button(
+            &model.display_name,
+            AgentInputFooterAction::SelectSubscriptionModel {
+                conversation_id: conversation_id.to_string(),
+                model_id: model.id.clone(),
+            },
+            app,
+        ));
+    }
+    choices.finish()
+}
+
+fn subscription_action_button(
+    label: &str,
+    action: AgentInputFooterAction,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    EventHandler::new(
+        Container::new(
+            Text::new_inline(
+                label.to_string(),
+                appearance.ui_font_family(),
+                appearance.monospace_font_size() - 2.,
+            )
+            .with_color(
+                appearance
+                    .theme()
+                    .main_text_color(appearance.theme().background())
+                    .into_solid(),
+            )
+            .finish(),
+        )
+        .with_horizontal_padding(7.)
+        .with_vertical_padding(3.)
+        .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+        .finish(),
+    )
+    .on_left_mouse_down(move |ctx, _, _| {
+        ctx.dispatch_typed_action(action.clone());
+        DispatchEventResult::StopPropagation
+    })
+    .finish()
+}
+
 impl View for AgentInputFooter {
     fn ui_name() -> &'static str {
         "AgentViewFooter"
@@ -1860,6 +2097,77 @@ impl View for AgentInputFooter {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(4.);
+
+        let active_conversation_id = BlocklistAIHistoryModel::as_ref(app)
+            .active_conversation(self.terminal_view_id)
+            .map(|conversation| conversation.id().to_string());
+        if let Some(conversation_id) = active_conversation_id.as_deref() {
+            let registry = SubscriptionSessionRegistry::as_ref(app);
+            if let Some(target) = registry.target(conversation_id) {
+                let lifecycle = registry
+                    .lifecycle(conversation_id)
+                    .unwrap_or(AgentLifecycle::Ready);
+                let session = registry.get(conversation_id).map(|stored| stored.session);
+                left_buttons.add_child(subscription_target_status(
+                    &target,
+                    session.as_ref(),
+                    &lifecycle,
+                    app,
+                ));
+                match &lifecycle {
+                    AgentLifecycle::WaitingForApproval { request_id } => {
+                        right_buttons.add_child(subscription_approval_actions(
+                            conversation_id,
+                            request_id,
+                            target.installation.agent,
+                            app,
+                        ));
+                    }
+                    AgentLifecycle::TurnCompleted { .. }
+                    | AgentLifecycle::RecoverableError {
+                        session: Some(_),
+                        ..
+                    } => {
+                        right_buttons
+                            .add_child(subscription_session_actions(conversation_id, app));
+                    }
+                    AgentLifecycle::NoAgentInstalled
+                    | AgentLifecycle::NotSignedIn { .. }
+                    | AgentLifecycle::Ready
+                    | AgentLifecycle::Starting
+                    | AgentLifecycle::Responding
+                    | AgentLifecycle::RunningTool { .. }
+                    | AgentLifecycle::SessionEnded
+                    | AgentLifecycle::RecoverableError { session: None, .. } => {}
+                }
+            } else if let Some(lifecycle) = registry.lifecycle(conversation_id) {
+                let choices = registry.agent_choices(conversation_id);
+                let models = registry.model_choices(conversation_id);
+                if !models.is_empty() {
+                    left_buttons.add_child(subscription_status_text(
+                        "Choose model".to_string(),
+                        Appearance::as_ref(app),
+                    ));
+                    right_buttons.add_child(subscription_model_choices(
+                        conversation_id,
+                        &models,
+                        app,
+                    ));
+                } else if !choices.is_empty() {
+                    left_buttons.add_child(subscription_status_text(
+                        "Choose agent".to_string(),
+                        Appearance::as_ref(app),
+                    ));
+                    right_buttons.add_child(subscription_agent_choices(
+                        conversation_id,
+                        &choices,
+                        app,
+                    ));
+                } else {
+                    left_buttons.add_child(subscription_lifecycle_status(&lifecycle, app));
+                }
+            }
+        }
 
         let has_prompt_alert = !self.prompt_alert.as_ref(app).is_no_alert();
         if has_prompt_alert {
@@ -2029,6 +2337,28 @@ pub enum AgentInputFooterAction {
     OpenPluginUpdateInstructionsPane,
     DismissPluginChip,
     OpenCodingAgentSettings,
+    ResolveSubscriptionApproval {
+        conversation_id: String,
+        request_id: String,
+        decision: ApprovalDecision,
+    },
+    ResumeSubscriptionSession {
+        conversation_id: String,
+    },
+    RestartSubscriptionSession {
+        conversation_id: String,
+    },
+    EndSubscriptionSession {
+        conversation_id: String,
+    },
+    SelectSubscriptionAgent {
+        conversation_id: String,
+        agent: SubscriptionAgent,
+    },
+    SelectSubscriptionModel {
+        conversation_id: String,
+        model_id: String,
+    },
     ShowContextMenu {
         position: Vector2F,
     },
@@ -2218,6 +2548,45 @@ impl TypedActionView for AgentInputFooter {
                     page: SettingsSection::ThirdPartyCLIAgents,
                     widget_id: crate::settings_view::cli_agent_settings_widget_id(),
                 });
+            }
+            AgentInputFooterAction::ResolveSubscriptionApproval {
+                conversation_id,
+                request_id,
+                decision,
+            } => {
+                SubscriptionSessionRegistry::as_ref(ctx).resolve_approval(
+                    conversation_id,
+                    request_id,
+                    *decision,
+                );
+                ctx.notify();
+            }
+            AgentInputFooterAction::ResumeSubscriptionSession { conversation_id } => {
+                SubscriptionSessionRegistry::as_ref(ctx).mark_ready_to_resume(conversation_id);
+                ctx.notify();
+            }
+            AgentInputFooterAction::RestartSubscriptionSession { conversation_id } => {
+                SubscriptionSessionRegistry::as_ref(ctx).restart(conversation_id);
+                ctx.notify();
+            }
+            AgentInputFooterAction::EndSubscriptionSession { conversation_id } => {
+                SubscriptionSessionRegistry::as_ref(ctx).remove(conversation_id);
+                ctx.notify();
+            }
+            AgentInputFooterAction::SelectSubscriptionAgent {
+                conversation_id,
+                agent,
+            } => {
+                SubscriptionSessionRegistry::as_ref(ctx).select_agent(conversation_id, *agent);
+                ctx.notify();
+            }
+            AgentInputFooterAction::SelectSubscriptionModel {
+                conversation_id,
+                model_id,
+            } => {
+                SubscriptionSessionRegistry::as_ref(ctx)
+                    .select_model(conversation_id, model_id);
+                ctx.notify();
             }
             AgentInputFooterAction::ShowContextMenu { position } => {
                 ctx.emit(AgentInputFooterEvent::ShowContextMenu {

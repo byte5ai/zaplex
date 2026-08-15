@@ -75,11 +75,11 @@ pub(super) fn confirm_icon(publish: bool) -> Icon {
     }
 }
 
-fn loading_label(publish: bool) -> &'static str {
+fn loading_label(publish: bool) -> String {
     if publish {
-        "Publishing…"
+        crate::t!("git-dialog-loading-publish")
     } else {
-        "Pushing…"
+        crate::t!("git-dialog-loading-push")
     }
 }
 
@@ -152,9 +152,9 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
             match result {
                 Ok(_) => {
                     let toast_msg = if publish {
-                        "Branch successfully published."
+                        crate::t!("git-dialog-toast-published")
                     } else {
-                        "Changes successfully pushed."
+                        crate::t!("git-dialog-toast-pushed")
                     };
                     show_toast(toast_msg, ctx);
                 }
@@ -193,7 +193,7 @@ fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        "Included commits",
+        crate::t!("git-dialog-included-commits"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -215,14 +215,9 @@ fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn
         .soft_wrap(false)
         .finish();
 
-        let stats_text = format!(
-            "{} {}",
-            commit.files_changed,
-            if commit.files_changed == 1 {
-                "file"
-            } else {
-                "files"
-            },
+        let stats_text = crate::t!(
+            "git-dialog-file-count",
+            count = (commit.files_changed as i64)
         );
 
         let mut stats_row = Flex::row()
@@ -320,7 +315,7 @@ fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn
             } else {
                 let loading = Container::new(
                     Text::new(
-                        "Loading…",
+                        crate::t!("common-loading"),
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )

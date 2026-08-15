@@ -93,19 +93,18 @@ the "+" menu, the spawn card, the object tree — **reads** from it. A host is *
 *picked everywhere*. Multiple access points to the same registered object are good UX; a second
 data-entry is not.
 
-**Wall vs. list — the distinction that matters.** The removed clutter was the *combinatorial
-cross-product* (every agent × every account × every host) rendered as flat rows — that stays gone.
-Listing the **hosts themselves** is *linear* (N hosts) and belongs in "+".
+**Wall vs. curated list — the distinction that matters.** The removed clutter was the
+*combinatorial cross-product* (every agent × every account × every host) rendered as flat rows —
+that stays gone. The host section in "+" is a user-curated list of **favorite registered hosts**,
+not an automatically growing inventory.
 
 **Decisions.**
-1. **"+" menu reads the registry.** A `Hosts` group lists each registered host (linear). Clicking a
-   host opens a **terminal** on it (same action as clicking it in the sidebar — a plain connect to an
-   explicitly chosen host is not a "blind agent launch", so §2's no-blind-launch rule is not
-   violated). Launching an **agent** on a host is done via the spawn card ("Neuer Agent…"), whose
-   host picker already reads the same registry — so no per-host submenu is needed and the old
-   per-host launch *permutations* do not return to the menu; only the hosts themselves (a linear
-   list) do. *(Built: `unified_new_session_menu_items` emits one `OpenSshTerminal` item per
-   registered `NodeKind::Server`; the spawn card's host row lists the same nodes.)*
+1. **"+" menu reads favorite host references.** A `Hosts` group lists only favorite registered
+   hosts. Each host row opens a right-hand submenu with exactly the primary actions **Terminal**
+   and **New Agent**. Terminal connects to that explicit host; New Agent opens the real spawn card
+   pre-scoped to that host and still requires the normal provider, account, project/directory,
+   model, and effort choices. Non-favorite hosts remain available in the sidebar tree and the spawn
+   card but never appear automatically in "+". No agent × account × host permutations return.
 2. **Launch/tab configs are for layouts, not hosts.** A saved config captures a *layout / command
    combo*; where it targets a host it stores a **reference** to the registry node (`node_id`), never
    duplicated connection data. This requires making `LeafContents::SshServer` capturable
@@ -115,9 +114,14 @@ Listing the **hosts themselves** is *linear* (N hosts) and belongs in "+".
 3. **Spawn card + tree "+" scope from the registry.** The spawn card's host picker (§2, item #2) and
    any pane/tree `＋` resolve their host list from the same registry; pre-scoping just pre-selects a
    node.
+4. **Favorite migration is lossless.** Existing project, session, and saved-launch favorite records
+   remain persisted or are explicitly migrated without data loss. They no longer render as flat
+   host/agent rows in the "+" host section; changing that menu presentation is not permission to
+   overwrite or discard their stored references.
 
 **Increment (Build A/B boundary).**
-- A: "+" menu lists registered hosts (`⏎` terminal); spawn-card host picker reads the registry.
+- A: "+" menu lists favorite hosts with right-hand Terminal/New Agent submenus; spawn-card host
+  picker reads the registry.
 - B: launch-config host-*reference* capture (`launch_config.rs:162`) + "Save this session as entry…";
   tree `＋` host-scoping.
 
@@ -263,14 +267,14 @@ The user approved (visual mockup) this model, to build now (polish later):
   (ctx bar + tabular %, nothing jumps), **status = a color dot only** (green working · amber waiting ·
   faint idle — no status words), **indent rails**, weight/color hierarchy, sans labels + mono only for the
   percent.
-- **Dropdown = Favorites (curated).** The "+" menu is *not* an auto host list; it holds user-curated
-  **favorites** — typed pointers to tree objects (Host · Project · Session · saved Launch). Click = the
-  object's default action (host→terminal / project→scoped spawn card / session→attach). Curated two ways:
-  **★ on a tree node** (sidebar) or **"＋ Add favorite…"** in the dropdown (a tree picker). This is WARP's
-  user-owned-entries model done right, and the definitive answer to "SSH hosts in the dropdown" (favorite a
-  host — no regression) and "register once, pick everywhere" (a favorite duplicates nothing). Persistence:
-  a small ordered store of stable node keys; a stale favorite (target gone) greys out + one-click remove.
-  The generic GitHub instance-flows leave the fixed dropdown (they become favoritable / palette actions).
+- **Dropdown = favorite hosts (curated).** The "+" menu is *not* an auto host list. Its host section
+  contains only user-curated references to registered hosts. Each host opens a right-hand submenu with
+  **Terminal** and **New Agent**; the latter opens the real provider/account/project chooser pre-scoped to
+  the host. Hosts are curated through **★ on a tree node** or **"＋ Add favorite…"** in the dropdown.
+  A favorite duplicates no connection data. Existing Project · Session · saved Launch favorite records
+  are preserved or explicitly migrated without loss, but no longer render as flat host/agent rows in this
+  section. A stale host favorite greys out with a one-click remove action. The generic GitHub
+  instance-flows leave the fixed dropdown and remain palette actions.
 - **File manager select bar (must-have).** The SFTP/file-manager browser gets a **classic MC / Norton
   Commander select bar**: a highlighted current row moved by keyboard (↑/↓, Home/End, PageUp/Down) and set
   by mouse click; Enter/→ activates it; the file-op hotkeys act on the selected row.

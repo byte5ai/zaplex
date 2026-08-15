@@ -147,48 +147,48 @@ fn should_send_git_ops_ai_request(app: &AppContext) -> bool {
 /// Maps a raw git error string to a user-friendly toast message. Known
 /// failure modes get dedicated copy; anything else falls back to a generic
 /// message (the raw error is always logged separately at the call site).
-fn user_facing_git_error(raw: &str) -> &'static str {
+fn user_facing_git_error(raw: &str) -> String {
     let lower = raw.to_lowercase();
     if lower.contains("nothing to commit") {
-        "No changes to commit."
+        crate::t!("git-dialog-error-nothing-to-commit")
     } else if lower.contains("please tell me who you are")
         || lower.contains("author identity unknown")
     {
-        "Git identity not configured. Set user.name and user.email."
+        crate::t!("git-dialog-error-identity")
     } else if lower.contains("updates were rejected")
         || lower.contains("non-fast-forward")
         || lower.contains("fetch first")
     {
-        "Remote has new changes \u{2014} pull before pushing."
+        crate::t!("git-dialog-error-non-fast-forward")
     } else if lower.contains("does not appear to be a git repository")
         || lower.contains("no configured push destination")
         || lower.contains("no such remote")
     {
-        "No remote configured for this branch."
+        crate::t!("git-dialog-error-no-remote")
     } else if lower.contains("authentication failed")
         || lower.contains("permission denied (publickey)")
     {
-        "Authentication failed. Check your Git credentials."
+        crate::t!("git-dialog-error-auth")
     } else if lower.contains("could not resolve host")
         || lower.contains("network is unreachable")
         || lower.contains("connection timed out")
     {
-        "Network error. Check your connection."
+        crate::t!("git-dialog-error-network")
     } else if lower.contains("repository not found") {
-        "Remote repository not found."
+        crate::t!("git-dialog-error-repo-not-found")
     } else if lower.contains("failed to execute gh command") {
         // `run_gh_command` wraps spawn failures with this prefix, which is
         // the reliable "gh binary missing" signal.
-        "GitHub CLI (gh) not installed. See https://cli.github.com/."
+        crate::t!("git-dialog-error-gh-missing")
     } else if lower.contains("not logged in")
         || lower.contains("authentication required")
         || lower.contains("gh auth login")
     {
         // Phrases mirror `context_chips::current_prompt::is_gh_auth_error`,
         // which has been vetted against real `gh` failure output.
-        "GitHub CLI not authenticated. Run `gh auth login`."
+        crate::t!("git-dialog-error-gh-unauth")
     } else {
-        "Git operation failed."
+        crate::t!("git-dialog-error-generic")
     }
 }
 
@@ -209,7 +209,7 @@ fn render_branch_section(
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        "Branch",
+        crate::t!("git-dialog-branch-label"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -294,10 +294,7 @@ fn render_file_changes_box(
     let total_deletions: usize = file_changes.iter().map(|f| f.deletions).sum();
 
     let files_text = Text::new(
-        format!(
-            "{total_files} {}",
-            if total_files == 1 { "file" } else { "files" }
-        ),
+        crate::t!("git-dialog-file-count", count = (total_files as i64)),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -617,7 +614,7 @@ impl GitDialog {
 
     /// Disables cancel/confirm/close and swaps the confirm label while the
     /// async op is running.
-    fn set_loading(&mut self, loading_label: &'static str, ctx: &mut ViewContext<Self>) {
+    fn set_loading(&mut self, loading_label: String, ctx: &mut ViewContext<Self>) {
         self.loading = true;
         self.confirm_button.update(ctx, |b, ctx| {
             b.set_label(loading_label, ctx);
@@ -653,17 +650,17 @@ impl GitDialog {
         });
     }
 
-    fn title(&self) -> &'static str {
+    fn title(&self) -> String {
         match &self.mode {
-            GitDialogMode::Commit(_) => "Commit your changes",
+            GitDialogMode::Commit(_) => crate::t!("git-dialog-title-commit"),
             GitDialogMode::Push(state) => {
                 if state.publish {
-                    "Publish branch"
+                    crate::t!("git-dialog-title-publish")
                 } else {
-                    "Push changes"
+                    crate::t!("git-dialog-title-push")
                 }
             }
-            GitDialogMode::CreatePr(_) => "Create pull request",
+            GitDialogMode::CreatePr(_) => crate::t!("git-dialog-title-create-pr"),
         }
     }
 

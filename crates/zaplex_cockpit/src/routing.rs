@@ -8,7 +8,7 @@
 
 use std::cmp::Ordering;
 
-use crate::types::{AccountStatus, AccountUsage, Provider, UsageProvenance};
+use crate::types::{AccountStatus, AccountUsage, CockpitSnapshot, Provider, UsageProvenance};
 
 /// 5-hour heat at/above which an account counts as **over budget** (at or over
 /// its 5h budget). Used only to rank under-budget accounts ahead of over-budget
@@ -31,6 +31,21 @@ pub fn pick_freest(provider: Provider, accounts: &[AccountUsage]) -> Option<&Acc
         .iter()
         .filter(|a| a.account.provider == provider)
         .min_by(|a, b| cmp_freeness(a, b))
+}
+
+/// [`pick_freest`], but only from an authoritative snapshot. Returns `None` while the
+/// snapshot is still loading or if it degraded (a config/dir failed to load) — an
+/// account whose usage scan silently failed has `heat = 0` and would otherwise win as
+/// "freest", so the launcher would auto-route onto a possibly-broken account. On
+/// `None` the caller falls back to its default/selected account instead of guessing.
+pub fn pick_freest_checked(
+    provider: Provider,
+    snapshot: &CockpitSnapshot,
+) -> Option<&AccountUsage> {
+    if !snapshot.health.is_loaded() {
+        return None;
+    }
+    pick_freest(provider, &snapshot.accounts)
 }
 
 /// Every account of `provider`, ranked freest-first — the same order
@@ -113,6 +128,7 @@ mod tests {
             },
             block5h: WindowTotals::default(),
             today: WindowTotals::default(),
+            today_by_session: Default::default(),
             week: WindowTotals::default(),
             reset5h: None,
             reset_week: None,
@@ -121,6 +137,7 @@ mod tests {
             heat_opus: None,
             heat_sonnet: None,
             sessions: Vec::new(),
+            idle_sessions: Vec::new(),
             status,
             provenance,
         }
@@ -222,5 +239,41 @@ mod tests {
     fn empty_input_is_none_and_empty_rank() {
         assert!(pick_freest(Provider::Claude, &[]).is_none());
         assert!(rank_by_freeness(Provider::Claude, &[]).is_empty());
+    }
+
+    fn snapshot(accounts: Vec<AccountUsage>, health: crate::types::ScanHealth) -> CockpitSnapshot {
+        CockpitSnapshot {
+            accounts,
+            generated_at: chrono::Utc::now(),
+            health,
+        }
+    }
+
+    #[test]
+    fn failed_account_scan_is_excluded_from_freest_routing() {
+        use crate::types::ScanHealth;
+        let accts = vec![claude("claude:default", 0.3)];
+        // Authoritative scan → auto-route works.
+        assert!(
+            pick_freest_checked(Provider::Claude, &snapshot(accts.clone(), ScanHealth::Loaded))
+                .is_some(),
+            "a loaded snapshot routes normally"
+        );
+        // First scan not done yet — do not silently auto-route on a "not loaded" list.
+        assert!(
+            pick_freest_checked(Provider::Claude, &snapshot(accts.clone(), ScanHealth::Pending))
+                .is_none(),
+            "a pending snapshot must not auto-route"
+        );
+        // A config/dir failed to load — a scan-failed account looks maximally free and
+        // would be picked wrongly. Refuse to guess.
+        assert!(
+            pick_freest_checked(
+                Provider::Claude,
+                &snapshot(accts, ScanHealth::Degraded("codex auth unreadable".into()))
+            )
+            .is_none(),
+            "a degraded snapshot must not auto-route"
+        );
     }
 }

@@ -49,6 +49,23 @@ message ClientMessage {
     // Session-less one-shot host command (Agent-Cockpit remote guardrails). See
     // the "Session-less Host Command" section at the end of this file.
     HostExec host_exec = 31;
+    // Reports where a session's bootstrap handshake completed so the daemon can
+    // freeze an eviction-proof preamble for later adopts (T1.3).
+    SetBootstrapPreamble set_bootstrap_preamble = 32;
+    // Narrow, identity-verified Agent-Cockpit process signalling. This is
+    // deliberately separate from HostExec: callers can request only Interrupt
+    // or Kill and must provide the process identity discovered for the session.
+    AgentProcessSignalRequest agent_process_signal = 33;
+    // Generation-checked association between a CLI-agent conversation and the
+    // daemon-owned PTY that currently hosts it.
+    BindAgentPty bind_agent_pty = 34;
+    UnbindAgentPty unbind_agent_pty = 35;
+    // Descriptor-bound, journaled file transaction. Clients must negotiate
+    // "safe-file-transactions-v1" before using this request.
+    SafeFileRequest safe_file = 36;
+    // Typed inventory of existing tmux/byobu sessions. Clients must negotiate
+    // "multiplexer-inventory-v1" before using this request.
+    ListMultiplexerSessions list_multiplexer_sessions = 37;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -91,6 +108,15 @@ message ServerMessage {
     // Session-less one-shot host command result. See the "Session-less Host
     // Command" section at the end of this file.
     HostExecResult host_exec_result = 30;
+    // Correlated acceptance result for retry-safe startup input. Ordinary
+    // SessionInput notifications do not produce this response.
+    StartupCommandAck startup_command_ack = 31;
+    // Correlated, typed result for AgentProcessSignalRequest.
+    AgentProcessSignalResponse agent_process_signal_response = 32;
+    // Correlated, typed result for BindAgentPty / UnbindAgentPty.
+    AgentPtyBindingResponse agent_pty_binding_response = 33;
+    SafeFileResponse safe_file_response = 34;
+    MultiplexerSessionList multiplexer_session_list = 35;
   }
 }
 
@@ -102,6 +128,9 @@ message Initialize {
   // Empty means no credential was available and does not clear an existing
   // daemon credential.
   string auth_token = 1;
+  // Capabilities understood by this client. Old clients omit this field and
+  // therefore cannot mutate or trust generation-checked PTY bindings.
+  repeated string features = 2;
 }
 
 // Sent by the client when its bearer credential rotates after initialization.
@@ -576,6 +605,155 @@ message WriteFileChunkResponse {
   }
 }
 
+// ── Safe file transactions ───────────────────────────────────────
+
+enum SafeFileEntryKind {
+  SAFE_FILE_ENTRY_KIND_UNSPECIFIED = 0;
+  SAFE_FILE_ENTRY_KIND_REGULAR = 1;
+  SAFE_FILE_ENTRY_KIND_DIRECTORY = 2;
+  SAFE_FILE_ENTRY_KIND_SYMLINK = 3;
+}
+
+message SafeFileIdentity {
+  SafeFileEntryKind kind = 1;
+  uint64 size = 2;
+  // Unix device + inode encoded as an opaque token. Clients compare it but
+  // never interpret it.
+  string object_id = 3;
+  // Includes size and modification time so content changes on the same inode
+  // are visible while a path-only rename keeps the revision stable.
+  string revision = 4;
+}
+
+message SafeFileOpenExisting {
+  string path = 1;
+  SafeFileEntryKind expected_kind = 2;
+}
+
+message SafeFileCreateExclusive {
+  string path = 1;
+  SafeFileEntryKind kind = 2;
+}
+
+message SafeFileReadHandle {
+  string handle_id = 1;
+  uint64 max_bytes = 2;
+}
+
+message SafeFileWriteHandle {
+  string handle_id = 1;
+  bytes bytes = 2;
+}
+
+message SafeFileFlushHandle {
+  string handle_id = 1;
+}
+
+message SafeFileInspectHandle {
+  string handle_id = 1;
+  string path = 2;
+}
+
+message SafeFileCloseHandle {
+  string handle_id = 1;
+}
+
+enum SafeFileRenameMode {
+  SAFE_FILE_RENAME_MODE_UNSPECIFIED = 0;
+  SAFE_FILE_RENAME_MODE_NO_REPLACE = 1;
+  SAFE_FILE_RENAME_MODE_EXCHANGE = 2;
+}
+
+message SafeFileRename {
+  string handle_id = 1;
+  string old_path = 2;
+  string new_path = 3;
+  SafeFileRenameMode mode = 4;
+  // Required for exchange. The mutation is refused if the destination is no
+  // longer this exact object.
+  optional SafeFileIdentity expected_target = 5;
+}
+
+message SafeFileDelete {
+  string path = 1;
+  SafeFileIdentity expected = 2;
+  // Required for regular files and omitted for empty directories.
+  optional string expected_sha256 = 3;
+}
+
+message SafeFileListRecoveries {}
+
+message SafeFileRetryRecovery {}
+
+message SafeFileRequest {
+  // Required for create/rename/delete. Reusing an id returns the persisted
+  // result instead of executing a second mutation.
+  string operation_id = 1;
+  oneof operation {
+    SafeFileOpenExisting open_existing = 2;
+    SafeFileCreateExclusive create_exclusive = 3;
+    SafeFileReadHandle read_handle = 4;
+    SafeFileWriteHandle write_handle = 5;
+    SafeFileFlushHandle flush_handle = 6;
+    SafeFileInspectHandle inspect_handle = 7;
+    SafeFileCloseHandle close_handle = 8;
+    SafeFileRename rename = 9;
+    SafeFileDelete delete = 10;
+    SafeFileListRecoveries list_recoveries = 11;
+    SafeFileRetryRecovery retry_recovery = 12;
+  }
+}
+
+message SafeFileOpened {
+  string handle_id = 1;
+  SafeFileIdentity identity = 2;
+}
+
+message SafeFileReadResult {
+  bytes bytes = 1;
+  bool eof = 2;
+}
+
+message SafeFileInspectResult {
+  SafeFileIdentity identity = 1;
+  bool matches_path = 2;
+  optional uint64 link_count = 3;
+}
+
+enum SafeFileMutationState {
+  SAFE_FILE_MUTATION_STATE_UNSPECIFIED = 0;
+  SAFE_FILE_MUTATION_STATE_APPLIED = 1;
+  SAFE_FILE_MUTATION_STATE_ALREADY_APPLIED = 2;
+}
+
+message SafeFileMutationResult {
+  SafeFileMutationState state = 1;
+}
+
+message SafeFileRecovery {
+  string operation_id = 1;
+  repeated string paths = 2;
+  // A successfully reconciled rename commits the destination while leaving
+  // the higher-level move source intact. The client uses this to report the
+  // recovered transfer honestly instead of presenting it as a completed move.
+  bool source_preserved_after_commit = 3;
+}
+
+message SafeFileRecoveryList {
+  repeated SafeFileRecovery recoveries = 1;
+}
+
+message SafeFileResponse {
+  oneof result {
+    SafeFileOpened opened = 1;
+    SafeFileReadResult read = 2;
+    SafeFileInspectResult inspected = 3;
+    SafeFileMutationResult mutation = 4;
+    SafeFileRecoveryList recoveries = 5;
+    FileOperationError error = 15;
+  }
+}
+
 // ── Native Remote Session Layer (zaplex native session host) ──────────
 // See docs/superpowers/plans/2026-06-24-native-remote-session-layer.md.
 //
@@ -619,6 +797,8 @@ message OpenSession {
 // persistent session id.
 message SessionOpened {
   string session_id = 1;
+  // Monotonic daemon-process generation used to reject stale PTY ids.
+  uint64 generation = 2;
 }
 
 // Client → daemon: attach to an existing session and start receiving live
@@ -628,6 +808,20 @@ message AttachSession {
   // Highest output seq the client has already consumed; 0 means replay
   // everything available from the earliest point in the ring buffer.
   uint64 last_seq = 2;
+  // Whether this client understands `SessionAttached.bootstrap_preamble` (T1.3).
+  // Old clients omit this → it decodes as false → the daemon serves a plain
+  // replay from `last_seq` exactly as before (never shifting the replay past a
+  // preamble the client cannot consume), so new-daemon↔old-client stays
+  // wire-transparent.
+  bool supports_bootstrap_preamble = 3;
+  // When present, attach succeeds only for this exact PTY generation. Old
+  // clients omit it and retain their legacy id-only reconnect behavior.
+  optional uint64 expected_generation = 4;
+  // Optional foreground-agent identity captured from the same capability-gated
+  // inventory row. When present, attach succeeds only while this exact agent
+  // still owns the PTY foreground, preventing a stale row from opening a later
+  // handoff target. Legacy clients omit it.
+  AgentSessionIdentity expected_agent_binding = 5;
 }
 
 // Daemon → client: attach succeeded, with replay data and the current size.
@@ -638,6 +832,36 @@ message SessionAttached {
   uint64 base_seq = 3;
   // Historical PTY bytes from after last_seq up to now (may be empty).
   bytes replay = 4;
+  // The session's frozen bootstrap-handshake prefix: the raw captured output
+  // bytes [0, end_seq) up to where the opening client reported bootstrap complete
+  // (so it contains the InitShell…Bootstrapped DCS plus any interleaved banner /
+  // prompt output). Sent only for an opted-in fresh adopt whose ring has evicted
+  // its start (`base_seq() > 0`), when `replay` may no longer carry the handshake
+  // (T1.3). Empty otherwise: opt-out clients, a reconnect (`last_seq > 0`), a
+  // session with nothing evicted, or one whose capture was never frozen /was
+  // abandoned. The client feeds this through the normal parser path *before* the
+  // replay to arm bootstrap (no client-side state-machine surgery). `base_seq`
+  // already accounts for it: it points at the first replay byte at or after the
+  // preamble's end, so preamble and replay never overlap.
+  bytes bootstrap_preamble = 5;
+  // Exact generation of the attached PTY.
+  uint64 generation = 6;
+  // Current foreground agent for capability-aware clients. This hydrates
+  // lifecycle routing after a generic sidebar adopt where no agent row was
+  // available at the callsite. Absent is the safe legacy/unbound default.
+  AgentSessionIdentity agent_binding = 7;
+}
+
+// Client → daemon: report the byte boundary at which this session's Zaplexify
+// bootstrap handshake completed (notification, no response). Sent once, by the
+// client that *opened* the session, the moment its terminal model becomes
+// bootstrapped — `end_seq` is that client's output cursor at that point. The
+// daemon freezes the output bytes it accumulated from seq 0 up to `end_seq` as
+// the session's `bootstrap_preamble`, immune to later ring eviction, so a future
+// adopt can still arm bootstrap. Idempotent: ignored once the preamble is frozen.
+message SetBootstrapPreamble {
+  string session_id = 1;
+  uint64 end_seq = 2;
 }
 
 // Client → daemon: detach (notification, no response). The session keeps
@@ -646,11 +870,25 @@ message DetachSession {
   string session_id = 1;
 }
 
-// Client → daemon: write keyboard/mouse bytes into the PTY (notification, no
-// response).
+// Client → daemon: write bytes into the PTY. Ordinary keyboard/mouse input has
+// an empty startup_command_id and remains a notification with no response.
+// Startup commands carry a stable non-empty id and a non-empty envelope
+// request_id; the daemon responds with StartupCommandAck and deduplicates
+// retries by this id after the ordered writer has accepted the bytes.
 message SessionInput {
   string session_id = 1;
   bytes bytes = 2;
+  string startup_command_id = 3;
+}
+
+// Daemon → client: correlated acceptance result for startup SessionInput.
+// accepted=true means the bytes were accepted by the ordered writer, or the
+// same startup_command_id had already been accepted earlier. accepted=false
+// means no bytes were accepted and the id remains retryable.
+message StartupCommandAck {
+  string session_id = 1;
+  string startup_command_id = 2;
+  bool accepted = 3;
 }
 
 // Client → daemon: resize the PTY window (notification, no response);
@@ -682,11 +920,46 @@ message SessionInfo {
   // the daemon's memory governor accounts against the host cap. Surfaced so the
   // multi-session UI can show per-session RAM. 0 = unknown.
   uint64 ring_bytes = 6;
+  uint64 generation = 7;
 }
 
 // Daemon → client: result of ListSessions.
 message SessionList {
   repeated SessionInfo sessions = 1;
+  // Host-wide output-ring cap enforced by the daemon. Older daemons omit this
+  // field, which decodes as 0 (unknown) and must not be guessed by the client.
+  uint64 host_ring_cap_bytes = 2;
+}
+
+// Client → daemon: enumerate existing terminal-multiplexer sessions without
+// attaching to them or interpolating their names into shell commands.
+message ListMultiplexerSessions {}
+
+enum MultiplexerKind {
+  MULTIPLEXER_KIND_UNSPECIFIED = 0;
+  MULTIPLEXER_KIND_TMUX = 1;
+  MULTIPLEXER_KIND_BYOBU_TMUX = 2;
+  MULTIPLEXER_KIND_BYOBU_SCREEN = 3;
+}
+
+// One attachable multiplexer session. `target` is the exact opaque value the
+// backend reported and must be passed as one argv/data value when attaching;
+// `name` is presentation-only and may omit a screen PID prefix.
+message MultiplexerSessionInfo {
+  MultiplexerKind kind = 1;
+  string target = 2;
+  string name = 3;
+  // 0 means the backend did not report a reliable value.
+  uint32 windows = 4;
+  uint32 attached_clients = 5;
+}
+
+// Daemon → client: typed multiplexer inventory. A missing executable or an
+// absent multiplexer server is an empty, successful result. Real scan failures
+// remain visible through `warnings` and must not be rendered as an empty list.
+message MultiplexerSessionList {
+  repeated MultiplexerSessionInfo sessions = 1;
+  repeated string warnings = 2;
 }
 
 // Daemon → client (push, empty request_id): live PTY output. seq is
@@ -761,11 +1034,161 @@ message AgentSessionInfo {
   string project_name = 10;
   uint64 last_activity_epoch_millis = 11;
   uint32 pid = 12;
+  // Session identity for the redesigned sidebar (§2.2). Empty string = unknown
+  // (maps back to Option::None), so an older daemon that omits these still
+  // decodes cleanly.
+  string worktree = 13;
+  string branch = 14;
+  // The session account's provider config dir ON THE HOST (a plexed CODEX_HOME /
+  // CLAUDE_CONFIG_DIR), so the client can pin the right subscription when it asks
+  // the daemon to resume the session. Empty = default account (no pin).
+  //
+  // Routing only — NOT an account identity. It is a path on the daemon's host, so
+  // it neither matches how the client spells the same account nor exists at all for
+  // a default account. Use account_email to tell whose account a session is.
+  string config_dir = 15;
+  // Email of the account this session runs under: the join key (with `provider`)
+  // that lets a client tell which of ITS accounts a remote session belongs to.
+  // Nothing else on this wire identifies a subscription across hosts.
+  //
+  // Empty = the daemon could not determine it, or predates this field. Such a
+  // session still folds into the host tree; it simply joins no account rather than
+  // being guessed onto one.
+  string account_email = 16;
+  // Working-tree root of the REPO project_root belongs to (its main checkout when
+  // project_root is a linked worktree, otherwise the same path). The inventory
+  // groups on this, so several worktrees of one repo read as one project.
+  //
+  // Empty = the daemon predates this field; the client then groups that session by
+  // its own project_root, i.e. the old worktree-per-project split. Degraded, not
+  // mis-grouped.
+  string repo_root = 17;
+  // Opaque identity of the exact process observed during discovery. Empty means
+  // unknown and therefore unsignalable. Additive so older daemons decode as the
+  // safe empty value.
+  string process_fingerprint = 18;
+  // Present only for clients that negotiated "agent-pty-binding-v2". Empty/zero
+  // values are the safe unbound defaults for old clients and daemons.
+  string pty_session_id = 19;
+  uint64 pty_session_generation = 20;
+  bool pty_foreground = 21;
+  // Latest structured task state parsed on the daemon host. The explicit
+  // presence bit distinguishes "no supported task record" (and old daemons)
+  // from a provider that deliberately emitted an empty list.
+  bool has_task_state = 22;
+  repeated AgentTaskItem task_items = 23;
+}
+
+message AgentTaskItem {
+  string id = 1;
+  string title = 2;
+  // {"pending","in_progress","completed"}; unknown values decode as pending.
+  string status = 3;
 }
 
 // Daemon → client: result of ListAgentSessions.
 message AgentSessionList {
   repeated AgentSessionInfo sessions = 1;
+}
+
+// ── Agent-to-PTY Binding ──────────────────────────────────────────────────
+//
+// A PTY can contain several historical agent conversations but exactly one
+// live foreground agent. Switching foreground identity requires an explicit
+// handoff from the identity currently reported by the daemon.
+//
+// Capability: "agent-pty-binding" documents the additive base schema;
+// mutations and trusted attach require both peers to advertise
+// "agent-pty-binding-v2". Older clients decode the additive inventory fields
+// as unbound and never send these ops.
+
+message AgentSessionIdentity {
+  string session_id = 1;
+  string provider = 2;
+  string account_email = 3;
+  string config_dir = 4;
+}
+
+message BindAgentPty {
+  AgentSessionIdentity agent = 1;
+  string pty_session_id = 2;
+  uint64 pty_session_generation = 3;
+  AgentSessionIdentity handoff_from = 4;
+  // Exact daemon process identity returned by InitializeResponse.host_id.
+  // Additive: legacy payloads decode with the safe empty value and are
+  // rejected rather than mutating a PTY on an unintended daemon instance.
+  string host_id = 5;
+}
+
+message UnbindAgentPty {
+  AgentSessionIdentity agent = 1;
+  string pty_session_id = 2;
+  uint64 pty_session_generation = 3;
+  // Exact daemon process identity returned by InitializeResponse.host_id.
+  string host_id = 4;
+}
+
+enum AgentPtyBindingStatus {
+  AGENT_PTY_BINDING_STATUS_UNSPECIFIED = 0;
+  AGENT_PTY_BINDING_STATUS_BOUND = 1;
+  AGENT_PTY_BINDING_STATUS_UNBOUND = 2;
+  AGENT_PTY_BINDING_STATUS_CAPABILITY_REQUIRED = 3;
+  AGENT_PTY_BINDING_STATUS_PTY_NOT_FOUND = 4;
+  AGENT_PTY_BINDING_STATUS_STALE_GENERATION = 5;
+  AGENT_PTY_BINDING_STATUS_FOREIGN_CONNECTION = 6;
+  AGENT_PTY_BINDING_STATUS_FOREGROUND_CONFLICT = 7;
+  AGENT_PTY_BINDING_STATUS_HANDOFF_MISMATCH = 8;
+  AGENT_PTY_BINDING_STATUS_IDENTITY_NOT_BOUND = 9;
+  AGENT_PTY_BINDING_STATUS_INVALID_REQUEST = 10;
+  AGENT_PTY_BINDING_STATUS_IDENTITY_ALREADY_BOUND = 11;
+  AGENT_PTY_BINDING_STATUS_FOREIGN_DAEMON = 12;
+  AGENT_PTY_BINDING_STATUS_IDENTITY_NOT_DISCOVERED = 13;
+}
+
+message AgentPtyBindingResponse {
+  AgentPtyBindingStatus status = 1;
+  string message = 2;
+}
+
+// ── Verified Agent Process Signal ─────────────────────────────────────────
+//
+// This is the only remote guardrail boundary. It accepts no command text and
+// exposes only the two intentional process signals. The daemon re-verifies the
+// opaque process fingerprint immediately before signalling, so a recycled pid
+// cannot redirect Stop/Kill to a different process.
+//
+// Capability: gated behind "agent-process-signal-v1". A client talking to an
+// older daemon must not fall back to HostExec or any shell command; it must
+// report the guardrail as unsupported.
+
+enum AgentProcessSignal {
+  AGENT_PROCESS_SIGNAL_UNSPECIFIED = 0;
+  AGENT_PROCESS_SIGNAL_INTERRUPT = 1;
+  AGENT_PROCESS_SIGNAL_KILL = 2;
+}
+
+message AgentProcessSignalRequest {
+  string session_id = 1;
+  uint32 pid = 2;
+  string expected_process_fingerprint = 3;
+  AgentProcessSignal signal = 4;
+}
+
+enum AgentProcessSignalStatus {
+  AGENT_PROCESS_SIGNAL_STATUS_UNSPECIFIED = 0;
+  AGENT_PROCESS_SIGNAL_STATUS_SENT = 1;
+  AGENT_PROCESS_SIGNAL_STATUS_STALE_IDENTITY = 2;
+  AGENT_PROCESS_SIGNAL_STATUS_IDENTITY_UNVERIFIABLE = 3;
+  AGENT_PROCESS_SIGNAL_STATUS_INVALID_REQUEST = 4;
+  AGENT_PROCESS_SIGNAL_STATUS_SIGNAL_FAILED = 5;
+}
+
+message AgentProcessSignalResponse {
+  string session_id = 1;
+  uint32 pid = 2;
+  AgentProcessSignalStatus status = 3;
+  // Empty on success; human-readable diagnostic for a typed failure.
+  string error_message = 4;
 }
 
 // ── Session-less Host Command ──────────────────────────────────────────────
@@ -774,8 +1197,8 @@ message AgentSessionList {
 // LocalCommandExecutor (looked up by session_id) — HostExec runs one ad-hoc
 // command on the daemon host WITHOUT any bound session. It is the general
 // session-less host-command path, used by callers that hold a daemon
-// connection but no interactive session on that host (e.g. the Agent-Cockpit
-// remote guardrails, which send `kill -<SIG> <pid>` to a remote agent's pid).
+// connection but no interactive session on that host. Agent-Cockpit process
+// guardrails must use AgentProcessSignalRequest instead.
 //
 // The daemon runs it in its default user shell (`$SHELL`, falling back to
 // `/bin/bash`) rooted at the daemon's home directory, with no session state.
@@ -783,8 +1206,7 @@ message AgentSessionList {
 // Capability: gated behind the "host-exec" feature in
 // InitializeResponse.features (zaplex_remote_session::types::FEATURE_HOST_EXEC).
 // A client talking to an OLD daemon that does not advertise it must NOT send
-// HostExec; it falls back with an honest "needs a newer daemon" message rather
-// than a misleading failure.
+// HostExec.
 
 // Client → daemon: run one command session-lessly on the daemon host.
 message HostExec {

@@ -55,13 +55,20 @@ pub struct DaemonSessionRequest {
     /// daemon session (attach + replay instead of open) — the multi-session
     /// "adopt a running session" path (Stage 4).
     pub adopt_pty_session_id: Option<String>,
+    /// Exact generation from the same capability-gated inventory response.
+    /// Zero/`None` preserves the id-only attach required by legacy daemons;
+    /// capability-gated agent inventory always supplies a nonzero value.
+    pub adopt_pty_generation: Option<u64>,
+    /// Exact foreground agent captured from the same inventory row. `None` for
+    /// generic PTY sidebar adopts; agent-row adopts fail if a handoff changed it.
+    pub expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
     /// First-connect auto-install: phase messages from the install ladder
     /// (`InstallProgress`), rendered as notice lines in this tab while the
     /// remote-server binary is being set up. `None` for the common case where
     /// the daemon is already installed.
     pub install_progress_rx: Option<Receiver<String>>,
     /// Human-readable host label (the SSH host name), for in-tab status lines
-    /// ("⚡ persistent session on <host>", reconnect notices).
+    /// ("persistent session on <host>", reconnect notices).
     pub host_label: String,
 }
 
@@ -102,6 +109,8 @@ impl TerminalManager {
         connection_session_id: SessionId,
         open_params: OpenSessionParams,
         adopt_pty_session_id: Option<String>,
+        adopt_pty_generation: Option<u64>,
+        expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         install_progress_rx: Option<Receiver<String>>,
         host_label: String,
         ctx: &mut AppContext,
@@ -154,6 +163,8 @@ impl TerminalManager {
             connection_session_id,
             open_params,
             adopt_pty_session_id,
+            adopt_pty_generation,
+            expected_agent_binding,
             install_progress_rx,
             host_label,
             ctx,
@@ -175,6 +186,7 @@ impl TerminalManager {
         let view = ctx.add_typed_action_view(window_id, |ctx| {
             TerminalView::new(
                 resources,
+                None,
                 wakeups_rx,
                 model_events.clone(),
                 cloned_model,
@@ -198,6 +210,10 @@ impl TerminalManager {
             model_event_sender,
             ctx,
         );
+        let terminal_view_id = view.as_ref(ctx).view_id();
+        event_loop.update(ctx, |event_loop, ctx| {
+            event_loop.bind_terminal_view(terminal_view_id, ctx);
+        });
 
         // Create the terminal manager itself.
         let terminal_manager = Self {
@@ -223,6 +239,8 @@ impl TerminalManager {
         connection_session_id: SessionId,
         open_params: OpenSessionParams,
         adopt_pty_session_id: Option<String>,
+        adopt_pty_generation: Option<u64>,
+        expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         install_progress_rx: Option<Receiver<String>>,
         host_label: String,
         ctx: &mut AppContext,
@@ -236,6 +254,8 @@ impl TerminalManager {
                 connection_session_id,
                 open_params,
                 adopt_pty_session_id,
+                adopt_pty_generation,
+                expected_agent_binding,
                 install_progress_rx,
                 host_label,
                 ctx,

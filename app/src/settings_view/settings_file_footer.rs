@@ -14,7 +14,6 @@ use crate::WorkspaceAction;
 use pathfinder_color::ColorU;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::Fill;
-use warpui::SingletonEntity as _;
 use warpui::elements::{
     Border, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Element, Empty, Expanded, Flex, Highlight, Hoverable,
@@ -23,6 +22,7 @@ use warpui::elements::{
 };
 use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::platform::Cursor;
+use warpui::SingletonEntity as _;
 
 /// Horizontal + vertical padding applied to the footer inside the sidebar.
 const FOOTER_PADDING: f32 = 12.;
@@ -257,7 +257,7 @@ pub fn render_settings_error_alert(
         let install_model = crate::terminal::cli_agent::CLIAgentInstallModel::as_ref(app);
         let installed: Vec<crate::terminal::cli_agent::CLIAgent> =
             enum_iterator::all::<crate::terminal::cli_agent::CLIAgent>()
-                .filter(|a| !matches!(a, crate::terminal::cli_agent::CLIAgent::Unknown))
+                .filter(|a| a.is_available_for_new_launch())
                 .filter(|a| install_model.is_cli_agent_installed(*a))
                 .collect();
         let label = match installed.first() {
@@ -319,7 +319,9 @@ pub fn render_footer(
             mouse_states.open_settings_file_button.clone(),
         ),
         SettingsFooterKind::ErrorAlert => match error {
-            Some(error) => render_settings_error_alert(appearance, error, ai_enabled, mouse_states, app),
+            Some(error) => {
+                render_settings_error_alert(appearance, error, ai_enabled, mouse_states, app)
+            }
             // Defensive fallback: if the error disappears between `choose` and
             // `render_footer`, fall back to the plain button rather than
             // rendering an empty alert shell.

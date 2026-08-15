@@ -1,9 +1,7 @@
-//! `AgentProviderSecrets`: stores each custom Provider's API key to the OS keystore.
+//! Compatibility singleton for the retired custom-provider secret store.
 //!
-//! Data shape: `HashMap<provider_id, api_key>`, serialized via `serde_json` and written to
-//! `secure_storage` under the `AgentProviderSecrets` key.
-//!
-//! Design reference: `crates/ai/src/api_keys.rs::ApiKeyManager`.
+//! BYOP is no longer a supported execution path. The singleton remains temporarily so old
+//! settings code can deserialize without a startup panic, but it never returns or persists a key.
 
 use std::collections::HashMap;
 
@@ -18,16 +16,21 @@ pub enum AgentProviderSecretsEvent {
     KeysUpdated,
 }
 
-/// Singleton: manages API keys for user-defined Providers.
+/// Compatibility singleton that keeps the retired provider-secret store empty.
 pub struct AgentProviderSecrets {
     keys: HashMap<String, String>,
 }
 
 impl AgentProviderSecrets {
-    /// Load all keys from secure storage on startup.
+    /// Delete the retired value on startup and expose an empty compatibility store.
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+        if let Err(error) = ctx.secure_storage().remove_value(SECURE_STORAGE_KEY) {
+            if !matches!(error, secure_storage::Error::NotFound) {
+                log::warn!("Failed to remove retired agent-provider secrets: {error:#}");
+            }
+        }
         Self {
-            keys: Self::load_from_storage(ctx),
+            keys: HashMap::new(),
         }
     }
 
@@ -36,51 +39,27 @@ impl AgentProviderSecrets {
         self.keys.get(provider_id).map(String::as_str)
     }
 
-    /// Set/update a Provider's API key.
-    /// Passing an empty string is equivalent to deletion.
+    /// Ignore writes from stale settings surfaces and keep the retired key deleted.
     pub fn set(&mut self, provider_id: &str, api_key: String, ctx: &mut ModelContext<Self>) {
-        if api_key.is_empty() {
-            self.keys.remove(provider_id);
-        } else {
-            self.keys.insert(provider_id.to_owned(), api_key);
-        }
+        drop(api_key);
+        self.keys.remove(provider_id);
         ctx.emit(AgentProviderSecretsEvent::KeysUpdated);
-        self.persist(ctx);
+        Self::remove_retired_value(ctx);
     }
 
     /// Delete a Provider (along with its secret).
     pub fn remove(&mut self, provider_id: &str, ctx: &mut ModelContext<Self>) {
         if self.keys.remove(provider_id).is_some() {
             ctx.emit(AgentProviderSecretsEvent::KeysUpdated);
-            self.persist(ctx);
         }
+        Self::remove_retired_value(ctx);
     }
 
-    fn load_from_storage(ctx: &mut ModelContext<Self>) -> HashMap<String, String> {
-        let raw = match ctx.secure_storage().read_value(SECURE_STORAGE_KEY) {
-            Ok(json) => json,
-            Err(secure_storage::Error::NotFound) => return HashMap::new(),
-            Err(e) => {
-                log::error!("Failed to read agent provider secrets: {e:#}");
-                return HashMap::new();
+    fn remove_retired_value(ctx: &mut ModelContext<Self>) {
+        if let Err(error) = ctx.secure_storage().remove_value(SECURE_STORAGE_KEY) {
+            if !matches!(error, secure_storage::Error::NotFound) {
+                log::warn!("Failed to remove retired agent-provider secrets: {error:#}");
             }
-        };
-        serde_json::from_str(&raw).unwrap_or_else(|e| {
-            log::error!("Failed to deserialize agent provider secrets: {e:#}");
-            HashMap::new()
-        })
-    }
-
-    fn persist(&self, ctx: &mut ModelContext<Self>) {
-        let json = match serde_json::to_string(&self.keys) {
-            Ok(json) => json,
-            Err(e) => {
-                log::error!("Failed to serialize agent provider secrets: {e:#}");
-                return;
-            }
-        };
-        if let Err(e) = ctx.secure_storage().write_value(SECURE_STORAGE_KEY, &json) {
-            log::error!("Failed to write agent provider secrets: {e:#}");
         }
     }
 }

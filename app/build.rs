@@ -388,7 +388,8 @@ fn parse_file_version_quad(tag: &str) -> (u16, u16, u16, u16) {
 fn embed_resource_file(target_dir: &Path) {
     use std::io::Write;
 
-    let version = env::var("GIT_RELEASE_TAG").unwrap_or("v0".to_owned());
+    let version =
+        env::var("GIT_RELEASE_TAG").unwrap_or_else(|_| format!("v{}", env!("CARGO_PKG_VERSION")));
     // Default value aligns with publisher and is set to "Zaplex", aligned globally with
     // `script/windows/bundle.ps1` OSS branch (`$APP_NAME = 'Zaplex'`) + AUMID `dev.zaplex.Zaplex` + Cargo bundle
     // metadata. Windows Task Manager's process grouping name actually comes from PE resources

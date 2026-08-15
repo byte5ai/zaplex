@@ -355,10 +355,59 @@ fn harness_parse_orchestration_harness_accepts_aliases() {
 }
 
 #[test]
+fn harness_parse_orchestration_harness_rejects_legacy_gemini() {
+    assert_eq!(Harness::parse_orchestration_harness("gemini"), None);
+}
+
+#[test]
 fn harness_parse_local_child_harness_rejects_oz() {
     assert_eq!(Harness::parse_local_child_harness("oz"), None);
     assert_eq!(
         Harness::parse_local_child_harness("opencode"),
         Some(Harness::OpenCode)
     );
+}
+
+#[test]
+fn agent_skill_lifecycle_commands_parse() {
+    for (name, expected) in [
+        ("install-skill", AgentCommand::InstallSkill),
+        ("remove-skill", AgentCommand::RemoveSkill),
+    ] {
+        let args = Args::try_parse_from(["zaplex", "agent", name]).unwrap();
+        let Some(Command::CommandLine(command)) = args.command() else {
+            panic!("expected a command-line command");
+        };
+        let CliCommand::Agent(actual) = command.as_ref() else {
+            panic!("expected an agent command");
+        };
+        assert_eq!(
+            std::mem::discriminant(actual),
+            std::mem::discriminant(&expected)
+        );
+    }
+}
+
+#[test]
+fn agent_hook_lifecycle_commands_parse() {
+    for (name, expected_agent) in [
+        ("install-hooks", CliAgentHookAgent::Claude),
+        ("remove-hooks", CliAgentHookAgent::Grok),
+        ("install-hooks", CliAgentHookAgent::Antigravity),
+        ("install-hooks", CliAgentHookAgent::DeepSeek),
+    ] {
+        let args =
+            Args::try_parse_from(["zaplex", "agent", name, expected_agent.as_str()]).unwrap();
+        let Some(Command::CommandLine(command)) = args.command() else {
+            panic!("expected a command-line command");
+        };
+        let CliCommand::Agent(actual) = command.as_ref() else {
+            panic!("expected an agent command");
+        };
+        let actual_agent = match actual {
+            AgentCommand::InstallHooks { agent } | AgentCommand::RemoveHooks { agent } => *agent,
+            _ => panic!("expected a hook lifecycle command"),
+        };
+        assert_eq!(actual_agent, expected_agent);
+    }
 }

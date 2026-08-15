@@ -450,6 +450,7 @@ pub enum CLIAgentType {
     Goose,
     DeepSeek,
     Antigravity,
+    Grok,
     Unknown,
 }
 
@@ -2931,9 +2932,7 @@ impl TelemetryEvent {
                         ("warp_markdown_viewer", Some(*layout), None)
                     }
                     FileTarget::CodeEditor(layout) => ("warp_code_editor", Some(*layout), None),
-                    FileTarget::ImageViewer(layout) => {
-                        ("warp_image_viewer", Some(*layout), None)
-                    }
+                    FileTarget::ImageViewer(layout) => ("warp_image_viewer", Some(*layout), None),
                     FileTarget::EnvEditor => ("env_editor", None, None),
                     FileTarget::SystemDefault => ("system_default", None, None),
                     FileTarget::SystemGeneric => ("system_generic", None, None),
@@ -3064,7 +3063,9 @@ impl TelemetryEvent {
                 Some(json!({"enabled": enabled}))
             }
             TelemetryEvent::ToggleSshTmuxWrapper { enabled } => Some(json!({"enabled": enabled})),
-            TelemetryEvent::ToggleSshZaplexification { enabled } => Some(json!({"enabled": enabled})),
+            TelemetryEvent::ToggleSshZaplexification { enabled } => {
+                Some(json!({"enabled": enabled}))
+            }
             TelemetryEvent::SetSshExtensionInstallMode { mode } => Some(json!({"mode": mode})),
             TelemetryEvent::SshRemoteServerChoiceDoNotAskAgainToggled { checked } => {
                 Some(json!({"checked": checked}))

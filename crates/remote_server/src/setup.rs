@@ -304,6 +304,75 @@ pub fn remote_server_daemon_dir(identity_key: &str) -> String {
     )
 }
 
+/// Filename of the daemon's runtime rendezvous file (socket / pid) inside
+/// [`remote_server_daemon_dir`], for the given extension (`"sock"` / `"pid"`).
+///
+/// Zaplex **release** builds (`Channel::Oss` with a `GIT_RELEASE_TAG`) get a
+/// versioned name — `server-<tag>.sock` — so proxy and daemon of one release
+/// can only ever rendezvous with each other. This is the structural fix for
+/// the stale-daemon trap: the proxy reused ANY running daemon by pid-liveness
+/// alone, so a daemon from the previous release kept serving new clients with
+/// old code (RC finding 2026-07-19). An old daemon keeps its old socket,
+/// serves only its remaining sessions, and retires itself via the idle grace
+/// timer once the last one ends.
+///
+/// Source builds (no tag) and non-Oss channels keep the legacy unversioned
+/// `server.sock` — the `script/deploy_remote_server` dev loop overwrites one
+/// slot, and upstream channel behavior stays byte-for-byte untouched. (This
+/// deliberately keys more narrowly than [`remote_server_binary`], which
+/// versions most non-Oss install paths: renaming upstream's runtime files is
+/// not this fork's call to make.)
+pub fn daemon_runtime_filename(extension: &str) -> String {
+    match (ChannelState::channel(), ChannelState::app_version()) {
+        (Channel::Oss, Some(tag)) => {
+            format!("server-{}.{extension}", version_path_segment(tag))
+        }
+        _ => format!("server.{extension}"),
+    }
+}
+
+/// A release tag can appear in the version segment at most this long. The
+/// socket path lives inside `sockaddr_un.sun_path` (104 bytes on macOS, 108
+/// on Linux) together with `$HOME`, `.zaplex/remote-server` and the identity
+/// dir — an unbounded tag could push a perfectly valid setup past the limit
+/// and make the daemon's bind fail. Tags longer than this (or ones needing
+/// percent-escapes) collapse to `prefix-hash`, which is deterministic on both
+/// sides of the rendezvous because proxy and daemon are the same binary.
+const VERSION_SEGMENT_MAX: usize = 20;
+
+/// Path segment for a release tag: short clean tags (the normal case,
+/// `v0.rc2`) pass through readably; anything long or with characters outside
+/// `[A-Za-z0-9._-]` becomes a bounded `prefix-<fnv64 hex>` form.
+fn version_path_segment(tag: &str) -> String {
+    let clean = tag
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+    if clean && tag.len() <= VERSION_SEGMENT_MAX {
+        return tag.to_string();
+    }
+    // ASCII-safe prefix (drop anything questionable), then a stable 64-bit
+    // FNV-1a of the FULL original tag for uniqueness.
+    let prefix: String = tag
+        .bytes()
+        .filter(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        .take(8)
+        .map(|b| b as char)
+        .collect();
+    format!("{prefix}-{:016x}", fnv1a_64(tag.as_bytes()))
+}
+
+/// FNV-1a, 64-bit — tiny, dependency-free, stable across builds. Not
+/// cryptographic; it only needs to keep two different tags from colliding in
+/// a filename.
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 /// Returns the remote-server binary filename.
 pub fn binary_name() -> &'static str {
     ChannelState::channel().cli_command_name()
@@ -366,7 +435,7 @@ fn download_url() -> String {
         Some(tag) => format!("download/{tag}"),
         None => "latest/download".to_string(),
     };
-    format!("https://github.com/zerx-lab/warp/releases/{release_path}")
+    format!("https://github.com/byte5ai/zaplex/releases/{release_path}")
 }
 
 fn version_suffix() -> String {

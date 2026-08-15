@@ -53,12 +53,16 @@ fn read_access_token(config_dir: &Path, default_config_dir: &Path) -> Option<Str
     #[cfg(target_os = "macos")]
     if config_dir == default_config_dir {
         let output = command::blocking::Command::new("security")
-            .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+            .args([
+                "find-generic-password",
+                "-s",
+                "Claude Code-credentials",
+                "-w",
+            ])
             .output()
             .ok()?;
         if output.status.success() {
-            let json: serde_json::Value =
-                serde_json::from_slice(&output.stdout).ok()?;
+            let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
             if let Some(token) = json
                 .get("claudeAiOauth")
                 .and_then(|o| o.get("accessToken"))
@@ -110,11 +114,7 @@ pub async fn refresh_cache(
 
     let stale: Vec<PathBuf> = claude_config_dirs
         .into_iter()
-        .filter(|dir| {
-            cache
-                .get(dir)
-                .is_none_or(|c| c.fetched_at.elapsed() >= TTL)
-        })
+        .filter(|dir| cache.get(dir).is_none_or(|c| c.fetched_at.elapsed() >= TTL))
         .collect();
     if stale.is_empty() {
         return cache;

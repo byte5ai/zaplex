@@ -3,7 +3,7 @@ use markdown_parser::{
 };
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::{phenomenon::PhenomenonStyle, Fill};
+use warp_core::ui::theme::{Fill, phenomenon::PhenomenonStyle};
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
     Align, CacheOption, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
@@ -24,8 +24,8 @@ use crate::view_components::action_button::{ActionButton, ActionButtonTheme, But
 const MODAL_WIDTH: f32 = 420.;
 const HERO_HEIGHT: f32 = 92.;
 const HERO_IMAGE_PATH: &str = "async/png/onboarding/zap_launch_banner.png";
-const REPO_URL: &str = "https://github.com/warpdotdev/warp";
-const CONTRIBUTING_URL: &str = "https://github.com/warpdotdev/warp/blob/master/CONTRIBUTING.md";
+const REPO_URL: &str = "https://github.com/byte5ai/zaplex";
+const CONTRIBUTING_URL: &str = "https://github.com/byte5ai/zaplex/blob/main/CONTRIBUTING.md";
 
 struct InlineLink {
     text: String,

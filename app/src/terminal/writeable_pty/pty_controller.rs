@@ -125,8 +125,21 @@ impl<T: EventLoopSender> PtyController<T> {
             }
             ModelEvent::Handler(AnsiHandlerEvent::InitShell {
                 pending_session_info,
+                suppress_bootstrap_write,
             }) => {
-                me.initialize_shell(pending_session_info.as_ref(), ctx);
+                // This `InitShell` came from a daemon-hosted session — the fresh
+                // open's live handshake or an adopt's re-fed preamble (T1.3). The
+                // daemon already delivered the complete bootstrap server-side, so
+                // writing the body here would run it a second time, visibly, in
+                // the live shell (and double-load fish/pwsh). Skip the write; a
+                // genuine `InitShell` from a non-daemon pane still initializes.
+                if *suppress_bootstrap_write {
+                    log::debug!(
+                        "PtyController: skipping bootstrap write for a daemon-hosted session"
+                    );
+                } else {
+                    me.initialize_shell(pending_session_info.as_ref(), ctx);
+                }
             }
             ModelEvent::Handler(AnsiHandlerEvent::Bootstrapped { is_subshell, .. }) => {
                 me.shell_bootstrapped(*is_subshell);

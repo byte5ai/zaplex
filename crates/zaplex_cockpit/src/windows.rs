@@ -1,10 +1,14 @@
 //! Time-window aggregation: ccusage-style rolling blocks (5h / 7d) + calendar
 //! "today", producing [`WindowTotals`] and reset times, plus heat.
 //!
-//! All functions are pure and take an explicit `now`, so window boundaries are
-//! deterministic and unit-testable without touching the clock.
+//! Functions take an explicit `now`, so window boundaries are deterministic and
+//! unit-testable without touching the clock. The one ambient input is the
+//! machine's time zone, which fixes the calendar-day boundary; it is injected
+//! into [`today_totals_in`] so that path stays testable against a fixed zone.
 
-use chrono::{DateTime, Duration, Timelike, Utc};
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Duration, Local, TimeZone, Timelike, Utc};
 
 use crate::pricing::PricingTable;
 use crate::types::{Account, AccountUsage, UsageEntry, WindowTotals};
@@ -80,18 +84,78 @@ fn current_window(
     }
 }
 
-/// Sum of entries whose timestamp is on the same UTC calendar day as `now`.
+/// Sum of entries falling on the same calendar day as `now` **in `tz`**.
+///
+/// The day boundary is the one the user sees on their own clock, not UTC:
+/// east of UTC, work done just after local midnight still carries the previous
+/// UTC date, and would otherwise be booked into yesterday's "today".
+/// Each instant is converted on its own, so the offset applied is the one in
+/// force at that instant. With a DST-aware zone (production passes [`Local`])
+/// the local day therefore stays correct across a transition; a `FixedOffset`,
+/// as the tests pass, is not DST-aware to begin with. UTC→local is always
+/// unambiguous, so this cannot panic even inside a repeated fall-back hour.
+fn today_totals_in<Tz: TimeZone>(
+    entries: &[UsageEntry],
+    now: DateTime<Utc>,
+    tz: &Tz,
+    pricing: &PricingTable,
+) -> WindowTotals {
+    let today = now.with_timezone(tz).date_naive();
+    let mut totals = WindowTotals::default();
+    for e in entries
+        .iter()
+        .filter(|e| e.ts.with_timezone(tz).date_naive() == today)
+    {
+        totals.add(e, pricing);
+    }
+    totals
+}
+
+/// Sum of entries on the machine's current local calendar day.
 fn today_totals(
     entries: &[UsageEntry],
     now: DateTime<Utc>,
     pricing: &PricingTable,
 ) -> WindowTotals {
-    let today = now.date_naive();
-    let mut totals = WindowTotals::default();
-    for e in entries.iter().filter(|e| e.ts.date_naive() == today) {
-        totals.add(e, pricing);
+    today_totals_in(entries, now, &Local, pricing)
+}
+
+/// The same day's spend, split by the session that incurred it.
+///
+/// Folds the identical entries [`today_totals_in`] does, under the identical day
+/// rule, and puts each on exactly one side — so the parts account for the whole
+/// rather than the whole being a second figure that could drift from the rows
+/// beneath it. Exactly, for the token counters. `cost_usd` is an `f64` and
+/// addition is not associative, so grouping the same summands per session can
+/// land a rounding step away from the sequential total; the tests assert the
+/// counters exactly and the cost within a tolerance for that reason.
+///
+/// Turns whose transcript names no session group under the empty id: still
+/// counted for the account, simply not attributable to a row.
+fn today_by_session_in<Tz: TimeZone>(
+    entries: &[UsageEntry],
+    now: DateTime<Utc>,
+    tz: &Tz,
+    pricing: &PricingTable,
+) -> BTreeMap<String, WindowTotals> {
+    let today = now.with_timezone(tz).date_naive();
+    let mut by_session: BTreeMap<String, WindowTotals> = BTreeMap::new();
+    for e in entries
+        .iter()
+        .filter(|e| e.ts.with_timezone(tz).date_naive() == today)
+    {
+        by_session.entry(e.session_id.clone()).or_default().add(e, pricing);
     }
-    totals
+    by_session
+}
+
+/// [`today_by_session_in`] on the machine's local calendar day.
+fn today_by_session(
+    entries: &[UsageEntry],
+    now: DateTime<Utc>,
+    pricing: &PricingTable,
+) -> BTreeMap<String, WindowTotals> {
+    today_by_session_in(entries, now, &Local, pricing)
 }
 
 /// Build the full per-account usage view (5h block / today / week + resets + heat).
@@ -108,6 +172,7 @@ pub fn build_account_usage(
     let (block5h, reset5h) = current_window(&entries, now, window_5h(), pricing);
     let (week, reset_week) = current_window(&entries, now, window_week(), pricing);
     let today = today_totals(&entries, now, pricing);
+    let today_by_session = today_by_session(&entries, now, pricing);
     let heat = if budget_5h > 0 {
         block5h.work as f64 / budget_5h as f64
     } else {
@@ -122,6 +187,7 @@ pub fn build_account_usage(
         account,
         block5h,
         today,
+        today_by_session,
         week,
         reset5h,
         reset_week,
@@ -131,6 +197,7 @@ pub fn build_account_usage(
         heat_opus: None,
         heat_sonnet: None,
         sessions: Vec::new(),
+        idle_sessions: Vec::new(),
         status: crate::types::AccountStatus::Offline,
         provenance: crate::types::UsageProvenance::Estimate,
     }
@@ -155,22 +222,37 @@ pub fn plan_budgets(plan_tier: Option<&str>) -> (u64, u64) {
 }
 
 /// Attaches live sessions to a built usage view and derives the account status.
+///
+/// "Live" asks for a session that is actually *there*, so a dormant one never
+/// counts. `sessions` is not supposed to carry [`SessionState::Idle`] at all
+/// (that is what [`AccountUsage::idle_sessions`] is for), but the rule is
+/// written to be total rather than to trust the invariant: a remote host folds
+/// any state string it does not recognise to `Idle`, and an account must not
+/// claim to be live on the strength of one of those.
 pub fn with_sessions(
     mut usage: AccountUsage,
     sessions: Vec<crate::types::SessionSnapshot>,
 ) -> AccountUsage {
     use crate::types::{AccountStatus, SessionState};
-    usage.status = if sessions
-        .iter()
-        .any(|s| s.state == SessionState::Active)
-    {
+    usage.status = if sessions.iter().any(|s| s.state == SessionState::Active) {
         AccountStatus::Working
-    } else if !sessions.is_empty() {
+    } else if sessions.iter().any(|s| s.state != SessionState::Idle) {
         AccountStatus::Live
     } else {
         AccountStatus::Offline
     };
     usage.sessions = sessions;
+    usage
+}
+
+/// Attaches the dormant, resumable sessions. Kept apart from [`with_sessions`]
+/// because they answer a different question — "what could I pick back up?"
+/// rather than "what is running?" — and must not colour the account's status.
+pub fn with_idle_sessions(
+    mut usage: AccountUsage,
+    idle: Vec<crate::types::SessionSnapshot>,
+) -> AccountUsage {
+    usage.idle_sessions = idle;
     usage
 }
 

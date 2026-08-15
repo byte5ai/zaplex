@@ -54,6 +54,10 @@ const BUTTON_TOOLTIP: &str = "Agent harness";
 /// Label rendered at the top of the dropdown.
 const MENU_HEADER_LABEL: &str = "Agent harness";
 
+/// Harnesses offered for new runs. Gemini remains readable in persisted run
+/// metadata but is not selectable now that its standalone CLI is retired.
+const SELECTABLE_HARNESSES: &[Harness] = &[Harness::Oz, Harness::Claude];
+
 /// Actions dispatched by the [`HarnessSelector`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum HarnessSelectorAction {
@@ -233,12 +237,9 @@ fn build_menu_items(
         )
     };
 
-    vec![
-        header,
-        item_for(Harness::Oz),
-        item_for(Harness::Claude),
-        item_for(Harness::Gemini),
-    ]
+    let mut items = vec![header];
+    items.extend(SELECTABLE_HARNESSES.iter().copied().map(item_for));
+    items
 }
 
 impl Entity for HarnessSelector {
@@ -282,3 +283,7 @@ impl View for HarnessSelector {
         stack.finish()
     }
 }
+
+#[cfg(test)]
+#[path = "harness_selector_tests.rs"]
+mod tests;

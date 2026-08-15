@@ -79,7 +79,10 @@ pub struct ZaplexifyBannerState {
 }
 
 impl ZaplexifyBannerState {
-    pub fn new(mode: ZaplexificationMode, initialize_zaplexify_keybinding: Option<Keystroke>) -> Self {
+    pub fn new(
+        mode: ZaplexificationMode,
+        initialize_zaplexify_keybinding: Option<Keystroke>,
+    ) -> Self {
         Self {
             mode,
             height: 0.0,

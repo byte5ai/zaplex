@@ -166,7 +166,8 @@ pub fn discover_accounts(home: &Path, config_dir_env: Option<&str>) -> Vec<Accou
 
 /// Extract a [`UsageEntry`] from one parsed transcript line, or `None` if the line
 /// is not an assistant turn with usage. Reads counts + model + timestamp only.
-fn parse_line(v: &Value) -> Option<UsageEntry> {
+/// `session_id` is supplied by the caller — see [`parse_transcript`].
+fn parse_line(v: &Value, session_id: &str) -> Option<UsageEntry> {
     if v.get("type")?.as_str()? != "assistant" {
         return None;
     }
@@ -194,33 +195,68 @@ fn parse_line(v: &Value) -> Option<UsageEntry> {
         cache_create: n("cache_creation_input_tokens"),
         cache_read: n("cache_read_input_tokens"),
         reasoning: 0,
+        session_id: session_id.to_string(),
     })
 }
 
 /// Parse a single Claude `.jsonl` transcript into usage entries (skips malformed lines).
+///
+/// Every entry is stamped with the session the transcript belongs to, taken from
+/// the **file name**. The lines carry a `sessionId` of their own and it agrees,
+/// but the stem is the id the rest of the crate keys on: `transcripts_by_id`
+/// indexes by it, and a session is only discovered when a transcript named after
+/// its registry id exists. Reading the id from the content could therefore
+/// attribute spend to an id no session row has.
 pub fn parse_transcript(path: &Path) -> Vec<UsageEntry> {
     let Ok(content) = fs::read_to_string(path) else {
         return Vec::new();
     };
+    let session_id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
     content
         .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter_map(|v| parse_line(&v))
+        .filter_map(|v| parse_line(&v, session_id))
         .collect()
 }
 
 /// All usage entries for an account with a transcript mtime at or after `since`
 /// (widest window cutoff). Walks `<config_dir>/projects/**/*.jsonl`.
-pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> Vec<UsageEntry> {
+///
+/// The returned bool is `true` when the directory walk hit an I/O error *other than*
+/// a missing `projects/` dir (a permission error on a subdir, etc.) — the usage totals
+/// may then be incomplete. Callers mark the snapshot degraded so a silently-truncated
+/// scan is not mistaken for "never used" (which would also look maximally free to the
+/// launcher's freest-account routing).
+pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> (Vec<UsageEntry>, bool) {
     let projects = account.config_dir.join("projects");
     let mut entries = Vec::new();
-    for file in WalkDir::new(&projects)
-        .into_iter()
-        .flatten()
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("jsonl"))
-    {
+    let mut io_error = false;
+    for result in WalkDir::new(&projects) {
+        let file = match result {
+            Ok(f) => f,
+            Err(e) => {
+                // A missing `projects/` ROOT (depth 0, NotFound) is the "account never
+                // used" case and fine. A NotFound below the root, or any other error
+                // (permission on a subdir, etc.), means the walk was truncated and the
+                // numbers may be incomplete.
+                let missing_root = e.depth() == 0
+                    && e.io_error().map(std::io::Error::kind)
+                        == Some(std::io::ErrorKind::NotFound);
+                if !missing_root {
+                    io_error = true;
+                }
+                continue;
+            }
+        };
+        if !file.file_type().is_file()
+            || file.path().extension().and_then(|x| x.to_str()) != Some("jsonl")
+        {
+            continue;
+        }
         // Cheap mtime prefilter: skip transcripts untouched since the cutoff.
         if let Ok(meta) = file.metadata() {
             if let Ok(modified) = meta.modified() {
@@ -236,7 +272,7 @@ pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> Vec<UsageEn
                 .filter(|e| e.ts >= since),
         );
     }
-    entries
+    (entries, io_error)
 }
 
 #[cfg(test)]

@@ -2562,10 +2562,7 @@ fn serialize_outgoing_tool_call(
                 Some(SkillReference::BundledSkillId(id)) => format!("@warp-skill:{id}"),
                 None => String::new(),
             };
-            (
-                "read_skill".to_owned(),
-                json!({ "name": name }).to_string(),
-            )
+            ("read_skill".to_owned(), json!({ "name": name }).to_string())
         }
         Some(Tool::ReadShellCommandOutput(r)) => {
             use api::message::tool_call::read_shell_command_output::Delay;
@@ -2889,7 +2886,10 @@ pub(super) fn build_client(
             &proxy_cfg.password,
             &proxy_cfg.no_proxy,
         ) {
-            log::warn!("[byop] proxy URL '{}' is invalid, skipping proxy config: {err}", proxy_cfg.url);
+            log::warn!(
+                "[byop] proxy URL '{}' is invalid, skipping proxy config: {err}",
+                proxy_cfg.url
+            );
         }
     }
     Client::builder()
@@ -4392,11 +4392,7 @@ fn sanitize_title(raw: &str) -> Option<String> {
     let mut s = first_line;
 
     // 3. Strip prefixes (in a loop, handling double prefixes like "Title: Title: foo").
-    let prefixes = [
-        "title:",
-        "subject:",
-        "thread:",
-    ];
+    let prefixes = ["title:", "subject:", "thread:"];
     loop {
         let lower = s.to_lowercase();
         let mut stripped = false;
@@ -5135,7 +5131,11 @@ mod assistant_buffer_tests {
         buf.reasoning = Some("planning".to_string());
         let mut msgs = Vec::new();
         buf.flush_into(&mut msgs);
-        assert_eq!(msgs.len(), 2, "text + tool_calls should flush into two messages");
+        assert_eq!(
+            msgs.len(),
+            2,
+            "text + tool_calls should flush into two messages"
+        );
         for m in &msgs {
             assert!(
                 reasoning_part(m).is_none(),
@@ -5519,7 +5519,11 @@ mod cache_boundary_stability_tests {
             } else {
                 CacheControl::Ephemeral5m
             };
-            assert_eq!(cc, expected, "role={:?} cache TTL does not match expected value", m.role);
+            assert_eq!(
+                cc, expected,
+                "role={:?} cache TTL does not match expected value",
+                m.role
+            );
         }
     }
 
@@ -5536,8 +5540,14 @@ mod cache_boundary_stability_tests {
             .map(|(i, _)| i)
             .collect();
         // Verify that system (idx=0) and the last 2 non-system (idx=4, idx=5) are all marked.
-        assert!(tagged_indices.contains(&0), "first system message was not marked");
-        assert!(tagged_indices.contains(&4), "second-to-last message was not marked");
+        assert!(
+            tagged_indices.contains(&0),
+            "first system message was not marked"
+        );
+        assert!(
+            tagged_indices.contains(&4),
+            "second-to-last message was not marked"
+        );
         assert!(tagged_indices.contains(&5), "last message was not marked");
         assert_eq!(
             tagged_indices.len(),
@@ -5722,7 +5732,10 @@ mod cache_boundary_stability_tests {
             opts.prompt_cache_key.is_none(),
             "empty conversation_id should skip prompt_cache_key"
         );
-        assert!(opts.cache_control.is_none(), "cache_control should never be sent");
+        assert!(
+            opts.cache_control.is_none(),
+            "cache_control should never be sent"
+        );
     }
 
     /// **The Anthropic path's build_chat_options does not send cache_control**
@@ -5904,7 +5917,12 @@ mod serializer_readiness_tests {
     }
 
     fn build_openai_request(params: &RequestParams) -> Result<ChatRequest, ConvertToAPITypeError> {
-        build_chat_request(params, false, AgentProviderApiType::OpenAi, attachment_caps::AttachmentCaps::default())
+        build_chat_request(
+            params,
+            false,
+            AgentProviderApiType::OpenAi,
+            attachment_caps::AttachmentCaps::default(),
+        )
     }
 
     fn assert_request_has_no_repair_placeholder(request: &ChatRequest) {
@@ -6878,7 +6896,11 @@ mod accepted_history_repair_tests {
         ];
         repair_messages(&mut msgs);
 
-        assert_eq!(msgs.len(), 3, "two adjacent Tool messages should merge into one");
+        assert_eq!(
+            msgs.len(),
+            3,
+            "two adjacent Tool messages should merge into one"
+        );
         assert_eq!(msgs[0].role, ChatRole::User);
         assert_eq!(msgs[1].role, ChatRole::Assistant);
         assert_eq!(msgs[2].role, ChatRole::Tool);
@@ -6941,7 +6963,11 @@ mod accepted_history_repair_tests {
         ];
         repair_messages(&mut msgs);
 
-        assert_eq!(msgs.len(), 3, "two adjacent Tool messages merge, orphan z is dropped");
+        assert_eq!(
+            msgs.len(),
+            3,
+            "two adjacent Tool messages merge, orphan z is dropped"
+        );
         let responses = responses_of(&msgs[2]);
         assert_eq!(
             responses,

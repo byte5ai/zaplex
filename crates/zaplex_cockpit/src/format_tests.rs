@@ -30,8 +30,10 @@ fn heat_fill_clamps_but_label_does_not() {
     assert_eq!(heat_fill(0.5), 0.5);
     assert_eq!(heat_fill(1.3), 1.0);
     assert_eq!(heat_fill(-0.2), 0.0);
-    assert_eq!(heat_pct_label(1.3), "130%");
-    assert_eq!(heat_pct_label(0.615), "62%");
+    // Number and unit are joined by a narrow no-break space (U+202F): typographic
+    // convention, and it keeps "130 %" from ever wrapping across a line.
+    assert_eq!(heat_pct_label(1.3), "130\u{202f}%");
+    assert_eq!(heat_pct_label(0.615), "62\u{202f}%");
 }
 
 #[test]
@@ -39,23 +41,24 @@ fn provenance_marks_estimates_only() {
     use crate::types::UsageProvenance;
     assert_eq!(
         heat_pct_label_with_provenance(0.62, UsageProvenance::Real),
-        "62%"
+        "62\u{202f}%"
     );
     assert_eq!(
         heat_pct_label_with_provenance(0.62, UsageProvenance::Estimate),
-        "~62%"
+        "~62\u{202f}%"
     );
     assert_eq!(
         heat_pct_label_with_provenance(1.3, UsageProvenance::Estimate),
-        "~130%"
+        "~130\u{202f}%"
     );
 }
 
 #[test]
 fn cost_format() {
-    assert_eq!(format_cost(4.2), "$4.20");
-    assert_eq!(format_cost(0.0), "$0.00");
-    assert_eq!(format_cost(19.005), "$19.00");
+    assert_eq!(format_cost(4.2), "~$4.20");
+    assert_eq!(format_cost(0.0), "~$0.00");
+    assert_eq!(format_cost(19.005), "~$19.00");
+    assert_eq!(format_cost(-1.0), "unpriced");
 }
 
 #[test]
@@ -101,4 +104,34 @@ fn model_family_shortens_or_passes_through() {
     assert_eq!(model_family("CLAUDE-SONNET-4-6"), "sonnet");
     assert_eq!(model_family("gpt-5-codex"), "gpt-5-codex");
     assert_eq!(model_family(""), "");
+}
+
+/// "Last" reads in the same units as "resets in" — a row and a meter should not
+/// speak two dialects of the same clock.
+#[test]
+fn relative_time_is_short_and_matches_the_reset_units() {
+    let now = DateTime::parse_from_rfc3339("2026-07-17T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let ago = |secs: i64| format_relative(now - chrono::Duration::seconds(secs), now);
+
+    assert_eq!(ago(5), "now", "under a minute is not worth a number");
+    assert_eq!(ago(59), "now");
+    assert_eq!(ago(60), "1m");
+    assert_eq!(ago(3599), "59m");
+    assert_eq!(ago(3600), "1h");
+    assert_eq!(ago(86_399), "23h");
+    assert_eq!(ago(86_400), "1d");
+    assert_eq!(ago(10 * 86_400), "10d");
+}
+
+/// A timestamp from the future means two clocks disagree — the host that wrote
+/// it and this one. That is not news to put in a row, so it reads as `now`
+/// rather than as a negative age.
+#[test]
+fn a_future_timestamp_reads_as_now_rather_than_negative() {
+    let now = DateTime::parse_from_rfc3339("2026-07-17T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    assert_eq!(format_relative(now + chrono::Duration::hours(3), now), "now");
 }

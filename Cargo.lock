@@ -11041,6 +11041,7 @@ dependencies = [
  "warp_core",
  "warp_util",
  "warpui",
+ "zaplex_remote_session",
 ]
 
 [[package]]
@@ -14663,7 +14664,7 @@ dependencies = [
 
 [[package]]
 name = "warp"
-version = "0.1.0"
+version = "1.0.2"
 dependencies = [
  "addr",
  "aho-corasick",
@@ -14882,6 +14883,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml 0.8.23",
+ "toml_edit 0.25.12+spec-1.1.0",
  "tracing",
  "typed-path 0.10.0",
  "ui_components",
@@ -14998,6 +15000,7 @@ name = "warp_cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "cfg-if",
  "cfg_aliases 0.2.1",
  "chrono",
@@ -15005,7 +15008,9 @@ dependencies = [
  "clap_complete",
  "color-print",
  "humantime",
+ "ipc",
  "jaq-all",
+ "serde",
  "serial_test",
  "url",
  "uuid",
@@ -17033,10 +17038,12 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "command",
  "libc",
  "log",
  "serde",
  "serde_json",
+ "sysinfo",
  "tempfile",
  "walkdir",
 ]

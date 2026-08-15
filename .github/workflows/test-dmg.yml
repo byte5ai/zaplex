@@ -6,11 +6,10 @@
 # test-dispatch.yml für Rust-Tests.
 #
 # Aufruf:  gh workflow run test-dmg.yml -R byte5ai/zaplex --ref <branch> \
-#            [-f arch=aarch64|x86_64] [-f dmg_tag=v0.daemontest]
+#            [-f dmg_tag=v1.0.2]
 #
-# Das .dmg ist ad-hoc-signiert (wie zap_release.yml, --selfsign) → beim ersten
-# Öffnen auf dem Mac einmal:  xattr -rd com.apple.quarantine /Applications/Zaplex.app
-# (bzw. das .dmg), siehe issue #51. Kein Developer-ID/Notarize im OSS-Channel.
+# Das .dmg wird mit Developer ID signiert, über App Store Connect notarisiert
+# und mit dem Notarisierungs-Ticket versehen.
 #
 # `dmg_tag` wird als GIT_RELEASE_TAG eingebrannt und bestimmt den remote-server-
 # Pfad, den der Client auf dem Ziel-Host prüft: ~/.zaplex/remote-server/zaplex-<tag>.
@@ -23,30 +22,65 @@
 
 name: Test DMG
 
+# ci-lint: allow-CI008  Manual workflow_dispatch only; path filters do not apply.
 on:
   workflow_dispatch:
     inputs:
-      arch:
-        description: "macOS-Architektur (aarch64 = Apple Silicon, x86_64 = Intel)"
-        type: choice
-        default: aarch64
-        options:
-          - aarch64
-          - x86_64
       dmg_tag:
         description: "GIT_RELEASE_TAG (bestimmt den remote-server-Pfad auf dem Ziel-Host)"
         type: string
-        default: v0.daemontest
+        default: v1.0.2
       fast:
-        description: "Schnell bauen (Debug-Profil: Minuten statt ~Stunde). Für Funktionstests. Aus = release-lto (langsam, optimiert)."
+        description: "Nur für schnelle Entwicklerprüfung: Debug-Profil statt release-lto. Für ein Abnahme-DMG ausgeschaltet lassen."
         type: boolean
-        default: true
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
   CHANNEL: oss
 
 jobs:
+  readiness:
+    name: Verify Phase A release readiness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Phase A verifies ancestry from the recorded V1 base commit.
+          fetch-depth: 0
+
+      - name: Verify release version and Phase A readiness
+        run: |
+          EXPECTED_TAG="v$(tr -d '[:space:]' < VERSION)"
+          if [[ "${{ inputs.dmg_tag }}" != "$EXPECTED_TAG" ]]; then
+            echo "DMG tag '${{ inputs.dmg_tag }}' does not match VERSION ('$EXPECTED_TAG')." >&2
+            exit 1
+          fi
+          script/check-v1-release-readiness --phase-a
+        shell: bash
+
+  signing_preflight:
+    name: Validate macOS signing identity
+    # macOS is required for Keychain, codesign and notarytool validation.
+    runs-on: macos-26
+    needs: readiness
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Validate Developer ID signing inputs
+        run: |
+          script/macos/bundle --channel "$CHANNEL" --arch aarch64 \
+            --read-passwords-from-env --check-signing-only
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
+
   # Linux remote-server tarball, bundled INTO the DMG (install ladder rung 3a):
   # first connect to a Linux x86_64 host auto-installs the persistent-session
   # daemon fully offline, version-matched to the client by construction (same
@@ -60,22 +94,21 @@ jobs:
     # here; the large Blacksmith runner is used precisely to speed up heavy builds.
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 180
+    needs: signing_preflight
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # Build the daemon ONCE and reuse it. `crates/remote_server` does NOT depend
-      # on the client GUI (`app/**`), so UI-only iterations leave its compile inputs
-      # unchanged → this cache hits and the whole ~30-40min build below is skipped
-      # (only the tarball is restored + re-uploaded). Keyed by the daemon's inputs
-      # (Cargo.lock + every workspace crate + toolchain + the bundle script) and the
-      # release tag (baked into the binary): a change to any of them rebuilds and
-      # re-caches, so it never serves a stale daemon.
+      # Build the daemon ONCE and reuse it. The CLI target belongs to the `warp`
+      # package, so both app/** and crates/** are compilation inputs. Resources
+      # and their staging scripts are included because the cached artifact is
+      # bundled into the app. The release tag is baked into the binary. Any
+      # relevant change therefore rebuilds the daemon instead of serving stale code.
       - name: Restore cached remote-server tarball
         id: daemon_cache
         uses: actions/cache@v4
         with:
           path: zap-linux-x86_64.tar.gz
-          key: remote-server-musl-x86_64-${{ inputs.dmg_tag }}-${{ hashFiles('Cargo.lock', 'crates/**', 'rust-toolchain.toml', 'script/bundle') }}
+          key: remote-server-musl-x86_64-${{ inputs.dmg_tag }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources') }}
 
       - name: Free up disk space
         if: steps.daemon_cache.outputs.cache-hit != 'true'
@@ -143,8 +176,9 @@ jobs:
           retention-days: 7
 
   build_dmg:
-    name: Build Test DMG (macOS ${{ inputs.arch }})
-    runs-on: ${{ inputs.arch == 'x86_64' && 'macos-26-intel' || 'macos-26' }}
+    name: Build Test DMG (macOS Apple Silicon)
+    # GitHub's pinned macOS 26 image provisions Xcode's optional Metal toolchain.
+    runs-on: macos-26
     timeout-minutes: 360
     needs: build_remote_server
     steps:
@@ -162,12 +196,12 @@ jobs:
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
-          cache_key: macos-${{ inputs.arch }}
+          cache_key: macos-aarch64
           is_self_hosted: false
           install_release_deps: true
 
       - name: Ensure rust target is installed
-        run: rustup target add ${{ inputs.arch }}-apple-darwin
+        run: rustup target add aarch64-apple-darwin
         shell: bash
 
       - name: Setup Go
@@ -181,22 +215,26 @@ jobs:
       - name: Install create-dmg
         run: brew install create-dmg
 
-      # --selfsign = ad-hoc-Signatur (kein Developer-ID-Cert nötig), identisch zu
-      # zap_release.yml. dmg_name_suffix nur fürs Dateinaming.
-      - name: Build ${{ inputs.arch }} bundle (ad-hoc signed)
+      - name: Build, sign and notarize aarch64 bundle
         id: bundle_app
         run: |
-          script/bundle --channel "$CHANNEL" --arch ${{ inputs.arch }} \
-            --dmg-name-suffix "${{ inputs.arch == 'x86_64' && 'intel' || 'arm64' }}" --selfsign \
+          script/bundle --channel "$CHANNEL" --arch aarch64 \
+            --dmg-name-suffix arm64 \
+            --read-passwords-from-env \
             ${{ inputs.fast && '--debug' || '' }}
         shell: bash
         env:
           GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: zap-test-dmg-${{ inputs.arch }}
+          name: zap-test-dmg-aarch64
           path: ${{ steps.bundle_app.outputs.dmg_path }}
           if-no-files-found: error
           retention-days: 7

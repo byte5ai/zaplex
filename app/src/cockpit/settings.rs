@@ -1,9 +1,31 @@
 //! Scalar policy settings for the cockpit. Accounts are *discovered*, not
 //! configured, so no list settings live here (per the Increment 1 design §7).
 
+use serde::{Deserialize, Serialize};
 use settings::{
     macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
 };
+
+/// Controls how a persisted CLI-agent binding is handled when its pane is restored.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(rename_all = "snake_case")]
+pub enum CockpitContinuationMode {
+    Off,
+    #[default]
+    Prompt,
+    Auto,
+}
 
 define_settings_group!(CockpitSettings,
     settings: [
@@ -46,6 +68,16 @@ define_settings_group!(CockpitSettings,
             storage_key: "CockpitOauthUsage",
             toml_path: "cockpit.oauth_usage",
             description: "Show real Claude subscription utilization from the account's own OAuth usage endpoint (read-only; off = transcript-based estimates only, no requests).",
+        },
+        continuation_mode: CockpitContinuationModeSetting {
+            type: CockpitContinuationMode,
+            default: CockpitContinuationMode::Prompt,
+            supported_platforms: SupportedPlatforms::DESKTOP,
+            sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+            private: false,
+            storage_key: "CockpitContinuationMode",
+            toml_path: "cockpit.continuation_mode",
+            description: "How restored CLI-agent panes continue: off keeps a shell, prompt shows a one-click banner, and auto resumes through the same identity-bound path.",
         },
         attention_dnd: CockpitAttentionDnd {
             type: bool,

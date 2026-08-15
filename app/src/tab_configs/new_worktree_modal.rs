@@ -4,9 +4,9 @@ use warpui::{
     elements::{
         Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element,
         Fill as ElementFill, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, Padding,
-        ParentElement, Radius, Shrinkable, Text,
+        ParentElement, Radius, Text,
     },
-    fonts::{Properties, Weight},
+    fonts::Weight,
     keymap::FixedBinding,
     platform::Cursor,
     ui_components::{
@@ -27,8 +27,6 @@ pub fn init(app: &mut AppContext) {
     )]);
 }
 
-use warp_core::ui::theme::color::internal_colors;
-
 use crate::{
     appearance::Appearance,
     editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions},
@@ -37,6 +35,7 @@ use crate::{
         branch_picker::BranchPicker,
         repo_picker::{RepoPicker, RepoPickerEvent},
     },
+    ui_components::modal_frame,
 };
 
 /// Gap between sections in the modal body (repo picker, branch picker, checkbox).
@@ -49,7 +48,6 @@ const CONTENT_HORIZONTAL_PADDING: f32 = 24.;
 const HEADER_PADDING_TOP: f32 = 24.;
 /// Header bottom padding (Figma: pb-12).
 const HEADER_PADDING_BOTTOM: f32 = 12.;
-/// Header title font size (Figma: 16px bold).
 /// Bottom padding of the form area above the footer.
 const BODY_BOTTOM_PADDING: f32 = 16.;
 /// Vertical padding of the footer bar.
@@ -64,15 +62,8 @@ const FOOTER_BUTTON_HORIZONTAL_PADDING: f32 = 12.;
 const FOOTER_BUTTON_GAP: f32 = 8.;
 /// Corner radius for footer buttons (Figma: rounded-4).
 const FOOTER_BUTTON_RADIUS: Radius = Radius::Pixels(4.);
-/// Size of the ESC keyboard shortcut badge (Figma: 14px tall, 10px font).
-const ESC_BADGE_HEIGHT: f32 = 14.;
-const ESC_BADGE_CORNER_RADIUS: Radius = Radius::Pixels(3.);
 /// Size of the close (X) icon in the header.
 const CLOSE_ICON_SIZE: f32 = 14.;
-/// Font size for inline validation error messages.
-/// Error shown when the user-entered worktree branch name contains invalid characters.
-const INVALID_BRANCH_NAME_ERROR: &str =
-    "Name can only contain letters, numbers, hyphens, and underscores";
 
 /// Returns `true` if `name` is a valid worktree branch name.
 ///
@@ -184,7 +175,7 @@ impl NewWorktreeModal {
         let editor = ctx.add_typed_action_view(|ctx| {
             let options = SingleLineEditorOptions::default();
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("my-feature-branch", ctx);
+            editor.set_placeholder_text(crate::t!("new-worktree-name-placeholder"), ctx);
             editor
         });
         ctx.subscribe_to_view(&editor, |me, _, event, ctx| match event {
@@ -319,40 +310,9 @@ impl View for NewWorktreeModal {
             && !is_valid_worktree_branch_name(&worktree_name_text);
         let can_submit = has_repo && has_branch && worktree_name_valid;
 
-        // ── Header (custom — Modal wrapper has no title) ────────────────
+        // ── Header (the one shared modal header: title · close ✕) ────────
         let header = {
-            let title = Text::new_inline(
-                "New worktree".to_string(),
-                appearance.ui_font_family(),
-                appearance.ui_font_heading_3(),
-            )
-            .with_color(theme.active_ui_text_color().into())
-            .with_style(Properties::default().weight(Weight::Bold))
-            .finish();
-
-            // ESC keyboard shortcut badge (matches Figma keyboardBase component)
-            let esc_badge = {
-                let badge_bg = internal_colors::neutral_2(theme);
-                let badge_text = Text::new_inline(
-                    "ESC".to_string(),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_overline(),
-                )
-                .with_color(theme.foreground().into())
-                .finish();
-
-                Container::new(
-                    ConstrainedBox::new(badge_text)
-                        .with_height(ESC_BADGE_HEIGHT)
-                        .finish(),
-                )
-                .with_horizontal_padding(2.)
-                .with_background(badge_bg)
-                .with_corner_radius(CornerRadius::with_all(ESC_BADGE_CORNER_RADIUS))
-                .finish()
-            };
-
-            // X close icon
+            // X close icon — dispatches the wrapping Modal's Close action.
             let close_icon = ConstrainedBox::new(
                 warp_core::ui::Icon::X
                     .to_warpui_icon(theme.sub_text_color(theme.background()))
@@ -362,16 +322,9 @@ impl View for NewWorktreeModal {
             .with_height(CLOSE_ICON_SIZE)
             .finish();
 
-            let close_button = Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(2.)
-                .with_child(close_icon)
-                .with_child(esc_badge)
-                .finish();
-
-            let close_hoverable = warpui::elements::Hoverable::new(
+            let close = warpui::elements::Hoverable::new(
                 self.close_button_mouse_state.clone(),
-                move |_state| close_button,
+                move |_state| close_icon,
             )
             .on_click(|ctx, _, _| {
                 ctx.dispatch_typed_action(ModalAction::Close);
@@ -379,15 +332,12 @@ impl View for NewWorktreeModal {
             .with_cursor(Cursor::PointingHand)
             .finish();
 
-            Container::new(
-                Flex::row()
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(Shrinkable::new(1., title).finish())
-                    .with_child(close_hoverable)
-                    .finish(),
-            )
+            Container::new(modal_frame::modal_header(
+                crate::t!("new-worktree-title"),
+                None,
+                close,
+                appearance,
+            ))
             .with_padding(
                 Padding::uniform(0.)
                     .with_top(HEADER_PADDING_TOP)
@@ -404,14 +354,20 @@ impl View for NewWorktreeModal {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         // Repo picker
-        body.add_child(Self::render_section_label("Select repository", appearance));
+        body.add_child(Self::render_section_label(
+            &crate::t!("new-worktree-select-repo"),
+            appearance,
+        ));
         body.add_child(ChildView::new(&self.repo_picker).finish());
 
         // Branch picker (with gap)
         body.add_child(
-            Container::new(Self::render_section_label("Select branch", appearance))
-                .with_margin_top(SECTION_GAP)
-                .finish(),
+            Container::new(Self::render_section_label(
+                &crate::t!("new-worktree-select-branch"),
+                appearance,
+            ))
+            .with_margin_top(SECTION_GAP)
+            .finish(),
         );
         body.add_child(ChildView::new(&self.branch_picker).finish());
 
@@ -461,7 +417,7 @@ impl View for NewWorktreeModal {
             .with_child(checkbox_element)
             .with_child(
                 Text::new_inline(
-                    "Autogenerate worktree branch name".to_string(),
+                    crate::t!("new-worktree-autogenerate"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -480,7 +436,7 @@ impl View for NewWorktreeModal {
         if !self.autogenerate_branch_name {
             body.add_child(
                 Container::new(Self::render_section_label(
-                    "Worktree branch name",
+                    &crate::t!("new-worktree-name-label"),
                     appearance,
                 ))
                 .with_margin_top(SECTION_GAP)
@@ -492,7 +448,7 @@ impl View for NewWorktreeModal {
                 body.add_child(
                     Container::new(
                         Text::new_inline(
-                            INVALID_BRANCH_NAME_ERROR.to_string(),
+                            crate::t!("new-worktree-invalid-name"),
                             appearance.ui_font_family(),
                             appearance.ui_font_body(),
                         )

@@ -182,8 +182,8 @@ runs:
     # without it `xcrun metal` is missing and crates/warpui/build.rs fails to
     # compile the .metal shaders ("cannot execute tool 'metal' due to missing
     # Metal Toolchain"). Must run AFTER setup-xcode so it targets the selected
-    # Xcode. `script/macos/install_build_deps` runs `xcodebuild -downloadComponent
-    # MetalToolchain`.
+    # Xcode. `script/macos/install_build_deps` completes first-launch setup,
+    # downloads the component, and verifies that `xcrun` can resolve `metal`.
     - name: Install macOS build deps (Metal toolchain)
       if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
       shell: bash

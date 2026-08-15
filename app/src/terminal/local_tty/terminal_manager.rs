@@ -28,6 +28,7 @@ use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::banner::BannerState;
 use crate::context_chips::current_prompt::CurrentPrompt;
 use crate::context_chips::prompt_type::PromptType;
+use crate::control_surface::ControlPtyContext;
 use crate::features::FeatureFlag;
 use crate::pane_group::TerminalViewResources;
 use crate::persistence::ModelEvent;
@@ -174,6 +175,10 @@ impl TerminalManager {
         initial_input_config: Option<InputConfig>,
         ctx: &mut AppContext,
     ) -> ModelHandle<Box<dyn crate::terminal::TerminalManager>> {
+        let mut control_context = ControlPtyContext::new(resources.control_tab_id.clone());
+        let mut env_vars = env_vars;
+        control_context.inject_env(&mut env_vars);
+
         // Create all the necessary channels we need for communication.
         let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
         let (events_tx, events_rx) = async_channel::unbounded();
@@ -288,6 +293,7 @@ impl TerminalManager {
             let size_info = cloned_model.lock().block_list().size().to_owned();
             TerminalView::new(
                 resources,
+                Some(control_context),
                 wakeups_rx,
                 model_events.clone(),
                 cloned_model,

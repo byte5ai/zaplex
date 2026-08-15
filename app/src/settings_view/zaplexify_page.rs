@@ -536,10 +536,9 @@ impl TitleWidget {
         // No "Learn more" link yet: there is no Zaplexify docs page, and an empty
         // href renders a broken/no-op hyperlink. The description stands alone as a
         // complete sentence; restore the link once a real docs URL exists.
-        let zaplexify_description =
-            vec![FormattedTextFragment::plain_text(crate::t!(
-                "settings-zaplexify-description-prefix"
-            ))];
+        let zaplexify_description = vec![FormattedTextFragment::plain_text(crate::t!(
+            "settings-zaplexify-description-prefix"
+        ))];
 
         let zaplexify_description = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(zaplexify_description)]),
@@ -697,7 +696,9 @@ impl SettingsWidget for SSHWidget {
                         .check(enable_ssh_zaplexification)
                         .build()
                         .on_click(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(ZaplexifyPageAction::ToggleSshZaplexification);
+                            ctx.dispatch_typed_action(
+                                ZaplexifyPageAction::ToggleSshZaplexification,
+                            );
                         })
                         .finish(),
                     None,
@@ -748,9 +749,8 @@ impl SettingsWidget for SSHWidget {
                     crate::t!("settings-zaplexify-use-tmux"),
                     Some(AdditionalInfo {
                         mouse_state: self.additional_info_mouse_state.clone(),
-                        on_click_action: Some(ZaplexifyPageAction::OpenUrl(
-                            "".into(),
-                        )),
+                        // No Zaplex docs destination yet; keep the setting, drop the dead docs link.
+                        on_click_action: None,
                         secondary_text: None,
                         tooltip_override_text: None,
                     }),
@@ -772,7 +772,9 @@ impl SettingsWidget for SSHWidget {
                                 return;
                             }
 
-                            ctx.dispatch_typed_action(ZaplexifyPageAction::ToggleTmuxZaplexification);
+                            ctx.dispatch_typed_action(
+                                ZaplexifyPageAction::ToggleTmuxZaplexification,
+                            );
                         })
                         .finish(),
                     None,

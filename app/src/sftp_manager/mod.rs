@@ -14,7 +14,9 @@ pub mod fm_registry;
 pub mod keynav;
 pub mod sftp_backend;
 pub mod sftp_ops;
+pub mod transfer_job;
 pub mod transfer_panel;
+pub mod transfer_queue;
 pub mod types;
 
 #[cfg(test)]

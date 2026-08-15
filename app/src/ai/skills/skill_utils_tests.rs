@@ -131,7 +131,11 @@ fn test_unique_skills_keeps_same_provider_skills_from_different_dirs() {
     let skill_paths = vec![(home_dir, home_path.clone()), (project_dir, project_path)];
 
     let result = unique_skills(&skill_paths, &skills_by_path);
-    assert_eq!(result.len(), 2, "same name + same provider across directories should each be retained");
+    assert_eq!(
+        result.len(),
+        2,
+        "same name + same provider across directories should each be retained"
+    );
     assert!(
         result
             .iter()

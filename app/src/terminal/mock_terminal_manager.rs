@@ -62,6 +62,7 @@ impl MockTerminalManager {
             let size_info = cloned_model.lock().block_list().size().to_owned();
             TerminalView::new(
                 resources,
+                None,
                 wakeups_rx,
                 model_events_dispatcher.clone(),
                 cloned_model,
@@ -167,6 +168,7 @@ mod testing {
                 let resources = TerminalViewResources {
                     tips_completed: tips_model,
                     model_event_sender: None,
+                    control_tab_id: "test-tab".to_string(),
                 };
                 let terminal_manager = MockTerminalManager::create_model(
                     ShellLaunchState::ShellSpawned {

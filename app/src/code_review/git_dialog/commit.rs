@@ -61,9 +61,6 @@ pub enum CommitSubAction {
 }
 
 const EDITOR_MIN_HEIGHT: f32 = 72.;
-/// Loading-state label while the commit / chain runs. Static because the shared
-/// button API currently stores borrowed labels.
-const LOADING_LABEL: &str = "Committing\u{2026}";
 pub struct CommitState {
     intent: CommitIntent,
     include_unstaged: bool,
@@ -95,9 +92,12 @@ pub(super) fn new_state(
     // whether or not the branch already has an upstream — but the label
     // and icon flip to communicate the user-visible difference.
     let (push_label, push_icon) = if has_upstream {
-        ("Commit and push", Icon::ArrowUp)
+        (crate::t!("git-dialog-commit-and-push"), Icon::ArrowUp)
     } else {
-        ("Commit and publish", Icon::UploadCloud)
+        (
+            crate::t!("git-dialog-commit-and-publish"),
+            Icon::UploadCloud,
+        )
     };
     // If AI autogen is on, the dialog opens with "Generating\u{2026}" and a
     // background request fills the editor when it resolves. Otherwise, we
@@ -222,9 +222,9 @@ pub(super) fn is_ready_to_confirm(state: &CommitState, app: &AppContext) -> bool
 
 /// Returns a tooltip to show on the disabled Confirm button when the
 /// user needs to take action, or `None` when no tooltip is needed.
-pub(super) fn confirm_tooltip(state: &CommitState, app: &AppContext) -> Option<&'static str> {
+pub(super) fn confirm_tooltip(state: &CommitState, app: &AppContext) -> Option<String> {
     if !state.file_changes.is_empty() && commit_message(state, app).is_none() {
-        Some("Enter a commit message")
+        Some(crate::t!("git-dialog-commit-need-message"))
     } else {
         None
     }
@@ -281,7 +281,7 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
     let repo_path = me.repo_path().clone();
     let branch_name = me.branch_name().to_string();
 
-    me.set_loading(LOADING_LABEL, ctx);
+    me.set_loading(crate::t!("git-dialog-loading-commit"), ctx);
 
     // Lock the commit message editor while the async op is in flight.
     message_editor.update(ctx, |editor, ctx| {
@@ -312,10 +312,10 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
         move |_me, result, ctx| {
             match result {
                 Ok(CommitOutcome::Committed) => {
-                    show_toast("Changes successfully committed.", ctx);
+                    show_toast(crate::t!("git-dialog-toast-committed"), ctx);
                 }
                 Ok(CommitOutcome::Pushed) => {
-                    show_toast("Changes committed and pushed.", ctx);
+                    show_toast(crate::t!("git-dialog-toast-committed-pushed"), ctx);
                 }
                 Ok(CommitOutcome::PrCreated(pr)) => {
                     show_pr_created_toast(&pr, ctx);
@@ -432,7 +432,7 @@ fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<d
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
 
     let changes_label = Text::new(
-        "Changes",
+        crate::t!("git-dialog-changes-label"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -440,7 +440,7 @@ fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<d
     .finish();
 
     let include_label = Text::new(
-        "Include unstaged",
+        crate::t!("git-dialog-include-unstaged"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )

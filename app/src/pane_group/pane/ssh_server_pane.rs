@@ -40,6 +40,13 @@ impl SshServerPane {
             node_id,
         }
     }
+
+    /// The SSH-registry node id this editor pane is for — lets the workspace
+    /// dedup (focus an existing editor for the same host instead of splitting a
+    /// duplicate).
+    pub fn node_id(&self) -> &str {
+        &self.node_id
+    }
 }
 
 impl PaneContent for SshServerPane {

@@ -149,6 +149,7 @@ impl NotificationsModel {
                         CLIAgent::Codex => "Notification from Codex",
                         CLIAgent::DeepSeek => "Notification from DeepSeek",
                         CLIAgent::Antigravity => "Notification from Antigravity",
+                        CLIAgent::Grok => "Notification from Grok",
                         _ => "Task completed.",
                     };
                     self.add_notification(

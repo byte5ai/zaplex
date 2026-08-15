@@ -19,7 +19,7 @@
 
 use crate::ai::agent_providers::active_ai::parsing::strip_code_fence;
 use serde::Deserialize;
-use zaplex_cockpit::{AccountUsage, Provider};
+use zaplex_cockpit::{AccountUsage, CockpitSnapshot, Provider};
 
 /// A drafted issue awaiting the user's review before `gh issue create`
 /// (Quick-Issue flow). The instance proposes; the user disposes.
@@ -82,11 +82,13 @@ pub struct PrReviewVerdict {
 /// routing engine (`pick_freest` already deprioritizes working/over-budget
 /// accounts) — kept as its own name so call sites read as intent, and so the
 /// selection policy for analyses can diverge later without touching launch.
-pub fn pick_analysis_instance<'a>(
+pub fn pick_analysis_instance(
     provider: Provider,
-    accounts: &'a [AccountUsage],
-) -> Option<&'a AccountUsage> {
-    zaplex_cockpit::pick_freest(provider, accounts)
+    snapshot: &CockpitSnapshot,
+) -> Option<&AccountUsage> {
+    // Guarded pick: never route a background analysis onto an account whose usage
+    // failed to load (it looks maximally free) or a snapshot still loading.
+    zaplex_cockpit::pick_freest_checked(provider, snapshot)
 }
 
 /// Parse an instance's Quick-Issue output into an [`IssueDraft`]. Fault-tolerant:

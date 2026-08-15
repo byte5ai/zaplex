@@ -100,7 +100,9 @@ impl PluginInstructionsBlock {
 
         let step_number = render_step_number(index + 1, appearance);
 
-        let desc_element: Box<dyn Element> = if let Some(url) = link {
+        // Only render "Learn more" when the plugin actually provides a destination;
+        // an empty link would open an empty URL.
+        let desc_element: Box<dyn Element> = if let Some(url) = link.filter(|u| !u.is_empty()) {
             let fragments = vec![
                 FormattedTextFragment::plain_text(format!("{description} ")),
                 FormattedTextFragment::hyperlink(crate::t!("common-learn-more"), url),
@@ -114,7 +116,9 @@ impl PluginInstructionsBlock {
                 theme.nonactive_ui_text_color().into_solid(),
                 Default::default(),
             )
-            .with_heading_to_font_size_multipliers(appearance.heading_font_size_multipliers().clone())
+            .with_heading_to_font_size_multipliers(
+                appearance.heading_font_size_multipliers().clone(),
+            )
             .with_hyperlink_font_color(theme.accent().into())
             .register_default_click_handlers_with_action_support(|hyperlink, _evt, app| {
                 if let HyperlinkLens::Url(url) = hyperlink {

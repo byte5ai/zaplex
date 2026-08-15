@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>UI-Spezifikation — Bestehende tmux-/byobu-Sessions übernehmen</title>
+  <meta name="ui-spec-route" content="/native/ssh-manager">
+  <meta name="ui-spec-viewports" content="960x760,760x700">
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --bg: #111318;
+      --panel: #191c22;
+      --row: #20242c;
+      --hover: #272c35;
+      --border: #303641;
+      --text: #eef1f6;
+      --muted: #9aa3b2;
+      --faint: #687181;
+      --accent: #8b7cf6;
+      --accent-soft: #8b7cf621;
+      --success: #53c88f;
+      --warning: #e0aa55;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; color: var(--text); background: #0b0d10; }
+    #spec, .viewport {
+      max-width: 920px;
+      margin: 0 auto 22px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+    }
+    #spec { padding: 16px 18px; }
+    h1 { margin: 0 0 12px; font-size: 18px; }
+    .spec-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    h2 { margin: 0 0 5px; color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    ul { margin: 0; padding-left: 15px; color: var(--muted); font-size: 11px; }
+    .viewport { overflow: hidden; box-shadow: 0 18px 55px #0008; }
+    .viewport-label { padding: 7px 12px; border-bottom: 1px solid var(--border); color: var(--faint); font-size: 11px; }
+    .app { min-height: 620px; display: grid; grid-template-columns: 370px 1fr; background: var(--bg); }
+    .sidebar { border-right: 1px solid var(--border); background: var(--panel); }
+    .sidebar-head {
+      height: 45px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sidebar-head strong { font-size: 12px; }
+    .icon-button { color: var(--muted); }
+    .tree { padding: 9px 7px; }
+    .host {
+      display: flex;
+      min-height: 32px;
+      align-items: center;
+      gap: 7px;
+      padding: 0 8px;
+      border-radius: 5px;
+      background: var(--hover);
+    }
+    .host strong { min-width: 0; flex: 1; font-size: 12px; }
+    .host small { color: var(--muted); }
+    .section {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 28px;
+      padding: 6px 9px 2px 36px;
+      color: var(--faint);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    .section span:first-child { flex: 1; }
+    .section .count {
+      padding: 1px 5px;
+      border-radius: 9px;
+      color: var(--muted);
+      background: var(--row);
+      font-weight: 500;
+    }
+    .session {
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr) auto;
+      min-height: 36px;
+      align-items: center;
+      gap: 7px;
+      padding: 0 8px 0 49px;
+      border-radius: 5px;
+    }
+    .session:hover { background: var(--row); }
+    .session .title { min-width: 0; }
+    .session .title strong {
+      display: block;
+      overflow: hidden;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 500;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .session .title small { display: block; color: var(--faint); font-size: 10px; }
+    .native-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+    .multiplexer-badge {
+      display: grid;
+      width: 16px;
+      height: 16px;
+      place-items: center;
+      border: 1px solid #4a5260;
+      border-radius: 4px;
+      color: var(--muted);
+      font: 8px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .attach {
+      display: grid;
+      width: 20px;
+      height: 20px;
+      padding: 0;
+      place-items: center;
+      border: 0;
+      border-radius: 5px;
+      color: var(--muted);
+      background: transparent;
+    }
+    .attach:hover { color: #ddd9ff; background: var(--accent-soft); }
+    .attach svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
+    .hint {
+      margin: 8px 8px 4px 36px;
+      padding: 8px 9px;
+      border-left: 2px solid var(--accent);
+      color: var(--muted);
+      background: #20242c;
+      font-size: 10px;
+    }
+    .hint strong { color: var(--text); font-weight: 550; }
+    .failure {
+      margin: 5px 8px 4px 49px;
+      padding: 7px 9px;
+      border-radius: 5px;
+      color: #e6bd76;
+      background: #392e1f;
+      font-size: 10px;
+    }
+    .content { padding: 34px; color: var(--muted); }
+    .content h3 { margin: 0 0 8px; color: var(--text); font-size: 16px; }
+    .content p { max-width: 430px; }
+    .flow {
+      display: grid;
+      grid-template-columns: auto 22px auto 22px auto;
+      align-items: center;
+      margin-top: 24px;
+      color: var(--faint);
+      font-size: 10px;
+    }
+    .flow span {
+      min-height: 54px;
+      display: grid;
+      place-items: center;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      text-align: center;
+    }
+    .flow b { color: var(--accent); text-align: center; }
+    body:has(.viewport:target) #spec,
+    body:has(.viewport:target) .viewport:not(:target) { display: none; }
+    .viewport:target { width: 100%; margin: 0; }
+    @media (max-width: 780px) {
+      body { padding: 8px; }
+      .spec-grid { grid-template-columns: 1fr 1fr; }
+      .app { grid-template-columns: 350px 1fr; }
+      .content { padding: 24px; }
+      .flow { grid-template-columns: 1fr; gap: 6px; }
+      .flow b { transform: rotate(90deg); }
+    }
+  </style>
+</head>
+<body>
+  <section id="spec">
+    <h1>UI-Spezifikation — Bestehende tmux-/byobu-Sessions übernehmen</h1>
+    <div class="spec-grid">
+      <div>
+        <h2>Platzierung</h2>
+        <ul>
+          <li>Pro verbundenem Host unter den nativen Zaplex-Sessions.</li>
+          <li>Eigener Abschnitt „Bestehende tmux-/byobu-Sessions“; keine Vermischung der Persistenzmodelle.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Aktion</h2>
+        <ul>
+          <li>Ein festes Terminal-Icon bleibt pro Zeile sichtbar und tastaturerreichbar; der lokalisierte Tooltip lautet „In neuem Tab öffnen“.</li>
+          <li>Der Sessionname erhält die flexible Breite; die Aktion verdrängt ihn nicht mit wiederholtem Text.</li>
+          <li>Öffnet eine klassische SSH-Session mit <code>ZAPLEX_SESSION=1</code> und exakt adressiertem Ziel.</li>
+          <li>Nie innerhalb einer bereits laufenden Zaplex-Session verschachteln.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Zustände</h2>
+        <ul>
+          <li>Liste zeigt Name, Multiplexer-Typ sowie Fenster-/Clientzahl, sofern gemeldet.</li>
+          <li>Kein tmux/byobu installiert oder keine Session: Abschnitt bleibt verborgen.</li>
+          <li>Scan-/Attach-Fehler bleiben sichtbar und werden nicht als leere Liste dargestellt.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Abnahme</h2>
+        <ul>
+          <li>Erkennung läuft über den bestehenden authentifizierten Hostkanal, nie über lokales Shell-Raten.</li>
+          <li>Sessionnamen werden als Daten übergeben, nicht in Shelltext interpoliert.</li>
+          <li>Neue Arbeit nutzt weiterhin native Zaplex-Sessions; diese Fläche ist eine Migrationsbrücke.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <article class="viewport" id="multiplexer-adoption">
+    <div class="viewport-label">SSH-Verbindungen · vorhandene Multiplexer-Sessions gefunden</div>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="sidebar-head"><strong>SSH-Verbindungen</strong><span class="icon-button">＋　⟳</span></div>
+        <div class="tree">
+          <div class="host"><span>⌄</span><span>◉</span><strong>devhost</strong><small>verbunden</small></div>
+
+          <div class="section"><span>Zaplex-Sessions</span><span class="count">2</span></div>
+          <div class="session">
+            <span class="native-dot"></span>
+            <span class="title"><strong>release/v1.0</strong><small>aktiv · native Session</small></span>
+            <span></span>
+          </div>
+          <div class="session">
+            <span class="native-dot"></span>
+            <span class="title"><strong>monitor</strong><small>getrennt · native Session</small></span>
+            <span></span>
+          </div>
+
+          <div class="section"><span>Bestehende tmux-/byobu-Sessions</span><span class="count">2</span></div>
+          <div class="hint"><strong>Weiterarbeiten, wo es bereits läuft.</strong> Neue Arbeit bleibt in nativen Zaplex-Sessions.</div>
+          <div class="session">
+            <span class="multiplexer-badge">tm</span>
+            <span class="title"><strong>legacy-api</strong><small>tmux · 3 Fenster · 1 Client</small></span>
+            <button class="attach" title="In neuem Tab öffnen" aria-label="In neuem Tab öffnen"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="10" rx="1.5"/><path d="m4 6 2 2-2 2M8 10h3"/></svg></button>
+          </div>
+          <div class="session">
+            <span class="multiplexer-badge">by</span>
+            <span class="title"><strong>ops</strong><small>byobu · 2 Fenster · getrennt</small></span>
+            <button class="attach" title="In neuem Tab öffnen" aria-label="In neuem Tab öffnen"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="10" rx="1.5"/><path d="m4 6 2 2-2 2M8 10h3"/></svg></button>
+          </div>
+
+          <div class="host" style="margin-top:10px;background:transparent"><span>⌄</span><span>◉</span><strong>agenthost</strong><small>verbunden</small></div>
+          <div class="section"><span>Zaplex-Sessions</span><span class="count">1</span></div>
+          <div class="session">
+            <span class="native-dot"></span>
+            <span class="title"><strong>codex-review</strong><small>aktiv · native Session</small></span>
+            <span></span>
+          </div>
+          <div class="failure">tmux/byobu-Sessions konnten nicht gelesen werden. Erneut versuchen</div>
+        </div>
+      </aside>
+      <main class="content">
+        <h3>Migration statt Verschachtelung</h3>
+        <p>Bestehende Arbeit bleibt erreichbar, ohne sie als Zaplex-native Session auszugeben. Die sichtbare Aktion öffnet genau die gewählte Multiplexer-Session in einem neuen Tab.</p>
+        <div class="flow">
+          <span>bestehende Session<br><strong>legacy-api</strong></span>
+          <b>→</b>
+          <span>klassische SSH-Verbindung<br><strong>kein Nested-Attach</strong></span>
+          <b>→</b>
+          <span>neuer Zaplex-Tab<br><strong>bestehende Arbeit</strong></span>
+        </div>
+      </main>
+    </div>
+  </article>
+</body>
+</html>

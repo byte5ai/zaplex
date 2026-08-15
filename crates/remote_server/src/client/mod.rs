@@ -10,16 +10,21 @@ use futures::io::{AsyncRead, AsyncWrite};
 use warpui::r#async::{executor, FutureExt as _};
 
 use crate::proto::{
-    client_message, read_file_chunk_response, server_message, Abort, AgentSessionList,
-    AttachSession, Authenticate, BufferEdit, ClientMessage, CloseBuffer, CreateDirectory,
-    CreateDirectoryResponse, DeleteFile, DetachSession, ErrorCode, HostExec, HostExecResult,
-    Initialize, InitializeResponse, ListAgentSessions, ListDirectory, ListDirectoryResponse,
-    ListSessions, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, OpenBuffer,
-    OpenBufferResponse, OpenSession, ReadFileChunk, ReadFileChunkResponse, ReadFileContextRequest,
-    ReadFileContextResponse, ResizeSession, ResolveConflict, ResolveConflictResponse, ResolvePath,
-    ResolvePathResponse, RunCommandRequest, RunCommandResponse, SaveBuffer, SaveBufferResponse,
-    ServerMessage, SessionAttached, SessionBootstrapped, SessionInput, SessionList, SessionOpened,
-    SessionSize, TextEdit, WriteFile, WriteFileChunk, WriteFileChunkResponse,
+    client_message, read_file_chunk_response, safe_file_request, server_message, Abort,
+    AgentProcessSignal, AgentProcessSignalRequest, AgentProcessSignalResponse,
+    AgentProcessSignalStatus, AgentPtyBindingResponse, AgentSessionIdentity, AgentSessionList,
+    AttachSession, Authenticate, BindAgentPty, BufferEdit, ClientMessage, CloseBuffer,
+    CreateDirectory, CreateDirectoryResponse, DeleteFile, DetachSession, ErrorCode, HostExec,
+    HostExecResult, Initialize, InitializeResponse, ListAgentSessions, ListDirectory,
+    ListDirectoryResponse, ListMultiplexerSessions, ListSessions,
+    LoadRepoMetadataDirectoryResponse, MultiplexerSessionList, NavigatedToDirectoryResponse,
+    OpenBuffer, OpenBufferResponse, OpenSession, ReadFileChunk, ReadFileChunkResponse,
+    ReadFileContextRequest, ReadFileContextResponse, ResizeSession, ResolveConflict,
+    ResolveConflictResponse, ResolvePath, ResolvePathResponse, RunCommandRequest,
+    RunCommandResponse, SafeFileCloseHandle, SafeFileRequest, SafeFileResponse, SaveBuffer,
+    SaveBufferResponse, ServerMessage, SessionAttached, SessionBootstrapped, SessionInput,
+    SessionList, SessionOpened, SessionSize, SetBootstrapPreamble, StartupCommandAck, TextEdit,
+    UnbindAgentPty, WriteFile, WriteFileChunk, WriteFileChunkResponse,
 };
 
 use crate::protocol::{self, ProtocolError, RequestId};
@@ -224,6 +229,7 @@ impl RemoteServerClient {
             request_id: request_id.to_string(),
             message: Some(client_message::Message::Initialize(Initialize {
                 auth_token: auth_token.unwrap_or_default().to_owned(),
+                features: zaplex_remote_session::types::supported_client_features(),
             })),
         };
 
@@ -269,6 +275,25 @@ impl RemoteServerClient {
             )),
         };
         self.send_notification(msg);
+    }
+
+    /// Reports where a daemon-hosted session's bootstrap handshake completed
+    /// (fire-and-forget) so the daemon can freeze an eviction-proof preamble for
+    /// later adopts (T1.3). Sent once, by the client that opened the session, the
+    /// moment its terminal model becomes bootstrapped; `end_seq` is that client's
+    /// output cursor at that point. Returns whether the notification was enqueued
+    /// so the caller can retry rather than latch off on a lost send.
+    pub fn set_bootstrap_preamble(&self, session_id: String, end_seq: u64) -> bool {
+        let msg = ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::SetBootstrapPreamble(
+                SetBootstrapPreamble {
+                    session_id,
+                    end_seq,
+                },
+            )),
+        };
+        self.try_send_notification(msg)
     }
 
     /// Sends a `NavigatedToDirectory` request and awaits the response.
@@ -546,6 +571,51 @@ impl RemoteServerClient {
         }
     }
 
+    /// Executes one descriptor-bound safe-file operation.
+    ///
+    /// Callers must first require the daemon's
+    /// `safe-file-transactions-v1` capability. This method deliberately has no
+    /// path-based fallback.
+    pub async fn safe_file(
+        &self,
+        request: SafeFileRequest,
+    ) -> Result<SafeFileResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::SafeFile(request)),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::SafeFileResponse(response)) => Ok(response),
+            other => {
+                log::error!("Unexpected response variant for SafeFile: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Closes a descriptor-bound safe-file handle without blocking the caller.
+    ///
+    /// Handle teardown runs from ownership-anchor `Drop` implementations, so it
+    /// must never wait for the normal two-minute request timeout. The daemon
+    /// treats an empty-request-id close as a notification and sends no reply.
+    pub fn close_safe_file_handle(&self, handle_id: String) -> Result<(), ClientError> {
+        let msg = ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::SafeFile(SafeFileRequest {
+                operation_id: String::new(),
+                operation: Some(safe_file_request::Operation::CloseHandle(
+                    SafeFileCloseHandle { handle_id },
+                )),
+            })),
+        };
+        self.outbound_tx.try_send(msg).map_err(|error| {
+            log::debug!("Failed to enqueue safe-file handle close: {error}");
+            ClientError::Disconnected
+        })
+    }
+
     /// Opens a buffer on the remote host for bidirectional syncing.
     pub async fn open_buffer(&self, path: String) -> Result<OpenBufferResponse, ClientError> {
         let request_id = RequestId::new();
@@ -691,12 +761,41 @@ impl RemoteServerClient {
         session_id: String,
         last_seq: u64,
     ) -> Result<SessionAttached, ClientError> {
+        self.attach_session_generation(session_id, last_seq, None)
+            .await
+    }
+
+    /// Attaches only if the daemon still owns the expected PTY generation.
+    pub async fn attach_session_generation(
+        &self,
+        session_id: String,
+        last_seq: u64,
+        expected_generation: Option<u64>,
+    ) -> Result<SessionAttached, ClientError> {
+        self.attach_session_generation_and_agent(session_id, last_seq, expected_generation, None)
+            .await
+    }
+
+    /// Attaches only while both the PTY generation and optional foreground
+    /// agent identity still match the capability-gated inventory row.
+    pub async fn attach_session_generation_and_agent(
+        &self,
+        session_id: String,
+        last_seq: u64,
+        expected_generation: Option<u64>,
+        expected_agent_binding: Option<AgentSessionIdentity>,
+    ) -> Result<SessionAttached, ClientError> {
         let request_id = RequestId::new();
         let msg = ClientMessage {
             request_id: request_id.to_string(),
             message: Some(client_message::Message::AttachSession(AttachSession {
                 session_id,
                 last_seq,
+                // This client feeds `SessionAttached.bootstrap_preamble` on adopt
+                // (T1.3), so opt in to receiving it.
+                supports_bootstrap_preamble: true,
+                expected_generation,
+                expected_agent_binding,
             })),
         };
         let response = self.send_request(request_id, msg).await?;
@@ -704,6 +803,64 @@ impl RemoteServerClient {
             Some(server_message::Message::SessionAttached(resp)) => Ok(resp),
             other => {
                 log::error!("Unexpected response variant for AttachSession: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Binds a CLI-agent conversation to its generation-checked daemon PTY.
+    pub async fn bind_agent_pty(
+        &self,
+        host_id: String,
+        agent: AgentSessionIdentity,
+        pty_session_id: String,
+        pty_session_generation: u64,
+        handoff_from: Option<AgentSessionIdentity>,
+    ) -> Result<AgentPtyBindingResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::BindAgentPty(BindAgentPty {
+                agent: Some(agent),
+                pty_session_id,
+                pty_session_generation,
+                handoff_from,
+                host_id,
+            })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::AgentPtyBindingResponse(response)) => Ok(response),
+            other => {
+                log::error!("Unexpected response variant for BindAgentPty: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Unbinds one CLI-agent identity from its generation-checked daemon PTY.
+    pub async fn unbind_agent_pty(
+        &self,
+        host_id: String,
+        agent: AgentSessionIdentity,
+        pty_session_id: String,
+        pty_session_generation: u64,
+    ) -> Result<AgentPtyBindingResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::UnbindAgentPty(UnbindAgentPty {
+                agent: Some(agent),
+                pty_session_id,
+                pty_session_generation,
+                host_id,
+            })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::AgentPtyBindingResponse(response)) => Ok(response),
+            other => {
+                log::error!("Unexpected response variant for UnbindAgentPty: {other:?}");
                 Err(ClientError::UnexpectedResponse)
             }
         }
@@ -721,6 +878,29 @@ impl RemoteServerClient {
             Some(server_message::Message::SessionList(resp)) => Ok(resp),
             other => {
                 log::error!("Unexpected response variant for ListSessions: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Lists existing tmux/byobu sessions as typed data.
+    ///
+    /// Capability-gated: callers must require
+    /// [`FEATURE_MULTIPLEXER_INVENTORY_V1`](zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1)
+    /// and must never fall back to a generic host-shell scan.
+    pub async fn list_multiplexer_sessions(&self) -> Result<MultiplexerSessionList, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::ListMultiplexerSessions(
+                ListMultiplexerSessions {},
+            )),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::MultiplexerSessionList(response)) => Ok(response),
+            other => {
+                log::error!("Unexpected response variant for ListMultiplexerSessions: {other:?}");
                 Err(ClientError::UnexpectedResponse)
             }
         }
@@ -764,12 +944,46 @@ impl RemoteServerClient {
             message: Some(client_message::Message::SessionInput(SessionInput {
                 session_id,
                 bytes,
+                startup_command_id: String::new(),
             })),
         };
         self.outbound_tx.try_send(msg).map_err(|e| {
             log::error!("Failed to enqueue session input: {e}");
             ClientError::Disconnected
         })
+    }
+
+    /// Delivers a startup command through the daemon's retry-safe input path.
+    ///
+    /// `startup_command_id` identifies the logical command across transport
+    /// retries and reconnects. The future resolves only after the daemon says
+    /// whether its ordered PTY writer accepted the bytes.
+    pub async fn send_startup_command(
+        &self,
+        session_id: String,
+        startup_command_id: String,
+        bytes: Vec<u8>,
+    ) -> Result<StartupCommandAck, ClientError> {
+        if startup_command_id.is_empty() {
+            return Err(ClientError::UnexpectedResponse);
+        }
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::SessionInput(SessionInput {
+                session_id,
+                bytes,
+                startup_command_id,
+            })),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::StartupCommandAck(ack)) => Ok(ack),
+            other => {
+                log::error!("Unexpected response variant for startup SessionInput: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
     }
 
     /// Resizes a session's PTY (notification).
@@ -880,16 +1094,64 @@ impl RemoteServerClient {
         }
     }
 
+    /// Sends one of the two supported guardrail signals to the exact remote
+    /// process identity discovered for an agent session.
+    ///
+    /// Capability-gated: callers must require
+    /// [`FEATURE_AGENT_PROCESS_SIGNAL_V1`](zaplex_remote_session::types::FEATURE_AGENT_PROCESS_SIGNAL_V1).
+    /// An older daemon must fail closed; there is deliberately no HostExec or
+    /// shell-command fallback.
+    pub async fn send_verified_process_signal(
+        &self,
+        session_id: String,
+        pid: u32,
+        expected_process_fingerprint: String,
+        signal: AgentProcessSignal,
+    ) -> Result<AgentProcessSignalResponse, ClientError> {
+        let expected_session_id = session_id.clone();
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::AgentProcessSignal(
+                AgentProcessSignalRequest {
+                    session_id,
+                    pid,
+                    expected_process_fingerprint,
+                    signal: signal.into(),
+                },
+            )),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::AgentProcessSignalResponse(response))
+                if response.session_id == expected_session_id
+                    && response.pid == pid
+                    && matches!(
+                        AgentProcessSignalStatus::try_from(response.status),
+                        Ok(AgentProcessSignalStatus::Sent
+                            | AgentProcessSignalStatus::StaleIdentity
+                            | AgentProcessSignalStatus::IdentityUnverifiable
+                            | AgentProcessSignalStatus::InvalidRequest
+                            | AgentProcessSignalStatus::SignalFailed)
+                    ) =>
+            {
+                Ok(response)
+            }
+            other => {
+                log::error!("Unexpected response for AgentProcessSignal: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
     /// Runs a **session-less** one-shot command on the daemon host and returns
     /// its output. Unlike [`Self::run_command`], no bootstrapped session is
     /// required: the daemon runs it in its default user shell (see the daemon's
-    /// `handle_host_exec`). This is the cross-host guardrail path — e.g.
-    /// `kill -<SIG> <pid>` against a remote agent.
+    /// `handle_host_exec`).
     ///
     /// Capability-gated: callers must only invoke this against a daemon that
     /// advertises [`FEATURE_HOST_EXEC`](zaplex_remote_session::types::FEATURE_HOST_EXEC)
-    /// in its `InitializeResponse.features`. An old daemon without it must not be
-    /// sent `HostExec`; the caller falls back with an honest message.
+    /// in its `InitializeResponse.features`.
     ///
     /// A daemon-side failure to even spawn the command comes back as a
     /// [`ClientError::ServerError`] (the daemon maps it to an `ErrorResponse`);
@@ -977,10 +1239,21 @@ impl RemoteServerClient {
 
     /// Sends a message without registering a pending request (fire-and-forget).
     fn send_notification(&self, msg: ClientMessage) {
-        // Use try_send to avoid blocking; if the channel is full or closed,
-        // the notification is best-effort.
-        if let Err(e) = self.outbound_tx.try_send(msg) {
-            log::debug!("Failed to send notification (best-effort): {e}");
+        let _ = self.try_send_notification(msg);
+    }
+
+    /// Like [`Self::send_notification`] but reports whether the message was
+    /// enqueued, so a caller that latches off after a single send (e.g. the T1.3
+    /// bootstrap-boundary report) can retry when the channel is closed/full.
+    fn try_send_notification(&self, msg: ClientMessage) -> bool {
+        // Use try_send to avoid blocking; if the channel is full or closed, the
+        // notification is best-effort and the caller is told it did not go out.
+        match self.outbound_tx.try_send(msg) {
+            Ok(()) => true,
+            Err(e) => {
+                log::debug!("Failed to send notification (best-effort): {e}");
+                false
+            }
         }
     }
 

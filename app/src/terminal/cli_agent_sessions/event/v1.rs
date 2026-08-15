@@ -16,9 +16,11 @@ pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {
 
     let event = match raw.event.as_str() {
         "session_start" => CLIAgentEventType::SessionStart,
+        "pre_tool_use" => CLIAgentEventType::PreToolUse,
         "prompt_submit" => CLIAgentEventType::PromptSubmit,
         "tool_complete" => CLIAgentEventType::ToolComplete,
         "stop" => CLIAgentEventType::Stop,
+        "session_end" => CLIAgentEventType::SessionEnd,
         "permission_request" => CLIAgentEventType::PermissionRequest,
         "permission_replied" => CLIAgentEventType::PermissionReplied,
         "question_asked" => CLIAgentEventType::QuestionAsked,

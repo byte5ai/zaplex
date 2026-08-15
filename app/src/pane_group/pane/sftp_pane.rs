@@ -8,10 +8,8 @@
 
 use warpui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
 
-use crate::pane_group::{
-    BackingView, PaneConfiguration, PaneContent, PaneGroup, PaneView,
-};
 use crate::app_state::LeafContents;
+use crate::pane_group::{BackingView, PaneConfiguration, PaneContent, PaneGroup, PaneView};
 use crate::sftp_manager::browser::SftpBrowserView;
 
 use super::{DetachType, PaneId, ShareableLink, ShareableLinkError};
@@ -25,6 +23,11 @@ pub struct SftpPane {
 }
 
 impl SftpPane {
+    #[cfg(test)]
+    pub(crate) fn browser_view(&self, ctx: &warpui::AppContext) -> ViewHandle<SftpBrowserView> {
+        self.view.as_ref(ctx).child(ctx)
+    }
+
     /// Creates a new SFTP browser pane, rooted at `start_path` (the remote
     /// shell's cwd) when known, else the host root `/`.
     pub fn new<V: View>(
@@ -103,9 +106,13 @@ impl PaneContent for SftpPane {
         focus_handle: crate::pane_group::focus_state::PaneFocusHandle,
         ctx: &mut ViewContext<PaneGroup>,
     ) {
+        let pane_group_id = ctx.view_id();
         self.view
             .update(ctx, |view, ctx| view.set_focus_handle(focus_handle, ctx));
         let child = self.view.as_ref(ctx).child(ctx);
+        child.update(ctx, move |view, ctx| {
+            view.set_pane_group_id(Some(pane_group_id), ctx)
+        });
 
         let pane_id = self.id();
         ctx.subscribe_to_view(&child, move |pane_group, _, event, ctx| {
@@ -120,6 +127,7 @@ impl PaneContent for SftpPane {
         ctx: &mut ViewContext<PaneGroup>,
     ) {
         let child = self.view.as_ref(ctx).child(ctx);
+        child.update(ctx, |view, ctx| view.set_pane_group_id(None, ctx));
         ctx.unsubscribe_to_view(&child);
     }
 

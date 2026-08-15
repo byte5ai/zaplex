@@ -1,16 +1,14 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warp_editor::editor::NavigationKey;
 use warpui::{
     elements::{
         Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, Padding, ParentElement, Radius, SavePosition, ScrollTarget,
-        ScrollToPositionMode, ScrollbarWidth, Shrinkable, Text,
+        CrossAxisAlignment, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+        MouseStateHandle, Padding, ParentElement, SavePosition, ScrollTarget, ScrollToPositionMode,
+        ScrollbarWidth, Text,
     },
-    fonts::{Properties, Weight},
     keymap::{macros::*, FixedBinding, Keystroke},
     platform::Cursor,
     ui_components::components::UiComponent,
@@ -30,6 +28,7 @@ use crate::{
         repo_picker::{RepoPicker, RepoPickerEvent},
         PickerStyle, TabConfig, TabConfigParam, TabConfigParamType,
     },
+    ui_components::modal_frame,
     view_components::action_button::{
         ActionButton, DisabledTheme, KeystrokeSource, NakedTheme, PrimaryTheme,
     },
@@ -525,58 +524,28 @@ impl View for TabConfigParamsModal {
             resolve_param_value(value, param).is_some()
         });
 
-        // ── Header ───────────────────────────────────────────────────────
+        // ── Header (the one shared modal header: title · close ✕) ─────────
         let header = {
-            let title = Text::new_inline(self.title.clone(), appearance.ui_font_family(), 16.)
-                .with_color(theme.active_ui_text_color().into())
-                .with_style(Properties::default().weight(Weight::Bold))
-                .finish();
-
-            let esc_badge = Container::new(
-                ConstrainedBox::new(
-                    Text::new_inline("ESC".to_string(), appearance.ui_font_family(), 10.)
-                        .with_color(theme.foreground().into())
-                        .finish(),
-                )
-                .with_height(14.)
-                .finish(),
-            )
-            .with_horizontal_padding(2.)
-            .with_background(internal_colors::neutral_2(theme))
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
-            .finish();
-
             let close_icon = ConstrainedBox::new(Icon::X.to_warpui_icon(sub_text).finish())
                 .with_width(14.)
                 .with_height(14.)
                 .finish();
 
-            let close_button = Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(2.)
-                .with_child(close_icon)
-                .with_child(esc_badge)
-                .finish();
+            let close = Hoverable::new(self.close_button_mouse_state.clone(), move |_state| {
+                close_icon
+            })
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(ModalAction::Close);
+            })
+            .with_cursor(Cursor::PointingHand)
+            .finish();
 
-            let close_hoverable =
-                Hoverable::new(self.close_button_mouse_state.clone(), move |_state| {
-                    close_button
-                })
-                .on_click(|ctx, _, _| {
-                    ctx.dispatch_typed_action(ModalAction::Close);
-                })
-                .with_cursor(Cursor::PointingHand)
-                .finish();
-
-            Container::new(
-                Flex::row()
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(Shrinkable::new(1., title).finish())
-                    .with_child(close_hoverable)
-                    .finish(),
-            )
+            Container::new(modal_frame::modal_header(
+                self.title.clone(),
+                None,
+                close,
+                appearance,
+            ))
             .with_padding(
                 Padding::uniform(0.)
                     .with_top(24.)

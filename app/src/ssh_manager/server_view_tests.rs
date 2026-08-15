@@ -93,6 +93,17 @@ fn auth_toggle_includes_onekey_option() {
 }
 
 #[test]
+fn startup_command_is_optional_but_must_be_one_line() {
+    assert_eq!(validated_startup_command("  "), Ok(None));
+    assert_eq!(
+        validated_startup_command("  tmux attach  "),
+        Ok(Some("tmux attach".to_string()))
+    );
+    assert_eq!(validated_startup_command("first\nsecond"), Err(()));
+    assert_eq!(validated_startup_command("first\r\nsecond"), Err(()));
+}
+
+#[test]
 fn onekey_auth_only_renders_credential_field_in_server_form() {
     assert_eq!(
         auth_specific_fields(AuthType::OneKey),
@@ -259,4 +270,82 @@ fn onekey_key_credential_resolves_test_connection_to_key_auth() {
 fn missing_lookup_id_returns_none_when_editor_empty() {
     let store = MockSecretStore::new();
     assert!(resolve_test_password(None, SecretKind::OneKeyPassword, "", &store).is_none());
+}
+
+#[test]
+fn stale_test_completion_cannot_overwrite_current_endpoint_state() {
+    assert!(should_apply_connection_test_result(7, 7));
+    assert!(!should_apply_connection_test_result(8, 7));
+}
+
+#[test]
+fn dirty_onekey_dialog_requires_save_discard_or_cancel() {
+    assert_eq!(
+        dirty_onekey_dialog_actions(),
+        [
+            SshServerAction::SaveManagedOneKeyCredentialAndContinue,
+            SshServerAction::DiscardManagedOneKeyChanges,
+            SshServerAction::CancelManagedOneKeyTransition,
+        ]
+    );
+}
+
+#[test]
+fn dirty_dialog_requires_explicit_choice() {
+    assert_eq!(dirty_onekey_dialog_actions().len(), 3);
+}
+
+#[test]
+fn pending_selection_tracks_stable_credential_identity() {
+    let credentials = vec![
+        credential("first", "one", OneKeyCredentialKind::Password, None),
+        credential("second", "two", OneKeyCredentialKind::Password, None),
+    ];
+    assert_eq!(
+        onekey_selection_transition(Some(1), &credentials),
+        OneKeyTransition::Select(Some("second".to_string()))
+    );
+}
+
+#[test]
+fn outside_click_does_not_discard_dirty_changes() {
+    assert!(onekey_backdrop_dismiss_action().is_none());
+}
+
+#[test]
+fn ssh_persistence_failure_remains_visible() {
+    crate::i18n::init(Some("en"));
+    let status = StatusBanner::Error("keychain is locked".to_string());
+    assert_eq!(
+        status_banner_content(Some(&status)),
+        Some(("keychain is locked".to_string(), StatusTone::Error))
+    );
+}
+
+#[test]
+fn known_ssh_transport_errors_never_fall_through_to_raw_copy() {
+    crate::i18n::init(Some("en"));
+    let known = [
+        "Connection timeout",
+        "ssh: Could not resolve hostname devbox: Name or service not known",
+        "ssh: connect to host devbox port 22: Connection refused",
+        "Authentication failed: wrong password (Permission denied)",
+        "ssh: connect to host devbox port 22: No route to host",
+        "SSH host key changed; connection blocked",
+        "Failed to spawn ssh: executable not found",
+    ];
+
+    for raw in known {
+        assert_ne!(
+            classify_ssh_transport_error(raw),
+            SshTransportErrorKind::Other,
+            "{raw}"
+        );
+        let humanized = humanize_ssh_transport_error(Some(raw));
+        assert_ne!(humanized, raw);
+        assert!(
+            humanized.ends_with(raw),
+            "diagnostic detail must remain available: {humanized}"
+        );
+    }
 }

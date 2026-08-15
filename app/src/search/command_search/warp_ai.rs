@@ -22,7 +22,8 @@ use warpui::{
 };
 
 const OPEN_ZAPLEX_AI_ITEM_BODY_TEXT: &str = "Ask Zaplex AI for command suggestions";
-const TRANSLATE_WITH_ZAPLEX_AI_ITEM_BODY_TEXT: &str = "Translate into shell command using Zaplex AI";
+const TRANSLATE_WITH_ZAPLEX_AI_ITEM_BODY_TEXT: &str =
+    "Translate into shell command using Zaplex AI";
 
 #[derive(Clone, Debug)]
 pub enum WarpAISearchItem {

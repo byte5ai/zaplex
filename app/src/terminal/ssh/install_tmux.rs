@@ -24,8 +24,7 @@ use warpui::{
 };
 use warpui::{BlurContext, FocusContext};
 
-pub const WHY_INSTALL_TMUX_URL: &str =
-    "";
+pub const WHY_INSTALL_TMUX_URL: &str = "";
 
 #[derive(Debug, Clone)]
 pub struct TmuxInstallMethod {
@@ -382,13 +381,8 @@ impl View for SshInstallTmuxBlock {
             "In order to Zaplexify your SSH session, tmux must be installed. "
         };
 
-        let zaplexify_description = vec![
-            FormattedTextFragment::plain_text(explanation),
-            FormattedTextFragment::hyperlink(
-                crate::t!("terminal-ssh-why-need-tmux"),
-                WHY_INSTALL_TMUX_URL,
-            ),
-        ];
+        // Dropped the "why do I need tmux?" link: no Zaplex docs yet.
+        let zaplexify_description = vec![FormattedTextFragment::plain_text(explanation)];
 
         let text_color =
             blended_colors::text_sub(appearance.theme(), appearance.theme().surface_1());
@@ -408,8 +402,9 @@ impl View for SshInstallTmuxBlock {
         })
         .finish();
 
-        content
-            .add_child(render::apply_spacing_styles(Container::new(zaplexify_description)).finish());
+        content.add_child(
+            render::apply_spacing_styles(Container::new(zaplexify_description)).finish(),
+        );
 
         if let Some(root_install_state) = &self.system_install_state {
             content.add_child(self.render_system_install_ui(root_install_state, app));

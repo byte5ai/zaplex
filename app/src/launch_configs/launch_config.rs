@@ -73,6 +73,10 @@ fn is_falsey(val: &Option<bool>) -> bool {
     val.is_none_or(|v| !v)
 }
 
+fn is_false(val: &bool) -> bool {
+    !*val
+}
+
 /// The mode a leaf pane opens in.
 ///
 /// Used by tab configs to distinguish terminal, agent, and cloud panes.
@@ -115,9 +119,27 @@ pub enum PaneTemplateType {
     /// `SshServer` editor pane; restored by re-opening that host's editor pane.
     /// Declared last so untagged deserialization tries the richer variants first
     /// (a `{node_id}` blob matches only here; a `{cwd,…}` blob never matches).
-    SshHost {
-        node_id: String,
-    },
+    SshHost { node_id: String },
+}
+
+impl PaneTemplateType {
+    /// Whether this layout can actually be opened.
+    ///
+    /// Launch configs are user-editable TOML that older versions also wrote, so
+    /// a branch with an empty `panes` list turns up in the field. It is not a
+    /// layout: restoring it produces a pane group with zero panes, and startup
+    /// then dies on the `expect("At least one pane should have been created")`
+    /// in `pane_group` — a dock bounce and no window in the dev-profile builds
+    /// the test DMGs ship with. Callers reject such a config (and say so in the
+    /// log) instead of opening it.
+    pub fn is_openable(&self) -> bool {
+        match self {
+            PaneTemplateType::PaneTemplate { .. } | PaneTemplateType::SshHost { .. } => true,
+            PaneTemplateType::PaneBranchTemplate { panes, .. } => {
+                !panes.is_empty() && panes.iter().all(Self::is_openable)
+            }
+        }
+    }
 }
 
 impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
@@ -195,6 +217,8 @@ where
 pub struct TabTemplate {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_pinned: bool,
     pub layout: PaneTemplateType,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub color: Option<AnsiColorIdentifier>,
@@ -207,6 +231,7 @@ impl TryFrom<TabSnapshot> for TabTemplate {
         let color = snapshot.color();
         Ok(Self {
             title: snapshot.custom_title,
+            is_pinned: snapshot.is_pinned,
             layout: snapshot.root.try_into()?,
             color,
         })
@@ -252,6 +277,7 @@ pub fn make_mock_single_window_launch_config() -> LaunchConfig {
             tabs: vec![
                 TabTemplate {
                     title: Some("First Tab".to_string()),
+                    is_pinned: false,
                     layout: PaneTemplateType::PaneTemplate {
                         is_focused: Some(true),
                         cwd: PathBuf::from("/some/path"),
@@ -263,6 +289,7 @@ pub fn make_mock_single_window_launch_config() -> LaunchConfig {
                 },
                 TabTemplate {
                     title: Some("Second Tab".to_string()),
+                    is_pinned: false,
                     layout: PaneTemplateType::PaneTemplate {
                         is_focused: Some(true),
                         cwd: PathBuf::from("/some/path"),

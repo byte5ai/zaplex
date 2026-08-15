@@ -341,6 +341,7 @@ impl PaneContent for TerminalPane {
             LeafContents::Terminal(TerminalPaneSnapshot {
                 uuid: self.uuid.clone(),
                 cwd: None,
+                cli_agent_binding: None,
                 is_active,
                 is_read_only: false,
                 shell_launch_data: None,
@@ -363,6 +364,7 @@ impl PaneContent for TerminalPane {
                 LeafContents::Terminal(TerminalPaneSnapshot {
                     uuid: self.uuid.clone(),
                     cwd: None,
+                    cli_agent_binding: None,
                     is_active,
                     is_read_only: false,
                     shell_launch_data: None,
@@ -401,9 +403,14 @@ impl PaneContent for TerminalPane {
                         .active_conversation_id()
                 });
 
+            let cwd = view.pwd_if_local(app);
+            let cli_agent_binding = CLIAgentSessionsModel::as_ref(app)
+                .local_binding_for_restore(view.id(), cwd.as_deref());
+
             LeafContents::Terminal(TerminalPaneSnapshot {
                 uuid: self.uuid.clone(),
-                cwd: view.pwd_if_local(app),
+                cwd,
+                cli_agent_binding,
                 is_active,
                 is_read_only: view.model.lock().is_read_only(),
                 shell_launch_data: view.shell_launch_data_if_local(app),

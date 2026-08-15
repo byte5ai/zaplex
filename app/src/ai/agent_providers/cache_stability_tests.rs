@@ -98,7 +98,10 @@ fn serialize_grep_tool_call_is_deterministic() {
     assert_eq!(n1, n2, "tool name must be consistent");
     let j1 = serde_json::to_string(&v1).unwrap();
     let j2 = serde_json::to_string(&v2).unwrap();
-    assert_eq!(j1, j2, "same ToolCall must be byte-equal across serializations");
+    assert_eq!(
+        j1, j2,
+        "same ToolCall must be byte-equal across serializations"
+    );
 }
 
 /// Grep `queries` is `Vec<String>`, order must be stable (Vec is inherently stable, but this is a defensive assertion).
@@ -116,7 +119,10 @@ fn serialize_grep_preserves_queries_order() {
     let s = serde_json::to_string(&v).unwrap();
     let pos_z = s.find("zzz").expect("queries should contain zzz");
     let pos_a = s.find("aaa").expect("queries should contain aaa");
-    assert!(pos_z < pos_a, "Vec order must follow input parameter order (zzz before aaa)");
+    assert!(
+        pos_z < pos_a,
+        "Vec order must follow input parameter order (zzz before aaa)"
+    );
 }
 
 /// MCP tool calls contain `prost_types::Struct`; verify serialization stability.
@@ -250,7 +256,10 @@ fn full_tools_array_serialization_is_stable() {
     let a = assemble();
     let b = assemble();
     assert_eq!(a.len(), b.len());
-    assert_eq!(a, b, "tools array serialization result must be byte-equal across calls");
+    assert_eq!(
+        a, b,
+        "tools array serialization result must be byte-equal across calls"
+    );
 }
 
 /// End-to-end concatenation stability with MCP server (coordinates with P0-3 sorting guarantee).
@@ -320,7 +329,12 @@ fn full_tools_array_with_mcp_is_stable() {
     let b = assemble(&ctx2);
     assert_eq!(a, b, "tools array with MCP must be byte-equal across calls");
     // Verify MCP tools are in lexicographic order by function_name (alpha before zeta)
-    let pos_alpha = a.find("mcp__server-a__alpha").expect("should contain alpha");
+    let pos_alpha = a
+        .find("mcp__server-a__alpha")
+        .expect("should contain alpha");
     let pos_zeta = a.find("mcp__server-a__zeta").expect("should contain zeta");
-    assert!(pos_alpha < pos_zeta, "P0-3 ordering guarantee: alpha < zeta");
+    assert!(
+        pos_alpha < pos_zeta,
+        "P0-3 ordering guarantee: alpha < zeta"
+    );
 }

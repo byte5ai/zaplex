@@ -1,5 +1,8 @@
 //! TTY related functionality.
-use crate::terminal::bootstrap::raw_init_shell_script_for_shell;
+use crate::terminal::bootstrap::{
+    daemon_bootstrap_delivery, raw_init_shell_script_for_shell, script_for_shell,
+    DaemonBootstrapDelivery,
+};
 use crate::terminal::cli_agent_sessions::event::current_protocol_version;
 use crate::terminal::local_tty::docker_sandbox::{
     DockerSandboxShellStarter, DOCKER_SANDBOX_HOME_DIR,
@@ -9,6 +12,7 @@ use crate::terminal::local_tty::shell::{
 };
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
+use crate::terminal::writeable_pty::{create_bootstrap_file, TempBootstrapFile};
 use crate::ASSETS;
 use warp_core::features::FeatureFlag;
 
@@ -25,7 +29,7 @@ use mio::unix::SourceFd;
 use mio::Interest;
 use nix::{
     pty::openpty,
-    sys::termios::{self, InputFlags, SetArg},
+    sys::termios::{self, InputFlags, LocalFlags, SetArg},
 };
 use serde::{Deserialize, Serialize};
 use signal_hook_mio::v1_0::Signals;
@@ -38,6 +42,7 @@ use std::{
     io,
     mem::MaybeUninit,
     os::unix::{
+        ffi::OsStringExt,
         fs::DirBuilderExt,
         io::{AsRawFd, FromRawFd, RawFd},
     },
@@ -509,10 +514,99 @@ fn spawn_command_in_pty(
     })
 }
 
+struct SessionSpawnCommand {
+    command: Command,
+    bootstrap_file: Option<TempBootstrapFile>,
+    bootstrap_delivery: DaemonBootstrapDelivery,
+}
+
+fn session_spawn_command(
+    shell: &str,
+    env: &HashMap<String, String>,
+) -> Result<SessionSpawnCommand> {
+    // Match the LOCAL app's shell-integration launch contract
+    // (`build_host_shell_command` → `arguments_for_session_spawning_command`)
+    // for every supported shell. Bash/zsh receive the body through the ordered
+    // PTY writer. Fish/PowerShell use a temporary body file: their spawn-time
+    // InitShell hook sources it exactly once, avoiding fish's long-paste
+    // formatting explosion and PowerShell's dropped-character PTY behavior.
+    let supported_shell = super::shell::supported_shell_path_and_type(shell);
+    let shell_type = supported_shell.as_ref().map(|(_, shell_type)| *shell_type);
+    let bootstrap_delivery = daemon_bootstrap_delivery(shell_type);
+    let bootstrap_file = match bootstrap_delivery {
+        DaemonBootstrapDelivery::GuardedFile => {
+            let guarded_shell_type = match shell_type {
+                Some(shell_type @ (ShellType::Fish | ShellType::PowerShell)) => shell_type,
+                Some(ShellType::Bash | ShellType::Zsh) | None => {
+                    unreachable!("guarded file delivery is only for fish/PowerShell")
+                }
+            };
+            Some(
+                create_bootstrap_file(
+                    script_for_shell(guarded_shell_type, &ASSETS),
+                    guarded_shell_type,
+                    None::<&str>,
+                )
+                .ok_or_else(|| {
+                    anyhow::anyhow!("failed to create daemon {guarded_shell_type:?} bootstrap file")
+                })?,
+            )
+        }
+        DaemonBootstrapDelivery::OrderedPty | DaemonBootstrapDelivery::NoIntegration => None,
+    };
+    let mut command = match supported_shell {
+        Some((resolved_path, shell_type)) => {
+            let path_str = resolved_path.to_string_lossy();
+            let args = super::shell::arguments_for_session_spawning_command(&path_str, shell_type);
+            let mut command = Command::new(resolved_path.as_os_str());
+            for arg in args {
+                command.arg(arg);
+            }
+            // Bash truncates $HISTFILE to its default 500 lines on startup unless
+            // HISTFILESIZE is pre-set large; the body only clears the sentinel
+            // when it is still unchanged (`bash_body.sh`). Mirror
+            // `build_host_shell_command`.
+            if shell_type == ShellType::Bash && !env.contains_key("HISTFILESIZE") {
+                command.env("HISTFILESIZE", "57265949261");
+                command.env("ZAPLEX_INITIAL_HISTFILESIZE", "57265949261");
+            }
+            // The body reads ZAPLEX_HONOR_PS1; unset behaves like "0" (Zaplex
+            // prompt), but set it explicitly for parity with the local spawn.
+            if !env.contains_key("ZAPLEX_HONOR_PS1") {
+                command.env("ZAPLEX_HONOR_PS1", "0");
+            }
+            command
+        }
+        None => {
+            // Unclassified shells retain the plain login-shell contract and
+            // receive no Zaplex bootstrap body.
+            let mut command = Command::new(shell);
+            command.arg("-l");
+            command
+        }
+    };
+    command.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    if let Some(file) = bootstrap_file.as_ref() {
+        let path = file
+            .path_as_bytes()
+            .ok_or_else(|| anyhow::anyhow!("daemon bootstrap path is not available"))?;
+        // This is an internal one-shot capability, not client-controlled
+        // session environment. Apply it last so a colliding OpenSession value
+        // cannot suppress the body or redirect the shell to another file.
+        command.env("ZAPLEX_DAEMON_BOOTSTRAP_FILE", OsString::from_vec(path));
+    }
+    Ok(SessionSpawnCommand {
+        command,
+        bootstrap_file,
+        bootstrap_delivery,
+    })
+}
+
 /// Spawns a login shell on a freshly-allocated PTY for a daemon-hosted remote
 /// session, reusing the shared `spawn_command_in_pty` fork/`pre_exec` setup
 /// (controlling tty, signal reset, fd hygiene). Returns the owned PTY leader
-/// (master) fd and the spawned shell child.
+/// (master) fd, the spawned shell child, and an optional fish/PowerShell
+/// bootstrap file that must remain alive with the session.
 ///
 /// Unlike the interactive client path this skips the Warp shell-integration
 /// wrapper (`build_host_shell_command`): the daemon session host just needs a
@@ -524,14 +618,19 @@ pub(crate) fn spawn_session_pty(
     env: &HashMap<String, String>,
     rows: usize,
     cols: usize,
-) -> Result<(std::os::fd::OwnedFd, std::process::Child)> {
-    let mut command = Command::new(shell);
-    // Login shell so the user's profile (PATH etc.) is loaded.
-    command.arg("-l");
+) -> Result<(
+    std::os::fd::OwnedFd,
+    std::process::Child,
+    Option<TempBootstrapFile>,
+)> {
+    let SessionSpawnCommand {
+        mut command,
+        bootstrap_file,
+        bootstrap_delivery,
+    } = session_spawn_command(shell, env)?;
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    command.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     if !env.contains_key("TERM") {
         command.env("TERM", "xterm-256color");
     }
@@ -589,9 +688,32 @@ pub(crate) fn spawn_session_pty(
     }
     let size = SizeInfo::new_without_font_metrics(rows, cols);
     let info = spawn_command_in_pty(command, &size, true)?;
+
+    // Silence the line discipline before anyone can write to this PTY.
+    //
+    // The bootstrap body is enqueued as the session's first input the moment
+    // this returns. The shell's own rcfile clears ECHO too — but it only runs
+    // once the inner shell has exec'd, and the write does not wait for that. Win
+    // that race and ~1500 lines of bootstrap get echoed into the user's terminal
+    // at session start; the code that builds those spawn args calls the symptom
+    // "garbage being inserted in every line" (shell.rs). Doing it here, on the
+    // fd we already hold, removes the timing question entirely: there is no
+    // window in which input can arrive with ECHO still on.
+    //
+    // Only for shells that receive the body — it ends with `stty sane`, which
+    // restores this. Clearing it for a shell that gets no body would leave the
+    // user typing invisibly.
+    if bootstrap_delivery == DaemonBootstrapDelivery::OrderedPty {
+        if let Ok(mut tio) = termios::tcgetattr(info.result.leader_fd) {
+            tio.local_flags.remove(LocalFlags::ECHO);
+            // TCSANOW: take effect before the first byte, not after the queue
+            // drains — the queue is exactly what we are trying to stay ahead of.
+            let _ = termios::tcsetattr(info.result.leader_fd, SetArg::TCSANOW, &tio);
+        }
+    }
     // SAFETY: `leader_fd` is a freshly-opened PTY master fd that we now own.
     let leader = unsafe { std::os::fd::OwnedFd::from_raw_fd(info.result.leader_fd) };
-    Ok((leader, info.child))
+    Ok((leader, info.child, bootstrap_file))
 }
 
 impl Pty {
@@ -996,87 +1118,5 @@ fn test_get_pw_entry() {
 }
 
 #[cfg(test)]
-mod session_pty_tests {
-    use super::spawn_session_pty;
-    use std::collections::HashMap;
-    use std::io::{ErrorKind, Read, Write};
-    use std::os::fd::AsRawFd;
-    use std::time::{Duration, Instant};
-
-    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-        haystack.windows(needle.len()).any(|w| w == needle)
-    }
-
-    /// Spawns a real shell on a daemon-owned PTY, applies a resize via
-    /// TIOCSWINSZ (the same ioctl the session host's resize handler uses), and
-    /// confirms that (a) a command's output streams back through the master and
-    /// (b) the resize reached the slave tty (`stty size` → `30 100`). Exercises
-    /// the OS-level behaviour the daemon reader/writer tasks rely on
-    /// (Stage 1 #9/#10).
-    ///
-    /// Robustness: the read is non-blocking with a deadline and we tear the
-    /// shell down ourselves — the test never depends on the shell self-exiting,
-    /// so it cannot hang.
-    #[test]
-    fn spawn_session_pty_streams_and_resizes() {
-        let env = HashMap::new();
-        let (leader, mut child) =
-            spawn_session_pty(None, "/bin/sh", &env, 24, 80).expect("spawn_session_pty");
-        let mut master = std::fs::File::from(leader);
-
-        // Resize to 30x100 via the same ioctl the daemon's ResizeSession handler
-        // uses, before issuing the command.
-        let win = libc::winsize {
-            ws_row: 30,
-            ws_col: 100,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        // SAFETY: `master` wraps a live PTY leader fd.
-        let rc =
-            unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &win as *const libc::winsize) };
-        assert_eq!(rc, 0, "TIOCSWINSZ should succeed");
-
-        // The marker is computed by the shell (M42K), so it only appears in
-        // *executed* output — not in the tty's echo of the command itself.
-        master
-            .write_all(b"stty size; echo M$((6*7))K\n")
-            .expect("write command to pty");
-
-        // Non-blocking master so the read loop can never hang.
-        let fd = master.as_raw_fd();
-        // SAFETY: toggling O_NONBLOCK on our own fd.
-        unsafe {
-            let flags = libc::fcntl(fd, libc::F_GETFL);
-            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-        }
-
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let mut out = Vec::new();
-        let mut buf = [0u8; 4096];
-        while Instant::now() < deadline && !contains(&out, b"M42K") {
-            match master.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => out.extend_from_slice(&buf[..n]),
-                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                Err(_) => break,
-            }
-        }
-
-        // Always tear the shell down ourselves; never rely on it self-exiting.
-        let _ = child.kill();
-        let _ = child.wait();
-
-        let text = String::from_utf8_lossy(&out);
-        assert!(
-            contains(&out, b"M42K"),
-            "command output should stream back through the PTY; got:\n{text}"
-        );
-        assert!(
-            text.contains("30 100"),
-            "stty size should reflect the TIOCSWINSZ resize; got:\n{text}"
-        );
-    }
-}
+#[path = "unix_session_pty_tests.rs"]
+mod session_pty_tests;

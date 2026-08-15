@@ -1,7 +1,7 @@
 use settings::Setting as _;
 use warpui::{
-    fonts::FamilyId, AddSingletonModel, AppContext, AssetProvider, Entity, ModelContext,
-    SingletonEntity,
+    AddSingletonModel, AppContext, AssetProvider, Entity, ModelContext, SingletonEntity,
+    fonts::FamilyId,
 };
 
 #[cfg(target_os = "macos")]
@@ -13,7 +13,7 @@ mod macos_app_icon {
     };
     pub use objc::{class, msg_send, sel, sel_impl};
     pub use warp_core::channel::{Channel, ChannelState};
-    pub use warpui::platform::mac::{make_nsstring, AutoreleasePoolGuard};
+    pub use warpui::platform::mac::{AutoreleasePoolGuard, make_nsstring};
 
     pub use crate::settings::app_icon::{AppIcon, AppIconSettings, AppIconSettingsChangedEvent};
 }
@@ -21,13 +21,13 @@ mod macos_app_icon {
 use macos_app_icon::*;
 
 use crate::{
+    ASSETS,
     settings::{
-        active_theme_kind, font::heading_font_size_multipliers_from_settings, FontSettings,
-        FontSettingsChangedEvent, MonospaceFontSize, Settings, ThemeSettings, UI_FONT_SIZE_MIN,
-        UI_FONT_SIZE_MAX,
+        FontSettings, FontSettingsChangedEvent, MonospaceFontSize, Settings, ThemeSettings,
+        UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN, active_theme_kind,
+        font::heading_font_size_multipliers_from_settings,
     },
     themes::theme::{ThemeKind, WarpTheme},
-    ASSETS,
 };
 
 use anyhow::anyhow;
@@ -189,6 +189,13 @@ impl AppearanceManager {
 
     pub fn set_transient_theme(&mut self, theme: ThemeKind, ctx: &mut ModelContext<Self>) {
         self.transient_theme = Some(Settings::theme_for_theme_kind(&theme, ctx));
+        self.refresh_theme_state(ctx);
+    }
+
+    /// Applies a draft theme directly while the theme editor is open. The
+    /// draft is never persisted by this method and can be cleared atomically.
+    pub fn set_transient_warp_theme(&mut self, theme: WarpTheme, ctx: &mut ModelContext<Self>) {
+        self.transient_theme = Some(theme);
         self.refresh_theme_state(ctx);
     }
 
@@ -438,8 +445,9 @@ fn build_appearance(ctx: &mut AppContext) -> Appearance {
     let ui_font_family = if ui_font_name.is_empty() {
         load_default_ui_font_family(ctx).expect("unable to load default ui font family")
     } else {
-        get_or_load_font_family(&ui_font_name, ctx)
-            .unwrap_or_else(|| load_default_ui_font_family(ctx).expect("unable to load default ui font family"))
+        get_or_load_font_family(&ui_font_name, ctx).unwrap_or_else(|| {
+            load_default_ui_font_family(ctx).expect("unable to load default ui font family")
+        })
     };
 
     let am_font_family_from_settings = get_or_load_font_family(&am_font_name, ctx);

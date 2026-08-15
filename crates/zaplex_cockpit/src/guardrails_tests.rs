@@ -13,7 +13,17 @@ fn session(name: &str, cwd: &str, pid: u32) -> SessionSnapshot {
         effort: None,
         ctx_tokens: 0,
         project_root: cwd.to_string(),
+        repo_root: cwd.to_string(),
         project_name: "proj".to_string(),
+        branch: None,
+        worktree: None,
+        config_dir: None,
+        account_email: None,
+        process_fingerprint: None,
+        pty_session_id: None,
+        pty_session_generation: None,
+        pty_foreground: false,
+        task_state: None,
         last_activity: Utc::now(),
         pid,
     }
@@ -22,25 +32,11 @@ fn session(name: &str, cwd: &str, pid: u32) -> SessionSnapshot {
 #[test]
 fn interrupt_maps_to_sigint() {
     assert_eq!(GuardrailSignal::Interrupt.signal_number(), 2);
-    assert_eq!(GuardrailSignal::Interrupt.shell_flag(), "INT");
 }
 
 #[test]
 fn kill_maps_to_sigkill() {
     assert_eq!(GuardrailSignal::Kill.signal_number(), 9);
-    assert_eq!(GuardrailSignal::Kill.shell_flag(), "KILL");
-}
-
-#[test]
-fn remote_kill_command_is_a_plain_kill_invocation() {
-    assert_eq!(
-        GuardrailSignal::Interrupt.remote_kill_command(4242),
-        "kill -INT 4242"
-    );
-    assert_eq!(
-        GuardrailSignal::Kill.remote_kill_command(4242),
-        "kill -KILL 4242"
-    );
 }
 
 #[test]
@@ -49,8 +45,8 @@ fn guardrail_target_routes_by_explicit_locality() {
     assert_eq!(guardrail_target(true, "devhost"), GuardrailTarget::Local);
     // Remote marker → Remote, carrying the label for the daemon lookup.
     assert_eq!(
-        guardrail_target(false, "macmini"),
-        GuardrailTarget::Remote("macmini".to_string())
+        guardrail_target(false, "agenthost"),
+        GuardrailTarget::Remote("agenthost".to_string())
     );
 }
 
@@ -71,6 +67,13 @@ fn guardrail_target_label_collision_does_not_route_local() {
 fn pid_zero_is_never_signalable() {
     assert!(!pid_signalable(0));
     assert!(pid_signalable(1234));
+}
+
+#[test]
+fn pid_must_fit_the_positive_signed_process_id_range() {
+    assert!(pid_signalable(i32::MAX as u32));
+    assert!(!pid_signalable(i32::MAX as u32 + 1));
+    assert!(!pid_signalable(u32::MAX));
 }
 
 #[test]

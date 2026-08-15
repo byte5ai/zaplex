@@ -1,29 +1,38 @@
-# Zap release pipeline — triggered by pushing tag (v*) to the openWarp branch
+# Zaplex release pipeline — triggered by pushing a stable tag (v*)
 #
 # Differences from upstream create_release.yml:
-# - Only macOS arm64 + macOS Intel + Windows x64 + Linux x86_64,
-#   all of Web/CLI/Universal/Win-arm64 removed
-#   (macOS dual-architecture produces single-arch DMG and CLI tarball respectively; Linux produces AppImage/deb/rpm
-#    plus best-effort Arch package, does not publish upstream Zap repository source or signing keys)
-# - Single channel: preview (configuration provided by release_configurations.json)
-# - No signing: no --read-passwords-from-env (macOS) / no SIGN_TOOL_CMD (Windows)
+# - Supported release targets are macOS arm64 + Linux x86_64; Web/CLI/Universal,
+#   Intel macOS and Windows are not published. The dormant Windows job is opt-in.
+#   (macOS produces a native DMG and CLI tarball; Linux produces AppImage/deb/rpm
+#    plus a best-effort Arch package, without upstream Zap source or signing keys.)
+# - Single stable OSS channel (configuration provided by release_configurations.json)
+# - macOS is signed with Developer ID and notarized through App Store Connect.
+#   The dormant Windows build remains unsigned until a Windows signing identity is available.
 # - No upload to GCS / third-party crash platforms / Slack / changelog, no channel-versions repository_dispatch call
 # - Reuse ./.github/actions/{prepare_environment,get_channel_config}
 #
 # Pipeline structure (package first, publish later, avoid creating empty Release):
-#   prepare_metadata → release_{macos,windows,linux} (upload as workflow artifact)
-#                    → publish_release (download artifact and create Release after all builds succeed)
+#   prepare_metadata → signing_preflight → build_remote_server → release_macos
+#                                      └→ release_linux
+#   supported package jobs → publish_release (download artifacts and create Release after all succeed)
 # If any build job fails → publish_release skips due to needs → no Release without installers left behind.
 
 name: Zap Release
 
 # PR validation is handled by .github/workflows/pr-check.yml (Linux cargo check).
-# This workflow only runs full three-platform packaging when pushing a tag / manual dispatch, avoiding ~3h waste on PRs.
+# This workflow only runs full supported-platform packaging on a tag/manual dispatch, avoiding costly PR builds.
+# ci-lint: allow-CI008  Tag/manual release workflow; path filters do not apply to stable tags.
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag; must match VERSION"
+        type: string
+        default: v1.0.2
+        required: true
 
 # Creating a release + uploading assets requires write permissions. Default GITHUB_TOKEN is read-only on forks/restricted repos,
 # explicitly declare contents: write here to avoid 403 "Resource not accessible by integration".
@@ -45,6 +54,7 @@ jobs:
   prepare_metadata:
     name: Prepare metadata
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
     outputs:
       release_tag: ${{ steps.compute_tag.outputs.tag }}
       release_branch: ${{ steps.compute_tag.outputs.branch }}
@@ -55,6 +65,23 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+
+      - name: Verify Phase A release readiness
+        run: |
+          set -euo pipefail
+          git fetch origin main:refs/remotes/origin/main --no-tags
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            RELEASE_COMMIT="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+            if ! git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main; then
+              echo "Stable releases must point to a commit reachable from origin/main." >&2
+              exit 1
+            fi
+          elif [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Manual stable releases must be dispatched from main, not '$GITHUB_REF'." >&2
+            exit 1
+          fi
+          script/check-v1-release-readiness --phase-a
+        shell: bash
 
       - name: Get channel configuration
         id: get-config
@@ -67,14 +94,19 @@ jobs:
         id: compute_tag
         shell: bash
         run: |
+          EXPECTED_TAG="v$(tr -d '[:space:]' < VERSION)"
           # tag-triggered scenario: GITHUB_REF=refs/tags/<tag>
-          # workflow_dispatch: GITHUB_REF=refs/heads/<branch>, no tag, generate temporary tag
+          # workflow_dispatch: build the selected branch with the explicit release tag.
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
             BRANCH="$TAG"
           else
-            TAG="v0.$(date +%Y.%m.%d.%H%M)"
+            TAG="${{ inputs.release_tag }}"
             BRANCH="${GITHUB_REF#refs/heads/}"
+          fi
+          if [[ "$TAG" != "$EXPECTED_TAG" ]]; then
+            echo "Release tag '$TAG' does not match VERSION ('$EXPECTED_TAG')." >&2
+            exit 1
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
@@ -142,24 +174,141 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  release_macos:
-    name: Build Release (macOS ${{ matrix.dmg_name_suffix }})
-    runs-on: ${{ matrix.runner }}
+  signing_preflight:
+    name: Validate macOS signing identity
+    # macOS is required for Keychain, codesign and notarytool validation.
+    runs-on: macos-26
     needs: prepare_metadata
-    # Native arm64 build on Blacksmith Apple Silicon (M4) — no cross-compile. Full cargo build +
-    # bundle + create-dmg with no sccache is still time-consuming; keep a generous timeout to be safe.
-    timeout-minutes: 360
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: aarch64
-            dmg_name_suffix: arm64
-            runner: blacksmith-12vcpu-macos-26 # Blacksmith Apple Silicon (M4), native arm64
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.prepare_metadata.outputs.release_branch }}
+
+      - name: Validate Developer ID signing inputs
+        run: |
+          script/macos/bundle --channel "$CHANNEL" --arch aarch64 \
+            --read-passwords-from-env --check-signing-only
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
+
+  build_remote_server:
+    name: Build bundled remote-server (Linux musl x86_64)
+    # ci-lint: allow-CI001  Org-managed larger-runner label has no versioned equivalent.
+    runs-on: ubuntu-latest-xl
+    needs:
+      - prepare_metadata
+      - signing_preflight
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.prepare_metadata.outputs.release_branch }}
+
+      - name: Restore cached remote-server tarball
+        id: daemon_cache
+        uses: actions/cache@v4
+        with:
+          path: zap-linux-x86_64.tar.gz
+          key: release-remote-server-musl-x86_64-${{ needs.prepare_metadata.outputs.release_tag }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources') }}
+
+      - name: Free up disk space
+        if: steps.daemon_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift || true
+          df -h /
+
+      - uses: ./.github/actions/prepare_environment
+        if: steps.daemon_cache.outputs.cache-hit != 'true'
+        with:
+          target_os: linux
+          is_self_hosted: false
+          install_release_deps: true
+
+      - name: Install zig + cargo-zigbuild for static musl build
+        if: steps.daemon_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add x86_64-unknown-linux-musl
+          ZIG_VERSION="0.13.0"
+          ZIG_DIR="$HOME/.local/zig-${ZIG_VERSION}"
+          if [ ! -x "${ZIG_DIR}/zig" ]; then
+            mkdir -p "${ZIG_DIR}"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+              | tar -xJ -C "${ZIG_DIR}" --strip-components=1
+          fi
+          echo "${ZIG_DIR}" >> "$GITHUB_PATH"
+          cargo install --locked cargo-zigbuild --version ^0.19
+
+      - name: Build remote-server CLI (static musl via zigbuild)
+        if: steps.daemon_cache.outputs.cache-hit != 'true'
+        id: bundle_cli
+        shell: bash
+        run: |
+          script/bundle --channel "$CHANNEL" --arch x86_64 --artifact cli --packages none \
+            --target x86_64-unknown-linux-musl
+        env:
+          GIT_RELEASE_TAG: ${{ needs.prepare_metadata.outputs.release_tag }}
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          USE_ZIGBUILD: "true"
+          PKG_CONFIG_ALLOW_CROSS: 1
+
+      - name: Pack release and bundled tarball
+        if: steps.daemon_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging=$(mktemp -d)
+          cp "${{ steps.bundle_cli.outputs.executable_path }}" "$staging/zaplex"
+          cp -R "$(dirname "${{ steps.bundle_cli.outputs.bundled_resources_dir }}")/resources" \
+            "$staging/resources"
+          tar -czf zap-linux-x86_64.tar.gz -C "$staging" zaplex resources
+          ls -lh zap-linux-x86_64.tar.gz
+
+      - name: Upload remote-server tarball
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zap-cli-linux-x86_64
+          path: zap-linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  release_macos:
+    name: Build Release (macOS ${{ matrix.dmg_name_suffix }})
+    # macOS is required to build, sign, notarize and staple the native DMG.
+    runs-on: ${{ matrix.runner }}
+    needs:
+      - prepare_metadata
+      - signing_preflight
+      - build_remote_server
+    # Native arm64 build on GitHub's pinned macOS 26 image. Full cargo build + bundle +
+    # create-dmg with no sccache is still time-consuming; keep a generous timeout to be safe.
+    timeout-minutes: 360
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: aarch64
+            dmg_name_suffix: arm64
+            runner: macos-26
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ needs.prepare_metadata.outputs.release_branch }}
+
+      - name: Fetch bundled remote-server tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: zap-cli-linux-x86_64
+          path: resources/bundled/remote-server/
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -174,7 +323,7 @@ jobs:
 
       - name: Check ${{ matrix.arch }} release compile
         run: |
-          script/bundle --check-only --channel "$CHANNEL" --arch ${{ matrix.arch }} --dmg-name-suffix "${{ matrix.dmg_name_suffix }}" --selfsign
+          script/bundle --check-only --channel "$CHANNEL" --arch ${{ matrix.arch }} --dmg-name-suffix "${{ matrix.dmg_name_suffix }}"
         shell: bash
         env:
           GIT_RELEASE_TAG: ${{ needs.prepare_metadata.outputs.release_tag }}
@@ -190,22 +339,19 @@ jobs:
       - name: Install create-dmg
         run: brew install create-dmg
 
-      # Use --selfsign for ad-hoc signing (fallback to `-` when no Apple Developer cert):
-      # 1. Give .app a cdhash → UNUserNotificationCenter registers Zap to
-      #    System Settings → Notifications (otherwise desktop notifications silently fail, see issue #40).
-      # 2. ad-hoc + Hardened Runtime + Debug-Entitlements.plist (disable-library-validation
-      #    + get-task-allow) is a valid combination, can be completed on macos-26 runner without credentials.
-      # 3. The entire notarize block is skipped by the CODESIGN=false branch in `script/macos/bundle`; DMG is created directly
-      #    from BUNDLE_DIR with create-dmg, no codesign / staple steps.
-      # 4. Users still see Gatekeeper's "unidentified developer" dialog on first open (inherent limitation of lacking Developer ID
-      #    notarize); the self-help solution `xattr -rd com.apple.quarantine` provided in issue #51 remains effective.
-      - name: Build ${{ matrix.arch }} bundle (ad-hoc signed)
+      - name: Build, sign and notarize ${{ matrix.arch }} bundle
         id: bundle_app
         run: |
-          script/bundle --channel "$CHANNEL" --arch ${{ matrix.arch }} --dmg-name-suffix "${{ matrix.dmg_name_suffix }}" --selfsign
+          script/bundle --channel "$CHANNEL" --arch ${{ matrix.arch }} \
+            --dmg-name-suffix "${{ matrix.dmg_name_suffix }}" --read-passwords-from-env
         shell: bash
         env:
           GIT_RELEASE_TAG: ${{ needs.prepare_metadata.outputs.release_tag }}
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -218,10 +364,16 @@ jobs:
       - name: Build CLI
         id: bundle_cli
         run: |
-          script/bundle --channel "$CHANNEL" --arch ${{ matrix.arch }} --artifact cli --nosign
+          script/bundle --channel "$CHANNEL" --arch ${{ matrix.arch }} \
+            --artifact cli --read-passwords-from-env
         shell: bash
         env:
           GIT_RELEASE_TAG: ${{ needs.prepare_metadata.outputs.release_tag }}
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
 
       - name: Package CLI tarball
         run: |
@@ -241,7 +393,8 @@ jobs:
 
   release_windows:
     name: Build Release (Windows x64)
-    runs-on: windows-latest
+    # ci-lint: allow-CI005  Disabled by default; a native runner is required only when explicitly enabled.
+    runs-on: windows-2025
     # Windows is NOT a supported target — we do not ship it, so it must not burn paid CI minutes.
     # Disabled by default: this job is skipped (no runner, zero cost) unless the repo variable
     # ENABLE_WINDOWS_RELEASE is set to 'true'. Flip that variable on when Windows becomes a target.
@@ -286,7 +439,9 @@ jobs:
   release_linux:
     name: Build Release (Linux x86_64)
     runs-on: blacksmith-4vcpu-ubuntu-2204
-    needs: prepare_metadata
+    needs:
+      - prepare_metadata
+      - signing_preflight
     # Use 22.04 (glibc 2.35) instead of ubuntu-latest (24.04, glibc 2.39),
     # AppImage links against host glibc, 22.04 artifacts can run on more older distributions
     # (Debian 11 / Ubuntu 20.04 and others).
@@ -296,11 +451,9 @@ jobs:
         with:
           ref: ${{ needs.prepare_metadata.outputs.release_branch }}
 
-      # GitHub-hosted ubuntu runner's / free space is limited, and this job sequentially outputs
-      # release-lto (GUI/AppImage/deb/rpm/arch) and release-cli (musl CLI) two complete
-      # targets; combined with cargo registry / docker images / zig toolchain, it exhausts the disk, musl CLI
-      # step reports "No space left on device" (see run 27593938453). First delete pre-installed
-      # toolchains unrelated to this build (Android SDK / .NET / GHC / CodeQL / Swift), freeing ~25GB.
+      # GitHub-hosted ubuntu runner disk is limited. The release-lto GUI packages,
+      # cargo registry, and Arch packaging container can exhaust it, so remove
+      # unrelated pre-installed toolchains before building.
       - name: Free up disk space
         shell: bash
         run: |
@@ -439,86 +592,18 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # release-lto artifacts (GUI/deb/rpm/arch) have already been uploaded by the previous "Upload package artifacts"
-      # as workflow artifacts, no longer needed locally; the musl CLI below uses independent release-cli
-      # profile, delete release-lto to free disk for it, avoiding "No space left on device".
-      - name: Reclaim disk before musl CLI build
-        shell: bash
-        run: |
-          rm -rf target/release-lto
-          df -h /
-
-      # CLI/remote-server tarball uses static musl linking, artifacts don't depend on host glibc,
-      # can run on any Linux x86_64 host (including CentOS 7 / Amazon Linux 2 with older glibc
-      # and Alpine and other musl distributions). GUI AppImage/deb still use the
-      # glibc linking build above, unaffected.
-      #
-      # Use `cargo zigbuild` for musl cross-compilation: zig includes complete C/C++ musl
-      # toolchain (`zig cc` / `zig c++`), doesn't depend on host's `musl-gcc` or hand-written
-      # `musl-g++` wrapper — historically, the "host g++ + musl specs" hack prepared for *-sys
-      # dependencies like freetype-sys / harfbuzz-sys is now completely removed.
-      # Local dev auto-build paths (`ssh_transport.rs`) also prefer zigbuild, toolchain unified on both sides.
-      - name: Install zig + cargo-zigbuild for static musl CLI build
-        run: |
-          set -euo pipefail
-          rustup target add x86_64-unknown-linux-musl
-          # zig: use official pre-compiled tarball, fixed version to ensure reproducible builds.
-          # 0.13.0 is compatible with cargo-zigbuild >= 0.19.
-          ZIG_VERSION="0.13.0"
-          ZIG_DIR="$HOME/.local/zig-${ZIG_VERSION}"
-          if [ ! -x "${ZIG_DIR}/zig" ]; then
-            mkdir -p "${ZIG_DIR}"
-            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
-              | tar -xJ -C "${ZIG_DIR}" --strip-components=1
-          fi
-          echo "${ZIG_DIR}" >> "$GITHUB_PATH"
-          # cargo-zigbuild: use cargo install, reuse from cache after first install.
-          cargo install --locked cargo-zigbuild --version ^0.19
-        shell: bash
-
-      - name: Build CLI (static musl via zigbuild)
-        id: bundle_cli
-        run: |
-          script/bundle --channel "$CHANNEL" --arch x86_64 --artifact cli --packages none \
-            --target x86_64-unknown-linux-musl
-        shell: bash
-        env:
-          GIT_RELEASE_TAG: ${{ needs.prepare_metadata.outputs.release_tag }}
-          APPIMAGE_EXTRACT_AND_RUN: 1
-          # Let script/linux/bundle switch `cargo build` to `cargo zigbuild`.
-          USE_ZIGBUILD: "true"
-          # libc (musl) is statically linked into the binary with +crt-static — this is key to freeing artifacts
-          # from host glibc dependency. `libdbus-sys` now embeds from source via keyring's
-          # `vendored` feature (see Cargo.toml), no longer uses pkg-config
-          # to detect host `dbus-1`; `PKG_CONFIG_ALLOW_CROSS=1` is kept as fallback,
-          # in case a newly introduced -sys crate still uses pkg-config.
-          PKG_CONFIG_ALLOW_CROSS: 1
-
-      - name: Package CLI tarball
-        run: |
-          cp "${{ steps.bundle_cli.outputs.executable_path }}" zap-oss
-          tar czf zap-linux-x86_64.tar.gz \
-            zap-oss \
-            -C "$(dirname "${{ steps.bundle_cli.outputs.bundled_resources_dir }}")" resources
-        shell: bash
-
-      - name: Upload CLI artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: zap-cli-linux-x86_64
-          path: zap-linux-x86_64.tar.gz
-          if-no-files-found: error
-          retention-days: 7
-
   publish_release:
     name: Publish GitHub Release
+    # ci-lint: allow-CI005  This Linux job only publishes already-built artifacts.
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
     # Gate the release on the supported platforms only (macOS arm64 + Linux); if either fails
     # → this job is skipped → no half-published Release. Windows is unsupported for now and is
     # deliberately NOT in `needs`, so a Windows failure can never block a macOS/Linux release.
     # `files: dist/*` below attaches whatever artifacts exist, so a missing Windows asset is fine.
     needs:
       - prepare_metadata
+      - build_remote_server
       - release_macos
       - release_linux
     steps:

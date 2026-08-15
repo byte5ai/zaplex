@@ -14,9 +14,9 @@ use crate::cloud_object::model::persistence::ObjectStoreModel;
 use crate::cloud_object::model::view::ObjectStoreViewModel;
 use crate::cloud_object::update_manager::UpdateManager;
 use crate::cloud_object::{StoredObjectMetadata, StoredObjectPermissions};
-use crate::server_time::ServerTimestamp;
 use crate::notebooks::manager::NotebookManager;
 use crate::server::ids::SyncId;
+use crate::server_time::ServerTimestamp;
 use crate::settings::AISettings;
 use crate::system::SystemStats;
 use crate::workspaces::user_profiles::UserProfiles;
@@ -62,7 +62,10 @@ fn collect_user_rules_returns_empty_when_store_is_empty() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let rules = app.read(|app| collect_user_rules(ObjectStoreModel::as_ref(app)));
-        assert!(rules.is_empty(), "empty store should return empty Vec, got: {rules:?}");
+        assert!(
+            rules.is_empty(),
+            "empty store should return empty Vec, got: {rules:?}"
+        );
     });
 }
 
@@ -80,7 +83,11 @@ fn collect_user_rules_filters_trashed_entries() {
         });
 
         let rules = app.read(|app| collect_user_rules(ObjectStoreModel::as_ref(app)));
-        assert_eq!(rules.len(), 1, "trashed entries should be filtered: {rules:?}");
+        assert_eq!(
+            rules.len(),
+            1,
+            "trashed entries should be filtered: {rules:?}"
+        );
         assert_eq!(rules[0].0.as_deref(), Some("alive"));
         assert_eq!(rules[0].1, "live content");
     });
@@ -129,7 +136,10 @@ fn collect_user_rules_handles_unnamed_rules() {
 
         let rules = app.read(|app| collect_user_rules(ObjectStoreModel::as_ref(app)));
         assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0].0, None, "entries without name should sort first: {rules:?}");
+        assert_eq!(
+            rules[0].0, None,
+            "entries without name should sort first: {rules:?}"
+        );
         assert_eq!(rules[0].1, "unnamed content");
         assert_eq!(rules[1].0.as_deref(), Some("named"));
     });

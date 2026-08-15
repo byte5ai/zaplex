@@ -34,6 +34,8 @@ jobs:
   validate:
     name: validate-tag-on-main
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    # No historical runs exist yet; this deterministic Git-only check is capped conservatively.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="ui-spec-status" content="approved-2026-08-13-user-feedback">
+  <meta name="ui-spec-route" content="/native/ssh-manager-navigation">
+  <meta name="ui-spec-viewports" content="900x650">
+  <title>UI-Spezifikation — Navigation zur Hostverwaltung</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --canvas: #0b0d12;
+      --panel: #11151f;
+      --surface: #181d28;
+      --hover: #252b39;
+      --border: #2a3140;
+      --text: #e8ebf2;
+      --muted: #9aa4b5;
+      --faint: #667084;
+      --accent: #8f83ff;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 22px; color: var(--text); background: var(--canvas); }
+    #spec, #mockups { width: min(856px, 100%); margin: 0 auto 20px; }
+    #spec { padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+    h1 { margin: 0 0 12px; font-size: 18px; }
+    .spec-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    h2 { margin: 0 0 5px; color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 11px; }
+    #mockups { display: grid; grid-template-columns: repeat(2, 250px); justify-content: center; gap: 34px; }
+    .frame { overflow: hidden; min-height: 390px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); box-shadow: 0 16px 44px #0007; }
+    .caption { padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--faint); font-size: 10px; }
+    .panel-head { display: flex; align-items: center; height: 34px; padding: 0 8px; border-bottom: 1px solid #191e29; }
+    .tools { display: flex; gap: 6px; color: var(--muted); }
+    .close { margin-left: auto; color: var(--muted); }
+    .back { display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border-radius: 5px; color: var(--text); }
+    .back:hover { background: var(--hover); }
+    .arrow { font-size: 16px; }
+    .body { padding: 10px; }
+    .zone { overflow: hidden; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+    .zone-head { display: flex; align-items: center; gap: 5px; padding: 8px 9px 6px; color: var(--muted); font-size: 10px; text-transform: uppercase; }
+    .zone-head .gear { margin-left: auto; color: var(--accent); }
+    .row { display: flex; align-items: center; gap: 7px; height: 29px; padding: 3px 8px; }
+    .dot { width: 6px; height: 6px; border: 1px solid var(--faint); border-radius: 50%; }
+    .count { color: var(--faint); }
+    .manager-tools { display: flex; gap: 12px; height: 28px; align-items: center; color: var(--muted); }
+    .manager-tools .collapse { margin-left: auto; }
+    .folder { margin-top: 4px; }
+    .folder .row { padding-left: 16px; }
+  </style>
+</head>
+<body>
+  <section id="spec">
+    <h1>UI-Spezifikation — Navigation zur Hostverwaltung</h1>
+    <div class="spec-grid">
+      <div>
+        <h2>Hierarchie</h2>
+        <ul>
+          <li>„Verbindungen“ ist der primäre Navigationskontext.</li>
+          <li>Das Zahnrad öffnet die Hostverwaltung als genau eine Drill-in-Ebene.</li>
+          <li>Die Hostverwaltung ist bei aktivem Cockpit kein paralleler Toolbelt-Root.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Rückweg</h2>
+        <ul>
+          <li>Der Header zeigt sichtbar <strong>← Verbindungen</strong>.</li>
+          <li>Der Rückweg funktioniert auch nach Schließen/Öffnen und Zustandswiederherstellung.</li>
+          <li>Das × schließt das Panel und ersetzt niemals „Zurück“.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Abnahme</h2>
+        <ul>
+          <li>Zahnrad → Hostverwaltung → „Verbindungen“ benötigt je einen offensichtlichen Klick.</li>
+          <li>Bei deaktiviertem Cockpit ist die Hostverwaltung primär und zeigt keinen falschen Rückweg.</li>
+          <li>Es existieren höchstens zwei Navigationsebenen.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <main id="mockups">
+    <section class="frame">
+      <div class="caption">Ebene 1 · Verbindungen</div>
+      <div class="panel-head"><div class="tools">▦　▣　⌕　▢　▤</div><span class="close">×</span></div>
+      <div class="body">
+        <div class="zone">
+          <div class="zone-head"><span>Verbindungen</span><span class="count">4</span><span class="gear">⚙</span></div>
+          <div class="row"><span class="dot"></span>Mac.local</div>
+          <div class="row"><span class="dot"></span>agenthost</div>
+          <div class="row"><span class="dot"></span>devhost</div>
+          <div class="row"><span class="dot"></span>hal9000</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="frame">
+      <div class="caption">Ebene 2 · Hostverwaltung</div>
+      <div class="panel-head"><span class="back"><span class="arrow">←</span>Verbindungen</span><span class="close">×</span></div>
+      <div class="body">
+        <div class="manager-tools"><span>▣</span><span>＋</span><span class="collapse">⌃</span></div>
+        <div class="folder">
+          <div class="row">⌘　devhost　ϟ</div>
+          <div class="row">⌘　agenthost　ϟ</div>
+          <div class="row">⌘　hal9000　ϟ</div>
+          <div class="row">⌄　▣　New folder</div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

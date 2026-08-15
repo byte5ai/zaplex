@@ -1,19 +1,117 @@
 //! Full transcript parser for the conversation viewer (audit (g), no regression
 //! vs claudeplex/-desktop's transcript view + watch/adopt mode).
 //!
-//! [`sessions`] reads only the transcript *tail* to derive state/model/context.
-//! This module reads a whole Claude Code session `.jsonl` into an ordered list
-//! of [`TranscriptTurn`]s — the authoritative content channel (assistant text,
+//! [`sessions`] reads the transcript tail for coarse state/model/context and
+//! replays the complete transcript for structured task state. This module also
+//! reads a whole Claude Code session `.jsonl` into an ordered list of
+//! [`TranscriptTurn`]s — the authoritative content channel (assistant text,
 //! thinking, tool calls, per-turn model + token usage) written by Claude to disk,
-//! not scraped from the screen. Mirrors claudeplex's `transcript.ts`.
+//! not scraped from the screen. It reconstructs provider-neutral structured
+//! task state from Claude task tools and Codex `update_plan` calls. Mirrors
+//! claudeplex's `transcript.ts`.
 //!
 //! Each line is one JSON object. We keep `type:"assistant"` and `type:"user"`
 //! turns; the many bookkeeping kinds (agent-name, mode, attachment,
 //! file-history-snapshot, …) are ignored. Meta/system-reminder/command wrappers
 //! are dropped so the viewer shows the real conversation, not plumbing.
 
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
 use chrono::{DateTime, Utc};
-use serde_json::Value;
+use serde_json::{Map, Value};
+
+use crate::types::{Provider, TaskItem, TaskState, TaskStatus};
+
+const TASK_STATE_CACHE_LIMIT: usize = 512;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FileFingerprint {
+    len: u64,
+    modified: SystemTime,
+}
+
+pub(crate) fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> {
+    let metadata = std::fs::metadata(path)?;
+    Ok(FileFingerprint {
+        len: metadata.len(),
+        modified: metadata.modified()?,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct CachedTaskState {
+    provider: Provider,
+    fingerprint: FileFingerprint,
+    state: Option<TaskState>,
+    last_used: u64,
+}
+
+/// Bounded cache for the full-transcript replay needed by structured task state.
+///
+/// Every lookup still stats the file, but an unchanged `(mtime, size)` pair
+/// avoids reopening and reparsing the transcript. The cache is process-local,
+/// contains only the same task titles already exposed on `SessionSnapshot`,
+/// and evicts the least recently used entry once the fixed bound is exceeded.
+#[derive(Clone, Debug, Default)]
+pub struct TaskStateCache {
+    entries: HashMap<PathBuf, CachedTaskState>,
+    clock: u64,
+}
+
+impl TaskStateCache {
+    pub fn parse_file(&mut self, provider: Provider, path: &Path) -> Option<TaskState> {
+        let fingerprint = match file_fingerprint(path) {
+            Ok(fingerprint) => fingerprint,
+            Err(_) => {
+                self.entries.remove(path);
+                return None;
+            }
+        };
+        self.clock = self.clock.wrapping_add(1);
+        if let Some(cached) = self.entries.get_mut(path) {
+            if cached.provider == provider && cached.fingerprint == fingerprint {
+                cached.last_used = self.clock;
+                return cached.state.clone();
+            }
+        }
+
+        let state = match std::fs::read_to_string(path) {
+            Ok(jsonl) => parse_task_state(provider, &jsonl),
+            Err(_) => {
+                self.entries.remove(path);
+                return None;
+            }
+        };
+        self.entries.insert(
+            path.to_path_buf(),
+            CachedTaskState {
+                provider,
+                fingerprint,
+                state: state.clone(),
+                last_used: self.clock,
+            },
+        );
+        self.evict_lru();
+        state
+    }
+
+    fn evict_lru(&mut self) {
+        while self.entries.len() > TASK_STATE_CACHE_LIMIT {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(path, _)| path.clone())
+            else {
+                return;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+}
 
 /// Who produced a turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +149,341 @@ pub struct TranscriptTurn {
     pub model: Option<String>,
     pub usage: Option<TurnUsage>,
     pub timestamp: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+struct ClaudeTask {
+    item: TaskItem,
+    metadata: Map<String, Value>,
+}
+
+impl ClaudeTask {
+    fn is_internal(&self) -> bool {
+        self.metadata
+            .get("_internal")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PendingClaudeTask {
+    title: String,
+    metadata: Map<String, Value>,
+}
+
+#[derive(Debug, Default)]
+struct ClaudeTaskAccumulator {
+    tasks: BTreeMap<String, ClaudeTask>,
+    pending_creates: HashMap<String, PendingClaudeTask>,
+    displayed: Option<Vec<TaskItem>>,
+}
+
+impl ClaudeTaskAccumulator {
+    fn apply(&mut self, object: &Value) {
+        match object.get("type").and_then(Value::as_str) {
+            Some("assistant") => self.apply_assistant(object),
+            Some("user") => self.apply_user(object),
+            Some(_) | None => {}
+        }
+    }
+
+    fn apply_assistant(&mut self, object: &Value) {
+        let Some(content) = object
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_array)
+        else {
+            return;
+        };
+        for part in content {
+            if part.get("type").and_then(Value::as_str) != Some("tool_use") {
+                continue;
+            }
+            match part.get("name").and_then(Value::as_str) {
+                Some("TaskCreate") => self.apply_task_create(part),
+                Some("TaskUpdate") => self.apply_task_update(part),
+                Some("TodoWrite") => self.apply_todo_write(part),
+                Some(_) | None => {}
+            }
+        }
+    }
+
+    fn apply_task_create(&mut self, tool_use: &Value) {
+        let Some(input) = tool_use.get("input").and_then(Value::as_object) else {
+            return;
+        };
+        let Some(title) = normalized_title(input.get("subject").and_then(Value::as_str)) else {
+            return;
+        };
+        let metadata = input
+            .get("metadata")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let Some(tool_use_id) = value_id(tool_use.get("id")) else {
+            return;
+        };
+        self.pending_creates
+            .insert(tool_use_id, PendingClaudeTask { title, metadata });
+    }
+
+    fn apply_task_update(&mut self, tool_use: &Value) {
+        let Some(input) = tool_use.get("input").and_then(Value::as_object) else {
+            return;
+        };
+        let Some(task_id) = ["taskId", "id", "task_id"]
+            .iter()
+            .find_map(|key| value_id(input.get(*key)))
+        else {
+            return;
+        };
+        if input.get("status").and_then(Value::as_str) == Some("deleted") {
+            if self.tasks.remove(&task_id).is_some() {
+                self.refresh_task_items();
+            }
+            return;
+        }
+        if let Some(task) = self.tasks.get_mut(&task_id) {
+            if let Some(title) = normalized_title(input.get("subject").and_then(Value::as_str)) {
+                task.item.title = title;
+            }
+            if let Some(status) = input.get("status").and_then(Value::as_str) {
+                task.item.status = external_task_status(Some(status));
+            }
+            if let Some(metadata) = input.get("metadata").and_then(Value::as_object) {
+                for (key, value) in metadata {
+                    if value.is_null() {
+                        task.metadata.remove(key);
+                    } else {
+                        task.metadata.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+            self.refresh_task_items();
+            return;
+        }
+        let Some(title) = normalized_title(input.get("subject").and_then(Value::as_str)) else {
+            return;
+        };
+        self.tasks.insert(
+            task_id.clone(),
+            ClaudeTask {
+                item: TaskItem {
+                    id: task_id,
+                    title,
+                    status: external_task_status(input.get("status").and_then(Value::as_str)),
+                },
+                metadata: input
+                    .get("metadata")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default(),
+            },
+        );
+        self.refresh_task_items();
+    }
+
+    fn apply_todo_write(&mut self, tool_use: &Value) {
+        let Some(todos) = tool_use
+            .get("input")
+            .and_then(|input| input.get("todos"))
+            .and_then(Value::as_array)
+        else {
+            return;
+        };
+        let rows = todos
+            .iter()
+            .enumerate()
+            .filter_map(|(index, todo)| {
+                let title = normalized_title(todo.get("content").and_then(Value::as_str))?;
+                Some(TaskItem {
+                    id: index.to_string(),
+                    title,
+                    status: external_task_status(todo.get("status").and_then(Value::as_str)),
+                })
+            })
+            .collect();
+        if self.task_items().is_empty() {
+            self.displayed = Some(rows);
+        }
+    }
+
+    fn apply_user(&mut self, object: &Value) {
+        let Some(result_task) = object
+            .get("toolUseResult")
+            .and_then(|result| result.get("task"))
+            .and_then(Value::as_object)
+        else {
+            return;
+        };
+        let Some(task_id) = value_id(result_task.get("id")) else {
+            return;
+        };
+        let Some(content) = object
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_array)
+        else {
+            return;
+        };
+        for part in content {
+            if part.get("type").and_then(Value::as_str) != Some("tool_result") {
+                continue;
+            }
+            let Some(tool_use_id) = value_id(part.get("tool_use_id")) else {
+                continue;
+            };
+            let Some(pending) = self.pending_creates.remove(&tool_use_id) else {
+                continue;
+            };
+            let title = normalized_title(result_task.get("subject").and_then(Value::as_str))
+                .unwrap_or(pending.title);
+            self.tasks.insert(
+                task_id.clone(),
+                ClaudeTask {
+                    item: TaskItem {
+                        id: task_id.clone(),
+                        title,
+                        status: TaskStatus::Pending,
+                    },
+                    metadata: pending.metadata,
+                },
+            );
+            self.refresh_task_items();
+            return;
+        }
+    }
+
+    fn task_items(&self) -> Vec<TaskItem> {
+        let mut tasks: Vec<&ClaudeTask> = self
+            .tasks
+            .values()
+            .filter(|task| !task.is_internal())
+            .collect();
+        tasks.sort_by(|left, right| compare_task_ids(&left.item.id, &right.item.id));
+        tasks.into_iter().map(|task| task.item.clone()).collect()
+    }
+
+    fn refresh_task_items(&mut self) {
+        self.displayed = Some(self.task_items());
+    }
+
+    fn finish(self) -> Option<TaskState> {
+        self.displayed.map(|tasks| TaskState { tasks })
+    }
+}
+
+fn compare_task_ids(left: &str, right: &str) -> Ordering {
+    match (left.parse::<u64>(), right.parse::<u64>()) {
+        (Ok(left), Ok(right)) => left.cmp(&right),
+        (Ok(_), Err(_)) => Ordering::Less,
+        (Err(_), Ok(_)) => Ordering::Greater,
+        (Err(_), Err(_)) => left.cmp(right),
+    }
+}
+
+fn value_id(value: Option<&Value>) -> Option<String> {
+    let value = value?;
+    if let Some(id) = value.as_str() {
+        return normalized_title(Some(id));
+    }
+    value.as_u64().map(|id| id.to_string())
+}
+
+fn normalized_title(text: Option<&str>) -> Option<String> {
+    let normalized = text?.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn external_task_status(status: Option<&str>) -> TaskStatus {
+    let normalized = status.unwrap_or("").trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "completed" | "complete" | "done" => TaskStatus::Completed,
+        "in_progress" | "in-progress" | "inprogress" | "running" | "active" => {
+            TaskStatus::InProgress
+        }
+        _ => TaskStatus::Pending,
+    }
+}
+
+fn parse_claude_task_state(jsonl: &str) -> Option<TaskState> {
+    let mut accumulator = ClaudeTaskAccumulator::default();
+    for line in jsonl.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(object) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        accumulator.apply(&object);
+    }
+    accumulator.finish()
+}
+
+fn parse_codex_task_state(jsonl: &str) -> Option<TaskState> {
+    let mut latest = None;
+    for line in jsonl.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(object) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if object.get("type").and_then(Value::as_str) != Some("response_item") {
+            continue;
+        }
+        let Some(payload) = object.get("payload") else {
+            continue;
+        };
+        if payload.get("type").and_then(Value::as_str) != Some("function_call")
+            || payload.get("name").and_then(Value::as_str) != Some("update_plan")
+        {
+            continue;
+        }
+        let Some(arguments) = payload.get("arguments") else {
+            continue;
+        };
+        let parsed_arguments = if let Some(arguments) = arguments.as_str() {
+            let Ok(parsed) = serde_json::from_str::<Value>(arguments) else {
+                continue;
+            };
+            parsed
+        } else if arguments.is_object() {
+            arguments.clone()
+        } else {
+            continue;
+        };
+        let Some(plan) = parsed_arguments.get("plan").and_then(Value::as_array) else {
+            continue;
+        };
+        let tasks: Vec<TaskItem> = plan
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                let title = normalized_title(row.get("step").and_then(Value::as_str))?;
+                Some(TaskItem {
+                    id: index.to_string(),
+                    title,
+                    status: external_task_status(row.get("status").and_then(Value::as_str)),
+                })
+            })
+            .collect();
+        // A valid empty plan explicitly clears the state. A non-empty plan made
+        // solely of malformed rows cannot be trusted to erase the last good one.
+        if plan.is_empty() || !tasks.is_empty() {
+            latest = Some(TaskState { tasks });
+        }
+    }
+    latest
+}
+
+/// Reconstruct the latest structured task state from one provider transcript.
+///
+/// Both formats are append-only. Claude's task protocol is incremental and is
+/// replayed by stable task id; Codex `update_plan` calls are full replacements,
+/// so the latest valid call wins. Malformed/unknown records are ignored and
+/// never clear a previously valid state.
+pub fn parse_task_state(provider: Provider, jsonl: &str) -> Option<TaskState> {
+    match provider {
+        Provider::Claude => parse_claude_task_state(jsonl),
+        Provider::Codex => parse_codex_task_state(jsonl),
+        Provider::Antigravity => None,
+    }
 }
 
 /// Strip a trailing/leading PAI session-naming hook payload

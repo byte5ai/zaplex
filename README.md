@@ -58,7 +58,7 @@ zaplex is a fork of [Zap](https://github.com/zerx-lab/zap) — the open-source, 
 - **Multi-account, multi-provider** — all your Claude and ChatGPT/Codex subscription logins discovered and monitored side by side; launching a new agent can route to the freest account, including on a remote host, straight from the new-session menu.
 - **Adopt any session** — daemon sessions started elsewhere appear in the sidebar; Enter attaches one as a block, history included.
 - **Session fork & worktree launch** — fork a running session (same history, divergent future) or fork straight into an isolated git worktree to try another approach without disturbing the original.
-- **File manager pane mode** — flip any terminal pane into a host-aware file manager; dual-pane cross-host copy/move (local↔local, local↔remote, remote↔remote via relay) and view/edit files over SSH.
+- **File manager pane mode** — flip any terminal pane into a host-aware local or remote file manager; MC-style keyboard control, dual-pane cross-host copy/move (local↔local, local↔remote, remote↔remote via relay), streamed conflict handling, progress and cancellation, plus view/edit over SSH.
 - **GitHub flows from the launcher** — draft a quick issue, review a PR, or triage an issue on the freest account; the agent drafts the exact `gh` command, you confirm before anything runs.
 - **Session transcript viewer** — parsed, Markdown-rendered `.jsonl` transcripts, plus a live `◇ log` tail of the running session.
 - **Tailscale host discovery** — Tailscale peers show up as ready-to-add SSH hosts.
@@ -69,13 +69,15 @@ zaplex is a fork of [Zap](https://github.com/zerx-lab/zap) — the open-source, 
 
 **First-class: [Claude Code](https://github.com/anthropics/claude-code) and [Codex](https://github.com/openai/codex).** zaplex's orchestration layer — multi-account discovery, usage heat, account routing — is built around subscription accounts, because their rolling rate windows are what make heat tracking and "launch on the freest account" meaningful.
 
-**Bring the rest.** zaplex is not an agent and does not ship one. Block-level support (status, banners, notifications) covers Gemini CLI, OpenCode, Copilot, DeepSeek, Goose, and more — inherited from Zap and extended. More deep integrations will follow as the base solidifies.
+**Bring the rest.** zaplex is not an agent and does not ship one. Block-level support (status, banners, notifications) covers Antigravity, OpenCode, Copilot, DeepSeek/CodeWhale, Goose, and more — inherited from Zap and extended. More deep integrations will follow as the base solidifies.
 
 **zero, natively.** zaplex is adopting [zero](https://github.com/Gitlawb/zero)'s schema-versioned stream-JSON protocol to render headless zero runs as typed, native timelines — tool calls, permission requests with risk levels, usage. zero stays your agent; zaplex becomes its cockpit. (Designed — see status below.)
 
 ## Status & roadmap
 
-zaplex is in **early, active development** — no releases yet. Honest state of affairs:
+Zaplex 1.0.2 source is in final validation. No public binary has been released
+yet; the table reflects the integrated source state, not an unperformed runtime
+acceptance:
 
 | Area | State |
 |---|---|
@@ -90,6 +92,7 @@ zaplex is in **early, active development** — no releases yet. Honest state of 
 | Session fork & isolated-worktree launches | ✅ merged |
 | GitHub flows (quick issue, PR review, triage) — human confirms before anything runs | ✅ merged |
 | zero integration: block support + stream-JSON rendering | 📋 designed |
+| Safe dual-pane and cross-host file transfer queue | ✅ merged |
 | MCP backchannel (`zaplex-mcp`) | 📋 planned (post-v1) |
 | mosh-grade UDP transport (roaming, predictive echo) | 📋 planned (capability negotiation reserved, transport unbuilt) |
 | Mobile companion | 🔭 outlook |
@@ -98,12 +101,14 @@ Every designed item has a dated design doc in [`docs/superpowers/`](docs/superpo
 
 ## Install
 
-**Pre-release.** There are no binary releases yet — zaplex currently targets contributors and the adventurous:
+The first public Zaplex 1.0.2 binary will appear on
+[Releases](https://github.com/byte5ai/zaplex/releases) after the documented
+runtime matrix passes. The macOS DMG is built in GitHub Actions, signed with
+Developer ID, notarized by Apple, and shipped together with its matching Linux
+host daemon. Nothing needs to be installed manually on a remote host.
 
-- **macOS app:** build from source with a Rust toolchain (dependency list: `script/linux/install_build_deps`; macOS builds need Xcode), or via the repository's GitHub Actions DMG workflow (`test-dmg.yml`).
-- **Host daemon:** nothing to install by hand — the app installs and updates it automatically on first connect to a resilience-enabled host.
-
-Watch [Releases](https://github.com/byte5ai/zaplex/releases) for the first tagged builds.
+Installation and recovery steps are in the
+[Zaplex 1.0 guide](docs/release/1.0-user-guide.md).
 
 ## Lineage & acknowledgements
 

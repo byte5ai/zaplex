@@ -46,7 +46,6 @@ use warp_core::{
     settings::ToggleableSetting as _, ui::theme::color::internal_colors,
 };
 use warp_editor::editor::NavigationKey;
-use zaplexify_page::{ZaplexifyPageAction, ZaplexifyPageView};
 use warpui::Element;
 use warpui::{
     elements::{
@@ -62,13 +61,14 @@ use warpui::{
     Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView as _,
     View, ViewContext, ViewHandle,
 };
+use zaplexify_page::{ZaplexifyPageAction, ZaplexifyPageView};
 
 mod about_page;
 mod agent_providers_widget;
 mod ai_page;
 mod appearance_page;
-mod code_page;
 mod cloud_sync_page;
+mod code_page;
 mod directory_color_add_picker;
 mod execution_profile_view;
 mod features;
@@ -177,8 +177,6 @@ pub enum SettingsSection {
     WarpAgent,
     AgentProfiles,
     AgentMCPServers,
-    /// Custom AI provider configuration (BYOP), Providers subpage in Agents secondary menu.
-    AgentProviders,
     Knowledge,
     ThirdPartyCLIAgents,
     /// Global HTTP proxy settings page. Gated by `FeatureFlag::HttpProxySettings`.
@@ -212,7 +210,6 @@ impl Display for SettingsSection {
             SettingsSection::WarpAgent => crate::t!("settings-section-warp-agent"),
             SettingsSection::AgentProfiles => crate::t!("settings-section-agent-profiles"),
             SettingsSection::AgentMCPServers => crate::t!("settings-section-agent-mcp-servers"),
-            SettingsSection::AgentProviders => crate::t!("settings-section-agent-providers"),
             SettingsSection::Knowledge => crate::t!("settings-section-knowledge"),
             SettingsSection::ThirdPartyCLIAgents => {
                 crate::t!("settings-section-third-party-cli-agents")
@@ -244,7 +241,6 @@ impl SettingsSection {
             Self::WarpAgent
                 | Self::AgentProfiles
                 | Self::AgentMCPServers
-                | Self::AgentProviders
                 | Self::Knowledge
                 | Self::ThirdPartyCLIAgents
         )
@@ -271,7 +267,6 @@ impl SettingsSection {
         &[
             Self::WarpAgent,
             Self::AgentProfiles,
-            Self::AgentProviders,
             Self::AgentMCPServers,
             Self::Knowledge,
             Self::ThirdPartyCLIAgents,
@@ -297,7 +292,7 @@ impl FromStr for SettingsSection {
             "Oz" | "Zaplex Agent" => Ok(Self::WarpAgent),
             "Profiles" | "AgentProfiles" => Ok(Self::AgentProfiles),
             "MCP servers" | "AgentMCPServers" => Ok(Self::AgentMCPServers),
-            "Providers" | "AgentProviders" => Ok(Self::AgentProviders),
+            "Providers" | "AgentProviders" => Ok(Self::WarpAgent),
             "Knowledge" => Ok(Self::Knowledge),
             "Third party CLI agents" | "ThirdPartyCLIAgents" => Ok(Self::ThirdPartyCLIAgents),
             "Editor and Code Review" | "EditorAndCodeReview" => Ok(Self::EditorAndCodeReview),
@@ -2259,7 +2254,8 @@ impl TypedActionView for SettingsView {
             }
             SettingsAction::ZaplexDrive(warp_drive_action) => {
                 if let Some(warp_drive_page) = self.settings_page(SettingsSection::ZaplexDrive) {
-                    if let SettingsPageViewHandle::ZaplexDrive(view) = &warp_drive_page.view_handle {
+                    if let SettingsPageViewHandle::ZaplexDrive(view) = &warp_drive_page.view_handle
+                    {
                         view.update(ctx, |view, ctx| {
                             view.handle_action(warp_drive_action, ctx);
                         })

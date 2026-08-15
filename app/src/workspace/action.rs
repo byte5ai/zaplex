@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use warp_util::path::LineAndColumnArg;
 
+use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::auth::LoginGatedFeature;
-use crate::drive::items::WarpDriveItemId;
 use crate::drive::ObjectTypeAndId;
+use crate::drive::items::WarpDriveItemId;
 use crate::palette::PaletteMode;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search;
@@ -20,8 +20,8 @@ use crate::server::telemetry::{AddTabWithShellSource, AgentModeEntrypoint, Palet
 use crate::settings_view::{SettingsAction as SettingsTabAction, SettingsSection};
 use crate::tab::{NewSessionMenuItem, SelectedTabColor};
 use crate::tab_configs::TabConfig;
-use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::CLIAgent;
+use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
@@ -104,6 +104,10 @@ pub enum WorkspaceAction {
     MoveActiveTabRight,
     MoveTabLeft(usize),
     MoveTabRight(usize),
+    SetTabPinned {
+        index: usize,
+        is_pinned: bool,
+    },
     RenameTab(usize),
     ResetTabName(usize),
     RenamePane(PaneViewLocator),
@@ -138,6 +142,7 @@ pub enum WorkspaceAction {
     CloseTabsRight(usize),
     CloseTabsRightActiveTab,
     AddDefaultTab,
+    OpenThemeCreatorModal,
     AddTerminalTab {
         hide_homepage: bool,
     },
@@ -152,6 +157,12 @@ pub enum WorkspaceAction {
     /// Conductor spine when a registered host row (with no live agent) is clicked,
     /// so the caller need not carry the server info.
     OpenSshTerminalByNode {
+        node_id: String,
+    },
+    /// Open an SFTP file-manager pane for a registered SSH host, resolving the
+    /// connection by its stable registry node id. Dispatched by the visible
+    /// "Files" action on a Conductor host node.
+    OpenSftpPaneByNode {
         node_id: String,
     },
     /// Toggle a curated favorite (design §10): the ★ affordance on a Conductor
@@ -174,9 +185,13 @@ pub enum WorkspaceAction {
     ManageSshHost {
         node_id: String,
     },
-    /// Create a blank registered SSH host and open its editor — the Conductor
-    /// spine's "＋ Add host" root (same path as the SSH-manager's "New server").
-    AddSshHost,
+    /// Open (never toggle shut) the SSH-manager panel — the „VERBINDUNGEN"
+    /// zone-header gear (spec v3 §3/S1). Unlike [`Self::ToggleSshManager`] a
+    /// second click must not close it: the gear means "take me to the SSH
+    /// configuration", and it is the single entry point now that the spine's
+    /// "＋ Add host" root is gone (the manager owns the add flow — its own
+    /// toolbar `+` creates a blank host and opens its editor).
+    OpenSshManager,
     /// A remote directory was picked in the SFTP browser (opened in pick mode from
     /// the spawn card's "Browse…"): fill the spawn card's remote-dir field with
     /// `path`, re-show the card, and close the picker (#105).
@@ -640,6 +655,11 @@ pub enum WorkspaceAction {
     },
     SaveCurrentTabAsNewConfig(usize),
     SyncTrafficLights,
+    CancelTransfer(crate::sftp_manager::transfer_queue::TransferActionTarget),
+    PauseTransfer(crate::sftp_manager::transfer_queue::TransferActionTarget),
+    ResumeTransfer(crate::sftp_manager::transfer_queue::TransferActionTarget),
+    RetryTransferRecovery(u64),
+    ClearTransferHistory,
     /// Opens a tab config file in the editor and dismisses the associated error toast.
     OpenTabConfigErrorFile {
         path: PathBuf,
@@ -693,8 +713,22 @@ pub enum WorkspaceAction {
         /// Non-default account config dir for subscription pinning
         /// (`None` = the provider's default login).
         config_dir: Option<PathBuf>,
+        /// Stable account identity. Unlike `config_dir`, this also distinguishes
+        /// a known default account from an unknown manually started session.
+        account_email: Option<String>,
         /// Isolate the fork's file effects in a fresh sibling worktree.
         into_worktree: bool,
+        /// The source session's host (the inventory's Host column label), for a
+        /// toast when the host is unreachable.
+        host: String,
+        /// The host's live daemon identity (`None` for the local host). A remote
+        /// session forks *on its own host* — resolve this to the SSH node and run
+        /// the fork there — instead of wrongly opening a local tab at the remote
+        /// cwd.
+        host_id: Option<String>,
+        /// `true` when the source session runs on this machine — the inventory's
+        /// explicit marker, never a host-label comparison.
+        is_local: bool,
     },
     /// Adopt an idle CLI session in place (cockpit "open = focus" verb): opens a
     /// terminal tab in the session's cwd and *resumes the same session* (no
@@ -708,30 +742,39 @@ pub enum WorkspaceAction {
         /// Non-default account config dir for subscription pinning
         /// (`None` = the provider's default login).
         config_dir: Option<PathBuf>,
+        /// Stable account identity for exact terminal reuse.
+        account_email: Option<String>,
     },
     /// Run a Claude Code slash command (`/compact`, `/clear`) against a
     /// discovered agent-session (cockpit model-lever, step 8).
     ///
-    /// Cockpit sessions are *external* processes — zaplex does not own their
-    /// stdin — so the honest mechanism is: **resume the same conversation into a
-    /// zaplex-owned tab** (`agent.resume_command_pinned`, exactly like adopt)
-    /// and prefill the slash command in that live PTY's input, ready to send.
-    /// The command operates on the same session, and the human presses Enter
-    /// (in-the-loop, mirroring the review-loop verbs). Local + Claude only:
-    /// resume runs a local PTY at `cwd`, and `/compact`/`/clear` are Claude Code
-    /// commands.
+    /// A known live pane is focused and receives the command directly. A
+    /// dormant conversation resumes first; a live session with no reliable
+    /// pane/PTY locator is left untouched. The human presses Enter to send the
+    /// staged command (in-the-loop, mirroring the review-loop verbs). Claude
+    /// only (`/compact`/`/clear` are Claude Code commands).
     SlashCommandSession {
-        agent: CLIAgent,
+        provider: zaplex_cockpit::Provider,
         session_id: String,
         /// The session's working directory.
         cwd: PathBuf,
         /// Non-default account config dir for subscription pinning
         /// (`None` = the provider's default login).
         config_dir: Option<PathBuf>,
+        /// Stable account identity for exact terminal reuse.
+        account_email: Option<String>,
         /// The literal slash command to prefill (e.g. `/compact`, `/clear`).
         command: String,
+        /// The source session's host label (for an unreachable-host toast).
+        host: String,
+        /// The host's live daemon identity (`None` for local). A remote session
+        /// resumes on its own host and prefills the command there, instead of
+        /// resuming locally at the remote cwd.
+        host_id: Option<String>,
+        /// `true` when the source session runs on this machine.
+        is_local: bool,
     },
-    /// Open a session's conversation transcript (cockpit "◇ log" verb): reads the
+    /// Open a session's conversation transcript (cockpit "log" verb): reads the
     /// session's `.jsonl`, renders it to Markdown, and opens it read-only in a
     /// code/text pane. No regression vs claudeplex/-desktop's transcript view.
     ViewTranscript {
@@ -745,7 +788,7 @@ pub enum WorkspaceAction {
         /// cockpit reconcile re-renders + reloads it. `false` = one-shot open.
         watch: bool,
     },
-    /// Open a session's **review** view (cockpit "◈ review" verb, step 6): read
+    /// Open a session's **review** view (cockpit "review" verb, step 6): read
     /// the working changes of the session's repo (`git diff HEAD` + untracked),
     /// render them to Markdown, and open them read-only in a code/text pane —
     /// the same pane-opening mechanism [`ViewTranscript`] uses. An empty change
@@ -788,6 +831,8 @@ pub enum WorkspaceAction {
         /// (`None` = the provider's default login). Local launches only —
         /// a remote host uses its own default account (config dirs are local).
         config_dir: Option<PathBuf>,
+        /// Stable identity of the selected local account.
+        account_email: Option<String>,
         /// Working directory for the new agent (`None` = the default dir).
         cwd: Option<PathBuf>,
         /// SSH host node to launch on (`None` = local). When set, the routed
@@ -807,11 +852,14 @@ pub enum WorkspaceAction {
     /// opened from a Conductor host/project header `+`; both `None` opens it
     /// unscoped (the global "New Agent" entry).
     OpenSpawnCard {
+        /// Stable SSH-registry node selected by a favorite or registry-backed
+        /// navigator action. This is already in the spawn card's identity space
+        /// and therefore takes precedence over daemon-id translation.
+        registry_node_id: Option<String>,
         /// Stable id of the pre-selected host (`None` = local / unscoped). This
-        /// is the authoritative scoping key: two connected hosts can share a
-        /// display label, so `host` (the label) alone can resolve to the wrong
-        /// node. When present, the card resolves the scoped host by this id and
-        /// only falls back to `host` (name) when it is `None`.
+        /// is the live daemon identity. It is translated to a registry node at
+        /// the spawn-card boundary. Two connected hosts can share a display
+        /// label, so `host` alone is never authoritative.
         host_id: Option<String>,
         /// Pre-selected host label (`None` = local / unscoped). Used for display
         /// and as the resolution fallback when `host_id` is absent.
@@ -831,12 +879,10 @@ pub enum WorkspaceAction {
         error_description: String,
     },
     /// Attach to a specific agent from the unified Conductor inventory, keyed by
-    /// `(host, session_id)` (session ids are unique only within a host). A local
-    /// host adopts the session in place (resume, no fork); a remote host's agent
-    /// lives on that host, so it's handled honestly (see the workspace handler).
-    /// The workspace resolves provider / cwd / config_dir from the live
-    /// inventory, so the action stays tiny and is shared by the Conductor
-    /// row-click and the `w`-jump.
+    /// host, provider, account route, and session id. A known local or remote
+    /// pane is focused; only a dormant session is resumed. A live session with
+    /// no reliable pane mapping is reported rather than duplicated. The
+    /// workspace resolves cwd and current state from the live inventory.
     AttachFleetSession {
         host: String,
         /// Stable per-daemon `host_id` from the inventory node
@@ -845,6 +891,10 @@ pub enum WorkspaceAction {
         /// daemon by id rather than by the collidable `host` label.
         host_id: Option<String>,
         session_id: String,
+        provider: zaplex_cockpit::Provider,
+        config_dir: Option<String>,
+        /// Stable account identity; session ids are not unique across accounts.
+        account_email: Option<String>,
         /// Whether `host` is *this* machine, taken from the inventory's explicit
         /// [`zaplex_cockpit::HostNode::is_local`] marker — never re-derived from
         /// `host` label equality. Drives local adopt-in-place vs. the remote
@@ -873,6 +923,10 @@ pub enum WorkspaceAction {
         host_id: Option<String>,
         session_id: String,
         pid: u32,
+        /// Opaque identity of the exact process selected by the user. The
+        /// signal path must re-probe and compare this value; it must never
+        /// replace it with a fingerprint from a later inventory refresh.
+        process_fingerprint: Option<String>,
         /// Whether `host` is *this* machine, from the inventory's explicit
         /// [`zaplex_cockpit::HostNode::is_local`] marker. Drives local
         /// `libc::kill` vs. the daemon path — `pid` is host-local, so this
@@ -896,6 +950,9 @@ pub enum WorkspaceAction {
         host_id: Option<String>,
         session_id: String,
         pid: u32,
+        /// Process identity captured with the selected row and carried through
+        /// the confirmation dialog unchanged.
+        process_fingerprint: Option<String>,
         /// Whether `host` is *this* machine, from the inventory's explicit
         /// [`zaplex_cockpit::HostNode::is_local`] marker (see [`Self::StopAgent`]).
         /// Threaded through the confirm dialog so the eventual SIGKILL routes
@@ -942,6 +999,7 @@ impl WorkspaceAction {
             | MoveActiveTabRight
             | MoveTabLeft(_)
             | MoveTabRight(_)
+            | SetTabPinned { .. }
             | DropTab
             | RenameTab(_)
             | ResetTabName(_)
@@ -958,11 +1016,17 @@ impl WorkspaceAction {
             | CloseTabsRightActiveTab
             | ToggleTabColor { .. }
             | AddDefaultTab
+            | OpenThemeCreatorModal
             | AddTerminalTab { .. }
             | OpenSshTerminal { .. }
             | OpenSshTerminalByNode { .. }
+            | OpenSftpPaneByNode { .. }
             | OpenLocalFileManager { .. }
             | ToggleSshManager
+            // Opening the SSH manager changes the persisted left-panel view, exactly
+            // like toggling it — so it is app state (the gear only differs in never
+            // hiding on a second click, not in what it persists).
+            | OpenSshManager
             | ToggleSkillManager
             | AddTabWithShell { .. }
             | AddGetStartedTab
@@ -1136,6 +1200,11 @@ impl WorkspaceAction {
             | DismissSessionConfigTabConfigChip
             | SaveCurrentTabAsNewConfig(_)
             | SyncTrafficLights
+            | CancelTransfer(_)
+            | PauseTransfer(_)
+            | ResumeTransfer(_)
+            | RetryTransferRecovery(_)
+            | ClearTransferHistory
             | OpenTabConfigErrorFile { .. }
             | TabConfigSidecarMakeDefault { .. }
             | TabConfigSidecarEditConfig { .. }
@@ -1189,9 +1258,9 @@ impl WorkspaceAction {
             OpenLinkOnDesktop(_) => false,
             // Favorites live in their own persisted store, not in app state.
             ToggleFavorite { .. } | RemoveFavorite { .. } => false,
-            // Managing/adding a host opens an editor pane; the registry itself is
+            // Managing a host opens an editor pane; the registry itself is
             // persisted separately (SQLite), so this isn't app-state either.
-            ManageSshHost { .. } | AddSshHost => false,
+            ManageSshHost { .. } => false,
             // Fills a transient modal field / re-shows a modal; not app state.
             RemoteSpawnDirPicked { .. } | RemoteSpawnDirPickCanceled => false,
             // actions that are related to updating user settings or

@@ -11,6 +11,7 @@
 //! and has zero effect on existing behaviour. Later stages fill in the
 //! [`server`] and [`client`] modules.
 
+pub mod agent_binding;
 pub mod types;
 
 #[cfg(feature = "client")]

@@ -2,9 +2,9 @@
 //! fleet-wide stop-all — so the user trusts nothing runs unattended out of
 //! control. This module carries only the **pure decisions**: which POSIX
 //! signal a verb sends, whether a session's host executes it locally or over
-//! the daemon's `RunCommandRequest`, and the exact confirm-dialog / toast text.
-//! No IO, no GPUI — the app wires these into `libc::kill` (local) and the
-//! remote-server client (remote); see `app/src/workspace/view.rs`.
+//! the daemon, and the exact confirm-dialog / toast text. The process-identity
+//! module owns verified local signalling; the app wires these decisions to it
+//! and to the remote-server client; see `app/src/workspace/view.rs`.
 
 use crate::types::SessionSnapshot;
 
@@ -18,34 +18,18 @@ pub enum GuardrailSignal {
 }
 
 impl GuardrailSignal {
-    /// The POSIX signal number (`SIGINT` = 2, `SIGKILL` = 9). Plain integers
-    /// so this pure crate never depends on `libc`; the app maps these back to
-    /// `libc::SIGINT` / `libc::SIGKILL` for the local path.
+    /// The POSIX signal number (`SIGINT` = 2, `SIGKILL` = 9).
     pub fn signal_number(self) -> i32 {
         match self {
             GuardrailSignal::Interrupt => 2,
             GuardrailSignal::Kill => 9,
         }
     }
-
-    /// The `kill(1)` flag (`INT` / `KILL`) used to build the remote shell
-    /// command for the daemon's `RunCommandRequest` path.
-    pub fn shell_flag(self) -> &'static str {
-        match self {
-            GuardrailSignal::Interrupt => "INT",
-            GuardrailSignal::Kill => "KILL",
-        }
-    }
-
-    /// The shell command that sends this signal to `pid` on a remote host.
-    pub fn remote_kill_command(self, pid: u32) -> String {
-        format!("kill -{} {pid}", self.shell_flag())
-    }
 }
 
-/// Where a guardrail signal for a given host executes: `Local` uses
-/// `libc::kill` directly in-process; `Remote` needs the daemon's
-/// `RunCommandRequest` on that host.
+/// Where a guardrail signal for a given host executes: `Local` uses verified
+/// in-process signalling; `Remote` asks that host's daemon to perform the same
+/// identity verification before signalling.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GuardrailTarget {
     Local,
@@ -71,10 +55,16 @@ pub fn guardrail_target(is_local: bool, host_label: &str) -> GuardrailTarget {
 }
 
 /// A session whose pid can't be honestly signaled: unknown (`0`, discovery
-/// never recorded one) — the caller must surface a clear toast rather than a
-/// silent no-op (design invariant: never hide a failure as a no-op).
+/// never recorded one) or outside the positive signed process-id range. The
+/// caller must surface a clear toast rather than a silent no-op (design
+/// invariant: never hide a failure as a no-op).
+///
+/// POSIX reserves non-positive `pid_t` values for process groups and broad
+/// targets. Validate the unsigned inventory value before any caller casts it
+/// to `pid_t`, so `u32::MAX` can never become `-1` and signal every permitted
+/// process.
 pub fn pid_signalable(pid: u32) -> bool {
-    pid != 0
+    i32::try_from(pid).is_ok_and(|pid| pid > 0)
 }
 
 /// The Conductor row's own label rule (`name — dir`, or just `dir` when
@@ -122,11 +112,11 @@ pub fn stop_all_confirm_message(n: usize) -> (String, String) {
     (title, body)
 }
 
-/// Toast text for a session whose pid can't be signaled honestly (unknown or
-/// already dead) — used by both the pause and kill verbs.
+/// Toast text for a session whose process can't be signaled honestly (unknown,
+/// unverified, or already dead) — used by both the pause and kill verbs.
 pub fn unsignalable_toast(session_label: &str) -> String {
     format!(
-        "\u{201c}{session_label}\u{201d} has no known process id (already exited?) — nothing to signal."
+        "\u{201c}{session_label}\u{201d} has no verified live process (already exited?) — nothing to signal."
     )
 }
 

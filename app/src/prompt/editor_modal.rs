@@ -684,7 +684,10 @@ impl EditorModal {
 
         self.render_prompt_section(
             appearance,
-            matches!(self.prompt_type, PromptType::Zaplex | PromptType::WarpDefault),
+            matches!(
+                self.prompt_type,
+                PromptType::Zaplex | PromptType::WarpDefault
+            ),
             header_row,
             None,
             body,

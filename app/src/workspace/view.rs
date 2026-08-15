@@ -1,6 +1,5 @@
 pub(crate) mod attention_inbox;
 pub(crate) mod codex_modal;
-pub(crate) mod spawn_card;
 pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
 mod crash_recovery;
@@ -8,9 +7,9 @@ pub mod global_search;
 pub(crate) mod launch_modal;
 pub(crate) mod left_panel;
 pub(crate) mod onboarding;
-pub(crate) mod zap_launch_modal;
 pub(crate) mod right_panel;
 pub(crate) mod server_file_browser;
+pub(crate) mod spawn_card;
 mod startup_directory;
 #[cfg(test)]
 #[path = "view_test.rs"]
@@ -18,11 +17,12 @@ mod tests;
 mod vertical_tabs;
 #[cfg(target_family = "wasm")]
 mod wasm_view;
+pub(crate) mod zap_launch_modal;
 
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
-    render_detail_sidecar, render_settings_popup, VerticalTabsPanelState,
-    VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
+    VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID, VerticalTabsPanelState, render_detail_sidecar,
+    render_settings_popup,
 };
 use crate::workspace::cross_window_tab_drag::{
     AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState,
@@ -32,8 +32,8 @@ pub(crate) use onboarding::OnboardingTutorial;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::agent_conversations_model::ConversationOrTask;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::{
     SuggestedRuleAndId, SuggestedRuleModal, SuggestedRuleModalEvent,
@@ -42,15 +42,15 @@ use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::{
-    agent::{api::ServerConversationToken, conversation::AIConversationId, EntrypointType},
+    agent::{EntrypointType, api::ServerConversationToken, conversation::AIConversationId},
     blocklist::{
+        SlashCommandRequest,
         inline_action::code_diff_view::CodeDiffView,
         suggested_agent_mode_workflow_modal::{
             SuggestedAgentModeWorkflowModal, SuggestedAgentModeWorkflowModalEvent,
         },
-        SlashCommandRequest,
     },
-    facts::{view::AIFactPage, AIFactManager, AIFactView, AIFactViewEvent},
+    facts::{AIFactManager, AIFactView, AIFactViewEvent, view::AIFactPage},
 };
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::app_state::{
@@ -58,10 +58,10 @@ use crate::app_state::{
     PaneNodeSnapshot, PaneUuid, RightPanelSnapshot, SettingsPaneSnapshot, TabSnapshot,
     TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
-use crate::code_review::diff_state::DiffStateModel;
 #[cfg(feature = "local_fs")]
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::code_review::GlobalCodeReviewModel;
+use crate::code_review::diff_state::DiffStateModel;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::default_terminal::DefaultTerminal;
 use crate::notebooks::NotebookObject;
@@ -97,36 +97,34 @@ use crate::util::file::external_editor::Editor;
 use crate::util::file::external_editor::EditorSettings;
 use crate::util::openable_file_type::FileTarget;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{resolve_file_target_with_editor_choice, EditorLayout};
+use crate::util::openable_file_type::{EditorLayout, resolve_file_target_with_editor_choice};
 
-use crate::ai::blocklist::history_model::LoadedConversationData;
+use crate::BlocklistAIHistoryModel;
 use crate::ai::blocklist::FORK_PREFIX;
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
-use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
-use crate::terminal::cli_agent::{CLIAgentInstallEvent, CLIAgentInstallModel};
+use crate::ai::blocklist::history_model::LoadedConversationData;
 use crate::terminal::CLIAgent;
+use crate::terminal::cli_agent::{CLIAgentInstallEvent, CLIAgentInstallModel, RoutedAgentLaunch};
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabCloseButtonPosition;
 use crate::workspace::view::attention_inbox::{AttentionInbox, AttentionInboxEvent};
 use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
 use crate::workspace::view::spawn_card::{SpawnCard, SpawnCardEvent};
-use crate::workspace::view::zap_launch_modal::{
-    ZaplexLaunchModal, ZaplexLaunchModalEvent,
-};
+use crate::workspace::view::zap_launch_modal::{ZaplexLaunchModal, ZaplexLaunchModalEvent};
 use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
-use crate::BlocklistAIHistoryModel;
 
 use serde_json;
 use warpui::notification::NotificationSendError;
 
+use super::WorkspaceRegistry;
 use super::hoa_onboarding::{
-    mark_hoa_onboarding_completed, HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep,
+    HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep, mark_hoa_onboarding_completed,
 };
 use super::lightbox_view::{LightboxParams, LightboxView, LightboxViewEvent};
 use super::util;
-use super::WorkspaceRegistry;
 use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
 use crate::auth::AuthState;
@@ -189,15 +187,15 @@ use crate::wasm_nux_dialog::WasmNUXDialog;
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::settings::WarpDriveSettingsChangedEvent;
 use crate::env_vars::{
-    manager::{EnvVarCollectionManager, EnvVarCollectionSource},
     EnvVarCollectionObject,
+    manager::{EnvVarCollectionManager, EnvVarCollectionSource},
 };
 use crate::settings::cloud_preferences::PreferencesSettings;
 
 use crate::appearance::{Appearance, AppearanceManager};
 use crate::auth::AuthStateProvider;
 use crate::autoupdate::{
-    is_incoming_version_past_current, AutoupdateState, AutoupdateStateEvent, RelaunchModel,
+    AutoupdateState, AutoupdateStateEvent, RelaunchModel, is_incoming_version_past_current,
 };
 use crate::banner::BannerState;
 use crate::changelog_model::{ChangelogModel, ChangelogRequestType, Event as ChangelogEvent};
@@ -215,8 +213,8 @@ use crate::drive::{
 };
 use crate::experiments::{BlockOnboarding, Experiment};
 use crate::menu::{
-    Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource,
-    DEFAULT_WIDTH as MENU_DEFAULT_WIDTH,
+    DEFAULT_WIDTH as MENU_DEFAULT_WIDTH, Event as MenuEvent, Menu, MenuItem, MenuItemFields,
+    MenuSelectionSource, SubMenu,
 };
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
@@ -243,8 +241,8 @@ use crate::prompt::editor_modal::{
 };
 use crate::report_if_error;
 use crate::resource_center::{
-    mark_feature_used_and_write_to_user_defaults, skip_tips_and_write_to_user_defaults,
     ResourceCenterEvent, ResourceCenterPage, ResourceCenterView, Tip, TipAction, TipsCompleted,
+    mark_feature_used_and_write_to_user_defaults, skip_tips_and_write_to_user_defaults,
 };
 use crate::root_view::{NewWorkspaceSource, OpenLaunchConfigArg};
 use crate::search::command_search::searcher::{
@@ -260,10 +258,10 @@ use crate::server::telemetry::{
 use crate::server_time::ServerTime;
 use crate::session_management::{SessionNavigationData, SessionSource};
 use crate::settings::{
-    active_theme_kind, respect_system_theme, AccessibilitySettings, AliasExpansionSettings,
-    AppEditorSettings, BlockVisibilitySettings, CursorBlink, DebugSettings, FontSettings,
-    GPUSettings, InputSettings, MonospaceFontSize, PaneSettings, PrivacySettings,
-    SelectionSettings, SshSettings, ThemeSettings,
+    AccessibilitySettings, AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings,
+    CursorBlink, DebugSettings, FontSettings, GPUSettings, InputSettings, MonospaceFontSize,
+    PaneSettings, PrivacySettings, SelectionSettings, SshSettings, ThemeSettings,
+    active_theme_kind, respect_system_theme,
 };
 use crate::settings_view::flags;
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
@@ -277,7 +275,7 @@ use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::session::Session;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::resizable_data::{
-    ModalSizes, ModalType, ResizableData, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH,
+    DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH, ModalSizes, ModalType, ResizableData,
 };
 use crate::terminal::safe_mode_settings::SafeModeSettings;
 use crate::terminal::session_settings::{
@@ -296,9 +294,7 @@ use ::settings::{Setting, ToggleableSetting};
 use warp_core::features::FeatureFlag;
 
 use crate::search::{self, QueryFilter};
-use crate::terminal::view::{
-    SyncEvent, SyncInputType, TerminalAction, NOTIFICATIONS_TROUBLESHOOT_URL,
-};
+use crate::terminal::view::{SyncEvent, SyncInputType, TerminalAction};
 use crate::terminal::{BlockListSettings, TerminalModel};
 use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
 use crate::themes::theme_chooser::{ThemeChooser, ThemeChooserEvent, ThemeChooserMode};
@@ -307,27 +303,27 @@ use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModal
 use crate::tips::{TipsEvent, TipsView};
 use crate::ui_components::buttons::{combo_inner_button, icon_button_with_color};
 use crate::undo_close::UndoCloseStack;
+use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 #[cfg(feature = "local_fs")]
 use crate::user_config::{
     ensure_default_worktree_config, find_unused_tab_config_path, find_unused_toml_path,
     find_unused_worktree_config_path, materialize_default_worktree_config, sanitize_toml_base_name,
     tab_configs_dir,
 };
-use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::util::bindings::{keybinding_name_to_display_string, keybinding_name_to_keystroke};
 use crate::util::links;
-use crate::util::traffic_lights::{traffic_light_data, TrafficLightMouseStates, TrafficLightSide};
+use crate::util::traffic_lights::{TrafficLightMouseStates, TrafficLightSide, traffic_light_data};
 use crate::util::truncation::truncate_from_end;
 #[cfg(target_family = "wasm")]
 use crate::view_components::action_button::ActionButton;
 use crate::view_components::callout_bubble::{
-    render_callout_bubble, CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig,
+    CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig, render_callout_bubble,
 };
 use crate::view_components::{AgentToastStack, DismissibleToast, DismissibleToastStack, ToastLink};
 use crate::window_settings::{WindowSettings, WindowSettingsChangedEvent, ZoomLevel};
 use crate::workflows::{
-    manager::WorkflowOpenSource, AIWorkflowOrigin, WorkflowObject, WorkflowSelectionSource,
-    WorkflowSource, WorkflowType, WorkflowViewMode,
+    AIWorkflowOrigin, WorkflowObject, WorkflowSelectionSource, WorkflowSource, WorkflowType,
+    WorkflowViewMode, manager::WorkflowOpenSource,
 };
 use crate::workspace::action::CommandSearchOptions;
 use crate::workspace::one_time_modal_model::OneTimeModalModel;
@@ -335,15 +331,15 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::toast_stack::{
     ToastStack as WorkspaceToastStack, ToastStackEvent as WorkspaceToastStackEvent,
 };
+use crate::{GlobalResourceHandles, send_telemetry_from_ctx};
 use crate::{
     ai_assistant::{
+        AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR, AskAIType,
         panel::{AIAssistantPanelEvent, AIAssistantPanelView},
-        AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR,
     },
     settings,
     ui_components::blended_colors,
 };
-use crate::{send_telemetry_from_ctx, GlobalResourceHandles};
 
 use futures::Future;
 use itertools::Itertools;
@@ -356,10 +352,10 @@ use std::convert::TryFrom;
 use std::time::Duration;
 #[cfg(target_os = "macos")]
 use std::time::{SystemTime, UNIX_EPOCH};
-use warp_core::context_flag::ContextFlag;
 use warp_core::HostId;
+use warp_core::context_flag::ContextFlag;
 use warp_core::semantic_selection::SemanticSelection;
-use warp_util::path::{user_friendly_path, LineAndColumnArg};
+use warp_util::path::{LineAndColumnArg, user_friendly_path};
 use warpui::fonts::Weight;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
 
@@ -429,17 +425,17 @@ use crate::tab_configs::{
     NewWorktreeModal, NewWorktreeModalEvent, TabConfigParamsModal, TabConfigParamsModalEvent,
 };
 
+use crate::TelemetryEvent;
 use crate::code::editor::{add_color, remove_color};
 use crate::palette::PaletteMode;
 use crate::search::command_palette::view::{Event as CommandPaletteEvent, View as CommandPalette};
 use crate::server::telemetry::{NotificationsTurnedOnSource, PaletteSource, TabRenameEvent};
 use crate::tab::{
-    tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
-    TabBarState, TabComponent, TabData, TabTelemetryAction, TAB_BAR_BORDER_HEIGHT,
+    NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT, TabBarState,
+    TabComponent, TabData, TabTelemetryAction, tab_position_id, uses_vertical_tabs,
 };
 use crate::terminal::view::ssh_file_upload::FileUploadId;
 use crate::ui_components::icons;
-use crate::TelemetryEvent;
 use autoupdate::AutoupdateStage;
 #[cfg(target_os = "macos")]
 use command::blocking::Command;
@@ -454,10 +450,10 @@ use std::path::Path;
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::process;
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 use std::{cmp::Ordering, sync::Arc};
-use warp_core::ui::theme::{color::internal_colors, phenomenon::PhenomenonStyle, Fill};
-use warp_core::ui::{color::coloru_with_opacity, Icon};
+use warp_core::ui::theme::{Fill, color::internal_colors, phenomenon::PhenomenonStyle};
+use warp_core::ui::{Icon, color::coloru_with_opacity};
 use warp_editor::editor::NavigationKey;
 use warpui::keymap::Context;
 use warpui::notification::{RequestPermissionsOutcome, UserNotification};
@@ -467,6 +463,7 @@ use warpui::platform::{
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
+    AppContext, Entity, TypedActionView, UpdateView, View, ViewContext, ViewHandle,
     accessibility::{
         AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
     },
@@ -478,8 +475,7 @@ use warpui::{
         PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable,
         Stack, Text,
     },
-    geometry::vector::{vec2f, Vector2F},
-    AppContext, Entity, TypedActionView, UpdateView, View, ViewContext, ViewHandle,
+    geometry::vector::{Vector2F, vec2f},
 };
 use warpui::{
     EntityId, FocusContext, ModelHandle, SingletonEntity, UpdateModel, ViewAsRef, WeakViewHandle,
@@ -611,6 +607,87 @@ pub const NEW_SESSION_MENU_BUTTON_POSITION_ID: &str = "new_session_menu_button";
 
 // The max length of the title of a fork toast (after which we truncate it).
 const MAX_FORK_TOAST_TITLE_LENGTH: usize = 100;
+
+/// Constant shell source for remote agent launches. Every launch-controlled
+/// value is supplied after `$0` as a positional argument, so remote paths,
+/// environment values, programs and CLI arguments never become shell source.
+const REMOTE_AGENT_LAUNCH_SHELL_SOURCE: &str = r#"cwd=$1
+shift
+unset_count=$1
+shift
+while [ "$unset_count" -gt 0 ]; do
+  unset "$1"
+  shift
+  unset_count=$((unset_count - 1))
+done
+env_count=$1
+shift
+while [ "$env_count" -gt 0 ]; do
+  export "$1=$2"
+  shift 2
+  env_count=$((env_count - 1))
+done
+if [ -n "$cwd" ]; then
+  cd -- "$cwd" || exit 1
+else
+  cd || exit 1
+fi
+exec "$@""#;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RemoteAgentLaunchRequest {
+    cwd: Option<PathBuf>,
+    launch: RoutedAgentLaunch,
+}
+
+impl RemoteAgentLaunchRequest {
+    fn new(cwd: Option<&Path>, launch: RoutedAgentLaunch) -> Self {
+        Self {
+            cwd: cwd.map(Path::to_path_buf),
+            launch,
+        }
+    }
+
+    fn shell_source(&self) -> &'static str {
+        REMOTE_AGENT_LAUNCH_SHELL_SOURCE
+    }
+
+    fn shell_arguments(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        args.push(
+            self.cwd
+                .as_deref()
+                .map(|cwd| cwd.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
+        args.push(self.launch.unset_environment.len().to_string());
+        args.extend(
+            self.launch
+                .unset_environment
+                .iter()
+                .map(|name| (*name).to_string()),
+        );
+        args.push(self.launch.environment.len().to_string());
+        for (name, value) in &self.launch.environment {
+            args.push((*name).to_string());
+            args.push(value.clone());
+        }
+        args.push(self.launch.program.clone());
+        args.extend(self.launch.args.iter().cloned());
+        args
+    }
+
+    fn shell_command(&self) -> String {
+        let mut words = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            self.shell_source().to_string(),
+            "zaplex-agent-launch".to_string(),
+        ];
+        words.extend(self.shell_arguments());
+        shell_words::join(words)
+    }
+}
 
 // The max length of the window title (matching conversation title truncation).
 const MAX_WINDOW_TITLE_LENGTH: usize = 80;
@@ -851,6 +928,7 @@ enum PendingSessionConfigTabConfigChipTutorial {
 pub struct TransferredTab {
     pub pane_group: ViewHandle<PaneGroup>,
     pub color: Option<AnsiColorIdentifier>,
+    pub is_pinned: bool,
     pub custom_title: Option<String>,
     pub left_panel_open: bool,
     pub vertical_tabs_panel_open: bool,
@@ -881,7 +959,9 @@ struct RemoteSftpEdit {
 
 /// Pure inversion of the daemon↔node association: find the SSH `node_id` whose
 /// live daemon carries `daemon_host_id`, given `(node_id, daemon_host_id)`
-/// pairs. Split from [`WorkspaceView::node_for_daemon_host`] so the id-space
+/// pairs. The candidate must also still exist in the current SSH registry;
+/// stale manager associations are not routable after a registered host is
+/// removed. Split from [`WorkspaceView::node_for_daemon_host`] so the id-space
 /// translation is unit-testable without live [`RemoteServerManager`] state.
 ///
 /// Same-named hosts are disambiguated correctly here: the daemon `HostId` is
@@ -891,11 +971,39 @@ struct RemoteSftpEdit {
 fn node_for_daemon_host_in<'a>(
     daemon_host_id: &str,
     assocs: impl IntoIterator<Item = (&'a str, String)>,
+    registered_node_ids: &[String],
 ) -> Option<String> {
     assocs
         .into_iter()
-        .find(|(_, host_id)| host_id == daemon_host_id)
+        .find(|(node_id, host_id)| {
+            host_id == daemon_host_id
+                && registered_node_ids
+                    .iter()
+                    .any(|registered| registered == node_id)
+        })
         .map(|(node_id, _)| node_id.to_string())
+}
+
+/// Reconcile a spawn request into the SSH-registry identity space.
+///
+/// A registry id is already authoritative. A live daemon id may contribute a
+/// translated registry id. If that translation fails, the daemon association
+/// is stale: discard its display label too, so a same-named registered host can
+/// never be preselected in its place. Label-only legacy scopes may still use
+/// the spawn card's name fallback.
+fn reconcile_spawn_host_scope(
+    registry_node_id: Option<String>,
+    daemon_host_id: Option<&str>,
+    translated_node_id: Option<String>,
+    host_name: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let scoped_host_id = registry_node_id.or(translated_node_id);
+    let scoped_host_name = if daemon_host_id.is_some() && scoped_host_id.is_none() {
+        None
+    } else {
+        host_name
+    };
+    (scoped_host_id, scoped_host_name)
 }
 
 /// A unique local directory for one classic-SSH remote-edit working copy. The
@@ -922,72 +1030,226 @@ enum GuardrailSendOutcome {
     /// — the honest degradation for the remote path (see guardrails design
     /// step 7 §1): reported, never silently skipped.
     NoRemoteConnection(String),
-    /// The target host is reachable, but its daemon is too old to run a
-    /// session-less host command (no `host-exec` capability). Reported honestly
-    /// as "update the daemon", never a misleading "could not kill" — carries the
-    /// host label.
+    /// The target host is reachable, but its daemon is too old to verify and
+    /// signal an agent process safely. Reported honestly as "update the daemon",
+    /// never a misleading "could not kill" — carries the host label.
     RemoteUnsupported(String),
 }
 
-/// Send `signal` to a **local** process. `EPERM`/`ESRCH` and any other errno
-/// are reported (never swallowed) via [`std::io::Error::last_os_error`].
-#[cfg(unix)]
-fn send_local_guardrail_signal(pid: u32, signal: zaplex_cockpit::GuardrailSignal) -> GuardrailSendOutcome {
-    // SAFETY: `kill(2)` with a real signal on a pid we discovered from the
-    // Claude Code session registry; the syscall itself can't cause UB — worst
-    // case it fails with ESRCH (already exited) or EPERM (not ours).
-    let rc = unsafe { libc::kill(pid as libc::pid_t, signal.signal_number()) };
-    if rc == 0 {
-        GuardrailSendOutcome::Sent
-    } else {
-        GuardrailSendOutcome::Failed(std::io::Error::last_os_error().to_string())
+/// Runs a signal backend only when pid and process identity are both proven.
+///
+/// Kept as a small injected seam so regression tests can assert that invalid,
+/// missing, or recycled identities never reach the irreversible backend.
+fn send_verified_guardrail_signal_with(
+    pid: u32,
+    expected_fingerprint: Option<&str>,
+    observed_fingerprint: Option<&str>,
+    signal: zaplex_cockpit::GuardrailSignal,
+    send: impl FnOnce(u32, zaplex_cockpit::GuardrailSignal) -> GuardrailSendOutcome,
+) -> GuardrailSendOutcome {
+    if !zaplex_cockpit::pid_signalable(pid) {
+        return GuardrailSendOutcome::Failed("invalid process id".to_string());
+    }
+    match (expected_fingerprint, observed_fingerprint) {
+        (Some(expected), Some(observed)) if !expected.is_empty() && expected == observed => {
+            send(pid, signal)
+        }
+        (Some(_), Some(_)) => {
+            GuardrailSendOutcome::Failed("the process ended or its id was reused".to_string())
+        }
+        (Some(_), None) | (None, Some(_)) | (None, None) => {
+            GuardrailSendOutcome::Failed("the process identity could not be verified".to_string())
+        }
     }
 }
 
-#[cfg(not(unix))]
+/// Send `signal` to the exact **local** process observed during discovery.
+///
+/// The initial re-probe rejects stale UI state before entering the backend.
+/// The backend then repeats the check while holding a Linux pidfd (or
+/// immediately before macOS `kill`), so pid reuse cannot redirect the signal.
 fn send_local_guardrail_signal(
-    _pid: u32,
-    _signal: zaplex_cockpit::GuardrailSignal,
-) -> GuardrailSendOutcome {
-    GuardrailSendOutcome::Failed("signal sending is not supported on this platform".to_string())
-}
-
-/// Attempt `signal` on a **remote** host's pid via the daemon's session-less
-/// `HostExec` path (`kill -<SIG> <pid>`), reusing the same client the
-/// Agent-Inventory fold already holds a connection to
-/// (`RemoteServerManager::connected_daemons`).
-///
-/// `HostExec` runs the command in the daemon's default user shell with **no**
-/// bootstrapped session — the correct mechanism here, because the cockpit holds
-/// a daemon connection to the host but no bound interactive session on it (the
-/// earlier `RunCommandRequest` path looked up a per-session executor by id and
-/// always returned `SessionNotFound`, so remote Stop/Kill never actually
-/// reached `kill`). A command that runs but exits non-zero (e.g. the pid is
-/// already gone) surfaces its stderr as a `Failed` toast; a daemon-side spawn
-/// failure surfaces as `Failed` too — never a silent no-op.
-///
-/// Capability: the caller must have already confirmed the daemon advertises
-/// `host-exec` (see [`FEATURE_HOST_EXEC`](zaplex_remote_session::types::FEATURE_HOST_EXEC));
-/// an old daemon without it is reported as `RemoteUnsupported` before this is
-/// ever called.
-async fn run_remote_guardrail_signal(
-    client: &std::sync::Arc<remote_server::client::RemoteServerClient>,
     pid: u32,
+    expected_fingerprint: Option<&str>,
     signal: zaplex_cockpit::GuardrailSignal,
 ) -> GuardrailSendOutcome {
-    let command = signal.remote_kill_command(pid);
-    match client.host_exec(command).await {
-        Ok(result) if result.exit_code.unwrap_or(1) == 0 => GuardrailSendOutcome::Sent,
-        Ok(result) => {
-            let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
-            GuardrailSendOutcome::Failed(if stderr.is_empty() {
-                format!("exited with status {}", result.exit_code.unwrap_or(-1))
+    let observed_fingerprint = zaplex_cockpit::current_process_fingerprint(pid);
+    send_verified_guardrail_signal_with(
+        pid,
+        expected_fingerprint,
+        observed_fingerprint.as_deref(),
+        signal,
+        |pid, signal| {
+            let expected = expected_fingerprint
+                .expect("the verified seam calls the backend only with an expected fingerprint");
+            match zaplex_cockpit::send_verified_process_signal(pid, expected, signal) {
+                Ok(()) => GuardrailSendOutcome::Sent,
+                Err(error) => GuardrailSendOutcome::Failed(error.to_string()),
+            }
+        },
+    )
+}
+
+fn inventory_guardrail_session_is_available(
+    tree: &zaplex_cockpit::FleetTree,
+    host_id: Option<&str>,
+    session_id: &str,
+    is_local: bool,
+    pid: u32,
+    expected_fingerprint: Option<&str>,
+) -> bool {
+    tree.hosts
+        .iter()
+        .filter(|host| host.is_available())
+        .filter(|host| {
+            if is_local {
+                host.is_local
             } else {
-                stderr
-            })
-        }
+                !host.is_local && host_id.is_some() && host.host_id.as_deref() == host_id
+            }
+        })
+        .flat_map(|host| host.projects.iter())
+        .flat_map(|project| project.sessions.iter())
+        .any(|session| {
+            session.session_id == session_id
+                && session.pid == pid
+                && session.process_fingerprint.as_deref() == expected_fingerprint
+        })
+}
+
+/// Ask a remote daemon to signal the exact process identity discovered for one
+/// agent session.
+///
+/// The request carries no shell text and can express only Interrupt or Kill.
+/// The daemon re-verifies the opaque process fingerprint immediately before
+/// signalling. A stale inventory row therefore fails closed instead of
+/// targeting a process that later reused the same numeric pid.
+async fn run_remote_guardrail_signal(
+    client: &std::sync::Arc<remote_server::client::RemoteServerClient>,
+    session_id: &str,
+    pid: u32,
+    expected_fingerprint: &str,
+    signal: zaplex_cockpit::GuardrailSignal,
+) -> GuardrailSendOutcome {
+    use remote_server::proto::{AgentProcessSignal, AgentProcessSignalStatus};
+
+    let signal = match signal {
+        zaplex_cockpit::GuardrailSignal::Interrupt => AgentProcessSignal::Interrupt,
+        zaplex_cockpit::GuardrailSignal::Kill => AgentProcessSignal::Kill,
+    };
+    match client
+        .send_verified_process_signal(
+            session_id.to_string(),
+            pid,
+            expected_fingerprint.to_string(),
+            signal,
+        )
+        .await
+    {
+        Ok(response) => match AgentProcessSignalStatus::try_from(response.status) {
+            Ok(AgentProcessSignalStatus::Sent) => GuardrailSendOutcome::Sent,
+            Ok(
+                AgentProcessSignalStatus::StaleIdentity
+                | AgentProcessSignalStatus::IdentityUnverifiable
+                | AgentProcessSignalStatus::InvalidRequest
+                | AgentProcessSignalStatus::SignalFailed,
+            ) => GuardrailSendOutcome::Failed(response.error_message),
+            Ok(AgentProcessSignalStatus::Unspecified) | Err(_) => GuardrailSendOutcome::Failed(
+                "the host returned an invalid signal result".to_string(),
+            ),
+        },
         Err(e) => GuardrailSendOutcome::Failed(format!("{e:#}")),
     }
+}
+
+type DaemonAdoptionKey = (String, String, u64);
+
+#[derive(Clone)]
+struct AdoptedDaemonSession {
+    pane_group_id: EntityId,
+    connection_session_id: SessionId,
+}
+
+#[cfg(unix)]
+fn daemon_adoption_key(node_id: &str, pty_session_id: &str, generation: u64) -> DaemonAdoptionKey {
+    (node_id.to_string(), pty_session_id.to_string(), generation)
+}
+
+#[cfg(unix)]
+fn remove_adopted_daemon_session(
+    adopted_daemon_sessions: &mut std::collections::HashMap<
+        DaemonAdoptionKey,
+        AdoptedDaemonSession,
+    >,
+    connection_session_id: SessionId,
+) {
+    adopted_daemon_sessions
+        .retain(|_, adopted| adopted.connection_session_id != connection_session_id);
+}
+
+#[cfg(unix)]
+fn agent_inventory_confirms_binding(
+    inventory: &remote_server::proto::AgentSessionList,
+    pty_session_id: &str,
+    generation: u64,
+    expected: &remote_server::proto::AgentSessionIdentity,
+) -> bool {
+    inventory.sessions.iter().any(|session| {
+        session.pty_foreground
+            && session.pty_session_id == pty_session_id
+            && session.pty_session_generation == generation
+            && session.provider == expected.provider
+            && session.account_email == expected.account_email
+            && session.config_dir == expected.config_dir
+            && session.session_id == expected.session_id
+    })
+}
+
+#[cfg(unix)]
+fn remember_daemon_node_session(
+    daemon_node_sessions: &mut std::collections::HashMap<String, Vec<SessionId>>,
+    node_id: String,
+    session_id: SessionId,
+) {
+    let sessions = daemon_node_sessions.entry(node_id).or_default();
+    if !sessions.contains(&session_id) {
+        sessions.push(session_id);
+    }
+}
+
+#[cfg(unix)]
+fn forget_daemon_node_session(
+    daemon_node_sessions: &mut std::collections::HashMap<String, Vec<SessionId>>,
+    session_id: SessionId,
+) {
+    daemon_node_sessions.retain(|_, sessions| {
+        sessions.retain(|candidate| *candidate != session_id);
+        !sessions.is_empty()
+    });
+}
+
+#[cfg(unix)]
+fn apply_daemon_server_auth(
+    mut server: warp_ssh_manager::SshServerInfo,
+    auth: warp_ssh_manager::ResolvedSshAuth,
+) -> warp_ssh_manager::SshServerInfo {
+    server.username = auth.username;
+    server.key_path = auth.key_path;
+    server.auth_type = auth.auth_type;
+    server
+}
+
+#[cfg(unix)]
+fn resolved_daemon_server(node_id: &str) -> Option<warp_ssh_manager::SshServerInfo> {
+    warp_ssh_manager::with_conn(|conn| {
+        let Some(server) = warp_ssh_manager::SshRepository::get_server(conn, node_id)? else {
+            return Ok(None);
+        };
+        let auth = warp_ssh_manager::SshRepository::resolve_server_auth(conn, &server)?;
+        Ok(Some(apply_daemon_server_auth(server, auth)))
+    })
+    .ok()
+    .flatten()
 }
 
 pub struct Workspace {
@@ -995,11 +1257,11 @@ pub struct Workspace {
     pub(crate) tabs: Vec<TabData>,
     active_tab_index: usize,
     /// Tracks which tab (by pane-group id) currently hosts each adopted daemon
-    /// `pty_session_id`, so adopting the same running session again focuses the
-    /// existing tab instead of opening a second view onto it (which would split
-    /// input/output across two tabs). Stale entries (tab since closed) are pruned
-    /// opportunistically on the next adopt.
-    adopted_daemon_sessions: std::collections::HashMap<String, EntityId>,
+    /// `(node_id, pty_session_id, generation, expected_agent_identity)`, so
+    /// adopting the same running session again focuses the existing tab without
+    /// conflating hosts, handoffs, accounts, or a reused stale id.
+    /// Stale entries (tab since closed) are pruned opportunistically.
+    adopted_daemon_sessions: std::collections::HashMap<DaemonAdoptionKey, AdoptedDaemonSession>,
     /// SSH host node per tab (pane-group id → `ssh_servers.node_id`), recorded
     /// when a tab is opened for a host (daemon or classic). Lets pane-scoped
     /// actions resolve their host context — e.g. "Open file manager here" on a
@@ -1010,6 +1272,15 @@ pub struct Workspace {
     /// host-scoped advisories (e.g. the multiplexer-nesting warning toast).
     #[cfg(unix)]
     daemon_session_hosts: std::collections::HashMap<SessionId, String>,
+    /// The SSH server behind each pending daemon connection (`SessionId`), kept
+    /// only until the session connects or fails. If the initialize handshake
+    /// fails — most importantly a version mismatch, where a stale daemon of a
+    /// different release answered — the daemon tab shows the error but is
+    /// otherwise dead; this lets the workspace fall back to a working classic SSH
+    /// session (the recovery the manager's mismatch branch documents but nobody
+    /// caught). Entry is removed on connect or on the one-shot fallback.
+    #[cfg(unix)]
+    daemon_session_servers: std::collections::HashMap<SessionId, warp_ssh_manager::SshServerInfo>,
     /// SSH host `node_id` → its daemon connection `SessionId`, recorded when a
     /// resilient host opens (or adopts) a daemon-backed session. The SFTP file
     /// manager is keyed by `node_id`; this lets it resolve a live daemon
@@ -1020,7 +1291,13 @@ pub struct Workspace {
     /// back. `SessionId`s are never reused, so an entry can only ever resolve to
     /// its own host or to nothing, never to a wrong host.
     #[cfg(all(unix, feature = "local_tty"))]
-    daemon_node_sessions: std::collections::HashMap<String, SessionId>,
+    daemon_node_sessions: std::collections::HashMap<String, Vec<SessionId>>,
+    /// One workspace-owned daemon connection per SSH registry node, created
+    /// when a standalone SFTP pane needs descriptor-bound safe-file
+    /// transactions but no terminal has connected that host yet. These
+    /// connections outlive panes so queued transfers survive pane closure.
+    #[cfg(all(unix, feature = "local_tty"))]
+    sftp_file_service_sessions: std::collections::HashMap<String, SessionId>,
     /// Remote files opened for editing over *classic* SSH (no daemon), keyed by
     /// their local working-copy path. On a `GlobalBufferModelEvent::FileSaved`
     /// for one of these paths, the working copy is uploaded back to the host
@@ -1195,6 +1472,104 @@ pub struct Workspace {
     tab_config_action_sidecar_item: Option<SidecarItemKind>,
     tab_config_action_sidecar_mouse_states: crate::tab_configs::action_sidecar::SidecarMouseStates,
     remove_tab_config_confirmation_dialog: ViewHandle<RemoveTabConfigConfirmationDialog>,
+}
+
+fn favorite_host_menu_item(
+    favorite: &zaplex_cockpit::Favorite,
+    host_nodes: &[(String, String)],
+) -> MenuItem<WorkspaceAction> {
+    match host_nodes
+        .iter()
+        .find(|(node_id, _)| node_id == &favorite.target)
+    {
+        Some((node_id, name)) => MenuItem::Submenu {
+            fields: MenuItemFields::new_submenu(name.clone()).with_icon(icons::Icon::Key),
+            menu: SubMenu::new(vec![
+                MenuItemFields::new(crate::t!("workspace-new-session-terminal"))
+                    .with_on_select_action(WorkspaceAction::OpenSshTerminalByNode {
+                        node_id: node_id.clone(),
+                    })
+                    .with_icon(icons::Icon::Terminal)
+                    .into_item(),
+                MenuItemFields::new(crate::t!("cockpit-spawn-card-new-agent"))
+                    .with_on_select_action(WorkspaceAction::OpenSpawnCard {
+                        registry_node_id: Some(node_id.clone()),
+                        host_id: None,
+                        host: Some(name.clone()),
+                        project: None,
+                    })
+                    .with_icon(icons::Icon::LayoutAlt01)
+                    .into_item(),
+            ]),
+        },
+        None => MenuItem::Submenu {
+            fields: MenuItemFields::new_submenu(format!(
+                "{} — {}",
+                favorite.display_label(),
+                crate::t!("workspace-favorite-unavailable")
+            ))
+            .with_icon(icons::Icon::AlertTriangle),
+            menu: SubMenu::new(vec![
+                MenuItemFields::new(crate::t!("workspace-favorite-unavailable"))
+                    .with_disabled(true)
+                    .with_icon(icons::Icon::AlertTriangle)
+                    .into_item(),
+                MenuItemFields::new(crate::t!("cockpit-tt-favorite-remove"))
+                    .with_on_select_action(WorkspaceAction::RemoveFavorite {
+                        kind: favorite.kind,
+                        target: favorite.target.clone(),
+                    })
+                    .with_icon(icons::Icon::Trash)
+                    .into_item(),
+            ]),
+        },
+    }
+}
+
+fn add_favorite_hosts_menu_item(
+    host_nodes: &[(String, String)],
+    favorites: &[zaplex_cockpit::Favorite],
+) -> Option<MenuItem<WorkspaceAction>> {
+    let mut addable_hosts: Vec<&(String, String)> = host_nodes
+        .iter()
+        .filter(|(node_id, _)| {
+            !favorites
+                .iter()
+                .any(|favorite| favorite.same_target(zaplex_cockpit::FavoriteKind::Host, node_id))
+        })
+        .collect();
+    addable_hosts.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+
+    let items = addable_hosts
+        .into_iter()
+        .map(|(node_id, name)| {
+            MenuItemFields::new(name.clone())
+                .with_on_select_action(WorkspaceAction::ToggleFavorite {
+                    kind: zaplex_cockpit::FavoriteKind::Host,
+                    target: node_id.clone(),
+                    label: name.clone(),
+                })
+                .with_icon(icons::Icon::Key)
+                .into_item()
+        })
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        None
+    } else {
+        Some(MenuItem::Submenu {
+            fields: MenuItemFields::new_submenu(crate::t!("workspace-favorites-add-header"))
+                .with_icon(icons::Icon::Plus),
+            menu: SubMenu::new(items),
+        })
+    }
+}
+
+fn primary_host_navigation_views(cockpit_enabled: bool) -> Vec<ToolPanelView> {
+    if cockpit_enabled {
+        vec![ToolPanelView::Cockpit]
+    } else {
+        vec![ToolPanelView::SshManager]
+    }
 }
 
 impl Workspace {
@@ -1817,7 +2192,9 @@ impl Workspace {
     /// Guardrails (step 7): the shared confirm dialog for the "kill" (per-agent
     /// SIGKILL) and "stop all" (fleet-wide SIGINT) verbs — see
     /// `agent_guardrail_dialog.rs`.
-    fn build_agent_guardrail_dialog(ctx: &mut ViewContext<Self>) -> ViewHandle<AgentGuardrailDialog> {
+    fn build_agent_guardrail_dialog(
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<AgentGuardrailDialog> {
         let agent_guardrail_dialog = ctx.add_typed_action_view(|_| AgentGuardrailDialog::new());
         ctx.subscribe_to_view(&agent_guardrail_dialog, move |me, _, event, ctx| {
             me.handle_agent_guardrail_dialog_event(event, ctx);
@@ -2003,8 +2380,8 @@ impl Workspace {
         });
         let modal = ctx.add_typed_action_view(|ctx| {
             // We intentionally pass `None` for the title so the Modal renders
-            // no built-in header — the body view renders its own header to
-            // match the Figma mock exactly (bold title + X close + ESC badge).
+            // no built-in header — the body view renders its own header via the
+            // shared `modal_frame::modal_header` (title + ✕ close).
             Modal::new(None, body, ctx)
                 .with_modal_style(UiComponentStyles {
                     width: Some(460.),
@@ -2054,12 +2431,16 @@ impl Workspace {
                     && ai_settings.default_tab_config_path() == path.to_string_lossy();
                 if is_removed_default {
                     AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                        report_if_error!(settings
-                            .default_session_mode_internal
-                            .set_value(DefaultSessionMode::Terminal, ctx));
-                        report_if_error!(settings
-                            .default_tab_config_path
-                            .set_value(String::new(), ctx));
+                        report_if_error!(
+                            settings
+                                .default_session_mode_internal
+                                .set_value(DefaultSessionMode::Terminal, ctx)
+                        );
+                        report_if_error!(
+                            settings
+                                .default_tab_config_path
+                                .set_value(String::new(), ctx)
+                        );
                     });
                 }
                 if let Err(e) = std::fs::remove_file(path) {
@@ -2888,18 +3269,66 @@ impl Workspace {
         #[cfg(unix)]
         ctx.subscribe_to_model(
             &crate::remote_server::manager::RemoteServerManager::handle(ctx),
-            |me, _handle, event, ctx| {
-                if let RemoteServerManagerEvent::SessionNotice {
+            |me, _handle, event, ctx| match event {
+                RemoteServerManagerEvent::SessionNotice {
                     session_id,
                     kind,
                     detail,
                     ..
-                } = event
-                {
-                    if kind == "multiplexer-detected" {
-                        me.on_daemon_session_multiplexer_notice(*session_id, detail.clone(), ctx);
+                } if kind == "multiplexer-detected" => {
+                    me.on_daemon_session_multiplexer_notice(*session_id, detail.clone(), ctx);
+                }
+                // The daemon connected fine — drop the classic-SSH fallback record
+                // we no longer need for this session.
+                RemoteServerManagerEvent::SessionConnected { session_id, .. } => {
+                    me.daemon_session_servers.remove(session_id);
+                }
+                RemoteServerManagerEvent::SessionExited { session_id, .. } => {
+                    remove_adopted_daemon_session(&mut me.adopted_daemon_sessions, *session_id);
+                }
+                RemoteServerManagerEvent::SessionDisconnected { session_id, .. } => {
+                    remove_adopted_daemon_session(&mut me.adopted_daemon_sessions, *session_id);
+                    forget_daemon_node_session(&mut me.daemon_node_sessions, *session_id);
+                }
+                // Session torn down (the user closed the tab, possibly mid-connect)
+                // — drop the fallback record so a *trailing* Initialize failure
+                // can't open an unwanted classic tab after the user cancelled.
+                RemoteServerManagerEvent::SessionDeregistered { session_id } => {
+                    me.daemon_session_servers.remove(session_id);
+                    remove_adopted_daemon_session(&mut me.adopted_daemon_sessions, *session_id);
+                    forget_daemon_node_session(&mut me.daemon_node_sessions, *session_id);
+                    me.sftp_file_service_sessions
+                        .retain(|_, candidate| candidate != session_id);
+                }
+                RemoteServerManagerEvent::SessionConnectionFailed {
+                    session_id, phase, ..
+                } => {
+                    remove_adopted_daemon_session(&mut me.adopted_daemon_sessions, *session_id);
+                    forget_daemon_node_session(&mut me.daemon_node_sessions, *session_id);
+                    me.sftp_file_service_sessions
+                        .retain(|_, candidate| candidate != session_id);
+                    match phase {
+                        // The initialize handshake failed for a daemon session — often
+                        // a version mismatch, where a stale daemon of another release
+                        // answered our socket. The daemon tab already shows the error
+                        // via its connect-failed path; recover by opening a working
+                        // classic SSH session (the fallback the manager's mismatch
+                        // branch documents but that nothing was catching before).
+                        crate::remote_server::manager::RemoteServerInitPhase::Initialize => {
+                            me.fall_back_to_classic_after_daemon_handshake_failure(
+                                *session_id,
+                                ctx,
+                            );
+                        }
+                        // Connect-phase failures are handled by the daemon-connect
+                        // preflight path; just drop the record so a later event can't
+                        // act on a stale entry.
+                        crate::remote_server::manager::RemoteServerInitPhase::Connect => {
+                            me.daemon_session_servers.remove(session_id);
+                        }
                     }
                 }
+                _ => {}
             },
         );
 
@@ -3151,8 +3580,12 @@ impl Workspace {
             ssh_tab_nodes: std::collections::HashMap::new(),
             #[cfg(unix)]
             daemon_session_hosts: std::collections::HashMap::new(),
+            #[cfg(unix)]
+            daemon_session_servers: std::collections::HashMap::new(),
             #[cfg(all(unix, feature = "local_tty"))]
             daemon_node_sessions: std::collections::HashMap::new(),
+            #[cfg(all(unix, feature = "local_tty"))]
+            sftp_file_service_sessions: std::collections::HashMap::new(),
             #[cfg(all(unix, feature = "local_tty"))]
             remote_sftp_edits: std::collections::HashMap::new(),
             #[cfg(unix)]
@@ -3552,34 +3985,54 @@ impl Workspace {
         window: WindowTemplate,
         ctx: &mut ViewContext<Self>,
     ) {
-        let start_index = self.tabs.len();
-
-        window
-            .tabs
-            .iter()
-            .enumerate()
-            .for_each(|(tab_index, tab_template)| {
-                self.add_tab_with_pane_layout(
-                    PanesLayout::Template(tab_template.layout.clone()),
-                    Arc::new(HashMap::new()),
-                    tab_template.title.clone(),
-                    ctx,
+        // Skip layouts that cannot be opened — a branch with no panes, which
+        // user-edited (or older-version-written) TOML does contain. Restoring one
+        // yields a tab with zero panes and the app dies on the "at least one pane"
+        // expectation during startup. Dropping the broken tab keeps the rest of
+        // the config usable.
+        //
+        // `add_tab_with_pane_layout` inserts at a position that depends on the
+        // NewTabPlacement setting (append, or after the active tab) and then
+        // activates the tab it inserted — so `self.active_tab_index` afterward is
+        // that tab's real index. We use it directly rather than assuming tabs
+        // append, and record the real index of the config's active tab so a
+        // skipped tab before it doesn't shift focus onto the wrong one.
+        let original_active = window.active_tab_index.unwrap_or_default();
+        let mut active_tab_index: Option<usize> = None;
+        let mut added = false;
+        for (original_index, tab_template) in window.tabs.iter().enumerate() {
+            if !tab_template.layout.is_openable() {
+                log::warn!(
+                    "Skipping launch-config tab {:?}: its layout has an empty pane branch",
+                    tab_template.title
                 );
-                self.tabs[start_index + tab_index].selected_color = tab_template
-                    .color
-                    .map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
-            });
-
-        if !window.tabs.is_empty() {
-            // Focus the active tab from the launch config.
-
-            let mut index = start_index + window.active_tab_index.unwrap_or_default();
-
-            if index >= self.tab_count() {
-                index = start_index;
+                continue;
             }
+            self.add_tab_with_pane_layout(
+                PanesLayout::Template(tab_template.layout.clone()),
+                Arc::new(HashMap::new()),
+                tab_template.title.clone(),
+                ctx,
+            );
+            added = true;
+            let inserted = self.active_tab_index;
+            self.tabs[inserted].selected_color = tab_template
+                .color
+                .map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+            let inserted = self
+                .set_tab_pinned(inserted, tab_template.is_pinned, ctx)
+                .unwrap_or(inserted);
+            if original_index == original_active {
+                active_tab_index = Some(inserted);
+            }
+        }
 
-            self.activate_tab_internal(index, ctx);
+        // Focus the config's active tab. If it was itself skipped, leave the
+        // last-added tab active (each add already activated the tab it inserted).
+        if added {
+            if let Some(index) = active_tab_index {
+                self.activate_tab_internal(index, ctx);
+            }
         }
     }
 
@@ -3602,39 +4055,41 @@ impl Workspace {
                 window_snapshot,
                 block_lists,
             } => {
-                let active_tab_index = window_snapshot.active_tab_index;
+                let original_active_tab_index = window_snapshot.active_tab_index;
+                let mut active_pane_group_id = None;
                 let restored_left_panel_open = window_snapshot.left_panel_open;
 
-                window_snapshot
-                    .tabs
-                    .iter()
-                    .enumerate()
-                    .for_each(|(tab_index, saved_tab)| {
-                        let custom_title = saved_tab.custom_title.clone();
-                        self.add_tab_with_pane_layout(
-                            PanesLayout::Snapshot(Box::new(saved_tab.root.clone())),
-                            block_lists.clone(),
-                            custom_title,
-                            ctx,
-                        );
-                        self.tabs[tab_index].default_directory_color =
-                            saved_tab.default_directory_color;
-                        self.tabs[tab_index].selected_color = saved_tab.selected_color;
+                for (tab_index, saved_tab) in window_snapshot.tabs.iter().enumerate() {
+                    let custom_title = saved_tab.custom_title.clone();
+                    self.add_tab_with_pane_layout(
+                        PanesLayout::Snapshot(Box::new(saved_tab.root.clone())),
+                        block_lists.clone(),
+                        custom_title,
+                        ctx,
+                    );
+                    let inserted = self.active_tab_index;
+                    self.tabs[inserted].default_directory_color = saved_tab.default_directory_color;
+                    self.tabs[inserted].selected_color = saved_tab.selected_color;
+                    self.tabs[inserted].is_pinned = saved_tab.is_pinned;
 
-                        let pane_group = self.tabs[tab_index].pane_group.clone();
+                    let pane_group = self.tabs[inserted].pane_group.clone();
+                    if tab_index == original_active_tab_index {
+                        active_pane_group_id = Some(pane_group.id());
+                    }
 
-                        if let Some(left_panel_snapshot) = &saved_tab.left_panel {
-                            self.restore_left_panel_for_tab(&pane_group, left_panel_snapshot, ctx);
-                        }
+                    if let Some(left_panel_snapshot) = &saved_tab.left_panel {
+                        self.restore_left_panel_for_tab(&pane_group, left_panel_snapshot, ctx);
+                    }
 
-                        if let Some(right_panel_snapshot) = &saved_tab.right_panel {
-                            self.restore_right_panel_for_tab(
-                                &pane_group,
-                                right_panel_snapshot,
-                                ctx,
-                            );
-                        }
-                    });
+                    if let Some(right_panel_snapshot) = &saved_tab.right_panel {
+                        self.restore_right_panel_for_tab(&pane_group, right_panel_snapshot, ctx);
+                    }
+                }
+
+                // Restored tabs are created in snapshot order. Normalize legacy snapshots
+                // into a pinned prefix only after every tab exists so relative order within
+                // the pinned and unpinned groups remains stable.
+                self.tabs.sort_by_key(|tab| !tab.is_pinned);
 
                 if self.tab_count() == 0 {
                     if self.should_trigger_get_started_onboarding(ctx) {
@@ -3655,6 +4110,13 @@ impl Workspace {
                     self.left_panel_open = restored_left_panel_open;
                 }
 
+                let active_tab_index = active_pane_group_id
+                    .and_then(|active_id| {
+                        self.tabs
+                            .iter()
+                            .position(|tab| tab.pane_group.id() == active_id)
+                    })
+                    .unwrap_or_default();
                 self.activate_tab_internal(active_tab_index, ctx);
                 self.check_and_trigger_onboarding(ctx);
                 self.maybe_auto_open_conversation_list(ctx);
@@ -3703,6 +4165,7 @@ impl Workspace {
             #[cfg(feature = "local_fs")]
             NewWorkspaceSource::TransferredTab {
                 tab_color,
+                is_pinned,
                 custom_title,
                 left_panel_open,
                 right_panel_open,
@@ -3720,6 +4183,9 @@ impl Workspace {
                 if let (Some(color), Some(tab)) = (tab_color, self.tabs.last_mut()) {
                     tab.selected_color = SelectedTabColor::Color(color);
                 }
+                if let Some(tab) = self.tabs.last_mut() {
+                    tab.is_pinned = is_pinned;
+                }
                 if self.left_panel_visibility_across_tabs_enabled(ctx) {
                     self.left_panel_open = left_panel_open;
                 }
@@ -3734,6 +4200,7 @@ impl Workspace {
             #[cfg(not(feature = "local_fs"))]
             NewWorkspaceSource::TransferredTab {
                 tab_color,
+                is_pinned,
                 custom_title,
                 left_panel_open,
                 is_tab_drag_preview,
@@ -3748,6 +4215,9 @@ impl Workspace {
                 );
                 if let (Some(color), Some(tab)) = (tab_color, self.tabs.last_mut()) {
                     tab.selected_color = SelectedTabColor::Color(color);
+                }
+                if let Some(tab) = self.tabs.last_mut() {
+                    tab.is_pinned = is_pinned;
                 }
                 if self.left_panel_visibility_across_tabs_enabled(ctx) {
                     self.left_panel_open = left_panel_open;
@@ -3798,8 +4268,8 @@ impl Workspace {
             NewWorkspaceSource::Empty { .. }
             | NewWorkspaceSource::FromTemplate { .. }
             | NewWorkspaceSource::Session { .. }
-            | NewWorkspaceSource::AgentSession { .. }
-            | NewWorkspaceSource::NotebookFromFilePath { .. } => should_default_open,
+            | NewWorkspaceSource::AgentSession { .. } => should_default_open,
+            NewWorkspaceSource::NotebookFromFilePath { .. } => false,
             #[cfg(not(target_family = "wasm"))]
             NewWorkspaceSource::FromCloudConversationId { .. }
             | NewWorkspaceSource::NotebookById { .. }
@@ -4195,10 +4665,10 @@ impl Workspace {
         // Route through the one explicit launch grammar: open the spawn card with
         // the task prompt AND the requested agent preselected (so "Fix with Codex"
         // opens on Codex, not silently on the default). The card is restricted to
-        // the supported Claude/Codex, launches, and prefills the prompt — no blind
+        // the supported installed CLI, launches, and prefills the prompt — no blind
         // one-click. The card also handles the "nothing installed" case (inert
         // Confirm with an install hint) instead of a toast.
-        self.open_spawn_card(None, None, None, Some(prompt), agent, ctx);
+        self.open_spawn_card(None, None, None, None, Some(prompt), agent, ctx);
     }
 
     /// Like [`Self::ask_agent`] but launches Claude **routed to a subscription**
@@ -4215,7 +4685,15 @@ impl Workspace {
         // at open time (the same "on the freest instance" intent as the old direct
         // path) and prefills the task prompt — one explicit launch grammar for
         // every launch, no blind one-click. Routed flows are Claude (they drive gh).
-        self.open_spawn_card(None, None, None, Some(prompt), Some(CLIAgent::Claude), ctx);
+        self.open_spawn_card(
+            None,
+            None,
+            None,
+            None,
+            Some(prompt),
+            Some(CLIAgent::Claude),
+            ctx,
+        );
     }
 
     /// Creates a new default terminal tab, then runs the startup command of the specified CLI agent.
@@ -4230,19 +4708,51 @@ impl Workspace {
         });
     }
 
+    /// Stamps the selected account onto the active terminal before CLI command
+    /// detection catches up. The route starts the process; the email is the
+    /// identity used for safe later focus/reuse.
+    fn bind_active_terminal_account(
+        &mut self,
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        account_email: Option<&str>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let config_dir = config_dir.map(|dir| dir.to_string_lossy().into_owned());
+        let account_email = account_email.map(str::to_owned);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            if let Some(terminal_view) = pane_group.active_session_view(ctx) {
+                let terminal_view_id = terminal_view.as_ref(ctx).view_id();
+                CLIAgentSessionsModel::handle(ctx).update(ctx, |model, _| {
+                    model.bind_account_identity(
+                        terminal_view_id,
+                        agent,
+                        config_dir.clone(),
+                        account_email.clone(),
+                    );
+                });
+            }
+        });
+    }
+
     /// Fork an agent conversation into a NEW session (fork/worktree design §2):
     /// a new tab in the source session's cwd runs the provider's fork command —
     /// same history, divergent future; the original session stays untouched.
     /// With `into_worktree`, the fork instead runs in a fresh sibling git
     /// worktree of the session's repo (design §3/FW), so trying a second
     /// approach never touches the first approach's working tree.
+    #[allow(clippy::too_many_arguments)]
     fn fork_agent_session(
         &mut self,
         agent: CLIAgent,
         session_id: &str,
         cwd: &Path,
         config_dir: Option<&Path>,
+        account_email: Option<&str>,
         into_worktree: bool,
+        host: &str,
+        host_id: Option<&str>,
+        is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(fork_cmd) = agent.fork_command_pinned(session_id, config_dir) else {
@@ -4250,13 +4760,127 @@ impl Workspace {
             // is the belt-and-braces guard (no fake fork).
             return;
         };
+        if !is_local {
+            // The source session runs on a remote host, so the fork must too —
+            // running it locally would open a tab at the *remote* cwd on this
+            // machine and address the wrong (or a non-existent) checkout. Run it
+            // on the session's own host. (Worktree isolation is a local-only
+            // feature — `into_worktree` is never offered for remote sessions,
+            // whose in-repo probe checks the local filesystem — so a remote fork
+            // is always in-place.)
+            #[cfg(all(unix, feature = "local_tty"))]
+            {
+                let _ = into_worktree;
+                self.run_agent_command_on_remote_host(
+                    host,
+                    host_id,
+                    cwd,
+                    &fork_cmd,
+                    agent,
+                    config_dir,
+                    account_email,
+                    ctx,
+                );
+            }
+            #[cfg(not(all(unix, feature = "local_tty")))]
+            {
+                // No daemon transport on this build — surface it instead of a
+                // silent no-op (and never fall through to the wrong local path).
+                let _ = (into_worktree, host_id, cwd, fork_cmd);
+                self.remote_agent_action_unavailable_toast(host, ctx);
+            }
+            return;
+        }
+        let _ = (host, host_id);
         #[cfg(feature = "local_fs")]
         if into_worktree {
-            self.fork_into_worktree(&fork_cmd, cwd, ctx);
+            self.fork_into_worktree(&fork_cmd, cwd, agent, config_dir, account_email, ctx);
             return;
         }
         let _ = into_worktree;
-        self.fork_agent_session_in_place(&fork_cmd, cwd, ctx);
+        self.fork_agent_session_in_place(&fork_cmd, cwd, agent, config_dir, account_email, ctx);
+    }
+
+    /// Run `command` on a *remote* agent session's own host: resolve the daemon
+    /// `host_id` to its live SSH node and open a terminal there that runs the
+    /// command in `cwd` (the host's own CLI login, so remote account routing is
+    /// the host's, not a local config dir). The command is prepended with the
+    /// host's own startup command, exactly like [`Self::attach_fleet_session`]'s
+    /// remote resume. Returns `true` when a remote tab was opened; on a host with
+    /// no live daemon (or no matching server row) it shows an honest toast and
+    /// returns `false`, so the caller never silently falls back to the wrong
+    /// local path.
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn run_agent_command_on_remote_host(
+        &mut self,
+        host: &str,
+        host_id: Option<&str>,
+        cwd: &Path,
+        command: &str,
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        account_email: Option<&str>,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let node_id = host_id.and_then(|hid| self.node_for_daemon_host(hid, &*ctx));
+        let Some(node_id) = node_id else {
+            self.toast_stack.update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::default(format!(
+                        "That agent runs on {host}, which isn't connected right now — open \
+                         that host first, then try again."
+                    )),
+                    ctx,
+                );
+            });
+            return false;
+        };
+        let full = format!(
+            "cd {} && {command}",
+            shell_words::quote(&cwd.to_string_lossy())
+        );
+        let server = warp_ssh_manager::with_conn(|conn| {
+            Ok(warp_ssh_manager::SshRepository::get_server(conn, &node_id)?)
+        });
+        match server {
+            Ok(Some(mut server)) => {
+                server.startup_command = Some(match server.startup_command {
+                    Some(existing) if !existing.trim().is_empty() => format!("{existing}; {full}"),
+                    _ => full,
+                });
+                self.open_ssh_terminal(node_id, server, false, ctx);
+                self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
+                true
+            }
+            _ => {
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::error(format!(
+                            "Couldn't find host '{node_id}' to run the command on."
+                        )),
+                        ctx,
+                    );
+                });
+                false
+            }
+        }
+    }
+
+    /// Remote fork / slash landed on a build without the daemon transport
+    /// (`all(unix, feature = "local_tty")`). The cross-host inventory can still
+    /// surface these verbs there, so tell the user honestly instead of silently
+    /// no-op'ing — and never fall through to the wrong local path.
+    #[cfg(not(all(unix, feature = "local_tty")))]
+    fn remote_agent_action_unavailable_toast(&mut self, host: &str, ctx: &mut ViewContext<Self>) {
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::default(format!(
+                    "That agent runs on {host} — remote agent actions aren't available on \
+                     this platform."
+                )),
+                ctx,
+            );
+        });
     }
 
     /// Adopt an idle CLI session in place (`AdoptAgentSession`, cockpit
@@ -4270,6 +4894,7 @@ impl Workspace {
         session_id: &str,
         cwd: &Path,
         config_dir: Option<&Path>,
+        account_email: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(resume_cmd) = agent.resume_command_pinned(session_id, config_dir) else {
@@ -4277,40 +4902,200 @@ impl Workspace {
             // is the belt-and-braces guard (no fake resume).
             return;
         };
-        self.fork_agent_session_in_place(&resume_cmd, cwd, ctx);
+        self.fork_agent_session_in_place(&resume_cmd, cwd, agent, config_dir, account_email, ctx);
+    }
+
+    /// Resolves one fleet session with the inventory's explicit local marker or
+    /// a remote daemon's stable id. Display labels never route remote actions.
+    fn inventory_agent_session(
+        host_id: Option<&str>,
+        session_id: &str,
+        provider: zaplex_cockpit::Provider,
+        config_dir: Option<&str>,
+        account_email: Option<&str>,
+        is_local: bool,
+        ctx: &AppContext,
+    ) -> Option<zaplex_cockpit::SessionSnapshot> {
+        let model = crate::cockpit::CockpitModel::as_ref(ctx);
+        let expected_key = zaplex_cockpit::session_identity_key(
+            is_local,
+            host_id,
+            provider,
+            config_dir,
+            account_email,
+            session_id,
+        );
+        let mut live = model
+            .inventory()
+            .hosts
+            .iter()
+            .filter(|host| host.is_available())
+            .flat_map(|host| {
+                let expected_key = &expected_key;
+                host.projects.iter().flat_map(move |project| {
+                    project.sessions.iter().filter(move |session| {
+                        zaplex_cockpit::session_key(host.is_local, host.host_id.as_deref(), session)
+                            == expected_key.as_str()
+                    })
+                })
+            })
+            .cloned();
+        let matched_live = live.next();
+        if live.next().is_some() {
+            return None;
+        }
+        if matched_live.is_some() || !is_local {
+            return matched_live;
+        }
+
+        // Local dormant sessions deliberately live outside the fleet tree: the
+        // tree is a live-work navigator, while account snapshots retain the
+        // transcript-only rows. They still need the safe ResumeDormant route.
+        let mut local = model
+            .snapshot()
+            .accounts
+            .iter()
+            .flat_map(|account| account.sessions.iter().chain(&account.idle_sessions))
+            .filter(|session| {
+                zaplex_cockpit::session_key(true, None, session) == expected_key.as_str()
+            })
+            .cloned();
+        let matched_local = local.next();
+        if local.next().is_some() {
+            return None;
+        }
+        matched_local
     }
 
     /// Run a Claude Code slash command against a discovered session
     /// (`SlashCommandSession`, cockpit model-levers `/compact` · `/clear`).
     ///
-    /// Cockpit sessions are external processes whose stdin zaplex does not own,
-    /// so the honest path is to **resume the same conversation** into a
-    /// zaplex-owned tab (identical to adopt) and prefill the slash command in
-    /// that live PTY's input — the human presses Enter to send it (in-the-loop,
-    /// like the review-loop verbs). The command then acts on the same session.
+    /// A known pane receives the command in place. A dormant session first
+    /// resumes into a Zaplex-owned tab. A live session without a reliable pane
+    /// locator is left untouched rather than duplicated.
+    #[allow(clippy::too_many_arguments)]
     fn slash_command_session(
         &mut self,
-        agent: CLIAgent,
+        provider: zaplex_cockpit::Provider,
         session_id: &str,
         cwd: &Path,
         config_dir: Option<&Path>,
+        account_email: Option<&str>,
         command: &str,
+        host: &str,
+        host_id: Option<&str>,
+        is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        use crate::cockpit::capabilities::{SessionOpenPlan, plan_session_open};
+
+        let agent = crate::cockpit::agent_of(provider);
+        let config_identity = config_dir.map(|dir| dir.to_string_lossy().into_owned());
+        let Some(session) = Self::inventory_agent_session(
+            host_id,
+            session_id,
+            provider,
+            config_identity.as_deref(),
+            account_email,
+            is_local,
+            &*ctx,
+        ) else {
+            self.session_not_found_toast(host, ctx);
+            return;
+        };
+        let terminal_view_id = Self::terminal_view_id_for_agent_session(
+            agent,
+            session_id,
+            config_identity.as_deref(),
+            account_email,
+            host_id,
+            is_local,
+            &*ctx,
+        );
+        match plan_session_open(&session, terminal_view_id.is_some()) {
+            SessionOpenPlan::FocusExistingTerminal => {
+                let terminal_view_id = terminal_view_id
+                    .expect("the open plan only focuses when a terminal id is present");
+                if self.focus_terminal_view_anywhere(terminal_view_id, ctx) {
+                    // Preserve the existing in-the-loop behavior: stage the slash
+                    // command in the live pane and let the user submit it.
+                    if !Self::prefill_terminal_view_input(terminal_view_id, command, ctx) {
+                        self.live_session_unavailable_toast(&session, host, ctx);
+                    }
+                } else {
+                    self.live_session_unavailable_toast(&session, host, ctx);
+                }
+                return;
+            }
+            SessionOpenPlan::ResumeDormant => {}
+            SessionOpenPlan::LiveSessionUnavailable => {
+                self.live_session_unavailable_toast(&session, host, ctx);
+                return;
+            }
+        }
+
         let Some(resume_cmd) = agent.resume_command_pinned(session_id, config_dir) else {
             // No resume mechanism → no way to reach the session's PTY honestly;
             // the surface stays disabled, this is the belt-and-braces guard.
             return;
         };
-        // Resume the session into a fresh local tab (owns the PTY) …
-        self.fork_agent_session_in_place(&resume_cmd, cwd, ctx);
+        if !is_local {
+            // Remote session: resume it *on its own host* (not locally at the
+            // remote cwd). We do NOT prefill the new tab's input as the local path
+            // does: `open_ssh_terminal` runs a fresh preflight + handshake, and
+            // either can replace the daemon tab with a classic-SSH fallback tab
+            // mid-connect, silently dropping a prefilled command. Instead, once
+            // the resume tab opened, surface the command for the user to send —
+            // honest, and never lost. The resume itself rides the daemon startup
+            // command, so it survives a fallback too.
+            #[cfg(all(unix, feature = "local_tty"))]
+            {
+                if self.run_agent_command_on_remote_host(
+                    host,
+                    host_id,
+                    cwd,
+                    &resume_cmd,
+                    agent,
+                    config_dir,
+                    account_email,
+                    ctx,
+                ) {
+                    let command = command.to_string();
+                    self.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::default(format!(
+                                "Resumed on {host} — send {command} in the new tab to run it."
+                            )),
+                            ctx,
+                        );
+                    });
+                }
+            }
+            #[cfg(not(all(unix, feature = "local_tty")))]
+            {
+                // No daemon transport on this build — surface it, don't no-op.
+                let _ = (host_id, cwd, resume_cmd, command);
+                self.remote_agent_action_unavailable_toast(host, ctx);
+            }
+            return;
+        }
+        let _ = (host, host_id);
+        // Local: resume the session into a fresh local tab (owns the PTY) …
+        self.fork_agent_session_in_place(&resume_cmd, cwd, agent, config_dir, account_email, ctx);
         // … then prefill the slash command, ready for the human to send.
-        let command = command.to_string();
+        self.prefill_active_tab_input(command, ctx);
+    }
+
+    /// Prefill `text` into the active tab's focused session input box and focus
+    /// it — stages a slash command (`/compact`, `/clear`) for the human to send
+    /// after a resume (local or remote).
+    fn prefill_active_tab_input(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        let text = text.to_string();
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
                 terminal_view.update(ctx, |terminal_view, ctx| {
                     terminal_view.input().update(ctx, |input, ctx| {
-                        input.replace_buffer_content(&command, ctx);
+                        input.replace_buffer_content(&text, ctx);
                         input.focus_input_box(ctx);
                     });
                 });
@@ -4318,91 +5103,237 @@ impl Workspace {
         });
     }
 
-    /// Attach to a fleet agent identified by `(host, session_id)` from the
-    /// unified Conductor inventory (`AttachFleetSession`) — the shared target of
-    /// the Conductor row-click and the `w`-jump. Everything is resolved from the
-    /// live [`CockpitModel::inventory`] so callers pass only the identity:
-    /// - **local host** → adopt the session in place (resume, no fork), pinned to
-    ///   the owning account's subscription when it isn't the default login.
-    /// - **remote host** → resolve the inventory host to its live SSH node and
-    ///   open a remote terminal that **resumes** the same session on that host
-    ///   (its own CLI login, the session's cwd) — the remote analogue of the
-    ///   local adopt. Falls back to an honest toast when the host has no live
-    ///   daemon connection to resume through.
+    fn terminal_view_handle(
+        terminal_view_id: EntityId,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<TerminalView>> {
+        ctx.window_ids().find_map(|window_id| {
+            ctx.views_of_type::<TerminalView>(window_id)
+                .and_then(|terminal_views| {
+                    terminal_views.iter().find_map(|terminal_view| {
+                        (terminal_view.as_ref(ctx).view_id() == terminal_view_id)
+                            .then(|| terminal_view.clone())
+                    })
+                })
+        })
+    }
+
+    /// Resolves a CLI conversation to the terminal on the exact fleet host.
+    /// Provider/session ids alone are insufficient: copied sessions may retain
+    /// the same id on local and multiple remote hosts.
+    fn terminal_view_id_for_agent_session(
+        agent: CLIAgent,
+        session_id: &str,
+        config_dir: Option<&str>,
+        account_email: Option<&str>,
+        host_id: Option<&str>,
+        is_local: bool,
+        ctx: &AppContext,
+    ) -> Option<EntityId> {
+        use crate::cockpit::capabilities::session_host_matches;
+
+        CLIAgentSessionsModel::as_ref(ctx).terminal_view_id_for_agent_session_matching(
+            agent,
+            session_id,
+            config_dir,
+            account_email,
+            |terminal_view_id, session| {
+                if (is_local && session.is_remote()) || (!is_local && !session.is_remote()) {
+                    return false;
+                }
+                let Some(terminal_view) = Self::terminal_view_handle(terminal_view_id, ctx) else {
+                    return false;
+                };
+                #[cfg(feature = "local_tty")]
+                let remote_host_id = terminal_view.as_ref(ctx).active_session_remote_host_id(ctx);
+                #[cfg(not(feature = "local_tty"))]
+                let remote_host_id: Option<warp_core::HostId> = None;
+                session_host_matches(
+                    is_local,
+                    host_id,
+                    remote_host_id.as_ref().map(warp_core::HostId::as_str),
+                )
+            },
+        )
+    }
+
+    /// Prefills one known terminal directly, including a terminal owned by a
+    /// different Zaplex window. This keeps session actions on the pane that
+    /// already owns the CLI process instead of creating a second resume.
+    fn prefill_terminal_view_input(
+        terminal_view_id: EntityId,
+        text: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(terminal_view) = Self::terminal_view_handle(terminal_view_id, &*ctx) else {
+            return false;
+        };
+
+        let text = text.to_string();
+        terminal_view.update(ctx, |terminal_view, ctx| {
+            terminal_view.input().update(ctx, |input, ctx| {
+                input.replace_buffer_content(&text, ctx);
+                input.focus_input_box(ctx);
+            });
+        });
+        true
+    }
+
+    fn session_display_name(session: &zaplex_cockpit::SessionSnapshot) -> String {
+        if !session.name.is_empty() {
+            return session.name.clone();
+        }
+        Path::new(&session.cwd)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| session.cwd.clone())
+    }
+
+    /// Reports a live session for which Zaplex has no reliable pane/PTY locator.
+    /// Starting a second `resume` would be worse than declining the action.
+    fn live_session_unavailable_toast(
+        &mut self,
+        session: &zaplex_cockpit::SessionSnapshot,
+        host: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let session = Self::session_display_name(session);
+        let host = if host.is_empty() {
+            crate::t!("cockpit-table-host-local").to_string()
+        } else {
+            host.to_string()
+        };
+        let message = crate::t!(
+            "cockpit-session-live-unavailable",
+            session = session,
+            host = host
+        )
+        .to_string();
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(DismissibleToast::default(message), ctx);
+        });
+    }
+
+    /// A row can outlive one inventory refresh. Report that calm, expected race
+    /// instead of making a click appear broken or falling back to a new process.
+    fn session_not_found_toast(&mut self, host: &str, ctx: &mut ViewContext<Self>) {
+        let host = if host.is_empty() {
+            crate::t!("cockpit-table-host-local").to_string()
+        } else {
+            host.to_string()
+        };
+        let message = crate::t!("cockpit-session-no-longer-available", host = host).to_string();
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(DismissibleToast::default(message), ctx);
+        });
+    }
+
+    /// Attach to a fleet agent identified by host, provider, account route, and
+    /// session id from the unified Conductor inventory
+    /// (`AttachFleetSession`) — the shared target of the Conductor row-click and
+    /// the `w`-jump. Current state and cwd are resolved from the live inventory:
+    /// A pane already hosting the session is focused, regardless of whether it
+    /// is local or remote. Only a dormant (`Idle`) session starts a resume
+    /// command. A live session without a reliable pane/PTY locator is reported
+    /// as unavailable rather than duplicated.
     fn attach_fleet_session(
         &mut self,
         host: &str,
         host_id: Option<&str>,
         session_id: &str,
+        provider: zaplex_cockpit::Provider,
+        config_dir: Option<&str>,
+        account_email: Option<&str>,
         is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::cockpit::CockpitModel;
+        use crate::cockpit::capabilities::{SessionOpenPlan, plan_session_open};
 
-        // `is_local` is the inventory's explicit marker for this host — never a
-        // `local_label() == host` comparison, which a colliding remote label
-        // would defeat (routing a remote adopt to a local one).
-        // Resolve everything up front, then drop the model borrow before the
-        // mutable adopt call / toast.
-        //
-        // Match the inventory node by the stable `host_id` when the row carried
-        // one (every remote node has one), falling back to the `host` label only
-        // for the local node (`host_id == None`). This keeps two remotes sharing
-        // a label distinct, so a remote adopt resolves the right host's session.
-        let model = CockpitModel::as_ref(ctx);
-        let resolved = model
-            .inventory()
-            .hosts
-            .iter()
-            .filter(|h| match host_id {
-                Some(id) => h.host_id.as_deref() == Some(id),
-                None => h.host == host && h.host_id.is_none(),
-            })
-            .flat_map(|h| &h.projects)
-            .flat_map(|p| &p.sessions)
-            .find(|s| s.session_id == session_id)
-            .map(|s| (s.provider, s.cwd.clone(), s.name.clone()));
-        let config_dir = if is_local {
-            model.config_dir_for_session(session_id)
-        } else {
-            None
-        };
+        // Resolve everything up front, then drop model borrows before focusing,
+        // resuming, or showing a toast.
+        let resolved = Self::inventory_agent_session(
+            host_id,
+            session_id,
+            provider,
+            config_dir,
+            account_email,
+            is_local,
+            &*ctx,
+        );
 
-        let Some((provider, cwd, name)) = resolved else {
+        let Some(session) = resolved else {
             // The inventory moved on (session ended between render and click).
+            self.session_not_found_toast(host, ctx);
             return;
         };
+        let agent = crate::cockpit::agent_of(session.provider);
+        let terminal_view_id = Self::terminal_view_id_for_agent_session(
+            agent,
+            session_id,
+            config_dir,
+            account_email,
+            host_id,
+            is_local,
+            &*ctx,
+        );
+        match plan_session_open(&session, terminal_view_id.is_some()) {
+            SessionOpenPlan::FocusExistingTerminal => {
+                let terminal_view_id = terminal_view_id
+                    .expect("the open plan only focuses when a terminal id is present");
+                if !self.focus_terminal_view_anywhere(terminal_view_id, ctx) {
+                    // The model can briefly retain a terminal that closed between
+                    // lookup and focus. Never turn that race into a duplicate.
+                    self.live_session_unavailable_toast(&session, host, ctx);
+                }
+                return;
+            }
+            SessionOpenPlan::ResumeDormant => {}
+            SessionOpenPlan::LiveSessionUnavailable => {
+                #[cfg(unix)]
+                if !is_local {
+                    if let Some((pty_session_id, generation)) =
+                        crate::cockpit::capabilities::daemon_reattach_target(&session)
+                    {
+                        let server = host_id
+                            .and_then(|host_id| self.node_for_daemon_host(host_id, &*ctx))
+                            .and_then(|node_id| resolved_daemon_server(&node_id));
+                        if let Some(server) = server {
+                            let expected_agent_binding =
+                                crate::remote_server::agent_session::snapshot_agent_identity(
+                                    &session,
+                                );
+                            self.adopt_daemon_session(
+                                server,
+                                pty_session_id.to_string(),
+                                generation,
+                                Some(expected_agent_binding),
+                                ctx,
+                            );
+                            return;
+                        }
+                    }
+                }
+                self.live_session_unavailable_toast(&session, host, ctx);
+                return;
+            }
+        }
 
         if is_local {
-            let agent = match provider {
-                zaplex_cockpit::Provider::Claude => CLIAgent::Claude,
-                zaplex_cockpit::Provider::Codex => CLIAgent::Codex,
-            };
             self.adopt_agent_session(
                 agent,
                 session_id,
-                Path::new(&cwd),
-                config_dir.as_deref(),
+                Path::new(&session.cwd),
+                config_dir.map(Path::new),
+                account_email,
                 ctx,
             );
         } else {
-            // Remote in-place adopt: resume the same agent session on its host.
+            // Remote dormant-session resume: start the same conversation on its host.
             // Resolve the inventory host to a live SSH node, build the agent's
             // resume command, and open a remote terminal that runs it in the
             // session's cwd (the host's own CLI login — remote account routing is
             // the host's, not a local config dir).
-            let agent = match provider {
-                zaplex_cockpit::Provider::Claude => CLIAgent::Claude,
-                zaplex_cockpit::Provider::Codex => CLIAgent::Codex,
-            };
-            let place = if name.is_empty() {
-                Path::new(&cwd)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| cwd.clone())
-            } else {
-                name
-            };
+            let place = Self::session_display_name(&session);
             // Inventory host id (daemon `HostId`) → the SSH `node_id` whose live
             // daemon carries it. `None` when the host has no live connection.
             let node_id: Option<String> = {
@@ -4428,11 +5359,20 @@ impl Workspace {
                 });
                 return;
             };
-            let Some(resume_cmd) = agent.resume_command_pinned(session_id, None) else {
+            // Pin the session's account on the resume so a plexed remote agent
+            // (a non-default CODEX_HOME / CLAUDE_CONFIG_DIR on the host) is found
+            // — the daemon reported the host-side config dir with the session.
+            // Without this, `codex resume <id>` ran under the host's *default*
+            // login and silently found nothing (the reported dead pane). The path
+            // is the host's; it's replayed verbatim inside the daemon's
+            // `startup_command`, so it must not be canonicalized against the local
+            // filesystem.
+            let pinned_dir = session.config_dir.as_deref().map(Path::new);
+            let Some(resume_cmd) = agent.resume_command_pinned(session_id, pinned_dir) else {
                 // No resume mechanism for this agent → nothing honest to do.
                 return;
             };
-            let full = format!("cd {} && {resume_cmd}", shell_words::quote(&cwd));
+            let full = format!("cd {} && {resume_cmd}", shell_words::quote(&session.cwd));
             let server = warp_ssh_manager::with_conn(|conn| {
                 Ok(warp_ssh_manager::SshRepository::get_server(conn, &node_id)?)
             });
@@ -4446,6 +5386,7 @@ impl Workspace {
                         _ => full,
                     });
                     self.open_ssh_terminal(node_id, server, false, ctx);
+                    self.bind_active_terminal_account(agent, pinned_dir, account_email, ctx);
                 }
                 _ => {
                     self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -4481,6 +5422,9 @@ impl Workspace {
                     &target.host_label,
                     target.host_id.as_deref(),
                     &target.session_id,
+                    target.provider,
+                    target.config_dir.as_deref(),
+                    target.account_email.as_deref(),
                     target.is_local,
                     ctx,
                 );
@@ -4496,7 +5440,7 @@ impl Workspace {
         }
     }
 
-    /// Open a session's conversation transcript (`ViewTranscript`, cockpit "◇ log"
+    /// Open a session's conversation transcript (`ViewTranscript`, cockpit "log"
     /// verb): resolve its `.jsonl`, render it to Markdown, write a temp file, and
     /// open it in a code/text pane. Honest on failure — a missing/unreadable
     /// transcript raises a toast rather than opening a blank pane.
@@ -4514,7 +5458,11 @@ impl Workspace {
             });
         };
         let Some(path) = zaplex_cockpit::sessions::transcript_path(config_dir, session_id) else {
-            toast_err(self, ctx, "No transcript found for this session.".to_string());
+            toast_err(
+                self,
+                ctx,
+                "No transcript found for this session.".to_string(),
+            );
             return;
         };
         let markdown = match std::fs::read_to_string(&path) {
@@ -4544,7 +5492,7 @@ impl Workspace {
         self.add_tab_for_code_file(tmp, None, ctx);
     }
 
-    /// Open a session's **review** view (`ReviewSession`, cockpit "◈ review"
+    /// Open a session's **review** view (`ReviewSession`, cockpit "review"
     /// verb, step 6): read the repo's working changes off-thread (`git diff
     /// HEAD` + untracked), render them to Markdown, write a temp file, and open
     /// it read-only in a code/text pane — the exact mechanism
@@ -4739,7 +5687,15 @@ impl Workspace {
     /// add` fails (dirty repo, existing branch), the error is the session's
     /// first output — visible in the block, never swallowed (design §3).
     #[cfg(feature = "local_fs")]
-    fn fork_into_worktree(&mut self, fork_cmd: &str, cwd: &Path, ctx: &mut ViewContext<Self>) {
+    fn fork_into_worktree(
+        &mut self,
+        fork_cmd: &str,
+        cwd: &Path,
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        account_email: Option<&str>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         // git resolves worktree paths against the repo; the session's cwd may
         // be a subdirectory, so anchor the sibling `.worktrees` dir at the
         // repo root (= nearest ancestor with a `.git`; a file counts, so
@@ -4754,7 +5710,7 @@ impl Workspace {
             // UI already hides the worktree action for non-repo cwds; this
             // covers races (repo deleted between render and click).
             log::warn!("fork into worktree: no git repo above cwd, forking in place");
-            self.fork_agent_session_in_place(fork_cmd, cwd, ctx);
+            self.fork_agent_session_in_place(fork_cmd, cwd, agent, config_dir, account_email, ctx);
             return;
         };
         let repo_str = repo.to_string_lossy().into_owned();
@@ -4782,6 +5738,7 @@ impl Workspace {
             Ok(tab_config) => {
                 let param_values = tab_config.default_param_values();
                 self.open_tab_config_with_params(tab_config, param_values, Some(&branch_hint), ctx);
+                self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
             }
             Err(e) => {
                 log::warn!("fork into worktree: generated config failed to parse: {e:?}");
@@ -4795,16 +5752,19 @@ impl Workspace {
         &mut self,
         fork_cmd: &str,
         cwd: &Path,
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        account_email: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let options =
-            NewTerminalOptions::default().with_initial_directory(cwd.to_path_buf());
+        let options = NewTerminalOptions::default().with_initial_directory(cwd.to_path_buf());
         self.add_tab_with_pane_layout(
             PanesLayout::SingleTerminal(Box::new(options)),
             Arc::new(HashMap::new()),
             None,
             ctx,
         );
+        self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                 terminal_view.update(ctx, |view, ctx| {
@@ -4825,6 +5785,7 @@ impl Workspace {
         &mut self,
         agent: CLIAgent,
         config_dir: Option<&Path>,
+        account_email: Option<&str>,
         cwd: Option<&Path>,
         node_id: Option<&str>,
         model: Option<&str>,
@@ -4886,14 +5847,9 @@ impl Workspace {
             effort.map(str::to_owned),
         );
         if let Some(node_id) = node_id {
-            let cmd = agent.launch_command_routed_with(None, model, effort);
-            let full = match cwd {
-                Some(dir) => format!(
-                    "cd {} && {cmd}",
-                    shell_words::quote(&dir.to_string_lossy())
-                ),
-                None => cmd,
-            };
+            let launch =
+                RemoteAgentLaunchRequest::new(cwd, agent.routed_launch(None, model, effort));
+            let launch_command = launch.shell_command();
             let server = warp_ssh_manager::with_conn(|conn| {
                 Ok(warp_ssh_manager::SshRepository::get_server(conn, node_id)?)
             });
@@ -4903,11 +5859,14 @@ impl Workspace {
                     // setup still runs, then the routed agent launch.
                     server.startup_command = Some(match server.startup_command {
                         Some(existing) if !existing.trim().is_empty() => {
-                            format!("{existing}; {full}")
+                            format!("{existing}; {launch_command}")
                         }
-                        _ => full,
+                        _ => launch_command,
                     });
                     self.open_ssh_terminal(node_id.to_string(), server, false, ctx);
+                    // Remote launches intentionally use that host's own default
+                    // login; no local account identity can be asserted here.
+                    self.bind_active_terminal_account(agent, None, None, ctx);
                 }
                 _ => {
                     self.toast_stack.update(ctx, |view, ctx| {
@@ -4935,6 +5894,7 @@ impl Workspace {
             None,
             ctx,
         );
+        self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                 terminal_view.update(ctx, |view, ctx| {
@@ -4977,7 +5937,7 @@ impl Workspace {
             !self.current_workspace_state.is_ai_assistant_panel_open;
 
         // Close any other modals that could be floating on top of the Zaplex AI panel.
-        self.current_workspace_state.close_all_modals();
+        self.close_all_modals(ctx);
 
         if self.current_workspace_state.is_ai_assistant_panel_open {
             // Close the resource center panel if we open the AI Assistant panel.
@@ -5883,7 +6843,7 @@ impl Workspace {
         &self,
         terminal_view_id: EntityId,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
         let current_window = ctx.window_id();
         let result = WorkspaceRegistry::as_ref(ctx)
             .all_workspaces(ctx)
@@ -5913,8 +6873,132 @@ impl Workspace {
                     "root_view:handle_pane_navigation_event",
                     &locator,
                 );
+                return true;
             }
         }
+        false
+    }
+
+    /// Focuses an existing terminal regardless of which Zaplex window owns it.
+    fn focus_terminal_view_anywhere(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        self.focus_terminal_view_locally(terminal_view_id, ctx)
+            || self.focus_terminal_view_in_other_window(terminal_view_id, ctx)
+    }
+
+    pub(crate) fn control_surface_matches(
+        &self,
+        workspace: ViewHandle<Self>,
+        auth: &warp_cli::control::ControlAuth,
+        ctx: &AppContext,
+    ) -> Vec<crate::control_surface::ControlSurfaceMatch> {
+        self.tabs
+            .iter()
+            .flat_map(|tab| {
+                let workspace = workspace.clone();
+                let pane_group = tab.pane_group.clone();
+                tab.pane_group
+                    .as_ref(ctx)
+                    .control_surface_matches(auth, ctx)
+                    .into_iter()
+                    .map(move |surface| crate::control_surface::ControlSurfaceMatch {
+                        workspace: workspace.clone(),
+                        pane_group: pane_group.clone(),
+                        terminal: surface.terminal,
+                        context: surface.context,
+                    })
+            })
+            .collect()
+    }
+
+    pub(crate) fn control_surface_id_matches(
+        &self,
+        workspace: ViewHandle<Self>,
+        surface_id: &str,
+        ctx: &AppContext,
+    ) -> Vec<crate::control_surface::ControlSurfaceMatch> {
+        self.tabs
+            .iter()
+            .flat_map(|tab| {
+                let workspace = workspace.clone();
+                let pane_group = tab.pane_group.clone();
+                tab.pane_group
+                    .as_ref(ctx)
+                    .control_surface_id_matches(surface_id, ctx)
+                    .into_iter()
+                    .map(move |surface| crate::control_surface::ControlSurfaceMatch {
+                        workspace: workspace.clone(),
+                        pane_group: pane_group.clone(),
+                        terminal: surface.terminal,
+                        context: surface.context,
+                    })
+            })
+            .collect()
+    }
+
+    pub(crate) fn focus_control_terminal(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        self.focus_terminal_view_anywhere(terminal_view_id, ctx)
+    }
+
+    pub(crate) fn focus_control_fleet_session(
+        &mut self,
+        host: &str,
+        session_id: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let mut matches = crate::cockpit::CockpitModel::as_ref(ctx)
+            .inventory()
+            .hosts
+            .iter()
+            .filter(|candidate| {
+                candidate.is_available()
+                    && (candidate.host == host
+                        || candidate.host_id.as_deref() == Some(host)
+                        || (candidate.is_local && host == "local"))
+            })
+            .flat_map(|candidate| {
+                candidate.projects.iter().flat_map(move |project| {
+                    project
+                        .sessions
+                        .iter()
+                        .filter(move |session| session.session_id == session_id)
+                        .map(move |session| {
+                            (
+                                candidate.host.clone(),
+                                candidate.host_id.clone(),
+                                session.provider,
+                                session.config_dir.clone(),
+                                session.account_email.clone(),
+                                candidate.is_local,
+                            )
+                        })
+                })
+            });
+        let Some(target) = matches.next() else {
+            return false;
+        };
+        if matches.next().is_some() {
+            return false;
+        }
+        let (host, host_id, provider, config_dir, account_email, is_local) = target;
+        self.attach_fleet_session(
+            &host,
+            host_id.as_deref(),
+            session_id,
+            provider,
+            config_dir.as_deref(),
+            account_email.as_deref(),
+            is_local,
+            ctx,
+        );
+        true
     }
 
     /// Shows the notification error in the specific pane.
@@ -6040,9 +7124,11 @@ impl Workspace {
             right,
         };
         TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .header_toolbar_chip_selection
-                .set_value(selection, ctx));
+            report_if_error!(
+                settings
+                    .header_toolbar_chip_selection
+                    .set_value(selection, ctx)
+            );
         });
     }
 
@@ -6362,7 +7448,7 @@ impl Workspace {
                 // through the spawn card under the cockpit vision (one launch
                 // grammar), falling back to the legacy in-app agent tab when off.
                 if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
-                    self.open_spawn_card(None, None, None, None, None, ctx);
+                    self.open_spawn_card(None, None, None, None, None, None, ctx);
                 } else {
                     self.add_terminal_tab_with_new_agent_view(ctx);
                 }
@@ -6390,20 +7476,41 @@ impl Workspace {
             LeftPanelEvent::OpenSftpPane { node_id, server: _ } => {
                 self.open_sftp_pane(node_id.clone(), ctx);
             }
-            LeftPanelEvent::OpenCockpitPane => {
-                self.open_cockpit_pane(ctx);
+            LeftPanelEvent::OpenCockpitPane(account_key) => {
+                self.open_cockpit_pane_for(account_key.clone(), ctx);
             }
             LeftPanelEvent::AdoptDaemonSession {
                 server,
                 pty_session_id,
+                pty_generation,
             } => {
                 #[cfg(unix)]
-                self.adopt_daemon_session(server.clone(), pty_session_id.clone(), ctx);
+                self.adopt_daemon_session(
+                    server.clone(),
+                    pty_session_id.clone(),
+                    *pty_generation,
+                    None,
+                    ctx,
+                );
                 #[cfg(not(unix))]
                 {
-                    let _ = (server, pty_session_id);
+                    let _ = (server, pty_session_id, pty_generation);
                     log::warn!("AdoptDaemonSession ignored: daemon sessions are unix-only");
                 }
+            }
+            LeftPanelEvent::OpenMultiplexerSession {
+                node_id,
+                server,
+                mode,
+                target,
+            } => {
+                self.open_multiplexer_ssh_terminal(
+                    node_id.clone(),
+                    server.clone(),
+                    *mode,
+                    target,
+                    ctx,
+                );
             }
         }
     }
@@ -6411,10 +7518,38 @@ impl Workspace {
     /// Opens the roomy cockpit dashboard pane in the central area (C2b). Like
     /// the SSH panes, always opens a new pane (multi-instance is fine — it's a
     /// read-only lens over the data spine).
+    /// Open (or focus) the **fleet dashboard** — every account at once.
     pub fn open_cockpit_pane(&mut self, ctx: &mut ViewContext<Self>) {
+        self.open_cockpit_pane_for(None, ctx);
+    }
+
+    /// Open (or focus) the pane for one account (`None` = the fleet dashboard).
+    ///
+    /// Deduped **per account**, not per pane type: clicking an account whose
+    /// pane is already open focuses it rather than stacking an identical one —
+    /// and clicking a different account opens its own pane beside the first,
+    /// which is the point. A single dashboard filtered by one global selection
+    /// could only ever show one subscription at a time (spec v3 §4.1 P1).
+    pub fn open_cockpit_pane_for(
+        &mut self,
+        account_key: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         use crate::pane_group::pane::cockpit_pane::CockpitPane;
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            let pane = CockpitPane::new(ctx);
+            // `visible_pane_ids` excludes panes hidden-for-close, so we never match
+            // a stale pane that `focus_pane_by_id` can't focus (which would `return`
+            // and open nothing — review).
+            let existing = pane_group.visible_pane_ids().into_iter().find(|id| {
+                pane_group
+                    .downcast_pane_by_id::<CockpitPane>(*id)
+                    .is_some_and(|p| p.account_key(ctx) == account_key)
+            });
+            if let Some(id) = existing {
+                pane_group.focus_pane_by_id(id, ctx);
+                return;
+            }
+            let pane = CockpitPane::for_account(account_key.clone(), ctx);
             let smart_split_direction =
                 pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
             pane_group.add_pane_with_direction(
@@ -6426,12 +7561,22 @@ impl Workspace {
         });
     }
 
-    /// Opens an edit pane for the given SSH node in the central area. MVP implementation:
-    /// **always opens a new pane** (no dedup / find_pane yet); starting in Phase 2 a manager
-    /// singleton will do dedup + focus switching.
+    /// Opens an edit pane for the given SSH node in the central area. Deduped per
+    /// host: if an editor for the same `node_id` already exists in this tab, it is
+    /// focused instead of splitting a duplicate (repeated ⋯-manage clicks used to
+    /// stack identical editors).
     pub fn open_ssh_server(&mut self, node_id: String, ctx: &mut ViewContext<Self>) {
         use crate::pane_group::pane::ssh_server_pane::SshServerPane;
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            let existing = pane_group.visible_pane_ids().into_iter().find(|id| {
+                pane_group
+                    .downcast_pane_by_id::<SshServerPane>(*id)
+                    .is_some_and(|p| p.node_id() == node_id.as_str())
+            });
+            if let Some(id) = existing {
+                pane_group.focus_pane_by_id(id, ctx);
+                return;
+            }
             let pane = SshServerPane::new(node_id, ctx);
             let smart_split_direction =
                 pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
@@ -6469,6 +7614,8 @@ impl Workspace {
     /// Opens an SFTP file browser pane for the given SSH node in the central area.
     pub fn open_sftp_pane(&mut self, node_id: String, ctx: &mut ViewContext<Self>) {
         use crate::pane_group::pane::sftp_pane::SftpPane;
+        #[cfg(all(unix, feature = "local_tty"))]
+        self.ensure_sftp_safe_file_daemon(&node_id, ctx);
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             // SSH-manager "SFTP Browse": browse the host from its root.
             let pane = SftpPane::new(node_id, None, ctx);
@@ -6493,6 +7640,8 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::pane_group::pane::sftp_pane::SftpPane;
+        #[cfg(all(unix, feature = "local_tty"))]
+        self.ensure_sftp_safe_file_daemon(&node_id, ctx);
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             let pane = SftpPane::new_for_pick(node_id, start_path, ctx);
             let smart_split_direction =
@@ -6504,6 +7653,98 @@ impl Workspace {
                 ctx,
             );
         });
+    }
+
+    /// Ensures a standalone SFTP pane has a workspace-owned safe-file daemon.
+    ///
+    /// A terminal-backed pane normally reuses that terminal's daemon. Opening
+    /// "SFTP Browse" directly has no terminal lifetime to borrow, so this
+    /// creates one hidden, persistent host connection and records it before
+    /// starting asynchronous setup to deduplicate concurrent pane opens.
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn ensure_sftp_safe_file_daemon(&mut self, node_id: &str, ctx: &mut ViewContext<Self>) {
+        let already_connected = RemoteServerManager::as_ref(ctx)
+            .connected_daemons()
+            .into_iter()
+            .any(|daemon| {
+                daemon.registry_node_id.as_deref() == Some(node_id)
+                    && zaplex_remote_session::types::has_feature(
+                        &daemon.features,
+                        zaplex_remote_session::types::FEATURE_SAFE_FILE_TRANSACTIONS_V1,
+                    )
+            });
+        if already_connected || self.sftp_file_service_sessions.contains_key(node_id) {
+            return;
+        }
+
+        let Some(server) = resolved_daemon_server(node_id) else {
+            log::warn!("SFTP safe-file service: registry node {node_id} is unavailable");
+            return;
+        };
+        if !crate::remote_server::headless_connect::is_headless_capable(&server) {
+            log::info!(
+                "SFTP safe-file service [{}]: headless daemon authentication is unavailable",
+                server.host
+            );
+            return;
+        }
+
+        use crate::remote_server::auth_context::server_api_auth_context;
+        use crate::remote_server::headless_connect;
+        use crate::remote_server::ssh_transport::SshTransport;
+
+        let session_id = headless_connect::alloc_daemon_session_id();
+        self.sftp_file_service_sessions
+            .insert(node_id.to_string(), session_id);
+        remember_daemon_node_session(
+            &mut self.daemon_node_sessions,
+            node_id.to_string(),
+            session_id,
+        );
+        self.daemon_session_hosts
+            .insert(session_id, server.host.clone());
+
+        let auth_context = std::sync::Arc::new(server_api_auth_context(
+            AuthStateProvider::as_ref(ctx).get().clone(),
+        ));
+        let socket_path = headless_connect::control_socket_path(&server);
+        let host = server.host.clone();
+        let registry_node_id = node_id.to_string();
+        let server_for_transport = server.clone();
+        let registry_node_id_for_failure = registry_node_id.clone();
+
+        ctx.spawn(
+            headless_connect::prepare_daemon_transport(
+                server,
+                socket_path.clone(),
+                auth_context.clone(),
+            ),
+            move |workspace, result, ctx| match result {
+                Ok(()) => {
+                    let transport = SshTransport::new(socket_path, auth_context.clone())
+                        .with_self_heal(server_for_transport);
+                    RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+                        manager.mark_session_persistent(session_id);
+                        manager.connect_session(
+                            session_id,
+                            transport,
+                            auth_context,
+                            host,
+                            Some(registry_node_id),
+                            ctx,
+                        );
+                    });
+                }
+                Err(error) => {
+                    log::warn!("SFTP safe-file service [{host}] could not start: {error}");
+                    workspace
+                        .sftp_file_service_sessions
+                        .remove(&registry_node_id_for_failure);
+                    forget_daemon_node_session(&mut workspace.daemon_node_sessions, session_id);
+                    workspace.daemon_session_hosts.remove(&session_id);
+                }
+            },
+        );
     }
 
     /// After clicking a file in the remote file tree, opens it using the buffer-sync protocol.
@@ -6804,11 +8045,12 @@ impl Workspace {
     /// instead of the tab-level `ssh_tab_nodes` map, so a mixed local/remote split
     /// targets the right filesystem (Codex #1). Returns `None` for a local session
     /// (or a daemon session predating the mapping); the caller then falls back to
-    /// the tab node, then to Local.
+    /// the tab node — and, for a pane it knows to be remote, refuses rather than
+    /// opening this machine's filesystem under a remote path.
     fn node_for_session(&self, session_id: SessionId) -> Option<String> {
         self.daemon_node_sessions
             .iter()
-            .find(|(_, sid)| **sid == session_id)
+            .find(|(_, sessions)| sessions.contains(&session_id))
             .map(|(node_id, _)| node_id.clone())
     }
 
@@ -6819,13 +8061,17 @@ impl Workspace {
     /// daemon hosts whose session has since dropped, so the caller falls back.
     #[cfg(all(unix, feature = "local_tty"))]
     fn daemon_host_for_node(&self, node_id: &str, ctx: &AppContext) -> Option<warp_core::HostId> {
-        let session_id = *self.daemon_node_sessions.get(node_id)?;
         let manager = crate::remote_server::manager::RemoteServerManager::as_ref(ctx);
-        let host_id = manager.host_id_for_session(session_id)?;
-        // Buffer-sync needs a live client for the host; if there is none the
-        // session is not usable and we fall back rather than open a dead editor.
-        manager.client_for_host(host_id)?;
-        Some(host_id.clone())
+        self.daemon_node_sessions
+            .get(node_id)?
+            .iter()
+            .find_map(|session_id| {
+                let host_id = manager.host_id_for_session(*session_id)?;
+                // Buffer-sync needs a live client for the host; if there is none
+                // try another connection for this node before falling back.
+                manager.client_for_host(host_id)?;
+                Some(host_id.clone())
+            })
     }
 
     /// Invert [`Self::daemon_host_for_node`]: given a daemon `HostId` (the
@@ -6835,18 +8081,27 @@ impl Workspace {
     /// Two id spaces meet at the spawn-card boundary: the Conductor's Agent
     /// inventory keys hosts by the opaque daemon `HostId`, while the spawn
     /// card's host list (and every downstream `LaunchAgent { node_id }`) is
-    /// keyed by the SSH `node.id`. This bridges them so a remote-scoped `+`
-    /// preselects — and launches on — the right SSH node instead of silently
-    /// falling through to Local. Reuses `daemon_host_for_node`, so only nodes
-    /// with a live, client-backed daemon session match; a dropped daemon
-    /// yields `None` and the caller falls back to name matching.
+    /// keyed by the SSH `node.id`. The manager carries the registry node that
+    /// established each live daemon connection, so this bridge never has to
+    /// infer identity from a label or workspace-local pane state.
     #[cfg(all(unix, feature = "local_tty"))]
     fn node_for_daemon_host(&self, daemon_host_id: &str, ctx: &AppContext) -> Option<String> {
-        let assocs = self.daemon_node_sessions.keys().filter_map(|node_id| {
-            self.daemon_host_for_node(node_id, ctx)
-                .map(|h| (node_id.as_str(), h.as_str().to_string()))
+        let daemons = RemoteServerManager::as_ref(ctx).connected_daemons();
+        let assocs = daemons.iter().filter_map(|daemon| {
+            daemon
+                .registry_node_id
+                .as_deref()
+                .map(|node_id| (node_id, daemon.host_id.clone()))
         });
-        node_for_daemon_host_in(daemon_host_id, assocs)
+        let registered_node_ids = warp_ssh_manager::with_conn(|conn| {
+            Ok(warp_ssh_manager::SshRepository::list_nodes(conn)?
+                .into_iter()
+                .filter(|node| matches!(node.kind, warp_ssh_manager::types::NodeKind::Server))
+                .map(|node| node.id)
+                .collect::<Vec<_>>())
+        })
+        .unwrap_or_default();
+        node_for_daemon_host_in(daemon_host_id, assocs, &registered_node_ids)
     }
 
     /// A remote daemon just finished its handshake: migrate any launch-effort
@@ -6863,7 +8118,7 @@ impl Workspace {
         if let Some(node_id) = self
             .daemon_node_sessions
             .iter()
-            .find(|(_, sid)| **sid == session_id)
+            .find(|(_, sessions)| sessions.contains(&session_id))
             .map(|(node_id, _)| node_id.clone())
         {
             crate::cockpit::launch_registry::rehost(&node_id, host_id);
@@ -6873,9 +8128,8 @@ impl Workspace {
     /// Translate a Conductor-scoped daemon `HostId` to the SSH `node_id` the
     /// spawn card resolves against, or `None` when there is nothing to translate
     /// (a *local* `+`, no daemon id) or the daemon can no longer be resolved to a
-    /// live SSH node. In the latter case the caller keeps the host **name** so
-    /// resolution falls back to name matching rather than silently defaulting to
-    /// Local for a clearly remote-scoped open.
+    /// live SSH node. In the latter case the caller also discards the stale
+    /// display label, so it cannot select a different same-named registry node.
     #[cfg(all(unix, feature = "local_tty"))]
     fn translate_scoped_daemon_host(
         &self,
@@ -6886,7 +8140,7 @@ impl Workspace {
     }
 
     /// On platforms without daemon connections (no `local_tty` / non-unix) there
-    /// is nothing to translate; resolution relies on the host-name fallback.
+    /// is nothing to translate.
     #[cfg(not(all(unix, feature = "local_tty")))]
     fn translate_scoped_daemon_host(
         &self,
@@ -6917,6 +8171,34 @@ impl Workspace {
         // `ssh` session directly. Used by the daemon-connect fallback so it never
         // re-attempts the daemon path.
         force_classic: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.open_ssh_terminal_command(node_id, server, force_classic, None, ctx);
+    }
+
+    fn open_multiplexer_ssh_terminal(
+        &mut self,
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+        mode: warp_ssh_manager::MultiplexerAttachMode,
+        target: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.open_ssh_terminal_command(
+            node_id,
+            server,
+            true,
+            Some((mode, target.to_string())),
+            ctx,
+        );
+    }
+
+    fn open_ssh_terminal_command(
+        &mut self,
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+        force_classic: bool,
+        multiplexer: Option<(warp_ssh_manager::MultiplexerAttachMode, String)>,
         ctx: &mut ViewContext<Self>,
     ) {
         use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshRepository, SshSecretStore};
@@ -6957,7 +8239,28 @@ impl Workspace {
             }
         }
 
-        let cmd = warp_ssh_manager::build_ssh_command_line(&server_for_connection);
+        let cmd = match multiplexer.as_ref() {
+            Some((mode, target)) => match warp_ssh_manager::build_multiplexer_ssh_command_line(
+                &server_for_connection,
+                *mode,
+                target,
+            ) {
+                Ok(command) => command,
+                Err(error) => {
+                    self.toast_stack.update(ctx, |view, ctx| {
+                        view.add_ephemeral_toast(
+                            DismissibleToast::error(crate::t!(
+                                "workspace-left-panel-ssh-manager-multiplexer-attach-error",
+                                detail = error.to_string()
+                            )),
+                            ctx,
+                        );
+                    });
+                    return;
+                }
+            },
+            None => warp_ssh_manager::build_ssh_command_line(&server_for_connection),
+        };
         let window_id = ctx.window_id();
 
         // Open a new tab (not a split — the previous add_terminal_pane(Direction::Right) would
@@ -7014,14 +8317,16 @@ impl Workspace {
         );
 
         // Startup command injector — waits for the shell to be ready, then automatically runs startup_command
-        if let Some(ref startup_cmd) = server.startup_command {
-            if !startup_cmd.is_empty() {
-                crate::ssh_manager::startup_command_injector::spawn_startup_command_injector(
-                    terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c)),
-                    terminal_view.downgrade(),
-                    startup_cmd.clone(),
-                    ctx,
-                );
+        if multiplexer.is_none() {
+            if let Some(ref startup_cmd) = server.startup_command {
+                if !startup_cmd.is_empty() {
+                    crate::ssh_manager::startup_command_injector::spawn_startup_command_injector(
+                        terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c)),
+                        terminal_view.downgrade(),
+                        startup_cmd.clone(),
+                        ctx,
+                    );
+                }
             }
         }
 
@@ -7055,12 +8360,19 @@ impl Workspace {
     /// `false` to fall through to the ordinary local-PTY SSH path. v1 only takes
     /// the daemon path for resilient hosts with headless-capable (key) auth.
     ///
-    /// Preflights the ControlMaster + daemon-binary presence OFF the main thread
-    /// *before* creating any tab: only if the daemon is actually reachable do we
-    /// open a daemon-hosted tab; otherwise we fall back to a classic SSH session
-    /// with a prominent warning. This keeps persistence the default while degrading
-    /// gracefully — never a dead "Starting…" tab and never an install-on-connect
-    /// stall on a host without the daemon.
+    /// The tab opens IMMEDIATELY with a visible "Connecting…" line — a click must
+    /// produce a reaction now, not after the SSH handshake. The bounded preflight
+    /// (ControlMaster + daemon-binary presence) then runs OFF the main thread and
+    /// streams its outcome into that tab: ready → connect; first connect →
+    /// install ladder; unavailable → a classic SSH session opens with a prominent
+    /// warning and THEN the pending tab is retired (that order — see the note at
+    /// the close call). A failed *install* keeps its tab, the failure visible in
+    /// it, and opens the classic session alongside; closing the pending tab
+    /// meanwhile cancels the attempt — no connect, no fallback (an install
+    /// already running on the host merely finishes, which is idempotent and
+    /// serves the next connect). Every path is bounded and announced — never a
+    /// silently dead "Starting…" tab and never an install-on-connect stall on a
+    /// host without the daemon.
     #[cfg(unix)]
     fn try_open_daemon_ssh_terminal(
         &mut self,
@@ -7070,7 +8382,7 @@ impl Workspace {
     ) -> bool {
         use crate::remote_server::auth_context::server_api_auth_context;
         use crate::remote_server::headless_connect::{
-            self, DaemonPreflight, DAEMON_BINARY_MISSING,
+            self, DAEMON_BINARY_MISSING, DaemonPreflight,
         };
         use crate::remote_server::ssh_transport::{InstallProgress, SshTransport};
 
@@ -7095,11 +8407,61 @@ impl Workspace {
         let node_id_owned = node_id.to_string();
         let server_owned = server.clone();
 
-        // Fast, bounded preflight off the main thread (ControlMaster + binary check
-        // + install-source classification) — no tab yet, so a host that can't do
-        // persistence degrades to classic SSH without ever showing a dead daemon
-        // tab. A first-connect install runs *after* the tab exists, streaming its
-        // progress into it (Warp-style auto-install).
+        // The progress channel exists from the start (not only for installs): the
+        // very first thing the user sees in the new tab is a "Connecting…" line,
+        // written before any SSH work has happened. A first-connect install
+        // reuses the same channel for its ladder phases.
+        let (progress_tx, install_progress_rx) = async_channel::unbounded();
+        let _ = progress_tx
+            .try_send(crate::t!("connect-progress-starting", host = host.clone()).to_string());
+
+        let request = crate::terminal::daemon_tty::DaemonSessionRequest {
+            connection_session_id: session_id,
+            open_params: crate::terminal::daemon_tty::OpenSessionParams {
+                // Per-host scrollback ceiling (MiB → bytes); 0 → daemon default.
+                ring_ceiling_bytes: (server.ring_ceiling_mb > 0)
+                    .then(|| server.ring_ceiling_mb as u64 * 1024 * 1024),
+                // Honor the host's saved startup command on the daemon path too,
+                // matching the local-PTY SSH path (run once after the session opens).
+                startup_command: server.startup_command.clone(),
+                ..Default::default()
+            },
+            adopt_pty_session_id: None,
+            adopt_pty_generation: None,
+            expected_agent_binding: None,
+            install_progress_rx: Some(install_progress_rx),
+            host_label: server.host.clone(),
+        };
+
+        // Create the daemon-backed tab BEFORE the preflight: the click must
+        // produce a visible pane now, not after the SSH handshake. The tab's
+        // event loop subscribes for `SessionConnected` (and renders the
+        // progress lines) before any connect can resolve.
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                hide_homepage: true,
+                daemon_request: Some(request),
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None, /* custom_tab_title */
+            ctx,
+        );
+        // Remember which host this tab belongs to (pane-scoped context for e.g.
+        // "Open file manager here") — and keep the pane-group id so the failure
+        // path below can find this exact tab again to retire it.
+        let pending_pane_group = self
+            .get_pane_group_view(self.active_tab_index)
+            .map(|pane_group| pane_group.id());
+        if let Some(pane_group_id) = pending_pane_group {
+            self.ssh_tab_nodes
+                .insert(pane_group_id, node_id_owned.clone());
+        }
+
+        // Bounded preflight off the main thread (ControlMaster + binary check +
+        // install-source classification): ready → connect, needs-install →
+        // ladder + connect, unavailable → classic SSH opens and the pending tab
+        // is retired — and a tab the user closed meanwhile cancels the attempt.
         ctx.spawn(
             headless_connect::preflight_daemon_transport(
                 server.clone(),
@@ -7107,6 +8469,25 @@ impl Workspace {
                 auth_context.clone(),
             ),
             move |workspace, result, ctx| {
+                // The pending tab is the handle on this whole attempt: if the
+                // user closed it while the preflight ran, they cancelled.
+                // Connecting anyway would register a self-healing transport
+                // with no consumer (the tab's event loop — the only thing that
+                // ever sends `OpenSession` — died with the tab), and the
+                // install path would run a remote install for nobody.
+                let pending_tab_alive = pending_pane_group.is_some_and(|pane_group_id| {
+                    workspace
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.pane_group.id() == pane_group_id)
+                });
+                if !pending_tab_alive {
+                    log::info!(
+                        "daemon connect [{host}]: pending tab closed during preflight — \
+                         cancelling the connect"
+                    );
+                    return;
+                }
                 let preflight = match result {
                     Ok(preflight) => preflight,
                     Err(e) => {
@@ -7114,87 +8495,70 @@ impl Workspace {
                         // the user KNOWS they have no persistent session (a disconnect
                         // loses open work). Never silent, never a hang.
                         let warning = if e == DAEMON_BINARY_MISSING {
-                            format!(
-                                "Persistent session unavailable on {host}: the zaplex daemon \
-                                 isn't installed there and no install source is available. \
-                                 Opened a standard SSH session instead — a disconnect will \
-                                 lose open work."
-                            )
+                            crate::t!("connect-fallback-daemon-missing", host = host.clone())
                         } else {
-                            format!(
-                                "Couldn't start a persistent session on {host} ({e}). Opened a \
-                                 standard SSH session instead — a disconnect will lose open work."
+                            crate::t!(
+                                "connect-fallback-daemon-failed",
+                                host = host.clone(),
+                                error = e.to_string()
                             )
                         };
                         log::warn!(
                             "daemon connect [{host}] unavailable; falling back to classic SSH: {e}"
                         );
-                        workspace.fall_back_to_classic_ssh(node_id_owned, server_owned, warning, ctx);
+                        if let Some(pane_group_id) = pending_pane_group {
+                            workspace.ssh_tab_nodes.remove(&pane_group_id);
+                        }
+                        // Classic session first, THEN retire the pending
+                        // "Connecting…" tab: in this order the workspace never
+                        // hits the close-guarded single-tab state, and the user
+                        // sees a replacement, not a disappearance. The user may
+                        // have closed the pending tab themselves meanwhile —
+                        // look it up by pane-group id rather than by index.
+                        workspace.fall_back_to_classic_ssh(
+                            node_id_owned,
+                            server_owned,
+                            warning,
+                            ctx,
+                        );
+                        if let Some(pane_group_id) = pending_pane_group {
+                            if let Some(index) = workspace
+                                .tabs
+                                .iter()
+                                .position(|tab| tab.pane_group.id() == pane_group_id)
+                            {
+                                workspace.close_tab(
+                                    index, true,  /* skip_confirmation */
+                                    false, /* add_to_undo_stack */
+                                    ctx,
+                                );
+                            }
+                        }
                         return;
                     }
                 };
 
-                // First-connect install → wire a progress channel into the tab so the
-                // install ladder's phases render there.
-                let (progress_tx, install_progress_rx) = match preflight {
-                    DaemonPreflight::Ready => (None, None),
-                    DaemonPreflight::NeedsInstall => {
-                        let (tx, rx) = async_channel::unbounded();
-                        (Some(tx), Some(rx))
-                    }
-                };
-
-                let request = crate::terminal::daemon_tty::DaemonSessionRequest {
-                    connection_session_id: session_id,
-                    open_params: crate::terminal::daemon_tty::OpenSessionParams {
-                        // Per-host scrollback ceiling (MiB → bytes); 0 → daemon default.
-                        ring_ceiling_bytes: (server_owned.ring_ceiling_mb > 0)
-                            .then(|| server_owned.ring_ceiling_mb as u64 * 1024 * 1024),
-                        // Honor the host's saved startup command on the daemon path too,
-                        // matching the local-PTY SSH path (run once after the session opens).
-                        startup_command: server_owned.startup_command.clone(),
-                        ..Default::default()
-                    },
-                    adopt_pty_session_id: None,
-                    install_progress_rx,
-                    host_label: server_owned.host.clone(),
-                };
-
-                // Create the daemon-backed tab: its event loop subscribes for
-                // `SessionConnected` (and renders install progress) before we
-                // connect below.
-                workspace.add_tab_with_pane_layout(
-                    PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
-                        hide_homepage: true,
-                        daemon_request: Some(request),
-                        ..Default::default()
-                    })),
-                    Arc::new(HashMap::new()),
-                    None, /* custom_tab_title */
-                    ctx,
-                );
-                // Remember which host this tab belongs to (pane-scoped context
-                // for e.g. "Open file manager here").
-                if let Some(pane_group) = workspace.get_pane_group_view(workspace.active_tab_index)
-                {
-                    workspace
-                        .ssh_tab_nodes
-                        .insert(pane_group.id(), node_id_owned.clone());
-                }
                 // Record node_id → daemon session so the SFTP file manager on this
                 // host can later resolve a live `HostId` and open files in the
-                // native editor (see `daemon_host_for_node`).
+                // native editor (see `daemon_host_for_node`). Recorded only once
+                // the daemon is known to be reachable, as before the tab moved
+                // ahead of the preflight.
                 #[cfg(feature = "local_tty")]
-                workspace
-                    .daemon_node_sessions
-                    .insert(node_id_owned.clone(), session_id);
+                remember_daemon_node_session(
+                    &mut workspace.daemon_node_sessions,
+                    node_id_owned.clone(),
+                    session_id,
+                );
 
-                match progress_tx {
-                    // Daemon already installed → connect right away.
-                    None => {
+                match preflight {
+                    // Daemon already installed → connect right away. Dropping the
+                    // progress sender ends the tab's progress stream after the
+                    // initial "Connecting…" line.
+                    DaemonPreflight::Ready => {
                         log::info!(
                             "daemon connect [{host}]: ready — opening daemon session {session_id:?}"
                         );
+                        drop(progress_tx);
                         workspace.connect_daemon_session(
                             server_owned,
                             session_id,
@@ -7205,52 +8569,88 @@ impl Workspace {
                     }
                     // First connect → auto-install with progress in the tab, then
                     // connect; on failure degrade to classic SSH + warning.
-                    Some(progress_tx) => {
+                    DaemonPreflight::NeedsInstall => {
                         log::info!(
                             "daemon connect [{host}]: first connect — installing the session daemon"
                         );
                         let transport =
                             SshTransport::new(socket_path.clone(), auth_context.clone());
-                        let install = transport.install_binary_with_progress(
-                            InstallProgress::new(progress_tx.clone()),
-                        );
-                        ctx.spawn(install, move |workspace, result, ctx| match result {
-                            Ok(()) => {
-                                log::info!(
-                                    "daemon connect [{host}]: install complete — connecting"
-                                );
-                                let _ = progress_tx.try_send(
-                                    "Setup complete — starting your persistent session…".into(),
-                                );
-                                workspace.connect_daemon_session(
-                                    server_owned,
+                        let install = transport.install_binary_with_progress(InstallProgress::new(
+                            progress_tx.clone(),
+                        ));
+                        ctx.spawn(install, move |workspace, result, ctx| {
+                            // Same cancellation contract as the preflight above:
+                            // the install runs for seconds — a tab the user
+                            // closed meanwhile means connect to nothing, fall
+                            // back to nothing. (The remote install itself has
+                            // already run to completion or failure by now; a
+                            // completed install is idempotent and simply serves
+                            // the next connect.) The node→session record from
+                            // the preflight is withdrawn again — nothing will
+                            // ever connect this session, and a dead record here
+                            // would shadow a later live one for the same node
+                            // (`daemon_host_for_node`).
+                            let pending_tab_alive =
+                                pending_pane_group.is_some_and(|pane_group_id| {
+                                    workspace
+                                        .tabs
+                                        .iter()
+                                        .any(|tab| tab.pane_group.id() == pane_group_id)
+                                });
+                            if !pending_tab_alive {
+                                #[cfg(feature = "local_tty")]
+                                forget_daemon_node_session(
+                                    &mut workspace.daemon_node_sessions,
                                     session_id,
-                                    socket_path,
-                                    auth_context,
-                                    ctx,
                                 );
+                                log::info!(
+                                    "daemon connect [{host}]: pending tab closed during \
+                                     install — cancelling the connect"
+                                );
+                                return;
                             }
-                            Err(e) => {
-                                log::warn!(
-                                    "daemon connect [{host}]: install failed; falling back to \
+                            match result {
+                                Ok(()) => {
+                                    log::info!(
+                                        "daemon connect [{host}]: install complete — connecting"
+                                    );
+                                    let _ = progress_tx.try_send(
+                                        crate::t!("connect-progress-setup-complete").to_string(),
+                                    );
+                                    workspace.connect_daemon_session(
+                                        server_owned,
+                                        session_id,
+                                        socket_path,
+                                        auth_context,
+                                        ctx,
+                                    );
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "daemon connect [{host}]: install failed; falling back to \
                                      classic SSH: {e}"
-                                );
-                                // Leave the failure visible in the daemon tab, then open a
-                                // working classic session alongside it.
-                                let _ = progress_tx.try_send(format!(
-                                    "Setup failed: {e} — opened a standard SSH session in a new tab."
-                                ));
-                                let warning = format!(
-                                    "Couldn't install the Zaplex session daemon on {host} ({e}). \
-                                     Opened a standard SSH session instead — a disconnect will \
-                                     lose open work."
-                                );
-                                workspace.fall_back_to_classic_ssh(
-                                    node_id_owned,
-                                    server_owned,
-                                    warning,
-                                    ctx,
-                                );
+                                    );
+                                    // Leave the failure visible in the daemon tab, then open a
+                                    // working classic session alongside it.
+                                    let _ = progress_tx.try_send(
+                                        crate::t!(
+                                            "connect-progress-setup-failed",
+                                            error = e.to_string()
+                                        )
+                                        .to_string(),
+                                    );
+                                    let warning = crate::t!(
+                                        "connect-fallback-install-failed",
+                                        host = host.clone(),
+                                        error = e.to_string()
+                                    );
+                                    workspace.fall_back_to_classic_ssh(
+                                        node_id_owned,
+                                        server_owned,
+                                        warning,
+                                        ctx,
+                                    );
+                                }
                             }
                         });
                     }
@@ -7278,12 +8678,23 @@ impl Workspace {
 
         self.daemon_session_hosts
             .insert(session_id, server.host.clone());
+        // Remembered so a handshake failure (e.g. version mismatch) can fall back
+        // to classic SSH instead of leaving a dead daemon tab.
+        self.daemon_session_servers
+            .insert(session_id, server.clone());
         let host_label = server.host.clone();
-        let transport =
-            SshTransport::new(socket_path, auth_context.clone()).with_self_heal(server);
+        let registry_node_id = server.node_id.clone();
+        let transport = SshTransport::new(socket_path, auth_context.clone()).with_self_heal(server);
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.mark_session_persistent(session_id);
-            mgr.connect_session(session_id, transport, auth_context, host_label, ctx);
+            mgr.connect_session(
+                session_id,
+                transport,
+                auth_context,
+                host_label,
+                Some(registry_node_id),
+                ctx,
+            );
         });
     }
 
@@ -7318,6 +8729,35 @@ impl Workspace {
         });
     }
 
+    /// A daemon session's initialize handshake failed. The common cause is a
+    /// version mismatch (a stale daemon of another release answering our versioned
+    /// socket), but any handshake-level failure lands here, so the wording stays
+    /// generic. The daemon tab already surfaced the error via its connect-failed
+    /// path, but on its own that leaves the user with only a dead tab; open a
+    /// working classic SSH session in a new tab instead (the recovery the
+    /// manager's mismatch branch documents). One-shot: the fallback record is
+    /// taken, so a `SessionConnectionFailed` re-fire — or an unrelated non-daemon
+    /// session — can't reopen it.
+    #[cfg(unix)]
+    fn fall_back_to_classic_after_daemon_handshake_failure(
+        &mut self,
+        session_id: SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(server) = self.daemon_session_servers.remove(&session_id) else {
+            return;
+        };
+        log::warn!(
+            "daemon session {session_id:?} handshake failed; falling back to classic SSH on {}",
+            server.host
+        );
+        let warning = crate::t!(
+            "connect-fallback-handshake-failed",
+            host = server.host.clone()
+        );
+        self.fall_back_to_classic_ssh(server.node_id.clone(), server, warning, ctx);
+    }
+
     /// Daemon path unavailable/failed → open a classic local-PTY SSH session (no
     /// second daemon attempt) with a persistent warning toast: the user must know
     /// they have NO persistent session — a disconnect loses open work.
@@ -7340,6 +8780,92 @@ impl Workspace {
         self.open_ssh_terminal(node_id, server, true, ctx);
     }
 
+    /// Revalidates an agent row against a fresh daemon inventory snapshot before
+    /// focusing the one existing tab for its PTY.
+    #[cfg(unix)]
+    fn validate_and_focus_adopted_agent_session(
+        &mut self,
+        binding_key: DaemonAdoptionKey,
+        connection_session_id: SessionId,
+        pane_group_id: EntityId,
+        expected_agent_binding: remote_server::proto::AgentSessionIdentity,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let manager = crate::remote_server::manager::RemoteServerManager::as_ref(ctx);
+        if !manager.session_supports_feature(
+            connection_session_id,
+            zaplex_remote_session::types::FEATURE_AGENT_PTY_BINDING_V2,
+        ) || !manager.session_supports_feature(
+            connection_session_id,
+            zaplex_remote_session::types::FEATURE_AGENT_INVENTORY,
+        ) {
+            self.toast_stack.update(ctx, |stack, ctx| {
+                stack.add_persistent_toast(
+                    DismissibleToast::error(
+                        "The daemon cannot validate this agent-to-PTY route.".to_string(),
+                    ),
+                    ctx,
+                );
+            });
+            return;
+        }
+        let Some(client) = manager.client_for_session(connection_session_id).cloned() else {
+            self.toast_stack.update(ctx, |stack, ctx| {
+                stack.add_persistent_toast(
+                    DismissibleToast::error(
+                        "The daemon connection is unavailable; refresh Agent Sessions.".to_string(),
+                    ),
+                    ctx,
+                );
+            });
+            return;
+        };
+        let pty_session_id = binding_key.1.clone();
+        let generation = binding_key.2;
+        let validation = async move { client.list_agent_sessions().await };
+
+        ctx.spawn(validation, move |workspace, result, ctx| {
+            let confirmed = result.as_ref().is_ok_and(|inventory| {
+                agent_inventory_confirms_binding(
+                    inventory,
+                    &pty_session_id,
+                    generation,
+                    &expected_agent_binding,
+                )
+            });
+            if !confirmed {
+                workspace.toast_stack.update(ctx, |stack, ctx| {
+                    stack.add_persistent_toast(
+                        DismissibleToast::error(
+                            "This PTY's foreground agent changed. Refresh Agent Sessions \
+                             before attaching again."
+                                .to_string(),
+                        ),
+                        ctx,
+                    );
+                });
+                return;
+            }
+            let still_same_tab = workspace
+                .adopted_daemon_sessions
+                .get(&binding_key)
+                .is_some_and(|adopted| {
+                    adopted.connection_session_id == connection_session_id
+                        && adopted.pane_group_id == pane_group_id
+                });
+            if !still_same_tab {
+                return;
+            }
+            if let Some(index) = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == pane_group_id)
+            {
+                workspace.activate_tab(index, ctx);
+            }
+        });
+    }
+
     /// Adopts an already-running daemon session in a new tab: attaches to
     /// `pty_session_id` (replay + live) instead of opening a fresh one. This is
     /// the entry point the multi-session sidebar calls when the user picks a
@@ -7349,6 +8875,8 @@ impl Workspace {
         &mut self,
         server: warp_ssh_manager::SshServerInfo,
         pty_session_id: String,
+        pty_generation: u64,
+        expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::remote_server::headless_connect;
@@ -7358,10 +8886,25 @@ impl Workspace {
         // onto it (a second adopt would split input/output across two tabs).
         let live_pg_ids: Vec<EntityId> = self.tabs.iter().map(|t| t.pane_group.id()).collect();
         self.adopted_daemon_sessions
-            .retain(|_, pg_id| live_pg_ids.contains(pg_id));
-        if let Some(pg_id) = self.adopted_daemon_sessions.get(&pty_session_id).copied() {
+            .retain(|_, adopted| live_pg_ids.contains(&adopted.pane_group_id));
+        let binding_key = daemon_adoption_key(&server.node_id, &pty_session_id, pty_generation);
+        if let Some(adopted) = self.adopted_daemon_sessions.get(&binding_key) {
+            let pg_id = adopted.pane_group_id;
+            let connection_session_id = adopted.connection_session_id;
             if let Some(index) = self.tabs.iter().position(|t| t.pane_group.id() == pg_id) {
-                log::info!("daemon adopt: session {pty_session_id} already open — focusing its tab");
+                if let Some(expected_agent_binding) = expected_agent_binding {
+                    self.validate_and_focus_adopted_agent_session(
+                        binding_key,
+                        connection_session_id,
+                        pg_id,
+                        expected_agent_binding,
+                        ctx,
+                    );
+                    return;
+                }
+                log::info!(
+                    "daemon adopt: session {pty_session_id} already open — focusing its tab"
+                );
                 self.activate_tab(index, ctx);
                 return;
             }
@@ -7372,6 +8915,8 @@ impl Workspace {
             connection_session_id: session_id,
             open_params: crate::terminal::daemon_tty::OpenSessionParams::default(),
             adopt_pty_session_id: Some(pty_session_id.clone()),
+            adopt_pty_generation: Some(pty_generation),
+            expected_agent_binding,
             install_progress_rx: None,
             host_label: server.host.clone(),
         };
@@ -7394,16 +8939,24 @@ impl Workspace {
             .get_pane_group_view(self.active_tab_index)
             .map(|pane_group| pane_group.id())
         {
-            self.adopted_daemon_sessions
-                .insert(pty_session_id, pane_group_id);
+            self.adopted_daemon_sessions.insert(
+                binding_key,
+                AdoptedDaemonSession {
+                    pane_group_id,
+                    connection_session_id: session_id,
+                },
+            );
             self.ssh_tab_nodes
                 .insert(pane_group_id, server.node_id.clone());
         }
         // Same node_id → daemon session mapping as the fresh-connect path, so the
         // file manager on an adopted host can open files natively too.
         #[cfg(feature = "local_tty")]
-        self.daemon_node_sessions
-            .insert(server.node_id.clone(), session_id);
+        remember_daemon_node_session(
+            &mut self.daemon_node_sessions,
+            server.node_id.clone(),
+            session_id,
+        );
 
         self.spawn_daemon_session_connect(server, session_id, ctx);
     }
@@ -7430,8 +8983,13 @@ impl Workspace {
         let host = server.host.clone();
         self.daemon_session_hosts
             .insert(session_id, server.host.clone());
+        // Remembered so a handshake failure (e.g. version mismatch) can fall back
+        // to classic SSH instead of leaving a dead daemon tab.
+        self.daemon_session_servers
+            .insert(session_id, server.clone());
         // Kept for the transport so reconnect can re-heal a dead ControlMaster.
         let server_for_transport = server.clone();
+        let registry_node_id = server.node_id.clone();
 
         // Off the main thread: bring up the ControlMaster + ensure the
         // remote-server binary is installed, then connect the session.
@@ -7453,7 +9011,14 @@ impl Workspace {
                         // Persistent: a transport drop (ssh slave exit) must trigger
                         // reconnect — the daemon keeps the session alive (§9).
                         mgr.mark_session_persistent(session_id);
-                        mgr.connect_session(session_id, transport, auth_context, host_label, ctx);
+                        mgr.connect_session(
+                            session_id,
+                            transport,
+                            auth_context,
+                            host_label,
+                            Some(registry_node_id),
+                            ctx,
+                        );
                     });
                 }
                 Err(e) => {
@@ -7806,18 +9371,13 @@ impl Workspace {
     /// tab bar chevron and the vertical tab bar `+` button.
     ///
     /// Order: Terminal → User tab configs → separator → Agent → Coding Agents → separator → Docker → Worktree config → New tab config → separator → Reopen closed session.
-    /// The **Favorites** section of the "+" dropdown (design §10): the
-    /// user-curated list plus a flat "add to favorites" picker of tree objects
-    /// (hosts / projects) not yet favorited. This *replaces* the old auto
-    /// host-list — a favorite duplicates nothing ("register once, pick
-    /// everywhere") and is the definitive answer to "SSH hosts in the dropdown"
-    /// (favorite a host, no regression). Curation also happens via the ★ on a
-    /// Conductor tree node in the sidebar.
+    /// The **Favorites** section of the "+" dropdown (design §10): only
+    /// user-curated registered hosts. Each row opens a Terminal/New Agent
+    /// submenu. Other persisted favorite kinds survive the presentation
+    /// migration but do not render as flat rows here.
     fn favorites_menu_items(&self, ctx: &mut ViewContext<Self>) -> Vec<MenuItem<WorkspaceAction>> {
-        use zaplex_cockpit::FavoriteKind;
-
-        // Registered hosts (node_id -> label), read once from the SSH registry —
-        // used to resolve host favorites and to populate the add picker.
+        // Registered hosts (node_id -> label), read once from the SSH registry
+        // to resolve favorite references without duplicating connection data.
         let host_nodes: Vec<(String, String)> = warp_ssh_manager::with_conn(|c| {
             let mut out = Vec::new();
             for node in warp_ssh_manager::SshRepository::list_nodes(c)? {
@@ -7829,25 +9389,13 @@ impl Workspace {
         })
         .unwrap_or_default();
 
-        // Live inventory (owned clone) for session resolution + addable projects.
-        let inventory = crate::cockpit::CockpitModel::as_ref(ctx).inventory().clone();
-        let tab_configs = if FeatureFlag::TabConfigs.is_enabled() {
-            WarpConfig::as_ref(ctx).tab_configs().to_vec()
-        } else {
-            Vec::new()
-        };
-        let favorites = crate::cockpit::favorites::FavoritesStore::handle(ctx)
-            .as_ref(ctx)
-            .items()
-            .to_vec();
-
-        // Freest Claude account (config dir) for any GitHub-flow favorites —
-        // resolved once here (needs ctx), reused for every flow row.
-        let flow_config_dir = {
-            let snapshot = crate::cockpit::CockpitModel::as_ref(ctx).snapshot();
-            zaplex_cockpit::pick_freest(zaplex_cockpit::Provider::Claude, &snapshot.accounts)
-                .map(|f| f.account.config_dir.clone())
-        };
+        let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(ctx);
+        let favorites_store = favorites_store.as_ref(ctx);
+        let persistence_is_protected = favorites_store.persistence_is_protected();
+        let favorites = favorites_store
+            .host_menu_items()
+            .cloned()
+            .collect::<Vec<_>>();
 
         let mut items = vec![MenuItem::Separator];
         items.push(MenuItem::Header {
@@ -7856,7 +9404,14 @@ impl Workspace {
             right_side_fields: None,
         });
 
-        if favorites.is_empty() {
+        if persistence_is_protected {
+            items.push(
+                MenuItemFields::new(crate::t!("workspace-favorites-store-protected"))
+                    .with_disabled(true)
+                    .with_icon(icons::Icon::AlertTriangle)
+                    .into_item(),
+            );
+        } else if favorites.is_empty() {
             items.push(
                 MenuItemFields::new(crate::t!("workspace-favorites-empty"))
                     .with_disabled(true)
@@ -7864,180 +9419,18 @@ impl Workspace {
             );
         }
         for fav in &favorites {
-            items.push(self.favorite_menu_item(
-                fav,
-                &host_nodes,
-                &inventory,
-                &tab_configs,
-                flow_config_dir.as_deref(),
-            ));
+            items.push(favorite_host_menu_item(fav, &host_nodes));
         }
 
-        // No auto-generated "add" list here — that was exactly the clutter this
-        // dropdown replaced. Favorites are curated ONLY via the ★ on a tree node
-        // in the sidebar (the empty-state hint above points there); the dropdown
-        // shows nothing but the user's curated favorites.
+        // The curation submenu is a deliberate second level, not an automatic
+        // flat host list. It exposes only registered hosts not already present,
+        // while the first level remains the user's favorite hosts.
+        if !persistence_is_protected {
+            if let Some(add_item) = add_favorite_hosts_menu_item(&host_nodes, &favorites) {
+                items.push(add_item);
+            }
+        }
         items
-    }
-
-    /// Localized display label for a GitHub instance-flow key. `t!` needs a
-    /// literal key, so this maps the runtime flow key to the literal i18n call.
-    fn flow_label(key: &str) -> String {
-        use crate::cockpit::github_flows as gf;
-        match key {
-            gf::FLOW_QUICK_ISSUE => crate::t!("cockpit-flow-quick-issue").to_string(),
-            gf::FLOW_PR_REVIEW => crate::t!("cockpit-flow-pr-review").to_string(),
-            gf::FLOW_TRIAGE => crate::t!("cockpit-flow-triage").to_string(),
-            other => other.to_string(),
-        }
-    }
-
-    /// Resolve one curated favorite to its dropdown row: the object's default
-    /// action when the target still resolves, else a one-click "remove" row
-    /// (staleness is tolerated by design — the target is resolved lazily here).
-    fn favorite_menu_item(
-        &self,
-        fav: &zaplex_cockpit::Favorite,
-        host_nodes: &[(String, String)],
-        inventory: &zaplex_cockpit::FleetTree,
-        tab_configs: &[crate::tab_configs::TabConfig],
-        flow_config_dir: Option<&std::path::Path>,
-    ) -> MenuItem<WorkspaceAction> {
-        use zaplex_cockpit::FavoriteKind;
-        match fav.kind {
-            // Host → open a terminal on it (same as clicking it in the tree).
-            FavoriteKind::Host => match host_nodes.iter().find(|(id, _)| id == &fav.target) {
-                Some((node_id, name)) => MenuItemFields::new(name.clone())
-                    .with_on_select_action(WorkspaceAction::OpenSshTerminalByNode {
-                        node_id: node_id.clone(),
-                    })
-                    .with_icon(icons::Icon::Key)
-                    .into_item(),
-                None => self.stale_favorite_item(fav),
-            },
-            // Project → open the spawn card scoped to the project's host + dir.
-            // The target is a host_key. A LOCAL project is durable (local is
-            // always reachable) and launches locally with the path. A REMOTE
-            // project resolves against the live inventory to scope to its host —
-            // or greys out as stale if that host is gone, so it never launches on
-            // the wrong machine.
-            FavoriteKind::Project => {
-                if let Some(("local", path)) = zaplex_cockpit::split_host_key(&fav.target) {
-                    return MenuItemFields::new(fav.display_label().to_string())
-                        .with_on_select_action(WorkspaceAction::OpenSpawnCard {
-                            host_id: None,
-                            host: None,
-                            project: Some(std::path::PathBuf::from(path)),
-                        })
-                        .with_icon(icons::Icon::Folder)
-                        .into_item();
-                }
-                let resolved = inventory.hosts.iter().find_map(|h| {
-                    h.projects.iter().find_map(|p| {
-                        (zaplex_cockpit::host_key(h.is_local, h.host_id.as_deref(), &p.root)
-                            == fav.target)
-                            .then(|| (h.host.clone(), h.host_id.clone(), p.root.clone()))
-                    })
-                });
-                match resolved {
-                    Some((host, host_id, root)) => {
-                        MenuItemFields::new(fav.display_label().to_string())
-                            .with_on_select_action(WorkspaceAction::OpenSpawnCard {
-                                host_id,
-                                host: Some(host),
-                                project: Some(std::path::PathBuf::from(root)),
-                            })
-                            .with_icon(icons::Icon::Folder)
-                            .into_item()
-                    }
-                    None => self.stale_favorite_item(fav),
-                }
-            }
-            // Session → attach, resolving host identity from the live inventory by
-            // the host-scoped `host_key` (the favorite target), so the raw
-            // session id is never matched across hosts.
-            FavoriteKind::Session => {
-                let resolved = inventory.hosts.iter().find_map(|h| {
-                    h.projects.iter().flat_map(|p| p.sessions.iter()).find_map(|s| {
-                        (zaplex_cockpit::host_key(
-                            h.is_local,
-                            h.host_id.as_deref(),
-                            &s.session_id,
-                        ) == fav.target)
-                            .then(|| {
-                                (
-                                    h.host.clone(),
-                                    h.host_id.clone(),
-                                    s.session_id.clone(),
-                                    h.is_local,
-                                )
-                            })
-                    })
-                });
-                match resolved {
-                    Some((host, host_id, session_id, is_local)) => {
-                        MenuItemFields::new(fav.display_label().to_string())
-                            .with_on_select_action(WorkspaceAction::AttachFleetSession {
-                                host,
-                                host_id,
-                                session_id,
-                                is_local,
-                            })
-                            .with_icon(icons::Icon::Terminal)
-                            .into_item()
-                    }
-                    None => self.stale_favorite_item(fav),
-                }
-            }
-            // Launch → run the saved tab config, resolved by its stable name.
-            FavoriteKind::Launch => match tab_configs.iter().find(|c| c.name == fav.target) {
-                Some(config) => MenuItemFields::new(config.name.clone())
-                    .with_on_select_action(WorkspaceAction::SelectTabConfig(config.clone()))
-                    .with_icon(icons::Icon::LayoutAlt01)
-                    .into_item(),
-                None => self.stale_favorite_item(fav),
-            },
-            // GitHub instance-flow → run the flow's task on the freest Claude
-            // account (prompt prefilled for the human to review, #102). The
-            // freest config_dir is resolved once by the caller (needs ctx). The
-            // label is re-read from i18n each render (not the persisted one), so
-            // a flow's display text stays current.
-            FavoriteKind::GithubFlow => {
-                match crate::cockpit::github_flows::prompt_for_flow_key(&fav.target) {
-                    Some(prompt) => {
-                        let label = Self::flow_label(&fav.target);
-                        MenuItemFields::new(label)
-                            .with_on_select_action(WorkspaceAction::AskAgentRouted {
-                                prompt,
-                                config_dir: flow_config_dir.map(|p| p.to_path_buf()),
-                            })
-                            .with_icon(icons::Icon::Lightning)
-                            .into_item()
-                    }
-                    None => self.stale_favorite_item(fav),
-                }
-            }
-        }
-    }
-
-    /// A stale favorite row (its target vanished from the tree): greyed label +
-    /// a one-click remove. In a menu the cleanest "one-click remove" is to make
-    /// the row itself forget the favorite on click.
-    fn stale_favorite_item(
-        &self,
-        fav: &zaplex_cockpit::Favorite,
-    ) -> MenuItem<WorkspaceAction> {
-        MenuItemFields::new(format!(
-            "{} — {}",
-            fav.display_label(),
-            crate::t!("workspace-favorite-unavailable")
-        ))
-        .with_on_select_action(WorkspaceAction::RemoveFavorite {
-            kind: fav.kind,
-            target: fav.target.clone(),
-        })
-        .with_icon(icons::Icon::AlertTriangle)
-        .into_item()
     }
 
     fn unified_new_session_menu_items(
@@ -8184,6 +9577,7 @@ impl Workspace {
             menu_items.push(
                 MenuItemFields::new(crate::t!("cockpit-spawn-card-new-agent"))
                     .with_on_select_action(WorkspaceAction::OpenSpawnCard {
+                        registry_node_id: None,
                         host_id: None,
                         host: None,
                         project: None,
@@ -8199,7 +9593,7 @@ impl Workspace {
             let ai_settings = AISettings::as_ref(ctx);
             let install_model = CLIAgentInstallModel::as_ref(ctx);
             for agent in enum_iterator::all::<CLIAgent>() {
-                if matches!(agent, CLIAgent::Unknown) {
+                if !agent.is_available_for_new_launch() {
                     continue;
                 }
                 if !install_model.is_cli_agent_installed(agent) {
@@ -8222,7 +9616,7 @@ impl Workspace {
                     menu_items.push(item.into_item());
                 }
 
-                // Launch-target permutations (⚡ on-freest / per-account / @host)
+                // Launch-target permutations (on-freest / per-account / @host)
                 // and the GitHub instance-flows have left the fixed "+" menu: the
                 // permutations were the unreadable "wall" (host + account are
                 // chosen in the spawn card — the single app-level launch path,
@@ -8233,10 +9627,8 @@ impl Workspace {
             menu_items.len() - start_len
         };
 
-        // 5b. Favorites (design §10): the curated favorites list + an add picker,
-        // replacing the old auto host-list. A favorite duplicates nothing
-        // ("register once, pick everywhere") and is the definitive answer to "SSH
-        // hosts in the dropdown" — favorite a host, no regression.
+        // 5b. Favorite hosts (design §10), replacing the old automatic host and
+        // launch wall. A favorite duplicates no connection data.
         menu_items.extend(self.favorites_menu_items(ctx));
 
         // 6. Separator — only shown when there are coding agents and Docker is enabled
@@ -8393,9 +9785,7 @@ impl Workspace {
                     open_in_active_window: false,
                 },
             ),
-            NewSessionMenuItem::OpenLaunchConfigDocs => {
-                ctx.open_url("")
-            }
+            NewSessionMenuItem::OpenLaunchConfigDocs => ctx.open_url(""),
             #[cfg(feature = "local_fs")]
             NewSessionMenuItem::CreateNewTabConfig => {
                 self.create_and_open_new_tab_config(ctx);
@@ -9677,12 +11067,8 @@ impl Workspace {
                     let command_name = ChannelState::channel().cli_command_name();
                     let message = format!("Successfully installed the Oz CLI! You can now run '{command_name}' from the command line.");
                     view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::success(message.to_string())
-                            .with_link(
-                                ToastLink::new(crate::t!("common-learn-more")).with_href(
-                                    "".to_string(),
-                                ),
-                            );
+                        // Dropped the dead "learn more" link (empty URL, no Zaplex docs).
+                        let toast = DismissibleToast::success(message.to_string());
                         toast_stack.add_ephemeral_toast(toast, ctx);
                     });
                 }
@@ -9736,17 +11122,21 @@ impl Workspace {
 
     fn toggle_recording_mode(&self, ctx: &mut ViewContext<Self>) {
         DebugSettings::handle(ctx).update(ctx, |debug_settings, settings_ctx| {
-            report_if_error!(debug_settings
-                .recording_mode
-                .toggle_and_save_value(settings_ctx));
+            report_if_error!(
+                debug_settings
+                    .recording_mode
+                    .toggle_and_save_value(settings_ctx)
+            );
         });
     }
 
     fn toggle_in_band_generators(&self, ctx: &mut ViewContext<Self>) {
         DebugSettings::handle(ctx).update(ctx, |debug_settings, settings_ctx| {
-            report_if_error!(debug_settings
-                .are_in_band_generators_for_all_sessions_enabled
-                .toggle_and_save_value(settings_ctx));
+            report_if_error!(
+                debug_settings
+                    .are_in_band_generators_for_all_sessions_enabled
+                    .toggle_and_save_value(settings_ctx)
+            );
         });
     }
 
@@ -9909,9 +11299,11 @@ impl Workspace {
 
         // Mark that we've done the one-time auto-open
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .has_auto_opened_conversation_list
-                .set_value(true, ctx));
+            report_if_error!(
+                settings
+                    .has_auto_opened_conversation_list
+                    .set_value(true, ctx)
+            );
         });
     }
 
@@ -10372,13 +11764,22 @@ impl Workspace {
                 .with_on_select_action(WorkspaceAction::ToggleKeybindingsPage)
                 .into_item(),
             MenuItem::Separator,
-            MenuItemFields::new(crate::t!("workspace-menu-documentation"))
-                .with_on_select_action(WorkspaceAction::ViewUserDocs)
-                .into_item(),
+        ]);
+
+        // Documentation only when a real Zaplex docs destination exists; otherwise the
+        // item opens `""` and reads as a dead button.
+        if links::has_user_docs() {
+            items.push(
+                MenuItemFields::new(crate::t!("workspace-menu-documentation"))
+                    .with_on_select_action(WorkspaceAction::ViewUserDocs)
+                    .into_item(),
+            );
+        }
+        items.push(
             MenuItemFields::new(crate::t!("workspace-menu-feedback"))
                 .with_on_select_action(WorkspaceAction::SendFeedback)
                 .into_item(),
-        ]);
+        );
 
         #[cfg(not(target_family = "wasm"))]
         items.push(
@@ -10387,12 +11788,14 @@ impl Workspace {
                 .into_item(),
         );
 
-        items.extend([
-            MenuItemFields::new(crate::t!("workspace-menu-slack"))
-                .with_on_select_action(WorkspaceAction::JoinSlack)
-                .into_item(),
-            MenuItem::Separator,
-        ]);
+        // Slack only when a real community destination exists; otherwise it opens `""`.
+        if links::has_slack() {
+            items.push(
+                MenuItemFields::new(crate::t!("workspace-menu-slack"))
+                    .with_on_select_action(WorkspaceAction::JoinSlack)
+                    .into_item(),
+            );
+        }
 
         // Decentralized fork: this used to append account-related items such as account CTA / Upgrade / Billing / Invite / Log out;
         // they are all removed in local mode.
@@ -11604,17 +13007,21 @@ impl Workspace {
                 AgentGuardrailKind::KillAgent {
                     host,
                     host_id,
+                    session_id,
                     pid,
+                    process_fingerprint,
                     is_local,
                     agent_label,
-                    ..
+                    project_name: _,
                 } => {
                     self.send_guardrail_signal(
                         host,
                         host_id.as_deref(),
+                        session_id,
                         *is_local,
                         agent_label.clone(),
                         *pid,
+                        process_fingerprint.as_deref(),
                         zaplex_cockpit::GuardrailSignal::Kill,
                         ctx,
                     );
@@ -11628,30 +13035,44 @@ impl Workspace {
     }
 
     /// Guardrails (step 7): send `signal` to one Conductor session's pid, off
-    /// the UI thread. A local host (`host == CockpitModel::local_label()`)
-    /// calls `libc::kill` directly; a remote host attempts the daemon's
-    /// `RunCommandRequest` (`kill -<SIG> <pid>`) on the matching connected
-    /// daemon (see [`run_remote_guardrail_signal`] for the remote path's
-    /// honest limits). Always reports the outcome as a toast — an
+    /// the UI thread. A local host uses the platform's verified process API; a
+    /// remote host asks the matching daemon to perform the same identity check
+    /// before signalling (see [`run_remote_guardrail_signal`]). Always reports
+    /// the outcome as a toast — an
     /// unknown/dead pid, a failed local kill, and an unreachable remote host
     /// all surface rather than silently no-op'ing.
     fn send_guardrail_signal(
         &mut self,
         host: &str,
         host_id: Option<&str>,
+        session_id: &str,
         is_local: bool,
         agent_label: String,
         pid: u32,
+        expected_fingerprint: Option<&str>,
         signal: zaplex_cockpit::GuardrailSignal,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !zaplex_cockpit::pid_signalable(pid) {
+        let expected_fingerprint = expected_fingerprint.map(str::to_owned);
+        if !zaplex_cockpit::pid_signalable(pid) || expected_fingerprint.is_none() {
             self.toast_stack.update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
                     DismissibleToast::error(zaplex_cockpit::unsignalable_toast(&agent_label)),
                     ctx,
                 );
             });
+            return;
+        }
+
+        if !inventory_guardrail_session_is_available(
+            crate::cockpit::CockpitModel::as_ref(ctx).inventory(),
+            host_id,
+            session_id,
+            is_local,
+            pid,
+            expected_fingerprint.as_deref(),
+        ) {
+            self.session_not_found_toast(host, ctx);
             return;
         }
 
@@ -11677,24 +13098,34 @@ impl Workspace {
             zaplex_cockpit::GuardrailTarget::Local => None,
         };
         let host_owned = host.to_string();
+        let session_id = session_id.to_string();
 
         ctx.spawn(
             async move {
                 match target {
                     zaplex_cockpit::GuardrailTarget::Local => {
-                        send_local_guardrail_signal(pid, signal)
+                        send_local_guardrail_signal(pid, expected_fingerprint.as_deref(), signal)
                     }
                     zaplex_cockpit::GuardrailTarget::Remote(_) => match daemon {
                         Some(daemon)
                             if zaplex_remote_session::types::has_feature(
                                 &daemon.features,
-                                zaplex_remote_session::types::FEATURE_HOST_EXEC,
+                                zaplex_remote_session::types::FEATURE_AGENT_PROCESS_SIGNAL_V1,
                             ) =>
                         {
-                            run_remote_guardrail_signal(&daemon.client, pid, signal).await
+                            run_remote_guardrail_signal(
+                                &daemon.client,
+                                &session_id,
+                                pid,
+                                expected_fingerprint
+                                    .as_deref()
+                                    .expect("missing fingerprints return before remote dispatch"),
+                                signal,
+                            )
+                            .await
                         }
-                        // Reachable, but the daemon predates the session-less
-                        // host-command path — honest "update the daemon".
+                        // Reachable, but the daemon predates verified process
+                        // signalling — honest "update the daemon".
                         Some(_) => GuardrailSendOutcome::RemoteUnsupported(host_owned),
                         None => GuardrailSendOutcome::NoRemoteConnection(host_owned),
                     },
@@ -11702,7 +13133,9 @@ impl Workspace {
             },
             move |me, outcome, ctx| {
                 let (message, is_error) = match outcome {
-                    GuardrailSendOutcome::Sent => (zaplex_cockpit::sent_toast(&agent_label, signal), false),
+                    GuardrailSendOutcome::Sent => {
+                        (zaplex_cockpit::sent_toast(&agent_label, signal), false)
+                    }
                     GuardrailSendOutcome::Failed(e) => {
                         (zaplex_cockpit::failed_toast(&agent_label, signal, &e), true)
                     }
@@ -11741,19 +13174,29 @@ impl Workspace {
         // Each target carries its host's stable `host_id` (None for local) so the
         // remote path below resolves the exact daemon by id, never by the
         // collidable label.
-        let targets: Vec<(String, Option<String>, bool, u32)> =
+        let targets: Vec<(String, Option<String>, bool, String, u32, Option<String>)> =
             crate::cockpit::CockpitModel::as_ref(ctx)
                 .inventory()
                 .hosts
                 .iter()
+                .filter(|h| h.is_available())
                 .flat_map(|h| {
                     h.projects.iter().flat_map(move |p| {
-                        p.sessions
-                            .iter()
-                            .map(move |s| (h.host.clone(), h.host_id.clone(), h.is_local, s.pid))
+                        p.sessions.iter().map(move |s| {
+                            (
+                                h.host.clone(),
+                                h.host_id.clone(),
+                                h.is_local,
+                                s.session_id.clone(),
+                                s.pid,
+                                s.process_fingerprint.clone(),
+                            )
+                        })
                     })
                 })
-                .filter(|(_, _, _, pid)| zaplex_cockpit::pid_signalable(*pid))
+                .filter(|(_, _, _, _, pid, fingerprint)| {
+                    zaplex_cockpit::pid_signalable(*pid) && fingerprint.is_some()
+                })
                 .collect();
 
         if targets.is_empty() {
@@ -11770,11 +13213,12 @@ impl Workspace {
             async move {
                 let mut sent = 0usize;
                 let mut failed = 0usize;
-                for (host, host_id, is_local, pid) in targets {
+                for (host, host_id, is_local, session_id, pid, expected_fingerprint) in targets {
                     let target = zaplex_cockpit::guardrail_target(is_local, &host);
                     let outcome = match target {
                         zaplex_cockpit::GuardrailTarget::Local => send_local_guardrail_signal(
                             pid,
+                            expected_fingerprint.as_deref(),
                             zaplex_cockpit::GuardrailSignal::Interrupt,
                         ),
                         zaplex_cockpit::GuardrailTarget::Remote(_) => {
@@ -11786,12 +13230,16 @@ impl Workspace {
                                 Some(daemon)
                                     if zaplex_remote_session::types::has_feature(
                                         &daemon.features,
-                                        zaplex_remote_session::types::FEATURE_HOST_EXEC,
+                                        zaplex_remote_session::types::FEATURE_AGENT_PROCESS_SIGNAL_V1,
                                     ) =>
                                 {
                                     run_remote_guardrail_signal(
                                         &daemon.client,
+                                        &session_id,
                                         pid,
+                                        expected_fingerprint.as_deref().expect(
+                                            "filtered stop-all targets always have a fingerprint",
+                                        ),
                                         zaplex_cockpit::GuardrailSignal::Interrupt,
                                     )
                                     .await
@@ -11911,9 +13359,11 @@ impl Workspace {
 
     pub fn toggle_block_snackbar(&mut self, ctx: &mut ViewContext<Self>) {
         BlockListSettings::handle(ctx).update(ctx, |blocklist_settings, ctx| {
-            report_if_error!(blocklist_settings
-                .snackbar_enabled
-                .toggle_and_save_value(ctx));
+            report_if_error!(
+                blocklist_settings
+                    .snackbar_enabled
+                    .toggle_and_save_value(ctx)
+            );
         });
     }
 
@@ -11925,9 +13375,11 @@ impl Workspace {
 
     pub fn toggle_syntax_highlighting(&mut self, ctx: &mut ViewContext<Self>) {
         InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-            report_if_error!(input_settings
-                .syntax_highlighting
-                .toggle_and_save_value(ctx));
+            report_if_error!(
+                input_settings
+                    .syntax_highlighting
+                    .toggle_and_save_value(ctx)
+            );
         });
     }
 
@@ -11942,9 +13394,11 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         AccessibilitySettings::handle(ctx).update(ctx, |accessibility_settings, ctx| {
-            report_if_error!(accessibility_settings
-                .a11y_verbosity
-                .set_value(verbosity, ctx));
+            report_if_error!(
+                accessibility_settings
+                    .a11y_verbosity
+                    .set_value(verbosity, ctx)
+            );
         });
     }
 
@@ -12017,6 +13471,7 @@ impl Workspace {
                 TabSnapshot {
                     root,
                     custom_title: pane_group.custom_title(app),
+                    is_pinned: self.tabs.get(tab_index).is_some_and(|tab| tab.is_pinned),
                     default_directory_color: self
                         .tabs
                         .get(tab_index)
@@ -12398,6 +13853,14 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let tab_indices_vec = tab_indices.collect_vec();
+        if !skip_confirmation
+            && tab_indices_vec
+                .iter()
+                .any(|index| self.tabs.get(*index).is_some_and(|tab| tab.is_pinned))
+        {
+            self.show_close_session_confirmation_dialog(dialog_source, ctx);
+            return false;
+        }
         // Check if there are any tabs that can't be closed without confirmation
         if !skip_confirmation && self.should_confirm_close_session() {
             for i in tab_indices_vec.iter() {
@@ -12665,6 +14128,7 @@ impl Workspace {
             pane_group.reattach_panes(ctx);
         });
 
+        let tab_index = self.tab_insertion_index(tab_index, tab_data.is_pinned);
         self.tabs.insert(tab_index, tab_data);
         self.activate_tab(tab_index, ctx);
 
@@ -12672,9 +14136,9 @@ impl Workspace {
     }
 
     pub fn open_autoupdate_failure_link(&mut self, ctx: &mut ViewContext<Self>) {
-        ctx.open_url(
-            "",
-        );
+        // When the in-app update fails, "More info" sends the user to the Zaplex
+        // releases page so they can grab the latest build by hand.
+        ctx.open_url(links::GITHUB_RELEASES_URL);
     }
 
     pub fn add_terminal_tab(&mut self, hide_homepage: bool, ctx: &mut ViewContext<Self>) {
@@ -12948,9 +14412,11 @@ impl Workspace {
                     self.tabs.push(TabData::new(new_pane_group));
                     self.activate_tab_internal(self.tab_count() - 1, ctx);
                 } else {
+                    let insertion_index =
+                        self.tab_insertion_index(self.active_tab_index + 1, false);
                     self.tabs
-                        .insert(self.active_tab_index + 1, TabData::new(new_pane_group));
-                    self.activate_tab_internal(self.active_tab_index + 1, ctx);
+                        .insert(insertion_index, TabData::new(new_pane_group));
+                    self.activate_tab_internal(insertion_index, ctx);
                 }
             }
         }
@@ -13015,6 +14481,7 @@ impl Workspace {
             self.tabs.push(TabData::new(new_pane_group));
             self.activate_tab_internal(self.tab_count() - 1, ctx);
         } else {
+            let new_idx = self.tab_insertion_index(new_idx, false);
             self.tabs.insert(new_idx, TabData::new(new_pane_group));
             self.activate_tab_internal(new_idx, ctx);
         }
@@ -13985,6 +15452,9 @@ impl Workspace {
             TabMovement::Right if index < tabs_len - 1 => index + 1,
             _ => return,
         };
+        if self.tabs[index].is_pinned != self.tabs[new_index].is_pinned {
+            return;
+        }
         // Don't need to worry about negative numbers because that case is covered above
         self.tabs.swap(index, new_index);
 
@@ -14001,6 +15471,55 @@ impl Workspace {
         }
 
         ctx.notify();
+    }
+
+    fn pinned_tab_count(&self) -> usize {
+        self.tabs.iter().take_while(|tab| tab.is_pinned).count()
+    }
+
+    fn tab_insertion_index(&self, requested_index: usize, is_pinned: bool) -> usize {
+        let pinned_tab_count = self.pinned_tab_count();
+        if is_pinned {
+            requested_index.min(pinned_tab_count)
+        } else {
+            requested_index.max(pinned_tab_count).min(self.tabs.len())
+        }
+    }
+
+    /// Changes a tab's pin state and keeps the stable pinned-prefix invariant.
+    /// Returns the tab's new index, or `None` for an invalid source index.
+    fn set_tab_pinned(
+        &mut self,
+        index: usize,
+        is_pinned: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<usize> {
+        let tab = self.tabs.get(index)?;
+        if tab.is_pinned == is_pinned {
+            return Some(index);
+        }
+
+        let active_pane_group_id = self
+            .tabs
+            .get(self.active_tab_index)
+            .map(|tab| tab.pane_group.id());
+        let mut tab = self.tabs.remove(index);
+        tab.is_pinned = is_pinned;
+        let new_index = self.pinned_tab_count();
+        self.tabs.insert(new_index, tab);
+
+        if let Some(active_pane_group_id) = active_pane_group_id {
+            if let Some(active_index) = self
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == active_pane_group_id)
+            {
+                self.set_active_tab_index(active_index, ctx);
+            }
+        }
+
+        ctx.notify();
+        Some(new_index)
     }
 
     /// How to render the tab bar.
@@ -14117,18 +15636,13 @@ impl Workspace {
                 match &outcome {
                     RequestPermissionsOutcome::Accepted => (),
                     RequestPermissionsOutcome::PermissionsDenied => {
-                        // Show a helpful toast if the user denied permissions.
-                        let url = NOTIFICATIONS_TROUBLESHOOT_URL.to_string();
+                        // Show a helpful toast if the user denied permissions. The
+                        // "Troubleshoot" link is dropped: it pointed at an empty URL
+                        // (no Zaplex troubleshoot docs).
                         view.toast_stack.update(ctx, |toast_stack, ctx| {
-                            let toast = DismissibleToast::error(
-                                crate::t!("workspace-notification-permission-denied-toast"),
-                            )
-                            .with_link(
-                                ToastLink::new(crate::t!(
-                                    "workspace-troubleshoot-notifications-link"
-                                ))
-                                .with_href(url),
-                            );
+                            let toast = DismissibleToast::error(crate::t!(
+                                "workspace-notification-permission-denied-toast"
+                            ));
                             toast_stack.add_persistent_toast(toast, ctx);
                         });
                     }
@@ -14348,12 +15862,20 @@ impl Workspace {
 
     /// Close all overlays in this workspace and the active pane group.
     fn close_all_overlays(&mut self, ctx: &mut ViewContext<Self>) {
-        self.current_workspace_state.close_all_modals();
+        self.close_all_modals(ctx);
         self.close_tab_bar_overflow_menu(ctx);
         self.close_all_chip_menus(ctx);
 
         self.active_tab_pane_group()
             .update(ctx, |pane_group, ctx| pane_group.close_overlays(ctx));
+    }
+
+    fn close_all_modals(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.current_workspace_state.is_theme_creator_modal_open {
+            self.theme_creator_modal
+                .update(ctx, |modal, ctx| modal.clear_transient(ctx));
+        }
+        self.current_workspace_state.close_all_modals();
     }
 
     /// Close all chip menus across all inputs to prevent overlapping with modals.
@@ -15152,7 +16674,7 @@ impl Workspace {
             }
             // If focused pane contains an object, then set selected state in WD to that object
             pane_group::Event::PaneFocused => {
-                self.current_workspace_state.close_all_modals();
+                self.close_all_modals(ctx);
 
                 // Re-evaluate which region is focused and update pane dimming accordingly.
                 self.update_pane_dimming_for_current_focus_region(ctx);
@@ -17221,7 +18743,11 @@ impl Workspace {
 
     /// Open the guardrails confirm dialog (kill / stop-all) — see
     /// `agent_guardrail_dialog.rs`.
-    fn open_agent_guardrail_dialog(&mut self, kind: AgentGuardrailKind, ctx: &mut ViewContext<Self>) {
+    fn open_agent_guardrail_dialog(
+        &mut self,
+        kind: AgentGuardrailKind,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.agent_guardrail_dialog.update(ctx, |view, _| {
             view.set_kind(kind);
         });
@@ -17430,9 +18956,11 @@ impl Workspace {
 
     fn reset_zoom(&mut self, ctx: &mut ViewContext<Self>) {
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .zoom_level
-                .set_value(ZoomLevel::default_value(), ctx));
+            report_if_error!(
+                window_settings
+                    .zoom_level
+                    .set_value(ZoomLevel::default_value(), ctx)
+            );
         });
     }
 
@@ -17452,9 +18980,11 @@ impl Workspace {
         };
 
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .zoom_level
-                .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx));
+            report_if_error!(
+                window_settings
+                    .zoom_level
+                    .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx)
+            );
         });
     }
 
@@ -17467,9 +18997,11 @@ impl Workspace {
 
     fn set_terminal_font_size(&mut self, new_font_size: f32, ctx: &mut ViewContext<Self>) {
         FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-            report_if_error!(font_settings
-                .monospace_font_size
-                .set_value(new_font_size, ctx));
+            report_if_error!(
+                font_settings
+                    .monospace_font_size
+                    .set_value(new_font_size, ctx)
+            );
         });
     }
 
@@ -17654,8 +19186,8 @@ impl Workspace {
     }
 
     fn handle_codex_modal_event(&mut self, event: &CodexModalEvent, ctx: &mut ViewContext<Self>) {
-        use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
         use crate::AIExecutionProfilesModel;
+        use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 
         match event {
             CodexModalEvent::Close => {
@@ -17722,16 +19254,62 @@ impl Workspace {
     /// its accounts (label + config dir + heat) and the precomputed freest pick.
     /// Empty when the cockpit is disabled or the provider has no accounts — the
     /// card then launches under the provider's default login.
+    /// One account, as the Spawn-Karte needs it.
+    ///
+    /// The heat is the **binding window** (`binding_window`) — the fullest of
+    /// 5h / week / Opus / Sonnet — not the 5h block: an account whose weekly or
+    /// Opus sublimit is the real cap must not read calm here. Carried as both the
+    /// formatted label (with `~` for an estimate) and the raw fraction, so the
+    /// card can colour by the one utilisation rule rather than parse its own
+    /// string back.
+    fn spawn_card_account_option(a: &zaplex_cockpit::AccountUsage) -> spawn_card::AccountOption {
+        spawn_card::AccountOption {
+            label: a.account.label.clone(),
+            config_dir: a.account.config_dir.clone(),
+            heat_label: zaplex_cockpit::heat_pct_label_with_provenance(
+                zaplex_cockpit::binding_window(a).0,
+                a.provenance,
+            ),
+            heat: zaplex_cockpit::binding_window(a).0,
+            plan: a.account.plan_tier.clone(),
+            provider: a.account.provider,
+        }
+    }
+
+    fn account_email_for_route(
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        ctx: &AppContext,
+    ) -> Option<String> {
+        let provider = if agent == CLIAgent::Claude {
+            zaplex_cockpit::Provider::Claude
+        } else if agent == CLIAgent::Codex {
+            zaplex_cockpit::Provider::Codex
+        } else {
+            return None;
+        };
+        crate::cockpit::CockpitModel::as_ref(ctx)
+            .snapshot()
+            .accounts
+            .iter()
+            .find(|usage| {
+                usage.account.provider == provider
+                    && match config_dir {
+                        Some(dir) => usage.account.config_dir == dir,
+                        None => usage.account.is_default,
+                    }
+            })
+            .and_then(|usage| usage.account.email.clone())
+    }
+
     fn spawn_card_provider_options(
         &self,
         provider: zaplex_cockpit::Provider,
         installed: bool,
         ctx: &AppContext,
     ) -> spawn_card::ProviderOptions {
-        let mut opts = spawn_card::ProviderOptions {
-            installed,
-            ..Default::default()
-        };
+        let mut opts = spawn_card::ProviderOptions::default();
+        opts.installed = installed;
         if !*crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
             return opts;
         }
@@ -17741,18 +19319,10 @@ impl Workspace {
             .iter()
             .filter(|a| a.account.provider == provider)
         {
-            opts.accounts.push(spawn_card::AccountOption {
-                label: a.account.label.clone(),
-                config_dir: a.account.config_dir.clone(),
-                // Binding-window heat + provenance ("~" for estimates), so a chip
-                // never reads calm while a weekly/Opus sublimit is the real cap.
-                heat_label: zaplex_cockpit::heat_pct_label_with_provenance(
-                    zaplex_cockpit::binding_window(a).0,
-                    a.provenance,
-                ),
-            });
+            opts.accounts.push(Self::spawn_card_account_option(a));
         }
-        if let Some(f) = zaplex_cockpit::pick_freest(provider, &snapshot.accounts) {
+        if let Some(f) = zaplex_cockpit::pick_freest_checked(provider, snapshot) {
+            opts.freest = Some(Self::spawn_card_account_option(f));
             opts.freest_label = Some(format!(
                 "{} ({})",
                 f.account.label,
@@ -17775,6 +19345,7 @@ impl Workspace {
     /// defaults, then shows + focuses it.
     fn open_spawn_card(
         &mut self,
+        registry_node_id: Option<String>,
         host_id: Option<String>,
         host: Option<String>,
         project: Option<PathBuf>,
@@ -17791,8 +19362,12 @@ impl Workspace {
         let scan = crate::terminal::cli_agent::scan_cli_agent_installations();
         let claude_installed = scan.get(&CLIAgent::Claude).copied().unwrap_or(false);
         let codex_installed = scan.get(&CLIAgent::Codex).copied().unwrap_or(false);
+        let antigravity_installed = scan.get(&CLIAgent::Antigravity).copied().unwrap_or(false);
+        let grok_installed = scan.get(&CLIAgent::Grok).copied().unwrap_or(false);
         log::info!(
-            "spawn-card: synchronous CLI scan → claude={claude_installed} codex={codex_installed}"
+            "spawn-card: synchronous CLI scan → claude={claude_installed} \
+             codex={codex_installed} antigravity={antigravity_installed} \
+             grok={grok_installed}"
         );
 
         let claude = self.spawn_card_provider_options(
@@ -17819,17 +19394,23 @@ impl Workspace {
                 })
                 .collect();
 
-        // Reconcile the two host id spaces at the spawn-card boundary. The
-        // Conductor scopes a `+` by the Agent-inventory's *daemon* `HostId`, but
-        // `hosts` above (and every downstream `LaunchAgent { node_id }`) is keyed
-        // by the SSH `node.id`. Translate the daemon id to the SSH node that
-        // currently hosts that daemon so `resolve_scoped_host` matches by id.
+        // Reconcile the two host id spaces at the spawn-card boundary. A host
+        // favorite already carries the authoritative registry node id. The
+        // Conductor's live tree carries a daemon HostId, which must be translated
+        // to the registry node before `resolve_scoped_host` matches by id.
         //
         // If the daemon id cannot be translated to a live SSH node (e.g. the
-        // daemon dropped since the inventory was folded), `scoped_host_id` is
-        // `None` and resolution falls back to the host *name* below — it must
-        // never silently default to Local for a clearly remote-scoped open.
-        let scoped_host_id = self.translate_scoped_daemon_host(host_id.as_deref(), &*ctx);
+        // daemon dropped since the inventory was folded), the scope is stale.
+        // In that case neither its id nor its display name may preselect another
+        // registered host; the real chooser remains open for an explicit choice.
+        let is_unscoped = registry_node_id.is_none() && host_id.is_none() && host.is_none();
+        let translated_node_id = self.translate_scoped_daemon_host(host_id.as_deref(), &*ctx);
+        let (scoped_host_id, scoped_host_name) = reconcile_spawn_host_scope(
+            registry_node_id,
+            host_id.as_deref(),
+            translated_node_id,
+            host,
+        );
 
         // Prefill the launch directory from the invoking (active) pane's cwd for a
         // plain, unscoped "+" open — "directory is steering", so a global launch
@@ -17838,7 +19419,7 @@ impl Workspace {
         // own project, and a remote pane's cwd wouldn't apply to the Local-default
         // card (hence `active_session_path_if_local`, which is `None` off-local).
         let project = project.or_else(|| {
-            if host.is_none() && host_id.is_none() {
+            if is_unscoped {
                 self.active_tab_pane_group()
                     .as_ref(ctx)
                     .active_session_view(ctx)
@@ -17851,9 +19432,11 @@ impl Workspace {
         let cfg = spawn_card::SpawnCardConfig {
             claude,
             codex,
+            antigravity_installed,
+            grok_installed,
             hosts,
             scoped_host_id,
-            scoped_host_name: host,
+            scoped_host_name,
             project,
             prompt,
             default_agent,
@@ -17861,7 +19444,7 @@ impl Workspace {
         self.spawn_card
             .update(ctx, |card, ctx| card.configure(cfg, ctx));
 
-        self.current_workspace_state.close_all_modals();
+        self.close_all_modals(ctx);
         self.current_workspace_state.is_spawn_card_open = true;
         ctx.focus(&self.spawn_card);
         ctx.notify();
@@ -17871,12 +19454,170 @@ impl Workspace {
     /// (agent, model, effort, account, host, project) into a routed launch.
     fn handle_spawn_card_event(&mut self, event: &SpawnCardEvent, ctx: &mut ViewContext<Self>) {
         match event {
+            #[cfg(not(target_family = "wasm"))]
+            SpawnCardEvent::DiscoverModels {
+                generation,
+                agent,
+                config_dir,
+                node_id,
+                host_name,
+                working_directory,
+            } => {
+                let generation = *generation;
+                let agent = *agent;
+                let config_dir = config_dir.clone();
+                let node_id = node_id.clone();
+                let host_name = host_name.clone();
+                let working_directory = working_directory.clone();
+                let account_name = if node_id.is_some() {
+                    format!("{host_name} login")
+                } else {
+                    Self::account_email_for_route(agent, config_dir.as_deref(), &*ctx)
+                        .unwrap_or_else(|| {
+                            config_dir
+                                .as_ref()
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_else(|| "Default subscription".to_string())
+                        })
+                };
+                let location = match node_id.as_deref() {
+                    Some(node_id) => warp_ssh_manager::with_conn(|connection| {
+                        let server =
+                            warp_ssh_manager::SshRepository::get_server(connection, node_id)?
+                                .ok_or_else(|| {
+                                    warp_ssh_manager::SshRepositoryError::NotFound(
+                                        node_id.to_string(),
+                                    )
+                                })?;
+                        Ok(crate::ai::subscription_agent::ProcessLocation::Remote {
+                            ssh_argv: warp_ssh_manager::ssh_command::build_ssh_args(&server),
+                        })
+                    })
+                    .map_err(|error| error.to_string()),
+                    None => Ok(crate::ai::subscription_agent::ProcessLocation::Local),
+                };
+                let executable = if node_id.is_some() {
+                    PathBuf::from(agent.command_prefix())
+                } else {
+                    match crate::util::path::resolve_executable(agent.command_prefix()) {
+                        Some(path) => path.into_owned(),
+                        None => {
+                            self.spawn_card.update(ctx, |card, ctx| {
+                                card.apply_model_capabilities(
+                                    agent,
+                                    generation,
+                                    Err(format!(
+                                        "{} executable is no longer available",
+                                        agent.display_name()
+                                    )),
+                                    ctx,
+                                );
+                            });
+                            return;
+                        }
+                    }
+                };
+                let subscription_agent = match agent {
+                    CLIAgent::Claude => {
+                        crate::ai::subscription_agent::SubscriptionAgent::ClaudeCode
+                    }
+                    CLIAgent::Codex => crate::ai::subscription_agent::SubscriptionAgent::Codex,
+                    CLIAgent::Gemini
+                    | CLIAgent::Amp
+                    | CLIAgent::Droid
+                    | CLIAgent::OpenCode
+                    | CLIAgent::Copilot
+                    | CLIAgent::Pi
+                    | CLIAgent::Auggie
+                    | CLIAgent::CursorCli
+                    | CLIAgent::Goose
+                    | CLIAgent::DeepSeek
+                    | CLIAgent::Antigravity
+                    | CLIAgent::Grok
+                    | CLIAgent::Unknown => return,
+                };
+                let installation = crate::ai::subscription_agent::InstallationIdentity {
+                    agent: subscription_agent,
+                    host: crate::ai::subscription_agent::HostIdentity {
+                        id: node_id.clone().unwrap_or_else(|| "local".to_string()),
+                        display_name: host_name,
+                    },
+                    account: crate::ai::subscription_agent::AccountIdentity {
+                        id: account_name.clone(),
+                        display_name: account_name,
+                        config_dir,
+                    },
+                    executable,
+                    version: String::new(),
+                };
+                let discovery = async move {
+                    let location = location.map_err(anyhow::Error::msg)?;
+                    let version = crate::ai::subscription_agent::query_cli_version(
+                        &installation,
+                        working_directory.clone(),
+                        location.clone(),
+                    )
+                    .await?;
+                    let installation =
+                        crate::ai::subscription_agent::InstallationIdentity {
+                            version,
+                            ..installation
+                        };
+                    crate::ai::subscription_agent::discover_capabilities(
+                        installation,
+                        working_directory,
+                        location,
+                    )
+                    .await
+                    .map(|capability| capability.models)
+                };
+                let discovery_with_timeout = async move {
+                    match futures_util::future::select(
+                        Box::pin(discovery),
+                        Box::pin(warpui::r#async::Timer::after(Duration::from_secs(15))),
+                    )
+                    .await
+                    {
+                        futures_util::future::Either::Left((result, _)) => result,
+                        futures_util::future::Either::Right((_, _)) => {
+                            Err(anyhow::anyhow!("Model discovery timed out after 15 seconds"))
+                        }
+                    }
+                };
+                ctx.spawn(discovery_with_timeout, move |workspace, result, ctx| {
+                    workspace.spawn_card.update(ctx, |card, ctx| {
+                        card.apply_model_capabilities(
+                            agent,
+                            generation,
+                            result.map_err(|error| error.to_string()),
+                            ctx,
+                        );
+                    });
+                });
+            }
+            #[cfg(target_family = "wasm")]
+            SpawnCardEvent::DiscoverModels {
+                generation, agent, ..
+            } => {
+                self.spawn_card.update(ctx, |card, ctx| {
+                    card.apply_model_capabilities(
+                        *agent,
+                        *generation,
+                        Err("Subscription-agent model discovery requires the native app"
+                            .to_string()),
+                        ctx,
+                    );
+                });
+            }
             SpawnCardEvent::Close => {
                 self.current_workspace_state.is_spawn_card_open = false;
                 self.focus_active_tab(ctx);
                 ctx.notify();
             }
-            SpawnCardEvent::BrowseRemoteDir { node_id, start_path } => {
+            SpawnCardEvent::BrowseRemoteDir {
+                node_id,
+                start_path,
+            } => {
                 // Hide the card (its selections persist — it is a persistent view,
                 // not rebuilt) and open the host's SFTP browser in pick mode; the
                 // chosen dir returns via RemoteSpawnDirPicked (#105).
@@ -17894,9 +19635,15 @@ impl Workspace {
                 prompt,
             } => {
                 self.current_workspace_state.is_spawn_card_open = false;
+                let account_email = if node_id.is_none() {
+                    Self::account_email_for_route(*agent, config_dir.as_deref(), &*ctx)
+                } else {
+                    None
+                };
                 self.launch_routed_agent(
                     *agent,
                     config_dir.as_deref(),
+                    account_email.as_deref(),
                     cwd.as_deref(),
                     node_id.as_deref(),
                     model.as_deref(),
@@ -19231,7 +20978,7 @@ impl Workspace {
         let family = appearance.ui_font_family();
         // The one waiting glyph in the one attention amber — the same ✋ color
         // as every Conductor badge and inbox row — kept small/quiet.
-        let critical = crate::cockpit::style::attention_coloru();
+        let critical = crate::cockpit::style::attention_coloru(appearance);
         let label = format!("{} {}", zaplex_cockpit::GLYPH_WAITING, n);
         let handle = self.mouse_states.attention_pulse.clone();
         Some(
@@ -21299,18 +23046,16 @@ impl Workspace {
 
     /// Computes the list of available left panel views based on current AI settings and feature flags.
     fn compute_left_panel_views(ctx: &AppContext) -> Vec<ToolPanelView> {
-        let mut views = vec![];
+        // The Cockpit is the single Host ▸ Project ▸ Session navigation root.
+        // The legacy SSH manager remains reachable as a secondary management
+        // action from that tree; it is a primary toolbelt fallback only when the
+        // Cockpit is disabled.
+        let mut views =
+            primary_host_navigation_views(*crate::cockpit::CockpitSettings::as_ref(ctx).enabled);
 
-        // Cockpit (account/usage/attention overview) leads the toolbelt — the
-        // glanceable daily-driver. Gated by the cockpit.enabled setting.
-        if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
-            views.push(ToolPanelView::Cockpit);
-        }
-
-        // Remote-dev core: SSH hosts, then remote files.
-        // openWarp-only: the SSH manager, no feature flag, always shown by default.
-        views.push(ToolPanelView::SshManager);
-        if FeatureFlag::ServerFileBrowser.is_enabled() && FeatureFlag::SshRemoteServer.is_enabled() {
+        // Remote files remain their own task-specific surface.
+        if FeatureFlag::ServerFileBrowser.is_enabled() && FeatureFlag::SshRemoteServer.is_enabled()
+        {
             views.push(ToolPanelView::ServerFileBrowser);
         }
 
@@ -21443,6 +23188,10 @@ impl TypedActionView for Workspace {
             MoveActiveTabRight => self.move_tab(self.active_tab_index, TabMovement::Right, ctx),
             MoveTabLeft(index) => self.move_tab(*index, TabMovement::Left, ctx),
             MoveTabRight(index) => self.move_tab(*index, TabMovement::Right, ctx),
+            SetTabPinned { index, is_pinned } => {
+                self.set_tab_pinned(*index, *is_pinned, ctx);
+                ctx.dispatch_global_action("workspace:save_app", ());
+            }
             RenameTab(index) => self.rename_tab(*index, ctx),
             ResetTabName(index) => self.clear_tab_name(*index, ctx),
             RenamePane(locator) => self.rename_pane(*locator, ctx),
@@ -21481,12 +23230,16 @@ impl TypedActionView for Workspace {
                         } else {
                             // Config missing or deleted — clear and fall through to Terminal.
                             AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                                report_if_error!(settings
-                                    .default_session_mode_internal
-                                    .set_value(DefaultSessionMode::Terminal, ctx));
-                                report_if_error!(settings
-                                    .default_tab_config_path
-                                    .set_value(String::new(), ctx));
+                                report_if_error!(
+                                    settings
+                                        .default_session_mode_internal
+                                        .set_value(DefaultSessionMode::Terminal, ctx)
+                                );
+                                report_if_error!(
+                                    settings
+                                        .default_tab_config_path
+                                        .set_value(String::new(), ctx)
+                                );
                             });
                             self.add_terminal_tab(false, ctx);
                         }
@@ -21507,6 +23260,7 @@ impl TypedActionView for Workspace {
                     }
                 }
             }
+            OpenThemeCreatorModal => self.open_theme_creator_modal(ctx),
             AddTerminalTab { hide_homepage } => {
                 self.add_new_session_tab_internal_with_default_session_mode_behavior(
                     NewSessionSource::Tab,
@@ -21530,9 +23284,7 @@ impl TypedActionView for Workspace {
                     Ok(warp_ssh_manager::SshRepository::get_server(conn, node_id)?)
                 });
                 match server {
-                    Ok(Some(server)) => {
-                        self.open_ssh_terminal(node_id.clone(), server, false, ctx)
-                    }
+                    Ok(Some(server)) => self.open_ssh_terminal(node_id.clone(), server, false, ctx),
                     _ => {
                         self.toast_stack.update(ctx, |view, ctx| {
                             view.add_ephemeral_toast(
@@ -21545,6 +23297,9 @@ impl TypedActionView for Workspace {
                     }
                 }
             }
+            OpenSftpPaneByNode { node_id } => {
+                self.open_sftp_pane(node_id.clone(), ctx);
+            }
             ToggleFavorite {
                 kind,
                 target,
@@ -21552,49 +23307,28 @@ impl TypedActionView for Workspace {
             } => {
                 // ★ on a tree node / an add-favorite picker item: add if absent,
                 // remove if present. The store persists + broadcasts Changed.
-                let fav =
-                    zaplex_cockpit::Favorite::new(*kind, target.clone(), label.clone());
-                crate::cockpit::favorites::FavoritesStore::handle(ctx)
-                    .update(ctx, |store, ctx| {
-                        store.toggle(fav, ctx);
-                    });
+                let fav = zaplex_cockpit::Favorite::new(*kind, target.clone(), label.clone());
+                crate::cockpit::favorites::FavoritesStore::handle(ctx).update(ctx, |store, ctx| {
+                    store.toggle(fav, ctx);
+                });
             }
             RemoveFavorite { kind, target } => {
                 // One-click remove of a stale favorite whose target has vanished.
-                crate::cockpit::favorites::FavoritesStore::handle(ctx)
-                    .update(ctx, |store, ctx| {
-                        store.remove(*kind, target, ctx);
-                    });
+                crate::cockpit::favorites::FavoritesStore::handle(ctx).update(ctx, |store, ctx| {
+                    store.remove(*kind, target, ctx);
+                });
             }
             ManageSshHost { node_id } => {
                 // Spine "⋯ manage": open the SSH-manager editor for this host.
                 self.open_ssh_server(node_id.clone(), ctx);
             }
-            AddSshHost => {
-                // Spine "＋ Add host": create a blank registered host (same path as
-                // the SSH-manager's "New server"), open its editor, and broadcast
-                // the registry change so the SSH-manager panel + spine refresh.
-                match crate::ssh_manager::panel::create_blank_host() {
-                    Ok(node_id) => {
-                        self.open_ssh_server(node_id, ctx);
-                        crate::ssh_manager::SshTreeChangedNotifier::handle(ctx).update(
-                            ctx,
-                            |_, ctx| {
-                                ctx.emit(
-                                    crate::ssh_manager::notifier::SshTreeChangedEvent::TreeChanged,
-                                );
-                            },
-                        );
-                    }
-                    Err(err) => {
-                        self.toast_stack.update(ctx, |view, ctx| {
-                            view.add_ephemeral_toast(
-                                DismissibleToast::error(format!("Couldn't add host: {err}")),
-                                ctx,
-                            );
-                        });
-                    }
-                }
+            OpenSshManager => {
+                // The spine's „VERBINDUNGEN" zone gear: always SHOW the SSH-manager,
+                // never toggle it shut. Passing `is_showing = false` makes the
+                // toggle take its show branch unconditionally — a gear that closed
+                // the panel on a second click would read as a switch, not as
+                // "take me to the SSH configuration" (spec v3 §1.3/S1).
+                self.toggle_left_panel_view(&LeftPanelAction::SshManager, false, ctx);
             }
             RemoteSpawnDirPicked { path } => {
                 // The SFTP picker returned a directory: fill the card's remote-dir
@@ -21626,51 +23360,105 @@ impl TypedActionView for Workspace {
                 // Owned handle (not the `&ViewHandle` borrow of `self`) so it can be
                 // moved into the deferred 'static closure below.
                 let active_pg = self.active_tab_pane_group().clone();
-                // Resolve the FM host context from the INVOKING (focused) pane's own
-                // session — NOT the tab (Codex #1). A local split inside an SSH tab
-                // must open the LOCAL file manager, and a remote pane must open its
-                // host's FM. Only when the pane's own session can't be resolved to a
-                // host do we fall back to the tab's recorded node (`ssh_tab_nodes`),
-                // then to Local as the safe default.
-                let active_view = active_pg.as_ref(ctx).active_session_view(ctx);
-                let pane_is_local = active_view
-                    .as_ref()
-                    .and_then(|v| v.as_ref(ctx).active_session_is_local(ctx));
-                let target = if pane_is_local == Some(true) {
-                    crate::pane_group::FileManagerTarget::Local {
-                        start_path: start_path.clone(),
-                    }
-                } else {
-                    let node_id = active_view
-                        .as_ref()
-                        .and_then(|v| v.as_ref(ctx).active_block_session_id())
-                        .and_then(|sid| self.node_for_session(sid))
-                        .or_else(|| self.ssh_tab_nodes.get(&active_pg.id()).cloned());
-                    match node_id {
-                        Some(node_id) => crate::pane_group::FileManagerTarget::Remote {
-                            node_id,
-                            start_path: Some(start_path.clone()),
-                        },
-                        None => crate::pane_group::FileManagerTarget::Local {
-                            start_path: start_path.clone(),
-                        },
-                    }
-                };
                 // Capture the targeted pane NOW (at dispatch time) — the pane focused
                 // when the action fired. Re-reading `focused_pane_id` inside the
                 // deferred closure would toggle whatever happens to be focused at the
-                // later tick, which can differ if focus moved in between.
+                // later tick, which can differ if focus moved in between. (This reads
+                // the pane-group's focus state, not the invoking view, so it's safe to
+                // call synchronously.)
                 let target_pane_id = active_pg.as_ref(ctx).focused_pane_id(ctx);
-                // Defer the in-place swap to the next foreground tick. This action is
-                // dispatched synchronously from *inside* the invoking pane's own view
-                // update — the header FM-toggle button (PaneView<TerminalView> update)
-                // and the cmd-shift-E binding routed through the focused TerminalView.
-                // Replacing + refocusing that pane while it is still borrowed panics
-                // with "circular view reference" (replace_pane -> focus_pane_by_id ->
-                // update_session_visibility re-borrows the same view). Running it after
-                // the current update returns removes the re-entrancy; harmless for the
-                // overflow-menu path (already dispatched outside any update).
-                ctx.spawn(async move {}, move |_workspace, _, ctx| {
+                let start_path = start_path.clone();
+                // Defer EVERYTHING that touches the invoking pane's view — BOTH the
+                // host-context resolution AND the in-place swap. This action fires
+                // synchronously from *inside* the invoking pane's own view update (the
+                // header FM-toggle button — a `PaneView<TerminalView>` update — and the
+                // cmd-shift-E binding routed through the focused `TerminalView`). The
+                // context resolution borrows that same `PaneView<TerminalView>`
+                // (`active_session_view(...).as_ref()`), and the swap re-borrows it
+                // (`replace_pane` → `focus_pane_by_id` → `update_session_visibility`) —
+                // both panic with "circular view reference" while it is still checked
+                // out. Running it all after the current update returns removes the
+                // re-entrancy. (An earlier version deferred only the swap but resolved
+                // the context synchronously, and still crashed on the FM-on-SSH-pane
+                // click — that's this fix.)
+                ctx.spawn(async move {}, move |workspace, _, ctx| {
+                    // Resolve the FM host context from the INVOKING (focused) pane's own
+                    // session — NOT the tab (Codex #1). A local split inside an SSH tab
+                    // opens the LOCAL file manager; a remote pane opens its host's FM.
+                    // Fall back to the tab's recorded node. For a pane known to be
+                    // remote with no node either, the file manager does not open:
+                    // "Local" is not a safe default there, it is the wrong host's
+                    // files. Safe to borrow the view here: the invoking update has
+                    // returned, so the pane view is no longer checked out.
+                    //
+                    // Resolve from the CAPTURED `target_pane_id`, not the *current*
+                    // active session — focus may have moved to another terminal
+                    // before this deferred tick, and the swap targets that captured
+                    // pane, so the host context must come from the same pane (review).
+                    let active_view = active_pg
+                        .as_ref(ctx)
+                        .downcast_pane_by_id::<crate::pane_group::TerminalPane>(target_pane_id)
+                        .map(|tp| tp.terminal_view(ctx));
+                    let pane_is_local = active_view
+                        .as_ref()
+                        .and_then(|v| v.as_ref(ctx).active_session_is_local(ctx));
+                    // `active_session_is_local` is a THREE-valued answer:
+                    // Some(true) local, Some(false) remote, None = no active
+                    // session at all — a fresh local pane, which falls back to
+                    // $HOME. Only a *known* remote may be refused below; reading
+                    // None as "remote" would turn a local split with no session
+                    // into an error, and inside an SSH tab it would even scope it
+                    // to that tab's host.
+                    let target = if pane_is_local != Some(false) {
+                        crate::pane_group::FileManagerTarget::Local {
+                            start_path: start_path.clone(),
+                        }
+                    } else {
+                        let node_id = active_view
+                            .as_ref()
+                            .and_then(|v| v.as_ref(ctx).active_block_session_id())
+                            .and_then(|sid| workspace.node_for_session(sid))
+                            .or_else(|| workspace.ssh_tab_nodes.get(&active_pg.id()).cloned());
+                        match node_id {
+                            Some(node_id) => crate::pane_group::FileManagerTarget::Remote {
+                                node_id,
+                                start_path: Some(start_path.clone()),
+                            },
+                            // This pane is NOT local, and we could not work out
+                            // which host it is. Falling back to `Local` used to
+                            // be the answer here, and it is the worst one
+                            // available: the file manager would open on THIS
+                            // machine, rooted at the remote shell's path — a
+                            // path that either doesn't exist here (confusing) or
+                            // does and holds something else entirely (dangerous,
+                            // because copy and delete would land on it).
+                            //
+                            // `node_for_session` only resolves daemon-backed
+                            // sessions ("Returns None for classic SSH hosts"),
+                            // and `ssh_tab_nodes` only knows tabs opened through
+                            // the SSH path — so this gap is reachable, not
+                            // theoretical.
+                            //
+                            // Refuse and say so. No file manager is a small loss;
+                            // the wrong filesystem, silently, is not.
+                            None => {
+                                log::warn!(
+                                    "file manager: pane is remote but its host could not be \
+                                     resolved (no daemon session, no ssh tab node) — refusing \
+                                     rather than browsing this machine"
+                                );
+                                workspace.toast_stack.update(ctx, |toast_stack, ctx| {
+                                    toast_stack.add_ephemeral_toast(
+                                        DismissibleToast::error(
+                                            crate::t!("file-manager-unknown-host").to_string(),
+                                        ),
+                                        ctx,
+                                    );
+                                });
+                                return;
+                            }
+                        }
+                    };
                     active_pg.update(ctx, |pane_group, ctx| {
                         pane_group.open_file_manager_in_place(target_pane_id, target, ctx);
                     });
@@ -21688,17 +23476,22 @@ impl TypedActionView for Workspace {
                 // all dispatch this action, routing it here covers every entrypoint
                 // uniformly. Cockpit off → the legacy in-app agent tab (fallback).
                 if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
-                    self.open_spawn_card(None, None, None, None, None, ctx);
+                    self.open_spawn_card(None, None, None, None, None, None, ctx);
                 } else {
                     self.add_terminal_tab_with_new_agent_view(ctx);
                 }
             }
             AddSpecificAgentTab(agent) => {
+                // Persisted Gemini panes remain detectable, but stale actions
+                // must not create a new standalone Gemini CLI session.
+                if !agent.is_available_for_new_launch() {
+                    return;
+                }
                 // Route through the spawn card (agent preselected) under the cockpit
                 // vision, like every other agent entrypoint — no blind local launch
                 // at the action boundary (a legacy/stale caller can't bypass it).
                 if *crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
-                    self.open_spawn_card(None, None, None, None, Some(*agent), ctx);
+                    self.open_spawn_card(None, None, None, None, None, Some(*agent), ctx);
                 } else {
                     self.add_tab_with_specific_agent(*agent, ctx);
                 }
@@ -21784,9 +23577,11 @@ impl TypedActionView for Workspace {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.default_session_mode_internal.set_value(*mode, ctx));
                     if let Some(path) = tab_config_path {
-                        report_if_error!(settings
-                            .default_tab_config_path
-                            .set_value(path.to_string_lossy().into_owned(), ctx));
+                        report_if_error!(
+                            settings
+                                .default_tab_config_path
+                                .set_value(path.to_string_lossy().into_owned(), ctx)
+                        );
                     }
                 });
                 #[cfg(feature = "local_tty")]
@@ -21853,14 +23648,22 @@ impl TypedActionView for Workspace {
                 session_id,
                 cwd,
                 config_dir,
+                account_email,
                 into_worktree,
+                host,
+                host_id,
+                is_local,
             } => {
                 self.fork_agent_session(
                     *agent,
                     session_id,
                     cwd,
                     config_dir.as_deref(),
+                    account_email.as_deref(),
                     *into_worktree,
+                    host,
+                    host_id.as_deref(),
+                    *is_local,
                     ctx,
                 );
             }
@@ -21869,25 +23672,41 @@ impl TypedActionView for Workspace {
                 session_id,
                 cwd,
                 config_dir,
+                account_email,
             } => {
                 // Jumping to an agent clears it from the "Offene Punkte" inbox
                 // surface (harmless no-op when the inbox wasn't open).
                 self.current_workspace_state.is_attention_inbox_open = false;
-                self.adopt_agent_session(*agent, session_id, cwd, config_dir.as_deref(), ctx);
-            }
-            SlashCommandSession {
-                agent,
-                session_id,
-                cwd,
-                config_dir,
-                command,
-            } => {
-                self.slash_command_session(
+                self.adopt_agent_session(
                     *agent,
                     session_id,
                     cwd,
                     config_dir.as_deref(),
+                    account_email.as_deref(),
+                    ctx,
+                );
+            }
+            SlashCommandSession {
+                provider,
+                session_id,
+                cwd,
+                config_dir,
+                account_email,
+                command,
+                host,
+                host_id,
+                is_local,
+            } => {
+                self.slash_command_session(
+                    *provider,
+                    session_id,
+                    cwd,
+                    config_dir.as_deref(),
+                    account_email.as_deref(),
                     command,
+                    host,
+                    host_id.as_deref(),
+                    *is_local,
                     ctx,
                 );
             }
@@ -21895,9 +23714,24 @@ impl TypedActionView for Workspace {
                 host,
                 host_id,
                 session_id,
+                provider,
+                config_dir,
+                account_email,
                 is_local,
             } => {
-                self.attach_fleet_session(host, host_id.as_deref(), session_id, *is_local, ctx);
+                // Jumping to an agent clears the "Offene Punkte" inbox surface
+                // (harmless no-op when the inbox wasn't open).
+                self.current_workspace_state.is_attention_inbox_open = false;
+                self.attach_fleet_session(
+                    host,
+                    host_id.as_deref(),
+                    session_id,
+                    *provider,
+                    config_dir.as_deref(),
+                    account_email.as_deref(),
+                    *is_local,
+                    ctx,
+                );
             }
             JumpToNextWaiting => {
                 self.jump_to_next_waiting(ctx);
@@ -21925,17 +23759,20 @@ impl TypedActionView for Workspace {
             StopAgent {
                 host,
                 host_id,
-                session_id: _,
+                session_id,
                 pid,
+                process_fingerprint,
                 is_local,
                 agent_label,
             } => {
                 self.send_guardrail_signal(
                     host,
                     host_id.as_deref(),
+                    session_id,
                     *is_local,
                     agent_label.clone(),
                     *pid,
+                    process_fingerprint.as_deref(),
                     zaplex_cockpit::GuardrailSignal::Interrupt,
                     ctx,
                 );
@@ -21945,6 +23782,7 @@ impl TypedActionView for Workspace {
                 host_id,
                 session_id,
                 pid,
+                process_fingerprint,
                 is_local,
                 agent_label,
                 project_name,
@@ -21955,6 +23793,7 @@ impl TypedActionView for Workspace {
                         host_id: host_id.clone(),
                         session_id: session_id.clone(),
                         pid: *pid,
+                        process_fingerprint: process_fingerprint.clone(),
                         is_local: *is_local,
                         agent_label: agent_label.clone(),
                         project_name: project_name.clone(),
@@ -21967,9 +23806,12 @@ impl TypedActionView for Workspace {
                     .inventory()
                     .hosts
                     .iter()
+                    .filter(|h| h.is_available())
                     .flat_map(|h| h.projects.iter())
                     .flat_map(|p| p.sessions.iter())
-                    .filter(|s| zaplex_cockpit::pid_signalable(s.pid))
+                    .filter(|s| {
+                        zaplex_cockpit::pid_signalable(s.pid) && s.process_fingerprint.is_some()
+                    })
                     .count();
                 if count == 0 {
                     self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -21991,6 +23833,7 @@ impl TypedActionView for Workspace {
             LaunchAgent {
                 agent,
                 config_dir,
+                account_email,
                 cwd,
                 node_id,
                 model,
@@ -21999,6 +23842,7 @@ impl TypedActionView for Workspace {
                 self.launch_routed_agent(
                     *agent,
                     config_dir.as_deref(),
+                    account_email.as_deref(),
                     cwd.as_deref(),
                     node_id.as_deref(),
                     model.as_deref(),
@@ -22007,11 +23851,20 @@ impl TypedActionView for Workspace {
                 );
             }
             OpenSpawnCard {
+                registry_node_id,
                 host_id,
                 host,
                 project,
             } => {
-                self.open_spawn_card(host_id.clone(), host.clone(), project.clone(), None, None, ctx);
+                self.open_spawn_card(
+                    registry_node_id.clone(),
+                    host_id.clone(),
+                    host.clone(),
+                    project.clone(),
+                    None,
+                    None,
+                    ctx,
+                );
             }
             OpenFileInEditor { node_id, path } => {
                 if node_id.is_empty() {
@@ -23259,8 +25112,8 @@ impl TypedActionView for Workspace {
             }
             ToggleWarpDrive => {
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
-                    let is_showing =
-                        self.left_panel_view.as_ref(ctx).active_view() == ToolPanelView::ZaplexDrive;
+                    let is_showing = self.left_panel_view.as_ref(ctx).active_view()
+                        == ToolPanelView::ZaplexDrive;
                     self.toggle_left_panel_view(&LeftPanelAction::ZaplexDrive, is_showing, ctx);
                 }
             }
@@ -23451,6 +25304,63 @@ impl TypedActionView for Workspace {
                     });
                     ctx.notify();
                 }
+            }
+            CancelTransfer(target) => {
+                crate::sftp_manager::transfer_queue::TransferQueue::handle(ctx).update(
+                    ctx,
+                    |queue, ctx| {
+                        queue.cancel(*target);
+                        ctx.notify();
+                    },
+                );
+            }
+            PauseTransfer(target) => {
+                crate::sftp_manager::transfer_queue::TransferQueue::handle(ctx).update(
+                    ctx,
+                    |queue, ctx| {
+                        queue.pause(*target);
+                        ctx.notify();
+                    },
+                );
+            }
+            ResumeTransfer(target) => {
+                crate::sftp_manager::transfer_queue::TransferQueue::handle(ctx).update(
+                    ctx,
+                    |queue, ctx| {
+                        queue.resume(*target);
+                        ctx.notify();
+                    },
+                );
+            }
+            RetryTransferRecovery(id) => {
+                let retry = crate::sftp_manager::transfer_queue::TransferQueue::handle(ctx).update(
+                    ctx,
+                    |queue, ctx| {
+                        let retry = queue.retry_recovery_in_background(*id);
+                        ctx.notify();
+                        retry
+                    },
+                );
+                if let Err(error) = retry {
+                    self.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(
+                                crate::t!("fm-transfer-recovery-failed", err = error.to_string())
+                                    .to_string(),
+                            ),
+                            ctx,
+                        );
+                    });
+                }
+            }
+            ClearTransferHistory => {
+                crate::sftp_manager::transfer_queue::TransferQueue::handle(ctx).update(
+                    ctx,
+                    |queue, ctx| {
+                        queue.clear_terminal();
+                        ctx.notify();
+                    },
+                );
             }
             SyncTrafficLights => {
                 self.sync_window_button_visibility(ctx);
@@ -24679,6 +26589,22 @@ impl View for Workspace {
             );
         }
 
+        if let Some(transfer_panel) =
+            crate::sftp_manager::transfer_panel::render_workspace_transfer_panel(app)
+        {
+            stack.add_positioned_overlay_child(
+                ConstrainedBox::new(transfer_panel)
+                    .with_width(420.0)
+                    .finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(-8.0, -8.0),
+                    ParentOffsetBounds::ParentBySize,
+                    ParentAnchor::BottomRight,
+                    ChildAnchor::BottomRight,
+                ),
+            );
+        }
+
         // Add workspace-wide UI event handling.
         let stack = if FeatureFlag::VerticalTabs.is_enabled()
             && *TabSettings::as_ref(app).use_vertical_tabs
@@ -24789,6 +26715,7 @@ impl Workspace {
         let tab = self.tabs.get(index)?;
         let pane_group = tab.pane_group.clone();
         let color = tab.color();
+        let is_pinned = tab.is_pinned;
         let draggable_state = tab.draggable_state.clone();
         let custom_title = pane_group.read(ctx, |pg, ctx| pg.custom_title(ctx));
         let left_panel_open = pane_group.read(ctx, |pg, _| pg.left_panel_open);
@@ -24799,6 +26726,7 @@ impl Workspace {
         Some(TransferredTab {
             pane_group,
             color,
+            is_pinned,
             custom_title,
             left_panel_open,
             right_panel_open,
@@ -24855,6 +26783,7 @@ impl Workspace {
         let TransferredTab {
             pane_group,
             color,
+            is_pinned,
             draggable_state,
             ..
         } = transferred_tab;
@@ -24862,9 +26791,10 @@ impl Workspace {
             me.handle_file_tree_event(pane_group, event, ctx)
         });
 
-        let index = insertion_index.min(self.tabs.len());
+        let index = self.tab_insertion_index(insertion_index, is_pinned);
         let mut tab_data = TabData::new(pane_group);
         tab_data.selected_color = color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+        tab_data.is_pinned = is_pinned;
         tab_data.draggable_state = draggable_state;
         self.tabs.insert(index, tab_data);
         self.activate_tab_internal(index, ctx);
@@ -25335,6 +27265,9 @@ impl Workspace {
         };
 
         if new_index != current_index {
+            if self.tabs[new_index].is_pinned != self.tabs[current_index].is_pinned {
+                return;
+            }
             self.tabs.swap(new_index, current_index);
 
             if current_index == self.active_tab_index {

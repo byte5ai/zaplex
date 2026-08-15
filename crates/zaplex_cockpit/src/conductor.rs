@@ -17,21 +17,26 @@
 
 use crate::fleet::{FleetTree, HostNode};
 use crate::format::{context_fill, model_family};
-use crate::types::{SessionSnapshot, SessionState};
+use crate::types::{Provider, SessionSnapshot, SessionState};
 
 // Premium status dots: one uniform shape, meaning is carried by COLOR (the
 // renderers color each glyph by state — green working · amber waiting · faint
 // idle), not by an emoji. This keeps the Conductor calm and consistent instead
 // of dropping a coloured emoji hand into an otherwise monochrome premium UI.
+// Each state is distinguished by the dot's **shape**, not by colour alone, so
+// the vocabulary survives red-green colour-blindness (a filled green dot and an
+// amber one are otherwise indistinguishable). Colour reinforces the shape; in
+// tables the state word is shown alongside.
 /// Working: the agent is busy (Active) or mid tool-run / live job (Monitor) —
-/// hands off. A filled dot (rendered green).
+/// hands off. A **filled** dot (rendered green).
 pub const GLYPH_WORKING: &str = "●";
 /// Waiting: the agent handed control back — **this** is the attention state.
-/// A filled dot rendered in the amber attention colour (the colour is what makes
-/// it read as "needs you", so it stands out without an emoji).
-pub const GLYPH_WAITING: &str = "●";
-/// Idle: a resumable session with no live turn in flight. A hollow ring (reads as
-/// "not active") in the faint colour.
+/// A **fisheye** dot (a filled centre inside a ring — a halo) rendered in the
+/// amber attention colour: it stands out by shape *and* colour, so it reads as
+/// "needs you" even without colour and without an emoji.
+pub const GLYPH_WAITING: &str = "◉";
+/// Idle: a resumable session with no live turn in flight. A **hollow** ring
+/// (reads as "not active") in the faint colour.
 pub const GLYPH_IDLE: &str = "○";
 
 /// The one consistent status glyph for a session, used identically on every
@@ -58,7 +63,11 @@ fn title_case(s: &str) -> String {
 }
 
 /// Human word for a session state, used in the one-line attribute summary.
-fn state_word(state: SessionState) -> &'static str {
+/// The state's word, for surfaces that spell it out beside the glyph (the
+/// session table's Status column). One source, like [`session_glyph`] is for the
+/// shape — a second `match` elsewhere is how a row ends up saying "working" next
+/// to a waiting mark.
+pub fn state_word(state: SessionState) -> &'static str {
     match state {
         SessionState::Waiting => "waiting",
         SessionState::Active | SessionState::Monitor => "working",
@@ -229,13 +238,55 @@ pub fn host_ident(is_local: bool, host_id: Option<&str>) -> String {
     }
 }
 
-/// Composite `(host-identity, id)` key for per-`(host, session)` or
-/// `(host, project)` UI state. Session and project ids are unique only within a
-/// host, so they are scoped by the **stable** host identity — never the display
-/// label. Use for every seed / lookup / retain of such maps so labels can never
-/// key UI state again.
+/// Composite `(host-identity, id)` key for project UI state and legacy favorite
+/// compatibility. The id is scoped by the **stable** host identity — never the
+/// display label. Session rows must use [`session_key`] instead because a
+/// conversation id can also collide between provider accounts on one host.
 pub fn host_key(is_local: bool, host_id: Option<&str>, id: &str) -> String {
     format!("{}\u{0}{id}", host_ident(is_local, host_id))
+}
+
+/// Complete identity of one agent session for UI state and action routing.
+///
+/// A session id is not globally unique: a transcript can be copied to another
+/// provider account, and the same id can exist on several hosts. The account
+/// email is the durable account coordinate; `config_dir` is the exact host-local
+/// route. Keeping both makes the key fail closed for stale or copied account
+/// configurations instead of letting either coordinate silently override the
+/// other.
+pub fn session_identity_key(
+    is_local: bool,
+    host_id: Option<&str>,
+    provider: Provider,
+    config_dir: Option<&str>,
+    account_email: Option<&str>,
+    session_id: &str,
+) -> String {
+    let account = match account_email {
+        Some(email) => format!("email:{email}"),
+        None => "unknown".to_string(),
+    };
+    let config = match config_dir {
+        Some(config_dir) => format!("config:{config_dir}"),
+        None => "default".to_string(),
+    };
+    format!(
+        "{}\u{0}{}\u{0}{account}\u{0}{config}\u{0}{session_id}",
+        host_ident(is_local, host_id),
+        provider.as_str(),
+    )
+}
+
+/// Complete identity key for an observed session snapshot.
+pub fn session_key(is_local: bool, host_id: Option<&str>, session: &SessionSnapshot) -> String {
+    session_identity_key(
+        is_local,
+        host_id,
+        session.provider,
+        session.config_dir.as_deref(),
+        session.account_email.as_deref(),
+        &session.session_id,
+    )
 }
 
 /// Inverse of [`host_key`]: split a key back into `(host_ident, id)`. The
@@ -254,11 +305,9 @@ pub fn host_key_is_local(key: &str) -> bool {
 
 /// A stable, host-identity-carrying pointer to one Waiting agent — the `w`-jump
 /// target and cursor. It keeps the display `host_label` for the attach dispatch,
-/// but **identity** is the stable `(is_local, host_id)` pair plus the
-/// host-scoped `session_id`, never the label. Two remote daemons can advertise
-/// the same label (SSH alias / matching `gethostname()`) and even share a
-/// host-scoped `session_id`, yet stay distinct here because their `host_id`
-/// differs — so the jump cycle visits both and never collapses them.
+/// but **identity** is the stable `(is_local, host_id)` pair plus provider,
+/// account email, config route, and `session_id`, never the label. This also
+/// keeps two local accounts carrying a copied conversation id distinct.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WaitingTarget {
     /// Human host label (for display + the attach dispatch), not for identity.
@@ -271,16 +320,29 @@ pub struct WaitingTarget {
     pub is_local: bool,
     /// The host-scoped session id (unique only within one host).
     pub session_id: String,
+    /// Provider, account email, and config route complete the identity within a
+    /// host: session ids can survive a copy between accounts.
+    pub provider: Provider,
+    pub account_email: Option<String>,
+    /// Host-local launch route carried for the eventual attach dispatch and
+    /// included in the exact routing identity.
+    pub config_dir: Option<String>,
 }
 
 impl WaitingTarget {
     /// Same waiting agent? Compared by **stable** host identity `(is_local,
-    /// host_id)` + `session_id` — never the display label, so a label collision
-    /// between two remote daemons can't alias two distinct agents into one.
+    /// host_id)` plus provider, account email, config route, and `session_id` —
+    /// never the display label.
     fn same_agent(&self, host: &HostNode, session: &SessionSnapshot) -> bool {
-        host.is_local == self.is_local
-            && host.host_id == self.host_id
-            && session.session_id == self.session_id
+        session_key(host.is_local, host.host_id.as_deref(), session)
+            == session_identity_key(
+                self.is_local,
+                self.host_id.as_deref(),
+                self.provider,
+                self.config_dir.as_deref(),
+                self.account_email.as_deref(),
+                &self.session_id,
+            )
     }
 }
 
@@ -292,6 +354,7 @@ impl WaitingTarget {
 pub fn waiting_sessions(tree: &FleetTree) -> Vec<(&HostNode, &SessionSnapshot)> {
     tree.hosts
         .iter()
+        .filter(|h| h.is_available())
         .flat_map(|h| {
             h.projects
                 .iter()
@@ -306,9 +369,9 @@ pub fn waiting_sessions(tree: &FleetTree) -> Vec<(&HostNode, &SessionSnapshot)> 
 /// no longer waiting / no longer present, starts at the first waiting agent.
 ///
 /// `current` and the returned [`WaitingTarget`] key on the **stable** host
-/// identity `(is_local, host_id)` + `session_id`, never the display label: two
-/// hosts sharing a label (and even a host-scoped `session_id`) stay distinct, so
-/// the cycle visits both. `None` when nothing is waiting.
+/// identity `(is_local, host_id)` plus provider, account email, config route,
+/// and session id, never the display label. Host-label and account collisions
+/// therefore stay distinct. `None` when nothing is waiting.
 pub fn next_waiting(tree: &FleetTree, current: Option<&WaitingTarget>) -> Option<WaitingTarget> {
     let waiting = waiting_sessions(tree);
     if waiting.is_empty() {
@@ -325,6 +388,9 @@ pub fn next_waiting(tree: &FleetTree, current: Option<&WaitingTarget>) -> Option
         host_id: h.host_id.clone(),
         is_local: h.is_local,
         session_id: s.session_id.clone(),
+        provider: s.provider,
+        account_email: s.account_email.clone(),
+        config_dir: s.config_dir.clone(),
     })
 }
 

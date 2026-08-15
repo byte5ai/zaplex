@@ -66,8 +66,7 @@ impl OnboardingPromptBlock {
         const LINE_ONE: &str = "Next, let’s set up your prompt. Zaplex has a custom prompt builder or you can select PS1 to honor your pre-existing prompt configuration.";
         const LINE_TWO: &str =
             "Zaplex works with many custom prompts like oh-my-zsh, Starship, Powerlevel10K. ";
-        const LINK_DESTINATION: &str =
-            "";
+        const LINK_DESTINATION: &str = "";
 
         Flex::column()
             .with_children([
@@ -80,12 +79,9 @@ impl OnboardingPromptBlock {
                 .finish(),
                 Container::new(
                     FormattedTextElement::new(
+                        // Dropped the "learn more" link: no Zaplex custom-prompt docs yet.
                         FormattedText::new([FormattedTextLine::Line(vec![
                             FormattedTextFragment::plain_text(LINE_TWO),
-                            FormattedTextFragment::hyperlink(
-                                crate::t!("common-learn-more"),
-                                LINK_DESTINATION,
-                            ),
                         ])]),
                         font_size,
                         font_family,
@@ -93,7 +89,9 @@ impl OnboardingPromptBlock {
                         font_color.into_solid(),
                         self.learn_more_highlight_index.clone(),
                     )
-                    .with_heading_to_font_size_multipliers(appearance.heading_font_size_multipliers().clone())
+                    .with_heading_to_font_size_multipliers(
+                        appearance.heading_font_size_multipliers().clone(),
+                    )
                     .with_hyperlink_font_color(current_theme.accent().into_solid())
                     .register_default_click_handlers(|url, ctx, _| {
                         ctx.dispatch_typed_action(OnboardingPromptBlockAction::HyperlinkClick(url));
@@ -244,7 +242,8 @@ impl OnboardingPromptBlock {
         const NO_PS1_TEXT: &str = "No existing prompt.";
         const CORRECTION_TEXT: &str = "Look incorrect? ";
         const LINK_TEXT: &str = "Let us know.";
-        const LINK_DESTINATION: &str = "https://github.com/zerx-lab/warp/issues/new?assignees=&labels=Bug&projects=&template=01_bug_report.yml";
+        // zaplex's own tracker; the upstream Bug template doesn't exist in this repo.
+        const LINK_DESTINATION: &str = "https://github.com/byte5ai/zaplex/issues/new";
 
         const HEADER_MARGIN_LEFT: f32 = 4.;
         const PS1_PADDING_VERTICAL: f32 = 12.;

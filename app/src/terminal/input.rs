@@ -26,7 +26,7 @@ pub mod user_query;
 
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::{AIAgentAttachment, AIAgentExchangeId, CancellationReason};
+use crate::ai::agent::{AIAgentAttachment, AIAgentExchangeId, CancellationReason, ImageContext};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
 use crate::ai::blocklist::agent_view::{AgentViewEntryOrigin, EphemeralMessageModel};
@@ -99,7 +99,7 @@ use crate::code::editor_management::CodeSource;
 use crate::ai::ambient_agents::AttachmentInput;
 use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
 use crate::ai::block_context::BlockContext;
-use crate::ai::blocklist::AttachmentType;
+use crate::ai::blocklist::{AttachmentType, PendingAttachment};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::{
     ai::{
@@ -230,6 +230,7 @@ use lazy_static::lazy_static;
 use ordered_float::Float;
 use regex::Regex;
 use settings::{Setting as _, ToggleableSetting};
+use sha2::{Digest as _, Sha256};
 use std::{
     any::Any,
     borrow::Cow,
@@ -260,18 +261,20 @@ use warp_editor::editor::NavigationKey;
 use warp_util::path::ShellFamily;
 use warpui::{
     accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole},
+    assets::asset_cache::{AssetCache, AssetSource},
     clipboard::{ClipboardContent, ImageData},
     clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES,
     color::ColorU,
     elements::{
-        resizable_state_handle, Align, AnchorPair, ChildAnchor, Clipped, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, DispatchEventResult, DropTargetData, Element,
-        EventHandler, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
-        OffsetType, ParentAnchor, ParentElement, PositionedElementOffsetBounds, PositioningAxis,
-        Radius, ResizableStateHandle, SavePosition, SelectionHandle, Text, Wrap, XAxisAnchor,
-        YAxisAnchor,
+        resizable_state_handle, Align, AnchorPair, Border, CacheOption, ChildAnchor, Clipped,
+        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
+        DropTargetData, Element, EventHandler, Flex, Image, MainAxisAlignment, MainAxisSize,
+        MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor, ParentElement,
+        PositionedElementOffsetBounds, PositioningAxis, Radius, ResizableStateHandle, SavePosition,
+        SelectionHandle, Text, Wrap, XAxisAnchor, YAxisAnchor,
     },
     end_trace,
+    image_cache::ImageType,
     keymap::{BindingDescription, EditableBinding, FixedBinding, Keystroke},
     platform::OperatingSystem,
     presenter::ChildView,
@@ -1655,6 +1658,7 @@ struct AttachmentChip {
     file_name: String,
     mouse_state_handle: MouseStateHandle,
     attachment_type: AttachmentType,
+    preview_source: Option<AssetSource>,
     /// Index into the unified pending_attachments list for deletion.
     index: usize,
 }
@@ -2830,16 +2834,24 @@ impl Input {
                 }
                 BlocklistAIContextEvent::UpdatedPendingContext { .. } => {
                     me.update_image_context_options(ctx);
-                    me.attachment_chips = context_model
-                        .as_ref(ctx)
-                        .pending_attachments()
-                        .iter()
+                    let attachments = context_model.as_ref(ctx).pending_attachments().to_vec();
+                    me.attachment_chips = attachments
+                        .into_iter()
                         .enumerate()
-                        .map(|(i, attachment)| AttachmentChip {
-                            file_name: attachment.file_name().to_string(),
-                            mouse_state_handle: Default::default(),
-                            attachment_type: attachment.attachment_type(),
-                            index: i,
+                        .map(|(i, attachment)| {
+                            let preview_source = match &attachment {
+                                PendingAttachment::Image(image) => {
+                                    Self::cache_attachment_preview(image, ctx)
+                                }
+                                PendingAttachment::File(_) => None,
+                            };
+                            AttachmentChip {
+                                file_name: attachment.file_name().to_string(),
+                                mouse_state_handle: Default::default(),
+                                attachment_type: attachment.attachment_type(),
+                                preview_source,
+                                index: i,
+                            }
                         })
                         .collect_vec();
                 }
@@ -4659,6 +4671,8 @@ impl Input {
 
     pub fn update_image_context_options(&mut self, ctx: &mut ViewContext<Self>) {
         let ai_input_model = self.ai_input_model.as_ref(ctx);
+        let is_cli_agent_input_open =
+            CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id);
 
         let llm_prefs = LLMPreferences::as_ref(ctx);
 
@@ -4680,10 +4694,12 @@ impl Input {
         // Image context is available whenever the feature flag is enabled and we're in AI input
         // mode, including ambient-agent mode
         let image_context_options = if FeatureFlag::ImageAsContext.is_enabled()
-            && matches!(ai_input_model.input_type(), InputType::AI)
+            && (matches!(ai_input_model.input_type(), InputType::AI) || is_cli_agent_input_open)
         {
             ImageContextOptions::Enabled {
-                unsupported_model: !vision_supported,
+                // Native CLI agents own their model capability checks; Warp's selected
+                // LLM must not disable screenshots in the CLI composer.
+                unsupported_model: !is_cli_agent_input_open && !vision_supported,
                 is_processing_attached_images: self.is_processing_attached_images,
                 num_images_attached,
                 num_images_in_conversation,
@@ -9784,22 +9800,25 @@ impl Input {
         clipboard_content: ClipboardContent,
         ctx: &mut ViewContext<Self>,
     ) -> usize {
+        if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id) {
+            self.update_image_context_options(ctx);
+        }
         if self.check_image_limits_for_paste(1, ctx) == 0 {
             return 0;
         }
 
-        if let Some(images) = clipboard_content.images {
-            let best_image = CLIPBOARD_IMAGE_MIME_TYPES
-                .iter()
-                .find_map(|format| images.iter().find(|img| img.mime_type == *format));
+        let Some(images) = clipboard_content.images else {
+            return 0;
+        };
+        let Some(image) = CLIPBOARD_IMAGE_MIME_TYPES
+            .iter()
+            .find_map(|format| images.iter().find(|image| image.mime_type == *format))
+        else {
+            return 0;
+        };
 
-            if let Some(image) = best_image {
-                self.process_and_attach_clipboard_image(image.clone(), ctx);
-                return 1;
-            }
-        }
-
-        0
+        self.process_and_attach_clipboard_image(image.clone(), ctx);
+        1
     }
 
     /// Handle pasted file paths that point to images for auto-attachment. Returns number of images attached.
@@ -9817,7 +9836,12 @@ impl Input {
             return 0;
         }
 
+        let is_cli_agent_input_open =
+            CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id);
         self.maybe_enter_agent_view_for_image_add(ctx);
+        if is_cli_agent_input_open {
+            self.update_image_context_options(ctx);
+        }
 
         let num_images_to_attach = self.check_image_limits_for_paste(image_filepaths.len(), ctx);
         if num_images_to_attach == 0 {
@@ -9826,7 +9850,7 @@ impl Input {
 
         let is_buffer_empty = self.buffer_text(ctx).is_empty();
         let in_active_agent_view = self.agent_view_controller.as_ref(ctx).is_active();
-        if is_buffer_empty || in_active_agent_view {
+        if !is_cli_agent_input_open && (is_buffer_empty || in_active_agent_view) {
             self.set_input_mode_agent(true, ctx);
             self.update_image_context_options(ctx);
         }
@@ -9849,20 +9873,12 @@ impl Input {
         image: ImageData,
         ctx: &mut ViewContext<Self>,
     ) {
-        // CLI agents (Claude Code / Codex) read images from disk, not as base64
-        // AI-context: when their rich input is open, write the pasted image to a
-        // temp file and insert its path so the agent can pick it up (#50). Falls
-        // through to AI-context attachment if the write fails.
-        if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
-            && self.insert_clipboard_image_as_file(&image, ctx)
-        {
-            return;
-        }
-
+        let is_cli_agent_input_open =
+            CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id);
         self.maybe_enter_agent_view_for_image_add(ctx);
 
         // Switch to AI mode with block-level lock, unless already AI-mode-locked
-        if !self.is_locked_in_ai_mode(ctx) {
+        if !is_cli_agent_input_open && !self.is_locked_in_ai_mode(ctx) {
             self.set_input_mode_agent(true, ctx);
             self.update_image_context_options(ctx);
         }
@@ -9896,47 +9912,6 @@ impl Input {
         self.editor.update(ctx, |editor, ctx| {
             editor.process_and_attach_images_as_ai_context(1, vec![attached_image], ctx);
         });
-    }
-
-    /// Write a pasted clipboard image to a temp file and insert its (shell-quoted)
-    /// path into the input — the CLI-agent paste path (#50). Returns `false` on a
-    /// write failure so the caller can fall back to AI-context attachment.
-    fn insert_clipboard_image_as_file(
-        &mut self,
-        image: &ImageData,
-        ctx: &mut ViewContext<Self>,
-    ) -> bool {
-        let ext = match image.mime_type.as_str() {
-            "image/png" => "png",
-            "image/jpeg" | "image/jpg" => "jpg",
-            "image/gif" => "gif",
-            "image/webp" => "webp",
-            _ => "img",
-        };
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let file_name = image
-            .filename
-            .clone()
-            .unwrap_or_else(|| format!("pasted-image-{ts}.{ext}"));
-        // Namespaced + timestamped so concurrent pastes don't collide.
-        let path = std::env::temp_dir().join(format!("zaplex-paste-{ts}-{file_name}"));
-        if std::fs::write(&path, &image.data).is_err() {
-            return false;
-        }
-        // Quote so paths with spaces survive in the agent's shell-like composer;
-        // trailing space lets the user keep typing after the path.
-        let quoted = shell_words::quote(&path.to_string_lossy()).into_owned();
-        self.editor.update(ctx, |editor, ctx| {
-            editor.user_initiated_insert(
-                &format!("{quoted} "),
-                PlainTextEditorViewAction::Paste,
-                ctx,
-            );
-        });
-        true
     }
 
     /// Enters agent view when adding images, unless the CLI agent rich input is
@@ -13269,14 +13244,32 @@ impl Input {
         }
     }
 
-    fn render_attachment_chips(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+    fn cache_attachment_preview(
+        image: &ImageContext,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<AssetSource> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&image.data)
+            .ok()?;
+        let asset_id = format!("input-attachment-{:x}", Sha256::digest(&bytes));
+        AssetCache::handle(ctx).update(ctx, |cache, ctx| {
+            cache.insert_raw_asset_bytes::<ImageType>(asset_id.clone(), &bytes, ctx);
+        });
+        Some(AssetSource::Raw { id: asset_id })
+    }
+
+    fn render_attachment_chips(
+        &self,
+        appearance: &Appearance,
+        show_image_previews: bool,
+    ) -> Option<Box<dyn Element>> {
         if self.attachment_chips.is_empty() {
             None
         } else {
             let chips = self
                 .attachment_chips
                 .iter()
-                .map(|chip| self.render_attached_chip(chip, appearance));
+                .map(|chip| self.render_attached_chip(chip, appearance, show_image_previews));
 
             Some(
                 Wrap::row()
@@ -13293,6 +13286,7 @@ impl Input {
         &self,
         chip: &AttachmentChip,
         appearance: &Appearance,
+        show_image_preview: bool,
     ) -> Box<dyn Element> {
         let chip_index = chip.index;
         let close_button = appearance
@@ -13306,6 +13300,59 @@ impl Input {
                 ctx.dispatch_typed_action(TerminalAction::DeleteAttachment { index: chip_index });
             })
             .finish();
+
+        if show_image_preview {
+            if let Some(preview_source) = &chip.preview_source {
+                let thumbnail = ConstrainedBox::new(
+                    Clipped::new(
+                        Image::new(preview_source.clone(), CacheOption::BySize)
+                            .cover()
+                            .finish(),
+                    )
+                    .finish(),
+                )
+                .with_width(40.0)
+                .with_height(40.0)
+                .finish();
+
+                let label = ConstrainedBox::new(
+                    Text::new_inline(
+                        chip.file_name.clone(),
+                        appearance.ui_font_family(),
+                        appearance.monospace_font_size(),
+                    )
+                    .with_color(
+                        blended_colors::text_main(
+                            appearance.theme(),
+                            appearance.theme().background(),
+                        )
+                        .into(),
+                    )
+                    .finish(),
+                )
+                .with_max_width(180.0)
+                .finish();
+
+                let mut content = Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Min);
+                content.add_child(Container::new(thumbnail).with_margin_right(6.0).finish());
+                content.add_child(Container::new(label).with_margin_right(8.0).finish());
+                content.add_child(close_button);
+
+                return Container::new(content.finish())
+                    .with_horizontal_padding(4.0)
+                    .with_vertical_padding(4.0)
+                    .with_background(appearance.theme().surface_1())
+                    .with_border(
+                        Border::all(1.0)
+                            .with_border_fill(internal_colors::neutral_4(appearance.theme())),
+                    )
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.0)))
+                    .with_margin_right(6.0)
+                    .finish();
+            }
+        }
 
         let icon = match chip.attachment_type {
             AttachmentType::Image => Icon::Image,

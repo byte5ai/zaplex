@@ -9,12 +9,16 @@
 //! The `state`/`provider` enums travel as lowercase strings so the wire stays
 //! forward-compatible: an unknown future `state` folds to [`SessionState::Idle`]
 //! (never "needs me"), and an unknown `provider` folds to [`Provider::Claude`].
-//! An empty `effort` string round-trips to `None` (honestly unknown).
+//! An empty optional string field round-trips to `None` (honestly unknown), so
+//! an older daemon that omits newer identity fields still decodes cleanly and
+//! remains unsignalable without a process fingerprint.
 
 use chrono::{TimeZone, Utc};
-use zaplex_cockpit::types::{Provider, SessionSnapshot, SessionState};
+use zaplex_cockpit::types::{
+    Provider, SessionSnapshot, SessionState, TaskItem, TaskState, TaskStatus,
+};
 
-use super::proto::AgentSessionInfo;
+use super::proto::{AgentSessionIdentity, AgentSessionInfo, AgentTaskItem};
 
 /// Lowercase wire string for a session state.
 pub fn state_to_str(state: SessionState) -> &'static str {
@@ -43,7 +47,24 @@ pub fn state_from_str(s: &str) -> SessionState {
 pub fn provider_from_str(s: &str) -> Provider {
     match s {
         "codex" => Provider::Codex,
+        "antigravity" => Provider::Antigravity,
         _ => Provider::Claude,
+    }
+}
+
+fn task_status_to_str(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Pending => "pending",
+        TaskStatus::InProgress => "in_progress",
+        TaskStatus::Completed => "completed",
+    }
+}
+
+fn task_status_from_str(status: &str) -> TaskStatus {
+    match status {
+        "in_progress" => TaskStatus::InProgress,
+        "completed" => TaskStatus::Completed,
+        _ => TaskStatus::Pending,
     }
 }
 
@@ -60,9 +81,45 @@ pub fn snapshot_to_proto(s: &SessionSnapshot) -> AgentSessionInfo {
         effort: s.effort.clone().unwrap_or_default(),
         ctx_tokens: s.ctx_tokens,
         project_root: s.project_root.clone(),
+        repo_root: s.repo_root.clone(),
         project_name: s.project_name.clone(),
+        // Empty string encodes "honestly unknown" (None), like `effort`.
+        worktree: s.worktree.clone().unwrap_or_default(),
+        branch: s.branch.clone().unwrap_or_default(),
+        config_dir: s.config_dir.clone().unwrap_or_default(),
+        account_email: s.account_email.clone().unwrap_or_default(),
         last_activity_epoch_millis: s.last_activity.timestamp_millis() as u64,
         pid: s.pid,
+        process_fingerprint: s.process_fingerprint.clone().unwrap_or_default(),
+        pty_session_id: s.pty_session_id.clone().unwrap_or_default(),
+        pty_session_generation: s.pty_session_generation.unwrap_or_default(),
+        pty_foreground: s.pty_foreground,
+        has_task_state: s.task_state.is_some(),
+        task_items: s
+            .task_state
+            .as_ref()
+            .map(|state| {
+                state
+                    .tasks
+                    .iter()
+                    .map(|task| AgentTaskItem {
+                        id: task.id.clone(),
+                        title: task.title.clone(),
+                        status: task_status_to_str(task.status).to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// Exact foreground-agent identity carried by a capability-gated adopt.
+pub fn snapshot_agent_identity(s: &SessionSnapshot) -> AgentSessionIdentity {
+    AgentSessionIdentity {
+        session_id: s.session_id.clone(),
+        provider: s.provider.as_str().to_string(),
+        account_email: s.account_email.clone().unwrap_or_default(),
+        config_dir: s.config_dir.clone().unwrap_or_default(),
     }
 }
 
@@ -88,7 +145,31 @@ pub fn proto_to_snapshot(p: &AgentSessionInfo) -> SessionSnapshot {
         },
         ctx_tokens: p.ctx_tokens,
         project_root: p.project_root.clone(),
+        repo_root: p.repo_root.clone(),
         project_name: p.project_name.clone(),
+        // Empty string ⇒ None (honestly unknown), symmetric with `effort`.
+        worktree: (!p.worktree.is_empty()).then(|| p.worktree.clone()),
+        branch: (!p.branch.is_empty()).then(|| p.branch.clone()),
+        config_dir: (!p.config_dir.is_empty()).then(|| p.config_dir.clone()),
+        // Empty ⇒ None: an older daemon simply doesn't say, and a session that
+        // names no account joins none rather than being guessed onto one.
+        account_email: (!p.account_email.is_empty()).then(|| p.account_email.clone()),
+        process_fingerprint: (!p.process_fingerprint.is_empty())
+            .then(|| p.process_fingerprint.clone()),
+        pty_session_id: (!p.pty_session_id.is_empty()).then(|| p.pty_session_id.clone()),
+        pty_session_generation: (p.pty_session_generation != 0).then_some(p.pty_session_generation),
+        pty_foreground: p.pty_foreground,
+        task_state: p.has_task_state.then(|| TaskState {
+            tasks: p
+                .task_items
+                .iter()
+                .map(|task| TaskItem {
+                    id: task.id.clone(),
+                    title: task.title.clone(),
+                    status: task_status_from_str(&task.status),
+                })
+                .collect(),
+        }),
         last_activity,
         pid: p.pid,
     }

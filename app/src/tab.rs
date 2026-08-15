@@ -1,6 +1,10 @@
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
 use crate::appearance::Appearance;
+use crate::cockpit::{
+    style::{attention_coloru, attention_halo_coloru},
+    CockpitSettings,
+};
 /// Tab module contains structures related to Tabs (such as TabData or TabComponent) that simplify
 /// the rendering and management of tabs in general.
 use crate::editor::EditorView;
@@ -39,11 +43,11 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::AnsiColors;
 use warpui::elements::{
     Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, DragAxis, Draggable, DraggableState, DropTarget, Element, Empty, Fill,
-    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding,
-    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, Rect, SavePosition, Shrinkable, SizeConstraintCondition,
-    SizeConstraintSwitch, Stack, Text,
+    CrossAxisAlignment, DragAxis, Draggable, DraggableState, DropShadow, DropTarget, Element,
+    Empty, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect, SavePosition, Shrinkable,
+    SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
 use warpui::fonts::Weight;
 use warpui::text_layout::ClipConfig;
@@ -133,6 +137,8 @@ pub struct PaneNameMenuTarget {
 #[derive(Clone)]
 pub struct TabData {
     pub pane_group: ViewHandle<PaneGroup>,
+    /// Pinned tabs stay ahead of unpinned tabs and are persisted across relaunches.
+    pub is_pinned: bool,
     pub tab_mouse_state: MouseStateHandle,
     pub close_mouse_state: MouseStateHandle,
     pub tooltip_mouse_state: MouseStateHandle,
@@ -153,6 +159,7 @@ impl TabData {
     pub fn new(pane_group: ViewHandle<PaneGroup>) -> Self {
         Self {
             pane_group,
+            is_pinned: false,
             tab_mouse_state: Default::default(),
             close_mouse_state: Default::default(),
             tooltip_mouse_state: Default::default(),
@@ -167,6 +174,12 @@ impl TabData {
     /// The resolved tab color: manual selection takes priority over directory default.
     pub fn color(&self) -> Option<AnsiColorIdentifier> {
         self.selected_color.resolve(self.default_directory_color)
+    }
+
+    pub fn needs_attention(&self, ctx: &AppContext) -> bool {
+        self.pane_group
+            .as_ref(ctx)
+            .has_cli_agent_needing_attention(ctx)
     }
 
     /// Returns the menu items for the context menu on right mouse click.
@@ -233,6 +246,18 @@ impl TabData {
         menu_items.append(&mut vec![MenuItemFields::new(crate::t!("menu-tab-rename"))
             .with_on_select_action(WorkspaceAction::RenameTab(index))
             .into_item()]);
+        menu_items.push(
+            MenuItemFields::new(if self.is_pinned {
+                crate::t!("menu-tab-unpin")
+            } else {
+                crate::t!("menu-tab-pin")
+            })
+            .with_on_select_action(WorkspaceAction::SetTabPinned {
+                index,
+                is_pinned: !self.is_pinned,
+            })
+            .into_item(),
+        );
         // Group together with rename option (note, resetting doesn't make
         // sense unless you're able to rename a tab).
         let title = self.pane_group.as_ref(ctx).custom_title(ctx);
@@ -535,6 +560,7 @@ pub struct TabComponent<'a> {
     tooltip_git_branch: Option<String>,
     is_drag_target: bool,
     background_opacity: u8,
+    needs_attention: bool,
     /// Set to `true` when this `TabComponent` is being rendered inside the
     /// floating chip overlay used during a cross-window tab drag. In that
     /// mode `build()` skips the outer `SavePosition`, `Draggable`, and
@@ -682,6 +708,8 @@ impl<'a> TabComponent<'a> {
             .background_opacity
             .effective_opacity(window_id, ctx)
             .clamp(20, 100);
+        let needs_attention =
+            tab.needs_attention(ctx) && !*CockpitSettings::as_ref(ctx).attention_dnd;
         Self {
             tab: tab.clone(),
             tab_bar,
@@ -699,6 +727,7 @@ impl<'a> TabComponent<'a> {
             tooltip_git_branch,
             is_drag_target,
             background_opacity,
+            needs_attention,
             for_drag_ghost: false,
         }
     }
@@ -1147,7 +1176,7 @@ impl<'a> TabComponent<'a> {
         let theme = self.appearance.theme();
         let is_active = self.is_active_tab();
 
-        let (background_color, border_fill) = if FeatureFlag::NewTabStyling.is_enabled() {
+        let (background_color, mut border_fill) = if FeatureFlag::NewTabStyling.is_enabled() {
             // If there is a custom tab background, we overlay it with varying opacities.
             let bg = if let Some(custom_background) = self.styles.background {
                 let base_opacity = if is_active {
@@ -1211,12 +1240,34 @@ impl<'a> TabComponent<'a> {
 
             (bg, border)
         };
+        if self.needs_attention {
+            border_fill = attention_coloru(self.appearance).into();
+        }
 
         let full_tab_content = {
             let mut flex_row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_main_axis_alignment(MainAxisAlignment::Center)
                 .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Center);
+            if self.tab.is_pinned {
+                flex_row.add_child(
+                    Container::new(
+                        Text::new_inline(
+                            "◆",
+                            self.styles
+                                .default
+                                .font_family_id
+                                .expect("Font family defined"),
+                            (self.styles.default.font_size.expect("Font size defined") - 3.0)
+                                .max(8.0),
+                        )
+                        .with_color(theme.sub_text_color(theme.background()).into_solid())
+                        .finish(),
+                    )
+                    .with_margin_right(4.0)
+                    .finish(),
+                );
+            }
             if let Some(indicator) = self.render_indicator() {
                 flex_row.add_child(indicator);
             }
@@ -1382,6 +1433,14 @@ impl<'a> TabComponent<'a> {
             tab = tab
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
                 .with_border(Border::all(1.).with_border_fill(border_fill));
+        }
+        if self.needs_attention {
+            tab = tab.with_drop_shadow(DropShadow {
+                color: attention_halo_coloru(self.appearance),
+                offset: vec2f(0.0, 0.0),
+                blur_radius: 8.0,
+                spread_radius: 4.0,
+            });
         }
 
         // If the tab is being dragged, add an opaque background behind it

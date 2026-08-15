@@ -9,14 +9,11 @@ use super::{
 
 #[derive(Clone, Copy, Debug)]
 pub enum SSHBannerAction {
-    LearnMore,
     Settings,
 }
 
 #[derive(Default)]
 pub struct SSHBannerMouseStates {
-    /// Hover state for the "Learn more" button in the SSH wrapper banner.
-    pub learn_more: MouseStateHandle,
     /// Hover state for the "Settings" button in the SSH wrapper banner.
     pub settings: MouseStateHandle,
 }
@@ -46,30 +43,19 @@ pub fn render_inline_ssh_wrapper_banner(
             "Zaplex SSH wrapper disabled".to_string(),
         )
     };
-    let buttons = vec![
-        InlineBannerTextButton {
-            text: crate::t!("common-learn-more"),
-            text_color: label_text_color,
-            button_state: InlineBannerButtonState {
-                on_click_event: TerminalAction::LegacySSHBanner(SSHBannerAction::LearnMore),
-                mouse_state_handle: state.mouse_states.learn_more.clone(),
-            },
-            font: Default::default(),
-            position_id: None,
-            variant: InlineBannerTextButtonVariant::Secondary,
+    // The SSH wrapper banner's "Learn more" pointed at an empty URL (no Zaplex docs);
+    // drop it and keep the working "Settings" button.
+    let buttons = vec![InlineBannerTextButton {
+        text: crate::t!("common-settings"),
+        text_color: label_text_color,
+        button_state: InlineBannerButtonState {
+            on_click_event: TerminalAction::LegacySSHBanner(SSHBannerAction::Settings),
+            mouse_state_handle: state.mouse_states.settings.clone(),
         },
-        InlineBannerTextButton {
-            text: crate::t!("common-settings"),
-            text_color: label_text_color,
-            button_state: InlineBannerButtonState {
-                on_click_event: TerminalAction::LegacySSHBanner(SSHBannerAction::Settings),
-                mouse_state_handle: state.mouse_states.settings.clone(),
-            },
-            font: Default::default(),
-            position_id: None,
-            variant: InlineBannerTextButtonVariant::Primary,
-        },
-    ];
+        font: Default::default(),
+        position_id: None,
+        variant: InlineBannerTextButtonVariant::Primary,
+    }];
 
     render_inline_block_list_banner(
         style,

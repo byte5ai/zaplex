@@ -9,8 +9,8 @@ use super::{
     about_page::AboutPageView,
     ai_page::{AISettingsPageAction, AISettingsPageView},
     appearance_page::AppearanceSettingsPageView,
-    code_page::CodeSettingsPageView,
     cloud_sync_page::CloudSyncPageView,
+    code_page::CodeSettingsPageView,
     features_page::FeaturesPageView,
     keybindings::KeybindingsView,
     mcp_servers_page::MCPServersSettingsPageView,
@@ -278,10 +278,14 @@ pub fn build_sub_header(
     let color = color_override.unwrap_or(appearance.theme().active_ui_text_color());
     Container::new(
         Align::new(
-            Text::new_inline(text_name, appearance.ui_font_family(), appearance.ui_font_heading_3())
-                .with_style(Properties::default().weight(Weight::Bold))
-                .with_color(color.into())
-                .finish(),
+            Text::new_inline(
+                text_name,
+                appearance.ui_font_family(),
+                appearance.ui_font_heading_3(),
+            )
+            .with_style(Properties::default().weight(Weight::Bold))
+            .with_color(color.into())
+            .finish(),
         )
         .left()
         .finish(),
@@ -299,9 +303,13 @@ pub fn render_sub_header_with_description(
             .with_child(build_sub_header(appearance, text_name, None).finish())
             .with_child(
                 Align::new(
-                    Text::new(description, appearance.ui_font_family(), appearance.ui_font_body())
-                        .with_color(appearance.theme().nonactive_ui_text_color().into())
-                        .finish(),
+                    Text::new(
+                        description,
+                        appearance.ui_font_family(),
+                        appearance.ui_font_body(),
+                    )
+                    .with_color(appearance.theme().nonactive_ui_text_color().into())
+                    .finish(),
                 )
                 .left()
                 .finish(),
@@ -321,10 +329,14 @@ pub fn render_sub_sub_header(
     let mut sub_sub_header = Flex::row().with_child(
         Container::new(
             Align::new(
-                Text::new_inline(text_name, appearance.ui_font_family(), appearance.ui_font_body())
-                    .with_style(Properties::default().weight(Weight::Semibold))
-                    .with_color(appearance.theme().active_ui_text_color().into())
-                    .finish(),
+                Text::new_inline(
+                    text_name,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_body(),
+                )
+                .with_style(Properties::default().weight(Weight::Semibold))
+                .with_color(appearance.theme().active_ui_text_color().into())
+                .finish(),
             )
             .left()
             .finish(),
@@ -645,8 +657,12 @@ pub fn render_body_item_label_internal<T: Clone + Action>(
             ToggleState::Disabled => appearance.theme().disabled_ui_text_color(),
         },
     };
-    let label_text = Text::new_inline(label_text, appearance.ui_font_family(), appearance.ui_font_body())
-        .with_color(label_color.into());
+    let label_text = Text::new_inline(
+        label_text,
+        appearance.ui_font_family(),
+        appearance.ui_font_body(),
+    )
+    .with_color(label_color.into());
     if let Some(icon) = label_icon {
         label.add_child(
             Container::new(
@@ -691,10 +707,18 @@ pub fn render_body_item_label_internal<T: Clone + Action>(
                 None
             };
 
+        // Only draw the info affordance when it actually leads somewhere: a real
+        // click action, or explanatory tooltip text. Otherwise the icon's default
+        // tooltip ("Click to learn more in docs") promises a destination that does
+        // not exist and clicking it is a no-op — a dead button.
+        let show_info_icon = additional_info.on_click_action.is_some()
+            || additional_info.tooltip_override_text.is_some();
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(label)
-            .with_child(render_info_icon(appearance, additional_info));
+            .with_child(label);
+        if show_info_icon {
+            row.add_child(render_info_icon(appearance, additional_info));
+        }
         if let LocalOnlyIconState::Visible {
             mouse_state,
             custom_tooltip,
@@ -836,13 +860,17 @@ pub fn render_dropdown_item_label(
     color_override: Option<Fill>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let label = Text::new(label_text, appearance.ui_font_family(), appearance.ui_font_body())
-        .with_color(
-            color_override
-                .unwrap_or(appearance.theme().active_ui_text_color())
-                .into(),
-        )
-        .finish();
+    let label = Text::new(
+        label_text,
+        appearance.ui_font_family(),
+        appearance.ui_font_body(),
+    )
+    .with_color(
+        color_override
+            .unwrap_or(appearance.theme().active_ui_text_color())
+            .into(),
+    )
+    .finish();
     let label = if let Some(secondary_text) = secondary_text {
         let warp_theme = appearance.theme();
         let secondary_text_child = appearance

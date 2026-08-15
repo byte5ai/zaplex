@@ -4,9 +4,8 @@
 # Hintergrund: zaplex ist eine macOS-App, aber die persistente Remote-Session
 # läuft als Daemon auf dem Linux-Ziel-Host. Der Client (DMG) erwartet das Binary
 # unter ~/.zaplex/remote-server/zaplex-<GIT_RELEASE_TAG>. Im Fork-Setup schlägt der
-# Auto-Download (zerx-lab/warp releases) fehl, daher wird dieses Binary als
-# Artefakt gebaut und manuell auf den Ziel-Host gelegt (check_binary besteht dann,
-# der Download-Pfad wird nie genommen).
+# Der normale Release- und Test-DMG-Workflow bündelt dieses Binary inzwischen
+# offline. Dieser Einzelworkflow bleibt für gezielte Daemon-Diagnosen verfügbar.
 #
 # Aufruf:  gh workflow run build-remote-server.yml -R byte5ai/zaplex --ref <branch> \
 #            [-f dmg_tag=v0.daemontest]

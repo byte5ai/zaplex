@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="ui-spec-viewports" content="1280x800,900x700">
+  <title>UI-Spec — Globale Dateiübertragungen</title>
+  <style>
+    :root {
+      --workspace: #111317;
+      --surface: #20242b;
+      --surface-raised: #292e37;
+      --border: #3a414d;
+      --text: #f2f4f8;
+      --muted: #aeb5c1;
+      --accent: #7aa2ff;
+      --warning: #f3bd67;
+      --danger: #ff7b84;
+      --success: #68d391;
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 12px;
+      --radius: 8px;
+      --panel-width: 420px;
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0b0d10; color: var(--text); }
+    #spec {
+      max-width: 980px;
+      margin: 24px auto;
+      padding: 24px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      line-height: 1.5;
+    }
+    #spec h1 { margin-top: 0; }
+    #spec h2 { margin: 20px 0 6px; font-size: 16px; }
+    #spec code { color: #bfd0ff; }
+    #spec .draft { color: var(--warning); font-weight: 700; }
+
+    #mockups {
+      display: grid;
+      gap: 24px;
+      padding: 24px;
+    }
+    .viewport {
+      position: relative;
+      min-height: 620px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background:
+        linear-gradient(90deg, transparent 49.8%, #2c323b 50%, transparent 50.2%),
+        var(--workspace);
+    }
+    .viewport::before {
+      content: "Terminal-Panes";
+      position: absolute;
+      inset: 54px auto auto 24px;
+      color: #5f6876;
+      font: 13px ui-monospace, monospace;
+    }
+    .tabbar {
+      height: 42px;
+      border-bottom: 1px solid #242a32;
+      background: #15181d;
+    }
+    .panel {
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      width: min(var(--panel-width), calc(100% - 16px));
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 18px 55px #000a;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-md);
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-raised);
+    }
+    .panel-header strong { font-size: 13px; }
+    .summary {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .close { color: var(--muted); font-size: 16px; }
+    .job {
+      padding: 10px 12px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .job:last-child { border-bottom: 0; }
+    .job-top, .metrics, .actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-sm);
+    }
+    .job-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font: 12px ui-monospace, monospace;
+    }
+    .state { flex: none; color: var(--accent); font-size: 11px; }
+    .paused .state { color: var(--warning); }
+    .recovery .state { color: var(--danger); }
+    .bar {
+      height: 5px;
+      margin: 8px 0 6px;
+      overflow: hidden;
+      border-radius: 99px;
+      background: #11151a;
+    }
+    .bar span {
+      display: block;
+      width: var(--progress);
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+    }
+    .paused .bar span { background: var(--warning); }
+    .metrics {
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .actions {
+      justify-content: flex-end;
+      margin-top: 8px;
+    }
+    button {
+      padding: 4px 8px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+    }
+    .cancel { color: var(--danger); }
+    .recovery-note {
+      margin-top: 7px;
+      color: var(--danger);
+      font-size: 11px;
+    }
+    .recovery .bar { display: none; }
+
+    @media (max-width: 940px) {
+      :root { --panel-width: 360px; }
+      .viewport { min-height: 560px; }
+      .metrics { align-items: flex-start; flex-direction: column; gap: 2px; }
+    }
+  </style>
+</head>
+<body>
+  <section id="spec">
+    <h1>UI-Spec — Globale Dateiübertragungen</h1>
+    <p class="draft">Status: Entwurf, noch nicht freigegeben.</p>
+
+    <h2>Tokens</h2>
+    <ul>
+      <li>Das bestehende Transferpanel bleibt <code>420 px</code> breit, mit <code>8 px</code> Abstand rechts und unten.</li>
+      <li>Fortschritt nutzt die Akzentfarbe; pausiert nutzt Warnfarbe; Recovery nutzt Fehlerfarbe.</li>
+      <li>Alle Werte bleiben in der vorhandenen kompakten Zeilenhierarchie; keine neue Vollbildansicht.</li>
+    </ul>
+
+    <h2>Regeln</h2>
+    <ul>
+      <li>Der Kopf zeigt immer Gesamtfortschritt und Gesamtdurchsatz aller aktiven Jobs.</li>
+      <li>Jeder aktive Job zeigt übertragen/gesamt, eigenen Durchsatz und ETA in einer gemeinsamen Metrikzeile.</li>
+      <li>Pause/Fortsetzen und Abbrechen bleiben als sichtbare Textaktionen direkt am Job.</li>
+      <li>Das Panel ist workspace-global und bleibt sichtbar, wenn Quellpane oder Tab geschlossen werden.</li>
+      <li>Recovery verdrängt keine laufenden Jobs, steht aber in der Sortierung vor abgeschlossener Historie.</li>
+      <li>Bei schmalem Fenster umbrechen nur die Metriken; Jobname und Aktionen bleiben auffindbar.</li>
+    </ul>
+
+    <h2>Zustände</h2>
+    <ul>
+      <li>Mehrere aktive Jobs mit Gesamtfortschritt.</li>
+      <li>Pausierter Job mit erhaltenem letzten Durchsatz und ETA.</li>
+      <li>Recovery erforderlich mit konkretem Pfad und sichtbarer Wiederholen-Aktion.</li>
+      <li>Kein Job: Das Panel wird nicht gerendert.</li>
+    </ul>
+
+    <h2>Akzeptanzkriterien</h2>
+    <ul>
+      <li>Gesamtwerte entsprechen der Summe der aktiven Queue-Einträge.</li>
+      <li>Einzelwerte stammen aus demselben Queue-Snapshot wie Balken und Status.</li>
+      <li>Durchsatz wird als menschenlesbare Rate pro Sekunde dargestellt; Nullwerte werden nicht als irreführende Rate gezeigt.</li>
+      <li>ETA wird nur angezeigt, wenn eine belastbare Schätzung vorliegt.</li>
+      <li>Alle Aktionen besitzen sichtbare Textlabels und bleiben mit Maus und Tastatur erreichbar.</li>
+    </ul>
+  </section>
+
+  <section id="mockups">
+    <article class="viewport" aria-label="Breiter Workspace mit globaler Transferanzeige">
+      <div class="tabbar"></div>
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <strong>Übertragungen (3)</strong>
+            <div class="summary">2 aktiv · 1,8 / 4,2 GB · 34,6 MB/s</div>
+          </div>
+          <span class="close" aria-label="Panel schließen">×</span>
+        </header>
+
+        <div class="job" style="--progress: 64%">
+          <div class="job-top">
+            <span class="job-name">devhost:/builds/zaplex.dmg → MacBook:/Downloads</span>
+            <span class="state">Überträgt</span>
+          </div>
+          <div class="bar"><span></span></div>
+          <div class="metrics">
+            <span>1,6 / 2,5 GB</span>
+            <span>31,2 MB/s · Restzeit 29 s</span>
+          </div>
+          <div class="actions"><button>Pausieren</button><button class="cancel">Abbrechen</button></div>
+        </div>
+
+        <div class="job paused" style="--progress: 12%">
+          <div class="job-top">
+            <span class="job-name">agenthost:/logs → devhost:/archive</span>
+            <span class="state">Pausiert</span>
+          </div>
+          <div class="bar"><span></span></div>
+          <div class="metrics">
+            <span>205 / 1.700 MB</span>
+            <span>3,4 MB/s · Restzeit 7 min</span>
+          </div>
+          <div class="actions"><button>Fortsetzen</button><button class="cancel">Abbrechen</button></div>
+        </div>
+
+        <div class="job recovery">
+          <div class="job-top">
+            <span class="job-name">devhost:/tmp/.zaplex-transfer-84</span>
+            <span class="state">Bereinigung erforderlich</span>
+          </div>
+          <div class="recovery-note">Eigener Transferrest wurde sicher beibehalten.</div>
+          <div class="actions"><button>Bereinigung erneut versuchen</button></div>
+        </div>
+      </section>
+    </article>
+  </section>
+</body>
+</html>

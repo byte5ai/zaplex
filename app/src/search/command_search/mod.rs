@@ -1,4 +1,5 @@
 mod ai_queries;
+mod cli_agents;
 mod env_var_collections;
 mod history;
 mod notebooks;

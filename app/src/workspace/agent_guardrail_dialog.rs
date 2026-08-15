@@ -44,6 +44,9 @@ pub enum AgentGuardrailKind {
         host_id: Option<String>,
         session_id: String,
         pid: u32,
+        /// Identity captured from the row when the dialog opened. Confirmation
+        /// must verify this exact process, not a later same-pid inventory row.
+        process_fingerprint: Option<String>,
         /// Whether `host` is *this* machine (from the inventory's explicit
         /// `is_local` marker). Carried through the confirm so the SIGKILL
         /// routes by locality, never by a label comparison.

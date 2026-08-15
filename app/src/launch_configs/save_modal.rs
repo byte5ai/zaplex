@@ -423,7 +423,9 @@ impl LaunchConfigSaveModal {
                 appearance.theme().active_ui_text_color().into(),
                 Default::default(),
             )
-            .with_heading_to_font_size_multipliers(appearance.heading_font_size_multipliers().clone())
+            .with_heading_to_font_size_multipliers(
+                appearance.heading_font_size_multipliers().clone(),
+            )
             .finish(),
         )
         .with_padding_left(SIDE_PADDING)
@@ -522,28 +524,9 @@ impl LaunchConfigSaveModal {
                 .finish(),
         );
 
-        let link_to_docs = Container::new(
-            ConstrainedBox::new(
-                appearance
-                    .ui_builder()
-                    .link(
-                        crate::t!("launch-config-link-to-documentation"),
-                        Some(
-                            ""
-                                .to_string(),
-                        ),
-                        None,
-                        self.mouse_states.documentation_link_state.clone(),
-                    )
-                    .soft_wrap(false)
-                    .build()
-                    .finish(),
-            )
-            .with_width(DOC_LINK_WIDTH)
-            .finish(),
-        )
-        .with_uniform_padding(SIDE_PADDING)
-        .finish();
+        // The "link to documentation" opened an empty URL (no Zaplex launch-config docs);
+        // render nothing rather than a dead link.
+        let link_to_docs = warpui::elements::Empty::new().finish();
 
         let info = match &self.save_state {
             SaveState::Success => header

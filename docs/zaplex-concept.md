@@ -136,7 +136,7 @@ Die rot markierte Zelle ist der einzige bewusste Asymmetrie-Punkt: Codex hat kei
 
 ### 3.5 Sicheres Remote-Entwickeln — Multiplexer-kompatible Shell-Integration + Session-Resilienz
 
-> **Motivation:** Der User entwickelt täglich auf Remote-Hosts (devhost via Tailscale, macmini) und stützt sich heute auf **externes** `byobu` (Persistenz) + `mosh` (Roaming) *um* das Terminal herum. Ziel: zaplex vereint alles Notwendige zum sicheren Remote-Entwickeln **im integrierten Terminal**. Dies betrifft die interaktive User-Shell — verwandt mit, aber nicht identisch zur Agent-Fleet-Persistenz (§3.2/§4.4); beide sollten auf **einer** Resilienz-Primitive sitzen, nicht doppelt gebaut werden.
+> **Motivation:** Der User entwickelt täglich auf Remote-Hosts (devhost und agenthost via Tailscale) und stützt sich heute auf **externes** `byobu` (Persistenz) + `mosh` (Roaming) *um* das Terminal herum. Ziel: zaplex vereint alles Notwendige zum sicheren Remote-Entwickeln **im integrierten Terminal**. Dies betrifft die interaktive User-Shell — verwandt mit, aber nicht identisch zur Agent-Fleet-Persistenz (§3.2/§4.4); beide sollten auf **einer** Resilienz-Primitive sitzen, nicht doppelt gebaut werden.
 
 **Drei Lücken im heutigen Warp/Zap-Verhalten** (1–2 am Code verifiziert, 3 als Beobachtung):
 
@@ -347,7 +347,7 @@ Alles klein, nicht aufdringlich. Hover gibt mehr Details. Click auf den Account-
 
 **Layout:** klassisch MC: linke Pane, rechte Pane, Funktionsleiste am unteren Rand (F1 Help, F5 Copy, F6 Move, F7 Mkdir, F8 Delete, F10 Quit) — oder Zaps Äquivalent davon. Wenn Zap eine Hotkey-Konvention hat, der sich daran halten lässt: gut. Wenn nicht: F-Keys, weil sie MC-User erwarten.
 
-**Beide Panes können auf verschiedenen Hosts sein.** Das ist die Killer-Feature der MC-Hälfte — links macmini, rechts devhost, F5 copy → SFTP-Transfer. *(Provider-unabhängig.)*
+**Beide Panes können auf verschiedenen Hosts sein.** Das ist die Killer-Feature der MC-Hälfte — links agenthost, rechts devhost, F5 copy → SFTP-Transfer. *(Provider-unabhängig.)*
 
 **Verhalten zum Restsystem:** Wenn man in einem File-Block einen `.jsonl`-Transcript (Claude oder Codex) markiert und Enter drückt → öffnet als read-only Viewer mit dem Markdown-Renderer.
 

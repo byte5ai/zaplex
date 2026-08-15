@@ -16,6 +16,15 @@ use serde::{Deserialize, Serialize};
 /// "SSH PTY + no persistence" behaviour.
 pub const FEATURE_SESSION_HOST: &str = "session-host";
 
+/// Capability identifier advertised by daemons that support retry-safe startup
+/// command delivery for native sessions.
+///
+/// A client must require this feature before sending a `SessionInput` with a
+/// startup command id. Older daemons treat all session input as an
+/// unacknowledged notification, so falling back would reintroduce command loss
+/// and duplicate execution across reconnects.
+pub const FEATURE_STARTUP_COMMAND_ACK: &str = "startup-command-ack";
+
 /// Reserved capability name for the Phase B3 native UDP transport (mosh-grade
 /// roaming + low latency). **Not yet advertised** by [`supported_features`] —
 /// the transport is unimplemented; this only reserves the negotiation name so
@@ -37,20 +46,50 @@ pub const FEATURE_UDP_TRANSPORT: &str = "udp-transport";
 /// so it is advertised on all platforms.
 pub const FEATURE_AGENT_INVENTORY: &str = "agent-inventory";
 
+/// Capability identifier for the narrow, identity-verified remote process
+/// signal RPC used by Agent-Cockpit guardrails.
+///
+/// Clients must require this exact version before sending a signal request.
+/// Older daemons must fail closed: never fall back to [`FEATURE_HOST_EXEC`] or
+/// to any other shell-command path.
+pub const FEATURE_AGENT_PROCESS_SIGNAL_V1: &str = "agent-process-signal-v1";
+
+/// Base capability identifier for generation-checked agent-to-PTY inventory.
+///
+/// Version 1 predates daemon-identity pinning and fresh inventory validation.
+/// It remains advertised for protocol discovery, but clients must not use it
+/// to mutate bindings or trust PTY ids as attach authorization.
+pub const FEATURE_AGENT_PTY_BINDING: &str = "agent-pty-binding";
+
+/// Versioned capability for daemon-pinned, freshly verified PTY bindings.
+///
+/// Both peers must advertise this exact version before the client may send
+/// binding operations or trust PTY ids returned in agent inventory.
+pub const FEATURE_AGENT_PTY_BINDING_V2: &str = "agent-pty-binding-v2";
+
+/// Capability identifier for descriptor-bound, journaled remote file
+/// transactions used by the file manager.
+///
+/// Clients must require this exact version before trusting remote identities,
+/// opening transfer handles, or issuing destructive file mutations. Plain
+/// SFTP has no immutable object identity or no-follow open primitive, so an
+/// older daemon must never be treated as an equivalent fallback.
+pub const FEATURE_SAFE_FILE_TRANSACTIONS_V1: &str = "safe-file-transactions-v1";
+
 /// Capability identifier advertised by the daemon in `InitializeResponse.features`:
 /// it signals that the daemon can run a **session-less one-shot host command**
 /// via `HostExec` → `HostExecResult` — a command that needs no bootstrapped
 /// interactive session, run in the daemon's default user shell.
 ///
-/// The Agent-Cockpit's cross-host guardrails use it to deliver `kill -<SIG>
-/// <pid>` to a remote agent on a host where the app holds a daemon connection
-/// but no bound session. A client talking to an old daemon that omits this
-/// feature must not send `HostExec`, and instead surface an honest "remote
-/// guardrails need a newer daemon" message rather than a misleading failure.
-///
 /// Like [`FEATURE_AGENT_INVENTORY`] this is not PTY-bound (the command runs in a
 /// forked subshell), so it is advertised on all platforms.
 pub const FEATURE_HOST_EXEC: &str = "host-exec";
+
+/// Capability identifier for typed discovery of existing tmux/byobu sessions.
+///
+/// Session names stay protocol data from discovery through attach; clients must
+/// never downgrade this to a generic shell-command scan against older daemons.
+pub const FEATURE_MULTIPLEXER_INVENTORY_V1: &str = "multiplexer-inventory-v1";
 
 /// A persistent session identifier assigned by the daemon.
 ///
@@ -96,9 +135,10 @@ impl std::fmt::Display for SessionId {
 /// Returns the set of capabilities this daemon binary actually supports, used
 /// to populate `InitializeResponse.features`.
 ///
-/// Unix daemons advertise [`FEATURE_SESSION_HOST`] (Stage 1 PTY session host).
-/// Non-unix targets do not own PTYs, so they advertise nothing — honest
-/// advertisement: never claim a capability we cannot fulfil.
+/// Every daemon advertises its cross-platform inventory and host-command
+/// support. Linux daemons additionally advertise identity-verified process
+/// signalling, while Unix daemons advertise the native PTY session host and
+/// retry-safe startup delivery.
 pub fn supported_features() -> Vec<String> {
     // Agent-session inventory and session-less host-exec are both
     // filesystem/subshell-based (no PTY), so every daemon build advertises them
@@ -107,15 +147,47 @@ pub fn supported_features() -> Vec<String> {
         FEATURE_AGENT_INVENTORY.to_string(),
         FEATURE_HOST_EXEC.to_string(),
     ];
+    #[cfg(target_os = "linux")]
+    features.push(FEATURE_AGENT_PROCESS_SIGNAL_V1.to_string());
     // The native PTY session host is unix-only: non-unix targets do not own
     // PTYs, so they advertise nothing more — honest advertisement, never claim
     // a capability we cannot fulfil.
     #[cfg(unix)]
-    features.push(FEATURE_SESSION_HOST.to_string());
+    {
+        features.push(FEATURE_SESSION_HOST.to_string());
+        features.push(FEATURE_STARTUP_COMMAND_ACK.to_string());
+        features.push(FEATURE_AGENT_PTY_BINDING.to_string());
+        features.push(FEATURE_AGENT_PTY_BINDING_V2.to_string());
+        features.push(FEATURE_MULTIPLEXER_INVENTORY_V1.to_string());
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        features.push(FEATURE_SAFE_FILE_TRANSACTIONS_V1.to_string());
+    }
     features
 }
 
-/// Returns whether `feature` appears in the daemon-advertised `features` list.
+/// Returns the protocol capabilities understood by a connecting client.
+///
+/// A client can request identity-verified signalling from a remote Linux
+/// daemon regardless of the client's own platform. Daemon advertisement stays
+/// stricter in [`supported_features`], because actual signal execution requires
+/// the daemon-local process-bound backend.
+pub fn supported_client_features() -> Vec<String> {
+    vec![
+        FEATURE_SESSION_HOST.to_string(),
+        FEATURE_STARTUP_COMMAND_ACK.to_string(),
+        FEATURE_AGENT_INVENTORY.to_string(),
+        FEATURE_AGENT_PROCESS_SIGNAL_V1.to_string(),
+        FEATURE_AGENT_PTY_BINDING.to_string(),
+        FEATURE_AGENT_PTY_BINDING_V2.to_string(),
+        FEATURE_SAFE_FILE_TRANSACTIONS_V1.to_string(),
+        FEATURE_HOST_EXEC.to_string(),
+        FEATURE_MULTIPLEXER_INVENTORY_V1.to_string(),
+    ]
+}
+
+/// Returns whether `feature` appears in a peer's advertised `features` list.
 pub fn has_feature(features: &[String], feature: &str) -> bool {
     features.iter().any(|f| f == feature)
 }

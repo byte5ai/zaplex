@@ -8,7 +8,6 @@
 
 mod zaplexify;
 
-pub use zaplexify::*;
 use warpui::{
     elements::{
         ConstrainedBox, Container, CornerRadius, Hoverable, MouseState, MouseStateHandle,
@@ -16,6 +15,7 @@ use warpui::{
     },
     Element,
 };
+pub use zaplexify::*;
 
 use crate::themes::theme::WarpTheme;
 

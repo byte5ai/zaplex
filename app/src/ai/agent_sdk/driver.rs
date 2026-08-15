@@ -19,6 +19,7 @@ use crate::ai::mcp::MCPServerState;
 use crate::ai::agent_sdk::driver::harness::{
     task_env_vars, HarnessKind, HarnessRunner, SavePoint, ThirdPartyHarness,
 };
+use crate::terminal::cli_agent_sessions::hook_bridge;
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     plugin_manager_for, CliAgentPluginManager,
 };
@@ -1027,8 +1028,13 @@ impl AgentDriver {
             .await?;
 
         // Install plugins before running the harness command.
-        let plugin_manager: Option<Box<dyn CliAgentPluginManager>> =
-            plugin_manager_for(harness.cli_agent());
+        let native_hooks_installed =
+            hook_bridge::is_installed_for_agent(harness.cli_agent()).unwrap_or(false);
+        let plugin_manager: Option<Box<dyn CliAgentPluginManager>> = if native_hooks_installed {
+            None
+        } else {
+            plugin_manager_for(harness.cli_agent())
+        };
         if let Some(manager) = plugin_manager {
             if let Err(e) = manager.install().await {
                 log::warn!("Plugin installation failed (continuing): {e}");
@@ -1520,9 +1526,7 @@ impl AgentDriver {
     fn handle_terminal_driver_event(&mut self, event: &TerminalDriverEvent) {
         match event {
             TerminalDriverEvent::SlowBootstrap => {
-                eprintln!(
-                    "Warning: Terminal session is slow to bootstrap."
-                );
+                eprintln!("Warning: Terminal session is slow to bootstrap.");
             }
         }
     }

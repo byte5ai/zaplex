@@ -7,7 +7,6 @@ use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
 use crate::appearance::Appearance;
 use crate::terminal::shell::ShellType;
 use crate::terminal::zaplexify;
-use crate::terminal::zaplexify::render::SSH_DOCS_URL;
 use crate::ui_components::icons::Icon as UiIcon;
 use warpui::elements::{HighlightedHyperlink, Hoverable, Icon, MouseStateHandle};
 use warpui::keymap::FixedBinding;
@@ -78,18 +77,23 @@ pub fn zaplexify_description(
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
 
+    // Dropped the "learn more" link: no Zaplex SSH docs yet.
     let description = FormattedText::new(vec![FormattedTextLine::Line(vec![
         FormattedTextFragment::plain_text(
-            "Bring Zaplex's features to your remote session. Blocks, full text editing, auto-complete, Oz, and more. "
+            "Bring Zaplex's features to your remote session. Blocks, full text editing, auto-complete, Oz, and more."
         ),
-        FormattedTextFragment::hyperlink(crate::t!("common-learn-more"), SSH_DOCS_URL),
     ])]);
-    zaplexify::render::build_description_row(description, theme, appearance, hyperlink_index.clone())
-        .with_hyperlink_font_color(appearance.theme().accent().into_solid())
-        .register_default_click_handlers(|url, _, ctx| {
-            ctx.open_url(&url.url);
-        })
-        .finish()
+    zaplexify::render::build_description_row(
+        description,
+        theme,
+        appearance,
+        hyperlink_index.clone(),
+    )
+    .with_hyperlink_font_color(appearance.theme().accent().into_solid())
+    .register_default_click_handlers(|url, _, ctx| {
+        ctx.open_url(&url.url);
+    })
+    .finish()
 }
 
 impl View for SshZaplexifyBlock {

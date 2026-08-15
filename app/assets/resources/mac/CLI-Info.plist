@@ -5,19 +5,20 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>English</string>
   <key>CFBundleDisplayName</key>
-  <string>Warp CLI</string>
+  <string>Zaplex CLI</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleLocalizations</key>
   <array>
     <string>en</string>
-    <string>ja</string>
-    <string>zh-CN</string>
+    <string>de</string>
   </array>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>1.0.2</string>
+  <key>CFBundleVersion</key>
+  <string>1.0.2</string>
   <!-- This is marked as background-only so that macOS won't add it to the Dock -->
   <!-- See https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/LaunchServicesKeys.html#//apple_ref/doc/uid/20001431-109268 and https://developer.apple.com/documentation/bundleresources/information-property-list/lsbackgroundonly?language=objc -->
   <key>LSBackgroundOnly</key>
@@ -25,6 +26,6 @@
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.developer-tools</string>
   <key>NSHumanReadableCopyright</key>
-  <string>© 2025, Denver Technologies, Inc</string>
+  <string>© 2026, Zaplex</string>
 </dict>
 </plist>

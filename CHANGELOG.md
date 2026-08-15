@@ -2,7 +2,48 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
-## zaplex — Unreleased
+## [1.0.2] — unreleased
+
+- **Cockpit:** Account-Panes mit vorhandenen Sessions stürzen beim Layout der
+  virtualisierten Sitzungstabelle nicht mehr ab.
+- **Sidebar-Navigation:** Die aus „Verbindungen“ geöffnete Hostverwaltung zeigt
+  im Panel-Header einen sichtbaren Rückweg zu „Verbindungen“; das Schließen des
+  Panels bleibt davon klar getrennt.
+
+## [1.0.1] — 2026-08-13
+
+- **Sidebar:** Host-, Daemon- und Multiplexer-Zeilen reservieren die flexible
+  Breite für ihre Identität; wiederholte Sekundäraktionen erscheinen als feste
+  Icons mit lokalisierten Tooltips statt als platzraubende Textbuttons.
+- **UI-Qualität:** Ein gemeinsamer `CompactRowAction`-Baustein, ein verbindliches
+  HTML-Artefakt, Entwicklungsrichtlinien und ein billiger PR-Frühcheck schützen
+  die migrierten kompakten Sidebar-Zeilen mechanisch vor Regressionen.
+
+## [1.0.0] — 2026-07-30
+
+- **Remote-Sitzungen:** versionsgebundener Host-Dienst, persistente PTYs,
+  exaktes Reattach, Replay und idempotenter Shell-Bootstrap für Bash, fish und
+  PowerShell.
+- **Cockpit:** Host–Projekt–Session-Spine, mehrere Claude-/Codex-Konten,
+  belastbare Nutzungs- und Kostendarstellung, explizite Loading-/Fehlerzustände
+  und sichere Sitzungsaktionen.
+- **SSH:** atomarer und referenzsicherer Credential-Lifecycle, OneKey-Editor
+  mit Save/Discard/Cancel sowie strikte Endpunkt- und Host-Key-Prüfung.
+- **Dateimanager:** MC-Tastatursteuerung, stabile Dateiidentitäten, sichere
+  lokale und entfernte Operationen sowie eine gestreamte, fortsetzbare
+  Transfer-Queue für lokale, entfernte und hostübergreifende Transfers.
+- **Dateimanager-Sicherheit:** Remote SFTP-Mutationen behalten ihre Operation-ID
+  über Verbindungsabbrüche, werden idempotent wiederaufgenommen und bewahren die
+  Quelle, bis der daemonseitige Commit ausdrücklich bestätigt ist.
+- **Oberfläche:** englische und deutsche Kernoberflächen, gemeinsame
+  Modal-/Status-Komponenten und responsive Cockpit- und Dateimanager-Panes.
+- **Markdown-Viewer:** extern geöffnete Markdown-Dokumente starten in einem
+  eigenen Fenster ohne Sidebar und behalten am Dokumentende sichtbaren Abstand.
+- **Agenten:** Antigravity ersetzt die eingestellte Gemini CLI; Claude Code,
+  Codex, Grok und DeepSeek/CodeWhale liefern über lokale, selbst verwaltete
+  Integrationen verlässliche Arbeits-, Freigabe- und Abschlusszustände.
+- **Distribution:** konsistente Version `1.0.0`; das Apple-Silicon-DMG wird mit
+  Developer ID signiert und über Apple notarisiert.
 
 Work landed on top of the [Zap fork](https://github.com/zerx-lab/zap), starting from the native session-daemon merge ([PR #16](https://github.com/byte5ai/zaplex/pull/16)). Grouped by area; PR numbers are representative, not exhaustive — see `git log` for the full history.
 
@@ -104,7 +145,10 @@ First preview release of the Zap community fork.
 - **AI**: CJK input classification, reasoning split out, BYOP `tool_call` diagnostics, LRC tag-in synthesizes a virtual subagent + floating spawn flow
 - **CI**: Release workflow explicitly declares `contents: write` permission, fixing a 403
 
-[Unreleased]: https://github.com/zerx-lab/warp/compare/v2026.05.06.preview...HEAD
+[Unreleased]: https://github.com/byte5ai/zaplex/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/byte5ai/zaplex/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/byte5ai/zaplex/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/byte5ai/zaplex/releases/tag/v1.0.0
 [v2026.05.06.preview]: https://github.com/zerx-lab/warp/compare/v2026.05.04.preview...v2026.05.06.preview
 [v2026.05.04.preview]: https://github.com/zerx-lab/warp/compare/v2026.05.03.preview.4...v2026.05.04.preview
 [v2026.05.03.preview(.2/.3/.4)]: https://github.com/zerx-lab/warp/compare/v2026.05.02.preview...v2026.05.03.preview.4

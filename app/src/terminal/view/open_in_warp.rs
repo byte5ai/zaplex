@@ -41,8 +41,7 @@ use super::{Event, InlineBannerItem, InlineBannerType, TerminalView};
 #[path = "open_in_warp_tests.rs"]
 mod tests;
 
-const LEARN_MORE_MARKDOWN_URL: &str =
-    "";
+const LEARN_MORE_MARKDOWN_URL: &str = "";
 const LEARN_MORE_CODE_URL: &str = "";
 
 /// A path to a file that can be opened in Zaplex, along with its type.
@@ -194,15 +193,8 @@ impl TerminalView {
                     ctx.notify();
                 }
             }
-            OpenInWarpBannerAction::LearnMore => {
-                if let Some(banner_state) = &self.inline_banners_state.open_in_warp_banner {
-                    let url = match banner_state.target.file_type {
-                        OpenableFileType::Markdown => LEARN_MORE_MARKDOWN_URL,
-                        OpenableFileType::Code | OpenableFileType::Text => LEARN_MORE_CODE_URL,
-                    };
-                    ctx.open_url(url);
-                }
-            }
+            // Learn-more button removed (no Zaplex docs for Open-in-Zaplex); arm kept for exhaustiveness.
+            OpenInWarpBannerAction::LearnMore => {}
             OpenInWarpBannerAction::Close => {
                 if let Some(banner_state) = self.inline_banners_state.open_in_warp_banner.take() {
                     self.close_open_in_warp_banner(banner_state.id);

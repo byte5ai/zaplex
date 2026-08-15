@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>UI-Spezifikation — V1 Premium-Cockpit und SSH</title>
+  <meta name="ui-spec-route" content="/native/cockpit-ssh">
+  <meta name="ui-spec-viewports" content="1280x900,720x720">
+  <style>
+    :root {
+      --bg: #111318;
+      --surface-1: #191c22;
+      --surface-2: #22262e;
+      --border: #303641;
+      --text: #f1f3f7;
+      --muted: #9aa3b2;
+      --faint: #687181;
+      --accent: #8b7cf6;
+      --success: #40c98b;
+      --warning: #f4b860;
+      --error: #f26d78;
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 16px;
+      --space-lg: 24px;
+      --card-radius: 12px;
+      --modal-radius: 10px;
+      --control-radius: 6px;
+      --body: 13px;
+      --title: 18px;
+      color-scheme: dark;
+      font: var(--body)/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0b0d10;
+      color: var(--text);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; }
+    #spec {
+      max-width: 1180px;
+      margin: 0 auto 24px;
+      padding: 16px 20px;
+      border: 1px solid var(--border);
+      border-radius: var(--card-radius);
+      background: var(--surface-1);
+    }
+    #spec h1 { margin: 0 0 10px; font-size: 18px; }
+    #spec-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    #spec h2 { margin: 0 0 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+    #spec ul { margin: 0; padding-left: 16px; font-size: 11px; color: var(--muted); }
+    #spec code { color: var(--text); }
+    #mockups { display: grid; gap: 24px; max-width: 1180px; margin: 0 auto; }
+    .viewport {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--bg);
+      box-shadow: 0 16px 50px #0008;
+    }
+    .viewport-label { padding: 7px 12px; border-bottom: 1px solid var(--border); color: var(--faint); font-size: 11px; }
+    .screen { min-height: 520px; padding: var(--space-md); }
+    .screen-title { margin: 0 0 14px; font-size: var(--title); }
+    .card { border: 1px solid var(--border); border-radius: var(--card-radius); background: var(--surface-1); padding: var(--space-md); }
+    .account { display: flex; align-items: center; gap: 8px; margin-bottom: var(--space-md); }
+    .provider { width: 10px; height: 10px; border-radius: 3px; background: var(--accent); }
+    .account strong { font-size: 15px; }
+    .plan { color: var(--muted); font-size: 12px; }
+    .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .search { flex: 1; min-width: 150px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--control-radius); color: var(--muted); background: var(--surface-2); }
+    .chip { padding: 5px 9px; border-radius: var(--control-radius); color: var(--muted); background: var(--surface-2); }
+    .chip.active { color: var(--text); outline: 1px solid var(--accent); }
+    .table-frame { max-height: 274px; overflow: auto; clip-path: inset(0 round 8px); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+    th { position: sticky; top: 0; z-index: 1; height: 32px; color: var(--muted); background: var(--surface-1); text-align: left; font-weight: 500; }
+    th, td { padding: 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-bottom: 1px solid var(--border); }
+    td:last-child, th:last-child { text-align: right; }
+    .state { display: inline-flex; align-items: center; gap: 5px; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+    .dot.wait { background: var(--warning); }
+    .scrim { position: relative; display: grid; place-items: center; min-height: 560px; padding: 20px; background: #12121280; }
+    .modal { width: 680px; max-width: 100%; min-height: 470px; padding: var(--space-lg); border: 1px solid var(--border); border-radius: var(--modal-radius); background: var(--bg); box-shadow: 0 18px 60px #000a; }
+    .modal-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 16px; }
+    .modal-title { font-size: var(--title); font-weight: 650; }
+    .subtitle { color: var(--muted); font-size: 12px; }
+    .close { border: 0; color: var(--muted); background: transparent; font-size: 20px; }
+    .manager { display: grid; grid-template-columns: 210px 1fr; gap: 16px; }
+    .credentials { padding-right: 12px; border-right: 1px solid var(--border); }
+    .button, .field { border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--surface-2); }
+    .button { display: inline-flex; justify-content: center; padding: 7px 11px; color: var(--text); }
+    .button.full { width: 100%; margin-bottom: 8px; }
+    .credential { padding: 8px; border-radius: var(--control-radius); color: var(--muted); }
+    .credential.active { color: var(--text); background: var(--surface-2); }
+    label { display: block; margin: 8px 0 4px; color: var(--muted); font-size: 12px; }
+    .field { min-height: 34px; padding: 7px 9px; color: var(--text); }
+    .segmented { display: flex; gap: 4px; }
+    .segmented .button.active { border-color: var(--accent); }
+    .inline-error { margin: 10px 0; color: var(--error); font-size: 12px; }
+    .dirty-prompt { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .dirty-prompt p { margin: 0 0 10px; }
+    .actions { display: flex; justify-content: end; gap: 8px; }
+    .button.warn { color: var(--error); }
+    .button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+    .narrow { width: 680px; max-width: 100%; margin: 0 auto; }
+    .narrow .toolbar { flex-wrap: wrap; }
+    .narrow .search { flex-basis: 100%; }
+    body:has(.viewport:target) #spec,
+    body:has(.viewport:target) .viewport:not(:target) { display: none; }
+    .viewport:target { width: 100%; margin: 0; }
+    @media (max-width: 760px) {
+      body { padding: 10px; }
+      #spec-grid { grid-template-columns: 1fr 1fr; }
+      .manager { grid-template-columns: 155px 1fr; gap: 10px; }
+      .credentials { padding-right: 8px; }
+      .modal { padding: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <section id="spec">
+    <h1>UI-Spezifikation — V1 Premium-Cockpit und SSH</h1>
+    <div id="spec-grid">
+      <div>
+        <h2>Tokens</h2>
+        <ul>
+          <li>Karten: <code>surface-1</code>, 1 px Rand, 12 px Radius.</li>
+          <li>Modal: gemeinsamer Scrim, 10 px Radius, 24 px Innenabstand.</li>
+          <li>Abstände: 8 / 16 / 24 px; Fließtext 13 px, Titel 18 px.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Regeln</h2>
+        <ul>
+          <li>Der Session-Bereich besitzt einen endlichen Viewport und zeichnet nie außerhalb seiner Karte.</li>
+          <li>OneKey nutzt den app-weiten Modal-Rahmen; Backdrop-Klicks werden absorbiert.</li>
+          <li>Ungespeicherte Übergänge zeigen Speichern, Verwerfen und Abbrechen sichtbar.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Zustände</h2>
+        <ul>
+          <li>Cockpit: Laden, Bereit, Eingeschränkt, Fehler.</li>
+          <li>OneKey: Sauber, Bestätigung ungespeicherter Änderungen, Persistenzfehler.</li>
+          <li>SSH-Fehler: verständliche Zusammenfassung plus ursprüngliches Diagnosedetail.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Abnahme</h2>
+        <ul>
+          <li>Höchstens acht sichtbare Session-Zeilen vor internem Scrollen.</li>
+          <li>Keine ungespeicherte Änderung verschwindet durch Schließen, Auswahl, Neu oder Backdrop.</li>
+          <li>Schreibfehler bleiben sichtbar; der letzte gute Zustand bleibt erhalten.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="mockups">
+    <article class="viewport" id="cockpit-wide">
+      <div class="viewport-label">Cockpit · Konten-Pane · gefüllte, begrenzte Tabelle</div>
+      <div class="screen">
+        <h2 class="screen-title">Work Max</h2>
+        <div class="card">
+          <div class="account"><span class="provider"></span><strong>Work Max</strong><span class="plan">Claude Max · work@example.com</span></div>
+          <div class="toolbar"><div class="search">Projekt, Branch oder Worktree durchsuchen</div><span class="chip active">Alle 12</span><span class="chip">Aktiv 7</span><span class="chip">Wartend 2</span></div>
+          <div class="table-frame">
+            <table>
+              <thead><tr><th>Session</th><th>Worktree</th><th>Host</th><th>Modell</th><th>Status</th><th>Zuletzt</th></tr></thead>
+              <tbody>
+                <tr><td>Release-Härtung</td><td>v1-premium-ui</td><td>devhost</td><td>sol · high</td><td><span class="state"><span class="dot"></span>aktiv</span></td><td>jetzt</td></tr>
+                <tr><td>SSH-Persistenztests</td><td>v1-premium-ui</td><td>devhost</td><td>terra · high</td><td><span class="state"><span class="dot wait"></span>wartet</span></td><td>1 min</td></tr>
+                <tr><td>Navigationsreview</td><td>v1-navigation-spine</td><td>devhost</td><td>gemini · high</td><td><span class="state"><span class="dot"></span>inaktiv</span></td><td>9 min</td></tr>
+                <tr><td>Dateimanager-Audit</td><td>v1-file-manager</td><td>agenthost</td><td>sol · high</td><td><span class="state"><span class="dot"></span>aktiv</span></td><td>12 min</td></tr>
+                <tr><td>Wiederherstellungsdoku</td><td>release-v1</td><td>devhost</td><td>terra · high</td><td><span class="state"><span class="dot"></span>aktiv</span></td><td>17 min</td></tr>
+                <tr><td>Daemon-Handshake</td><td>main</td><td>agenthost</td><td>sol · high</td><td><span class="state"><span class="dot wait"></span>wartet</span></td><td>21 min</td></tr>
+                <tr><td>Nutzungsabrechnung</td><td>v1-cockpit-truth</td><td>devhost</td><td>terra · high</td><td><span class="state"><span class="dot"></span>inaktiv</span></td><td>32 min</td></tr>
+                <tr><td>RC-Risikomatrix</td><td>release-v1</td><td>devhost</td><td>sol · high</td><td><span class="state"><span class="dot"></span>aktiv</span></td><td>44 min</td></tr>
+                <tr><td>Neunte Zeile beweist Scrollen</td><td>release-v1</td><td>devhost</td><td>terra · high</td><td><span class="state"><span class="dot"></span>inaktiv</span></td><td>1 h</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <article class="viewport narrow" id="cockpit-narrow">
+      <div class="viewport-label">Schmales Pane · gleiche Hierarchie mit begrenztem Text</div>
+      <div class="screen">
+        <h2 class="screen-title">Work Max</h2>
+        <div class="card">
+          <div class="account"><span class="provider"></span><strong>Work Max</strong><span class="plan">Claude Max</span></div>
+          <div class="toolbar"><div class="search">Projekt, Branch oder Worktree durchsuchen</div><span class="chip active">Alle 12</span><span class="chip">Wartend 2</span></div>
+          <div class="table-frame">
+            <table>
+              <thead><tr><th>Session</th><th>Worktree</th><th>Host</th><th>Modell</th><th>Status</th><th>Zuletzt</th></tr></thead>
+              <tbody>
+                <tr><td>Release-Härtung</td><td>v1-premium-ui</td><td>devhost</td><td>sol · high</td><td><span class="state"><span class="dot"></span>aktiv</span></td><td>jetzt</td></tr>
+                <tr><td>SSH-Persistenztests</td><td>v1-premium-ui</td><td>devhost</td><td>terra · high</td><td><span class="state"><span class="dot wait"></span>wartet</span></td><td>1 min</td></tr>
+                <tr><td>Navigationsreview</td><td>v1-navigation-spine</td><td>devhost</td><td>gemini · high</td><td><span class="state"><span class="dot"></span>inaktiv</span></td><td>9 min</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <article class="viewport" id="onekey-dirty">
+      <div class="viewport-label">SSH · OneKey · Schließen mit ungespeicherten Änderungen und sichtbarem Persistenzfehler</div>
+      <div class="scrim">
+        <div class="modal">
+          <div class="modal-header">
+            <div><div class="modal-title">OneKey-Manager</div><div class="subtitle">Zugangsdaten für mehrere SSH-Hosts wiederverwenden.</div></div>
+            <button class="close" aria-label="Schließen">×</button>
+          </div>
+          <div class="manager">
+            <aside class="credentials"><div class="button full">Hinzufügen</div><div class="credential active">Produktion</div><div class="credential">Staging</div><div class="credential">Privates Lab</div></aside>
+            <div>
+              <label>Name der Zugangsdaten</label><div class="field">Produktion</div>
+              <label>Benutzer der Zugangsdaten</label><div class="field">deploy</div>
+              <label>Typ</label><div class="segmented"><span class="button active">Passwort</span><span class="button">Privater Schlüssel</span></div>
+              <label>Passwort</label><div class="field">••••••••••••</div>
+              <div class="inline-error">Zugangsdaten konnten nicht gespeichert werden: Schlüsselbund ist gesperrt.</div>
+              <div class="dirty-prompt">
+                <p>Speichere oder verwirf die Änderungen – oder brich den Vorgang ab.</p>
+                <div class="actions"><span class="button">Abbrechen</span><span class="button warn">Verwerfen</span><span class="button primary">Änderungen speichern</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </article>
+  </section>
+</body>
+</html>

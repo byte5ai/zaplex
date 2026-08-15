@@ -1029,7 +1029,7 @@ fi
 case "'${SHELL##*/}'" in
   bash)
     exec -a bash bash --rcfile <(echo '"'
-      command -p stty raw
+      command -p stty raw -echo
       HISTCONTROL=ignorespace
       HISTIGNORE=" *"
       ZAPLEX_SESSION_ID="$(command -p date +%s)$RANDOM"

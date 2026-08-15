@@ -1,4 +1,5 @@
 use super::*;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -6,7 +7,6 @@ use crate::ai::facts::manager::AIFactManager;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
-use crate::ai::AIRequestUsageModel;
 use crate::auth::UserUid;
 use crate::cloud_object::model::persistence::ObjectStoreModel;
 use crate::cloud_object::model::view::ObjectStoreViewModel;
@@ -23,10 +23,10 @@ use crate::terminal::shared_session::protocol::SessionSourceType;
 use crate::terminal::shared_session::protocol::{ParticipantId, ParticipantList};
 #[cfg(feature = "local_fs")]
 use crate::user_config::tab_configs_dir;
-use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
 use std::collections::HashMap;
 use std::sync::Arc;
 use watcher::HomeDirectoryWatcher;
@@ -35,8 +35,8 @@ use crate::cloud_object::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
 
 use crate::settings::PrivacySettings;
-use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::settings_view::DisplayCount;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::system::SystemStats;
 use crate::tab_configs::tab_config::{TabConfigPaneNode, TabConfigPaneType};
 use crate::terminal::history::History;
@@ -49,11 +49,12 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::shared_session::{SharedSessionScrollbackType, SharedSessionStatus};
 
+use crate::ObjectActions;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::mcp::{
-    gallery::MCPGalleryManager, templatable_manager::TemplatableMCPServerManager,
-    FileBasedMCPManager, FileMCPWatcher,
+    FileBasedMCPManager, FileMCPWatcher, gallery::MCPGalleryManager,
+    templatable_manager::TemplatableMCPServerManager,
 };
 use crate::resource_center::Tip;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -61,8 +62,7 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseSettings;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 use crate::workflows::local_workflows::LocalWorkflows;
-use crate::ObjectActions;
-use crate::{experiments, workspace, GlobalResourceHandlesProvider};
+use crate::{GlobalResourceHandlesProvider, experiments, workspace};
 
 // Zaplex(localization, Phase 5): `PreferencesSyncer` has been physically deleted.
 
@@ -71,7 +71,33 @@ use ai::project_context::model::ProjectContextModel;
 use pane_group::{NotebookPane, PaneState, SplitPaneState, TerminalPaneId};
 use terminal::view::ActiveSessionState;
 use warpui::AddSingletonModel;
-use warpui::{platform::WindowStyle, App, ViewHandle};
+use warpui::{App, ViewHandle, platform::WindowStyle};
+
+#[test]
+fn launch_request_never_interpolates_remote_path_into_shell_source() {
+    let remote_path = "/srv/projects/a path;$(touch /tmp/not-shell-source)";
+    let request = RemoteAgentLaunchRequest::new(
+        Some(Path::new(remote_path)),
+        CLIAgent::Codex.routed_launch(None, Some("gpt-5-codex"), Some("high")),
+    );
+
+    assert!(!request.shell_source().contains(remote_path));
+    let shell_argv = shell_words::split(&request.shell_command())
+        .expect("launch command must remain valid argv");
+    assert_eq!(shell_argv[0], "sh");
+    assert_eq!(shell_argv[1], "-c");
+    assert_eq!(shell_argv[2], REMOTE_AGENT_LAUNCH_SHELL_SOURCE);
+    assert_eq!(shell_argv[3], "zaplex-agent-launch");
+    assert_eq!(shell_argv[4], remote_path);
+    let expected_agent_argv = vec![
+        "codex".to_string(),
+        "--model".to_string(),
+        "gpt-5-codex".to_string(),
+        "-c".to_string(),
+        "model_reasoning_effort=\"high\"".to_string(),
+    ];
+    assert_eq!(&shell_argv[8..], expected_agent_argv.as_slice());
+}
 
 fn initialize_app(app: &mut App) {
     // Load the bundled localization so `t!` returns real strings (not keys) —
@@ -209,6 +235,91 @@ fn initialize_app(app: &mut App) {
     app.update(workspace::init);
 }
 
+fn assert_review21_skip_toast_is_neutral(directory: bool) {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
+        app.add_singleton_model(|_| crate::sftp_manager::transfer_queue::TransferQueue::new());
+        let source_root = tempfile::tempdir().unwrap();
+        let target_root = tempfile::tempdir().unwrap();
+        if directory {
+            std::fs::create_dir_all(source_root.path().join("item")).unwrap();
+            std::fs::create_dir_all(target_root.path().join("item")).unwrap();
+            std::fs::write(source_root.path().join("item/same.bin"), b"same").unwrap();
+            std::fs::write(target_root.path().join("item/same.bin"), b"same").unwrap();
+        } else {
+            std::fs::write(source_root.path().join("item.bin"), b"same").unwrap();
+            std::fs::write(target_root.path().join("item.bin"), b"same").unwrap();
+        }
+        let source_backend = Arc::new(crate::sftp_manager::sftp_backend::InMemorySftpBackend::new(
+            source_root.path().to_path_buf(),
+        )) as Arc<dyn crate::sftp_manager::sftp_backend::SftpBackend>;
+        let target_backend = Arc::new(crate::sftp_manager::sftp_backend::InMemorySftpBackend::new(
+            target_root.path().to_path_buf(),
+        )) as Arc<dyn crate::sftp_manager::sftp_backend::SftpBackend>;
+        let (_, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            crate::sftp_manager::browser::SftpBrowserView::new("review21".to_string(), None, ctx)
+        });
+        let flavor = Arc::new(std::sync::Mutex::new(None));
+        app.update(|ctx| {
+            let observed = flavor.clone();
+            ctx.subscribe_to_model(
+                &crate::workspace::ToastStack::handle(ctx),
+                move |_, event, _| {
+                    if let crate::workspace::toast_stack::ToastStackEvent::AddEphemeralToast {
+                        toast,
+                        ..
+                    } = event
+                    {
+                        *observed.lock().unwrap() = Some(toast.flavor_for_test());
+                    }
+                },
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.spawn_backend_queue_job_for_test(
+                source_backend,
+                target_backend,
+                if directory {
+                    PathBuf::from("/item")
+                } else {
+                    PathBuf::from("/item.bin")
+                },
+                if directory {
+                    PathBuf::from("/item")
+                } else {
+                    PathBuf::from("/item.bin")
+                },
+                directory,
+                if directory {
+                    crate::sftp_manager::transfer_job::ConflictDecision::MergeSkip
+                } else {
+                    crate::sftp_manager::transfer_job::ConflictDecision::Skip
+                },
+                "item".to_string(),
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            *flavor.lock().unwrap(),
+            Some(crate::view_components::ToastFlavor::Default),
+            "a fully skipped transfer must use a neutral toast presentation"
+        );
+    });
+}
+
+#[test]
+fn review21_file_skip_toast_is_neutral() {
+    assert_review21_skip_toast_is_neutral(false);
+}
+
+#[test]
+fn review21_directory_skip_toast_is_neutral() {
+    assert_review21_skip_toast_is_neutral(true);
+}
+
 fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     let global_resource_handles = GlobalResourceHandles::mock(app);
     let active_window_id = app.read(|ctx| ctx.windows().active_window());
@@ -269,6 +380,125 @@ fn test_boot_registers_all_keybindings_without_panicking() {
     });
 }
 
+#[test]
+fn transfer_recovery_retry_allocation_failure_is_visible_and_non_destructive() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| crate::sftp_manager::transfer_queue::TransferQueue::new());
+        let workspace = mock_workspace(&mut app);
+        let transfer_id = crate::sftp_manager::transfer_queue::TransferQueue::handle(&app).update(
+            &mut app,
+            |queue, _| {
+                let transfer_id = queue.enqueue("workspace", 1).unwrap();
+                queue.activity_handle(transfer_id).unwrap().set_error(
+                    &crate::sftp_manager::sftp_ops::SftpOpsError::RecoveryRequired {
+                        message: "retained cleanup".to_string(),
+                        recovery_id: Some(42),
+                        paths: vec![std::path::PathBuf::from("/retained")],
+                        committed: false,
+                    },
+                );
+                queue.exhaust_recovery_attempt_ids();
+                transfer_id
+            },
+        );
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::RetryTransferRecovery(transfer_id), ctx);
+        });
+
+        workspace.read(&app, |workspace, app| {
+            assert!(
+                workspace.toast_stack.as_ref(app).has_toasts(),
+                "the global retry error must be visible"
+            );
+        });
+        crate::sftp_manager::transfer_queue::TransferQueue::handle(&app).update(
+            &mut app,
+            |queue, _| {
+                let retained = queue.activity(transfer_id).unwrap();
+                assert!(retained.recovery_retryable);
+                assert!(matches!(
+                    retained.state,
+                    crate::sftp_manager::transfer_queue::QueuedTransferState::Failed(_)
+                ));
+                assert!(queue.enqueue("workspace", 1).is_ok());
+            },
+        );
+    });
+}
+
+#[test]
+fn startup_directory_recovery_is_visible_and_retryable_without_sftp_browser() {
+    use crate::sftp_manager::sftp_backend::{
+        DirectoryReservationFailure, InMemorySftpBackend, SftpBackend,
+    };
+    use crate::sftp_manager::transfer_queue::{QueuedTransferState, TransferQueue};
+    use std::path::Path;
+    use std::time::Duration;
+    use warpui::r#async::Timer;
+
+    let root = tempfile::tempdir().unwrap();
+    let backend = InMemorySftpBackend::new(root.path().to_path_buf())
+        .with_directory_reservation_failure(DirectoryReservationFailure::Identity);
+    let retained =
+        match backend.create_dir_with_ownership_anchor(Path::new("/retained-after-crash")) {
+            Ok(_) => panic!("the injected crash artifact must be retained"),
+            Err(error) => error,
+        };
+    assert!(
+        retained.recovery_id().is_none(),
+        "the backend-level artifact is discovered by the next process"
+    );
+    drop(backend);
+    let restarted: Arc<dyn SftpBackend> =
+        Arc::new(InMemorySftpBackend::new(root.path().to_path_buf()));
+    assert_eq!(restarted.startup_recovery_paths().len(), 1);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(move |ctx| {
+            TransferQueue::new_with_startup_backend_for_test(restarted, ctx)
+        });
+        let workspace = mock_workspace(&mut app);
+        let transfer_id = TransferQueue::handle(&app).read(&app, |queue, _| {
+            let activities = queue.activities().collect::<Vec<_>>();
+            assert_eq!(activities.len(), 1);
+            assert!(activities[0].recovery_retryable);
+            assert!(matches!(
+                activities[0].state,
+                QueuedTransferState::Failed(_)
+            ));
+            activities[0].id
+        });
+        app.read(|app| {
+            assert!(
+                crate::sftp_manager::transfer_panel::render_workspace_transfer_panel(app).is_some(),
+                "startup recovery must be visible at workspace level without an SFTP pane"
+            );
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::RetryTransferRecovery(transfer_id), ctx);
+        });
+        for _ in 0..50 {
+            Timer::after(Duration::from_millis(20)).await;
+            let terminal = TransferQueue::handle(&app).read(&app, |queue, _| {
+                queue.activity(transfer_id).is_some_and(|activity| {
+                    matches!(activity.state, QueuedTransferState::Completed)
+                        && !activity.recovery_retryable
+                })
+            });
+            if terminal {
+                return;
+            }
+        }
+        let activity =
+            TransferQueue::handle(&app).read(&app, |queue, _| queue.activity(transfer_id));
+        panic!("workspace retry did not complete the restart recovery: {activity:?}");
+    });
+}
+
 fn restored_workspace(
     app: &mut App,
     window_snapshot: crate::app_state::WindowSnapshot,
@@ -299,6 +529,7 @@ fn transferred_tab_workspace(
             None,
             NewWorkspaceSource::TransferredTab {
                 tab_color: None,
+                is_pinned: false,
                 custom_title: None,
                 left_panel_open: false,
                 vertical_tabs_panel_open,
@@ -341,28 +572,36 @@ fn open_worktree_sidecar(workspace: &ViewHandle<Workspace>, app: &mut App) {
 #[test]
 #[ignore = "depends on decommissioned PersistedWorkspace"]
 fn test_worktree_sidecar_hover_takes_precedence_over_selection() {
-    unimplemented!("PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended");
+    unimplemented!(
+        "PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended"
+    );
 }
 
 #[cfg(feature = "local_fs")]
 #[test]
 #[ignore = "depends on decommissioned PersistedWorkspace"]
 fn test_worktree_sidecar_pointer_entry_does_not_select_top_repo() {
-    unimplemented!("PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended");
+    unimplemented!(
+        "PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended"
+    );
 }
 
 #[cfg(feature = "local_fs")]
 #[test]
 #[ignore = "depends on decommissioned PersistedWorkspace"]
 fn test_worktree_sidecar_close_via_select_item_executes_from_workspace() {
-    unimplemented!("PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended");
+    unimplemented!(
+        "PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended"
+    );
 }
 
 #[cfg(feature = "local_fs")]
 #[test]
 #[ignore = "depends on decommissioned PersistedWorkspace"]
 fn test_worktree_sidecar_search_editor_enter_executes_selection() {
-    unimplemented!("PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended");
+    unimplemented!(
+        "PersistedWorkspace has been decommissioned, worktree sidecar repo list tests suspended"
+    );
 }
 
 /// RAII guard that removes tab config TOML files whose name starts with
@@ -553,6 +792,166 @@ fn reopen_closed_session_menu_item(
         Some(MenuItem::Item(fields)) if fields.label() == "Reopen closed session" => fields,
         _ => panic!("expected Reopen closed session to be the last new-session menu item"),
     }
+}
+
+fn favorite_host_submenu() -> MenuItem<WorkspaceAction> {
+    super::favorite_host_menu_item(
+        &zaplex_cockpit::Favorite::new(zaplex_cockpit::FavoriteKind::Host, "node-dev", "devhost"),
+        &[("node-dev".to_string(), "devhost".to_string())],
+    )
+}
+
+#[test]
+fn favorite_host_submenu_offers_terminal_and_new_agent() {
+    let MenuItem::Submenu { menu, .. } = favorite_host_submenu() else {
+        panic!("a favorite host must open a right-hand submenu");
+    };
+    assert_eq!(menu.items().len(), 2);
+    assert!(matches!(
+        menu.items()[0].item_on_select_action(),
+        Some(WorkspaceAction::OpenSshTerminalByNode { node_id }) if node_id == "node-dev"
+    ));
+    assert!(matches!(
+        menu.items()[1].item_on_select_action(),
+        Some(WorkspaceAction::OpenSpawnCard { .. })
+    ));
+}
+
+#[test]
+fn new_agent_submenu_opens_spawn_card_without_launching() {
+    let MenuItem::Submenu { menu, .. } = favorite_host_submenu() else {
+        panic!("a favorite host must open a right-hand submenu");
+    };
+    assert!(matches!(
+        menu.items()[1].item_on_select_action(),
+        Some(WorkspaceAction::OpenSpawnCard {
+            registry_node_id: Some(node_id),
+            host_id: None,
+            host: Some(host),
+            project: None,
+        }) if node_id == "node-dev" && host == "devhost"
+    ));
+}
+
+#[test]
+fn stale_favorite_is_disabled_and_removable() {
+    let favorite = zaplex_cockpit::Favorite::new(
+        zaplex_cockpit::FavoriteKind::Host,
+        "deleted-node",
+        "old-devhost",
+    );
+    let item = super::favorite_host_menu_item(&favorite, &[]);
+    let MenuItem::Submenu { fields, menu } = &item else {
+        panic!("a stale favorite must expose a removal submenu");
+    };
+
+    assert!(fields.on_select_action().is_none());
+    assert!(fields
+        .label()
+        .contains(&crate::t!("workspace-favorite-unavailable")));
+    assert_eq!(menu.items().len(), 2);
+    let MenuItem::Item(status) = &menu.items()[0] else {
+        panic!("a stale favorite must show a disabled status row");
+    };
+    assert!(status.is_disabled());
+    assert!(!menu.items()[0].selectable());
+    assert!(status.on_select_action().is_none());
+    assert!(matches!(
+        menu.items()[1].item_on_select_action(),
+        Some(WorkspaceAction::RemoveFavorite { kind, target })
+            if *kind == zaplex_cockpit::FavoriteKind::Host && target == "deleted-node"
+    ));
+    assert!(menu.items()[1].selectable());
+}
+
+#[test]
+fn removed_favorite_host_is_disabled_and_never_routed() {
+    let favorite = zaplex_cockpit::Favorite::new(
+        zaplex_cockpit::FavoriteKind::Host,
+        "removed-node",
+        "removed-host",
+    );
+    let item = super::favorite_host_menu_item(&favorite, &[]);
+    let MenuItem::Submenu { fields, menu } = &item else {
+        panic!("a removed host must expose a removal submenu instead of a live host submenu");
+    };
+
+    assert!(fields.on_select_action().is_none());
+    let MenuItem::Item(status) = &menu.items()[0] else {
+        panic!("a removed host must show a disabled status row");
+    };
+    assert!(status.is_disabled());
+    assert!(!menu.items()[0].selectable());
+    assert!(status.on_select_action().is_none());
+    assert!(matches!(
+        menu.items()[1].item_on_select_action(),
+        Some(WorkspaceAction::RemoveFavorite { kind, target })
+            if *kind == zaplex_cockpit::FavoriteKind::Host && target == "removed-node"
+    ));
+    assert!(menu.items().iter().all(|item| !matches!(
+        item.item_on_select_action(),
+        Some(WorkspaceAction::OpenSshTerminalByNode { .. } | WorkspaceAction::OpenSpawnCard { .. })
+    )));
+}
+
+#[test]
+fn add_favorite_menu_lists_only_unfavorited_registered_hosts() {
+    let favorites = vec![zaplex_cockpit::Favorite::new(
+        zaplex_cockpit::FavoriteKind::Host,
+        "node-a",
+        "alpha",
+    )];
+    let hosts = vec![
+        ("node-b".to_string(), "beta".to_string()),
+        ("node-a".to_string(), "alpha".to_string()),
+    ];
+
+    let Some(MenuItem::Submenu { menu, .. }) =
+        super::add_favorite_hosts_menu_item(&hosts, &favorites)
+    else {
+        panic!("an unfavorited registered host must be available for curation");
+    };
+    assert_eq!(menu.items().len(), 1);
+    assert!(matches!(
+        menu.items()[0].item_on_select_action(),
+        Some(WorkspaceAction::ToggleFavorite {
+            kind: zaplex_cockpit::FavoriteKind::Host,
+            target,
+            label,
+        }) if target == "node-b" && label == "beta"
+    ));
+}
+
+#[test]
+fn automatic_host_registration_never_adds_menu_favorite() {
+    let favorites = Vec::new();
+    let hosts = vec![("node-dev".to_string(), "devhost".to_string())];
+
+    let item = super::add_favorite_hosts_menu_item(&hosts, &favorites);
+
+    assert!(
+        item.is_some(),
+        "the host is available only in the curation submenu"
+    );
+    assert!(
+        favorites.is_empty(),
+        "registering a host must not silently curate it as a favorite"
+    );
+}
+
+#[test]
+fn primary_sidebar_has_exactly_one_host_project_session_tree() {
+    assert_eq!(
+        super::primary_host_navigation_views(true),
+        vec![ToolPanelView::Cockpit]
+    );
+}
+
+#[test]
+fn parallel_ssh_and_cockpit_primary_roots_are_absent() {
+    let views = super::primary_host_navigation_views(true);
+    assert!(!views.contains(&ToolPanelView::SshManager));
+    assert_eq!(views.len(), 1);
 }
 
 #[test]
@@ -793,9 +1192,11 @@ fn test_workspace_sessions_retrieves_tabs() {
                 .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(0).unwrap()))
                 .expect("WindowId was not retrieved.");
 
-            assert!(workspace
-                .workspace_sessions(ctx.window_id(), ctx)
-                .any(|x| { x.pane_view_locator().pane_id == pane_id }));
+            assert!(
+                workspace
+                    .workspace_sessions(ctx.window_id(), ctx)
+                    .any(|x| { x.pane_view_locator().pane_id == pane_id })
+            );
 
             // Add a tab and check if workspace_sessions finds the second session from the new tab.
             workspace.add_terminal_tab(false, ctx);
@@ -804,9 +1205,11 @@ fn test_workspace_sessions_retrieves_tabs() {
                 .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(0).unwrap()))
                 .expect("WindowId was not retrieved.");
 
-            assert!(workspace
-                .workspace_sessions(ctx.window_id(), ctx)
-                .any(|x| { x.pane_view_locator().pane_id == new_pane_id }));
+            assert!(
+                workspace
+                    .workspace_sessions(ctx.window_id(), ctx)
+                    .any(|x| { x.pane_view_locator().pane_id == new_pane_id })
+            );
         });
     });
 }
@@ -831,9 +1234,11 @@ fn test_workspace_sessions_retrieves_panes() {
                 .get_pane_group_view(0)
                 .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(1).unwrap()))
                 .expect("WindowId was not retrieved.");
-            assert!(workspace
-                .workspace_sessions(ctx.window_id(), ctx)
-                .any(|x| { x.pane_view_locator().pane_id == new_pane_id }));
+            assert!(
+                workspace
+                    .workspace_sessions(ctx.window_id(), ctx)
+                    .any(|x| { x.pane_view_locator().pane_id == new_pane_id })
+            );
         });
     });
 }
@@ -1034,6 +1439,134 @@ fn test_reopen_closed_shared_tab() {
             assert!(!pane_group.as_ref(ctx).is_terminal_pane_being_shared(ctx));
             assert_eq!(workspace.tab_count(), 3);
         })
+    });
+}
+
+#[test]
+fn test_tab_pinning_keeps_a_stable_prefix_and_restores_it() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let snapshot = workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 3);
+
+            let second_id = workspace.tabs[1].pane_group.id();
+            let third_id = workspace.tabs[2].pane_group.id();
+            assert_eq!(workspace.set_tab_pinned(1, true, ctx), Some(0));
+            assert_eq!(workspace.set_tab_pinned(2, true, ctx), Some(1));
+            assert_eq!(workspace.active_tab_index(), 1);
+            assert_eq!(workspace.tabs[0].pane_group.id(), second_id);
+            assert_eq!(workspace.tabs[1].pane_group.id(), third_id);
+            assert_eq!(
+                workspace
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.is_pinned)
+                    .collect::<Vec<_>>(),
+                vec![true, true, false]
+            );
+
+            workspace.move_tab(1, TabMovement::Right, ctx);
+            assert_eq!(workspace.tabs[1].pane_group.id(), third_id);
+
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.active_tab_index(), 2);
+            assert_eq!(
+                workspace
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.is_pinned)
+                    .collect::<Vec<_>>(),
+                vec![true, true, false, false]
+            );
+
+            assert_eq!(workspace.set_tab_pinned(0, false, ctx), Some(1));
+            assert_eq!(workspace.tabs[1].pane_group.id(), second_id);
+            assert_eq!(
+                workspace
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.is_pinned)
+                    .collect::<Vec<_>>(),
+                vec![true, false, false, false]
+            );
+
+            workspace.snapshot(ctx.window_id(), false, ctx)
+        });
+
+        let restored = restored_workspace(&mut app, snapshot);
+        restored.read(&app, |workspace, _| {
+            assert_eq!(workspace.active_tab_index(), 2);
+            assert_eq!(
+                workspace
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.is_pinned)
+                    .collect::<Vec<_>>(),
+                vec![true, false, false, false]
+            );
+        });
+    });
+}
+
+#[test]
+fn restored_legacy_pin_order_keeps_the_original_active_tab() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let mut snapshot = workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            workspace.activate_tab(0, ctx);
+            workspace.snapshot(ctx.window_id(), false, ctx)
+        });
+        snapshot.active_tab_index = 0;
+        snapshot.tabs[0].selected_color = SelectedTabColor::Color(AnsiColorIdentifier::Red);
+        snapshot.tabs[1].is_pinned = true;
+
+        let restored = restored_workspace(&mut app, snapshot);
+        restored.read(&app, |workspace, _| {
+            assert_eq!(workspace.active_tab_index(), 1);
+            assert_eq!(
+                workspace.tabs[workspace.active_tab_index()].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Red)
+            );
+            assert_eq!(
+                workspace
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.is_pinned)
+                    .collect::<Vec<_>>(),
+                vec![true, false, false]
+            );
+        });
+    });
+}
+
+#[test]
+fn test_pinned_tab_always_requires_close_confirmation() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(disable_quit_warning);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.set_tab_pinned(1, true, ctx), Some(0));
+
+            workspace.handle_action(&WorkspaceAction::CloseTab(0), ctx);
+
+            assert_eq!(workspace.tab_count(), 2);
+            assert!(
+                workspace
+                    .current_workspace_state
+                    .is_close_session_confirmation_dialog_open
+            );
+        });
     });
 }
 
@@ -1773,6 +2306,27 @@ fn set_left_panel_visibility_across_tabs(is_enabled: bool, ctx: &mut ViewContext
     });
 }
 
+#[test]
+fn markdown_viewer_window_starts_without_vertical_tabs_sidebar() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(|ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
+            });
+
+            assert!(!Workspace::initial_vertical_tabs_panel_open(
+                &NewWorkspaceSource::NotebookFromFilePath {
+                    file_path: Some(PathBuf::from("README.md")),
+                },
+                ctx,
+            ));
+        });
+    });
+}
+
 fn add_get_started_tab(workspace: &mut Workspace, ctx: &mut ViewContext<Workspace>) {
     workspace.add_tab_with_pane_layout(
         PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
@@ -2042,9 +2596,11 @@ fn test_vertical_tabs_panel_restored_open_when_show_in_restored_windows_enabled(
         app.update(|ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
                 report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
-                report_if_error!(settings
-                    .show_vertical_tab_panel_in_restored_windows
-                    .set_value(true, ctx));
+                report_if_error!(
+                    settings
+                        .show_vertical_tab_panel_in_restored_windows
+                        .set_value(true, ctx)
+                );
             });
         });
 
@@ -2407,14 +2963,18 @@ fn test_unified_new_session_menu_includes_reopen_closed_session() {
 #[test]
 #[ignore = "depends on the decommissioned PersistedWorkspace"]
 fn test_worktree_sidecar_search_editor_proxies_navigation_and_escape() {
-    unimplemented!("PersistedWorkspace has been decommissioned, worktree sidecar repository list testing is paused");
+    unimplemented!(
+        "PersistedWorkspace has been decommissioned, worktree sidecar repository list testing is paused"
+    );
 }
 
 #[cfg(feature = "local_fs")]
 #[test]
 #[ignore = "depends on the decommissioned PersistedWorkspace"]
 fn test_worktree_sidecar_hides_linked_worktrees_from_repo_list() {
-    unimplemented!("PersistedWorkspace has been decommissioned, worktree sidecar repository list testing is paused");
+    unimplemented!(
+        "PersistedWorkspace has been decommissioned, worktree sidecar repository list testing is paused"
+    );
 }
 
 #[test]
@@ -2429,9 +2989,11 @@ fn test_vertical_tabs_context_menu_does_not_show_hover_only_tab_bar() {
 
         workspace.update(&mut app, |workspace, ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .workspace_decoration_visibility
-                    .set_value(WorkspaceDecorationVisibility::OnHover, ctx));
+                report_if_error!(
+                    settings
+                        .workspace_decoration_visibility
+                        .set_value(WorkspaceDecorationVisibility::OnHover, ctx)
+                );
                 report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
             });
             workspace.should_show_ai_assistant_warm_welcome = false;
@@ -2456,9 +3018,11 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
 
         workspace.update(&mut app, |workspace, ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .workspace_decoration_visibility
-                    .set_value(WorkspaceDecorationVisibility::OnHover, ctx));
+                report_if_error!(
+                    settings
+                        .workspace_decoration_visibility
+                        .set_value(WorkspaceDecorationVisibility::OnHover, ctx)
+                );
             });
             workspace.should_show_ai_assistant_warm_welcome = false;
 
@@ -2478,8 +3042,7 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
 /// card resolves against SSH `node.id`s. `node_for_daemon_host_in` must invert
 /// the live daemon↔node association so the scoped launch preselects the right
 /// SSH node — even when two hosts share a display label — and must yield `None`
-/// for a daemon that no longer maps to a live node (so the caller falls back to
-/// name matching rather than silently launching on Local).
+/// for a daemon that no longer maps to a live node.
 #[cfg(all(unix, feature = "local_tty"))]
 #[test]
 fn node_for_daemon_host_in_translates_daemon_id_to_ssh_node() {
@@ -2492,21 +3055,260 @@ fn node_for_daemon_host_in_translates_daemon_id_to_ssh_node() {
             ("node-2", "daemon-b".to_string()),
         ]
     };
+    let registered = vec!["node-1".to_string(), "node-2".to_string()];
 
     assert_eq!(
-        super::node_for_daemon_host_in("daemon-b", assocs()),
+        super::node_for_daemon_host_in("daemon-b", assocs(), &registered),
         Some("node-2".to_string()),
         "daemon-b must translate to its own SSH node, not the first same-named one",
     );
     assert_eq!(
-        super::node_for_daemon_host_in("daemon-a", assocs()),
+        super::node_for_daemon_host_in("daemon-a", assocs(), &registered),
         Some("node-1".to_string()),
     );
 
-    // An untranslatable daemon id (session since dropped) yields None, so the
-    // caller keeps the host name and resolution falls back to name — never Local.
+    // An untranslatable daemon id (session since dropped) yields None.
     assert_eq!(
-        super::node_for_daemon_host_in("daemon-gone", assocs()),
+        super::node_for_daemon_host_in("daemon-gone", assocs(), &registered),
         None
     );
+
+    // A stale manager association is no longer routable once its registered
+    // host has been removed.
+    assert_eq!(
+        super::node_for_daemon_host_in("daemon-b", assocs(), &["node-1".to_string()],),
+        None
+    );
+}
+
+#[test]
+fn unresolved_daemon_scope_never_falls_back_to_display_name() {
+    let (node_id, host_name) = super::reconcile_spawn_host_scope(
+        None,
+        Some("daemon-gone"),
+        None,
+        Some("devbox".to_string()),
+    );
+
+    assert_eq!(node_id, None);
+    assert_eq!(
+        host_name, None,
+        "a stale daemon association must not preselect a different same-named host"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn adopted_pty_deduplication_is_host_scoped() {
+    let first = super::daemon_adoption_key("node-a", "pty-1", 7);
+    let second = super::daemon_adoption_key("node-b", "pty-1", 7);
+
+    assert_ne!(
+        first, second,
+        "matching daemon-local PTY ids and generations on different hosts must open different tabs"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn pty_dedupe_uses_current_authoritative_agent_after_handoff() {
+    let identity = |session_id: &str| remote_server::proto::AgentSessionIdentity {
+        provider: "codex".to_string(),
+        account_email: "agent@example.com".to_string(),
+        config_dir: "/home/agent/.codex".to_string(),
+        session_id: session_id.to_string(),
+    };
+    let agent_a = identity("agent-a");
+    let agent_b = identity("agent-b");
+    let inventory = remote_server::proto::AgentSessionList {
+        sessions: vec![remote_server::proto::AgentSessionInfo {
+            session_id: agent_b.session_id.clone(),
+            provider: agent_b.provider.clone(),
+            config_dir: agent_b.config_dir.clone(),
+            account_email: agent_b.account_email.clone(),
+            pty_session_id: "pty-1".to_string(),
+            pty_session_generation: 7,
+            pty_foreground: true,
+            ..Default::default()
+        }],
+    };
+
+    assert!(
+        !super::agent_inventory_confirms_binding(&inventory, "pty-1", 7, &agent_a),
+        "a stale inventory row must not focus a PTY after its foreground handoff"
+    );
+    assert!(
+        super::agent_inventory_confirms_binding(&inventory, "pty-1", 7, &agent_b),
+        "the current foreground agent may reuse the one PTY tab"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rejected_adopt_cleanup_does_not_poison_retry_key() {
+    let rejected_connection = warp_core::SessionId::from(41u64);
+    let live_connection = warp_core::SessionId::from(42u64);
+    let rejected_key = super::daemon_adoption_key("node-a", "pty-1", 7);
+    let live_key = super::daemon_adoption_key("node-a", "pty-2", 8);
+    let mut adopted = std::collections::HashMap::from([
+        (
+            rejected_key.clone(),
+            super::AdoptedDaemonSession {
+                pane_group_id: warpui::EntityId::new(),
+                connection_session_id: rejected_connection,
+            },
+        ),
+        (
+            live_key.clone(),
+            super::AdoptedDaemonSession {
+                pane_group_id: warpui::EntityId::new(),
+                connection_session_id: live_connection,
+            },
+        ),
+    ]);
+
+    super::remove_adopted_daemon_session(&mut adopted, rejected_connection);
+
+    assert!(
+        !adopted.contains_key(&rejected_key),
+        "a rejected provisional tab must not intercept the next atomic attach attempt"
+    );
+    assert!(
+        adopted.contains_key(&live_key),
+        "cleaning one rejected connection must preserve unrelated live adopts"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_node_route_falls_back_to_surviving_connection() {
+    let first = warp_core::SessionId::from(51u64);
+    let rejected = warp_core::SessionId::from(52u64);
+    let mut routes = std::collections::HashMap::new();
+
+    super::remember_daemon_node_session(&mut routes, "node-a".to_string(), first);
+    super::remember_daemon_node_session(&mut routes, "node-a".to_string(), rejected);
+    super::forget_daemon_node_session(&mut routes, rejected);
+
+    assert_eq!(
+        routes.get("node-a"),
+        Some(&vec![first]),
+        "rejecting a provisional adopt must preserve an older live route for the node"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cockpit_daemon_adopt_uses_resolved_onekey_auth() {
+    let mut server = warp_ssh_manager::SshServerInfo::new_default("node-a".to_string());
+    server.username = "placeholder".to_string();
+    server.auth_type = warp_ssh_manager::AuthType::OneKey;
+    let resolved = warp_ssh_manager::ResolvedSshAuth {
+        username: "resolved-user".to_string(),
+        auth_type: warp_ssh_manager::AuthType::Key,
+        key_path: Some("/keys/resolved".to_string()),
+        secret_lookup_id: "credential-a".to_string(),
+        secret_kind: warp_ssh_manager::SecretKind::Passphrase,
+    };
+
+    let server = super::apply_daemon_server_auth(server, resolved);
+
+    assert_eq!(server.username, "resolved-user");
+    assert_eq!(server.auth_type, warp_ssh_manager::AuthType::Key);
+    assert_eq!(server.key_path.as_deref(), Some("/keys/resolved"));
+}
+
+#[test]
+fn invalid_pid_never_reaches_local_signal_backend() {
+    let mut signal_calls = 0;
+    let _ = send_verified_guardrail_signal_with(
+        u32::MAX,
+        Some("birth-1"),
+        Some("birth-1"),
+        zaplex_cockpit::GuardrailSignal::Interrupt,
+        |_, _| {
+            signal_calls += 1;
+            GuardrailSendOutcome::Sent
+        },
+    );
+
+    assert_eq!(signal_calls, 0);
+}
+
+#[test]
+fn recycled_pid_never_reaches_local_signal_backend() {
+    let mut signal_calls = 0;
+    let _ = send_verified_guardrail_signal_with(
+        4242,
+        Some("original-process"),
+        Some("recycled-process"),
+        zaplex_cockpit::GuardrailSignal::Kill,
+        |_, _| {
+            signal_calls += 1;
+            GuardrailSendOutcome::Sent
+        },
+    );
+
+    assert_eq!(signal_calls, 0);
+}
+
+#[test]
+fn unprovable_process_identity_never_reaches_local_signal_backend() {
+    for (expected, observed) in [(None, Some("live")), (Some("expected"), None), (None, None)] {
+        let mut signal_calls = 0;
+        let _ = send_verified_guardrail_signal_with(
+            4242,
+            expected,
+            observed,
+            zaplex_cockpit::GuardrailSignal::Interrupt,
+            |_, _| {
+                signal_calls += 1;
+                GuardrailSendOutcome::Sent
+            },
+        );
+
+        assert_eq!(
+            signal_calls, 0,
+            "expected={expected:?}, observed={observed:?} must fail closed"
+        );
+    }
+}
+
+#[test]
+fn recycled_remote_pid_is_rejected_before_remote_request() {
+    let mut remote_request_calls = 0;
+    let _ = send_verified_guardrail_signal_with(
+        4242,
+        Some("inventory-process"),
+        Some("current-process"),
+        zaplex_cockpit::GuardrailSignal::Interrupt,
+        |_, _| {
+            remote_request_calls += 1;
+            GuardrailSendOutcome::Sent
+        },
+    );
+
+    assert_eq!(
+        remote_request_calls, 0,
+        "a stale remote row must be rejected before sending a remote signal request"
+    );
+}
+
+#[test]
+fn matching_process_identity_reaches_signal_backend_once() {
+    let mut signal_calls = 0;
+    let _ = send_verified_guardrail_signal_with(
+        4242,
+        Some("same-process"),
+        Some("same-process"),
+        zaplex_cockpit::GuardrailSignal::Interrupt,
+        |pid, signal| {
+            signal_calls += 1;
+            assert_eq!(pid, 4242);
+            assert_eq!(signal, zaplex_cockpit::GuardrailSignal::Interrupt);
+            GuardrailSendOutcome::Sent
+        },
+    );
+
+    assert_eq!(signal_calls, 1);
 }

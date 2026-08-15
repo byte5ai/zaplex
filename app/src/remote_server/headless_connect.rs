@@ -20,11 +20,14 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use remote_server::auth::RemoteServerAuthContext;
-use remote_server::proto::SessionInfo;
+use remote_server::proto::{InitializeResponse, MultiplexerSessionList, SessionList};
 use remote_server::transport::{Connection, RemoteTransport};
 use warp_core::SessionId;
-use warp_ssh_manager::{AuthType, SshServerInfo};
+use warp_ssh_manager::{
+    build_ssh_args, validate_ssh_endpoint, AuthType, EndpointUse, SshServerInfo,
+};
 use warpui::r#async::executor::Background;
+use zaplex_remote_session::types::{has_feature, FEATURE_MULTIPLEXER_INVENTORY_V1};
 
 use super::ssh_transport::SshTransport;
 
@@ -34,6 +37,21 @@ use super::ssh_transport::SshTransport;
 /// sessions — interactive and daemon — by `SessionId`, so uniqueness matters.
 const DAEMON_SESSION_ID_BASE: u64 = 1 << 63;
 static NEXT_DAEMON_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Session inventory returned by one authenticated daemon connection.
+///
+/// Older daemons contribute their native sessions and an empty multiplexer
+/// list. A client never replaces the typed multiplexer RPC with a host-shell
+/// fallback.
+#[derive(Debug, Default)]
+pub struct HostSessionInventory {
+    pub daemon: SessionList,
+    pub multiplexers: MultiplexerSessionList,
+}
+
+fn supports_multiplexer_inventory(response: &InitializeResponse) -> bool {
+    has_feature(&response.features, FEATURE_MULTIPLEXER_INVENTORY_V1)
+}
 
 /// Allocates a fresh, collision-safe `SessionId` for a daemon-hosted session.
 pub fn alloc_daemon_session_id() -> SessionId {
@@ -94,11 +112,55 @@ async fn control_master_alive(socket_path: &Path) -> bool {
     )
 }
 
+fn control_master_args(server: &SshServerInfo, socket_path: &Path) -> Result<Vec<String>> {
+    let endpoint =
+        validate_ssh_endpoint(EndpointUse::Connect, &server.host, &server.port.to_string())
+            .map_err(|error| anyhow!(error))?;
+    let mut validated_server = server.clone();
+    validated_server.host = endpoint.host;
+    validated_server.port = endpoint.port;
+
+    let mut args: Vec<String> = build_ssh_args(&validated_server)
+        .into_iter()
+        .skip(1)
+        .collect();
+    let destination_delimiter = args
+        .iter()
+        .position(|arg| arg == "--")
+        .ok_or_else(|| anyhow!("SSH destination delimiter is missing"))?;
+    args.splice(
+        destination_delimiter..destination_delimiter,
+        [
+            "-f".into(), // background after authentication
+            "-N".into(), // no remote command — pure multiplexing master
+            "-o".into(),
+            "ControlMaster=auto".into(),
+            "-o".into(),
+            // Idle timeout, NOT `yes`: `yes` keeps the backgrounded master alive
+            // forever (it even survives app exit, since `-f` detaches it), and daemon
+            // sessions no longer stop it on tab close (it's a shared per-host master).
+            // A timeout lets it self-retire after the last client goes idle, while
+            // still being reused for reconnects / new tabs within the window. The
+            // remote daemon session is independent of the master and survives either way.
+            "ControlPersist=600".into(),
+            "-o".into(),
+            format!("ControlPath={}", socket_path.display()),
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "-o".into(),
+            "ConnectTimeout=10".into(),
+        ],
+    );
+    Ok(args)
+}
+
 /// Ensures a ControlMaster is up at `socket_path` (idempotent via
 /// `ControlMaster=auto` + `ControlPersist`). Spawns `ssh -f -N …`, which
 /// authenticates and then backgrounds itself; the master socket exists by the
 /// time the foreground process exits. Key/agent auth only (`BatchMode=yes`).
 pub async fn ensure_control_master(server: &SshServerInfo, socket_path: &Path) -> Result<()> {
+    let args = control_master_args(server, socket_path)?;
+
     if socket_path.exists() {
         // A socket file is present, but the master may have died on an SSH drop,
         // leaving a stale socket. Verify it's actually serving: reuse a live
@@ -114,44 +176,6 @@ pub async fn ensure_control_master(server: &SshServerInfo, socket_path: &Path) -
         );
         let _ = std::fs::remove_file(socket_path);
     }
-
-    let mut args: Vec<String> = Vec::new();
-    if server.port != 22 {
-        args.push("-p".into());
-        args.push(server.port.to_string());
-    }
-    if let Some(key) = server.key_path.as_deref().filter(|p| !p.is_empty()) {
-        args.push("-i".into());
-        args.push(key.to_string());
-    }
-    args.extend([
-        "-f".into(), // background after authentication
-        "-N".into(), // no remote command — pure multiplexing master
-        "-o".into(),
-        "ControlMaster=auto".into(),
-        "-o".into(),
-        // Idle timeout, NOT `yes`: `yes` keeps the backgrounded master alive
-        // forever (it even survives app exit, since `-f` detaches it), and daemon
-        // sessions no longer stop it on tab close (it's a shared per-host master).
-        // A timeout lets it self-retire after the last client goes idle, while
-        // still being reused for reconnects / new tabs within the window. The
-        // remote daemon session is independent of the master and survives either way.
-        "ControlPersist=600".into(),
-        "-o".into(),
-        format!("ControlPath={}", socket_path.display()),
-        "-o".into(),
-        "BatchMode=yes".into(),
-        "-o".into(),
-        "ConnectTimeout=10".into(),
-        "-o".into(),
-        "StrictHostKeyChecking=accept-new".into(),
-    ]);
-    let target = if server.username.is_empty() {
-        server.host.clone()
-    } else {
-        format!("{}@{}", server.username, server.host)
-    };
-    args.push(target);
 
     let output = tokio::time::timeout(
         Duration::from_secs(20),
@@ -271,8 +295,9 @@ pub async fn prepare_daemon_transport(
 }
 
 /// Connects to `server`'s daemon (a transient connection) and returns the
-/// sessions it currently owns — including ones that survived an app restart or
-/// transport drop, which is the whole point of the adopt-sidebar. Self-contained:
+/// sessions it currently owns plus any existing tmux/byobu sessions — including
+/// ones that survived an app restart or transport drop, which is the whole point
+/// of the adopt-sidebar. Self-contained:
 /// brings up the ControlMaster + binary, connects, runs the initialize handshake,
 /// calls `list_sessions`, then tears the transient connection down again (the
 /// daemon and its sessions persist independently of this connection).
@@ -285,7 +310,7 @@ pub async fn list_daemon_sessions(
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
     executor: Arc<Background>,
-) -> std::result::Result<Vec<SessionInfo>, String> {
+) -> std::result::Result<HostSessionInventory, String> {
     prepare_daemon_transport(server, socket_path.clone(), auth_context.clone()).await?;
     let transport = SshTransport::new(socket_path, auth_context.clone());
     let Connection { client, child, .. } = transport
@@ -296,62 +321,28 @@ pub async fn list_daemon_sessions(
     // down when this returns. The daemon itself keeps running.
     let _child = child;
     let auth_token = auth_context.get_auth_token().await;
-    client
+    let initialize = client
         .initialize(auth_token.as_deref())
         .await
         .map_err(|e| format!("daemon handshake failed: {e:#}"))?;
-    let list = client
+    let daemon = client
         .list_sessions()
         .await
         .map_err(|e| format!("list_sessions failed: {e:#}"))?;
-    Ok(list.sessions)
+    let multiplexers = if supports_multiplexer_inventory(&initialize) {
+        client
+            .list_multiplexer_sessions()
+            .await
+            .map_err(|e| format!("list_multiplexer_sessions failed: {e:#}"))?
+    } else {
+        MultiplexerSessionList::default()
+    };
+    Ok(HostSessionInventory {
+        daemon,
+        multiplexers,
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use warp_ssh_manager::{AuthType, SshServerInfo};
-
-    fn server(auth: AuthType) -> SshServerInfo {
-        let mut s = SshServerInfo::new_default("node-1".to_string());
-        s.host = "example.com".to_string();
-        s.username = "me".to_string();
-        s.port = 22;
-        s.auth_type = auth;
-        s
-    }
-
-    #[test]
-    fn headless_capable_only_for_key_auth() {
-        assert!(is_headless_capable(&server(AuthType::Key)));
-        assert!(!is_headless_capable(&server(AuthType::Password)));
-        // OneKey is resolved to Key/Password upstream (resolve_server_auth); the
-        // bare OneKey marker is not headless-capable on its own.
-        assert!(!is_headless_capable(&server(AuthType::OneKey)));
-    }
-
-    #[test]
-    fn control_socket_path_is_stable_and_per_host() {
-        let a1 = control_socket_path(&server(AuthType::Key));
-        let a2 = control_socket_path(&server(AuthType::Key));
-        assert_eq!(a1, a2, "same host → same socket path (run-to-run stable)");
-
-        let mut other = server(AuthType::Key);
-        other.host = "other.example.com".to_string();
-        assert_ne!(
-            a1,
-            control_socket_path(&other),
-            "different host → different socket"
-        );
-        assert!(a1.to_string_lossy().contains(".ssh/zaplex-daemon-"));
-    }
-
-    #[test]
-    fn daemon_session_ids_are_unique_and_in_top_half() {
-        let a = alloc_daemon_session_id();
-        let b = alloc_daemon_session_id();
-        assert_ne!(a, b, "each allocation is unique");
-        assert!(a.as_u64() >= DAEMON_SESSION_ID_BASE, "top-half id (no collision with shell ids)");
-        assert!(b.as_u64() >= DAEMON_SESSION_ID_BASE);
-    }
-}
+#[path = "headless_connect_tests.rs"]
+mod tests;

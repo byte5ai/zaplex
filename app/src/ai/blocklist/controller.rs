@@ -11,7 +11,7 @@ mod slash_command;
 use input_context::{input_context_for_request, parse_context_attachments};
 pub use slash_command::*;
 
-use self::response_stream::{PendingTitleGeneration, ResponseStream, ResponseStreamEvent};
+use self::response_stream::{ResponseStream, ResponseStreamEvent};
 use super::agent_view::AgentViewEntryOrigin;
 use super::ResponseStreamId;
 use super::{
@@ -76,10 +76,7 @@ use pending_response_streams::PendingResponseStreams;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use warp_core::assertions::safe_assert;
-use warp_multi_agent_api::{
-    client_action::{Action, UpdateTaskDescription},
-    message, ClientAction, Task, ToolType,
-};
+use warp_multi_agent_api::{message, Task, ToolType};
 use warpui::r#async::SpawnedFutureHandle;
 
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -141,7 +138,10 @@ impl SessionContext {
     /// Returns `true` if this is a remote session (regardless of whether
     /// the remote server client is connected).
     pub fn is_remote(&self) -> bool {
-        matches!(self.session_type, Some(SessionType::ZaplexifiedRemote { .. }))
+        matches!(
+            self.session_type,
+            Some(SessionType::ZaplexifiedRemote { .. })
+        )
     }
 
     /// Zaplex: legacy SSH connection info (host/port); only meaningful when `is_legacy_ssh()` is true.
@@ -382,21 +382,6 @@ pub struct BlocklistAIController {
             Option<PassiveSuggestionTrigger>,
         )>,
     >,
-    /// A RequestInput stashed because readiness reported PendingToolResults for a BYOP request.
-    /// Once the conversation's live action completes and triggers FinishedAction, it is
-    /// taken out and resent by `flush_pending_byop_request_after_finished_action`,
-    /// so the user-submitted prompt is not silently dropped.
-    /// At most one entry is kept per conversation; a subsequent direct submission from the user overwrites it.
-    pending_byop_requests: HashMap<AIConversationId, PendingByopRequest>,
-}
-
-/// See `pending_byop_requests`.
-struct PendingByopRequest {
-    request_input: RequestInput,
-    query_metadata: Option<RequestMetadata>,
-    default_to_follow_up_on_success: bool,
-    can_attempt_resume_on_error: bool,
-    is_queued_prompt: bool,
 }
 
 enum InputQueryType {
@@ -564,11 +549,6 @@ impl BlocklistAIController {
             } else {
                 FollowUpTrigger::Auto
             };
-            // Prefer resending the BYOP request stashed by readiness (which contains the user's original prompt);
-            // if there is none, fall back to the original follow-up path (sending only finished_action_results).
-            if me.flush_pending_byop_request_after_finished_action(*conversation_id, ctx) {
-                return;
-            }
             me.send_follow_up_for_conversation(*conversation_id, trigger, ctx);
         });
 
@@ -621,7 +601,6 @@ impl BlocklistAIController {
             pending_auto_resume_handles: HashMap::new(),
             pending_passive_follow_ups: HashSet::new(),
             pending_passive_suggestion_results: HashMap::new(),
-            pending_byop_requests: HashMap::new(),
         }
     }
 
@@ -783,16 +762,7 @@ impl BlocklistAIController {
             is_queued_prompt,
             ctx,
         ) {
-            if let Some(pending) = e.downcast_ref::<PendingByopToolResultsError>() {
-                log::debug!(
-                    "[byop-readiness] request is waiting for pending tool result(s) \
-                     category={:?} tool_calls={}",
-                    pending.category(),
-                    pending.tool_call_count()
-                );
-            } else {
-                log::error!("Failed to send agent request: {e:?}");
-            }
+            log::error!("Failed to send agent request: {e:?}");
         }
     }
 
@@ -1511,73 +1481,6 @@ impl BlocklistAIController {
         self.pending_passive_follow_ups.remove(&conversation_id);
     }
 
-    /// When a conversation's live action completes, if that conversation previously had a BYOP request
-    /// stashed because readiness reported PendingToolResults, prefer resending that request (so the user's
-    /// original prompt is not lost), and merge the finished_action_results produced by the completed action
-    /// into the same RequestInput to avoid issuing two requests.
-    /// Returns true if a pending request was consumed and a send was attempted; false if there was no pending request to flush.
-    fn flush_pending_byop_request_after_finished_action(
-        &mut self,
-        conversation_id: AIConversationId,
-        ctx: &mut ModelContext<Self>,
-    ) -> bool {
-        let Some(pending) = self.pending_byop_requests.remove(&conversation_id) else {
-            return false;
-        };
-        let PendingByopRequest {
-            mut request_input,
-            query_metadata,
-            default_to_follow_up_on_success,
-            can_attempt_resume_on_error,
-            is_queued_prompt,
-        } = pending;
-
-        let finished_results = self.action_model.update(ctx, |action_model, _| {
-            action_model.drain_finished_action_results(conversation_id)
-        });
-        if !finished_results.is_empty() {
-            let context = input_context_for_request(
-                false,
-                self.context_model.as_ref(ctx),
-                self.active_session.as_ref(ctx),
-                Some(conversation_id),
-                vec![],
-                ctx,
-            );
-            for result in finished_results {
-                request_input
-                    .input_messages
-                    .entry(result.task_id.clone())
-                    .or_default()
-                    .push(AIAgentInput::ActionResult {
-                        result,
-                        context: context.clone(),
-                    });
-            }
-        }
-
-        log::debug!(
-            "[byop-readiness] flushing pending BYOP request after finished action \
-             conversation_id={conversation_id:?}"
-        );
-        if let Err(e) = self.send_request_input(
-            request_input,
-            query_metadata,
-            default_to_follow_up_on_success,
-            can_attempt_resume_on_error,
-            is_queued_prompt,
-            ctx,
-        ) {
-            // On second failure, do not retry in a loop: if Pending is reported again, the error
-            // has already been re-written into pending_byop_requests by send_request_input;
-            // if it's another error, handle it via the existing controller paths.
-            if e.downcast_ref::<PendingByopToolResultsError>().is_none() {
-                log::error!("[byop-readiness] failed to flush pending BYOP request: {e:?}");
-            }
-        }
-        true
-    }
-
     pub fn resume_conversation(
         &mut self,
         conversation_id: AIConversationId,
@@ -1947,8 +1850,6 @@ impl BlocklistAIController {
         agent_name: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) -> api::RequestParams {
-        let history_model = BlocklistAIHistoryModel::handle(ctx);
-        let conversation_id = conversation_data.id;
         let mut request_params = api::RequestParams::new(
             Some(self.terminal_view_id),
             SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
@@ -1960,18 +1861,7 @@ impl BlocklistAIController {
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
 
-        let compaction_cfg = crate::ai::byop_compaction::CompactionConfig::from_settings(ctx);
-        history_model.update(ctx, |history_model, _ctx| {
-            if let Some(convo) = history_model.conversation_mut(&conversation_id) {
-                crate::ai::byop_compaction::commit::prune_now(convo, &compaction_cfg);
-            }
-        });
-        if let Some(convo) = history_model.as_ref(ctx).conversation(&conversation_id) {
-            request_params.compaction_state = Some(convo.compaction_state.clone());
-            request_params.byop_repair_state = convo.byop_repair_state.clone();
-        }
-
-        self.populate_lrc_request_params(&mut request_params, conversation_id);
+        self.populate_lrc_request_params(&mut request_params, request_input.conversation_id);
         request_params
     }
 
@@ -2846,7 +2736,7 @@ impl BlocklistAIController {
     /// flow that handles existing conversations properly.
     fn send_request_input(
         &mut self,
-        mut request_input: RequestInput,
+        request_input: RequestInput,
         query_metadata: Option<RequestMetadata>,
         default_to_follow_up_on_success: bool,
         can_attempt_resume_on_error: bool,
@@ -2855,7 +2745,7 @@ impl BlocklistAIController {
     ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         let request_snapshot = self.conversation_snapshot_for_request(&request_input, ctx)?;
-        let mut conversation_data = request_snapshot.conversation_data;
+        let conversation_data = request_snapshot.conversation_data;
         let conversation_id = conversation_data.id;
 
         // Cancel any pending auto-resume for this conversation, since the user is sending a new
@@ -2866,10 +2756,6 @@ impl BlocklistAIController {
         {
             handle.abort();
         }
-        // A new request round begins; first discard any old request previously stashed due to
-        // readiness Pending. If this preflight encounters PendingToolResults again, it will be re-written below.
-        self.pending_byop_requests.remove(&conversation_id);
-
         // Make sure there's no existing response stream for the conversation. If
         // there is, something has gone wrong.
         if self
@@ -2904,7 +2790,7 @@ impl BlocklistAIController {
             &conversation_data.server_conversation_token,
         );
 
-        let mut request_params = self.build_request_params_for_input(
+        let request_params = self.build_request_params_for_input(
             &request_input,
             conversation_data.clone(),
             query_metadata.clone(),
@@ -2912,99 +2798,6 @@ impl BlocklistAIController {
             request_snapshot.agent_name,
             ctx,
         );
-        let preflight_result = self.run_byop_request_preflight(
-            &mut request_input,
-            &mut conversation_data,
-            &mut request_params,
-            query_metadata.clone(),
-            ctx,
-        );
-        if let Err(error) = preflight_result {
-            if let Some(pending) = error.downcast_ref::<PendingByopToolResultsError>() {
-                log::debug!(
-                    "[byop-readiness] BYOP request not opened; waiting for pending tool \
-                     result(s) category={:?} tool_calls={} conversation_id={} \
-                     request_attempt_id={}",
-                    pending.category(),
-                    pending.tool_call_count(),
-                    conversation_data.id,
-                    request_params
-                        .byop_readiness_attempt_id
-                        .as_deref()
-                        .unwrap_or("unknown")
-                );
-                // Stash the user's input, and when the live action in the conversation completes and
-                // triggers FinishedAction, re-send it in `flush_pending_byop_request_after_finished_action`
-                // to avoid silently losing the request.
-                self.pending_byop_requests.insert(
-                    conversation_id,
-                    PendingByopRequest {
-                        request_input,
-                        query_metadata,
-                        default_to_follow_up_on_success,
-                        can_attempt_resume_on_error,
-                        is_queued_prompt,
-                    },
-                );
-                return Err(error);
-            }
-            if let Some(blocked) = error.downcast_ref::<BlockedByopReadinessError>() {
-                log::error!(
-                    "[byop-readiness] rendering blocked request error category={:?} \
-                     conversation_id={} request_attempt_id={}",
-                    blocked.category(),
-                    conversation_data.id,
-                    request_params
-                        .byop_readiness_attempt_id
-                        .as_deref()
-                        .unwrap_or("unknown")
-                );
-                return self.complete_byop_blocked_request(
-                    request_input,
-                    conversation_data.id,
-                    request_params.model.clone(),
-                    is_queued_prompt,
-                    BLOCKED_BYOP_REQUEST_MESSAGE.to_owned(),
-                    ctx,
-                );
-            }
-            // When the persistence path fails (shared session cannot be saved, persistence disabled in settings,
-            // SQLite sender unavailable, or channel full), it would normally bubble up as a generic anyhow::Error
-            // and be silently swallowed by log::error!, leaving the user without any feedback. Here we route it through
-            // the blocked request UI path so the user can see the failure reason.
-            if let Some(persistence_err) =
-                error.downcast_ref::<crate::ai::agent::conversation::UpdateConversationError>()
-            {
-                if matches!(
-                    persistence_err,
-                    crate::ai::agent::conversation::UpdateConversationError::ByopPreflightPersistenceUnavailable(_)
-                    | crate::ai::agent::conversation::UpdateConversationError::ByopPreflightPersistenceSend(_)
-                ) {
-                    log::error!(
-                        "[byop-readiness] rendering blocked request due to persistence failure: \
-                         {persistence_err:?} conversation_id={} request_attempt_id={}",
-                        conversation_data.id,
-                        request_params
-                            .byop_readiness_attempt_id
-                            .as_deref()
-                            .unwrap_or("unknown")
-                    );
-                    return self.complete_byop_blocked_request(
-                        request_input,
-                        conversation_data.id,
-                        request_params.model.clone(),
-                        is_queued_prompt,
-                        "Zaplex couldn't save the BYOP conversation state needed to send this \
-                         request. Check that conversation persistence is enabled and that there \
-                         is enough disk space, then try again."
-                            .to_owned(),
-                        ctx,
-                    );
-                }
-            }
-            return Err(error);
-        }
-
         let server_conversation_token_for_identifiers =
             conversation_data.server_conversation_token.clone();
 
@@ -3218,62 +3011,6 @@ impl BlocklistAIController {
             .try_cancel_stream(response_stream_id, reason, ctx)
     }
 
-    fn start_title_generation(
-        &mut self,
-        pending_title_generation: PendingTitleGeneration,
-        stream_id: ResponseStreamId,
-        conversation_id: AIConversationId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let terminal_view_id = self.terminal_view_id;
-        let _ = ctx.spawn(
-            async move {
-                let result = crate::ai::agent_providers::chat_stream::generate_title_via_byop(
-                    &pending_title_generation.input,
-                    &pending_title_generation.user_query,
-                )
-                .await;
-                (pending_title_generation.task_id, result)
-            },
-            move |_me, (task_id, result), ctx| match result {
-                Ok(Some(title)) => {
-                    log::info!("[byop] title generated: {title:?}");
-                    let client_actions = vec![ClientAction {
-                        action: Some(Action::UpdateTaskDescription(UpdateTaskDescription {
-                            task_id,
-                            description: title,
-                        })),
-                    }];
-                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                        match history_model.apply_client_actions(
-                            &stream_id,
-                            client_actions,
-                            conversation_id,
-                            terminal_view_id,
-                            ctx,
-                        ) {
-                            Ok(()) => {
-                                ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
-                                    terminal_view_id: Some(terminal_view_id),
-                                    conversation_id,
-                                });
-                            }
-                            Err(e) => {
-                                log::warn!("[byop] title update failed: {e:#}");
-                            }
-                        }
-                    });
-                }
-                Ok(None) => {
-                    log::warn!("[byop] title gen returned empty content; skip");
-                }
-                Err(e) => {
-                    log::warn!("[byop] title gen failed: {e:#}; skip");
-                }
-            },
-        );
-    }
-
     fn handle_response_stream_event(
         &mut self,
         did_input_contain_user_query: bool,
@@ -3330,35 +3067,11 @@ impl BlocklistAIController {
                             warp_multi_agent_api::response_event::Type::Finished(
                                 finished_event,
                             ) => {
-                                let completed_successfully = matches!(
-                                    finished_event.reason.as_ref(),
-                                    Some(
-                                        warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)
-                                    ) | None
-                                );
-                                if completed_successfully {
-                                    if let Some(pending_title_generation) =
-                                        response_stream.update(ctx, |response_stream, _| {
-                                            response_stream.take_pending_title_generation()
-                                        })
-                                    {
-                                        self.start_title_generation(
-                                            pending_title_generation,
-                                            stream_id.clone(),
-                                            conversation_id,
-                                            ctx,
-                                        );
-                                    }
-                                }
-                                // Zaplex BYOP local session compression: fetch summarization flag before stream finishes
-                                let summarize_overflow =
-                                    response_stream.as_ref(ctx).summarization_overflow();
                                 self.handle_response_stream_finished(
                                     &stream_id,
                                     finished_event,
                                     conversation_id,
                                     did_input_contain_user_query,
-                                    summarize_overflow,
                                     ctx,
                                 );
                             }
@@ -3682,18 +3395,8 @@ impl BlocklistAIController {
         mut finished_event: warp_multi_agent_api::response_event::StreamFinished,
         conversation_id: AIConversationId,
         did_request_contain_user_query: bool,
-        summarize_overflow: Option<bool>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Zaplex BYOP local session compression: aggregate before token_usage moves into the closure below,
-        // used for auto overflow checks (in the Done branch below).
-        let aggregate_token_count: usize = finished_event
-            .token_usage
-            .iter()
-            .map(|u| (u.total_input + u.output + u.input_cache_read + u.input_cache_write) as usize)
-            .max()
-            .unwrap_or(0);
-
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         history_model.update(ctx, |history_model, _| {
             // Update conversation cost and usage information before updating and
@@ -3712,19 +3415,6 @@ impl BlocklistAIController {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         match finished_event.reason {
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None => {
-                // Zaplex BYOP local session compression - write back summary
-                if let Some(overflow) = summarize_overflow {
-                    let compaction_cfg = crate::ai::byop_compaction::CompactionConfig::from_settings(ctx);
-                    history_model.update(ctx, |history_model, _ctx| {
-                        if let Some(convo) = history_model.conversation_mut(&conversation_id) {
-                            crate::ai::byop_compaction::commit::commit_summarization(
-                                convo,
-                                overflow,
-                                &compaction_cfg,
-                            );
-                        }
-                    });
-                }
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_successfully(
                         stream_id,
@@ -3734,36 +3424,6 @@ impl BlocklistAIController {
                     );
                 });
 
-                // Zaplex BYOP local session compression - auto overflow trigger (aligned with opencode `processor.ts:395-403`)
-                // Only check when this stream is not itself a summary, to prevent recursion.
-                if summarize_overflow.is_none() {
-                    let aggregate_count = aggregate_token_count;
-                    if aggregate_count > 0 {
-                        let cfg = crate::ai::byop_compaction::CompactionConfig::from_settings(ctx);
-                        let model_limit =
-                            crate::ai::byop_compaction::overflow::ModelLimit::FALLBACK;
-                        let counts = crate::ai::byop_compaction::overflow::TokenCounts {
-                            total: aggregate_count,
-                            ..Default::default()
-                        };
-                        if crate::ai::byop_compaction::is_overflow(&cfg, counts, model_limit) {
-                            log::info!(
-                                "[byop-compaction] auto overflow detected: tokens={aggregate_count} usable={}",
-                                crate::ai::byop_compaction::usable(&cfg, model_limit)
-                            );
-                            // Triggered via SlashCommandRequest::Summarize (same path as /compact-and);
-                            // overflow=true → chat_stream carries the overflow flag when composing the summary request,
-                            // and commit_summarization also persists with overflow=true state (for UI differentiation).
-                            self.send_slash_command_request(
-                                crate::ai::blocklist::controller::SlashCommandRequest::Summarize {
-                                    prompt: None,
-                                    overflow: true,
-                                },
-                                ctx,
-                            );
-                        }
-                    }
-                }
             }
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::Other(_)) => {
                 let error_message = "Response stream finished unexpectedly (with finish reason `Other`).";

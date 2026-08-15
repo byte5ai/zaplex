@@ -284,10 +284,20 @@ impl PromptRenderHelper {
         if !sessions.is_empty() {
             crate::t!("terminal-starting-shell")
         } else {
-            crate::t!(
-                "terminal-bootstrapping-starting-shell-name",
-                shell = model.shell_launch_state().display_name()
-            )
+            // While the shell type is still being determined the display name
+            // is empty; the "Starting { $shell }..." key would then render as
+            // "Starting ..." (a stray space before the ellipsis). Fall back to
+            // the generic "Starting shell..." until a real name is known.
+            let launch_state = model.shell_launch_state();
+            let shell_name = launch_state.display_name();
+            if shell_name.is_empty() {
+                crate::t!("terminal-starting-shell")
+            } else {
+                crate::t!(
+                    "terminal-bootstrapping-starting-shell-name",
+                    shell = shell_name
+                )
+            }
         }
     }
 

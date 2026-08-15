@@ -45,14 +45,14 @@ use crate::settings::{
     AliasExpansionEnabled, AliasExpansionSettings, AppEditorSettings, AtContextMenuInTerminalMode,
     AutocompleteSymbols, AutosuggestionKeybindingHint, CodeSettings, CommandCorrections,
     CompletionsOpenWhileTyping, CopyOnSelect, CtrlTabBehavior, DefaultSessionMode,
-    EnableSshAutoDiscovery, EnableSlashCommandsInTerminal, EnableSshWrapper,
-    ErrorUnderliningEnabled, ExtraMetaKeys,
-    GPUSettings, GlobalHotkeyMode, InputSettings, InputSettingsChangedEvent,
-    LinuxSelectionClipboard, MiddleClickPasteEnabled, MouseScrollMultiplier, PreferLowPowerGPU,
-    PreferencesSettings, PreferredGraphicsBackend, QuakeModeSettings, ScrollSettings,
-    SelectionSettings, ShowAutosuggestionIgnoreButton, ShowTerminalInputMessageBar, SshSettings,
-    SyntaxHighlighting, TabBehavior, VimModeEnabled, VimStatusBar, VimUnnamedSystemClipboard,
-    DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES, QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
+    EnableSlashCommandsInTerminal, EnableSshAutoDiscovery, EnableSshWrapper,
+    ErrorUnderliningEnabled, ExtraMetaKeys, GPUSettings, GlobalHotkeyMode, InputSettings,
+    InputSettingsChangedEvent, LinuxSelectionClipboard, MiddleClickPasteEnabled,
+    MouseScrollMultiplier, PreferLowPowerGPU, PreferencesSettings, PreferredGraphicsBackend,
+    QuakeModeSettings, ScrollSettings, SelectionSettings, ShowAutosuggestionIgnoreButton,
+    ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting, TabBehavior, VimModeEnabled,
+    VimStatusBar, VimUnnamedSystemClipboard, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES,
+    QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
 };
 use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
@@ -732,8 +732,6 @@ lazy_static! {
 /// Used for styling notification settings
 const NOTIFICATION_CHECKBOX_MARGIN_RIGHT: f32 = 5.;
 const NOTIFICATION_EDITOR_MARGIN: f32 = 5.;
-
-const NOTIFICATIONS_DOCS_URL: &str = "";
 
 /// WARNING: this constant was computed manually by determining the pixel width
 /// of the quake mode dropdowns based on the number of expanded items in the flex row.
@@ -4312,9 +4310,8 @@ impl SettingsWidget for SessionRestorationWidget {
             crate::t!("settings-features-restore-session"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
-                on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "".into(),
-                )),
+                // No Zaplex docs destination yet; keep the setting, drop the dead docs link.
+                on_click_action: None,
                 secondary_text: None,
                 tooltip_override_text: None,
             }),
@@ -4342,16 +4339,8 @@ impl SettingsWidget for SessionRestorationWidget {
             .with_color(appearance.theme().disabled_ui_text_color().into())
             .finish();
 
-            let link = ui_builder
-                .link(
-                    crate::t!("settings-features-see-docs"),
-                    Some("".to_owned()),
-                    None,
-                    self.docs_link.clone(),
-                )
-                .soft_wrap(false)
-                .build()
-                .finish();
+            // The "see docs" link opened an empty URL (no Zaplex docs); render nothing.
+            let link = warpui::elements::Empty::new().finish();
 
             Flex::column()
                 .with_children([
@@ -4446,9 +4435,8 @@ impl SettingsWidget for SnackbarHeaderWidget {
             crate::t!("settings-features-show-sticky-command-header"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
-                on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "".into(),
-                )),
+                // No Zaplex docs destination yet; keep the setting, drop the dead docs link.
+                on_click_action: None,
                 secondary_text: None,
                 tooltip_override_text: None,
             }),
@@ -4903,9 +4891,8 @@ impl SettingsWidget for SSHWrapperWidget {
             crate::t!("settings-features-ssh-wrapper"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
-                on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "".into(),
-                )),
+                // No Zaplex docs destination yet; keep the setting, drop the dead docs link.
+                on_click_action: None,
                 secondary_text: if view.ssh_wrapper_toggled {
                     Some(crate::t!("settings-features-takes-effect-new-sessions"))
                 } else {
@@ -5010,7 +4997,8 @@ impl SettingsWidget for DesktopNotificationsWidget {
             crate::t!("settings-features-receive-desktop-notifications"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
-                on_click_action: Some(FeaturesPageAction::OpenUrl(NOTIFICATIONS_DOCS_URL.into())),
+                // No Zaplex docs destination yet; keep the setting, drop the dead docs link.
+                on_click_action: None,
                 secondary_text: None,
                 tooltip_override_text: None,
             }),
@@ -5378,19 +5366,8 @@ impl SettingsWidget for GlobalHotkeyWidget {
                             ))
                             .build()
                             .finish(),
-                        ui_builder
-                            .link(
-                                crate::t!("settings-features-see-docs"),
-                                Some(
-                                    ""
-                                        .to_owned(),
-                                ),
-                                None,
-                                view.button_mouse_states.global_hotkey_link.clone(),
-                            )
-                            .soft_wrap(false)
-                            .build()
-                            .finish(),
+                        // The "see docs" link opened an empty URL (no Zaplex docs); render nothing.
+                        warpui::elements::Empty::new().finish(),
                     ])
                     .finish(),
                 None,
@@ -6406,10 +6383,8 @@ impl SettingsWidget for MouseReportingWidget {
             crate::t!("settings-features-enable-mouse-reporting"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
-                on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    ""
-                        .into(),
-                )),
+                // No Zaplex docs destination yet; keep the setting, drop the dead docs link.
+                on_click_action: None,
                 secondary_text: None,
                 tooltip_override_text: None,
             }),
@@ -6671,9 +6646,8 @@ impl SettingsWidget for SmartSelectWidget {
             crate::t!("settings-features-double-click-smart-selection"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
-                on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "".into(),
-                )),
+                // No Zaplex docs destination yet; keep the setting, drop the dead docs link.
+                on_click_action: None,
                 secondary_text: None,
                 tooltip_override_text: None,
             }),
@@ -6922,9 +6896,8 @@ impl SettingsWidget for WorkflowsInCommandSearch {
             crate::t!("settings-features-show-global-workflows-in-command-search"),
             Some(AdditionalInfo {
                 mouse_state: self.additional_info_link.clone(),
-                on_click_action: Some(FeaturesPageAction::OpenUrl(
-                    "".into(),
-                )),
+                // No Zaplex docs destination yet; keep the setting, drop the dead docs link.
+                on_click_action: None,
                 secondary_text: None,
                 tooltip_override_text: None,
             }),

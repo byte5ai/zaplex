@@ -3,15 +3,21 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::proto::{
     client_message, read_file_chunk_response, resolve_path_response, run_command_response,
-    server_message, write_file_chunk_response, AgentSessionInfo, AgentSessionList, ClientMessage,
-    ErrorCode, FileSystemEntryKind, HostExecResult, InitializeResponse, ReadFileChunkResponse,
+    server_message, write_file_chunk_response, AgentProcessSignal, AgentProcessSignalRequest,
+    AgentProcessSignalResponse, AgentProcessSignalStatus, AgentPtyBindingResponse,
+    AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo, AgentSessionList, AgentTaskItem,
+    ClientMessage, ErrorCode, FileSystemEntryKind, HostExecResult, InitializeResponse,
+    MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList, ReadFileChunkResponse,
     ReadFileChunkSuccess, ResolvePathResponse, ResolvePathSuccess, RunCommandResponse,
-    RunCommandSuccess, ServerMessage, SessionAttached, SessionExited, SessionInfo, SessionList,
-    SessionOpened, SessionOutput, SessionSize, WriteFileChunkResponse, WriteFileChunkSuccess,
+    RunCommandSuccess, SafeFileEntryKind, SafeFileIdentity, SafeFileMutationResult,
+    SafeFileMutationState, SafeFileOpenExisting, SafeFileOpened, SafeFileRequest, SafeFileResponse,
+    ServerMessage, SessionAttached, SessionExited, SessionInfo, SessionList, SessionOpened,
+    SessionOutput, SessionSize, StartupCommandAck, WriteFileChunkResponse, WriteFileChunkSuccess,
 };
 use crate::protocol;
 use warp_core::SessionId;
 use warpui::r#async::executor;
+use zaplex_remote_session::types::FEATURE_AGENT_PROCESS_SIGNAL_V1;
 
 use super::*;
 
@@ -91,6 +97,20 @@ async fn initialize_sends_empty_auth_token_when_none() {
         match &msg.message {
             Some(client_message::Message::Initialize(init)) => {
                 assert!(init.auth_token.is_empty());
+                assert!(init
+                    .features
+                    .iter()
+                    .any(|feature| feature == FEATURE_AGENT_PROCESS_SIGNAL_V1));
+                #[cfg(unix)]
+                assert!(init
+                    .features
+                    .iter()
+                    .any(|feature| feature == "agent-pty-binding"));
+                #[cfg(unix)]
+                assert!(init
+                    .features
+                    .iter()
+                    .any(|feature| feature == "agent-pty-binding-v2"));
             }
             other => panic!("Expected Initialize, got {other:?}"),
         }
@@ -289,6 +309,84 @@ async fn write_file_chunk_round_trip() {
 }
 
 #[tokio::test]
+async fn safe_file_request_round_trip() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        let Some(client_message::Message::SafeFile(request)) = &msg.message else {
+            panic!("Expected SafeFile request");
+        };
+        assert!(request.operation_id.is_empty());
+        let Some(crate::proto::safe_file_request::Operation::OpenExisting(open)) =
+            &request.operation
+        else {
+            panic!("Expected safe-file open");
+        };
+        assert_eq!(open.path, "/tmp/source.bin");
+        assert_eq!(open.expected_kind, SafeFileEntryKind::Regular as i32);
+        server_message::Message::SafeFileResponse(SafeFileResponse {
+            result: Some(crate::proto::safe_file_response::Result::Opened(
+                SafeFileOpened {
+                    handle_id: "handle-1".to_string(),
+                    identity: Some(SafeFileIdentity {
+                        kind: SafeFileEntryKind::Regular as i32,
+                        size: 3,
+                        object_id: "1:2".to_string(),
+                        revision: "1:2:3".to_string(),
+                    }),
+                },
+            )),
+        })
+    });
+
+    let response = client
+        .safe_file(SafeFileRequest {
+            operation_id: String::new(),
+            operation: Some(crate::proto::safe_file_request::Operation::OpenExisting(
+                SafeFileOpenExisting {
+                    path: "/tmp/source.bin".to_string(),
+                    expected_kind: SafeFileEntryKind::Regular as i32,
+                },
+            )),
+        })
+        .await
+        .unwrap();
+    let Some(crate::proto::safe_file_response::Result::Opened(opened)) = response.result else {
+        panic!("expected opened response");
+    };
+    assert_eq!(opened.handle_id, "handle-1");
+}
+
+#[tokio::test]
+async fn safe_file_handle_close_is_a_nonblocking_notification() {
+    let (observed_tx, observed_rx) = async_channel::bounded(1);
+    let (client, _disconnect_rx, _executor) = setup_mock_client(move |msg| {
+        assert!(msg.request_id.is_empty());
+        let Some(client_message::Message::SafeFile(request)) = &msg.message else {
+            panic!("expected safe-file close notification");
+        };
+        assert!(request.operation_id.is_empty());
+        let Some(crate::proto::safe_file_request::Operation::CloseHandle(close)) =
+            &request.operation
+        else {
+            panic!("expected safe-file close operation");
+        };
+        assert_eq!(close.handle_id, "handle-1");
+        observed_tx.try_send(()).unwrap();
+        server_message::Message::SafeFileResponse(SafeFileResponse {
+            result: Some(crate::proto::safe_file_response::Result::Mutation(
+                SafeFileMutationResult {
+                    state: SafeFileMutationState::Applied as i32,
+                },
+            )),
+        })
+    });
+
+    client
+        .close_safe_file_handle("handle-1".to_string())
+        .unwrap();
+    observed_rx.recv().await.unwrap();
+}
+
+#[tokio::test]
 async fn concurrent_in_flight_requests() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|_| {
         server_message::Message::InitializeResponse(InitializeResponse {
@@ -432,6 +530,7 @@ async fn open_session_round_trip() {
         }
         server_message::Message::SessionOpened(SessionOpened {
             session_id: "sess-1".to_string(),
+            generation: 7,
         })
     });
 
@@ -471,6 +570,9 @@ async fn attach_session_round_trip() {
             }),
             base_seq: 42,
             replay: b"replayed".to_vec(),
+            bootstrap_preamble: Vec::new(),
+            generation: 7,
+            agent_binding: None,
         })
     });
 
@@ -480,6 +582,104 @@ async fn attach_session_round_trip() {
         .unwrap();
     assert_eq!(resp.base_seq, 42);
     assert_eq!(resp.replay, b"replayed");
+}
+
+#[tokio::test]
+async fn generation_checked_attach_reaches_wire() {
+    let expected_agent = AgentSessionIdentity {
+        session_id: "agent-1".to_string(),
+        provider: "codex".to_string(),
+        account_email: "agent@example.com".to_string(),
+        config_dir: "/home/agent/.codex".to_string(),
+    };
+    let expected_agent_for_wire = expected_agent.clone();
+    let (client, _disconnect_rx, _executor) = setup_mock_client(move |msg| {
+        let Some(client_message::Message::AttachSession(attach)) = &msg.message else {
+            panic!("expected AttachSession");
+        };
+        assert_eq!(attach.session_id, "sess-1");
+        assert_eq!(attach.expected_generation, Some(9));
+        assert_eq!(
+            attach.expected_agent_binding.as_ref(),
+            Some(&expected_agent_for_wire)
+        );
+        server_message::Message::SessionAttached(SessionAttached {
+            session_id: attach.session_id.clone(),
+            size: None,
+            base_seq: 0,
+            replay: vec![],
+            bootstrap_preamble: vec![],
+            generation: 9,
+            agent_binding: None,
+        })
+    });
+
+    let attached = client
+        .attach_session_generation_and_agent("sess-1".to_string(), 0, Some(9), Some(expected_agent))
+        .await
+        .unwrap();
+    assert_eq!(attached.generation, 9);
+}
+
+#[tokio::test]
+async fn agent_pty_bind_and_unbind_reach_wire() {
+    let identity = AgentSessionIdentity {
+        session_id: "agent-1".to_string(),
+        provider: "codex".to_string(),
+        account_email: "agent@example.com".to_string(),
+        config_dir: "/home/agent/.codex".to_string(),
+    };
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| match &msg.message {
+        Some(client_message::Message::BindAgentPty(bind)) => {
+            assert_eq!(bind.host_id, "daemon-host-1");
+            assert_eq!(bind.agent.as_ref().unwrap().session_id, "agent-1");
+            assert_eq!(bind.pty_session_id, "pty-1");
+            assert_eq!(bind.pty_session_generation, 9);
+            server_message::Message::AgentPtyBindingResponse(AgentPtyBindingResponse {
+                status: AgentPtyBindingStatus::Bound.into(),
+                message: String::new(),
+            })
+        }
+        Some(client_message::Message::UnbindAgentPty(unbind)) => {
+            assert_eq!(unbind.host_id, "daemon-host-1");
+            assert_eq!(unbind.agent.as_ref().unwrap().session_id, "agent-1");
+            assert_eq!(unbind.pty_session_id, "pty-1");
+            assert_eq!(unbind.pty_session_generation, 9);
+            server_message::Message::AgentPtyBindingResponse(AgentPtyBindingResponse {
+                status: AgentPtyBindingStatus::Unbound.into(),
+                message: String::new(),
+            })
+        }
+        other => panic!("expected agent PTY binding request, got {other:?}"),
+    });
+
+    let bound = client
+        .bind_agent_pty(
+            "daemon-host-1".to_string(),
+            identity.clone(),
+            "pty-1".to_string(),
+            9,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        AgentPtyBindingStatus::try_from(bound.status).unwrap(),
+        AgentPtyBindingStatus::Bound
+    );
+    let unbound = client
+        .unbind_agent_pty(
+            "daemon-host-1".to_string(),
+            identity,
+            "pty-1".to_string(),
+            9,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        AgentPtyBindingStatus::try_from(unbound.status).unwrap(),
+        AgentPtyBindingStatus::Unbound
+    );
 }
 
 #[tokio::test]
@@ -602,6 +802,65 @@ async fn send_session_input_sends_frame() {
 }
 
 #[tokio::test]
+async fn send_startup_command_carries_identity_and_waits_for_ack() {
+    let (client, _event_rx, _executor) = setup_mock_client(|msg| {
+        assert!(
+            !msg.request_id.is_empty(),
+            "startup delivery must be a correlated request"
+        );
+        match &msg.message {
+            Some(client_message::Message::SessionInput(input)) => {
+                assert_eq!(input.session_id, "sess-1");
+                assert_eq!(input.startup_command_id, "stable-command-id");
+                assert_eq!(input.bytes, b"codex resume exact-session\n");
+            }
+            other => panic!("expected startup SessionInput, got {other:?}"),
+        }
+        server_message::Message::StartupCommandAck(StartupCommandAck {
+            session_id: "sess-1".to_string(),
+            startup_command_id: "stable-command-id".to_string(),
+            accepted: true,
+        })
+    });
+
+    let ack = client
+        .send_startup_command(
+            "sess-1".to_string(),
+            "stable-command-id".to_string(),
+            b"codex resume exact-session\n".to_vec(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(ack.session_id, "sess-1");
+    assert_eq!(ack.startup_command_id, "stable-command-id");
+    assert!(ack.accepted);
+}
+
+#[tokio::test]
+async fn send_startup_command_surfaces_mismatched_ack_for_reconnect_handling() {
+    let (client, _event_rx, _executor) = setup_mock_client(|_| {
+        server_message::Message::StartupCommandAck(StartupCommandAck {
+            session_id: "wrong-session".to_string(),
+            startup_command_id: "wrong-command".to_string(),
+            accepted: true,
+        })
+    });
+
+    let ack = client
+        .send_startup_command(
+            "sess-1".to_string(),
+            "stable-command-id".to_string(),
+            b"codex resume exact-session\n".to_vec(),
+        )
+        .await
+        .expect("the event loop must receive and validate the mismatched acknowledgement");
+
+    assert_eq!(ack.session_id, "wrong-session");
+    assert_eq!(ack.startup_command_id, "wrong-command");
+}
+
+#[tokio::test]
 async fn send_resize_session_sends_frame() {
     let (client_stream, server_stream) = tokio::io::duplex(4096);
     let (server_read, _server_write) = tokio::io::split(server_stream);
@@ -669,6 +928,7 @@ async fn list_sessions_round_trip() {
                     alive: true,
                     last_attached_epoch_millis: 123,
                     ring_bytes: 0,
+                    generation: 7,
                 },
                 SessionInfo {
                     session_id: "s2".to_string(),
@@ -677,8 +937,10 @@ async fn list_sessions_round_trip() {
                     alive: true,
                     last_attached_epoch_millis: 456,
                     ring_bytes: 0,
+                    generation: 8,
                 },
             ],
+            host_ring_cap_bytes: 256 * 1024 * 1024,
         })
     });
 
@@ -688,6 +950,7 @@ async fn list_sessions_round_trip() {
     assert_eq!(resp.sessions[0].cwd, "/home/me/work");
     assert!(resp.sessions[0].alive);
     assert_eq!(resp.sessions[1].last_attached_epoch_millis, 456);
+    assert_eq!(resp.host_ring_cap_bytes, 256 * 1024 * 1024);
 }
 
 #[tokio::test]
@@ -710,8 +973,32 @@ async fn list_agent_sessions_round_trip() {
                     ctx_tokens: 42_000,
                     project_root: "/home/me/proj".to_string(),
                     project_name: "proj".to_string(),
+                    worktree: "wt-feature".to_string(),
+                    branch: "feature-work".to_string(),
+                    config_dir: "/home/me/.codex-work".to_string(),
                     last_activity_epoch_millis: 1_720_000_000_123,
                     pid: 4242,
+                    // F5 fleet-join keys: whose account (email + provider) and
+                    // which repo the worktree belongs to.
+                    account_email: "me@example.com".to_string(),
+                    repo_root: "/home/me/proj".to_string(),
+                    process_fingerprint: "linux-v1:boot-id:12345".to_string(),
+                    pty_session_id: "pty-7".to_string(),
+                    pty_session_generation: 7,
+                    pty_foreground: true,
+                    has_task_state: true,
+                    task_items: vec![
+                        AgentTaskItem {
+                            id: "2".to_string(),
+                            title: "Inspect".to_string(),
+                            status: "completed".to_string(),
+                        },
+                        AgentTaskItem {
+                            id: "10".to_string(),
+                            title: "Implement".to_string(),
+                            status: "in_progress".to_string(),
+                        },
+                    ],
                 },
                 AgentSessionInfo {
                     session_id: "a2".to_string(),
@@ -725,8 +1012,24 @@ async fn list_agent_sessions_round_trip() {
                     ctx_tokens: 0,
                     project_root: "/home/me/other".to_string(),
                     project_name: "other".to_string(),
+                    // Empty = honestly-unknown identity (primary worktree /
+                    // detached / non-repo).
+                    worktree: String::new(),
+                    branch: String::new(),
+                    config_dir: String::new(),
                     last_activity_epoch_millis: 0,
                     pid: 0,
+                    // Empty = honestly-unknown identity: this session folds
+                    // into the host tree but joins no account, and groups by
+                    // its own project_root (the degraded, not mis-grouped path).
+                    account_email: String::new(),
+                    repo_root: String::new(),
+                    process_fingerprint: String::new(),
+                    pty_session_id: String::new(),
+                    pty_session_generation: 0,
+                    pty_foreground: false,
+                    has_task_state: false,
+                    task_items: Vec::new(),
                 },
             ],
         })
@@ -742,20 +1045,90 @@ async fn list_agent_sessions_round_trip() {
         resp.sessions[0].last_activity_epoch_millis,
         1_720_000_000_123
     );
+    assert!(resp.sessions[0].has_task_state);
+    assert_eq!(resp.sessions[0].task_items.len(), 2);
+    assert_eq!(resp.sessions[0].task_items[0].id, "2");
+    assert_eq!(resp.sessions[0].task_items[1].status, "in_progress");
     assert_eq!(resp.sessions[1].state, "idle");
     assert_eq!(resp.sessions[1].provider, "codex");
     assert!(resp.sessions[1].effort.is_empty());
+    assert!(!resp.sessions[1].has_task_state);
+    assert!(resp.sessions[1].task_items.is_empty());
+}
+
+#[tokio::test]
+async fn verified_agent_process_signal_round_trip_is_narrow_and_correlated() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        match &msg.message {
+            Some(client_message::Message::AgentProcessSignal(req)) => {
+                assert_eq!(
+                    req,
+                    &AgentProcessSignalRequest {
+                        session_id: "agent-session-1".to_string(),
+                        pid: 4242,
+                        expected_process_fingerprint: "linux-v1:boot-id:12345".to_string(),
+                        signal: AgentProcessSignal::Interrupt.into(),
+                    }
+                );
+            }
+            other => panic!("expected AgentProcessSignal, got {other:?}"),
+        }
+        server_message::Message::AgentProcessSignalResponse(AgentProcessSignalResponse {
+            session_id: "agent-session-1".to_string(),
+            pid: 4242,
+            status: AgentProcessSignalStatus::Sent.into(),
+            error_message: String::new(),
+        })
+    });
+
+    let response = client
+        .send_verified_process_signal(
+            "agent-session-1".to_string(),
+            4242,
+            "linux-v1:boot-id:12345".to_string(),
+            AgentProcessSignal::Interrupt,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        AgentProcessSignalStatus::try_from(response.status),
+        Ok(AgentProcessSignalStatus::Sent)
+    );
+}
+
+#[tokio::test]
+async fn verified_agent_process_signal_rejects_mismatched_response_identity() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|_| {
+        server_message::Message::AgentProcessSignalResponse(AgentProcessSignalResponse {
+            session_id: "different-session".to_string(),
+            pid: 4242,
+            status: AgentProcessSignalStatus::Sent.into(),
+            error_message: String::new(),
+        })
+    });
+
+    let result = client
+        .send_verified_process_signal(
+            "agent-session-1".to_string(),
+            4242,
+            "linux-v1:boot-id:12345".to_string(),
+            AgentProcessSignal::Kill,
+        )
+        .await;
+
+    assert!(matches!(result, Err(ClientError::UnexpectedResponse)));
 }
 
 #[tokio::test]
 async fn host_exec_round_trip() {
-    // The session-less host-command path the cross-host guardrails use: the
-    // request carries just a command string; the response carries the captured
-    // output and exit code.
+    // The generic session-less host-command path remains available to its
+    // non-guardrail callers: the request carries a command string and the
+    // response carries the captured output and exit code.
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
         match &msg.message {
             Some(client_message::Message::HostExec(req)) => {
-                assert_eq!(req.command, "kill -INT 4242");
+                assert_eq!(req.command, "printf ready");
             }
             other => panic!("expected HostExec, got {other:?}"),
         }
@@ -766,11 +1139,33 @@ async fn host_exec_round_trip() {
         })
     });
 
-    let resp = client
-        .host_exec("kill -INT 4242".to_string())
-        .await
-        .unwrap();
+    let resp = client.host_exec("printf ready".to_string()).await.unwrap();
     assert_eq!(resp.stdout, b"done");
     assert!(resp.stderr.is_empty());
     assert_eq!(resp.exit_code, Some(0));
+}
+
+#[tokio::test]
+async fn typed_multiplexer_inventory_round_trip() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        assert!(matches!(
+            msg.message,
+            Some(client_message::Message::ListMultiplexerSessions(_))
+        ));
+        server_message::Message::MultiplexerSessionList(MultiplexerSessionList {
+            sessions: vec![MultiplexerSessionInfo {
+                kind: MultiplexerKind::Tmux.into(),
+                target: "release; touch /tmp/never".to_string(),
+                name: "release; touch /tmp/never".to_string(),
+                windows: 3,
+                attached_clients: 1,
+            }],
+            warnings: Vec::new(),
+        })
+    });
+
+    let inventory = client.list_multiplexer_sessions().await.unwrap();
+    assert_eq!(inventory.sessions.len(), 1);
+    assert_eq!(inventory.sessions[0].target, "release; touch /tmp/never");
+    assert!(inventory.warnings.is_empty());
 }

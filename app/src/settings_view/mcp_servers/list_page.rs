@@ -1067,16 +1067,12 @@ impl MCPServersListPageView {
 
         let toggle_row = build_toggle_element(label, switch, appearance, None);
 
-        let file_based_mcp_description_fragments: Vec<FormattedTextFragment> = vec![
-            FormattedTextFragment::plain_text(format!(
-                "{} ",
+        // Dropped "supported providers" link: no Zaplex MCP docs yet.
+        let file_based_mcp_description_fragments: Vec<FormattedTextFragment> =
+            vec![FormattedTextFragment::plain_text(format!(
+                "{}",
                 crate::t!("settings-mcp-list-file-based-description")
-            )),
-            FormattedTextFragment::hyperlink(
-                crate::t!("settings-mcp-list-file-based-supported-providers"),
-                "",
-            ),
-        ];
+            ))];
 
         let description = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(
@@ -1108,16 +1104,11 @@ impl MCPServersListPageView {
     }
 
     fn render_page_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
-        let description_fragments = vec![
-            FormattedTextFragment::plain_text(format!(
-                "{} ",
-                crate::t!("settings-mcp-list-description")
-            )),
-            FormattedTextFragment::hyperlink(
-                crate::t!("settings-mcp-list-learn-more"),
-                "",
-            ),
-        ];
+        // Dropped "learn more" link: no Zaplex MCP docs yet.
+        let description_fragments = vec![FormattedTextFragment::plain_text(format!(
+            "{}",
+            crate::t!("settings-mcp-list-description")
+        ))];
 
         let description = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(description_fragments)]),

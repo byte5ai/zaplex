@@ -15,7 +15,10 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
-pub const MODAL_CORNER_RADIUS: Radius = Radius::Pixels(8.);
+// The one modal corner radius, shared with the app-wide contract in
+// `crate::ui_components::modal_frame` (`MODAL_RADIUS`). Kept as a `Radius` const
+// here for the generic `Modal<T>` styles.
+pub const MODAL_CORNER_RADIUS: Radius = Radius::Pixels(10.);
 pub const MODAL_WIDTH: f32 = 440.;
 pub const MODAL_HEADER_HEIGHT: f32 = 70.;
 pub const MODAL_PADDING: f32 = 28.;
@@ -156,7 +159,10 @@ impl<T: View> Modal<T> {
                 ..Default::default()
             },
             close_modal_hover_state: Default::default(),
-            background_opacity: 179,
+            // The one scrim tone (see `modal_frame::modal_scrim`, ColorU 18/18/18
+            // @128); the opacity knob stays so callers like the session-config
+            // modal can still opt out of the veil (opacity 0).
+            background_opacity: 128,
             offset_positioning: Self::default_offset_positioning(),
         }
     }
@@ -450,7 +456,9 @@ impl<T: View> View for Modal<T> {
         stack.add_positioned_child(modal, self.offset_positioning.clone());
 
         Container::new(Align::new(stack.finish()).finish())
-            .with_background_color(ColorU::new(0, 0, 0, self.background_opacity))
+            // The one shared scrim tone (see `modal_frame::modal_scrim`); alpha
+            // stays caller-controllable via `background_opacity`.
+            .with_background_color(ColorU::new(18, 18, 18, self.background_opacity))
             .with_corner_radius(app.windows().window_corner_radius())
             .finish()
     }

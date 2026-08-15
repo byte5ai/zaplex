@@ -1,10 +1,11 @@
+use crate::terminal::bootstrap::{daemon_bootstrap_delivery, DaemonBootstrapDelivery};
 use crate::terminal::shell::ShellType;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use warp_core::channel::ChannelState;
 use warp_core::SessionId;
 use warp_util::standardized_path::StandardizedPath;
@@ -18,22 +19,35 @@ use warp_util::file::FileId;
 
 use super::proto::{
     client_message, delete_file_response, run_command_response, server_message,
-    write_file_response, Abort, AgentSessionList, Authenticate, ClientMessage, DeleteFile,
-    DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse, FailedFileRead,
-    FileContextProto, FileOperationError, HostExec, HostExecResult, Initialize, InitializeResponse,
-    NavigatedToDirectory, NavigatedToDirectoryResponse, ReadFileContextResponse, RunCommandError,
-    RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess, ServerMessage,
-    SessionBootstrapped, WriteFile, WriteFileResponse, WriteFileSuccess,
+    write_file_response, Abort, AgentProcessSignal, AgentProcessSignalRequest,
+    AgentProcessSignalResponse, AgentProcessSignalStatus, AgentPtyBindingResponse,
+    AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo, AgentSessionList, Authenticate,
+    ClientMessage, DeleteFile, DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse,
+    FailedFileRead, FileContextProto, FileOperationError, HostExec, HostExecResult, Initialize,
+    InitializeResponse, NavigatedToDirectory, NavigatedToDirectoryResponse,
+    ReadFileContextResponse, RunCommandError, RunCommandErrorCode, RunCommandRequest,
+    RunCommandResponse, RunCommandSuccess, ServerMessage, SessionBootstrapped, StartupCommandAck,
+    WriteFile, WriteFileResponse, WriteFileSuccess,
 };
-use zaplex_remote_session::types::supported_features;
 #[cfg(unix)]
 use super::proto::{
-    AttachSession, CloseSession, DetachSession, OpenSession, ResizeSession, SessionAttached,
-    SessionExited, SessionInfo, SessionInput, SessionList, SessionNotice, SessionOpened,
-    SessionOutput, SessionSize,
+    AttachSession, BindAgentPty, CloseSession, DetachSession, OpenSession, ResizeSession,
+    SessionAttached, SessionExited, SessionInfo, SessionInput, SessionList, SessionNotice,
+    SessionOpened, SessionOutput, SessionSize, SetBootstrapPreamble, UnbindAgentPty,
 };
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
+#[cfg(unix)]
+use zaplex_remote_session::agent_binding::{
+    AgentIdentity, AgentPtyBindings, BindingError, BindingRequest,
+};
+#[cfg(unix)]
+use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
+use zaplex_remote_session::types::{
+    supported_features, FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_PTY_BINDING_V2,
+    FEATURE_SAFE_FILE_TRANSACTIONS_V1,
+};
 
 // Buffer-sync related: depends on GlobalBufferModel, which server-local operations are only
 // available under `local_fs`, so the entire server-side buffer handling is gated by `local_fs`.
@@ -61,8 +75,7 @@ pub const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10 
 /// sessions otherwise live indefinitely so a client can reconnect (laptop
 /// closed, etc.); this bounds memory against truly abandoned ones (Stage 4).
 #[cfg(unix)]
-const MAX_DETACHED_SESSION_AGE: std::time::Duration =
-    std::time::Duration::from_secs(24 * 60 * 60);
+const MAX_DETACHED_SESSION_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 /// Soft cap on total output-ring bytes across all of this host's sessions. When
 /// exceeded, the oldest *detached* sessions are reaped until back under it
 /// (live, attached sessions are never reaped).
@@ -111,6 +124,132 @@ impl HandlerOutcome {
             HandlerOutcome::Async(_) => panic!("expected synchronous handler outcome"),
         }
     }
+}
+
+fn execute_agent_process_signal_with<F>(
+    req: AgentProcessSignalRequest,
+    current_sessions: &[AgentSessionInfo],
+    capability_negotiated: bool,
+    send: F,
+) -> AgentProcessSignalResponse
+where
+    F: FnOnce(u32, &str, GuardrailSignal) -> Result<(), ProcessSignalError>,
+{
+    let AgentProcessSignalRequest {
+        session_id,
+        pid,
+        expected_process_fingerprint,
+        signal,
+    } = req;
+
+    let failure =
+        |status: AgentProcessSignalStatus, error_message: String| AgentProcessSignalResponse {
+            session_id: session_id.clone(),
+            pid,
+            status: status.into(),
+            error_message,
+        };
+
+    if !capability_negotiated {
+        return failure(
+            AgentProcessSignalStatus::InvalidRequest,
+            "agent-process-signal-v1 capability was not negotiated".to_string(),
+        );
+    }
+    if session_id.trim().is_empty() {
+        return failure(
+            AgentProcessSignalStatus::InvalidRequest,
+            "agent session id is empty".to_string(),
+        );
+    }
+    if expected_process_fingerprint.is_empty() {
+        return failure(
+            AgentProcessSignalStatus::IdentityUnverifiable,
+            "expected process fingerprint is empty".to_string(),
+        );
+    }
+
+    let signal = match AgentProcessSignal::try_from(signal) {
+        Ok(AgentProcessSignal::Interrupt) => GuardrailSignal::Interrupt,
+        Ok(AgentProcessSignal::Kill) => GuardrailSignal::Kill,
+        Ok(AgentProcessSignal::Unspecified) | Err(_) => {
+            return failure(
+                AgentProcessSignalStatus::InvalidRequest,
+                "unsupported agent process signal".to_string(),
+            );
+        }
+    };
+
+    let mut matching_sessions = current_sessions
+        .iter()
+        .filter(|session| session.session_id == session_id);
+    let Some(registered) = matching_sessions.next() else {
+        return failure(
+            AgentProcessSignalStatus::InvalidRequest,
+            "agent session is not present in the current inventory".to_string(),
+        );
+    };
+    if matching_sessions.next().is_some() {
+        return failure(
+            AgentProcessSignalStatus::InvalidRequest,
+            "agent session id is ambiguous in the current inventory".to_string(),
+        );
+    }
+    if registered.pid != pid {
+        return failure(
+            AgentProcessSignalStatus::StaleIdentity,
+            "process id no longer matches the current agent inventory".to_string(),
+        );
+    }
+    if registered.process_fingerprint.trim().is_empty() {
+        return failure(
+            AgentProcessSignalStatus::IdentityUnverifiable,
+            "current agent inventory has no verified process fingerprint".to_string(),
+        );
+    }
+    if registered.process_fingerprint != expected_process_fingerprint {
+        return failure(
+            AgentProcessSignalStatus::StaleIdentity,
+            "process fingerprint no longer matches the current agent inventory".to_string(),
+        );
+    }
+
+    match send(registered.pid, &registered.process_fingerprint, signal) {
+        Ok(()) => AgentProcessSignalResponse {
+            session_id: session_id.clone(),
+            pid,
+            status: AgentProcessSignalStatus::Sent.into(),
+            error_message: String::new(),
+        },
+        Err(error) => {
+            let status = match &error {
+                ProcessSignalError::InvalidPid => AgentProcessSignalStatus::InvalidRequest,
+                ProcessSignalError::IdentityUnavailable(_) => {
+                    AgentProcessSignalStatus::IdentityUnverifiable
+                }
+                ProcessSignalError::IdentityChanged => AgentProcessSignalStatus::StaleIdentity,
+                ProcessSignalError::SignalFailed(_) => AgentProcessSignalStatus::SignalFailed,
+                ProcessSignalError::UnsupportedPlatform => {
+                    AgentProcessSignalStatus::IdentityUnverifiable
+                }
+            };
+            failure(status, error.to_string())
+        }
+    }
+}
+
+fn server_features_with_runtime_support(
+    process_signalling_supported: bool,
+    safe_file_transactions_supported: bool,
+) -> Vec<String> {
+    let mut features = supported_features();
+    if !process_signalling_supported {
+        features.retain(|feature| feature != FEATURE_AGENT_PROCESS_SIGNAL_V1);
+    }
+    if !safe_file_transactions_supported {
+        features.retain(|feature| feature != FEATURE_SAFE_FILE_TRANSACTIONS_V1);
+    }
+    features
 }
 
 /// Tracks an in-flight file write or delete so the async completion
@@ -196,6 +335,8 @@ pub struct ServerModel {
     /// a connection's `Uuid` to the channel the connection task drains to
     /// write `ServerMessage`s back to its proxy.
     connection_senders: HashMap<ConnectionId, async_channel::Sender<ServerMessage>>,
+    /// Capabilities advertised by each connected client during Initialize.
+    connection_features: HashMap<ConnectionId, HashSet<String>>,
     /// Per-connection set of repo roots for which we've already sent a
     /// snapshot in this connection's lifetime.
     ///
@@ -231,6 +372,20 @@ pub struct ServerModel {
     /// Live daemon-hosted terminal sessions, keyed by their daemon-assigned id.
     #[cfg(unix)]
     sessions: HashMap<String, super::session_host::Session>,
+    /// Generation-checked agent associations for live daemon PTYs.
+    #[cfg(unix)]
+    agent_pty_bindings: AgentPtyBindings,
+    /// Monotonic generation assigned to the next PTY opened by this daemon.
+    #[cfg(unix)]
+    next_pty_generation: u64,
+    /// Descriptor-bound file handles and durable mutation journal used by the
+    /// safe file-manager transfer protocol.
+    #[cfg(unix)]
+    safe_files: super::safe_file::SafeFileServer,
+    /// Bounded transcript parse cache shared by all agent-inventory requests.
+    /// The scan itself stays off the model thread; the mutex only serializes
+    /// concurrent readers of the process-local cache.
+    agent_transcript_cache: Arc<Mutex<zaplex_cockpit::TranscriptScanCache>>,
 }
 
 impl Entity for ServerModel {
@@ -249,6 +404,7 @@ impl ServerModel {
         );
         let mut model = Self {
             connection_senders: HashMap::new(),
+            connection_features: HashMap::new(),
             snapshot_sent_roots_by_connection: HashMap::new(),
             grace_timer_cancel: None,
             in_progress: HashMap::new(),
@@ -260,6 +416,15 @@ impl ServerModel {
             auth_token: None,
             #[cfg(unix)]
             sessions: HashMap::new(),
+            #[cfg(unix)]
+            agent_pty_bindings: AgentPtyBindings::default(),
+            #[cfg(unix)]
+            next_pty_generation: 1,
+            #[cfg(unix)]
+            safe_files: super::safe_file::SafeFileServer::new(),
+            agent_transcript_cache: Arc::new(Mutex::new(
+                zaplex_cockpit::TranscriptScanCache::default(),
+            )),
         };
         // Subscribe to FileModel and RepoMetadataModel events
         // file operation results and repo metadata pushes are forwarded to all
@@ -562,6 +727,7 @@ impl ServerModel {
             handle.abort();
         }
         self.connection_senders.insert(conn_id, conn_tx);
+        self.connection_features.insert(conn_id, HashSet::new());
         self.snapshot_sent_roots_by_connection
             .insert(conn_id, HashSet::new());
         ctx.notify();
@@ -571,11 +737,14 @@ impl ServerModel {
     /// and starts the grace timer if no connections remain.
     pub fn deregister_connection(&mut self, conn_id: ConnectionId, ctx: &mut ModelContext<Self>) {
         self.snapshot_sent_roots_by_connection.remove(&conn_id);
+        self.connection_features.remove(&conn_id);
         // Guard against double-deregister (reader and writer tasks both call
         // this on connection close; the second call must be a safe no-op).
         if self.connection_senders.remove(&conn_id).is_none() {
             return;
         }
+        #[cfg(unix)]
+        self.safe_files.close_connection(conn_id);
         // Drop this connection from all open server-local buffers; orphaned
         // buffers (no remaining connections) are deallocated by the tracker.
         #[cfg(feature = "local_fs")]
@@ -648,7 +817,7 @@ impl ServerModel {
 
         let outcome = match msg.message {
             Some(client_message::Message::Initialize(msg)) => {
-                self.handle_initialize(msg, &request_id)
+                self.handle_initialize(conn_id, msg, &request_id)
             }
             Some(client_message::Message::Authenticate(msg)) => {
                 self.handle_authenticate(msg);
@@ -664,6 +833,9 @@ impl ServerModel {
             }
             Some(client_message::Message::RunCommand(req)) => {
                 self.handle_run_command(req, &request_id, conn_id, ctx)
+            }
+            Some(client_message::Message::AgentProcessSignal(req)) => {
+                self.handle_agent_process_signal(req, &request_id, conn_id, ctx)
             }
             Some(client_message::Message::HostExec(req)) => {
                 self.handle_host_exec(req, &request_id, conn_id, ctx)
@@ -711,7 +883,9 @@ impl ServerModel {
             #[cfg(feature = "local_fs")]
             Some(client_message::Message::ResolvePath(msg)) => self.handle_resolve_path(msg),
             #[cfg(feature = "local_fs")]
-            Some(client_message::Message::CreateDirectory(msg)) => self.handle_create_directory(msg),
+            Some(client_message::Message::CreateDirectory(msg)) => {
+                self.handle_create_directory(msg)
+            }
             #[cfg(feature = "local_fs")]
             Some(client_message::Message::ReadFileChunk(msg)) => self.handle_read_file_chunk(msg),
             #[cfg(feature = "local_fs")]
@@ -725,30 +899,113 @@ impl ServerModel {
             }
             #[cfg(unix)]
             Some(client_message::Message::SessionInput(msg)) => {
-                self.handle_session_input(msg);
-                return;
+                match self.handle_session_input(conn_id, msg) {
+                    Some(ack) => {
+                        HandlerOutcome::Sync(server_message::Message::StartupCommandAck(ack))
+                    }
+                    None => return,
+                }
             }
             #[cfg(unix)]
             Some(client_message::Message::ResizeSession(msg)) => {
-                self.handle_resize_session(msg);
+                self.handle_resize_session(conn_id, msg);
                 return;
             }
             #[cfg(unix)]
             Some(client_message::Message::CloseSession(msg)) => {
-                self.handle_close_session(msg);
+                self.handle_close_session(msg, ctx);
                 return;
             }
             // Re-attach a reconnecting client to a still-running session and
             // replay the output it missed (Stage 3).
             #[cfg(unix)]
             Some(client_message::Message::AttachSession(msg)) => {
-                self.handle_attach_session(conn_id, msg)
+                self.handle_attach_session_request(&request_id, conn_id, msg, ctx)
             }
             #[cfg(unix)]
             Some(client_message::Message::DetachSession(msg)) => {
                 self.handle_detach_session(conn_id, msg);
                 return;
             }
+            // The opening client reports where bootstrap completed so we can
+            // freeze an eviction-proof preamble for later adopts (T1.3).
+            #[cfg(unix)]
+            Some(client_message::Message::SetBootstrapPreamble(msg)) => {
+                self.handle_set_bootstrap_preamble(msg);
+                return;
+            }
+            // No session host off unix → nothing to capture; drop the notification.
+            #[cfg(not(unix))]
+            Some(client_message::Message::SetBootstrapPreamble(_)) => return,
+            #[cfg(unix)]
+            Some(client_message::Message::BindAgentPty(msg)) => {
+                self.handle_bind_agent_pty(&request_id, conn_id, msg, ctx)
+            }
+            #[cfg(unix)]
+            Some(client_message::Message::UnbindAgentPty(msg)) => {
+                self.handle_unbind_agent_pty(conn_id, msg)
+            }
+            #[cfg(unix)]
+            Some(client_message::Message::SafeFile(request)) => {
+                let is_close_notification = request_id.is_empty()
+                    && matches!(
+                        request.operation.as_ref(),
+                        Some(super::proto::safe_file_request::Operation::CloseHandle(_))
+                    );
+                if self.client_supports_safe_file_transactions(conn_id)
+                    && self.safe_files.is_available()
+                {
+                    let response = self.safe_files.handle(conn_id, request);
+                    if is_close_notification {
+                        if let Some(super::proto::safe_file_response::Result::Error(error)) =
+                            response.result
+                        {
+                            log::warn!("Safe-file close notification failed: {}", error.message);
+                        }
+                        return;
+                    }
+                    HandlerOutcome::Sync(server_message::Message::SafeFileResponse(response))
+                } else {
+                    if is_close_notification {
+                        log::debug!(
+                            "Ignoring safe-file close notification without negotiated capability"
+                        );
+                        return;
+                    }
+                    HandlerOutcome::Sync(server_message::Message::SafeFileResponse(
+                        super::proto::SafeFileResponse {
+                            result: Some(super::proto::safe_file_response::Result::Error(
+                                FileOperationError {
+                                    message:
+                                        "safe-file-transactions-v1 capability was not negotiated"
+                                            .to_string(),
+                                },
+                            )),
+                        },
+                    ))
+                }
+            }
+            #[cfg(not(unix))]
+            Some(
+                client_message::Message::BindAgentPty(_)
+                | client_message::Message::UnbindAgentPty(_),
+            ) => HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                AgentPtyBindingResponse {
+                    status: AgentPtyBindingStatus::CapabilityRequired.into(),
+                    message: "agent-pty-binding-v2 requires a unix daemon".to_string(),
+                },
+            )),
+            #[cfg(not(unix))]
+            Some(client_message::Message::SafeFile(_)) => HandlerOutcome::Sync(
+                server_message::Message::SafeFileResponse(super::proto::SafeFileResponse {
+                    result: Some(super::proto::safe_file_response::Result::Error(
+                        FileOperationError {
+                            message: "safe-file transactions require a supported unix daemon"
+                                .to_string(),
+                        },
+                    )),
+                }),
+            ),
             // Agent-session inventory (Agent-Cockpit): report this host's
             // Claude/Codex agent-sessions discovered on the daemon's filesystem.
             // Not PTY-bound, so available on every platform.
@@ -763,6 +1020,25 @@ impl ServerModel {
                 HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                     code: ErrorCode::InvalidRequest.into(),
                     message: "zaplex session host requires a unix daemon".to_string(),
+                }))
+            }
+            #[cfg(unix)]
+            Some(client_message::Message::ListMultiplexerSessions(_)) => {
+                if self.client_supports_multiplexer_inventory(conn_id) {
+                    self.handle_list_multiplexer_sessions(&request_id, conn_id, ctx)
+                } else {
+                    HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: "multiplexer-inventory-v1 capability was not negotiated"
+                            .to_string(),
+                    }))
+                }
+            }
+            #[cfg(not(unix))]
+            Some(client_message::Message::ListMultiplexerSessions(_)) => {
+                HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: "multiplexer inventory requires a unix daemon".to_string(),
                 }))
             }
             // Non-unix daemons have no session host (PTY ownership is unix-only).
@@ -900,12 +1176,27 @@ impl ServerModel {
     /// deployed builds. The client treats an empty version as "unknown" and
     /// skips strict version enforcement, which keeps the
     /// `script/deploy_remote_server` developer workflow functional.
-    fn handle_initialize(&mut self, msg: Initialize, request_id: &RequestId) -> HandlerOutcome {
+    fn handle_initialize(
+        &mut self,
+        conn_id: ConnectionId,
+        msg: Initialize,
+        request_id: &RequestId,
+    ) -> HandlerOutcome {
         log::info!("Handling Initialize (request_id={request_id})");
+        self.connection_features
+            .insert(conn_id, msg.features.into_iter().collect());
         if !msg.auth_token.is_empty() {
             self.auth_token = Some(msg.auth_token);
         }
         let server_version = ChannelState::app_version().unwrap_or("").to_string();
+        #[cfg(unix)]
+        let safe_file_transactions_supported = self.safe_files.is_available();
+        #[cfg(not(unix))]
+        let safe_file_transactions_supported = false;
+        let features = server_features_with_runtime_support(
+            zaplex_cockpit::local_process_signalling_supported(),
+            safe_file_transactions_supported,
+        );
         HandlerOutcome::Sync(server_message::Message::InitializeResponse(
             InitializeResponse {
                 server_version,
@@ -913,9 +1204,37 @@ impl ServerModel {
                 // Capabilities this daemon advertises. Stage 0 is empty (the
                 // native session host is not implemented yet); Stage 1 adds
                 // FEATURE_SESSION_HOST via supported_features().
-                features: supported_features(),
+                features,
             },
         ))
+    }
+
+    fn client_supports_agent_pty_binding(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_AGENT_PTY_BINDING_V2))
+    }
+
+    fn client_supports_agent_process_signal(&self, conn_id: ConnectionId) -> bool {
+        zaplex_cockpit::local_process_signalling_supported()
+            && self
+                .connection_features
+                .get(&conn_id)
+                .is_some_and(|features| features.contains(FEATURE_AGENT_PROCESS_SIGNAL_V1))
+    }
+
+    #[cfg(unix)]
+    fn client_supports_multiplexer_inventory(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_MULTIPLEXER_INVENTORY_V1))
+    }
+
+    #[cfg(unix)]
+    fn client_supports_safe_file_transactions(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_SAFE_FILE_TRANSACTIONS_V1))
     }
 
     /// Handles `Authenticate` by replacing the daemon-wide credential.
@@ -1080,14 +1399,67 @@ impl ServerModel {
         HandlerOutcome::Async(Some(handle))
     }
 
+    /// Handles the narrow Agent-Cockpit process-signal RPC.
+    ///
+    /// The negotiated capability and a fresh daemon-local agent inventory must
+    /// bind the requested session id, pid, and fingerprint before dispatch.
+    /// No command text reaches a shell or `HostExec`: the daemon then delegates
+    /// only to [`zaplex_cockpit::send_verified_process_signal`], which re-verifies
+    /// the process identity immediately before signalling.
+    fn handle_agent_process_signal(
+        &mut self,
+        req: AgentProcessSignalRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let capability_negotiated = self.client_supports_agent_process_signal(conn_id);
+        if !capability_negotiated {
+            return HandlerOutcome::Sync(server_message::Message::AgentProcessSignalResponse(
+                execute_agent_process_signal_with(req, &[], false, |_, _, _| {
+                    unreachable!("capability rejection cannot dispatch a process signal")
+                }),
+            ));
+        }
+
+        let request_id_for_response = request_id.clone();
+        let transcript_cache = Arc::clone(&self.agent_transcript_cache);
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let mut cache = transcript_cache.lock().unwrap_or_else(|poisoned| {
+                    log::warn!(
+                        "Daemon: agent transcript cache mutex was poisoned; recovering its state"
+                    );
+                    poisoned.into_inner()
+                });
+                let current_sessions = collect_agent_sessions(&mut cache);
+                drop(cache);
+                execute_agent_process_signal_with(
+                    req,
+                    &current_sessions,
+                    true,
+                    zaplex_cockpit::send_verified_process_signal,
+                )
+            },
+            move |me, response, _ctx| {
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::AgentProcessSignalResponse(response),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
     /// Handles `HostExec` — a **session-less** one-shot host command. Unlike
     /// [`Self::handle_run_command`], it does not look up a per-session
     /// `LocalCommandExecutor`; it builds an ad-hoc executor over the daemon's
     /// default user shell (`$SHELL`, falling back to `/bin/bash`) rooted at the
-    /// daemon's home directory and runs the command there. This is the path the
-    /// Agent-Cockpit cross-host guardrails use to deliver `kill -<SIG> <pid>` to
-    /// a remote agent when the app holds a daemon connection but no bound
-    /// interactive session on that host.
+    /// daemon's home directory and runs the command there. Agent process
+    /// guardrails must use [`Self::handle_agent_process_signal`] instead.
     ///
     /// On success returns a `HandlerOutcome::Async` resolving a `HostExecResult`;
     /// a failure to even spawn the command surfaces as a top-level
@@ -1743,8 +2115,7 @@ impl ServerModel {
                     let metadata = entry.metadata().ok();
                     let kind = entry_kind(file_type.as_ref(), metadata.as_ref());
                     let is_dir = kind == FileSystemEntryKind::Directory as i32;
-                    let size_bytes =
-                        metadata.as_ref().filter(|m| m.is_file()).map(|m| m.len());
+                    let size_bytes = metadata.as_ref().filter(|m| m.is_file()).map(|m| m.len());
                     let modified_epoch_millis = metadata
                         .as_ref()
                         .and_then(|m| m.modified().ok())
@@ -1950,10 +2321,7 @@ fn expand_user_path(path: &str) -> PathBuf {
 }
 
 #[cfg(feature = "local_fs")]
-fn entry_kind(
-    file_type: Option<&std::fs::FileType>,
-    metadata: Option<&std::fs::Metadata>,
-) -> i32 {
+fn entry_kind(file_type: Option<&std::fs::FileType>, metadata: Option<&std::fs::Metadata>) -> i32 {
     if file_type.is_some_and(|ft| ft.is_symlink()) {
         return FileSystemEntryKind::Symlink as i32;
     }
@@ -2031,7 +2399,7 @@ fn now_epoch_millis() -> u64 {
         .unwrap_or(0)
 }
 
-/// Discovers the agent-sessions (Claude/Codex CLI conversations) present on
+/// Discovers the agent-sessions (Claude/Codex/Antigravity CLI conversations) present on
 /// this daemon's filesystem and maps them to the wire shape. Pure filesystem +
 /// transcript reads — no PTY, so it works on every platform. Runs the same
 /// `zaplex_cockpit` discovery the local app uses, over the daemon's own home:
@@ -2039,24 +2407,53 @@ fn now_epoch_millis() -> u64 {
 ///
 /// Returns an empty list (never an error) when the home directory can't be
 /// resolved — an inventory the client can safely fold as "zero sessions here".
-fn collect_agent_sessions() -> Vec<super::proto::AgentSessionInfo> {
+fn collect_agent_sessions(
+    transcript_cache: &mut zaplex_cockpit::TranscriptScanCache,
+) -> Vec<super::proto::AgentSessionInfo> {
     let Some(home) = dirs::home_dir() else {
         log::warn!("Daemon: ListAgentSessions: no home dir; reporting empty inventory");
         return Vec::new();
     };
     let now = chrono::Utc::now();
-    // Claude sessions (registry + transcript joined) …
-    let claude = zaplex_cockpit::claude::discover_accounts(&home, None)
-        .into_iter()
-        .flat_map(|account| zaplex_cockpit::sessions::live_sessions(&account.config_dir, now));
+    // Claude sessions (registry + transcript joined) … `Account::stamp` gives each
+    // one the two things it can't know about itself: its account's config-dir pin,
+    // so the client can route a remote resume to a plexed subscription, and its
+    // account's email, so the client can tell which of ITS accounts the session
+    // belongs to — nothing else on this wire identifies a subscription across
+    // hosts. The same function `build_snapshot` uses locally, so two hosts cannot
+    // stamp the same account differently.
+    let mut snapshots = Vec::new();
+    for account in zaplex_cockpit::claude::discover_accounts(&home, None) {
+        for mut snapshot in zaplex_cockpit::live_claude_sessions_with_cache(
+            &account.config_dir,
+            now,
+            transcript_cache,
+        ) {
+            account.stamp(&mut snapshot);
+            snapshots.push(snapshot);
+        }
+    }
     // … plus Codex sessions (transcript-inferred; no registry/pid — see
     // zaplex_cockpit::codex_sessions), so remote Codex agents flow through the
     // unified inventory too.
-    let codex = zaplex_cockpit::codex::discover_accounts(&home.join(".codex"))
+    for account in zaplex_cockpit::codex::discover_accounts(&home.join(".codex")) {
+        for mut snapshot in zaplex_cockpit::live_codex_sessions_with_cache(
+            &account.config_dir,
+            now,
+            transcript_cache,
+        ) {
+            account.stamp(&mut snapshot);
+            snapshots.push(snapshot);
+        }
+    }
+    snapshots.extend(zaplex_cockpit::antigravity_idle_sessions(
+        &home,
+        now,
+        zaplex_cockpit::IDLE_MAX_AGE,
+        zaplex_cockpit::IDLE_SESSION_LIMIT,
+    ));
+    snapshots
         .into_iter()
-        .flat_map(|account| zaplex_cockpit::codex_sessions::live_sessions(&account.config_dir, now));
-    claude
-        .chain(codex)
         .map(|snapshot| super::agent_session::snapshot_to_proto(&snapshot))
         .collect()
 }
@@ -2070,7 +2467,8 @@ impl ServerModel {
     ///
     /// The scan itself — account discovery plus a transcript-session filesystem
     /// walk with JSON parsing — can be slow on hosts with many Claude/Codex
-    /// transcripts or a slow home dir. Running it inline on the model thread
+    /// transcripts or a slow home dir. Antigravity adds only one small bounded
+    /// registry read. Running it inline on the model thread
     /// would stall PTY/session servicing (`SessionInput`/`SessionOutput`/attach)
     /// for the duration of every cockpit inventory poll. So we offload the work
     /// off the model thread: [`Self::spawn_request_handler`] runs the future on
@@ -2085,6 +2483,7 @@ impl ServerModel {
     ) -> HandlerOutcome {
         let request_id_for_response = request_id.clone();
         let conn_id_for_response = conn_id;
+        let transcript_cache = Arc::clone(&self.agent_transcript_cache);
         // `collect_agent_sessions` performs blocking filesystem/JSON work with no
         // await points; because `spawn_request_handler` schedules this future on
         // the background executor, that blocking work never touches the model
@@ -2092,12 +2491,45 @@ impl ServerModel {
         // preserved inside `collect_agent_sessions`.
         let handle = self.spawn_request_handler(
             request_id.clone(),
-            async move { collect_agent_sessions() },
-            move |me, sessions, _ctx| {
+            async move {
+                let mut cache = transcript_cache.lock().unwrap_or_else(|poisoned| {
+                    log::warn!(
+                        "Daemon: agent transcript cache mutex was poisoned; recovering its state"
+                    );
+                    poisoned.into_inner()
+                });
+                collect_agent_sessions(&mut cache)
+            },
+            move |me, mut sessions, _ctx| {
+                #[cfg(unix)]
+                me.reconcile_and_overlay_agent_bindings(conn_id_for_response, &mut sessions);
                 me.send_server_message(
                     Some(conn_id_for_response),
                     Some(&request_id_for_response),
                     server_message::Message::AgentSessionList(AgentSessionList { sessions }),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    #[cfg(unix)]
+    fn handle_list_multiplexer_sessions(
+        &mut self,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            super::multiplexer::discover_multiplexer_sessions(),
+            move |me, inventory, _ctx| {
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::MultiplexerSessionList(inventory),
                 );
             },
             ctx,
@@ -2109,7 +2541,264 @@ impl ServerModel {
 /// Daemon-side session-host handlers (Stage 1). Unix-only: the daemon owns the
 /// PTYs. The per-session state and async tasks live in `super::session_host`.
 #[cfg(unix)]
+fn agent_identity_from_proto(
+    identity: Option<AgentSessionIdentity>,
+) -> Result<AgentIdentity, AgentPtyBindingResponse> {
+    let Some(identity) = identity else {
+        return Err(agent_pty_binding_response(
+            AgentPtyBindingStatus::InvalidRequest,
+            "agent identity is required",
+        ));
+    };
+    if identity.provider.is_empty() || identity.session_id.is_empty() {
+        return Err(agent_pty_binding_response(
+            AgentPtyBindingStatus::InvalidRequest,
+            "agent provider and session id are required",
+        ));
+    }
+    Ok(AgentIdentity {
+        provider: identity.provider,
+        session_id: identity.session_id,
+        account_email: (!identity.account_email.is_empty()).then_some(identity.account_email),
+        config_dir: (!identity.config_dir.is_empty()).then_some(identity.config_dir),
+    })
+}
+
+#[cfg(unix)]
+fn agent_identity_to_proto(identity: &AgentIdentity) -> AgentSessionIdentity {
+    AgentSessionIdentity {
+        session_id: identity.session_id.clone(),
+        provider: identity.provider.clone(),
+        account_email: identity.account_email.clone().unwrap_or_default(),
+        config_dir: identity.config_dir.clone().unwrap_or_default(),
+    }
+}
+
+#[cfg(unix)]
+fn live_agent_identities(sessions: &[AgentSessionInfo]) -> HashSet<AgentIdentity> {
+    sessions
+        .iter()
+        .filter(|session| session.state != "idle")
+        .filter(|session| !session.provider.is_empty() && !session.session_id.is_empty())
+        .map(|session| AgentIdentity {
+            provider: session.provider.clone(),
+            session_id: session.session_id.clone(),
+            account_email: (!session.account_email.is_empty())
+                .then(|| session.account_email.clone()),
+            config_dir: (!session.config_dir.is_empty()).then(|| session.config_dir.clone()),
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn agent_pty_binding_response(
+    status: AgentPtyBindingStatus,
+    message: impl Into<String>,
+) -> AgentPtyBindingResponse {
+    AgentPtyBindingResponse {
+        status: status.into(),
+        message: message.into(),
+    }
+}
+
+#[cfg(unix)]
+fn binding_error_response(error: BindingError) -> AgentPtyBindingResponse {
+    match error {
+        BindingError::PtyNotFound => agent_pty_binding_response(
+            AgentPtyBindingStatus::PtyNotFound,
+            "PTY session was not found",
+        ),
+        BindingError::StaleGeneration => agent_pty_binding_response(
+            AgentPtyBindingStatus::StaleGeneration,
+            "PTY generation is stale",
+        ),
+        BindingError::ForeignDaemon => agent_pty_binding_response(
+            AgentPtyBindingStatus::ForeignDaemon,
+            "request targets another daemon instance",
+        ),
+        BindingError::ForeignConnection => agent_pty_binding_response(
+            AgentPtyBindingStatus::ForeignConnection,
+            "PTY is attached to another connection",
+        ),
+        BindingError::ForegroundConflict => agent_pty_binding_response(
+            AgentPtyBindingStatus::ForegroundConflict,
+            "PTY already has a live foreground agent",
+        ),
+        BindingError::HandoffMismatch => agent_pty_binding_response(
+            AgentPtyBindingStatus::HandoffMismatch,
+            "explicit handoff does not match the foreground agent",
+        ),
+        BindingError::IdentityNotBound => agent_pty_binding_response(
+            AgentPtyBindingStatus::IdentityNotBound,
+            "agent identity is not bound to this PTY",
+        ),
+        BindingError::IdentityAlreadyBound => agent_pty_binding_response(
+            AgentPtyBindingStatus::IdentityAlreadyBound,
+            "agent identity is already bound to another PTY",
+        ),
+    }
+}
+
+#[cfg(unix)]
 impl ServerModel {
+    fn handle_bind_agent_pty(
+        &mut self,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        msg: BindAgentPty,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        if !self.client_supports_agent_pty_binding(conn_id) {
+            return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                agent_pty_binding_response(
+                    AgentPtyBindingStatus::CapabilityRequired,
+                    "client did not negotiate agent-pty-binding-v2",
+                ),
+            ));
+        }
+        if msg.host_id != self.host_id {
+            return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                agent_pty_binding_response(
+                    AgentPtyBindingStatus::ForeignDaemon,
+                    "request targets another daemon instance",
+                ),
+            ));
+        }
+        let request_id_for_response = request_id.clone();
+        let transcript_cache = Arc::clone(&self.agent_transcript_cache);
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let mut cache = transcript_cache.lock().unwrap_or_else(|poisoned| {
+                    log::warn!(
+                        "Daemon: agent transcript cache mutex was poisoned; recovering its state"
+                    );
+                    poisoned.into_inner()
+                });
+                live_agent_identities(&collect_agent_sessions(&mut cache))
+            },
+            move |me, live_agents, _ctx| {
+                let response = me.execute_bind_agent_pty(conn_id, msg, &live_agents);
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::AgentPtyBindingResponse(response),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    fn execute_bind_agent_pty(
+        &mut self,
+        conn_id: ConnectionId,
+        msg: BindAgentPty,
+        live_agents: &HashSet<AgentIdentity>,
+    ) -> AgentPtyBindingResponse {
+        if !self.client_supports_agent_pty_binding(conn_id) {
+            return agent_pty_binding_response(
+                AgentPtyBindingStatus::CapabilityRequired,
+                "client did not negotiate agent-pty-binding-v2",
+            );
+        }
+        let agent = match agent_identity_from_proto(msg.agent) {
+            Ok(agent) => agent,
+            Err(response) => return response,
+        };
+        let handoff_from = match msg.handoff_from {
+            Some(identity) => match agent_identity_from_proto(Some(identity)) {
+                Ok(identity) => Some(identity),
+                Err(response) => return response,
+            },
+            None => None,
+        };
+        self.agent_pty_bindings.reconcile_live_agents(live_agents);
+        if !live_agents.contains(&agent) {
+            return agent_pty_binding_response(
+                AgentPtyBindingStatus::IdentityNotDiscovered,
+                "agent identity is not present in the current live inventory",
+            );
+        }
+        match self.agent_pty_bindings.bind(
+            conn_id.as_u128(),
+            BindingRequest {
+                host_id: msg.host_id,
+                pty_session_id: msg.pty_session_id,
+                pty_generation: msg.pty_session_generation,
+                agent,
+                handoff_from,
+            },
+        ) {
+            Ok(()) => {
+                agent_pty_binding_response(AgentPtyBindingStatus::Bound, "agent bound to PTY")
+            }
+            Err(error) => binding_error_response(error),
+        }
+    }
+
+    fn reconcile_and_overlay_agent_bindings(
+        &mut self,
+        conn_id: ConnectionId,
+        sessions: &mut [AgentSessionInfo],
+    ) {
+        let live_agents = live_agent_identities(sessions);
+        self.agent_pty_bindings.reconcile_live_agents(&live_agents);
+        if !self.client_supports_agent_pty_binding(conn_id) {
+            return;
+        }
+        for session in sessions {
+            let identity = AgentIdentity {
+                provider: session.provider.clone(),
+                session_id: session.session_id.clone(),
+                account_email: (!session.account_email.is_empty())
+                    .then(|| session.account_email.clone()),
+                config_dir: (!session.config_dir.is_empty()).then(|| session.config_dir.clone()),
+            };
+            if let Some(binding) = self.agent_pty_bindings.binding_for(&identity) {
+                session.pty_session_id = binding.pty_session_id.clone();
+                session.pty_session_generation = binding.pty_generation;
+                session.pty_foreground = binding.foreground;
+            }
+        }
+    }
+
+    fn handle_unbind_agent_pty(
+        &mut self,
+        conn_id: ConnectionId,
+        msg: UnbindAgentPty,
+    ) -> HandlerOutcome {
+        if !self.client_supports_agent_pty_binding(conn_id) {
+            return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                agent_pty_binding_response(
+                    AgentPtyBindingStatus::CapabilityRequired,
+                    "client did not negotiate agent-pty-binding-v2",
+                ),
+            ));
+        }
+        let agent = match agent_identity_from_proto(msg.agent) {
+            Ok(agent) => agent,
+            Err(response) => {
+                return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                    response,
+                ));
+            }
+        };
+        let response = match self.agent_pty_bindings.unbind(
+            conn_id.as_u128(),
+            &msg.host_id,
+            &agent,
+            &msg.pty_session_id,
+            msg.pty_session_generation,
+        ) {
+            Ok(()) => {
+                agent_pty_binding_response(AgentPtyBindingStatus::Unbound, "agent unbound from PTY")
+            }
+            Err(error) => binding_error_response(error),
+        };
+        HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(response))
+    }
+
     /// Opens a new daemon-hosted session: allocates a PTY, spawns a login
     /// shell, registers the session, and starts its reader + writer tasks.
     fn handle_open_session(
@@ -2118,6 +2807,13 @@ impl ServerModel {
         msg: OpenSession,
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
+        let generation = self.next_pty_generation;
+        let Some(next_pty_generation) = generation.checked_add(1) else {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::Internal.into(),
+                message: "PTY generation counter exhausted".to_string(),
+            }));
+        };
         let (rows, cols) = msg
             .size
             .as_ref()
@@ -2138,7 +2834,7 @@ impl ServerModel {
             .map(|b| (b as usize).min(HOST_RING_CAP_BYTES))
             .unwrap_or(super::session_host::RING_CEILING_BYTES);
 
-        let (leader_fd, child) = match crate::terminal::local_tty::spawn_session_pty(
+        let (leader_fd, child, bootstrap_file) = match crate::terminal::local_tty::spawn_session_pty(
             cwd.as_deref().map(std::path::Path::new),
             &shell,
             &msg.env,
@@ -2166,22 +2862,35 @@ impl ServerModel {
         };
 
         let session_id = uuid::Uuid::new_v4().to_string();
-        let (input_tx, input_rx) = async_channel::unbounded::<Vec<u8>>();
+        self.next_pty_generation = next_pty_generation;
+        let (input_tx, input_rx) = async_channel::unbounded::<super::session_host::PtyInput>();
         let shell_pid = child.id();
         self.sessions.insert(
             session_id.clone(),
             super::session_host::Session {
+                generation,
                 leader: async_leader.clone(),
                 child,
+                _bootstrap_file: bootstrap_file,
                 ring: zaplex_remote_session::server::output_ring::OutputRing::new(ring_ceiling),
                 rows,
                 cols,
                 attached: conn_id,
                 input_tx,
+                accepted_startup_commands: HashMap::new(),
                 cwd,
                 shell: shell.clone(),
                 last_attached_ms: now_epoch_millis(),
+                preamble: super::session_host::BootstrapPreamble::new(
+                    super::session_host::BOOTSTRAP_PREAMBLE_CAP_BYTES,
+                ),
             },
+        );
+        self.agent_pty_bindings.register_pty(
+            session_id.clone(),
+            generation,
+            self.host_id.clone(),
+            conn_id.as_u128(),
         );
 
         let spawner = ctx.spawner();
@@ -2192,8 +2901,11 @@ impl ServerModel {
             ctx.spawner(),
         ))
         .detach();
-        exec.spawn(super::session_host::run_session_writer(async_leader, input_rx))
-            .detach();
+        exec.spawn(super::session_host::run_session_writer(
+            async_leader,
+            input_rx,
+        ))
+        .detach();
         // Advisory probe: did the user's profile auto-attach tmux/screen into
         // this session despite the spawn-env opt-outs? See run_multiplexer_probe.
         exec.spawn(super::session_host::run_multiplexer_probe(
@@ -2203,50 +2915,203 @@ impl ServerModel {
         ))
         .detach();
 
-        // Bootstrap the daemon-spawned shell with the Zaplexify shell integration
-        // (blocks, prompt marks, completions) by writing the init script as the
-        // session's first input — the ordered writer delivers it ahead of any
-        // user input. The script emits the InitShell DCS hook and is idempotent
-        // (ZAPLEX_BOOTSTRAPPED guard), so a later re-attach won't double-run it.
-        // The terminal *identity* (TERM_PROGRAM=ZaplexTerminal etc.) is set as a
-        // spawn env var in `spawn_session_pty`, not by this script. Together the
-        // identity env and the integration script are what make a daemon session
-        // a real Zaplex terminal rather than a bare VT.
-        match crate::terminal::shell::ShellType::from_name(&shell) {
-            Some(shell_type) => {
-                let mut bootstrap =
-                    crate::terminal::bootstrap::init_shell_script_for_shell(shell_type, &crate::ASSETS)
-                        .into_bytes();
-                bootstrap.extend_from_slice(shell_type.execute_command_bytes());
+        // Deliver the Zaplexify shell integration as the session's first input
+        // (ahead of any user input, via the ordered writer). The terminal
+        // *identity* (TERM_PROGRAM=ZaplexTerminal etc.) is a spawn env var in
+        // `spawn_session_pty`; here we feed the integration *scripts*.
+        //
+        // `spawn_session_pty` launches the shell with RC loading suppressed (the
+        // same contract the local app uses), so — exactly like a local session —
+        // we must deliver BOTH the InitShell emitter and the shell *body*. The
+        // body is what sources the user's login RC, sets `ZAPLEX_BOOTSTRAPPED`,
+        // and emits the `Bootstrapped` DCS hook carrying the remote `HISTFILE`
+        // path. Without the body the session stops at InitShell (prompt marks
+        // render) but never becomes bootstrapped, so `is_bootstrapped()` stays
+        // false and history is never queryable — history-backed autosuggestions
+        // and tab-completions never arm over the remote session.
+        //
+        // What to send per shell mirrors the local contract exactly
+        // (`arguments_for_session_spawning_command` + `enqueue_init_script`):
+        //   • zsh  — spawn args use `--no-rcs` (no embedded init) → init + body.
+        //   • bash — init is embedded in `--rcfile <(echo …)>` at spawn → body only.
+        //   • fish/pwsh — their spawn-time InitShell hook sources an idempotent
+        //     body from the session-owned temporary file. Nothing is typed
+        //     through the PTY, avoiding fish long-paste and pwsh input loss.
+        //   • unclassified $SHELL — plain login shell, no integration.
+        let shell_type = crate::terminal::local_tty::shell::supported_shell_path_and_type(&shell)
+            .map(|(_, shell_type)| shell_type);
+        let bootstrap_delivery = daemon_bootstrap_delivery(shell_type);
+        let bootstrap = match bootstrap_delivery {
+            DaemonBootstrapDelivery::OrderedPty => match shell_type {
+                Some(ShellType::Zsh) => {
+                    let mut buf = crate::terminal::bootstrap::init_shell_script_for_shell(
+                        ShellType::Zsh,
+                        &crate::ASSETS,
+                    )
+                    .into_bytes();
+                    buf.extend_from_slice(ShellType::Zsh.execute_command_bytes());
+                    buf.extend_from_slice(&crate::terminal::bootstrap::script_for_shell(
+                        ShellType::Zsh,
+                        &crate::ASSETS,
+                    ));
+                    Some(buf)
+                }
+                Some(ShellType::Bash) => Some(
+                    crate::terminal::bootstrap::script_for_shell(ShellType::Bash, &crate::ASSETS)
+                        .into_owned(),
+                ),
+                Some(ShellType::Fish | ShellType::PowerShell) | None => {
+                    unreachable!("ordered PTY delivery is only for bash/zsh")
+                }
+            },
+            DaemonBootstrapDelivery::GuardedFile | DaemonBootstrapDelivery::NoIntegration => None,
+        };
+        match bootstrap {
+            Some(bootstrap) => {
                 if let Some(session) = self.sessions.get(&session_id) {
-                    if let Err(e) = session.input_tx.try_send(bootstrap) {
+                    if let Err(e) = session
+                        .input_tx
+                        .try_send(super::session_host::PtyInput::Bootstrap(bootstrap))
+                    {
                         log::warn!("Daemon: failed to enqueue bootstrap for {session_id}: {e}");
                     } else {
-                        log::info!("Daemon: bootstrapped session {session_id} ({})", shell_type.name());
+                        log::info!("Daemon: bootstrapped session {session_id} (shell={shell})");
                     }
                 }
             }
-            None => {
-                log::info!(
-                    "Daemon: shell {shell:?} is not Zaplexify-capable; session {session_id} \
-                     runs as a plain shell (no blocks)"
-                );
-            }
+            None => match bootstrap_delivery {
+                DaemonBootstrapDelivery::GuardedFile => {
+                    log::info!(
+                        "Daemon: bootstrapped session {session_id} from a guarded body file \
+                             (shell={shell})"
+                    );
+                }
+                DaemonBootstrapDelivery::OrderedPty => {
+                    unreachable!("bash/zsh always enqueue a bootstrap body")
+                }
+                DaemonBootstrapDelivery::NoIntegration => {
+                    log::info!(
+                        "Daemon: shell {shell:?} runs as a plain shell (no block integration); \
+                             session {session_id}"
+                    );
+                }
+            },
         }
 
         log::info!("Daemon: opened session {session_id} ({rows}x{cols}, shell={shell})");
         HandlerOutcome::Sync(server_message::Message::SessionOpened(SessionOpened {
             session_id,
+            generation,
         }))
     }
 
     /// Queues input bytes for the session's ordered writer task.
-    fn handle_session_input(&mut self, msg: SessionInput) {
-        if let Some(session) = self.sessions.get(&msg.session_id) {
-            if let Err(e) = session.input_tx.try_send(msg.bytes) {
-                log::warn!("Daemon: dropping input for session {}: {e}", msg.session_id);
-            }
+    ///
+    /// Ordinary input has no startup id and remains a fire-and-forget
+    /// notification. Startup input is a correlated request: the id is recorded
+    /// only after `try_send` succeeds, duplicate retries receive the same
+    /// positive acknowledgement without a second enqueue, and a writer failure
+    /// leaves the id retryable.
+    fn handle_session_input(
+        &mut self,
+        conn_id: ConnectionId,
+        msg: SessionInput,
+    ) -> Option<StartupCommandAck> {
+        let SessionInput {
+            session_id,
+            bytes,
+            startup_command_id,
+        } = msg;
+        if !self
+            .sessions
+            .get(&session_id)
+            .is_some_and(|session| session.attached == conn_id)
+        {
+            log::warn!(
+                "Daemon: rejecting input for session {session_id} from non-owning connection \
+                 {conn_id}"
+            );
+            return (!startup_command_id.is_empty()).then_some(StartupCommandAck {
+                session_id,
+                startup_command_id,
+                accepted: false,
+            });
         }
+        if startup_command_id.is_empty() {
+            if let Some(session) = self.sessions.get(&session_id) {
+                if let Err(e) = session
+                    .input_tx
+                    .try_send(super::session_host::PtyInput::Visible(bytes))
+                {
+                    log::warn!("Daemon: dropping input for session {session_id}: {e}");
+                }
+            }
+            return None;
+        }
+        if !super::session_host::is_valid_startup_input(&bytes) {
+            log::warn!(
+                "Daemon: rejecting malformed startup command {startup_command_id} for session \
+                 {session_id}; expected one non-empty LF-terminated line"
+            );
+            return Some(StartupCommandAck {
+                session_id,
+                startup_command_id,
+                accepted: false,
+            });
+        }
+
+        let accepted = if let Some(session) = self.sessions.get_mut(&session_id) {
+            if let Some(accepted_bytes) = session.accepted_startup_commands.get(&startup_command_id)
+            {
+                if accepted_bytes == &bytes {
+                    true
+                } else {
+                    log::warn!(
+                        "Daemon: startup command id {startup_command_id} was reused with \
+                         different bytes for session {session_id}"
+                    );
+                    false
+                }
+            } else if session.accepted_startup_commands.len()
+                >= super::session_host::MAX_ACCEPTED_STARTUP_COMMANDS
+            {
+                log::warn!(
+                    "Daemon: startup command ledger is full for session {session_id}; \
+                     rejecting new id {startup_command_id}"
+                );
+                false
+            } else {
+                match session
+                    .input_tx
+                    .try_send(super::session_host::PtyInput::Startup(bytes.clone()))
+                {
+                    Ok(()) => {
+                        session
+                            .accepted_startup_commands
+                            .insert(startup_command_id.clone(), bytes);
+                        true
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Daemon: failed to enqueue startup command {startup_command_id} \
+                             for session {session_id}: {e}"
+                        );
+                        false
+                    }
+                }
+            }
+        } else {
+            log::warn!(
+                "Daemon: startup command {startup_command_id} targeted unknown session {session_id}"
+            );
+            false
+        };
+
+        Some(StartupCommandAck {
+            session_id,
+            startup_command_id,
+            accepted,
+        })
     }
 
     /// Re-attaches a (possibly reconnected) connection to a still-running
@@ -2254,21 +3119,185 @@ impl ServerModel {
     /// stream at `conn_id`, so subsequent `SessionOutput` pushes go to the
     /// reconnected client. This is the heart of "survives the drop": the session
     /// kept running and buffering into its ring while the client was gone.
+    fn handle_attach_session_request(
+        &mut self,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        msg: AttachSession,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let Some(expected_proto) = msg.expected_agent_binding.clone() else {
+            return self.handle_attach_session(conn_id, msg);
+        };
+        if !self.client_supports_agent_pty_binding(conn_id) {
+            return self.handle_attach_session(conn_id, msg);
+        }
+        let expected_agent = match agent_identity_from_proto(Some(expected_proto)) {
+            Ok(identity) => identity,
+            Err(response) => {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: response.message,
+                }));
+            }
+        };
+        let request_id_for_response = request_id.clone();
+        let transcript_cache = Arc::clone(&self.agent_transcript_cache);
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let mut cache = transcript_cache.lock().unwrap_or_else(|poisoned| {
+                    log::warn!(
+                        "Daemon: agent transcript cache mutex was poisoned; recovering its state"
+                    );
+                    poisoned.into_inner()
+                });
+                live_agent_identities(&collect_agent_sessions(&mut cache))
+            },
+            move |me, live_agents, _ctx| {
+                let message =
+                    match me.validate_fresh_agent_attach(conn_id, &expected_agent, &live_agents) {
+                        Ok(()) => match me.handle_attach_session(conn_id, msg) {
+                            HandlerOutcome::Sync(message) => message,
+                            HandlerOutcome::Async(_) => {
+                                unreachable!("validated attach execution is synchronous")
+                            }
+                        },
+                        Err(error) => server_message::Message::Error(error),
+                    };
+                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    fn validate_fresh_agent_attach(
+        &mut self,
+        conn_id: ConnectionId,
+        expected_agent: &AgentIdentity,
+        live_agents: &HashSet<AgentIdentity>,
+    ) -> Result<(), ErrorResponse> {
+        self.agent_pty_bindings.reconcile_live_agents(live_agents);
+        if !self.client_supports_agent_pty_binding(conn_id) {
+            return Err(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "agent-pty-binding-v2 connection changed during inventory refresh"
+                    .to_string(),
+            });
+        }
+        if !live_agents.contains(expected_agent) {
+            return Err(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "agent is no longer present in the current live inventory".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     fn handle_attach_session(
         &mut self,
         conn_id: ConnectionId,
         msg: AttachSession,
     ) -> HandlerOutcome {
+        let client_supports_agent_pty_binding = self.client_supports_agent_pty_binding(conn_id);
+        if client_supports_agent_pty_binding && msg.expected_generation.is_none() {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "agent-pty-binding-v2 attach requires a PTY generation".to_string(),
+            }));
+        }
+        if msg.expected_agent_binding.is_some() && !client_supports_agent_pty_binding {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "agent-pty-binding-v2 capability was not negotiated".to_string(),
+            }));
+        }
+        let expected_agent_binding = match msg.expected_agent_binding.clone() {
+            Some(identity) => match agent_identity_from_proto(Some(identity)) {
+                Ok(identity) => Some(identity),
+                Err(response) => {
+                    return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: response.message,
+                    }));
+                }
+            },
+            None => None,
+        };
         let Some(session) = self.sessions.get_mut(&msg.session_id) else {
             return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                 code: ErrorCode::InvalidRequest.into(),
                 message: format!("no such session: {}", msg.session_id),
             }));
         };
-        let (base_seq, replay) = session.ring.replay_from(msg.last_seq);
+        if msg
+            .expected_generation
+            .is_some_and(|expected| expected != session.generation)
+        {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: format!("stale generation for session {}", msg.session_id),
+            }));
+        }
+        if session.attached != conn_id
+            && session.attached != uuid::Uuid::nil()
+            && self.connection_senders.contains_key(&session.attached)
+        {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: format!(
+                    "session {} is already attached to a live connection; detach it before handoff",
+                    msg.session_id
+                ),
+            }));
+        }
+        // T1.3: on a *fresh adopt* (`last_seq == 0`) whose ring has already
+        // evicted seq 0, the bootstrap handshake is gone from the replay and the
+        // client could never arm bootstrap. `plan_attach` ships the frozen
+        // preamble and starts the replay at the preamble's end so the two never
+        // overlap; a reconnecting client (`last_seq > 0`) gets no preamble and a
+        // normal replay from where it left off.
+        let (base_seq, replay, bootstrap_preamble) = super::session_host::plan_attach(
+            &session.ring,
+            &session.preamble,
+            msg.last_seq,
+            msg.supports_bootstrap_preamble,
+        );
+        let generation = session.generation;
+        if let Some(expected_agent_binding) = expected_agent_binding.as_ref() {
+            let foreground = self
+                .agent_pty_bindings
+                .foreground_for_pty(&msg.session_id, generation);
+            if foreground.map(|binding| &binding.agent) != Some(expected_agent_binding) {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: "foreground agent changed since inventory refresh".to_string(),
+                }));
+            }
+        }
+        match self
+            .agent_pty_bindings
+            .attach_pty(&msg.session_id, generation, conn_id.as_u128())
+        {
+            Ok(()) => {}
+            Err(error) => {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: binding_error_response(error).message,
+                }));
+            }
+        }
         // Route live output to the reconnected connection from now on.
         session.attached = conn_id;
         session.last_attached_ms = now_epoch_millis();
+        let agent_binding = if client_supports_agent_pty_binding {
+            self.agent_pty_bindings
+                .foreground_for_pty(&msg.session_id, generation)
+                .map(|binding| agent_identity_to_proto(&binding.agent))
+        } else {
+            None
+        };
         let size = SessionSize {
             rows: session.rows as u32,
             cols: session.cols as u32,
@@ -2276,16 +3305,44 @@ impl ServerModel {
             pixel_height: 0,
         };
         log::info!(
-            "Daemon: attached conn {conn_id} to session {} (replay {} bytes from seq {base_seq})",
+            "Daemon: attached conn {conn_id} to session {} (replay {} bytes from seq {base_seq}, \
+             preamble {} bytes)",
             msg.session_id,
-            replay.len()
+            replay.len(),
+            bootstrap_preamble.len(),
         );
         HandlerOutcome::Sync(server_message::Message::SessionAttached(SessionAttached {
             session_id: msg.session_id,
             size: Some(size),
             base_seq,
             replay,
+            bootstrap_preamble,
+            generation,
+            agent_binding,
         }))
+    }
+
+    /// Freezes the session's bootstrap preamble at the boundary the opening
+    /// client just reported (T1.3). The preamble was accumulated from seq 0 by
+    /// `on_session_output`; here we truncate it to `end_seq` (the client's output
+    /// cursor at bootstrap completion) and stop capturing. Idempotent: a session
+    /// whose preamble is already frozen (or was abandoned at the cap) ignores
+    /// repeats — only the first, opening client defines the boundary.
+    fn handle_set_bootstrap_preamble(&mut self, msg: SetBootstrapPreamble) {
+        let Some(session) = self.sessions.get_mut(&msg.session_id) else {
+            log::debug!(
+                "SetBootstrapPreamble for unknown session {}; ignoring",
+                msg.session_id
+            );
+            return;
+        };
+        session.preamble.freeze(msg.end_seq);
+        log::info!(
+            "Daemon: froze bootstrap preamble for session {} (reported end_seq {}, {} bytes kept)",
+            msg.session_id,
+            msg.end_seq,
+            session.preamble.frozen().map(<[u8]>::len).unwrap_or(0),
+        );
     }
 
     /// Detaches a connection from a session without ending it: the session keeps
@@ -2299,7 +3356,10 @@ impl ServerModel {
             // (which would silently cut off the new tab's live output).
             if session.attached == conn_id {
                 session.attached = uuid::Uuid::nil();
-                log::info!("Daemon: detached session {} (still running)", msg.session_id);
+                log::info!(
+                    "Daemon: detached session {} (still running)",
+                    msg.session_id
+                );
             } else {
                 log::debug!(
                     "Daemon: ignoring stale detach for session {} from conn {conn_id} \
@@ -2343,10 +3403,14 @@ impl ServerModel {
                     // Per-session output-ring footprint the memory governor
                     // accounts against the host cap (see `gc_sessions`).
                     ring_bytes: session.ring.len() as u64,
+                    generation: session.generation,
                 }
             })
             .collect();
-        HandlerOutcome::Sync(server_message::Message::SessionList(SessionList { sessions }))
+        HandlerOutcome::Sync(server_message::Message::SessionList(SessionList {
+            sessions,
+            host_ring_cap_bytes: HOST_RING_CAP_BYTES as u64,
+        }))
     }
 
     /// Memory governor (Stage 4): reaps detached sessions that are either idle
@@ -2377,6 +3441,7 @@ impl ServerModel {
         };
         for id in aged {
             if let Some(mut session) = self.sessions.remove(&id) {
+                self.agent_pty_bindings.remove_pty(&id, session.generation);
                 let _ = session.child.kill();
                 let _ = session.child.wait();
                 reaped += 1;
@@ -2404,6 +3469,7 @@ impl ServerModel {
                     break;
                 }
                 if let Some(mut session) = self.sessions.remove(&id) {
+                    self.agent_pty_bindings.remove_pty(&id, session.generation);
                     over = over.saturating_sub(session.ring.len());
                     let _ = session.child.kill();
                     let _ = session.child.wait();
@@ -2418,14 +3484,16 @@ impl ServerModel {
         reaped
     }
 
-    /// After a GC sweep, arm the shutdown grace timer if the daemon is now fully
-    /// idle: no connected proxies *and* no live sessions. This closes the leak
-    /// where `deregister_connection` left the daemon up because sessions still
-    /// existed, and those sessions were later reaped by the GC (age / RAM cap) —
-    /// leaving a daemon with nothing to do and no timer to retire it. The
-    /// `grace_timer_cancel.is_none()` guard avoids restarting an already-running
-    /// timer (which would reset the countdown each tick).
-    fn maybe_arm_grace_after_gc(&mut self, ctx: &mut ModelContext<Self>) {
+    /// Arm the shutdown grace timer if the daemon is now fully idle: no
+    /// connected proxies *and* no live sessions. Called from every place a
+    /// session can cease to exist — explicit close (`handle_close_session`),
+    /// PTY EOF (`on_session_reader_eof`) and the periodic GC sweep — so a
+    /// daemon whose last session ends while no client is attached retires
+    /// after [`GRACE_PERIOD`] instead of lingering until the next GC tick
+    /// noticed (`deregister_connection` deliberately skips the timer while
+    /// sessions exist). The `grace_timer_cancel.is_none()` guard avoids
+    /// restarting an already-running timer (which would reset the countdown).
+    fn maybe_arm_grace_when_idle(&mut self, ctx: &mut ModelContext<Self>) {
         if self.connection_senders.is_empty()
             && !self.has_live_sessions()
             && self.grace_timer_cancel.is_none()
@@ -2458,7 +3526,7 @@ impl ServerModel {
                             // arm the grace timer so it exits. deregister_connection
                             // deliberately skipped the timer while sessions existed,
                             // so without this the daemon would linger forever.
-                            me.maybe_arm_grace_after_gc(ctx);
+                            me.maybe_arm_grace_when_idle(ctx);
                         })
                         .await;
                     if outcome.is_err() {
@@ -2470,10 +3538,17 @@ impl ServerModel {
     }
 
     /// Applies a window resize to the session's PTY (TIOCSWINSZ).
-    fn handle_resize_session(&mut self, msg: ResizeSession) {
+    fn handle_resize_session(&mut self, conn_id: ConnectionId, msg: ResizeSession) {
         let Some(session) = self.sessions.get_mut(&msg.session_id) else {
             return;
         };
+        if session.attached != conn_id {
+            log::warn!(
+                "Daemon: rejecting resize for session {} from non-owning connection {conn_id}",
+                msg.session_id
+            );
+            return;
+        }
         let Some(size) = msg.size else {
             return;
         };
@@ -2493,10 +3568,12 @@ impl ServerModel {
     }
 
     /// Closes a session: kills + reaps the shell and emits `SessionExited`.
-    fn handle_close_session(&mut self, msg: CloseSession) {
+    fn handle_close_session(&mut self, msg: CloseSession, ctx: &mut ModelContext<Self>) {
         let Some(mut session) = self.sessions.remove(&msg.session_id) else {
             return;
         };
+        self.agent_pty_bindings
+            .remove_pty(&msg.session_id, session.generation);
         let _ = session.child.kill();
         let exit_code = session.child.wait().ok().and_then(|s| s.code());
         let conn = session.attached;
@@ -2510,16 +3587,21 @@ impl ServerModel {
         );
         // Dropping `session` drops `input_tx` (writer task ends) and the last
         // app-side Arc; the reader task ends once it observes PTY EOF.
+        // This may have been the last session with no proxy attached — retire
+        // an idle daemon now, not at the next GC tick.
+        self.maybe_arm_grace_when_idle(ctx);
     }
 
     /// Reader-task callback: append output to the ring and push it to the
     /// attached connection with the chunk's start seq.
     pub(super) fn on_session_output(&mut self, session_id: &str, bytes: Vec<u8>) {
-        let Some((seq, conn)) = self
-            .sessions
-            .get_mut(session_id)
-            .map(|s| (s.ring.append(&bytes), s.attached))
-        else {
+        let Some((seq, conn)) = self.sessions.get_mut(session_id).map(|s| {
+            let seq = s.ring.append(&bytes);
+            // T1.3: mirror output into the bootstrap preamble (from seq 0, immune
+            // to ring eviction) until the handshake boundary is reported.
+            s.preamble.capture(&bytes);
+            (seq, s.attached)
+        }) else {
             return;
         };
         self.send_server_message(
@@ -2553,10 +3635,12 @@ impl ServerModel {
     }
 
     /// Reader-task callback on PTY EOF: reap the shell and emit `SessionExited`.
-    pub(super) fn on_session_reader_eof(&mut self, session_id: &str) {
+    pub(super) fn on_session_reader_eof(&mut self, session_id: &str, ctx: &mut ModelContext<Self>) {
         let Some(mut session) = self.sessions.remove(session_id) else {
             return;
         };
+        self.agent_pty_bindings
+            .remove_pty(session_id, session.generation);
         let exit_code = session.child.wait().ok().and_then(|s| s.code());
         let conn = session.attached;
         self.send_server_message(
@@ -2567,6 +3651,10 @@ impl ServerModel {
                 exit_code,
             }),
         );
+        // The shell ending on its own may leave the daemon fully idle (the
+        // client may have long disconnected) — retire it now, not at the next
+        // GC tick.
+        self.maybe_arm_grace_when_idle(ctx);
     }
 }
 

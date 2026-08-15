@@ -1,0 +1,4 @@
+CREATE TABLE tab_pins (
+    tab_id INTEGER PRIMARY KEY NOT NULL,
+    FOREIGN KEY(tab_id) REFERENCES tabs(id) ON DELETE CASCADE
+);

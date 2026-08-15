@@ -1158,10 +1158,10 @@ impl PerAgentSettings {
     /// must be an explicit choice). They return as the cockpit C4 launcher
     /// ("Launch <agent> on <host> in <dir>"); until then the buttons stay
     /// de-listed but user-enableable in Settings → Agents.
-    pub fn default_for(_agent: CLIAgent) -> Self {
+    pub fn default_for(agent: CLIAgent) -> Self {
         Self {
             toolbar: true,
-            tabmenu: true,
+            tabmenu: agent.is_available_for_new_launch(),
             titlebar: false,
         }
     }
@@ -2435,7 +2435,7 @@ impl AISettings {
 
     /// Query whether a given CLI agent is shown in the new-tab menu. Falls back to the agent default when not present in per-agent settings.
     pub fn is_cli_agent_tab_menu_enabled(&self, agent: CLIAgent) -> bool {
-        if matches!(agent, CLIAgent::Unknown) {
+        if !agent.is_available_for_new_launch() {
             return false;
         }
         self.cli_agent_per_agent_settings
@@ -2446,7 +2446,7 @@ impl AISettings {
 
     /// Query whether a given CLI agent's title bar button is enabled. Falls back to the agent default when not present in per-agent settings.
     pub fn is_cli_agent_titlebar_enabled(&self, agent: CLIAgent) -> bool {
-        if matches!(agent, CLIAgent::Unknown) {
+        if !agent.is_available_for_new_launch() {
             return false;
         }
         self.cli_agent_per_agent_settings
@@ -2466,7 +2466,10 @@ impl AISettings {
         let mut map = self.cli_agent_per_agent_settings.clone();
         map.entry(key)
             .and_modify(|s| s.toolbar = enabled)
-            .or_insert_with(|| PerAgentSettings { toolbar: enabled, ..PerAgentSettings::default_for(agent) });
+            .or_insert_with(|| PerAgentSettings {
+                toolbar: enabled,
+                ..PerAgentSettings::default_for(agent)
+            });
         report_if_error!(self.cli_agent_per_agent_settings.set_value(map, ctx));
     }
 
@@ -2481,7 +2484,10 @@ impl AISettings {
         let mut map = self.cli_agent_per_agent_settings.clone();
         map.entry(key)
             .and_modify(|s| s.tabmenu = enabled)
-            .or_insert_with(|| PerAgentSettings { tabmenu: enabled, ..PerAgentSettings::default_for(agent) });
+            .or_insert_with(|| PerAgentSettings {
+                tabmenu: enabled,
+                ..PerAgentSettings::default_for(agent)
+            });
         report_if_error!(self.cli_agent_per_agent_settings.set_value(map, ctx));
     }
 
@@ -2496,7 +2502,10 @@ impl AISettings {
         let mut map = self.cli_agent_per_agent_settings.clone();
         map.entry(key)
             .and_modify(|s| s.titlebar = enabled)
-            .or_insert_with(|| PerAgentSettings { titlebar: enabled, ..PerAgentSettings::default_for(agent) });
+            .or_insert_with(|| PerAgentSettings {
+                titlebar: enabled,
+                ..PerAgentSettings::default_for(agent)
+            });
         report_if_error!(self.cli_agent_per_agent_settings.set_value(map, ctx));
     }
 
@@ -2511,7 +2520,7 @@ impl AISettings {
     ) {
         let installed_agents: Vec<CLIAgent> = installed
             .iter()
-            .filter(|(a, v)| **v && !matches!(a, CLIAgent::Unknown))
+            .filter(|(a, v)| **v && a.is_available_for_new_launch())
             .map(|(a, _)| *a)
             .collect();
         let installed_names: std::collections::HashSet<String> = installed_agents
@@ -2527,8 +2536,15 @@ impl AISettings {
                 .or_insert_with(|| PerAgentSettings::default_for(*agent));
         }
 
-        // Uninstalled agents → remove
-        per_agent.retain(|name, _| installed_names.contains(name.as_str()));
+        // Uninstalled launch agents are removed. Preserve a legacy Gemini
+        // toolbar preference for already-running sessions even though Gemini
+        // is no longer part of installation scans or new-launch surfaces.
+        per_agent.retain(|name, _| {
+            matches!(
+                CLIAgent::from_serialized_name(name.as_str()),
+                CLIAgent::Gemini
+            ) || installed_names.contains(name.as_str())
+        });
 
         let changed = &per_agent != self.cli_agent_per_agent_settings.value();
         if changed {

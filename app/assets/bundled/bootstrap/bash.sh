@@ -1,3 +1,11 @@
+ # Blank PS2 before ANYTHING else in this script is read: every line below is
+ # typed into the shell, and bash prints a '> ' continuation prompt for each
+ # line of a multi-line construct — that is the ~1500-line dump the user saw
+ # at session start (RC acceptance 2026-07-19). zsh.sh has always done this at
+ # the top; the bash path never did. Kept to ONE line, since a multi-line `if`
+ # here would draw the prompts it is meant to prevent. The sentinel is cleared
+ # first so an inherited value cannot restore a PS2 this shell never had.
+ unset ZAPLEX_ORIGINAL_PS2; if [ -n "${PS2+set}" ]; then ZAPLEX_ORIGINAL_PS2="$PS2"; fi; PS2=""
  # We need to prepend a space to all the top-level commands here to prevent
  # Warp bootstrap script contents from showing up in the history.
 
@@ -434,10 +442,25 @@
  # we notify the terminal to input these characters in. For the remote case,
  # we actually start in an interactive non-login shell (i.e. it runs ~/.bashrc),
  # but it gets replaced by a new shell that we fully control.
- read -r -d '' ZAPLEX_BOOTSTRAP_VAR << 'EOM'
+ # `read -d ''` returns non-zero at EOF — which is the NORMAL outcome here.
+ # Under an inherited `errexit` (SHELLOPTS carrying `set -e`) that status would
+ # end the shell right here, before `stty sane` and the PS2 restore below, and
+ # the session would be left raw and prompt-less. `|| true` makes the cleanup
+ # unconditional.
+ read -r -d '' ZAPLEX_BOOTSTRAP_VAR << 'EOM' || true
 #include bundled/bootstrap/bash_body.sh
 EOM
  # We need to restore the line editor before we evaluate the bootstrap logic
  # or everything freezes up
  stty sane
+ # Hand PS2 back before the bootstrap runs, so the user's own RC (sourced by
+ # the body) can still override it. Done here rather than inside the body:
+ # the body's ZAPLEX_BOOTSTRAPPED guard is skipped in a nested shell, which
+ # would strand PS2 as an empty string.
+ if [ -n "${ZAPLEX_ORIGINAL_PS2+set}" ]; then
+   PS2="$ZAPLEX_ORIGINAL_PS2"
+ else
+   unset PS2
+ fi
+ unset ZAPLEX_ORIGINAL_PS2
  eval "$ZAPLEX_BOOTSTRAP_VAR"; unset ZAPLEX_BOOTSTRAP_VAR

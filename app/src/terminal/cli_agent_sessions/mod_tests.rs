@@ -1,10 +1,13 @@
 use super::event::{parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType};
 use super::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
-    CLIAgentSessionStatus, CLIAgentSessionsModel,
+    CLIAgentSessionStatus, CLIAgentSessionsModel, PersistedCLIAgentAccount,
+    PersistedCLIAgentBinding,
 };
 use crate::ai::blocklist::{InputConfig, InputType};
 use crate::terminal::CLIAgent;
+use std::collections::HashMap;
+use warpui::{App, EntityId};
 
 #[test]
 fn parse_stop_notification() {
@@ -211,6 +214,23 @@ fn parse_tool_complete_notification() {
 }
 
 #[test]
+fn parses_structured_pre_tool_use_and_session_end_events() {
+    let pre_tool_use = parse_event(
+        Some("warp://cli-agent"),
+        r#"{"v":1,"agent":"codex","event":"pre_tool_use","session_id":"thr_123"}"#,
+    )
+    .unwrap();
+    let session_end = parse_event(
+        Some("warp://cli-agent"),
+        r#"{"v":1,"agent":"codex","event":"session_end","session_id":"thr_123"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(pre_tool_use.event, CLIAgentEventType::PreToolUse);
+    assert_eq!(session_end.event, CLIAgentEventType::SessionEnd);
+}
+
+#[test]
 fn parse_auggie_stop_notification() {
     // Mirrors what the community auggie-warp plugin emits on the Stop hook.
     let body = r#"{"v":1,"agent":"auggie","event":"stop","session_id":"abc","cwd":"/tmp/proj","project":"proj","query":"write a haiku","response":"Memory is safe"}"#;
@@ -275,6 +295,513 @@ fn apply_event_preserves_input_session() {
     session.apply_event(&event);
 
     assert_eq!(session.input_state, input_state);
+}
+
+#[test]
+fn structured_codex_events_map_to_rich_session_status() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Codex,
+        status: CLIAgentSessionStatus::Success,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        remote_host: None,
+        plugin_version: None,
+        draft_text: None,
+        custom_command_prefix: None,
+    };
+    let event = |event, summary: Option<&str>| CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Codex,
+        event,
+        session_id: Some("thr_123".to_owned()),
+        cwd: Some("/workspace".to_owned()),
+        project: None,
+        payload: CLIAgentEventPayload {
+            summary: summary.map(str::to_owned),
+            ..Default::default()
+        },
+    };
+
+    for event_type in [
+        CLIAgentEventType::PreToolUse,
+        CLIAgentEventType::PromptSubmit,
+        CLIAgentEventType::ToolComplete,
+    ] {
+        assert_eq!(
+            session.apply_event(&event(event_type, None)),
+            Some(CLIAgentSessionStatus::InProgress)
+        );
+    }
+    assert_eq!(
+        session.apply_event(&event(
+            CLIAgentEventType::PermissionRequest,
+            Some("Codex is waiting for approval"),
+        )),
+        Some(CLIAgentSessionStatus::Blocked {
+            message: Some("Codex is waiting for approval".to_owned())
+        })
+    );
+    assert_eq!(
+        session.apply_event(&event(CLIAgentEventType::Stop, None)),
+        Some(CLIAgentSessionStatus::Success)
+    );
+}
+
+#[test]
+fn hook_status_requires_a_structured_session_identity() {
+    let terminal_view_id = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    let session = |agent| CLIAgentSession {
+        agent,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        remote_host: None,
+        plugin_version: None,
+        draft_text: None,
+        custom_command_prefix: None,
+    };
+    model
+        .sessions
+        .insert(terminal_view_id, session(CLIAgent::Claude));
+
+    assert!(!model.has_rich_status_session_for_agent(CLIAgent::Claude));
+    assert!(!model.has_rich_status_session_for_agent(CLIAgent::Codex));
+
+    model
+        .sessions
+        .insert(terminal_view_id, session(CLIAgent::Codex));
+    model
+        .sessions
+        .get_mut(&terminal_view_id)
+        .unwrap()
+        .session_context
+        .session_id = Some("thr_123".to_owned());
+
+    assert!(model.has_rich_status_session_for_agent(CLIAgent::Codex));
+    assert!(!model.has_rich_status_session_for_agent(CLIAgent::Grok));
+}
+
+#[test]
+fn session_end_is_status_neutral() {
+    let blocked = CLIAgentSessionStatus::Blocked {
+        message: Some("Waiting for approval".to_owned()),
+    };
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Codex,
+        status: blocked.clone(),
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        remote_host: None,
+        plugin_version: None,
+        draft_text: None,
+        custom_command_prefix: None,
+    };
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Codex,
+        event: CLIAgentEventType::SessionEnd,
+        session_id: Some("thr_123".to_owned()),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    assert_eq!(session.apply_event(&event), None);
+    assert_eq!(session.status, blocked);
+}
+
+#[test]
+fn only_blocked_status_needs_attention() {
+    assert!(!CLIAgentSessionStatus::InProgress.needs_attention());
+    assert!(!CLIAgentSessionStatus::Success.needs_attention());
+    assert!(CLIAgentSessionStatus::Blocked { message: None }.needs_attention());
+}
+
+#[test]
+fn terminal_view_lookup_matches_provider_session_and_exact_host() {
+    let local_claude_view = EntityId::new();
+    let remote_a_claude_view = EntityId::new();
+    let remote_b_claude_view = EntityId::new();
+    let codex_view = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    let tracked_session = |agent, session_id: &str, remote_host: Option<&str>| CLIAgentSession {
+        agent,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext {
+            session_id: Some(session_id.to_string()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: remote_host.map(str::to_string),
+        draft_text: None,
+        custom_command_prefix: None,
+    };
+    model.sessions.insert(
+        local_claude_view,
+        tracked_session(CLIAgent::Claude, "same-id", None),
+    );
+    model.sessions.insert(
+        remote_a_claude_view,
+        tracked_session(CLIAgent::Claude, "same-id", Some("user@remote-a")),
+    );
+    model.sessions.insert(
+        remote_b_claude_view,
+        tracked_session(CLIAgent::Claude, "same-id", Some("user@remote-b")),
+    );
+    model.sessions.insert(
+        codex_view,
+        tracked_session(CLIAgent::Codex, "same-id", None),
+    );
+    let terminal_hosts = HashMap::from([
+        (local_claude_view, None),
+        (remote_a_claude_view, Some("remote-a")),
+        (remote_b_claude_view, Some("remote-b")),
+        (codex_view, None),
+    ]);
+
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Claude,
+            "same-id",
+            None,
+            None,
+            |terminal_view_id, session| {
+                !session.is_remote() && terminal_hosts[&terminal_view_id].is_none()
+            },
+        ),
+        Some(local_claude_view)
+    );
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Claude,
+            "same-id",
+            None,
+            None,
+            |terminal_view_id, session| {
+                session.is_remote() && terminal_hosts[&terminal_view_id] == Some("remote-a")
+            },
+        ),
+        Some(remote_a_claude_view)
+    );
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Claude,
+            "same-id",
+            None,
+            None,
+            |terminal_view_id, session| {
+                session.is_remote() && terminal_hosts[&terminal_view_id] == Some("remote-b")
+            },
+        ),
+        Some(remote_b_claude_view)
+    );
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Codex,
+            "same-id",
+            None,
+            None,
+            |terminal_view_id, _| terminal_view_id == codex_view,
+        ),
+        Some(codex_view)
+    );
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Claude,
+            "missing",
+            None,
+            None,
+            |_, _| true,
+        ),
+        None
+    );
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Claude,
+            "same-id",
+            None,
+            None,
+            |_, _| false,
+        ),
+        None,
+        "a provider/session match must still honor the exact-host predicate"
+    );
+}
+
+/// Keep the provider coordinate independently testable. The broader lookup
+/// fixture contains a matching Codex row, and its `HashMap` iteration order can
+/// accidentally hide a removed provider predicate. With only a Claude row, a
+/// Codex lookup must deterministically return `None` even when the host callback
+/// would accept every terminal.
+#[test]
+fn provider_mismatch_never_reaches_terminal_predicate() {
+    let claude_view = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    model.sessions.insert(
+        claude_view,
+        CLIAgentSession {
+            agent: CLIAgent::Claude,
+            status: CLIAgentSessionStatus::InProgress,
+            session_context: CLIAgentSessionContext {
+                session_id: Some("same-id".to_string()),
+                ..Default::default()
+            },
+            input_state: CLIAgentInputState::Closed,
+            should_auto_toggle_input: false,
+            listener: None,
+            plugin_version: None,
+            remote_host: None,
+            draft_text: None,
+            custom_command_prefix: None,
+        },
+    );
+    let mut predicate_calls = 0;
+
+    let found = model.terminal_view_id_for_agent_session_matching(
+        CLIAgent::Codex,
+        "same-id",
+        None,
+        None,
+        |_, _| {
+            predicate_calls += 1;
+            true
+        },
+    );
+
+    assert_eq!(found, None);
+    assert_eq!(
+        predicate_calls, 0,
+        "wrong-provider sessions must be rejected before host matching"
+    );
+}
+
+#[test]
+fn stale_account_a_never_focuses_account_b() {
+    let account_a_view = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    model.sessions.insert(
+        account_a_view,
+        CLIAgentSession {
+            agent: CLIAgent::Claude,
+            status: CLIAgentSessionStatus::InProgress,
+            session_context: CLIAgentSessionContext {
+                session_id: Some("copied-id".to_string()),
+                ..Default::default()
+            },
+            input_state: CLIAgentInputState::Closed,
+            should_auto_toggle_input: false,
+            listener: None,
+            plugin_version: None,
+            remote_host: None,
+            draft_text: None,
+            custom_command_prefix: None,
+        },
+    );
+    model.bind_account_identity(
+        account_a_view,
+        CLIAgent::Claude,
+        None,
+        Some("account-a@example.com".to_string()),
+    );
+    let mut host_predicate_calls = 0;
+
+    let found = model.terminal_view_id_for_agent_session_matching(
+        CLIAgent::Claude,
+        "copied-id",
+        None,
+        Some("account-b@example.com"),
+        |_, _| {
+            host_predicate_calls += 1;
+            true
+        },
+    );
+
+    assert_eq!(found, None);
+    assert_eq!(
+        host_predicate_calls, 0,
+        "the wrong account must be rejected before host matching"
+    );
+}
+
+#[test]
+fn copied_session_id_never_crosses_account_config_dir() {
+    let account_a_view = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    model.sessions.insert(
+        account_a_view,
+        CLIAgentSession {
+            agent: CLIAgent::Codex,
+            status: CLIAgentSessionStatus::InProgress,
+            session_context: CLIAgentSessionContext {
+                session_id: Some("copied-id".to_string()),
+                ..Default::default()
+            },
+            input_state: CLIAgentInputState::Closed,
+            should_auto_toggle_input: false,
+            listener: None,
+            plugin_version: None,
+            remote_host: None,
+            draft_text: None,
+            custom_command_prefix: None,
+        },
+    );
+    model.bind_account_identity(
+        account_a_view,
+        CLIAgent::Codex,
+        Some("/accounts/a".to_string()),
+        Some("shared@example.com".to_string()),
+    );
+    let mut host_predicate_calls = 0;
+
+    let found = model.terminal_view_id_for_agent_session_matching(
+        CLIAgent::Codex,
+        "copied-id",
+        Some("/accounts/b"),
+        Some("shared@example.com"),
+        |_, _| {
+            host_predicate_calls += 1;
+            true
+        },
+    );
+
+    assert_eq!(found, None);
+    assert_eq!(
+        host_predicate_calls, 0,
+        "the wrong config directory must be rejected before host matching"
+    );
+}
+
+#[test]
+fn duplicate_exact_session_identity_fails_closed() {
+    let first_view = EntityId::new();
+    let second_view = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    for terminal_view_id in [first_view, second_view] {
+        model.sessions.insert(
+            terminal_view_id,
+            CLIAgentSession {
+                agent: CLIAgent::Codex,
+                status: CLIAgentSessionStatus::InProgress,
+                session_context: CLIAgentSessionContext {
+                    session_id: Some("same-id".to_string()),
+                    ..Default::default()
+                },
+                input_state: CLIAgentInputState::Closed,
+                should_auto_toggle_input: false,
+                listener: None,
+                plugin_version: None,
+                remote_host: None,
+                draft_text: None,
+                custom_command_prefix: None,
+            },
+        );
+        model.bind_account_identity(
+            terminal_view_id,
+            CLIAgent::Codex,
+            Some("/accounts/work".to_string()),
+            Some("work@example.com".to_string()),
+        );
+    }
+
+    assert_eq!(
+        model.terminal_view_id_for_agent_session_matching(
+            CLIAgent::Codex,
+            "same-id",
+            Some("/accounts/work"),
+            Some("work@example.com"),
+            |_, _| true,
+        ),
+        None,
+        "two panes with the same complete identity are ambiguous and must never pick the first"
+    );
+}
+
+#[test]
+fn known_default_account_identity_is_not_unknown() {
+    let known_default_view = EntityId::new();
+    let unknown_manual_view = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    model.bind_account_identity(
+        known_default_view,
+        CLIAgent::Claude,
+        None,
+        Some("default@example.com".to_string()),
+    );
+
+    assert!(model.account_identity_matches(
+        known_default_view,
+        CLIAgent::Claude,
+        None,
+        Some("default@example.com")
+    ));
+    assert!(!model.account_identity_matches(known_default_view, CLIAgent::Claude, None, None));
+    assert!(!model.account_identity_matches(
+        unknown_manual_view,
+        CLIAgent::Claude,
+        None,
+        Some("default@example.com")
+    ));
+}
+
+#[test]
+fn account_binding_before_later_detection_is_preserved() {
+    App::test((), |mut app| async move {
+        let terminal_view_id = EntityId::new();
+        let model = app.add_model(|_| CLIAgentSessionsModel::new());
+
+        model.update(&mut app, |model, ctx| {
+            model.bind_account_identity(
+                terminal_view_id,
+                CLIAgent::Claude,
+                None,
+                Some("default@example.com".to_string()),
+            );
+            model.set_session(
+                terminal_view_id,
+                CLIAgentSession {
+                    agent: CLIAgent::Claude,
+                    status: CLIAgentSessionStatus::InProgress,
+                    session_context: CLIAgentSessionContext {
+                        session_id: Some("detected-later".to_string()),
+                        ..Default::default()
+                    },
+                    input_state: CLIAgentInputState::Closed,
+                    should_auto_toggle_input: false,
+                    listener: None,
+                    plugin_version: None,
+                    remote_host: None,
+                    draft_text: None,
+                    custom_command_prefix: None,
+                },
+                ctx,
+            );
+        });
+
+        model.read(&app, |model, _| {
+            assert!(
+                model.session(terminal_view_id).is_some(),
+                "the detected session is tracked"
+            );
+            let identity = model
+                .account_identity(terminal_view_id)
+                .expect("the pre-bound account identity is preserved");
+            assert_eq!(identity.config_dir, None);
+            assert_eq!(
+                identity.account_email.as_deref(),
+                Some("default@example.com")
+            );
+        });
+    });
 }
 
 #[test]
@@ -464,4 +991,342 @@ fn session_start_without_plugin_version_leaves_none() {
 
     session.apply_event(&event);
     assert_eq!(session.plugin_version, None);
+}
+
+#[test]
+fn repeated_session_start_refreshes_context_without_erasing_plugin_version() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Codex,
+        status: CLIAgentSessionStatus::Success,
+        session_context: CLIAgentSessionContext {
+            session_id: Some("old-session".to_owned()),
+            cwd: Some("/old".to_owned()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: Some("1.5.0".to_owned()),
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+    };
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Codex,
+        event: CLIAgentEventType::SessionStart,
+        session_id: Some("new-session".to_owned()),
+        cwd: Some("/new".to_owned()),
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    assert_eq!(session.apply_event(&event), None);
+    assert_eq!(
+        session.session_context.session_id.as_deref(),
+        Some("new-session")
+    );
+    assert_eq!(session.session_context.cwd.as_deref(), Some("/new"));
+    assert_eq!(session.plugin_version.as_deref(), Some("1.5.0"));
+    assert_eq!(session.status, CLIAgentSessionStatus::Success);
+}
+
+fn restorable_session(
+    agent: CLIAgent,
+    session_id: Option<&str>,
+    cwd: Option<&str>,
+    remote_host: Option<&str>,
+) -> CLIAgentSession {
+    CLIAgentSession {
+        agent,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext {
+            session_id: session_id.map(str::to_owned),
+            cwd: cwd.map(str::to_owned),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: remote_host.map(str::to_owned),
+        draft_text: None,
+        custom_command_prefix: None,
+    }
+}
+
+#[test]
+fn local_restore_binding_preserves_provider_session_cwd_and_account() {
+    let terminal_view_id = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    model.sessions.insert(
+        terminal_view_id,
+        restorable_session(
+            CLIAgent::Codex,
+            Some("thread-123"),
+            Some("/projects/zaplex"),
+            None,
+        ),
+    );
+    model.bind_account_identity(
+        terminal_view_id,
+        CLIAgent::Codex,
+        Some("/accounts/work".to_owned()),
+        Some("work@example.com".to_owned()),
+    );
+
+    let binding = model
+        .local_binding_for_restore(terminal_view_id, Some("/ignored"))
+        .expect("local resumable session should produce a durable binding");
+
+    assert_eq!(
+        binding,
+        PersistedCLIAgentBinding {
+            provider: CLIAgent::Codex,
+            session_id: "thread-123".to_owned(),
+            cwd: "/projects/zaplex".to_owned(),
+            account: Some(PersistedCLIAgentAccount {
+                config_dir: Some("/accounts/work".to_owned()),
+                email: Some("work@example.com".to_owned()),
+            }),
+        }
+    );
+    assert_eq!(
+        binding.resume_command().as_deref(),
+        Some("CODEX_HOME=/accounts/work codex resume thread-123")
+    );
+}
+
+#[test]
+fn local_restore_binding_uses_terminal_cwd_fallback() {
+    let terminal_view_id = EntityId::new();
+    let mut model = CLIAgentSessionsModel::new();
+    model.sessions.insert(
+        terminal_view_id,
+        restorable_session(CLIAgent::Claude, Some("session-1"), None, None),
+    );
+
+    let binding = model
+        .local_binding_for_restore(terminal_view_id, Some("/fallback"))
+        .expect("the terminal cwd should complete the binding");
+
+    assert_eq!(binding.cwd, "/fallback");
+    assert_eq!(binding.account, None);
+    assert_eq!(
+        binding.resume_command().as_deref(),
+        Some("claude --resume session-1")
+    );
+}
+
+#[test]
+fn restore_binding_rejects_remote_incomplete_and_nonresumable_sessions() {
+    let mut model = CLIAgentSessionsModel::new();
+    let remote = EntityId::new();
+    let missing_id = EntityId::new();
+    let unsupported = EntityId::new();
+    model.sessions.insert(
+        remote,
+        restorable_session(
+            CLIAgent::Claude,
+            Some("remote-session"),
+            Some("/work"),
+            Some("user@host"),
+        ),
+    );
+    model.sessions.insert(
+        missing_id,
+        restorable_session(CLIAgent::Codex, None, Some("/work"), None),
+    );
+    model.sessions.insert(
+        unsupported,
+        restorable_session(CLIAgent::Gemini, Some("session"), Some("/work"), None),
+    );
+
+    assert_eq!(model.local_binding_for_restore(remote, None), None);
+    assert_eq!(model.local_binding_for_restore(missing_id, None), None);
+    assert_eq!(model.local_binding_for_restore(unsupported, None), None);
+}
+
+#[test]
+fn persisted_restore_binding_round_trips_and_rejects_control_characters() {
+    let binding = PersistedCLIAgentBinding {
+        provider: CLIAgent::Claude,
+        session_id: "session with spaces".to_owned(),
+        cwd: "/projects/zaplex".to_owned(),
+        account: None,
+    };
+    let json = serde_json::to_string(&binding).expect("binding should serialize");
+    let restored: PersistedCLIAgentBinding =
+        serde_json::from_str(&json).expect("binding should deserialize");
+
+    assert_eq!(restored, binding);
+    assert_eq!(
+        restored.resume_command().as_deref(),
+        Some("claude --resume 'session with spaces'")
+    );
+
+    let invalid = PersistedCLIAgentBinding {
+        session_id: "session\ncommand".to_owned(),
+        ..binding
+    };
+    assert_eq!(invalid.resume_command(), None);
+
+    let invalid_config = PersistedCLIAgentBinding {
+        provider: CLIAgent::Codex,
+        session_id: "thread-1".to_owned(),
+        cwd: "/projects/zaplex".to_owned(),
+        account: Some(PersistedCLIAgentAccount {
+            config_dir: Some("/accounts/work\ncommand".to_owned()),
+            email: None,
+        }),
+    };
+    assert_eq!(invalid_config.resume_command(), None);
+}
+
+#[test]
+fn live_session_detection_consumes_pending_restore() {
+    App::test((), |mut app| async move {
+        let terminal_view_id = EntityId::new();
+        let binding = PersistedCLIAgentBinding {
+            provider: CLIAgent::Codex,
+            session_id: "thread-123".to_owned(),
+            cwd: "/projects/zaplex".to_owned(),
+            account: None,
+        };
+        let model = app.add_model(|_| CLIAgentSessionsModel::new());
+
+        model.update(&mut app, |model, ctx| {
+            assert!(model.register_pending_restore(terminal_view_id, binding.clone()));
+            assert_eq!(model.pending_restore(terminal_view_id), Some(&binding));
+            model.set_session(
+                terminal_view_id,
+                restorable_session(
+                    CLIAgent::Codex,
+                    Some("thread-123"),
+                    Some("/projects/zaplex"),
+                    None,
+                ),
+                ctx,
+            );
+            assert_eq!(model.take_pending_restore(terminal_view_id), None);
+        });
+    });
+}
+
+#[test]
+fn detection_without_provider_session_id_keeps_pending_restore() {
+    App::test((), |mut app| async move {
+        let terminal_view_id = EntityId::new();
+        let binding = PersistedCLIAgentBinding {
+            provider: CLIAgent::Codex,
+            session_id: "thread-123".to_owned(),
+            cwd: "/projects/zaplex".to_owned(),
+            account: None,
+        };
+        let model = app.add_model(|_| CLIAgentSessionsModel::new());
+
+        model.update(&mut app, |model, ctx| {
+            assert!(model.register_pending_restore(terminal_view_id, binding.clone()));
+            model.set_session(
+                terminal_view_id,
+                restorable_session(CLIAgent::Codex, None, Some("/projects/zaplex"), None),
+                ctx,
+            );
+            assert_eq!(model.pending_restore(terminal_view_id), Some(&binding));
+            assert_eq!(
+                model.local_binding_for_restore(terminal_view_id, None),
+                Some(binding)
+            );
+        });
+    });
+}
+
+#[test]
+fn ended_local_agent_remains_restorable_but_closed_pane_does_not() {
+    App::test((), |mut app| async move {
+        let terminal_view_id = EntityId::new();
+        let model = app.add_model(|_| CLIAgentSessionsModel::new());
+
+        model.update(&mut app, |model, ctx| {
+            model.bind_account_identity(
+                terminal_view_id,
+                CLIAgent::Claude,
+                Some("/accounts/work".to_owned()),
+                Some("work@example.com".to_owned()),
+            );
+            model.set_session(
+                terminal_view_id,
+                restorable_session(
+                    CLIAgent::Claude,
+                    Some("session-123"),
+                    Some("/projects/zaplex"),
+                    None,
+                ),
+                ctx,
+            );
+            model.end_session_preserving_restore(terminal_view_id, ctx);
+
+            let binding = model
+                .pending_restore(terminal_view_id)
+                .expect("ended local agent should remain resumable");
+            assert_eq!(binding.session_id, "session-123");
+            assert_eq!(
+                binding
+                    .account
+                    .as_ref()
+                    .and_then(|account| account.email.as_deref()),
+                Some("work@example.com")
+            );
+
+            model.remove_session(terminal_view_id, ctx);
+            assert_eq!(model.pending_restore(terminal_view_id), None);
+        });
+    });
+}
+
+#[test]
+fn pending_restore_binding_survives_an_intermediate_snapshot() {
+    let terminal_view_id = EntityId::new();
+    let binding = PersistedCLIAgentBinding {
+        provider: CLIAgent::Claude,
+        session_id: "session-123".to_owned(),
+        cwd: "/projects/zaplex".to_owned(),
+        account: None,
+    };
+    let mut model = CLIAgentSessionsModel::new();
+
+    assert!(model.register_pending_restore(terminal_view_id, binding.clone()));
+    assert_eq!(
+        model.local_binding_for_restore(terminal_view_id, Some("/fallback")),
+        Some(binding),
+        "autosave before resume must not erase the persisted opportunity"
+    );
+}
+
+#[test]
+fn prompt_and_auto_share_the_account_pinned_prepare_path() {
+    let terminal_view_id = EntityId::new();
+    let binding = PersistedCLIAgentBinding {
+        provider: CLIAgent::Codex,
+        session_id: "thread-123".to_owned(),
+        cwd: "/projects/zaplex".to_owned(),
+        account: Some(PersistedCLIAgentAccount {
+            config_dir: Some("/accounts/work".to_owned()),
+            email: Some("work@example.com".to_owned()),
+        }),
+    };
+    let mut model = CLIAgentSessionsModel::new();
+    assert!(model.register_pending_restore(terminal_view_id, binding.clone()));
+
+    assert_eq!(
+        model.prepare_pending_restore(terminal_view_id).as_deref(),
+        Some("CODEX_HOME=/accounts/work codex resume thread-123")
+    );
+    assert_eq!(model.pending_restore(terminal_view_id), Some(&binding));
+    assert!(model.account_identity_matches(
+        terminal_view_id,
+        CLIAgent::Codex,
+        Some("/accounts/work"),
+        Some("work@example.com")
+    ));
 }

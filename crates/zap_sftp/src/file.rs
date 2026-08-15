@@ -35,6 +35,9 @@ impl File {
         } else if options.create {
             flags |= ssh2::OpenFlags::CREATE;
         }
+        if options.exclusive {
+            flags |= ssh2::OpenFlags::EXCLUSIVE;
+        }
         if matches!(options.write, Some(crate::types::WriteMode::Append)) {
             flags |= ssh2::OpenFlags::APPEND;
         }

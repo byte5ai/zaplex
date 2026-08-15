@@ -139,8 +139,8 @@ where
 pub(super) fn relaunch() -> Result<()> {
     let channel = ChannelState::channel();
 
-    // openWarp(Channel::Oss): no code signing, cannot use RENAME_SWAP to replace bundle in place.
-    // Instead call `/usr/bin/open <dmg>` to have Finder display the standard mount window where users
+    // Zaplex OSS updates are Developer-ID signed, but deliberately use the visible DMG install flow.
+    // Call `/usr/bin/open <dmg>` to have Finder display the standard mount window where users
     // drag to Applications to complete installation. Don't call `open -n bundle` to restart ourselves,
     // because the current process has already requested termination during apply_update and the UI knows
     // to wait for the user to manually close and reopen. The dmg is opened by Finder after the current process exits.
@@ -170,7 +170,9 @@ pub(super) fn relaunch() -> Result<()> {
     // to verify changelog display after auto-update.
     if let Ok(path) = env::var("ZAPLEX_CHANNEL_VERSIONS_PATH") {
         let quoted_path = shell_escape::escape(path.into());
-        open_args.push_str(&format!(" --env ZAPLEX_CHANNEL_VERSIONS_PATH={quoted_path}"));
+        open_args.push_str(&format!(
+            " --env ZAPLEX_CHANNEL_VERSIONS_PATH={quoted_path}"
+        ));
     }
 
     let relaunch_script =
@@ -194,10 +196,10 @@ fn oss_open_installer() -> Result<()> {
     autoupdate_dir.push("autoupdate");
 
     let dmg = find_latest_dmg(&autoupdate_dir).ok_or_else(|| {
-        anyhow!("openWarp: could not find downloaded dmg (directory: {autoupdate_dir:?})")
+        anyhow!("Zaplex: could not find downloaded dmg (directory: {autoupdate_dir:?})")
     })?;
 
-    log::info!("openWarp: preparing to open installation dmg {dmg:?}");
+    log::info!("Zaplex: preparing to open installation dmg {dmg:?}");
 
     let pid = std::process::id();
     let quoted_dmg = shell_escape::escape(dmg.to_string_lossy());
@@ -407,6 +409,27 @@ async fn verify_code_signature(component: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Verifies that Gatekeeper recognizes a downloaded installer as notarized.
+async fn verify_notarized_installer(path: &Path) -> Result<()> {
+    let output = Command::new("/usr/sbin/spctl")
+        .args([
+            "-a",
+            "-vv",
+            "-t",
+            "open",
+            "--context",
+            "context:primary-signature",
+        ])
+        .arg(path)
+        .output()
+        .await?;
+    ensure!(
+        output.status.success(),
+        "Gatekeeper rejected notarized installer: {output:?}"
+    );
+    Ok(())
+}
+
 pub(super) async fn download_update_and_cleanup(
     version_info: &VersionInfo,
     update_id: &str,
@@ -416,10 +439,8 @@ pub(super) async fn download_update_and_cleanup(
 ) -> Result<DownloadReady> {
     let channel = ChannelState::channel();
 
-    // openWarp(Channel::Oss): no Apple Developer ID signing, cannot use official
-    // download_and_extract_binary (mount + cp + codesign verify + RENAME_SWAP).
-    // OSS path only stream-downloads dmg to cache_dir/autoupdate/<id>/; during apply,
-    // `relaunch()` uses `open <dmg>` to have Finder display the standard mount window where users drag to Applications.
+    // Zaplex OSS updates are Developer-ID signed, but continue to use the visible
+    // DMG install flow instead of replacing the running app in place.
     let result = if matches!(channel, Channel::Oss) {
         oss_download_dmg(channel, version_info, update_id, client, on_progress).await
     } else {
@@ -431,8 +452,9 @@ pub(super) async fn download_update_and_cleanup(
     result
 }
 
-/// OSS-exclusive download: stream-download dmg only to `cache_dir/autoupdate/<update_id>/<dmg>`,
-/// without mounting or code signature verification. Returns `DownloadReady::Yes` when the installer is ready;
+/// OSS-exclusive download: stream-download the DMG to
+/// `cache_dir/autoupdate/<update_id>/<dmg>`, then verify checksum, Developer ID
+/// team and notarization without mounting it. Returns `DownloadReady::Yes` when the installer is ready;
 /// upper layer switches to `UpdateReady` and waits for the user to click "Install Now" to trigger `relaunch()`.
 async fn oss_download_dmg(
     channel: Channel,
@@ -442,7 +464,7 @@ async fn oss_download_dmg(
     on_progress: ProgressCallback,
 ) -> Result<DownloadReady> {
     log::info!(
-        "openWarp: downloading update dmg, version {} on channel {channel}",
+        "Zaplex: downloading update dmg, version {} on channel {channel}",
         &version_info.version
     );
 
@@ -451,15 +473,25 @@ async fn oss_download_dmg(
 
     let dmg_path_buf = download_dmg(&channel, version_info, update_id, client, on_progress).await?;
 
-    // Intentionally skip hdiutil mount / verify_code_signature: OSS has no Apple codesign and doesn't need to copy
-    // .app into the current bundle. The dmg itself is the object the user needs to "open".
-    // But verify SHA-256 from GitHub Release metadata to defend against CDN man-in-the-middle / asset corruption.
+    // Verify SHA-256 from GitHub Release metadata before invoking platform
+    // signature tools, defending against CDN corruption and substitution.
     let asset_name = dmg_name(channel);
     if let Err(e) = super::verify_oss_asset_sha256(&dmg_path_buf, &asset_name) {
         // If verification fails, immediately delete the downloaded file to prevent users from opening a corrupted dmg after clicking "Install".
         let _ = async_fs::remove_file(&dmg_path_buf).await;
         return Err(e);
     }
+
+    let signature_result = async {
+        verify_code_signature("downloaded Zaplex DMG", &dmg_path_buf).await?;
+        verify_notarized_installer(&dmg_path_buf).await
+    }
+    .await;
+    if let Err(error) = signature_result {
+        let _ = async_fs::remove_file(&dmg_path_buf).await;
+        return Err(error);
+    }
+
     Ok(DownloadReady::Yes)
 }
 
@@ -797,18 +829,12 @@ async fn download_dmg(
         if downloaded - last_reported >= REPORT_BYTES_THRESHOLD
             || last_reported_at.elapsed() >= REPORT_TIME_THRESHOLD
         {
-            on_progress(DownloadProgress {
-                downloaded,
-                total,
-            });
+            on_progress(DownloadProgress { downloaded, total });
             last_reported = downloaded;
             last_reported_at = Instant::now();
         }
     }
-    on_progress(DownloadProgress {
-        downloaded,
-        total,
-    });
+    on_progress(DownloadProgress { downloaded, total });
     file.sync_data().await?;
 
     log::info!("Wrote DMG to tempfile at {:?}", &dmg_file);
@@ -864,13 +890,11 @@ fn update_url(channel: Channel, version: &str) -> String {
                 return found.browser_download_url.clone();
             }
             log::warn!(
-                "openWarp: cached release tag {} does not have an asset named {asset}, falling back to tag URL",
+                "Zaplex: cached release tag {} does not have an asset named {asset}, falling back to tag URL",
                 release.tag_name
             );
         }
-        return format!(
-            "https://github.com/byte5ai/zaplex/releases/download/v{version}/{asset}"
-        );
+        return format!("https://github.com/byte5ai/zaplex/releases/download/v{version}/{asset}");
     }
     format!(
         "{}/{}",
@@ -894,15 +918,14 @@ fn dmg_name(channel: Channel) -> String {
         .output()
         .is_ok_and(|output| output.stdout.starts_with(b"arm64"));
 
-    // openWarp GitHub Release asset names are fixed as `Zap-arm64.dmg` / `Zap-intel.dmg`
-    // (naming convention from .github/workflows), which differs from `app_name_prefix("zaplex")`.
-    // Here we hardcode only for OSS, which doesn't affect the universal naming for official channels.
+    dmg_name_for_arch(channel, is_arm64)
+}
+
+fn dmg_name_for_arch(channel: Channel, is_arm64: bool) -> String {
+    // Zaplex publishes separate Apple Silicon and Intel GitHub Release assets.
     if matches!(channel, Channel::Oss) {
-        return if is_arm64 {
-            "Zap-arm64.dmg".to_string()
-        } else {
-            "Zap-intel.dmg".to_string()
-        };
+        let architecture = if is_arm64 { "arm64" } else { "intel" };
+        return format!("{}-{architecture}.dmg", app_name_prefix(channel));
     }
 
     if is_arm64 {
@@ -920,7 +943,7 @@ fn app_name_prefix(channel: Channel) -> &'static str {
         Channel::Local => "warp",
         Channel::Integration => "integration",
         Channel::Dev => "WarpDev",
-        Channel::Oss => "zaplex",
+        Channel::Oss => "Zaplex",
     }
 }
 
@@ -942,3 +965,7 @@ fn executable_path(channel: Channel) -> String {
         executable_name(channel).to_owned()
     }
 }
+
+#[cfg(test)]
+#[path = "mac_tests.rs"]
+mod tests;

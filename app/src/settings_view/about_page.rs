@@ -310,7 +310,9 @@ impl AboutPageWidget {
         // - UpdateReady / UpdatedPendingRestart: can install + "Install now" button
         // - UnableTo*: autoupdate failed + "Go to GitHub download" fallback link
         let stage = autoupdate::get_update_state(app);
-        let progress = autoupdate::AutoupdateState::as_ref(app).download_progress().cloned();
+        let progress = autoupdate::AutoupdateState::as_ref(app)
+            .download_progress()
+            .cloned();
 
         let (status_text, action) = match &stage {
             AutoupdateStage::CheckingForUpdate => (

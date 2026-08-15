@@ -9,7 +9,8 @@ use super::*;
 
 #[test]
 fn issue_draft_parses_fenced_json() {
-    let raw = "```json\n{\"title\": \"Fix crash\", \"body\": \"steps...\", \"labels\": [\"bug\"]}\n```";
+    let raw =
+        "```json\n{\"title\": \"Fix crash\", \"body\": \"steps...\", \"labels\": [\"bug\"]}\n```";
     let d = parse_issue_draft(raw).expect("fenced draft parses");
     assert_eq!(d.title, "Fix crash");
     assert_eq!(d.body, "steps...");
@@ -54,7 +55,10 @@ fn triage_verdict_full_and_fenced() {
 #[test]
 fn triage_verdict_missing_required_field_is_none() {
     // `priority` absent → parse failure (no silent default for a required field).
-    assert_eq!(parse_triage_verdict(r#"{"type":"bug","actionable":true}"#), None);
+    assert_eq!(
+        parse_triage_verdict(r#"{"type":"bug","actionable":true}"#),
+        None
+    );
 }
 
 // ── parse_pr_review_verdict ────────────────────────────────────────────────
@@ -83,7 +87,10 @@ fn pr_review_verdict_defaults_comments_and_maps_variants() {
         PrReviewDecision::Comment
     );
     // Unknown decision variant → parse failure.
-    assert_eq!(parse_pr_review_verdict(r#"{"summary":"s","decision":"nuke"}"#), None);
+    assert_eq!(
+        parse_pr_review_verdict(r#"{"summary":"s","decision":"nuke"}"#),
+        None
+    );
 }
 
 // ── gh command builders: shell safety + repo flag ──────────────────────────
@@ -127,7 +134,10 @@ fn issue_comment_and_close_commands() {
         gh_issue_close_cmd(7, Some("duplicate of #3"), None),
         "gh issue close 7 --comment 'duplicate of #3'"
     );
-    assert_eq!(gh_issue_close_cmd(7, None, Some("o/r")), "gh issue close 7 --repo o/r");
+    assert_eq!(
+        gh_issue_close_cmd(7, None, Some("o/r")),
+        "gh issue close 7 --repo o/r"
+    );
 }
 
 #[test]
@@ -137,7 +147,12 @@ fn pr_review_commands_per_decision() {
         "gh pr review 5 --repo o/r --approve"
     );
     assert_eq!(
-        gh_pr_review_cmd(5, PrReviewDecision::RequestChanges, Some("fix the unwrap"), None),
+        gh_pr_review_cmd(
+            5,
+            PrReviewDecision::RequestChanges,
+            Some("fix the unwrap"),
+            None
+        ),
         "gh pr review 5 --request-changes --body 'fix the unwrap'"
     );
     assert_eq!(
@@ -148,7 +163,10 @@ fn pr_review_commands_per_decision() {
 
 #[test]
 fn pr_merge_command_is_squash() {
-    assert_eq!(gh_pr_merge_cmd(5, Some("o/r")), "gh pr merge 5 --repo o/r --squash");
+    assert_eq!(
+        gh_pr_merge_cmd(5, Some("o/r")),
+        "gh pr merge 5 --repo o/r --squash"
+    );
     assert_eq!(gh_pr_merge_cmd(5, None), "gh pr merge 5 --squash");
 }
 
@@ -193,8 +211,10 @@ fn flow_prompts_keep_human_in_the_loop() {
     // an instance never mutates GitHub on its own.
     for p in [quick_issue_prompt(), pr_review_prompt(), triage_prompt()] {
         let lower = p.to_lowercase();
-        assert!(lower.contains("confirm") || lower.contains("go-ahead"),
-            "prompt must gate on user confirmation: {p}");
+        assert!(
+            lower.contains("confirm") || lower.contains("go-ahead"),
+            "prompt must gate on user confirmation: {p}"
+        );
         assert!(p.contains("gh "), "prompt must reference the gh CLI: {p}");
     }
     assert!(quick_issue_prompt().contains("gh issue create"));

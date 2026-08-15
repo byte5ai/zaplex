@@ -18,6 +18,7 @@ use crate::root_view::quake_mode_window_id;
 use crate::server::ids::SyncId;
 use crate::settings_view::SettingsSection;
 use crate::tab::SelectedTabColor;
+use crate::terminal::cli_agent_sessions::PersistedCLIAgentBinding;
 use crate::terminal::ShellLaunchData;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::view::left_panel::ToolPanelView;
@@ -62,6 +63,7 @@ pub struct WindowSnapshot {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabSnapshot {
     pub custom_title: Option<String>,
+    pub is_pinned: bool,
     pub root: PaneNodeSnapshot,
     pub default_directory_color: Option<AnsiColorIdentifier>,
     pub selected_color: SelectedTabColor,
@@ -219,6 +221,7 @@ pub struct AmbientAgentPaneSnapshot {
 pub struct TerminalPaneSnapshot {
     pub uuid: Vec<u8>,
     pub cwd: Option<String>,
+    pub cli_agent_binding: Option<PersistedCLIAgentBinding>,
     pub shell_launch_data: Option<ShellLaunchData>,
     pub is_active: bool,
     pub is_read_only: bool,

@@ -78,7 +78,8 @@ use warp_util::path::convert_wsl_to_windows_host_path;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
-    CrossAxisAlignment, DispatchEventResult, EventHandler, Flex, MainAxisSize, Shrinkable, Stack,
+    Border, Container, CrossAxisAlignment, DispatchEventResult, DropShadow, EventHandler, Flex,
+    MainAxisSize, Shrinkable, Stack,
 };
 use warpui::keymap::{Context, EditableBinding, FixedBinding};
 use warpui::notification::NotificationSendError;
@@ -116,6 +117,7 @@ use crate::server::ids::{ObjectUid, SyncId};
 use crate::server::telemetry::{PaletteSource, TelemetryEvent};
 use crate::session_management::SessionNavigationData;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty;
@@ -221,8 +223,7 @@ fn resolve_tab_config_shell(name: &str, ctx: &AppContext) -> Option<AvailableShe
 
     AvailableShell::try_from(name).ok()
 }
-const ZAPLEX_SHELL_COMPATIBILITY_DOCS: &str =
-    "";
+const ZAPLEX_SHELL_COMPATIBILITY_DOCS: &str = "";
 // Default minimum width for a newly created Agent Mode pane so that it is legible. Called "default"
 // because this value may be too large for small windows. In that case, we fall back to 50% of the
 // window width.
@@ -869,6 +870,7 @@ pub enum SplitPaneState {
 pub struct TerminalViewResources {
     pub tips_completed: ModelHandle<TipsCompleted>,
     pub model_event_sender: Option<SyncSender<ModelEvent>>,
+    pub control_tab_id: String,
 }
 
 impl SplitPaneState {
@@ -1026,6 +1028,16 @@ impl PaneGroup {
         self.pane_contents
             .keys()
             .any(|pane_id| pane_id.is_terminal_pane())
+    }
+
+    /// Returns true when any terminal in this pane group hosts a CLI agent that
+    /// is blocked on human input. Running and completed sessions never qualify.
+    pub fn has_cli_agent_needing_attention(&self, ctx: &AppContext) -> bool {
+        let sessions = CLIAgentSessionsModel::as_ref(ctx);
+        self.terminal_pane_ids().any(|pane_id| {
+            self.terminal_view_from_pane_id(pane_id, ctx)
+                .is_some_and(|terminal| sessions.terminal_needs_attention(terminal.id()))
+        })
     }
 
     /// Returns true if this pane group contains any code panes.
@@ -1324,7 +1336,19 @@ impl PaneGroup {
                 let mut nodes = Vec::new();
                 let mut focus = InitialFocus::default();
                 let mut leftmost_pane_id = None;
-                let pane_flex = 1. / panes.len() as f32;
+                // A branch with no children is corrupt input, not a layout —
+                // and it reaches this code as a matter of course, because
+                // launch configs are user-editable TOML that older versions
+                // also wrote. Dividing by zero here (and underflowing
+                // `nodes.len() - 1` in `new_branch`) panicked in the dev
+                // profile the test DMGs are built with: dock bounce, no
+                // window, no dialog. Neither value is used when there are no
+                // children, so a safe placeholder is enough to keep the app up.
+                let pane_flex = if panes.is_empty() {
+                    1.
+                } else {
+                    1. / panes.len() as f32
+                };
 
                 let num_children = panes.len() as f32;
                 let total_divider_size = tree::get_divider_thickness() * (num_children - 1.);
@@ -1498,9 +1522,10 @@ impl PaneGroup {
                 };
                 Ok((PaneData::new(pane_id), focus))
             }
-            LeafContents::Terminal(terminal_snapshot) => {
+            LeafContents::Terminal(mut terminal_snapshot) => {
                 let uuid = PaneUuid(terminal_snapshot.uuid.clone());
                 let block_list = block_lists.get(&uuid);
+                let cli_agent_binding = terminal_snapshot.cli_agent_binding.take();
 
                 let chosen_shell = terminal_snapshot
                     .shell_launch_data
@@ -1513,10 +1538,17 @@ impl PaneGroup {
                         }
                     });
 
-                let startup_directory = terminal_snapshot
-                    .cwd
-                    .map(PathBuf::from)
-                    .filter(|path| path.is_dir());
+                let startup_directory = cli_agent_binding
+                    .as_ref()
+                    .map(|binding| PathBuf::from(&binding.cwd))
+                    .filter(|path| path.is_dir())
+                    .or_else(|| {
+                        terminal_snapshot
+                            .cwd
+                            .as_deref()
+                            .map(PathBuf::from)
+                            .filter(|path| path.is_dir())
+                    });
 
                 // Filter conversation IDs to only include those that have task messages
                 // and are not entirely passive (ignored suggestions).
@@ -1568,6 +1600,22 @@ impl PaneGroup {
                 );
 
                 let terminal_view_id = terminal_view.id();
+
+                if let Some(binding) = cli_agent_binding {
+                    let registered = CLIAgentSessionsModel::handle(ctx)
+                        .update(ctx, |sessions, _| {
+                            sessions.register_pending_restore(terminal_view_id, binding)
+                        });
+                    if registered {
+                        terminal_view.update(ctx, |terminal, ctx| {
+                            terminal.configure_pending_cli_agent_restore(ctx);
+                        });
+                    } else {
+                        log::warn!(
+                                "Discarded invalid CLI agent restore binding for terminal {terminal_view_id:?}"
+                            );
+                    }
+                }
 
                 let pane_data = TerminalPane::new(
                     uuid.0,
@@ -2024,6 +2072,7 @@ impl PaneGroup {
                         LeafContents::Terminal(TerminalPaneSnapshot {
                             uuid: Uuid::new_v4().as_bytes().to_vec(),
                             cwd: None,
+                            cli_agent_binding: None,
                             is_active: pane_id.as_terminal_pane_id() == self.active_session_id(app),
                             is_read_only: false,
                             shell_launch_data: None,
@@ -2422,6 +2471,7 @@ impl PaneGroup {
         let resources = TerminalViewResources {
             tips_completed: tips_completed.clone(),
             model_event_sender: model_event_sender.clone(),
+            control_tab_id: ctx.view_id().to_string(),
         };
 
         let view_bounds = Self::estimated_view_bounds(ctx);
@@ -2464,15 +2514,10 @@ impl PaneGroup {
 
         let user_default_shell_changed_banner = ctx.add_typed_action_view(|_| {
             Banner::<PaneGroupAction>::new_permanently_dismissible(
-                BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text(
-                        "Zaplex doesn't currently support your default shell, falling back to zsh.  ",
-                    ),
-                    FormattedTextFragment::hyperlink(
-                        crate::t!("common-learn-more"),
-                        ZAPLEX_SHELL_COMPATIBILITY_DOCS,
-                    ),
-                ]),
+                // Dropped the "learn more" link: no Zaplex shell-compatibility docs yet.
+                BannerTextContent::formatted_text(vec![FormattedTextFragment::plain_text(
+                    "Zaplex doesn't currently support your default shell, falling back to zsh.",
+                )]),
             )
         });
 
@@ -2851,6 +2896,7 @@ impl PaneGroup {
         let resources = TerminalViewResources {
             tips_completed: self.tips_completed.clone(),
             model_event_sender: self.model_event_sender.clone(),
+            control_tab_id: ctx.view_id().to_string(),
         };
         let view_size = Self::estimated_view_bounds(ctx).size();
         let (view, terminal_manager) =
@@ -3416,6 +3462,7 @@ impl PaneGroup {
         let resources = TerminalViewResources {
             tips_completed: self.tips_completed.clone(),
             model_event_sender: self.model_event_sender.clone(),
+            control_tab_id: ctx.view_id().to_string(),
         };
         let view_bounds = Self::estimated_view_bounds(ctx);
         let (view, terminal_manager) =
@@ -4914,6 +4961,8 @@ impl PaneGroup {
                     request.connection_session_id,
                     request.open_params,
                     request.adopt_pty_session_id,
+                    request.adopt_pty_generation,
+                    request.expected_agent_binding,
                     request.install_progress_rx,
                     request.host_label,
                     ctx,
@@ -5104,6 +5153,7 @@ impl PaneGroup {
         let resources = TerminalViewResources {
             tips_completed: self.tips_completed.clone(),
             model_event_sender: self.model_event_sender.clone(),
+            control_tab_id: ctx.view_id().to_string(),
         };
 
         let view_bounds = Self::estimated_view_bounds(ctx);
@@ -5166,6 +5216,7 @@ impl PaneGroup {
         let resources = TerminalViewResources {
             tips_completed: self.tips_completed.clone(),
             model_event_sender: self.model_event_sender.clone(),
+            control_tab_id: ctx.view_id().to_string(),
         };
 
         let view_bounds = Self::estimated_view_bounds(ctx);
@@ -5292,6 +5343,7 @@ impl PaneGroup {
         let resources = TerminalViewResources {
             tips_completed: self.tips_completed.clone(),
             model_event_sender: self.model_event_sender.clone(),
+            control_tab_id: ctx.view_id().to_string(),
         };
 
         let view_bounds = Self::estimated_view_bounds(ctx);
@@ -5363,6 +5415,29 @@ impl PaneGroup {
         }
 
         new_pane_id
+    }
+
+    pub(crate) fn add_control_terminal_pane(
+        &mut self,
+        direction: Direction,
+        startup_directory: Option<PathBuf>,
+        agent_ready: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<crate::control_surface::ControlPtyContext> {
+        let pane_id = self.add_session_in_directory(
+            direction,
+            Some(self.focused_pane_id(ctx)),
+            None,
+            startup_directory,
+            None,
+            DefaultSessionModeBehavior::Ignore,
+            ctx,
+        );
+        if agent_ready {
+            self.start_agent_mode_in_new_pane(None, None, ctx);
+        }
+        self.terminal_view_from_pane_id(pane_id, ctx)
+            .and_then(|terminal| terminal.as_ref(ctx).control_context().cloned())
     }
 
     /// Adds a new side-pane to this group, at the root of the pane tree.
@@ -5967,6 +6042,38 @@ impl PaneGroup {
             .collect()
     }
 
+    pub(crate) fn control_surface_matches(
+        &self,
+        auth: &warp_cli::control::ControlAuth,
+        ctx: &AppContext,
+    ) -> Vec<crate::control_surface::PaneControlSurfaceMatch> {
+        self.terminal_views(ctx)
+            .into_iter()
+            .filter_map(|terminal| {
+                let context = terminal.as_ref(ctx).control_context()?.clone();
+                context.authenticates(auth).then_some(
+                    crate::control_surface::PaneControlSurfaceMatch { terminal, context },
+                )
+            })
+            .collect()
+    }
+
+    pub(crate) fn control_surface_id_matches(
+        &self,
+        surface_id: &str,
+        ctx: &AppContext,
+    ) -> Vec<crate::control_surface::PaneControlSurfaceMatch> {
+        self.terminal_views(ctx)
+            .into_iter()
+            .filter_map(|terminal| {
+                let context = terminal.as_ref(ctx).control_context()?.clone();
+                (context.surface_id() == surface_id).then_some(
+                    crate::control_surface::PaneControlSurfaceMatch { terminal, context },
+                )
+            })
+            .collect()
+    }
+
     pub fn code_views(&self, ctx: &AppContext) -> Vec<ViewHandle<CodeView>> {
         self.panes_of::<CodePane>()
             .map(|p| p.file_view(ctx))
@@ -6150,6 +6257,7 @@ impl PaneGroup {
         let resources = TerminalViewResources {
             tips_completed: self.tips_completed.clone(),
             model_event_sender: self.model_event_sender.clone(),
+            control_tab_id: ctx.view_id().to_string(),
         };
 
         let view_bounds = Self::estimated_view_bounds(ctx);
@@ -6322,6 +6430,22 @@ impl View for PaneGroup {
                     DispatchEventResult::StopPropagation
                 })
                 .finish()
+        };
+        let main_content = if self.has_cli_agent_needing_attention(app)
+            && !*crate::cockpit::CockpitSettings::as_ref(app).attention_dnd
+        {
+            let attention = crate::cockpit::style::attention_coloru(appearance);
+            Container::new(main_content)
+                .with_border(Border::all(1.).with_border_fill(attention))
+                .with_drop_shadow(DropShadow {
+                    color: crate::cockpit::style::attention_halo_coloru(appearance),
+                    offset: Vector2F::zero(),
+                    blur_radius: 11.0,
+                    spread_radius: 6.0,
+                })
+                .finish()
+        } else {
+            main_content
         };
         column.add_child(Shrinkable::new(1., main_content).finish());
 

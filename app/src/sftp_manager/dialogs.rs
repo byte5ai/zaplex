@@ -9,8 +9,9 @@ use std::path::PathBuf;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warpui::elements::{
-    Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Flex,
-    Hoverable, MainAxisSize, MainAxisAlignment, MouseStateHandle, ParentElement, Radius, SavePosition, Shrinkable, Text,
+    Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Dismiss, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+    Radius, SavePosition, Shrinkable, Text,
 };
 use warpui::platform::Cursor;
 use warpui::Element;
@@ -47,7 +48,11 @@ fn dialog_shell(content: Box<dyn Element>, appearance: &Appearance) -> Box<dyn E
 /// Render title bar (title + close button).
 ///
 /// Title is wrapped with Shrinkable for adaptive width, X close button is placed on the right.
-fn render_title_bar(title: &str, appearance: &Appearance, close_btn_state: MouseStateHandle) -> Box<dyn Element> {
+fn render_title_bar(
+    title: &str,
+    appearance: &Appearance,
+    close_btn_state: MouseStateHandle,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text_color = theme.active_ui_text_color();
     let ui_font = appearance.ui_font_family();
@@ -73,7 +78,10 @@ fn render_title_bar(title: &str, appearance: &Appearance, close_btn_state: Mouse
 }
 
 /// Render X icon close button.
-fn render_icon_close_button(appearance: &Appearance, mouse_state: MouseStateHandle) -> Box<dyn Element> {
+fn render_icon_close_button(
+    appearance: &Appearance,
+    mouse_state: MouseStateHandle,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let icon_color = theme.sub_text_color(theme.background());
     let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(icon_color).finish())
@@ -154,8 +162,18 @@ fn render_button(
 }
 
 /// Render cancel button.
-fn render_cancel_button(appearance: &Appearance, mouse_state: MouseStateHandle) -> Box<dyn Element> {
-    render_button("Cancel", false, appearance, SftpBrowserAction::CloseDialog, mouse_state, Some("sftp_btn:dialog_cancel"))
+fn render_cancel_button(
+    appearance: &Appearance,
+    mouse_state: MouseStateHandle,
+) -> Box<dyn Element> {
+    render_button(
+        &crate::t!("fm-dlg-cancel"),
+        false,
+        appearance,
+        SftpBrowserAction::CloseDialog,
+        mouse_state,
+        Some("sftp_btn:dialog_cancel"),
+    )
 }
 
 /// Render descriptive confirmation dialog (title + description + confirm/cancel buttons).
@@ -186,7 +204,14 @@ fn render_confirm_dialog(
     )
     .finish();
 
-    let confirm_btn = render_button(confirm_label, true, appearance, confirm_action, confirm_btn_state, Some("sftp_btn:dialog_confirm"));
+    let confirm_btn = render_button(
+        confirm_label,
+        true,
+        appearance,
+        confirm_action,
+        confirm_btn_state,
+        Some("sftp_btn:dialog_confirm"),
+    );
     let cancel_btn = render_cancel_button(appearance, cancel_btn_state);
 
     let buttons = Flex::row()
@@ -229,16 +254,20 @@ fn render_cross_conn_conflict(
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    let verb = if is_move { "Move" } else { "Copy" };
+    let verb = if is_move {
+        crate::t!("fm-verb-move")
+    } else {
+        crate::t!("fm-verb-copy")
+    };
     let title_bar = render_title_bar(
-        &format!("{verb} — {existing} file(s) already exist"),
+        &crate::t!("fm-dlg-crossconn-title", verb = verb, count = existing),
         appearance,
         close_btn_state,
     );
     let desc = if existing == 1 {
-        "1 file already exists on the destination. Overwrite it, or skip it?".to_string()
+        crate::t!("fm-dlg-crossconn-body-one")
     } else {
-        format!("{existing} files already exist on the destination. Overwrite them, or skip them?")
+        crate::t!("fm-dlg-crossconn-body-many", count = existing)
     };
     let desc_el = Shrinkable::new(
         1.0,
@@ -249,7 +278,7 @@ fn render_cross_conn_conflict(
     .finish();
 
     let overwrite_btn = render_button(
-        "Overwrite",
+        &crate::t!("fm-dlg-overwrite"),
         true,
         appearance,
         SftpBrowserAction::ResolveCrossConnConflict { overwrite: true },
@@ -257,7 +286,7 @@ fn render_cross_conn_conflict(
         Some("sftp_btn:dialog_confirm"),
     );
     let skip_btn = render_button(
-        "Skip",
+        &crate::t!("fm-dlg-skip"),
         false,
         appearance,
         SftpBrowserAction::ResolveCrossConnConflict { overwrite: false },
@@ -302,6 +331,10 @@ fn render_copy_move_conflict(
     skip_btn_state: MouseStateHandle,
     overwrite_all_btn_state: MouseStateHandle,
     skip_all_btn_state: MouseStateHandle,
+    rename_btn_state: MouseStateHandle,
+    newer_only_btn_state: MouseStateHandle,
+    rename_all_btn_state: MouseStateHandle,
+    newer_only_all_btn_state: MouseStateHandle,
     close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -309,15 +342,25 @@ fn render_copy_move_conflict(
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    let verb = if is_move { "Move" } else { "Copy" };
-    let title_bar = render_title_bar(&format!("{verb} — target exists"), appearance, close_btn_state);
+    let verb = if is_move {
+        crate::t!("fm-verb-move")
+    } else {
+        crate::t!("fm-verb-copy")
+    };
+    let title_bar = render_title_bar(
+        &crate::t!("fm-dlg-conflict-title", verb = verb),
+        appearance,
+        close_btn_state,
+    );
 
     let desc = if remaining > 1 {
-        format!(
-            "\"{name}\" already exists in the destination. Overwrite it? ({remaining} conflicts remaining)"
+        crate::t!(
+            "fm-dlg-conflict-body-remaining",
+            name = name,
+            remaining = remaining
         )
     } else {
-        format!("\"{name}\" already exists in the destination. Overwrite it?")
+        crate::t!("fm-dlg-conflict-body", name = name)
     };
     let desc_el = Shrinkable::new(
         1.0,
@@ -328,7 +371,7 @@ fn render_copy_move_conflict(
     .finish();
 
     let overwrite_btn = render_button(
-        "Overwrite",
+        &crate::t!("fm-dlg-overwrite"),
         true,
         appearance,
         SftpBrowserAction::OverwriteConflict { all: false },
@@ -336,7 +379,7 @@ fn render_copy_move_conflict(
         Some("sftp_btn:dialog_confirm"),
     );
     let skip_btn = render_button(
-        "Skip",
+        &crate::t!("fm-dlg-skip"),
         false,
         appearance,
         SftpBrowserAction::SkipConflict { all: false },
@@ -344,7 +387,7 @@ fn render_copy_move_conflict(
         Some("sftp_btn:dialog_cancel"),
     );
     let overwrite_all_btn = render_button(
-        "Overwrite all",
+        &crate::t!("fm-dlg-overwrite-all"),
         false,
         appearance,
         SftpBrowserAction::OverwriteConflict { all: true },
@@ -352,22 +395,69 @@ fn render_copy_move_conflict(
         Some("sftp_btn:dialog_overwrite_all"),
     );
     let skip_all_btn = render_button(
-        "Skip all",
+        &crate::t!("fm-dlg-skip-all"),
         false,
         appearance,
         SftpBrowserAction::SkipConflict { all: true },
         skip_all_btn_state,
         Some("sftp_btn:dialog_skip_all"),
     );
+    let rename_btn = render_button(
+        &crate::t!("fm-dlg-rename-copy"),
+        false,
+        appearance,
+        SftpBrowserAction::RenameConflict { all: false },
+        rename_btn_state,
+        Some("sftp_btn:dialog_rename"),
+    );
+    let newer_only_btn = render_button(
+        &crate::t!("fm-dlg-newer-only"),
+        false,
+        appearance,
+        SftpBrowserAction::NewerOnlyConflict { all: false },
+        newer_only_btn_state,
+        Some("sftp_btn:dialog_newer_only"),
+    );
+    let rename_all_btn = render_button(
+        &crate::t!("fm-dlg-rename-copy-all"),
+        false,
+        appearance,
+        SftpBrowserAction::RenameConflict { all: true },
+        rename_all_btn_state,
+        Some("sftp_btn:dialog_rename_all"),
+    );
+    let newer_only_all_btn = render_button(
+        &crate::t!("fm-dlg-newer-only-all"),
+        false,
+        appearance,
+        SftpBrowserAction::NewerOnlyConflict { all: true },
+        newer_only_all_btn_state,
+        Some("sftp_btn:dialog_newer_only_all"),
+    );
 
-    let buttons = Flex::row()
+    let primary_buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_alignment(MainAxisAlignment::End)
         .with_spacing(8.0)
         .with_child(overwrite_btn)
         .with_child(skip_btn)
+        .with_child(rename_btn)
+        .with_child(newer_only_btn)
+        .finish();
+    let all_buttons = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_alignment(MainAxisAlignment::End)
+        .with_spacing(8.0)
         .with_child(overwrite_all_btn)
         .with_child(skip_all_btn)
+        .with_child(rename_all_btn)
+        .with_child(newer_only_all_btn)
+        .finish();
+    let buttons = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_spacing(8.0)
+        .with_child(primary_buttons)
+        .with_child(all_buttons)
         .finish();
 
     let content = Flex::column()
@@ -444,21 +534,22 @@ fn render_target_picker(
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    let verb = if is_move { "Move" } else { "Copy" };
-    let title_bar = render_title_bar(&format!("{verb} to which panel?"), appearance, close_btn_state);
+    let verb = if is_move {
+        crate::t!("fm-verb-move")
+    } else {
+        crate::t!("fm-verb-copy")
+    };
+    let title_bar = render_title_bar(
+        &crate::t!("fm-dlg-picker-title", verb = verb),
+        appearance,
+        close_btn_state,
+    );
 
     let desc_el = Shrinkable::new(
         1.0,
-        Text::new(
-            format!(
-                "More than one other file panel is open. Choose where to {}:",
-                verb.to_lowercase()
-            ),
-            ui_font,
-            ui_font_size,
-        )
-        .with_color(sub_color.into())
-        .finish(),
+        Text::new(crate::t!("fm-dlg-picker-body"), ui_font, ui_font_size)
+            .with_color(sub_color.into())
+            .finish(),
     )
     .finish();
 
@@ -519,15 +610,15 @@ fn render_delete_confirm(
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| paths[0].display().to_string());
-        format!("Are you sure you want to delete \"{name}\"? This action cannot be undone.")
+        crate::t!("fm-dlg-delete-body-one", name = name)
     } else {
-        format!("Are you sure you want to delete {count} items? This action cannot be undone.")
+        crate::t!("fm-dlg-delete-body-many", count = count)
     };
 
     render_confirm_dialog(
-        "Confirm Delete",
+        &crate::t!("fm-dlg-delete-title"),
         &desc,
-        "Delete",
+        &crate::t!("fm-dlg-delete"),
         SftpBrowserAction::ConfirmDelete,
         appearance,
         confirm_btn_state,
@@ -551,10 +642,14 @@ fn render_rename(
     let ui_font_size = appearance.ui_font_size();
 
     // Title bar
-    let title_bar = render_title_bar("Rename", appearance, close_btn_state);
+    let title_bar = render_title_bar(
+        &crate::t!("fm-dlg-rename-title"),
+        appearance,
+        close_btn_state,
+    );
 
     // Current name hint
-    let hint = format!("Current name: {original_name}");
+    let hint = crate::t!("fm-dlg-rename-hint", name = original_name);
     let hint_el = Shrinkable::new(
         1.0,
         Text::new(hint, ui_font, ui_font_size)
@@ -565,11 +660,7 @@ fn render_rename(
 
     // Editor — Shrinkable + Clipped to prevent long filename overflow
     let editor_el = Container::new(
-        Shrinkable::new(
-            1.0,
-            Clipped::new(ChildView::new(editor).finish()).finish(),
-        )
-        .finish(),
+        Shrinkable::new(1.0, Clipped::new(ChildView::new(editor).finish()).finish()).finish(),
     )
     .with_padding_left(8.0)
     .with_padding_right(8.0)
@@ -581,7 +672,7 @@ fn render_rename(
 
     // Buttons
     let confirm_btn = render_button(
-        "Confirm",
+        &crate::t!("fm-dlg-confirm"),
         true,
         appearance,
         SftpBrowserAction::ConfirmRename,
@@ -626,15 +717,15 @@ fn render_create_folder(
     let theme = appearance.theme();
 
     // Title bar
-    let title_bar = render_title_bar("New Folder", appearance, close_btn_state);
+    let title_bar = render_title_bar(
+        &crate::t!("fm-dlg-newfolder-title"),
+        appearance,
+        close_btn_state,
+    );
 
     // Editor
     let editor_el = Container::new(
-        Shrinkable::new(
-            1.0,
-            Clipped::new(ChildView::new(editor).finish()).finish(),
-        )
-        .finish(),
+        Shrinkable::new(1.0, Clipped::new(ChildView::new(editor).finish()).finish()).finish(),
     )
     .with_padding_left(8.0)
     .with_padding_right(8.0)
@@ -646,7 +737,7 @@ fn render_create_folder(
 
     // Buttons
     let confirm_btn = render_button(
-        "Create",
+        &crate::t!("fm-dlg-create"),
         true,
         appearance,
         SftpBrowserAction::ConfirmNewFolder,
@@ -719,14 +810,18 @@ fn render_file_details(
     close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
     // Title bar
-    let title_bar = render_title_bar("File Details", appearance, close_btn_state);
+    let title_bar = render_title_bar(
+        &crate::t!("fm-dlg-details-title"),
+        appearance,
+        close_btn_state,
+    );
 
     // Type
     let type_str = match entry.file_type {
-        crate::sftp_manager::types::FileEntryType::File => "File",
-        crate::sftp_manager::types::FileEntryType::Directory => "Directory",
-        crate::sftp_manager::types::FileEntryType::Symlink => "Symbolic Link",
-        crate::sftp_manager::types::FileEntryType::Other => "Other",
+        crate::sftp_manager::types::FileEntryType::File => crate::t!("fm-dlg-type-file"),
+        crate::sftp_manager::types::FileEntryType::Directory => crate::t!("fm-dlg-type-dir"),
+        crate::sftp_manager::types::FileEntryType::Symlink => crate::t!("fm-dlg-type-symlink"),
+        crate::sftp_manager::types::FileEntryType::Other => crate::t!("fm-dlg-type-other"),
     };
 
     // Build property rows
@@ -734,13 +829,33 @@ fn render_file_details(
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(8.0);
 
-    rows.add_child(detail_row("Type", type_str, appearance));
-    rows.add_child(detail_row("Size", &format_size(entry.size), appearance));
+    rows.add_child(detail_row(
+        &crate::t!("fm-dlg-detail-type"),
+        &type_str,
+        appearance,
+    ));
+    rows.add_child(detail_row(
+        &crate::t!("fm-dlg-detail-size"),
+        &format_size(entry.size),
+        appearance,
+    ));
     let modified = entry.modified.as_deref().unwrap_or("--");
-    rows.add_child(detail_row("Modified", modified, appearance));
+    rows.add_child(detail_row(
+        &crate::t!("fm-dlg-detail-modified"),
+        modified,
+        appearance,
+    ));
     let permissions = entry.permissions.as_deref().unwrap_or("--");
-    rows.add_child(detail_row("Permissions", permissions, appearance));
-    rows.add_child(detail_row("Path", &entry.path.display().to_string(), appearance));
+    rows.add_child(detail_row(
+        &crate::t!("fm-dlg-detail-permissions"),
+        permissions,
+        appearance,
+    ));
+    rows.add_child(detail_row(
+        &crate::t!("fm-dlg-detail-path"),
+        &entry.path.display().to_string(),
+        appearance,
+    ));
 
     // Close button
     let close_btn = render_cancel_button(appearance, cancel_btn_state);
@@ -749,7 +864,11 @@ fn render_file_details(
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(12.0)
         .with_child(title_bar)
-        .with_child(ConstrainedBox::new(rows.finish()).with_max_height(250.0).finish())
+        .with_child(
+            ConstrainedBox::new(rows.finish())
+                .with_max_height(250.0)
+                .finish(),
+        )
         .with_child(close_btn)
         .finish();
 
@@ -774,15 +893,17 @@ fn render_move_dialog(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    let target_display = target_dir.display();
-    let desc = format!(
-        "Move \"{source_name}\" to {target_display}"
+    let target_display = target_dir.display().to_string();
+    let desc = crate::t!(
+        "fm-dlg-move-body",
+        name = source_name,
+        target = target_display
     );
 
     render_confirm_dialog(
-        "Move File",
+        &crate::t!("fm-dlg-move-title"),
         &desc,
-        "Move",
+        &crate::t!("fm-verb-move"),
         SftpBrowserAction::ConfirmMove,
         appearance,
         confirm_btn_state,
@@ -807,14 +928,19 @@ fn render_overwrite_confirm(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let desc = match direction {
-        TransferDirection::Upload => format!("Remote file {target_name} already exists. Overwrite?"),
-        TransferDirection::Download => format!("Target file {target_name} already exists. Overwrite?"),
+        TransferDirection::Upload => crate::t!("fm-dlg-overwrite-upload-body", name = target_name),
+        TransferDirection::Download => {
+            crate::t!("fm-dlg-overwrite-download-body", name = target_name)
+        }
+        TransferDirection::Copy => {
+            unreachable!("copy direction is not used by overwrite dialogs")
+        }
     };
 
     render_confirm_dialog(
-        "Confirm Overwrite",
+        &crate::t!("fm-dlg-overwrite-title"),
         &desc,
-        "Overwrite",
+        &crate::t!("fm-dlg-overwrite"),
         SftpBrowserAction::ConfirmOverwrite,
         appearance,
         confirm_btn_state,
@@ -837,6 +963,10 @@ pub fn render_dialog(
     close_btn_state: MouseStateHandle,
     overwrite_all_btn_state: MouseStateHandle,
     skip_all_btn_state: MouseStateHandle,
+    rename_conflict_btn_state: MouseStateHandle,
+    newer_only_conflict_btn_state: MouseStateHandle,
+    rename_all_btn_state: MouseStateHandle,
+    newer_only_all_btn_state: MouseStateHandle,
     target_pick_btn_states: &[MouseStateHandle],
 ) -> Box<dyn Element> {
     match dialog {
@@ -848,7 +978,11 @@ pub fn render_dialog(
             close_btn_state,
             target_pick_btn_states,
         ),
-        Dialog::CopyMoveConflict { name, remaining, is_move } => render_copy_move_conflict(
+        Dialog::CopyMoveConflict {
+            name,
+            remaining,
+            is_move,
+        } => render_copy_move_conflict(
             name,
             *remaining,
             *is_move,
@@ -857,6 +991,10 @@ pub fn render_dialog(
             cancel_btn_state,
             overwrite_all_btn_state,
             skip_all_btn_state,
+            rename_conflict_btn_state,
+            newer_only_conflict_btn_state,
+            rename_all_btn_state,
+            newer_only_all_btn_state,
             close_btn_state,
         ),
         Dialog::CrossConnConflict { existing, is_move } => render_cross_conn_conflict(
@@ -867,36 +1005,63 @@ pub fn render_dialog(
             cancel_btn_state,
             close_btn_state,
         ),
-        Dialog::DeleteConfirm { paths, .. } => {
-            render_delete_confirm(paths, appearance, confirm_btn_state, cancel_btn_state, close_btn_state)
-        }
-        Dialog::Rename {
+        Dialog::DeleteConfirm { paths, .. } => render_delete_confirm(
+            paths,
+            appearance,
+            confirm_btn_state,
+            cancel_btn_state,
+            close_btn_state,
+        ),
+        Dialog::Rename { original_name, .. } => render_rename(
             original_name,
-            ..
-        } => render_rename(original_name, rename_editor, appearance, confirm_btn_state, cancel_btn_state, close_btn_state),
-        Dialog::CreateFolder { .. } => {
-            render_create_folder(new_folder_editor, appearance, confirm_btn_state, cancel_btn_state, close_btn_state)
-        }
+            rename_editor,
+            appearance,
+            confirm_btn_state,
+            cancel_btn_state,
+            close_btn_state,
+        ),
+        Dialog::CreateFolder { .. } => render_create_folder(
+            new_folder_editor,
+            appearance,
+            confirm_btn_state,
+            cancel_btn_state,
+            close_btn_state,
+        ),
         Dialog::FileDetails { entry } => {
             render_file_details(entry, appearance, cancel_btn_state, close_btn_state)
         }
-        Dialog::Move { source, target_dir } => {
-            render_move_dialog(source, target_dir, appearance, confirm_btn_state, cancel_btn_state, close_btn_state)
-        }
-        Dialog::OverwriteConfirm { source, target, file_size, direction } => {
-            render_overwrite_confirm(source, target, *file_size, *direction, appearance, confirm_btn_state, cancel_btn_state, close_btn_state)
-        }
-        Dialog::CloseTransferPanelConfirm => {
-            render_confirm_dialog(
-                "Close Transfer Panel",
-                "There are active transfer tasks. Closing will cancel all transfers and clear the records. Are you sure?",
-                "Close",
-                SftpBrowserAction::ConfirmCloseTransferPanel,
-                appearance,
-                confirm_btn_state,
-                cancel_btn_state,
-                close_btn_state,
-            )
-        }
+        Dialog::Move { source, target_dir } => render_move_dialog(
+            source,
+            target_dir,
+            appearance,
+            confirm_btn_state,
+            cancel_btn_state,
+            close_btn_state,
+        ),
+        Dialog::OverwriteConfirm {
+            source,
+            target,
+            file_size,
+            direction,
+        } => render_overwrite_confirm(
+            source,
+            target,
+            *file_size,
+            *direction,
+            appearance,
+            confirm_btn_state,
+            cancel_btn_state,
+            close_btn_state,
+        ),
+        Dialog::CloseTransferPanelConfirm => render_confirm_dialog(
+            &crate::t!("fm-dlg-close-transfer-title"),
+            &crate::t!("fm-dlg-close-transfer-body"),
+            &crate::t!("fm-dlg-close"),
+            SftpBrowserAction::ConfirmCloseTransferPanel,
+            appearance,
+            confirm_btn_state,
+            cancel_btn_state,
+            close_btn_state,
+        ),
     }
 }

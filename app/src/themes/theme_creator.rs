@@ -1,12 +1,66 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::path::PathBuf;
 
 use deltae::*;
-use kmeans_colors::{get_kmeans_hamerly, Calculate, CentroidData, Sort};
+use kmeans_colors::{Calculate, CentroidData, Sort, get_kmeans_hamerly};
 use palette::{FromColor, IntoColor, Lab, Pixel, Srgb, Srgba};
 use pathfinder_color::ColorU;
 
 use crate::util::color::hex_color::coloru_from_hex_string;
+
+/// Parses the two user-facing color syntaxes accepted by the theme editor:
+/// `#RRGGBB`/`RRGGBBAA`, their hashless forms, and `rgb(r, g, b)`.
+pub fn parse_theme_color_input(input: &str) -> Result<ColorU> {
+    let trimmed = input.trim();
+    if trimmed
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("rgb("))
+        && trimmed.ends_with(')')
+    {
+        let inner = &trimmed[4..trimmed.len() - 1];
+        let channels = inner
+            .split(',')
+            .map(str::trim)
+            .map(str::parse::<u8>)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| anyhow!("RGB channels must be integers between 0 and 255"))?;
+        if let [r, g, b] = channels.as_slice() {
+            return Ok(ColorU::new(*r, *g, *b, 255));
+        }
+        return Err(anyhow!("RGB colors need exactly three channels"));
+    }
+
+    let hex = if trimmed.starts_with('#') {
+        trimmed.to_owned()
+    } else {
+        format!("#{trimmed}")
+    };
+    if hex.len() == 9 {
+        let channels = (1..9)
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| anyhow!("Invalid 8-digit hex color"))?;
+        return Ok(ColorU::new(
+            channels[0],
+            channels[1],
+            channels[2],
+            channels[3],
+        ));
+    }
+    coloru_from_hex_string(&hex).map_err(|error| anyhow!(error))
+}
+
+pub fn format_theme_color(color: ColorU) -> String {
+    if color.a == 255 {
+        format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)
+    } else {
+        format!(
+            "#{:02X}{:02X}{:02X}{:02X}",
+            color.r, color.g, color.b, color.a
+        )
+    }
+}
 
 /// Uses a k-means algorithm to identify the 5 most average colors in an image.
 pub fn top_colors_for_image(image_path: PathBuf) -> Result<Vec<ColorU>> {

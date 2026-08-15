@@ -10,28 +10,45 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use warp_ssh_manager::SshRepository;
 use warp_ssh_manager::secrets::SshSecretStore;
 use warp_ssh_manager::types::{AuthType, ResolvedSshAuth, SshServerInfo};
-use zap_sftp::Sftp;
+use warp_ssh_manager::SshRepository;
 use zap_sftp::session::{AuthMethod, SftpSession};
 use zap_sftp::types::OpenOptions;
+use zap_sftp::Sftp;
 
-use super::types::{FileEntry, FileEntryType};
+use super::types::{FileEntry, FileEntryType, StableEntryIdentity};
 
 /// SFTP operation error
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum SftpOpsError {
     /// Connection error
     Connection(String),
     /// Operation error
     Operation(String),
+    /// The server connection has not negotiated descriptor-bound transfers.
+    CapabilityRequired(String),
     /// Local I/O error
     LocalIo(String),
     /// Credentials not found
     NoCredentials(String),
     /// Transfer cancelled
     Cancelled,
+    /// The destination is committed even though the final acknowledgement failed.
+    Committed(String),
+    /// The requested path does not exist.
+    NotFound(String),
+    /// The visible transfer result is safe, but retained paths require recovery.
+    RecoveryRequired {
+        /// Human-readable failure context.
+        message: String,
+        /// Process-wide cleanup action, when automatic retry is safe.
+        recovery_id: Option<u64>,
+        /// Paths retained instead of guessing after an indeterminate operation.
+        paths: Vec<PathBuf>,
+        /// Whether the new destination has already been committed.
+        committed: bool,
+    },
 }
 
 impl std::fmt::Display for SftpOpsError {
@@ -39,22 +56,105 @@ impl std::fmt::Display for SftpOpsError {
         match self {
             SftpOpsError::Connection(msg) => write!(f, "Connection error: {msg}"),
             SftpOpsError::Operation(msg) => write!(f, "Operation error: {msg}"),
+            SftpOpsError::CapabilityRequired(msg) => {
+                write!(f, "Secure transfer capability required: {msg}")
+            }
             SftpOpsError::LocalIo(msg) => write!(f, "Local I/O error: {msg}"),
             SftpOpsError::NoCredentials(msg) => write!(f, "Credentials not found: {msg}"),
             SftpOpsError::Cancelled => write!(f, "Transfer cancelled"),
+            SftpOpsError::Committed(msg) => write!(f, "{msg}"),
+            SftpOpsError::NotFound(path) => write!(f, "Path not found: {path}"),
+            SftpOpsError::RecoveryRequired { message, paths, .. } => {
+                write!(f, "{message}; recovery paths: ")?;
+                for (index, path) in paths.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", path.display())?;
+                }
+                Ok(())
+            }
         }
+    }
+}
+
+impl SftpOpsError {
+    /// Localized, non-sensitive summary for UI surfaces.
+    ///
+    /// The detailed diagnostic remains available through [`Display`] for
+    /// logging, but must not be rendered into a toast or transfer row because
+    /// backend errors may contain host-local paths or server details.
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::Connection(_) => crate::t!("fm-error-connection"),
+            Self::Operation(_) => crate::t!("fm-error-operation"),
+            Self::CapabilityRequired(_) => crate::t!("fm-error-secure-transfer-required"),
+            Self::LocalIo(_) => crate::t!("fm-error-local-io"),
+            Self::NoCredentials(_) => crate::t!("fm-error-credentials"),
+            Self::Cancelled => crate::t!("fm-error-cancelled"),
+            Self::Committed(_) => crate::t!("fm-error-committed"),
+            Self::NotFound(_) => crate::t!("fm-error-not-found"),
+            Self::RecoveryRequired { .. } => crate::t!("fm-error-recovery-required"),
+        }
+    }
+
+    pub fn recovery_id(&self) -> Option<u64> {
+        match self {
+            Self::RecoveryRequired { recovery_id, .. } => *recovery_id,
+            Self::Connection(_)
+            | Self::Operation(_)
+            | Self::CapabilityRequired(_)
+            | Self::LocalIo(_)
+            | Self::NoCredentials(_)
+            | Self::Cancelled
+            | Self::Committed(_)
+            | Self::NotFound(_) => None,
+        }
+    }
+
+    pub fn recovery_paths(&self) -> &[PathBuf] {
+        match self {
+            Self::RecoveryRequired { paths, .. } => paths,
+            Self::Connection(_)
+            | Self::Operation(_)
+            | Self::CapabilityRequired(_)
+            | Self::LocalIo(_)
+            | Self::NoCredentials(_)
+            | Self::Cancelled
+            | Self::Committed(_)
+            | Self::NotFound(_) => &[],
+        }
+    }
+
+    pub fn destination_committed(&self) -> bool {
+        matches!(
+            self,
+            Self::Committed(_)
+                | Self::RecoveryRequired {
+                    committed: true,
+                    ..
+                }
+        )
     }
 }
 
 impl From<zap_sftp::SftpError> for SftpOpsError {
     fn from(e: zap_sftp::SftpError) -> Self {
-        SftpOpsError::Operation(e.to_string())
+        if e.is_not_found() {
+            SftpOpsError::NotFound(e.to_string())
+        } else {
+            SftpOpsError::Operation(e.to_string())
+        }
     }
 }
 
 impl From<std::io::Error> for SftpOpsError {
     fn from(e: std::io::Error) -> Self {
-        SftpOpsError::LocalIo(e.to_string())
+        if e.kind() == std::io::ErrorKind::NotFound {
+            SftpOpsError::NotFound(e.to_string())
+        } else {
+            SftpOpsError::LocalIo(e.to_string())
+        }
     }
 }
 
@@ -63,6 +163,58 @@ pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send>;
 
 /// Connection timeout duration
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn unique_transfer_sibling(path: &Path, marker: &str) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string());
+    path.with_file_name(format!(".{name}.{marker}-{}", uuid::Uuid::new_v4()))
+}
+
+fn open_new_local_transfer_file(path: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+fn create_unique_local_transfer_file(
+    path: &Path,
+    marker: &str,
+) -> Result<(PathBuf, fs::File), SftpOpsError> {
+    for _ in 0..128 {
+        let candidate = unique_transfer_sibling(path, marker);
+        match open_new_local_transfer_file(&candidate) {
+            Ok(file) => return Ok((candidate, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(SftpOpsError::LocalIo(error.to_string())),
+        }
+    }
+    Err(SftpOpsError::LocalIo(format!(
+        "Could not create a unique temporary sibling for {}",
+        path.display()
+    )))
+}
+
+fn create_unique_remote_transfer_file(
+    sftp: &Sftp,
+    path: &Path,
+    marker: &str,
+) -> Result<(PathBuf, zap_sftp::File), SftpOpsError> {
+    for _ in 0..128 {
+        let candidate = unique_transfer_sibling(path, marker);
+        match sftp.open(&candidate, OpenOptions::create_new()) {
+            Ok(file) => return Ok((candidate, file)),
+            Err(_) if sftp.lstat(&candidate).is_ok() => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(SftpOpsError::Operation(format!(
+        "Could not create a unique temporary sibling for {}",
+        path.display()
+    )))
+}
 
 /// Establish SFTP connection using server configuration
 pub fn connect_from_server(
@@ -107,6 +259,12 @@ pub fn list_dir(sftp: &Sftp, path: &Path) -> Result<Vec<FileEntry>, SftpOpsError
             let group = bool_to_rwx(perms.group_read, perms.group_write, perms.group_exec);
             let other = bool_to_rwx(perms.other_read, perms.other_write, perms.other_exec);
             let permissions = Some(format!("{owner}{group}{other}"));
+            let modified_revision = entry
+                .metadata
+                .modified
+                .and_then(|time| time.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
             FileEntry {
                 name: entry.name,
                 path: entry.path,
@@ -114,6 +272,15 @@ pub fn list_dir(sftp: &Sftp, path: &Path) -> Result<Vec<FileEntry>, SftpOpsError
                 size: entry.metadata.size,
                 modified,
                 permissions,
+                identity: StableEntryIdentity {
+                    file_type,
+                    size: entry.metadata.size,
+                    object_id: String::new(),
+                    revision: format!(
+                        "{}:{}:{modified_revision}",
+                        entry.metadata.uid, entry.metadata.gid
+                    ),
+                },
             }
         })
         .collect();
@@ -162,6 +329,21 @@ pub fn rename(sftp: &Sftp, old_path: &Path, new_path: &Path) -> Result<(), SftpO
     Ok(())
 }
 
+/// Atomically replaces an existing remote entry.
+///
+/// Servers that do not support atomic replacement must reject the operation;
+/// falling back to a remove or backup dance would leave the destination absent
+/// across a crash boundary.
+pub fn replace_atomic(sftp: &Sftp, old_path: &Path, new_path: &Path) -> Result<(), SftpOpsError> {
+    let opts = zap_sftp::types::RenameOptions {
+        overwrite: true,
+        atomic: true,
+        native: false,
+    };
+    sftp.rename(old_path, new_path, opts)?;
+    Ok(())
+}
+
 /// Stream-upload local file to remote
 ///
 /// Uses temporary file pattern: first uploads to a temporary path with .sftp_partial suffix,
@@ -174,14 +356,49 @@ pub fn upload_file_streaming(
     progress_cb: Option<&ProgressCallback>,
     cancel_flag: &AtomicBool,
 ) -> Result<(), SftpOpsError> {
+    upload_file_streaming_with_mode(
+        sftp,
+        local_path,
+        remote_path,
+        progress_cb,
+        cancel_flag,
+        true,
+    )
+}
+
+pub fn upload_file_streaming_no_replace(
+    sftp: &Sftp,
+    local_path: &Path,
+    remote_path: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: &AtomicBool,
+) -> Result<(), SftpOpsError> {
+    upload_file_streaming_with_mode(
+        sftp,
+        local_path,
+        remote_path,
+        progress_cb,
+        cancel_flag,
+        false,
+    )
+}
+
+fn upload_file_streaming_with_mode(
+    sftp: &Sftp,
+    local_path: &Path,
+    remote_path: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: &AtomicBool,
+    overwrite_destination: bool,
+) -> Result<(), SftpOpsError> {
     let mut local_file =
         fs::File::open(local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
     let total_size = local_file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    // Use temporary path to upload, avoiding file truncation
-    let remote_display = remote_path.display();
-    let temp_remote_path = PathBuf::from(format!("{remote_display}.sftp_partial"));
-    let mut remote_file = sftp.open(&temp_remote_path, OpenOptions::write())?;
+    // Each in-flight transfer owns its temporary path. Two writes to the same
+    // destination must never truncate, finalize, or clean up each other's data.
+    let (temp_remote_path, mut remote_file) =
+        create_unique_remote_transfer_file(sftp, remote_path, "sftp_partial")?;
 
     const CHUNK_SIZE: usize = 32 * 1024;
     let mut buf = vec![0u8; CHUNK_SIZE];
@@ -206,77 +423,41 @@ pub fn upload_file_streaming(
         remote_file.flush()?;
         Ok(())
     })();
+    drop(remote_file);
 
     match &result {
         Ok(()) => {
-            // Upload successful: rename temporary file to target path
-            let rename_result = sftp.rename(
+            if !overwrite_destination {
+                if let Err(error) = sftp.rename(
+                    &temp_remote_path,
+                    remote_path,
+                    zap_sftp::types::RenameOptions {
+                        overwrite: false,
+                        atomic: false,
+                        native: false,
+                    },
+                ) {
+                    let _ = sftp.remove_file(&temp_remote_path);
+                    return Err(SftpOpsError::Operation(format!(
+                        "Failed to commit remote file without replacement: {error}"
+                    )));
+                }
+                return Ok(());
+            }
+            // Publish in one atomic replacement. If the server cannot provide
+            // that guarantee, fail safely and keep the existing destination.
+            if let Err(error) = sftp.rename(
                 &temp_remote_path,
                 remote_path,
                 zap_sftp::types::RenameOptions {
                     overwrite: true,
-                    atomic: false,
+                    atomic: true,
                     native: false,
                 },
-            );
-
-            // Some servers do not support OVERWRITE flag; use backup rename strategy to avoid data loss
-            let rename_result = match rename_result {
-                Ok(()) => Ok(()),
-                Err(_) => {
-                    let remote_display = remote_path.display();
-                    let backup_path = PathBuf::from(format!("{remote_display}.sftp_backup"));
-                    let backup_created = sftp
-                        .rename(
-                            remote_path,
-                            &backup_path,
-                            zap_sftp::types::RenameOptions {
-                                overwrite: false,
-                                atomic: false,
-                                native: false,
-                            },
-                        )
-                        .is_ok();
-
-                    match sftp.rename(
-                        &temp_remote_path,
-                        remote_path,
-                        zap_sftp::types::RenameOptions {
-                            overwrite: false,
-                            atomic: false,
-                            native: false,
-                        },
-                    ) {
-                        Ok(()) => {
-                            if backup_created {
-                                let _ = sftp.remove_file(&backup_path);
-                            }
-                            Ok(())
-                        }
-                        Err(e) => {
-                            // Rename failed: restore backup
-                            if backup_created {
-                                let _ = sftp.rename(
-                                    &backup_path,
-                                    remote_path,
-                                    zap_sftp::types::RenameOptions {
-                                        overwrite: false,
-                                        atomic: false,
-                                        native: false,
-                                    },
-                                );
-                            }
-                            Err(e)
-                        }
-                    }
-                }
-            };
-
-            if let Err(e) = rename_result {
-                // On rename failure, preserve remote temporary file to avoid data loss
-                let temp_display = temp_remote_path.display();
+            ) {
+                let _ = sftp.remove_file(&temp_remote_path);
                 return Err(SftpOpsError::Operation(format!(
-                    "Failed to rename remote temporary file: {e}. Temporary file: {temp_display}"
+                    "Failed to atomically replace remote file: {error}"
                 )));
             }
         }
@@ -301,6 +482,41 @@ pub fn download_file_streaming(
     progress_cb: Option<&ProgressCallback>,
     cancel_flag: &AtomicBool,
 ) -> Result<(), SftpOpsError> {
+    download_file_streaming_with_mode(
+        sftp,
+        remote_path,
+        local_path,
+        progress_cb,
+        cancel_flag,
+        true,
+    )
+}
+
+pub fn download_file_streaming_no_replace(
+    sftp: &Sftp,
+    remote_path: &Path,
+    local_path: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: &AtomicBool,
+) -> Result<(), SftpOpsError> {
+    download_file_streaming_with_mode(
+        sftp,
+        remote_path,
+        local_path,
+        progress_cb,
+        cancel_flag,
+        false,
+    )
+}
+
+fn download_file_streaming_with_mode(
+    sftp: &Sftp,
+    remote_path: &Path,
+    local_path: &Path,
+    progress_cb: Option<&ProgressCallback>,
+    cancel_flag: &AtomicBool,
+    overwrite_destination: bool,
+) -> Result<(), SftpOpsError> {
     let mut remote_file = sftp.open(remote_path, OpenOptions::read())?;
     let metadata = remote_file.stat()?;
     let total_size = metadata.size;
@@ -309,11 +525,10 @@ pub fn download_file_streaming(
         fs::create_dir_all(parent).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
     }
 
-    // Use temporary path to download, avoiding file truncation
-    let local_display = local_path.display();
-    let temp_local_path = PathBuf::from(format!("{local_display}.sftp_partial"));
-    let mut local_file =
-        fs::File::create(&temp_local_path).map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
+    // Use a transfer-owned sibling so parallel downloads to the same final
+    // path cannot corrupt or remove each other's temporary data.
+    let (temp_local_path, mut local_file) =
+        create_unique_local_transfer_file(local_path, "sftp_partial")?;
 
     const CHUNK_SIZE: usize = 32 * 1024;
     let mut buf = vec![0u8; CHUNK_SIZE];
@@ -341,15 +556,21 @@ pub fn download_file_streaming(
             .map_err(|e| SftpOpsError::LocalIo(e.to_string()))?;
         Ok(())
     })();
+    drop(local_file);
 
     match &result {
         Ok(()) => {
             // Download successful: rename temporary file to target path
-            if let Err(e) = fs::rename(&temp_local_path, local_path) {
-                // On rename failure, preserve local temporary file to avoid data loss
-                let temp_display = temp_local_path.display();
+            let finalize = if overwrite_destination {
+                fs::rename(&temp_local_path, local_path)
+            } else {
+                fs::hard_link(&temp_local_path, local_path)
+                    .and_then(|()| fs::remove_file(&temp_local_path))
+            };
+            if let Err(e) = finalize {
+                let _ = fs::remove_file(&temp_local_path);
                 return Err(SftpOpsError::LocalIo(format!(
-                    "Rename failed: {e}. Downloaded temporary file preserved at: {temp_display}"
+                    "Failed to finalize downloaded temporary file: {e}"
                 )));
             }
         }
@@ -393,8 +614,18 @@ pub fn upload_dir_recursive(
 
         if file_type.is_dir() {
             upload_dir_recursive(sftp, &entry.path(), &remote_path, progress_cb, cancel_flag)?;
-        } else {
+        } else if file_type.is_file() {
             upload_file_streaming(sftp, &entry.path(), &remote_path, progress_cb, cancel_flag)?;
+        } else if file_type.is_symlink() {
+            return Err(SftpOpsError::Operation(format!(
+                "Refusing to recursively upload symbolic link {}",
+                entry.path().display()
+            )));
+        } else {
+            return Err(SftpOpsError::Operation(format!(
+                "Refusing to recursively upload special file {}",
+                entry.path().display()
+            )));
         }
     }
 
@@ -430,7 +661,10 @@ pub fn download_dir_recursive(
             || entry.name.contains('/')
             || entry.name.contains('\\')
         {
-            continue;
+            return Err(SftpOpsError::Operation(format!(
+                "Refusing unsafe remote directory entry: {}",
+                entry.name
+            )));
         }
 
         let safe_remote_path = normalize_remote_path(&remote_dir.join(&entry.name));
@@ -446,9 +680,7 @@ pub fn download_dir_recursive(
                     cancel_flag,
                 )?;
             }
-            zap_sftp::types::FileType::File
-            | zap_sftp::types::FileType::Symlink
-            | zap_sftp::types::FileType::Other => {
+            zap_sftp::types::FileType::File => {
                 download_file_streaming(
                     sftp,
                     &safe_remote_path,
@@ -456,6 +688,18 @@ pub fn download_dir_recursive(
                     progress_cb,
                     cancel_flag,
                 )?;
+            }
+            zap_sftp::types::FileType::Symlink => {
+                return Err(SftpOpsError::Operation(format!(
+                    "Refusing to recursively download symbolic link {}",
+                    safe_remote_path.display()
+                )));
+            }
+            zap_sftp::types::FileType::Other => {
+                return Err(SftpOpsError::Operation(format!(
+                    "Refusing to recursively download special file {}",
+                    safe_remote_path.display()
+                )));
             }
         }
     }
@@ -475,26 +719,34 @@ fn build_auth_method(
                 .get(&resolved_auth.secret_lookup_id, resolved_auth.secret_kind)
                 .map_err(|e| SftpOpsError::NoCredentials(format!("Failed to read password: {e}")))?
                 .ok_or_else(|| {
-                    SftpOpsError::NoCredentials(format!("No password stored for server {}", server.host))
+                    SftpOpsError::NoCredentials(format!(
+                        "No password stored for server {}",
+                        server.host
+                    ))
                 })?;
             Ok(AuthMethod::Password {
                 password: password.to_string(),
             })
         }
         AuthType::Key => {
-            let key_path = resolved_auth.key_path.as_ref().ok_or_else(|| {
-                SftpOpsError::NoCredentials("Key authentication selected but no key path specified".to_string())
-            })?;
-            let expanded = shellexpand_path(key_path);
             let passphrase = secret_store
                 .get(&resolved_auth.secret_lookup_id, resolved_auth.secret_kind)
                 .ok()
                 .flatten()
                 .map(|p| p.to_string());
-            Ok(AuthMethod::PublicKey {
-                key_path: PathBuf::from(expanded),
-                passphrase,
-            })
+            // A host configured for key auth without an explicit key file is
+            // the normal case for anyone relying on `~/.ssh/config` +
+            // `ssh-agent`: the terminal path shells out to `ssh` and just
+            // works, while the file manager used to refuse to even try
+            // ("no key path specified" — the FM never opened on such a host).
+            // Fall back to what ssh itself does: agent, then default keys.
+            match resolved_auth.key_path.as_ref() {
+                Some(key_path) => Ok(AuthMethod::PublicKey {
+                    key_path: PathBuf::from(shellexpand_path(key_path)),
+                    passphrase,
+                }),
+                None => Ok(AuthMethod::AgentOrDefaultKeys { passphrase }),
+            }
         }
     }
 }
@@ -523,252 +775,11 @@ pub(crate) fn bool_to_rwx(read: bool, write: bool, exec: bool) -> String {
 /// Normalize remote path by converting Windows backslashes to forward slashes
 ///
 /// Remote servers (Linux) only accept forward slash path separators.
-/// On Windows, PathBuf::join produces backslashes, which must be converted.
-pub(crate) fn normalize_remote_path(path: &PathBuf) -> PathBuf {
+/// On Windows, path joins produce backslashes, which must be converted.
+pub(crate) fn normalize_remote_path(path: &Path) -> PathBuf {
     PathBuf::from(path.to_string_lossy().replace('\\', "/"))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Test SftpOpsError::Connection Display output
-    #[test]
-    fn test_sftp_ops_error_display_connection() {
-        assert_eq!(
-            SftpOpsError::Connection("refused".into()).to_string(),
-            "Connection error: refused"
-        );
-    }
-
-    /// Test SftpOpsError::Operation Display output
-    #[test]
-    fn test_sftp_ops_error_display_operation() {
-        assert_eq!(
-            SftpOpsError::Operation("not found".into()).to_string(),
-            "Operation error: not found"
-        );
-    }
-
-    /// Test SftpOpsError::LocalIo Display output
-    #[test]
-    fn test_sftp_ops_error_display_local_io() {
-        assert_eq!(
-            SftpOpsError::LocalIo("disk full".into()).to_string(),
-            "Local I/O error: disk full"
-        );
-    }
-
-    /// Test SftpOpsError::NoCredentials Display output
-    #[test]
-    fn test_sftp_ops_error_display_no_credentials() {
-        assert_eq!(
-            SftpOpsError::NoCredentials("no key".into()).to_string(),
-            "Credentials not found: no key"
-        );
-    }
-
-    /// Test SftpOpsError::Cancelled Display output
-    #[test]
-    fn test_sftp_ops_error_display_cancelled() {
-        assert_eq!(SftpOpsError::Cancelled.to_string(), "Transfer cancelled");
-    }
-
-    /// Test conversion from std::io::Error to SftpOpsError
-    #[test]
-    fn test_sftp_ops_error_from_io_error() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-        let ops_err: SftpOpsError = io_err.into();
-        assert!(matches!(ops_err, SftpOpsError::LocalIo(_)));
-    }
-
-    /// Test conversion from zap_sftp::SftpError to SftpOpsError
-    #[test]
-    fn test_sftp_ops_error_from_sftp_error() {
-        let sftp_err = zap_sftp::SftpError::General("test error".into());
-        let ops_err: SftpOpsError = sftp_err.into();
-        assert!(matches!(ops_err, SftpOpsError::Operation(_)));
-    }
-
-    /// Test shellexpand_path expanding ~/ path
-    #[test]
-    fn test_shellexpand_path_home() {
-        let home = dirs::home_dir().unwrap_or_default();
-        let result = shellexpand_path("~/test");
-        if !home.as_os_str().is_empty() {
-            assert!(!result.starts_with('~'));
-            assert!(result.contains("test"));
-        }
-    }
-
-    /// Test shellexpand_path preserving absolute path
-    #[test]
-    fn test_shellexpand_path_absolute() {
-        let result = shellexpand_path("/absolute/path");
-        assert_eq!(result, "/absolute/path");
-    }
-
-    /// Test shellexpand_path preserving relative path
-    #[test]
-    fn test_shellexpand_path_relative() {
-        let result = shellexpand_path("relative/path");
-        assert_eq!(result, "relative/path");
-    }
-
-    /// Test shellexpand_path with tilde only (no expansion)
-    #[test]
-    fn test_shellexpand_path_tilde_only() {
-        let result = shellexpand_path("~");
-        assert_eq!(result, "~");
-    }
-
-    /// Test shellexpand_path with empty path
-    #[test]
-    fn test_shellexpand_path_empty() {
-        let result = shellexpand_path("");
-        assert_eq!(result, "");
-    }
-
-    // ==================== bool_to_rwx tests ====================
-
-    /// Test full permissions rwx
-    #[test]
-    fn test_bool_to_rwx_all_true() {
-        assert_eq!(bool_to_rwx(true, true, true), "rwx");
-    }
-
-    /// Test no permissions
-    #[test]
-    fn test_bool_to_rwx_all_false() {
-        assert_eq!(bool_to_rwx(false, false, false), "---");
-    }
-
-    /// Test read-only permission
-    #[test]
-    fn test_bool_to_rwx_read_only() {
-        assert_eq!(bool_to_rwx(true, false, false), "r--");
-    }
-
-    /// Test write-only permission
-    #[test]
-    fn test_bool_to_rwx_write_only() {
-        assert_eq!(bool_to_rwx(false, true, false), "-w-");
-    }
-
-    /// Test execute-only permission
-    #[test]
-    fn test_bool_to_rwx_exec_only() {
-        assert_eq!(bool_to_rwx(false, false, true), "--x");
-    }
-
-    /// Test read-write permissions
-    #[test]
-    fn test_bool_to_rwx_read_write() {
-        assert_eq!(bool_to_rwx(true, true, false), "rw-");
-    }
-
-    /// Test read-execute permissions
-    #[test]
-    fn test_bool_to_rwx_read_exec() {
-        assert_eq!(bool_to_rwx(true, false, true), "r-x");
-    }
-
-    /// Test write-execute permissions
-    #[test]
-    fn test_bool_to_rwx_write_exec() {
-        assert_eq!(bool_to_rwx(false, true, true), "-wx");
-    }
-
-    /// Test return value length is always 3
-    #[test]
-    fn test_bool_to_rwx_length() {
-        for r in [true, false] {
-            for w in [true, false] {
-                for x in [true, false] {
-                    assert_eq!(bool_to_rwx(r, w, x).len(), 3);
-                }
-            }
-        }
-    }
-
-    /// Test each character position is only the target character
-    #[test]
-    fn test_bool_to_rwx_valid_chars() {
-        for r in [true, false] {
-            for w in [true, false] {
-                for x in [true, false] {
-                    let s = bool_to_rwx(r, w, x);
-                    let chars: Vec<char> = s.chars().collect();
-                    assert!((chars[0] == 'r') || (chars[0] == '-'));
-                    assert!((chars[1] == 'w') || (chars[1] == '-'));
-                    assert!((chars[2] == 'x') || (chars[2] == '-'));
-                }
-            }
-        }
-    }
-
-    // ==================== SftpOpsError edge case tests ====================
-
-    /// Test SftpOpsError::Connection with empty message
-    #[test]
-    fn test_sftp_ops_error_connection_empty() {
-        assert_eq!(
-            SftpOpsError::Connection(String::new()).to_string(),
-            "Connection error: "
-        );
-    }
-
-    /// Test SftpOpsError::Operation with empty message
-    #[test]
-    fn test_sftp_ops_error_operation_empty() {
-        assert_eq!(
-            SftpOpsError::Operation(String::new()).to_string(),
-            "Operation error: "
-        );
-    }
-
-    /// Test SftpOpsError::LocalIo with empty message
-    #[test]
-    fn test_sftp_ops_error_local_io_empty() {
-        assert_eq!(
-            SftpOpsError::LocalIo(String::new()).to_string(),
-            "Local I/O error: "
-        );
-    }
-
-    /// Test SftpOpsError::NoCredentials with empty message
-    #[test]
-    fn test_sftp_ops_error_no_credentials_empty() {
-        assert_eq!(
-            SftpOpsError::NoCredentials(String::new()).to_string(),
-            "Credentials not found: "
-        );
-    }
-
-    /// Test SftpOpsError::Cancelled always returns fixed text
-    #[test]
-    fn test_sftp_ops_error_cancelled_consistent() {
-        let s1 = SftpOpsError::Cancelled.to_string();
-        let s2 = SftpOpsError::Cancelled.to_string();
-        assert_eq!(s1, s2);
-        assert_eq!(s1, "Transfer cancelled");
-    }
-
-    /// Test shellexpand_path expanding nested ~/ path
-    #[test]
-    fn test_shellexpand_path_home_nested() {
-        let result = shellexpand_path("~/a/b/c");
-        assert!(!result.starts_with('~'));
-        assert!(result.contains("a/b/c"));
-    }
-
-    /// Test shellexpand_path with tilde followed by slash with no additional path
-    #[test]
-    fn test_shellexpand_path_home_root() {
-        let result = shellexpand_path("~/");
-        let home = dirs::home_dir().unwrap_or_default();
-        if !home.as_os_str().is_empty() {
-            assert!(!result.starts_with('~'));
-        }
-    }
-}
+#[path = "sftp_ops_tests.rs"]
+mod tests;

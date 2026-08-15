@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>UI-Spezifikation — Remote-Session-RAM</title>
+  <meta name="ui-spec-route" content="/native/ssh-manager">
+  <meta name="ui-spec-viewports" content="960x760,760x700">
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --bg: #111318;
+      --panel: #191c22;
+      --row: #20242c;
+      --hover: #272c35;
+      --border: #303641;
+      --text: #eef1f6;
+      --muted: #9aa3b2;
+      --faint: #687181;
+      --accent: #8b7cf6;
+      --warning: #eab15e;
+      --error: #ef6c78;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; color: var(--text); background: #0b0d10; }
+    #spec, .viewport {
+      max-width: 920px;
+      margin: 0 auto 22px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+    }
+    #spec { padding: 16px 18px; }
+    h1 { margin: 0 0 12px; font-size: 18px; }
+    .spec-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    h2 { margin: 0 0 5px; color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    ul { margin: 0; padding-left: 15px; color: var(--muted); font-size: 11px; }
+    .viewport { overflow: hidden; box-shadow: 0 18px 55px #0008; }
+    .viewport-label { padding: 7px 12px; border-bottom: 1px solid var(--border); color: var(--faint); font-size: 11px; }
+    .app { min-height: 620px; display: grid; grid-template-columns: 340px 1fr; background: var(--bg); }
+    .sidebar { border-right: 1px solid var(--border); background: var(--panel); }
+    .sidebar-head { height: 45px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--border); }
+    .sidebar-head strong { font-size: 12px; }
+    .icon-button { color: var(--muted); }
+    .tree { padding: 9px 7px; }
+    .host { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 8px; border-radius: 5px; background: var(--hover); }
+    .host strong { flex: 1; font-size: 12px; }
+    .host small { color: var(--muted); }
+    .ram-summary { padding: 8px 10px 7px 35px; }
+    .ram-label { display: flex; justify-content: space-between; margin-bottom: 5px; color: var(--muted); font-size: 10px; }
+    .ram-label strong { color: var(--text); font-weight: 500; }
+    .meter { height: 3px; overflow: hidden; border-radius: 99px; background: #303641; }
+    .meter i { display: block; width: 7.2%; height: 100%; border-radius: inherit; background: var(--accent); }
+    .session { display: flex; align-items: center; gap: 7px; min-height: 31px; padding: 0 10px 0 52px; border-radius: 5px; }
+    .session:hover { background: var(--row); }
+    .session .title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    .session .bytes { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+    .old-daemon { margin: 8px 10px 4px 35px; padding: 7px 8px; border-left: 2px solid var(--faint); color: var(--muted); background: #20242c; font-size: 10px; }
+    .content { padding: 34px; color: var(--faint); }
+    .content strong { display: block; margin-bottom: 8px; color: var(--muted); }
+    .thresholds { display: flex; gap: 8px; margin-top: 16px; }
+    .chip { padding: 4px 7px; border: 1px solid var(--border); border-radius: 5px; color: var(--muted); font-size: 10px; }
+    .chip.warn { border-color: #735a32; color: var(--warning); }
+    .chip.error { border-color: #70353c; color: var(--error); }
+    body:has(.viewport:target) #spec,
+    body:has(.viewport:target) .viewport:not(:target) { display: none; }
+    .viewport:target { width: 100%; margin: 0; }
+    @media (max-width: 780px) {
+      body { padding: 8px; }
+      .spec-grid { grid-template-columns: 1fr 1fr; }
+      .app { grid-template-columns: 320px 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <section id="spec">
+    <h1>UI-Spezifikation — Remote-Session-RAM</h1>
+    <div class="spec-grid">
+      <div>
+        <h2>Platzierung</h2>
+        <ul>
+          <li>Im aufgeklappten Hostblock direkt über den laufenden Sessions.</li>
+          <li>Pro Session bleibt die RAM-Zahl rechtsbündig in derselben Zeile.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Daten</h2>
+        <ul>
+          <li>Summe ausschließlich aus den vom Daemon gemeldeten Ring-Bytes bilden.</li>
+          <li>Den Host-Cap ausschließlich aus der SessionList des Daemons lesen; niemals clientseitig raten.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Zustände</h2>
+        <ul>
+          <li>Unter 80 % ruhig im Akzentton, ab 80 % amber, ab 100 % rot.</li>
+          <li>Alte Daemons mit Cap 0 zeigen weiter Sitzungswerte, aber keinen erfundenen Gesamt-Cap.</li>
+          <li>0 Bytes pro Session bleibt verborgen.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Abnahme</h2>
+        <ul>
+          <li>Anzeige lautet semantisch „Host-RAM: genutzt / Cap“ und ist nicht nur farbcodiert.</li>
+          <li>Die Summe aktualisiert sich mit jedem erneuten Session-Abruf.</li>
+          <li>Adoptieren und Tastaturfokus der Sessionzeilen bleiben unverändert.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <article class="viewport" id="remote-session-ram">
+    <div class="viewport-label">SSH-Verbindungen · Host-Cap gemeldet</div>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="sidebar-head"><strong>SSH-Verbindungen</strong><span class="icon-button">＋　⟳</span></div>
+        <div class="tree">
+          <div class="host"><span>⌄</span><span>◉</span><strong>devhost</strong><small>verbunden</small></div>
+          <div class="ram-summary">
+            <div class="ram-label"><span>Host-RAM</span><strong>18.4 MB / 256 MB</strong></div>
+            <div class="meter"><i></i></div>
+          </div>
+          <div class="session"><span>↳</span><span class="title">zaplex — release/v1.0</span><span class="bytes">12.1 MB</span></div>
+          <div class="session"><span>↳</span><span class="title">docs — theme editor</span><span class="bytes">6.3 MB</span></div>
+          <div class="host" style="margin-top:8px;background:transparent"><span>⌄</span><span>◉</span><strong>agenthost</strong><small>älterer Daemon</small></div>
+          <div class="old-daemon">Der Host-Cap wird von diesem Daemon noch nicht gemeldet.</div>
+          <div class="session"><span>↳</span><span class="title">monitor</span><span class="bytes">3.5 MB</span></div>
+        </div>
+      </aside>
+      <main class="content">
+        <strong>Die RAM-Anzeige bleibt Kontext, keine neue Dashboard-Fläche.</strong>
+        Sie steht dort, wo Sessions adoptiert werden, und übernimmt Typografie, Abstände und Hover-Verhalten des bestehenden SSH-Managers.
+        <div class="thresholds">
+          <span class="chip">ruhig &lt; 80 %</span>
+          <span class="chip warn">amber ≥ 80 %</span>
+          <span class="chip error">rot ≥ 100 %</span>
+        </div>
+      </main>
+    </div>
+  </article>
+</body>
+</html>

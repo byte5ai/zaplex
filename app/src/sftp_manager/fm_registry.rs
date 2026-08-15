@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use warpui::{Entity, SingletonEntity};
+use warpui::{Entity, EntityId, SingletonEntity};
 
 use super::sftp_backend::SftpBackend;
 
@@ -45,6 +45,19 @@ pub struct FmPaneDescriptor {
     pub fs: FsNamespace,
     /// The pane's current directory — the copy/move destination.
     pub current_path: PathBuf,
+    /// The pane group that currently owns this pane. Panes in the source's
+    /// group are visible beside it; panes in other groups remain selectable
+    /// targets but must not be chosen implicitly.
+    pub pane_group_id: Option<EntityId>,
+}
+
+/// Candidate destinations for an F5/F6 operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransferTargets {
+    /// The sole other pane visible beside the source, if there is exactly one.
+    pub default: Option<FmPaneDescriptor>,
+    /// Every other open pane, including panes in inactive tabs.
+    pub selectable: Vec<FmPaneDescriptor>,
 }
 
 /// How a copy/move between two panes must be carried out, decided purely from
@@ -131,21 +144,60 @@ impl FileManagerRegistry {
     /// Every other pane that shares `fs` — the candidate copy/move targets for
     /// the pane identified by `self_id`.
     pub fn others_same_fs(&self, self_id: u64, fs: &FsNamespace) -> Vec<FmPaneDescriptor> {
-        self.panes
+        let mut panes = self
+            .panes
             .iter()
             .filter(|p| p.id != self_id && &p.fs == fs)
             .cloned()
-            .collect()
+            .collect::<Vec<_>>();
+        panes.sort_unstable_by_key(|pane| pane.id);
+        panes
     }
 
     /// Every other pane, regardless of filesystem — copy/move candidates
     /// including cross-connection ones (routed via [`plan_transfer`]).
     pub fn others(&self, self_id: u64) -> Vec<FmPaneDescriptor> {
-        self.panes
+        let mut panes = self
+            .panes
             .iter()
             .filter(|p| p.id != self_id)
             .cloned()
-            .collect()
+            .collect::<Vec<_>>();
+        panes.sort_unstable_by_key(|pane| pane.id);
+        panes
+    }
+
+    /// Resolve the MC default destination without hiding any valid target.
+    /// Exactly one other pane in the source's pane group is the default. If
+    /// there are zero or multiple visible peers, the caller must present the
+    /// complete `selectable` list, including panes in inactive tabs.
+    pub fn transfer_targets(&self, self_id: u64) -> TransferTargets {
+        let selectable = self.others(self_id);
+        let source_group = self
+            .panes
+            .iter()
+            .find(|pane| pane.id == self_id)
+            .and_then(|pane| pane.pane_group_id);
+
+        let default = match source_group {
+            Some(source_group) => {
+                let mut visible = selectable
+                    .iter()
+                    .filter(|pane| pane.pane_group_id == Some(source_group));
+                let only = visible.next().cloned();
+                if visible.next().is_none() {
+                    only
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+
+        TransferTargets {
+            default,
+            selectable,
+        }
     }
 
     /// All registered panes (for tests/diagnostics).
@@ -161,122 +213,5 @@ impl Entity for FileManagerRegistry {
 impl SingletonEntity for FileManagerRegistry {}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn desc(id: u64, fs: FsNamespace, path: &str) -> FmPaneDescriptor {
-        FmPaneDescriptor {
-            id,
-            label: format!("pane{id}"),
-            fs,
-            current_path: PathBuf::from(path),
-        }
-    }
-
-    #[test]
-    fn upsert_inserts_then_updates_in_place() {
-        let mut reg = FileManagerRegistry::new();
-        reg.upsert(desc(1, FsNamespace::Local, "/a"));
-        reg.upsert(desc(2, FsNamespace::Local, "/b"));
-        assert_eq!(reg.panes().len(), 2);
-
-        // Same id → replace, not append.
-        reg.upsert(desc(1, FsNamespace::Local, "/a2"));
-        assert_eq!(reg.panes().len(), 2);
-        assert_eq!(
-            reg.panes().iter().find(|p| p.id == 1).unwrap().current_path,
-            PathBuf::from("/a2")
-        );
-    }
-
-    #[test]
-    fn remove_is_idempotent() {
-        let mut reg = FileManagerRegistry::new();
-        reg.upsert(desc(1, FsNamespace::Local, "/a"));
-        reg.remove(1);
-        reg.remove(1); // no panic, no-op
-        assert!(reg.panes().is_empty());
-    }
-
-    #[test]
-    fn others_same_fs_excludes_self_and_other_namespaces() {
-        let mut reg = FileManagerRegistry::new();
-        reg.upsert(desc(1, FsNamespace::Local, "/a"));
-        reg.upsert(desc(2, FsNamespace::Local, "/b"));
-        reg.upsert(desc(3, FsNamespace::Remote("host1".into()), "/c"));
-        reg.upsert(desc(4, FsNamespace::Remote("host2".into()), "/d"));
-
-        // From pane 1 (local): only pane 2 is a valid local target.
-        let targets = reg.others_same_fs(1, &FsNamespace::Local);
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].id, 2);
-
-        // From pane 3 (host1): no other host1 pane exists.
-        assert!(reg
-            .others_same_fs(3, &FsNamespace::Remote("host1".into()))
-            .is_empty());
-
-        // `others` ignores the namespace: pane 1 sees 2, 3 and 4.
-        let all = reg.others(1);
-        assert_eq!(all.len(), 3);
-        assert!(all.iter().all(|p| p.id != 1));
-    }
-
-    #[test]
-    fn backend_handle_is_stored_and_dropped_with_the_pane() {
-        use super::super::sftp_backend::InMemorySftpBackend;
-        let mut reg = FileManagerRegistry::new();
-        reg.upsert(desc(1, FsNamespace::Local, "/a"));
-        assert!(reg.backend_for(1).is_none());
-
-        let backend: Arc<dyn SftpBackend> =
-            Arc::new(InMemorySftpBackend::new(PathBuf::from("/")));
-        reg.set_backend(1, backend);
-        assert!(reg.backend_for(1).is_some());
-
-        // Removing the pane drops its backend handle.
-        reg.remove(1);
-        assert!(reg.backend_for(1).is_none());
-    }
-
-    #[test]
-    fn backend_for_namespace_finds_a_live_backend_for_the_host() {
-        use super::super::sftp_backend::InMemorySftpBackend;
-        let mut reg = FileManagerRegistry::new();
-        let host = FsNamespace::Remote("h1".into());
-        // Two panes on the same host; only the second has a backend registered.
-        reg.upsert(desc(1, host.clone(), "/a"));
-        reg.upsert(desc(2, host.clone(), "/b"));
-        reg.upsert(desc(3, FsNamespace::Local, "/c"));
-        assert!(reg.backend_for_namespace(&host).is_none());
-
-        let backend: Arc<dyn SftpBackend> =
-            Arc::new(InMemorySftpBackend::new(PathBuf::from("/")));
-        reg.set_backend(2, backend);
-        // A pane on the host now has a backend → resolves.
-        assert!(reg.backend_for_namespace(&host).is_some());
-        // A different host / the local namespace does not.
-        assert!(reg
-            .backend_for_namespace(&FsNamespace::Remote("other".into()))
-            .is_none());
-        assert!(reg.backend_for_namespace(&FsNamespace::Local).is_none());
-
-        // Dropping the only backed pane makes it unresolvable again.
-        reg.remove(2);
-        assert!(reg.backend_for_namespace(&host).is_none());
-    }
-
-    #[test]
-    fn plan_transfer_covers_every_direction() {
-        let local = FsNamespace::Local;
-        let host_a = FsNamespace::Remote("a".into());
-        let host_a2 = FsNamespace::Remote("a".into());
-        let host_b = FsNamespace::Remote("b".into());
-
-        assert_eq!(plan_transfer(&local, &local), TransferKind::DirectSameFs);
-        assert_eq!(plan_transfer(&host_a, &host_a2), TransferKind::DirectSameFs);
-        assert_eq!(plan_transfer(&local, &host_a), TransferKind::Upload);
-        assert_eq!(plan_transfer(&host_a, &local), TransferKind::Download);
-        assert_eq!(plan_transfer(&host_a, &host_b), TransferKind::RemoteToRemote);
-    }
-}
+#[path = "fm_registry_tests.rs"]
+mod tests;

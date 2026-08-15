@@ -383,9 +383,21 @@ impl super::TerminalView {
         match link {
             #[cfg(feature = "local_fs")]
             GridHighlightedLink::File(link) => {
-                let link = link.get_inner();
-                if let Some(path) = link.absolute_path() {
-                    self.open_file_path(path.clone(), link.line_and_column_num, ctx);
+                // Resolve the session owning the block this link sits in, so the
+                // remote-vs-local open decision follows the clicked block, not the
+                // active one (B1). Alt-screen links → active block.
+                let clicked_session_id = match link {
+                    WithinModel::BlockList(within_block) => self
+                        .model
+                        .lock()
+                        .block_list()
+                        .block_at(within_block.block_index)
+                        .and_then(|block| block.metadata().session_id()),
+                    WithinModel::AltScreen(_) => None,
+                };
+                let inner = link.get_inner();
+                if let Some(path) = inner.absolute_path() {
+                    self.open_file_path(path, inner.line_and_column_num, clicked_session_id, ctx);
                 }
             }
             GridHighlightedLink::Url(url) => {
@@ -419,7 +431,8 @@ impl super::TerminalView {
                         ctx,
                     );
                 } else {
-                    self.open_file_path(absolute_path.clone(), *line_and_column_num, ctx);
+                    // Rich-content link (no grid block) → active-block session.
+                    self.open_file_path(absolute_path.clone(), *line_and_column_num, None, ctx);
                 }
             }
             RichContentLink::Url(url) => {

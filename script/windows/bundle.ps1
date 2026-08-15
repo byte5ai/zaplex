@@ -114,7 +114,7 @@ if ("$CHANNEL" -eq 'local') {
     $BINARY_NAME = 'zaplex.exe'
     $APP_NAME = 'Zaplex'
     # OSS channel uses local crash reporting, does not enable release default feature set.
-    # autoupdate goes through GitHub Release (zerx-lab/warp), only downloads to Downloads, does not call Inno Setup.
+    # autoupdate goes through Zaplex's GitHub Release, only downloads to Downloads, does not call Inno Setup.
     $FEATURES = 'release_bundle,gui,nld_improvements,autoupdate'
 }
 

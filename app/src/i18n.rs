@@ -302,3 +302,7 @@ mod tests {
         assert_eq!(languages[0].to_string(), "en");
     }
 }
+
+#[cfg(test)]
+#[path = "i18n_catalog_tests.rs"]
+mod catalog_tests;

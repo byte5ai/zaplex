@@ -87,7 +87,9 @@ impl ZaplexifyFooterView {
             ZaplexificationMode::Ssh { .. } => {
                 ("Zaplexify SSH session", "terminal:zaplexify_ssh_session")
             }
-            ZaplexificationMode::Subshell { .. } => ("Zaplexify subshell", "terminal:zaplexify_subshell"),
+            ZaplexificationMode::Subshell { .. } => {
+                ("Zaplexify subshell", "terminal:zaplexify_subshell")
+            }
         };
         self.zaplexify_button.update(ctx, |button, ctx| {
             button.set_label(label, ctx);

@@ -57,6 +57,25 @@ use crate::test_util::{add_window_with_terminal, assert_eventually};
 
 use super::*;
 
+#[test]
+fn direct_control_hook_events_are_not_discarded_as_pty_duplicates() {
+    assert!(should_apply_cli_agent_notification(
+        ListenerRegistrationAction::Reuse,
+        &CLIAgentEventType::PermissionRequest,
+        true,
+    ));
+    assert!(!should_apply_cli_agent_notification(
+        ListenerRegistrationAction::Reuse,
+        &CLIAgentEventType::PermissionRequest,
+        false,
+    ));
+    assert!(should_apply_cli_agent_notification(
+        ListenerRegistrationAction::Reuse,
+        &CLIAgentEventType::SessionStart,
+        false,
+    ));
+}
+
 struct TestTerminalManager {
     model: Arc<FairMutex<TerminalModel>>,
     view: ViewHandle<TerminalView>,
@@ -4840,6 +4859,9 @@ fn file_manager_start_path_uses_session_cwd() {
 #[test]
 fn file_manager_start_path_falls_back_when_no_cwd() {
     let start = file_manager_start_path(None);
-    assert_eq!(start, dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/")));
+    assert_eq!(
+        start,
+        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"))
+    );
     assert!(start.is_absolute());
 }

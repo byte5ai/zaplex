@@ -74,6 +74,7 @@ impl TerminalView {
         let terminal_view_resources = TerminalViewResources {
             tips_completed: tips_model,
             model_event_sender: None,
+            control_tab_id: "test-tab".to_string(),
         };
 
         let model = Arc::new(FairMutex::new(TerminalModel::new_for_test(
@@ -96,6 +97,7 @@ impl TerminalView {
 
         Self::new(
             terminal_view_resources,
+            None,
             wakeups_rx,
             model_events,
             model,

@@ -60,19 +60,8 @@ pub fn render_inline_notifications_error_banner(
         });
     }
 
-    buttons.push(InlineBannerTextButton {
-        text: crate::t!("notifications-banner-troubleshoot"),
-        text_color: active_ui_text_color,
-        button_state: InlineBannerButtonState {
-            on_click_event: TerminalAction::NotificationsErrorBanner(
-                NotificationsErrorBannerAction::Troubleshoot,
-            ),
-            mouse_state_handle: state.mouse_states.troubleshoot.clone(),
-        },
-        font: Default::default(),
-        position_id: None,
-        variant: InlineBannerTextButtonVariant::Secondary,
-    });
+    // The "Troubleshoot" button opened an empty URL (no Zaplex troubleshoot docs);
+    // omitted. Set-permissions (when applicable) and Close remain.
 
     let close_button = InlineBannerCloseButton(InlineBannerButtonState {
         on_click_event: TerminalAction::NotificationsErrorBanner(

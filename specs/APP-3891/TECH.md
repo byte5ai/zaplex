@@ -2,7 +2,7 @@
 
 ## Problem
 
-The CLI agent rich input (used for composing prompts to Claude Code, Gemini CLI, etc.) did not support image attachments. The existing image paste infrastructure in Warp's agent mode needed to be extended to (1) render chips in the CLI agent input layout, (2) allow the paste flow to work when CLI agent input is open, and (3) deliver images to the CLI agent on submission by simulating clipboard-based Ctrl+V paste.
+The CLI agent rich input (used for composing prompts to Claude Code, Antigravity, Codex, etc.) did not support image attachments. The existing image paste infrastructure in Warp's agent mode is extended to (1) render removable image thumbnails in the CLI agent input layout, (2) allow the paste flow to work when CLI agent input is open, and (3) deliver images to the CLI agent on submission by simulating its platform-native clipboard paste sequence.
 
 ## Relevant code
 
@@ -28,11 +28,11 @@ The CLI agent rich input (used for composing prompts to Claude Code, Gemini CLI,
 
 ## Proposed changes
 
-### 1. Render attachment chips in CLI agent input
+### 1. Render thumbnail attachments in CLI agent input
 
 **File**: `app/src/terminal/input/cli_agent.rs`
 
-Add chip rendering above the editor in `render_cli_agent_input`, gated on `FeatureFlag::ImageAsContext`. Uses the same `render_attachment_chips()` + `spacing::UDI_CHIP_MARGIN` pattern as `render_agent_input` in `agent.rs`.
+Render attachments above the editor in `render_cli_agent_input`, gated on `FeatureFlag::ImageAsContext`. Image attachments use the decoded in-memory image as a compact 40×40 preview alongside the filename and existing remove action; file attachments retain the standard chip. The image is registered as a bounded raw asset in the existing asset cache, so no temporary file is created.
 
 New imports: `FeatureFlag`, `spacing`.
 
@@ -59,7 +59,7 @@ Modified method — `submit_cli_agent_rich_input`:
 
 New method — `paste_images_then_submit_text`:
 - Recursive: processes one image at a time from the vec.
-- For each image: decode base64 → raw bytes, write to system clipboard as `ClipboardContent { images: Some(vec![ImageData { ... }]) }`, send `0x16` (Ctrl+V) to PTY.
+- For each image: decode base64 → raw bytes, write to system clipboard as `ClipboardContent { images: Some(vec![ImageData { ... }]) }`, then send `0x16` (`Ctrl+V`) on macOS/Linux or `ESC v` (`Alt+V`) on Windows to the PTY.
 - Spawn a timer with `CLI_AGENT_IMAGE_PASTE_DELAY` before processing the next image.
 - Base case: when no images remain, fall through to `write_cli_agent_text_then_submit` for the text prompt.
 
@@ -76,7 +76,7 @@ sequenceDiagram
     User->>RichInput: Cmd+V (paste screenshot)
     RichInput->>ContextModel: append_pending_images()
     ContextModel-->>RichInput: UpdatedPendingContext event
-    RichInput->>RichInput: render attachment chips
+    RichInput->>RichInput: render image thumbnails
 
     User->>RichInput: types prompt text
     User->>RichInput: Enter (submit)
@@ -86,7 +86,7 @@ sequenceDiagram
 
     loop For each image
         RichInput->>Clipboard: write(ImageData)
-        RichInput->>PTY: write 0x16 (Ctrl+V)
+        RichInput->>PTY: write native image-paste sequence
         Note right of PTY: CLI agent reads clipboard
         RichInput->>RichInput: wait 500ms
     end
@@ -96,9 +96,9 @@ sequenceDiagram
 
 ## Risks and mitigations
 
-- **Clipboard clobbering**: Writing images to the system clipboard overwrites the user's previous clipboard contents. Mitigation: this is the same behavior as if the user manually Ctrl+V'd images. Could save/restore clipboard in a follow-up.
+- **Clipboard clobbering**: Writing images to the system clipboard overwrites the user's previous clipboard contents. Mitigation: this is the same behavior as a manual native image paste. Could save/restore clipboard in a follow-up.
 - **Delay sensitivity**: The 500ms delay works for Claude Code but may be insufficient for slower CLI agents or too long for fast ones. Mitigation: the constant is isolated and easy to tune; could be made per-agent in a follow-up.
-- **CLI agents without Ctrl+V image support**: Agents that don't handle clipboard image paste will ignore the Ctrl+V or insert garbage. Mitigation: this is a non-goal for v1; the feature targets Claude Code which has known support.
+- **CLI agents without native image-paste support**: Agents that do not handle their platform's image-paste sequence may ignore it. Mitigation: this is a non-goal for v1; the feature targets agents with known clipboard-image support and never exposes a temporary path as fallback.
 - **Race between image paste and text submit**: If the delay is too short, the text arrives before the CLI agent finishes processing the last image. Mitigation: the 500ms delay was validated empirically with Claude Code.
 
 ## Testing and validation
@@ -106,7 +106,7 @@ sequenceDiagram
 - **Build**: `cargo fmt` and `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings` pass clean.
 - **Manual — single image**: Paste one screenshot, submit with prompt. Claude Code shows `[Image #1]` and describes the image.
 - **Manual — two images**: Paste two different screenshots, submit. Claude Code shows `[Image #1] [Image #2]` and describes each distinctly.
-- **Manual — chip removal**: Paste an image, click ×, submit. No image sent to CLI agent.
+- **Manual — thumbnail removal**: Paste an image, click ×, submit. No image sent to CLI agent.
 - **Manual — text only**: Submit without images. No regression in behavior.
 - **Manual — agent mode**: Verify existing agent mode image paste still works (no regression from the `can_attach_on_filepaths_paste_or_dragdrop` and `process_and_attach_clipboard_image` changes).
 
@@ -114,6 +114,6 @@ sequenceDiagram
 
 - Save and restore clipboard contents after image paste submission.
 - Per-agent paste delay tuning (some agents may need more or less than 500ms).
-- Fallback strategy for CLI agents that don't support Ctrl+V image paste (e.g. file path references).
+- Explicit unsupported-state handling for CLI agents without native image paste; do not expose file paths in the composer.
 - Telemetry for CLI agent image paste (number of images, success rate).
 - Drag-and-drop image files into CLI agent rich input (likely works already but needs explicit testing).

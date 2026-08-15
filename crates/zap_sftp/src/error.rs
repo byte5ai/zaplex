@@ -35,6 +35,26 @@ pub enum SftpError {
     General(String),
 }
 
+impl SftpError {
+    /// Whether the remote operation failed specifically because the path does
+    /// not exist. Callers must not treat permission or connection errors as
+    /// evidence that a destination is absent.
+    pub fn is_not_found(&self) -> bool {
+        match self {
+            SftpError::Io(error) => error.kind() == std::io::ErrorKind::NotFound,
+            SftpError::Ssh2(error) => {
+                matches!(error.code(), ssh2::ErrorCode::SFTP(2))
+            }
+            SftpError::NoSuchFile(_) => true,
+            SftpError::ConnectionFailed(_)
+            | SftpError::AuthFailed(_)
+            | SftpError::Timeout
+            | SftpError::PermissionDenied(_)
+            | SftpError::General(_) => false,
+        }
+    }
+}
+
 /// SFTP channel errors
 #[derive(Debug, Error)]
 pub enum SftpChannelError {

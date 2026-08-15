@@ -38,8 +38,7 @@ pub(super) const IMPORT_FONT_SIZE: f32 = 14.;
 pub(super) const INDENT_MARGIN: f32 = 22.;
 pub(super) const BASE_INDENT: f32 = 30.;
 
-const FILE_TYPE_DOCS_URL: &str =
-    "";
+const FILE_TYPE_DOCS_URL: &str = "";
 const SUPPORTED_FILE_TYPE_TEXT: &str = "md, yaml, yml";
 
 #[cfg(test)]
@@ -426,17 +425,9 @@ impl ImportModalBody {
             .build()
             .finish();
 
-        let link_to_document = appearance
-            .ui_builder()
-            .link(
-                crate::t!("drive-import-learn-file-support"),
-                Some(FILE_TYPE_DOCS_URL.to_string()),
-                None,
-                self.link_mouse_state.clone(),
-            )
-            .soft_wrap(false)
-            .build()
-            .finish();
+        // The "learn about file support" link opened an empty URL (no Zaplex docs);
+        // render nothing rather than a dead link.
+        let link_to_document = warpui::elements::Empty::new().finish();
 
         ConstrainedBox::new(
             Align::new(

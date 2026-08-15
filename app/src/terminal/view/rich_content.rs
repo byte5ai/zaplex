@@ -11,7 +11,9 @@ use crate::{
         model::{
             blocks::RichContentItem, rich_content::RichContentType, terminal_model::BlockIndex,
         },
-        ssh::{error::SshErrorBlock, install_tmux::SshInstallTmuxBlock, zaplexify::SshZaplexifyBlock},
+        ssh::{
+            error::SshErrorBlock, install_tmux::SshInstallTmuxBlock, zaplexify::SshZaplexifyBlock,
+        },
         view::{
             ambient_agent::AmbientAgentEntryBlock,
             block_onboarding::onboarding_agentic_suggestions_block::OnboardingAgenticSuggestionsBlock,

@@ -893,7 +893,7 @@ where
                         .map(|parts| parts.join(";").trim().to_owned());
                     if let Ok(body) = body {
                         if !body.is_empty() {
-                            log::info!("Received OSC 9 notification: {}", body);
+                            log::info!("Received OSC 9 notification");
                             self.handler.pluggable_notification(None, body);
                             return;
                         }
@@ -1028,11 +1028,7 @@ where
                         })
                         .unwrap_or_default();
                     if !body.is_empty() {
-                        log::info!(
-                            "Received OSC 777 notification: title={:?}, body={}",
-                            title,
-                            body
-                        );
+                        log::info!("Received OSC 777 notification");
                         self.handler.pluggable_notification(title, body.to_owned());
                         return;
                     }

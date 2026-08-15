@@ -1,0 +1,1256 @@
+#!/usr/bin/env python3
+"""Validate Zaplex 1.0 release metadata and acceptance artifacts."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import plistlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+EXPECTED_MATRIX_ROWS = {
+    "M01": "Clean install and first launch",
+    "M02": "Keychain permissions",
+    "M03": "Password, key and OneKey authentication",
+    "M04": "Unknown and changed SSH host key",
+    "M05": "devhost and agenthost",
+    "M06": "Claude Code and Codex",
+    "M07": "Multiple provider accounts",
+    "M08": "Restart and session reattach",
+    "M09": "Network loss and reconnect",
+    "M10": "Local file-manager operations",
+    "M11": "Remote and cross-host file-manager operations",
+    "M12": "Two narrow file-manager panes",
+    "M13": "Damaged settings and favorites",
+    "M14": "Theme editor authoring, preview, import and export",
+    "M15": "tmux and byobu inventory and one-click attach",
+    "M16": "Tailscale discovery, cross-host fleet and daemon RAM",
+    "M17": "Managed agent hooks and blocked-state attention",
+    "M18": "Authenticated control-surface verbs",
+    "M19": "Zaplex skill install and natural-language pane workflow",
+    "M20": "Structured task progress and delayed row peek",
+    "M21": "Agent-pane restore modes and missing-session fallback",
+    "M22": "Pinned-tab ordering, restore and close warning",
+    "M23": "Grok launch, detection, resume, fork and status",
+    "M24": "Antigravity launch, Gemini search migration, resume and status",
+    "M25": "Blocked-only pane and tab halo with DND",
+    "M26": "Clipboard screenshot thumbnail and native CLI-agent delivery",
+    "M27": "German core UI and account-instance overrides",
+}
+
+V1_BASE_SHA = "7100184f190f4bdc476aeb6376a088fcedb44720"
+
+EXPECTED_LEGACY_OPEN_ISSUES = {
+    "18", "19", "21", "38", "47", "50", *map(str, range(110, 121))
+}
+
+# The implementation plan names acceptance tests by behavior. Some tests gained
+# more explicit Rust names while they were implemented. Keep that drift
+# auditable instead of silently weakening the plan or duplicating test bodies.
+PLANNED_TEST_ALIASES = {
+    "active_style_differs_from_selection":
+        "active_pane_style_differs_from_selection_and_hover",
+    "bind_and_unbind_follow_session_lifecycle":
+        "bind_and_unbind_follow_agent_and_pty_lifecycle",
+    "body_consumes_remaining_height":
+        "file_pane_body_consumes_remaining_height_above_footer",
+    "breadcrumb_click_survives_rerender":
+        "breadcrumb_click_survives_rerender_between_mouse_down_and_up",
+    "cancel_cancels_inflight_operation_exactly_once":
+        "cancel_button_cancels_inflight_operation_exactly_once",
+    "capability_negotiation_gates_pty_binding":
+        "pty_binding_requires_negotiated_capability",
+    "changed_key_is_hard_failure": "changed_host_key_is_a_hard_failure",
+    "claude_exposes_only_cli_default":
+        "claude_spawn_card_exposes_only_cli_default_effort",
+    "clone_compensates_secret_failure":
+        "clone_host_rolls_back_when_secret_copy_fails",
+    "codex_effort_reaches_cli_args": "selected_codex_effort_reaches_cli_arguments",
+    "columns_do_not_move_with_filename":
+        "column_positions_do_not_move_with_filename_length",
+    "corrupt_store_is_never_overwritten":
+        "corrupt_favorite_store_is_reported_and_never_overwritten",
+    "delete_folder_removes_all_descendant_secrets":
+        "delete_folder_removes_secrets_for_every_descendant_host",
+    "delete_onekey_is_blocked_while_referenced":
+        "delete_onekey_credential_is_blocked_while_hosts_reference_it",
+    "does_not_run_on_session_opened_or_init_shell":
+        "startup_command_does_not_run_on_session_opened_or_init_shell",
+    "empty_host_is_rejected_everywhere": "empty_host_is_rejected_by_save_test_and_connect",
+    "empty_path_maps_explicitly_home":
+        "empty_remote_launch_directory_maps_explicitly_to_home",
+    "estimate_has_provenance": "known_estimated_cost_has_provenance_marker",
+    "failed_relay_never_deletes_source":
+        "failed_remote_to_remote_move_never_deletes_source",
+    "first_ten_user_risks_have_mitigation":
+        "first_ten_user_risks_have_mitigation_recovery_and_validation",
+    "fish_body_is_idempotent": "fish_bootstrap_body_is_delivered_idempotently",
+    "fixture_reports_total_110_work_20":
+        "codex_usage_fixture_reports_total_110_and_work_20",
+    "foreign_pty_id_is_rejected": "foreign_host_or_daemon_binding_is_rejected",
+    "function_keys_dispatch_documented_actions":
+        "f5_f6_f7_f8_f10_dispatch_documented_actions",
+    "hidden_panes_are_targets": "hidden_tab_file_managers_are_selectable_targets",
+    "host_matching_never_crosses_boundary":
+        "terminal_host_matching_never_crosses_local_or_remote_boundaries",
+    "host_node_exposes_primary_actions":
+        "host_node_exposes_manage_terminal_agent_and_files_actions",
+    "identity_never_crosses_provider_or_account":
+        "session_identity_matching_never_crosses_provider_or_account_boundaries",
+    "invalid_pid_never_reaches_signal_backend":
+        "invalid_pid_never_reaches_the_signal_backend",
+    "invalid_port_never_falls_back_to_22":
+        "port_zero_and_out_of_range_are_rejected_without_fallback",
+    "inventory_round_trips_pty_id": "agent_inventory_round_trips_optional_pty_session_id",
+    "large_copy_streams": "large_copy_streams_without_buffering_entire_file",
+    "local_host_appears_exactly_once": "local_host_is_rendered_exactly_once",
+    "lost_ack_retry_is_deduplicated_by_command_id":
+        "lost_ack_after_execution_is_deduplicated_on_retry",
+    "marks_win_before_cursor": "file_action_uses_marked_entries_before_cursor",
+    "menu_lists_only_favorite_hosts": "plus_menu_lists_only_favorite_hosts",
+    "midflight_reconnect_reuses_command_id_and_runs_once":
+        "disconnect_before_daemon_processing_retries_same_command_id_once",
+    "move_never_deletes_source_tree_with_untransferred_special_file":
+        "move_with_untransferred_special_entry_never_deletes_source_tree",
+    "move_never_deletes_untransferred_symlink":
+        "move_with_untransferred_symlink_never_deletes_source_tree",
+    "multiple_historical_agents_can_share_pty":
+        "multiple_agent_sessions_can_reference_the_same_pty",
+    "new_agent_opens_spawn_card":
+        "new_agent_submenu_opens_spawn_card_without_launching",
+    "new_generation_rejects_stale_pty_binding":
+        "stale_binding_generation_cannot_replace_current_binding",
+    "one_other_pane_is_default_target":
+        "one_other_visible_file_manager_is_default_target",
+    "only_dormant_session_can_resume": "only_a_dormant_session_can_be_resumed",
+    "open_plan_refuses_unlocated_live_duplicate":
+        "open_plan_refuses_to_duplicate_an_unlocated_live_session",
+    "parallel_roots_are_absent": "parallel_ssh_and_cockpit_primary_roots_are_absent",
+    "pid_must_fit_positive_signed_range":
+        "pid_must_fit_the_positive_signed_process_id_range",
+    "pending_buffer_never_evicts_unacknowledged_startup":
+        "pending_buffer_never_evicts_unacknowledged_startup_command",
+    "project_session_and_launch_favorites_survive_menu_migration":
+        "favorite_menu_migration_preserves_non_host_favorite_data",
+    "pwsh_body_is_idempotent": "pwsh_bootstrap_body_is_delivered_idempotently",
+    "real_legacy_daemon_fixture_decodes_without_binding":
+        "real_legacy_schema_fixture_decodes_without_pty_binding",
+    "reattach_uses_id_without_cwd_guessing": "reattach_uses_pty_id_without_cwd_guessing",
+    "refresh_generation_discards_older_completion":
+        "refresh_generation_discards_an_older_completion",
+    "registered_and_live_hosts_join_once":
+        "registered_and_live_host_snapshots_join_into_one_host_node",
+    "registered_offline_host_remains_visible":
+        "registered_offline_host_remains_visible_without_live_inventory",
+    "relative_remote_path_is_rejected": "relative_remote_launch_directory_is_rejected",
+    "release_metadata_is_consistent":
+        "release_metadata_is_consistent_across_manifests_resources_and_docs",
+    "release_tree_has_no_rc_handoff":
+        "release_tree_does_not_contain_rc_handoff_document",
+    "remote_to_remote_move_with_skip_conflict_preserves_source_tree":
+        "remote_move_skip_conflict_preserves_skipped_source_and_source_tree",
+    "removed_registered_host_is_never_routable":
+        "removed_host_is_never_routed_as_available",
+    "rescan_keeps_persistent_mouse_state": "rescan_click_survives_rerender",
+    "runtime_matrix_requires_built_artifact_results":
+        "manual_release_matrix_has_result_and_evidence_for_every_row",
+    "save_as_resolves_same_entry_after_refresh":
+        "save_as_resolves_the_same_entry_after_refresh",
+    "second_live_foreground_binding_requires_explicit_handoff":
+        "second_live_agent_binding_to_same_pty_is_rejected",
+    "session_uses_shared_open_plan": "session_node_dispatches_shared_session_open_plan",
+    "sidebar_has_one_host_project_session_tree":
+        "primary_sidebar_has_exactly_one_host_project_session_tree",
+    "shipped_user_facing_copy_has_no_rc_beta_markers":
+        "shipped_release_copy_contains_no_rc_beta_or_preview_markers",
+    "stale_test_cannot_replace_current_state":
+        "stale_test_completion_cannot_overwrite_current_endpoint_state",
+    "startup_command_waits_for_bootstrap_and_runs_once":
+        "startup_command_waits_for_bootstrap_and_runs_exactly_once",
+    "submenu_offers_terminal_and_new_agent":
+        "favorite_host_submenu_offers_terminal_and_new_agent",
+    "survives_replay_then_live_bootstrap":
+        "startup_command_survives_replay_then_live_bootstrap",
+    "test_never_disables_host_key_verification":
+        "connection_test_never_disables_host_key_verification",
+    "unknown_model_is_not_zero_cost":
+        "unknown_model_price_is_rendered_as_not_priced",
+    "usage_subtracts_cached_tokens":
+        "codex_usage_subtracts_cached_tokens_from_input_total",
+}
+
+RELEASE_MARKER = re.compile(
+    r"\bpre[- ]release\b"
+    r"|\brelease candidate\b"
+    r"|\b(?:beta|preview)\s+(?:build|release|channel|version)\b"
+    r"|\brc[0-9]+\b",
+    re.IGNORECASE,
+)
+
+
+class ReadinessError(Exception):
+    pass
+
+
+def read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ReadinessError(f"cannot read {path}: {error}") from error
+
+
+def planned_red_test_names(root: Path) -> set[str]:
+    plan = read_text(root / "docs/2026-07-23-v1-implementation-plan.md")
+    names: set[str] = set()
+    for block in re.findall(
+        r"^- \*\*Rot-Tests:\*\*(.*?)(?=^- \*\*Dateidomäne:)",
+        plan,
+        re.MULTILINE | re.DOTALL,
+    ):
+        names.update(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", block))
+    if not names:
+        raise ReadinessError("implementation plan contains no named red tests")
+    return names
+
+
+def implemented_test_symbols(root: Path) -> set[str]:
+    symbols: set[str] = set()
+    rust_function = re.compile(
+        r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)",
+        re.MULTILINE,
+    )
+    for source_root in (root / "app", root / "crates"):
+        for path in source_root.rglob("*.rs"):
+            symbols.update(rust_function.findall(read_text(path)))
+
+    verifier = read_text(root / "script/check-v1-release-readiness")
+    symbols.update(re.findall(r"^def\s+([A-Za-z_][A-Za-z0-9_]*)", verifier, re.MULTILINE))
+    symbols.update(
+        re.findall(
+            r'expect_readiness_failure\(\s*"([A-Za-z_][A-Za-z0-9_]*)"',
+            verifier,
+            re.MULTILINE,
+        )
+    )
+    return symbols
+
+
+def planned_red_tests_have_authoritative_evidence(root: Path) -> None:
+    require_planned_test_evidence(
+        planned_red_test_names(root), implemented_test_symbols(root)
+    )
+
+
+def open_issue_red_tests_have_authoritative_evidence(root: Path) -> None:
+    try:
+        snapshot = json.loads(
+            read_text(root / "docs/release/1.0-open-issue-tests.json")
+        )
+    except json.JSONDecodeError as error:
+        raise ReadinessError(f"open-issue test snapshot is invalid JSON: {error}") from error
+    require_open_issue_test_evidence(
+        snapshot,
+        implemented_test_symbols(root),
+        read_text(root / "docs/release/1.0-readiness.md"),
+    )
+
+
+def legacy_open_issues_have_authoritative_evidence(root: Path) -> None:
+    try:
+        snapshot = json.loads(
+            read_text(root / "docs/release/1.0-open-issue-tests.json")
+        )
+    except json.JSONDecodeError as error:
+        raise ReadinessError(f"open-issue test snapshot is invalid JSON: {error}") from error
+    require_legacy_issue_evidence(
+        snapshot,
+        implemented_test_symbols(root),
+        read_text(root / "docs/release/1.0-readiness.md"),
+        read_text(root / "specs/APP-3891/PRODUCT.md"),
+        read_text(root / "app/src/terminal/input.rs"),
+        read_text(root / "app/src/terminal/input/cli_agent.rs"),
+        read_text(root / "app/src/terminal/view/use_agent_footer/mod.rs"),
+        read_text(root / "docs/ui/cli-agent-image-attachment.html"),
+    )
+
+
+def require_match(text: str, pattern: str, label: str) -> str:
+    match = re.search(pattern, text, re.MULTILINE | re.DOTALL)
+    if match is None:
+        raise ReadinessError(f"cannot find {label}")
+    return match.group(1)
+
+
+def manifest_version(path: Path) -> str:
+    text = read_text(path)
+    package = require_match(text, r"\[package\](.*?)(?:\n\[|\Z)", f"[package] in {path}")
+    return require_match(package, r'^version\s*=\s*"([^"]+)"', f"package version in {path}")
+
+
+def lock_version(path: Path, package_name: str) -> str:
+    text = read_text(path)
+    blocks = re.findall(r"\[\[package\]\]\n(.*?)(?=\n\[\[package\]\]|\Z)", text, re.DOTALL)
+    for block in blocks:
+        name = re.search(r'^name\s*=\s*"([^"]+)"', block, re.MULTILINE)
+        if name is not None and name.group(1) == package_name:
+            return require_match(
+                block,
+                r'^version\s*=\s*"([^"]+)"',
+                f"{package_name} version in {path}",
+            )
+    raise ReadinessError(f"cannot find package {package_name!r} in {path}")
+
+
+def plist_versions(path: Path) -> tuple[str, str]:
+    try:
+        with path.open("rb") as plist_file:
+            values = plistlib.load(plist_file)
+    except (OSError, plistlib.InvalidFileException) as error:
+        raise ReadinessError(f"cannot read plist {path}: {error}") from error
+    short = values.get("CFBundleShortVersionString")
+    build = values.get("CFBundleVersion")
+    if not isinstance(short, str) or not isinstance(build, str):
+        raise ReadinessError(f"{path} lacks both Apple version fields")
+    return short, build
+
+
+def embedded_plist_versions(path: Path) -> tuple[str, str]:
+    text = read_text(path)
+    short = require_match(
+        text,
+        r"<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>",
+        f"embedded CFBundleShortVersionString in {path}",
+    )
+    build = require_match(
+        text,
+        r"<key>CFBundleVersion</key>\s*<string>([^<]+)</string>",
+        f"embedded CFBundleVersion in {path}",
+    )
+    return short, build
+
+
+def release_metadata_is_consistent_across_manifests_resources_and_docs(root: Path) -> None:
+    version = read_text(root / "VERSION").strip()
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+        raise ReadinessError(f"VERSION is not a stable semantic version: {version!r}")
+
+    observed = {
+        "app/Cargo.toml": manifest_version(root / "app/Cargo.toml"),
+        "Cargo.lock warp package": lock_version(root / "Cargo.lock", "warp"),
+        "CLI-Info.plist short": plist_versions(
+            root / "app/assets/resources/mac/CLI-Info.plist"
+        )[0],
+        "CLI-Info.plist build": plist_versions(
+            root / "app/assets/resources/mac/CLI-Info.plist"
+        )[1],
+        "DockTilePlugin short": plist_versions(root / "app/DockTilePlugin/Info.plist")[0],
+        "DockTilePlugin build": plist_versions(root / "app/DockTilePlugin/Info.plist")[1],
+        "embedded Info.plist short": embedded_plist_versions(
+            root / "app/src/bin/zaplex.rs"
+        )[0],
+        "embedded Info.plist build": embedded_plist_versions(
+            root / "app/src/bin/zaplex.rs"
+        )[1],
+        "Windows installer default": require_match(
+            read_text(root / "script/windows/windows-installer.iss"),
+            r'#define MyAppVersion "([^"]+)"',
+            "MyAppVersion in script/windows/windows-installer.iss",
+        ),
+    }
+    mismatches = {label: value for label, value in observed.items() if value != version}
+    if mismatches:
+        details = ", ".join(f"{label}={value}" for label, value in mismatches.items())
+        raise ReadinessError(f"release version {version} is inconsistent: {details}")
+
+    release_config = json.loads(
+        read_text(root / ".github/workflows/release_configurations.json")
+    )
+    channels = release_config.get("channels", [])
+    if (
+        len(channels) != 1
+        or channels[0].get("channel") != "oss"
+        or channels[0].get("is_prerelease") is not False
+        or channels[0].get("release_base_name") != "Zaplex"
+    ):
+        raise ReadinessError("release configuration is not the stable Zaplex OSS channel")
+    if version not in str(channels[0].get("release_body_text", "")):
+        raise ReadinessError("release body does not contain VERSION")
+
+    required_doc_markers = {
+        "README.md": f"Zaplex {version}",
+        "CHANGELOG.md": f"[{version}]",
+        "docs/release/1.0-user-guide.md": f"Zaplex {version}",
+        "docs/release/1.0-readiness.md": f"`{V1_BASE_SHA}`",
+    }
+    for relative_path, marker in required_doc_markers.items():
+        if marker not in read_text(root / relative_path):
+            raise ReadinessError(f"{relative_path} does not contain {marker!r}")
+
+    expected_tag = f"v{version}"
+    for workflow in (
+        ".github/workflows/test-dmg.yml",
+        ".github/workflows/zap_release.yml",
+    ):
+        if expected_tag not in read_text(root / workflow):
+            raise ReadinessError(f"{workflow} does not contain default tag {expected_tag}")
+
+    test_dmg_workflow = read_text(root / ".github/workflows/test-dmg.yml")
+    require_match(
+        test_dmg_workflow,
+        r"\n      fast:\n.*?\n        default: (false)\n",
+        "release-profile default in .github/workflows/test-dmg.yml",
+    )
+
+
+def shipped_release_copy_contains_no_rc_beta_or_preview_markers(root: Path) -> None:
+    shipped_copy = (
+        "README.md",
+        "docs/release/1.0-user-guide.md",
+        ".github/workflows/release_configurations.json",
+        "app/i18n/en/warp.ftl",
+        "app/i18n/de/warp.ftl",
+    )
+    findings: list[str] = []
+    for relative_path in shipped_copy:
+        for line_number, line in enumerate(read_text(root / relative_path).splitlines(), 1):
+            if RELEASE_MARKER.search(line):
+                findings.append(f"{relative_path}:{line_number}: {line.strip()}")
+    if findings:
+        raise ReadinessError("release markers remain in shipped copy:\n" + "\n".join(findings))
+
+
+def release_tree_does_not_contain_rc_handoff_document(root: Path) -> None:
+    handoffs = sorted(
+        path.relative_to(root).as_posix()
+        for path in (root / "docs").glob("*handoff*")
+        if path.is_file()
+    )
+    if handoffs:
+        raise ReadinessError("temporary release handoff remains: " + ", ".join(handoffs))
+
+
+def release_tree_descends_from_recorded_v1_base(root: Path) -> None:
+    result = subprocess.run(
+        ["git", "-C", str(root), "merge-base", "--is-ancestor", V1_BASE_SHA, "HEAD"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"git exited with {result.returncode}"
+        raise ReadinessError(
+            f"HEAD does not descend from documented V1_BASE_SHA {V1_BASE_SHA}: {detail}"
+        )
+
+
+def release_workflows_bundle_version_matched_remote_server(root: Path) -> None:
+    release_workflow = read_text(root / ".github/workflows/zap_release.yml")
+    test_workflow = read_text(root / ".github/workflows/test-dmg.yml")
+    setup_source = read_text(root / "crates/remote_server/src/setup.rs")
+
+    required_release_markers = (
+        "build_remote_server:",
+        "name: zap-cli-linux-x86_64",
+        "path: resources/bundled/remote-server/",
+        "GIT_RELEASE_TAG: ${{ needs.prepare_metadata.outputs.release_tag }}",
+        'git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main',
+        'elif [[ "$GITHUB_REF" != "refs/heads/main" ]]',
+        'tar -czf zap-linux-x86_64.tar.gz -C "$staging" zaplex resources',
+        "hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources')",
+    )
+    for marker in required_release_markers:
+        if marker not in release_workflow:
+            raise ReadinessError(
+                f"zap_release.yml does not bundle the version-matched remote-server: {marker!r}"
+            )
+
+    required_test_markers = (
+        "build_remote_server:",
+        "path: resources/bundled/remote-server/",
+        "GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}",
+        "hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'app/**', 'crates/**', 'resources/**', 'rust-toolchain.toml', 'script/bundle', 'script/linux/bundle', 'script/prepare_bundled_resources')",
+    )
+    for marker in required_test_markers:
+        if marker not in test_workflow:
+            raise ReadinessError(
+                f"test-dmg.yml does not bundle the version-matched remote-server: {marker!r}"
+            )
+
+    if "https://github.com/byte5ai/zaplex/releases/" not in setup_source:
+        raise ReadinessError("remote-server fallback does not use byte5ai/zaplex releases")
+    if "https://github.com/zerx-lab/warp/releases/" in setup_source:
+        raise ReadinessError("remote-server fallback still references the upstream release repo")
+
+
+def macos_distribution_uses_developer_id_and_api_key_notarization(root: Path) -> None:
+    bundle = read_text(root / "script/macos/bundle")
+    release_workflow = read_text(root / ".github/workflows/zap_release.yml")
+    test_workflow = read_text(root / ".github/workflows/test-dmg.yml")
+
+    bundle_markers = (
+        "prepare_distribution_signing_inputs()",
+        "prepare_distribution_signing_keychain()",
+        "umask 077",
+        'security import "$CODESIGN_CERT_PATH"',
+        "-f pkcs12",
+        "security find-identity -v -p codesigning",
+        "Developer ID Application",
+        'xcrun notarytool submit "$NOTARIZATION_ARTIFACT"',
+        '--key "$NOTARY_KEY_PATH"',
+        '--key-id "$MACOS_NOTARY_KEY_ID"',
+        '--issuer "$MACOS_NOTARY_ISSUER_ID"',
+        'xcrun stapler validate "$DMG_DIR/$DMG_NAME"',
+        'security delete-keychain "$CODESIGN_KEYCHAIN_PATH"',
+        'rm -f "$CODESIGN_CERT_PATH"',
+        'rm -f "$NOTARY_KEY_PATH"',
+    )
+    for marker in bundle_markers:
+        if marker not in bundle:
+            raise ReadinessError(f"macOS distribution signing lacks {marker!r}")
+    if re.search(r"security import.*?\n(?:.*?\n)*?\s+-t cert", bundle) is not None:
+        raise ReadinessError("PKCS#12 import is restricted to certificates and may omit its key")
+
+    workflow_markers = (
+        "--read-passwords-from-env --check-signing-only",
+        "MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}",
+        "MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}",
+        "MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}",
+        "MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}",
+        "MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}",
+        "Build, sign and notarize",
+    )
+    for workflow_name, workflow in (
+        ("zap_release.yml", release_workflow),
+        ("test-dmg.yml", test_workflow),
+    ):
+        for marker in workflow_markers:
+            if marker not in workflow:
+                raise ReadinessError(f"{workflow_name} lacks signing contract {marker!r}")
+
+
+def release_artifact_names_match_autoupdaters(root: Path) -> None:
+    release_workflow = read_text(root / ".github/workflows/zap_release.yml")
+    contracts = {
+        "macOS bundle": (
+            read_text(root / "script/macos/bundle"),
+            (
+                'ZAPLEX_APP_NAME="Zaplex"',
+                'FINAL_DMG_NAME="$ZAPLEX_APP_NAME-$DMG_NAME_SUFFIX.dmg"',
+            ),
+        ),
+        "macOS updater tests": (
+            read_text(root / "app/src/autoupdate/mac_tests.rs"),
+            (
+                '"Zaplex.app"',
+                '"Zaplex-arm64.dmg"',
+                '"Zaplex-intel.dmg"',
+            ),
+        ),
+        "Linux bundle": (
+            read_text(root / "script/linux/bundle"),
+            (
+                'APP_NAME="Zaplex"',
+                'export APPIMAGE_NAME="$APP_NAME-$BUILD_ARCH.AppImage"',
+            ),
+        ),
+        "Linux updater": (
+            read_text(root / "app/src/autoupdate/linux.rs"),
+            ('const OSS_APPIMAGE_ASSET_NAME: &str = "Zaplex-x86_64.AppImage";',),
+        ),
+        "Windows bundle": (
+            read_text(root / "script/windows/bundle.ps1"),
+            (
+                "$APP_NAME = 'Zaplex'",
+                '$INSTALLER_NAME = "$($APP_NAME)$($FILE_ENDING)"',
+            ),
+        ),
+        "Windows updater": (
+            read_text(root / "app/src/autoupdate/windows.rs"),
+            (
+                'Ok(format!("{app_name_prefix}Setup.exe"))',
+                'Channel::Oss => "Zaplex"',
+            ),
+        ),
+        "release workflow architectures": (
+            release_workflow,
+            (
+                "dmg_name_suffix: arm64",
+                'script/bundle -Channel $CHANNEL -skip_build_installer --arch x64',
+                'script/bundle --channel "$CHANNEL" --arch x86_64 --packages appimage,deb',
+            ),
+        ),
+    }
+    for label, (text, markers) in contracts.items():
+        for marker in markers:
+            if marker not in text:
+                raise ReadinessError(f"{label} lacks release-name contract {marker!r}")
+
+
+def live_sftp_commit_boundaries_have_a_real_protocol_gate(root: Path) -> None:
+    workflow = read_text(root / ".github/workflows/live-sftp-safety.yml")
+    backend = read_text(root / "app/src/sftp_manager/sftp_backend.rs")
+    tests = read_text(root / "app/src/sftp_manager/sftp_backend_tests.rs")
+    server = read_text(root / "app/src/remote_server/safe_file.rs")
+    proto = read_text(root / "crates/remote_server/proto/remote_server.proto")
+    contracts = {
+        "live SFTP workflow": (
+            workflow,
+            (
+                "pull_request:",
+                "openssh-server",
+                "Subsystem sftp internal-sftp",
+                "cargo test --locked -p warp --lib live_sftp_remote_safe_rename -- --ignored",
+            ),
+        ),
+        "live SFTP fault cases": (
+            tests,
+            (
+                "live_sftp_remote_safe_rename_replays_when_request_was_not_applied",
+                "live_sftp_remote_safe_rename_recovers_when_response_was_lost",
+                "LiveRenameFault::BeforeMutation",
+                "LiveRenameFault::AfterMutation",
+            ),
+        ),
+        "client recovery state": (
+            backend,
+            (
+                "RemoteRecoveryAction::Rename",
+                "RemoteRecoveryResolution::SourceRestored",
+                "DestinationCommittedSourcePreserved",
+                "take_recovery_source_restored",
+            ),
+        ),
+        "server acknowledgement journal": (
+            server,
+            (
+                "consume_applied_mutation",
+                "JournalState::Applied",
+                "source_preserved_after_commit",
+            ),
+        ),
+        "wire recovery metadata": (
+            proto,
+            ("bool source_preserved_after_commit = 3;",),
+        ),
+    }
+    for label, (text, markers) in contracts.items():
+        for marker in markers:
+            if marker not in text:
+                raise ReadinessError(f"{label} lacks {marker!r}")
+
+
+def markdown_rows(text: str, start_marker: str, end_marker: str) -> list[list[str]]:
+    try:
+        section = text.split(start_marker, 1)[1].split(end_marker, 1)[0]
+    except IndexError as error:
+        raise ReadinessError(f"missing section markers {start_marker} / {end_marker}") from error
+    rows = []
+    for line in section.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells and re.fullmatch(r"[RM][0-9]{2}", cells[0]):
+            rows.append(cells)
+    return rows
+
+
+def first_ten_user_risks_have_mitigation_recovery_and_validation(root: Path) -> None:
+    text = read_text(root / "docs/release/1.0-readiness.md")
+    rows = markdown_rows(text, "<!-- risk-register:start -->", "<!-- risk-register:end -->")
+    if len(rows) != 10:
+        raise ReadinessError(f"risk register has {len(rows)} rows instead of 10")
+    expected_ids = {f"R{index:02d}" for index in range(1, 11)}
+    if {row[0] for row in rows} != expected_ids:
+        raise ReadinessError("risk register IDs must be R01 through R10")
+    for row in rows:
+        if len(row) != 7:
+            raise ReadinessError(
+                f"{row[0]} must contain trigger, impact, detection, mitigation, recovery and validation"
+            )
+        if any(not cell or cell in {"—", "-", "TBD"} for cell in row[1:]):
+            raise ReadinessError(f"{row[0]} contains an empty risk field")
+
+
+def manual_release_matrix_has_result_and_evidence_for_every_row(
+    root: Path, phase: str
+) -> None:
+    text = read_text(root / "docs/release/1.0-readiness.md")
+    rows = markdown_rows(text, "<!-- runtime-matrix:start -->", "<!-- runtime-matrix:end -->")
+    by_id = {row[0]: row for row in rows}
+    if set(by_id) != set(EXPECTED_MATRIX_ROWS):
+        missing = sorted(set(EXPECTED_MATRIX_ROWS) - set(by_id))
+        extra = sorted(set(by_id) - set(EXPECTED_MATRIX_ROWS))
+        raise ReadinessError(f"runtime matrix mismatch; missing={missing}, extra={extra}")
+    for row_id, required_scenario in EXPECTED_MATRIX_ROWS.items():
+        row = by_id[row_id]
+        if len(row) != 5:
+            raise ReadinessError(
+                f"{row_id} must contain scenario, result, artifact and evidence"
+            )
+        _, scenario, result, artifact, evidence = row
+        if scenario != required_scenario:
+            raise ReadinessError(
+                f"{row_id} scenario differs: {scenario!r} != {required_scenario!r}"
+            )
+        if phase == "a":
+            if (result, artifact, evidence) != ("PENDING_ARTIFACT", "—", "—"):
+                raise ReadinessError(
+                    f"{row_id} must remain PENDING_ARTIFACT without artifact evidence in Phase A"
+                )
+        elif result != "PASS" or artifact in {"", "—", "-"} or evidence in {"", "—", "-"}:
+            raise ReadinessError(
+                f"{row_id} needs PASS, an artifact ID and independent evidence in Phase B"
+            )
+
+
+def copy_fixture(root: Path, destination: Path, relative_paths: tuple[str, ...]) -> None:
+    for relative_path in relative_paths:
+        source = root / relative_path
+        target = destination / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
+def expect_readiness_failure(name: str, check) -> None:
+    try:
+        check()
+    except ReadinessError:
+        print(f"PASS red fixture: {name}")
+        return
+    raise ReadinessError(f"red fixture unexpectedly passed: {name}")
+
+
+def run_self_test() -> None:
+    root = Path(__file__).resolve().parent.parent
+    with tempfile.TemporaryDirectory(prefix="zaplex-release-readiness-") as directory:
+        fixture = Path(directory)
+        copy_fixture(
+            root,
+            fixture,
+            (
+                "VERSION",
+                "app/Cargo.toml",
+                "Cargo.lock",
+                "app/assets/resources/mac/CLI-Info.plist",
+                "app/DockTilePlugin/Info.plist",
+                "app/src/bin/zaplex.rs",
+                "script/windows/windows-installer.iss",
+                ".github/workflows/release_configurations.json",
+                ".github/workflows/test-dmg.yml",
+                ".github/workflows/zap_release.yml",
+                "README.md",
+                "CHANGELOG.md",
+                "docs/release/1.0-user-guide.md",
+                "docs/release/1.0-readiness.md",
+                "app/i18n/en/warp.ftl",
+                "app/i18n/de/warp.ftl",
+                "crates/remote_server/src/setup.rs",
+                "app/src/autoupdate/mac_tests.rs",
+                "app/src/autoupdate/linux.rs",
+                "app/src/autoupdate/windows.rs",
+                "script/macos/bundle",
+                "script/linux/bundle",
+                "script/windows/bundle.ps1",
+                ".github/workflows/live-sftp-safety.yml",
+                "app/src/sftp_manager/sftp_backend.rs",
+                "app/src/sftp_manager/sftp_backend_tests.rs",
+                "app/src/remote_server/safe_file.rs",
+                "crates/remote_server/proto/remote_server.proto",
+            ),
+        )
+
+        cargo_manifest = fixture / "app/Cargo.toml"
+        fixture_version = read_text(fixture / "VERSION").strip()
+        manifest_text = read_text(cargo_manifest)
+        version_marker = f'version = "{fixture_version}"'
+        if version_marker not in manifest_text:
+            raise ReadinessError(
+                "self-test could not locate VERSION in the fixture Cargo manifest"
+            )
+        cargo_manifest.write_text(
+            manifest_text.replace(version_marker, 'version = "0.1.0"', 1),
+            encoding="utf-8",
+        )
+        expect_readiness_failure(
+            "release_metadata_is_consistent_across_manifests_resources_and_docs",
+            lambda: release_metadata_is_consistent_across_manifests_resources_and_docs(
+                fixture
+            ),
+        )
+        shutil.copy2(root / "app/Cargo.toml", cargo_manifest)
+
+        readiness = fixture / "docs/release/1.0-readiness.md"
+        readiness.write_text(
+            read_text(readiness).replace(V1_BASE_SHA, "0" * 40, 1),
+            encoding="utf-8",
+        )
+        expect_readiness_failure(
+            "release_metadata_rejects_an_unrecorded_v1_base",
+            lambda: release_metadata_is_consistent_across_manifests_resources_and_docs(
+                fixture
+            ),
+        )
+        shutil.copy2(root / "docs/release/1.0-readiness.md", readiness)
+
+        readme = fixture / "README.md"
+        readme.write_text(
+            read_text(readme) + "\nThis is a preview release.\n", encoding="utf-8"
+        )
+        expect_readiness_failure(
+            "shipped_release_copy_contains_no_rc_beta_or_preview_markers",
+            lambda: shipped_release_copy_contains_no_rc_beta_or_preview_markers(fixture),
+        )
+        shutil.copy2(root / "README.md", readme)
+
+        handoff = fixture / "docs/temporary-handoff.md"
+        handoff.write_text("temporary", encoding="utf-8")
+        expect_readiness_failure(
+            "release_tree_does_not_contain_rc_handoff_document",
+            lambda: release_tree_does_not_contain_rc_handoff_document(fixture),
+        )
+        handoff.unlink()
+
+        release_workflow = fixture / ".github/workflows/zap_release.yml"
+        release_workflow.write_text(
+            read_text(release_workflow).replace(
+                "path: resources/bundled/remote-server/",
+                "path: resources/bundled/missing-remote-server/",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        expect_readiness_failure(
+            "release_workflows_bundle_version_matched_remote_server",
+            lambda: release_workflows_bundle_version_matched_remote_server(fixture),
+        )
+        shutil.copy2(root / ".github/workflows/zap_release.yml", release_workflow)
+
+        release_workflow.write_text(
+            read_text(release_workflow).replace(
+                'elif [[ "$GITHUB_REF" != "refs/heads/main" ]]',
+                'elif [[ "$GITHUB_REF" != "refs/heads/release-v1.0" ]]',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        expect_readiness_failure(
+            "stable_release_workflow_requires_main",
+            lambda: release_workflows_bundle_version_matched_remote_server(fixture),
+        )
+        shutil.copy2(root / ".github/workflows/zap_release.yml", release_workflow)
+
+        test_workflow = fixture / ".github/workflows/test-dmg.yml"
+        test_workflow.write_text(
+            read_text(test_workflow).replace("'app/**', ", "", 1),
+            encoding="utf-8",
+        )
+        expect_readiness_failure(
+            "remote_server_cache_tracks_app_sources",
+            lambda: release_workflows_bundle_version_matched_remote_server(fixture),
+        )
+        shutil.copy2(root / ".github/workflows/test-dmg.yml", test_workflow)
+
+        macos_bundle = fixture / "script/macos/bundle"
+        macos_bundle.write_text(
+            read_text(macos_bundle).replace(
+                '    -f pkcs12 \\\n', '    -t cert \\\n    -f pkcs12 \\\n', 1
+            ),
+            encoding="utf-8",
+        )
+        expect_readiness_failure(
+            "macos_distribution_rejects_certificate_only_pkcs12_import",
+            lambda: macos_distribution_uses_developer_id_and_api_key_notarization(
+                fixture
+            ),
+        )
+        shutil.copy2(root / "script/macos/bundle", macos_bundle)
+
+        linux_updater = fixture / "app/src/autoupdate/linux.rs"
+        linux_updater.write_text(
+            read_text(linux_updater).replace(
+                '"Zaplex-x86_64.AppImage"', '"Zap-x86_64.AppImage"', 1
+            ),
+            encoding="utf-8",
+        )
+        expect_readiness_failure(
+            "release_artifact_names_match_autoupdaters",
+            lambda: release_artifact_names_match_autoupdaters(fixture),
+        )
+        shutil.copy2(root / "app/src/autoupdate/linux.rs", linux_updater)
+
+        live_sftp_workflow = fixture / ".github/workflows/live-sftp-safety.yml"
+        live_sftp_workflow.write_text(
+            read_text(live_sftp_workflow).replace(
+                "live_sftp_remote_safe_rename -- --ignored",
+                "mock_sftp_only",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        expect_readiness_failure(
+            "live_sftp_commit_boundaries_have_a_real_protocol_gate",
+            lambda: live_sftp_commit_boundaries_have_a_real_protocol_gate(fixture),
+        )
+        shutil.copy2(
+            root / ".github/workflows/live-sftp-safety.yml", live_sftp_workflow
+        )
+
+        readiness.write_text(
+            read_text(readiness).replace(
+                "| Artefakt verwerfen, Signierungsursache beheben und nach neuer Freigabe neu bauen |",
+                "| |",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        expect_readiness_failure(
+            "first_ten_user_risks_have_mitigation_recovery_and_validation",
+            lambda: first_ten_user_risks_have_mitigation_recovery_and_validation(fixture),
+        )
+        shutil.copy2(root / "docs/release/1.0-readiness.md", readiness)
+
+        expect_readiness_failure(
+            "manual_release_matrix_has_result_and_evidence_for_every_row",
+            lambda: manual_release_matrix_has_result_and_evidence_for_every_row(
+                fixture, "b"
+            ),
+        )
+
+        planned = planned_red_test_names(root)
+        symbols = implemented_test_symbols(root)
+        evidence_target = PLANNED_TEST_ALIASES["active_style_differs_from_selection"]
+        symbols.remove(evidence_target)
+        expect_readiness_failure(
+            "planned_red_tests_require_executable_evidence",
+            lambda: require_planned_test_evidence(planned, symbols),
+        )
+
+        issue_snapshot = json.loads(
+            read_text(root / "docs/release/1.0-open-issue-tests.json")
+        )
+        issue_symbols = implemented_test_symbols(root)
+        issue_symbols.remove(
+            "resolved_symlink_target_selects_file_open_or_navigation_explicitly"
+        )
+        expect_readiness_failure(
+            "open_issue_red_tests_require_executable_evidence",
+            lambda: require_open_issue_test_evidence(
+                issue_snapshot,
+                issue_symbols,
+                read_text(root / "docs/release/1.0-readiness.md"),
+            ),
+        )
+
+        legacy_symbols = implemented_test_symbols(root)
+        legacy_symbols.remove("theme_color_input_accepts_hex_and_rgb")
+        legacy_arguments = (
+            issue_snapshot,
+            legacy_symbols,
+            read_text(root / "docs/release/1.0-readiness.md"),
+            read_text(root / "specs/APP-3891/PRODUCT.md"),
+            read_text(root / "app/src/terminal/input.rs"),
+            read_text(root / "app/src/terminal/input/cli_agent.rs"),
+            read_text(root / "app/src/terminal/view/use_agent_footer/mod.rs"),
+            read_text(root / "docs/ui/cli-agent-image-attachment.html"),
+        )
+        expect_readiness_failure(
+            "legacy_open_issues_require_executable_evidence",
+            lambda: require_legacy_issue_evidence(*legacy_arguments),
+        )
+
+        path_regression_arguments = list(legacy_arguments)
+        path_regression_arguments[1] = implemented_test_symbols(root)
+        path_regression_arguments[4] += "\nfn insert_clipboard_image_as_file() {}\n"
+        expect_readiness_failure(
+            "clipboard_thumbnail_rejects_temporary_path_regression",
+            lambda: require_legacy_issue_evidence(*path_regression_arguments),
+        )
+
+
+def require_planned_test_evidence(planned: set[str], symbols: set[str]) -> None:
+    stale_aliases = sorted(set(PLANNED_TEST_ALIASES) - planned)
+    if stale_aliases:
+        raise ReadinessError(f"test evidence aliases are no longer planned: {stale_aliases}")
+
+    missing = []
+    for planned_name in sorted(planned):
+        implemented_name = PLANNED_TEST_ALIASES.get(planned_name, planned_name)
+        if implemented_name not in symbols:
+            missing.append(f"{planned_name} -> {implemented_name}")
+    if missing:
+        raise ReadinessError("planned red tests lack executable evidence: " + ", ".join(missing))
+
+
+def require_open_issue_test_evidence(
+    snapshot: dict, symbols: set[str], readiness_text: str
+) -> None:
+    if snapshot.get("repository") != "byte5ai/zaplex":
+        raise ReadinessError("open-issue test snapshot names the wrong repository")
+    issues = snapshot.get("issues")
+    if not isinstance(issues, dict) or set(issues) != {
+        str(number) for number in range(125, 144)
+    }:
+        raise ReadinessError("open-issue test snapshot must cover issues 125 through 143")
+
+    issue_tests: dict[str, list[str]] = {}
+    for issue_number, issue in issues.items():
+        tests = issue.get("required_tests") if isinstance(issue, dict) else None
+        if not isinstance(tests, list) or not tests or not all(
+            isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+            for name in tests
+        ):
+            raise ReadinessError(f"issue #{issue_number} has invalid required_tests")
+        issue_tests[issue_number] = list(tests)
+
+    if sum(len(tests) for tests in issue_tests.values()) != 147:
+        raise ReadinessError("open-issue test snapshot no longer contains exactly 147 tests")
+
+    overrides = snapshot.get("owner_overrides")
+    if not isinstance(overrides, dict):
+        raise ReadinessError("open-issue test snapshot lacks owner overrides")
+    token_override = overrides.get("141_token_fixture")
+    if not isinstance(token_override, dict):
+        raise ReadinessError("open-issue test snapshot lacks the #141 owner decision")
+    replaced = token_override.get("replaces")
+    replacement = token_override.get("with")
+    if replaced not in issue_tests["141"] or not isinstance(replacement, str):
+        raise ReadinessError("#141 owner decision does not replace its stale fixture")
+    issue_tests["141"].remove(replaced)
+    issue_tests["141"].append(replacement)
+
+    host_override = overrides.get("143_runtime_hosts")
+    if not isinstance(host_override, dict) or host_override.get("with") != [
+        "devhost",
+        "agenthost",
+    ]:
+        raise ReadinessError("#143 owner topology must contain only devhost and agenthost")
+    if "| M05 | devhost and agenthost |" not in readiness_text:
+        raise ReadinessError("runtime matrix does not apply the #143 host-topology correction")
+    if "hal9000" in readiness_text:
+        raise ReadinessError("retired host hal9000 remains in release readiness")
+
+    missing = [
+        f"#{issue_number} {name}"
+        for issue_number, tests in sorted(issue_tests.items())
+        for name in tests
+        if name not in symbols
+    ]
+    if missing:
+        raise ReadinessError(
+            "open-issue red tests lack executable evidence: " + ", ".join(missing)
+        )
+
+
+def require_legacy_issue_evidence(
+    snapshot: dict,
+    symbols: set[str],
+    readiness_text: str,
+    image_product_text: str,
+    terminal_input_text: str,
+    cli_agent_input_text: str,
+    agent_footer_text: str,
+    image_ui_spec_text: str,
+) -> None:
+    legacy_issues = snapshot.get("legacy_issues")
+    actual_issues = set(legacy_issues) if isinstance(legacy_issues, dict) else set()
+    if actual_issues != EXPECTED_LEGACY_OPEN_ISSUES:
+        missing = sorted(EXPECTED_LEGACY_OPEN_ISSUES - actual_issues)
+        extra = sorted(actual_issues - EXPECTED_LEGACY_OPEN_ISSUES)
+        raise ReadinessError(
+            f"legacy open-issue snapshot mismatch; missing={missing}, extra={extra}"
+        )
+
+    missing_tests: list[str] = []
+    matrix_ids = {
+        row[0]
+        for row in markdown_rows(
+            readiness_text,
+            "<!-- runtime-matrix:start -->",
+            "<!-- runtime-matrix:end -->",
+        )
+    }
+    for issue_number, issue in legacy_issues.items():
+        if not isinstance(issue, dict):
+            raise ReadinessError(f"legacy issue #{issue_number} has invalid evidence")
+        if not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z",
+            str(issue.get("updated_at", "")),
+        ):
+            raise ReadinessError(f"legacy issue #{issue_number} lacks a GitHub timestamp")
+
+        tests = issue.get("required_tests")
+        if not isinstance(tests, list) or not all(
+            isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+            for name in tests
+        ):
+            raise ReadinessError(f"legacy issue #{issue_number} has invalid required_tests")
+        missing_tests.extend(
+            f"#{issue_number} {name}" for name in tests if name not in symbols
+        )
+
+        rows = issue.get("required_runtime_rows", [])
+        if not isinstance(rows, list) or not all(
+            isinstance(row, str) and row in EXPECTED_MATRIX_ROWS for row in rows
+        ):
+            raise ReadinessError(f"legacy issue #{issue_number} has invalid runtime rows")
+        absent_rows = sorted(set(rows) - matrix_ids)
+        if absent_rows:
+            raise ReadinessError(
+                f"legacy issue #{issue_number} lacks runtime rows {absent_rows}"
+            )
+
+        markers = issue.get("required_readiness_markers", [])
+        if not isinstance(markers, list) or not all(
+            isinstance(marker, str) and marker for marker in markers
+        ):
+            raise ReadinessError(f"legacy issue #{issue_number} has invalid readiness markers")
+        absent_markers = [marker for marker in markers if marker not in readiness_text]
+        if absent_markers:
+            raise ReadinessError(
+                f"legacy issue #{issue_number} lacks readiness evidence {absent_markers}"
+            )
+
+        covered_by = issue.get("covered_by", [])
+        if not isinstance(covered_by, list) or not all(
+            isinstance(child, str)
+            and child in EXPECTED_LEGACY_OPEN_ISSUES
+            and child != issue_number
+            for child in covered_by
+        ):
+            raise ReadinessError(f"legacy issue #{issue_number} has invalid child coverage")
+        if not tests and not rows and not markers and not covered_by:
+            raise ReadinessError(f"legacy issue #{issue_number} has no acceptance evidence")
+
+    if missing_tests:
+        raise ReadinessError(
+            "legacy open-issue tests lack executable evidence: "
+            + ", ".join(missing_tests)
+        )
+
+    image_override = snapshot.get("owner_overrides", {}).get(
+        "50_clipboard_image_delivery"
+    )
+    if not isinstance(image_override, dict) or image_override.get("with") != (
+        "removable image thumbnail and platform-native CLI-agent image paste"
+    ):
+        raise ReadinessError("#50 owner thumbnail decision is missing")
+    if "produces an image thumbnail" not in image_product_text or (
+        "inserts no file path" not in image_product_text
+    ):
+        raise ReadinessError("APP-3891 does not require a path-free image thumbnail")
+    forbidden_path_symbols = (
+        "write_clipboard_image_to_temp_file",
+        "insert_clipboard_image_as_file",
+        "zaplex-paste-",
+    )
+    if any(symbol in terminal_input_text for symbol in forbidden_path_symbols):
+        raise ReadinessError("#50 temporary-path image insertion remains in terminal input")
+    if "render_attachment_chips(appearance, true)" not in cli_agent_input_text:
+        raise ReadinessError("CLI-agent input does not render image previews")
+    if "Duration::from_millis(500)" not in agent_footer_text or (
+        "vec![0x1b, b'v']" not in agent_footer_text
+    ):
+        raise ReadinessError("CLI-agent native image delivery is incomplete")
+    if 'name="ui-spec-status" content="approved-2026-08-02"' not in image_ui_spec_text:
+        raise ReadinessError("CLI-agent image thumbnail UI spec is not owner-approved")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    phase = parser.add_mutually_exclusive_group()
+    phase.add_argument("--phase-a", action="store_true")
+    phase.add_argument("--phase-b", action="store_true")
+    parser.add_argument("--self-test", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    if args.self_test:
+        try:
+            run_self_test()
+        except ReadinessError as error:
+            print(f"FAIL {error}", file=sys.stderr)
+            return 1
+        return 0
+
+    phase = "b" if args.phase_b else "a"
+    root = Path(__file__).resolve().parent.parent
+    checks = (
+        (
+            "release_metadata_is_consistent_across_manifests_resources_and_docs",
+            lambda: release_metadata_is_consistent_across_manifests_resources_and_docs(root),
+        ),
+        (
+            "shipped_release_copy_contains_no_rc_beta_or_preview_markers",
+            lambda: shipped_release_copy_contains_no_rc_beta_or_preview_markers(root),
+        ),
+        (
+            "release_tree_does_not_contain_rc_handoff_document",
+            lambda: release_tree_does_not_contain_rc_handoff_document(root),
+        ),
+        (
+            "release_tree_descends_from_recorded_v1_base",
+            lambda: release_tree_descends_from_recorded_v1_base(root),
+        ),
+        (
+            "release_workflows_bundle_version_matched_remote_server",
+            lambda: release_workflows_bundle_version_matched_remote_server(root),
+        ),
+        (
+            "release_artifact_names_match_autoupdaters",
+            lambda: release_artifact_names_match_autoupdaters(root),
+        ),
+        (
+            "macos_distribution_uses_developer_id_and_api_key_notarization",
+            lambda: macos_distribution_uses_developer_id_and_api_key_notarization(root),
+        ),
+        (
+            "live_sftp_commit_boundaries_have_a_real_protocol_gate",
+            lambda: live_sftp_commit_boundaries_have_a_real_protocol_gate(root),
+        ),
+        (
+            "planned_red_tests_have_authoritative_evidence",
+            lambda: planned_red_tests_have_authoritative_evidence(root),
+        ),
+        (
+            "open_issue_red_tests_have_authoritative_evidence",
+            lambda: open_issue_red_tests_have_authoritative_evidence(root),
+        ),
+        (
+            "legacy_open_issues_have_authoritative_evidence",
+            lambda: legacy_open_issues_have_authoritative_evidence(root),
+        ),
+        (
+            "first_ten_user_risks_have_mitigation_recovery_and_validation",
+            lambda: first_ten_user_risks_have_mitigation_recovery_and_validation(root),
+        ),
+        (
+            "manual_release_matrix_has_result_and_evidence_for_every_row"
+            if phase == "b"
+            else "manual_release_matrix_is_complete_phase_a_template",
+            lambda: manual_release_matrix_has_result_and_evidence_for_every_row(root, phase),
+        ),
+    )
+
+    failed = False
+    for name, check in checks:
+        try:
+            check()
+        except (ReadinessError, json.JSONDecodeError) as error:
+            print(f"FAIL {name}: {error}", file=sys.stderr)
+            failed = True
+        else:
+            print(f"PASS {name}")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

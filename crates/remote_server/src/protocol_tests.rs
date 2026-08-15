@@ -1,10 +1,26 @@
 use prost::Message;
 
 use crate::proto::{
-    client_message, server_message, ClientMessage, Initialize, InitializeResponse, ServerMessage,
+    client_message, server_message, AgentSessionInfo, AgentTaskItem, BindAgentPty, ClientMessage,
+    Initialize, InitializeResponse, MultiplexerKind, MultiplexerSessionInfo,
+    MultiplexerSessionList, ServerMessage,
 };
 
 use super::*;
+
+const LEGACY_DAEMON_INVENTORY: &[u8] = &[
+    0x0a, 0x06, b'l', b'e', b'g', b'a', b'c', b'y', 0xea, 0x01, 0x11, 0x0a, 0x0f, 0x0a, 0x07, b'a',
+    b'g', b'e', b'n', b't', b'-', b'1', 0x12, 0x04, b'/', b't', b'm', b'p',
+];
+
+fn decode_legacy_daemon_inventory() -> crate::proto::AgentSessionList {
+    let decoded = ServerMessage::decode(LEGACY_DAEMON_INVENTORY).unwrap();
+    assert_eq!(decoded.request_id, "legacy");
+    let Some(server_message::Message::AgentSessionList(list)) = decoded.message else {
+        panic!("legacy fixture must decode as AgentSessionList");
+    };
+    list
+}
 
 #[tokio::test]
 async fn round_trip_client_message() {
@@ -12,6 +28,7 @@ async fn round_trip_client_message() {
         request_id: "test-123".to_string(),
         message: Some(client_message::Message::Initialize(Initialize {
             auth_token: String::new(),
+            features: vec![],
         })),
     };
 
@@ -54,6 +71,201 @@ async fn round_trip_server_message() {
         }
         other => panic!("unexpected message variant: {other:?}"),
     }
+}
+
+#[test]
+fn real_legacy_client_fixture_interoperates() {
+    // Captured old ClientMessage { request_id: "legacy", initialize:
+    // Initialize { auth_token: "token" } }. This byte fixture predates the
+    // additive Initialize.features field and is deliberately not produced by
+    // the current encoder.
+    const LEGACY_CLIENT_INITIALIZE: &[u8] = &[
+        0x0a, 0x06, b'l', b'e', b'g', b'a', b'c', b'y', 0x12, 0x07, 0x0a, 0x05, b't', b'o', b'k',
+        b'e', b'n',
+    ];
+    let decoded = ClientMessage::decode(LEGACY_CLIENT_INITIALIZE).unwrap();
+    let client_message::Message::Initialize(initialize) = decoded.message.unwrap() else {
+        panic!("legacy fixture must decode as Initialize");
+    };
+    assert_eq!(initialize.auth_token, "token");
+    assert!(initialize.features.is_empty());
+}
+
+#[test]
+fn real_pre_host_identity_bind_fixture_decodes_to_safe_empty_host() {
+    // Frozen ClientMessage { request_id: "legacy", bind_agent_pty: ... }
+    // bytes from the schema immediately before BindAgentPty.host_id was added.
+    // The fixture is old wire data, not produced by today's encoder.
+    const LEGACY_BIND_AGENT_PTY: &[u8] = &[
+        0x0a, 0x06, b'l', b'e', b'g', b'a', b'c', b'y', 0x92, 0x02, 0x1b, 0x0a, 0x10, 0x0a, 0x07,
+        b'a', b'g', b'e', b'n', b't', b'-', b'1', 0x12, 0x05, b'c', b'o', b'd', b'e', b'x', 0x12,
+        0x05, b'p', b't', b'y', b'-', b'1', 0x18, 0x09,
+    ];
+
+    let decoded = ClientMessage::decode(LEGACY_BIND_AGENT_PTY).unwrap();
+    let Some(client_message::Message::BindAgentPty(bind)) = decoded.message else {
+        panic!("legacy fixture must decode as BindAgentPty");
+    };
+    assert_eq!(bind.agent.unwrap().session_id, "agent-1");
+    assert_eq!(bind.pty_session_id, "pty-1");
+    assert_eq!(bind.pty_session_generation, 9);
+    assert!(bind.host_id.is_empty());
+}
+
+#[test]
+fn real_legacy_schema_fixture_decodes_without_pty_binding() {
+    // Captured old ServerMessage { request_id: "legacy", agent_session_list:
+    // [AgentSessionInfo { session_id: "agent-1", cwd: "/tmp" }] }. This full
+    // daemon envelope predates every PTY-binding field and is deliberately not
+    // produced by the current encoder.
+    let list = decode_legacy_daemon_inventory();
+    assert_eq!(list.sessions.len(), 1);
+    assert_eq!(list.sessions[0].session_id, "agent-1");
+    assert!(list.sessions[0].pty_session_id.is_empty());
+    assert_eq!(list.sessions[0].pty_session_generation, 0);
+    assert!(!list.sessions[0].pty_foreground);
+    assert!(!list.sessions[0].has_task_state);
+    assert!(list.sessions[0].task_items.is_empty());
+}
+
+#[test]
+fn older_daemon_without_pty_binding_decodes_safely() {
+    let list = decode_legacy_daemon_inventory();
+    let session = &list.sessions[0];
+
+    assert!(session.pty_session_id.is_empty());
+    assert_eq!(session.pty_session_generation, 0);
+    assert!(!session.pty_foreground);
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct LegacyAgentSessionInfo {
+    #[prost(string, tag = "1")]
+    session_id: String,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct LegacyServerEnvelope {
+    #[prost(string, tag = "1")]
+    request_id: String,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct LegacyBindAgentPty {
+    #[prost(message, optional, tag = "1")]
+    agent: Option<crate::proto::AgentSessionIdentity>,
+    #[prost(string, tag = "2")]
+    pty_session_id: String,
+    #[prost(uint64, tag = "3")]
+    pty_session_generation: u64,
+    #[prost(message, optional, tag = "4")]
+    handoff_from: Option<crate::proto::AgentSessionIdentity>,
+}
+
+#[test]
+fn older_client_schema_ignores_new_bind_host_identity() {
+    let current = BindAgentPty {
+        agent: None,
+        pty_session_id: "pty-7".to_string(),
+        pty_session_generation: 42,
+        handoff_from: None,
+        host_id: "daemon-host-1".to_string(),
+    };
+
+    let legacy = LegacyBindAgentPty::decode(current.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(legacy.pty_session_id, "pty-7");
+    assert_eq!(legacy.pty_session_generation, 42);
+}
+
+#[test]
+fn older_client_ignores_new_pty_binding_field() {
+    let current = AgentSessionInfo {
+        session_id: "agent-1".to_string(),
+        pty_session_id: "pty-7".to_string(),
+        pty_session_generation: 42,
+        pty_foreground: true,
+        ..Default::default()
+    };
+
+    let legacy = LegacyAgentSessionInfo::decode(current.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(legacy.session_id, "agent-1");
+}
+
+#[test]
+fn older_client_ignores_new_structured_task_fields() {
+    let current = AgentSessionInfo {
+        session_id: "agent-1".to_string(),
+        has_task_state: true,
+        task_items: vec![AgentTaskItem {
+            id: "0".to_string(),
+            title: "Inspect".to_string(),
+            status: "in_progress".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    let legacy = LegacyAgentSessionInfo::decode(current.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(legacy.session_id, "agent-1");
+}
+
+#[test]
+fn older_client_ignores_multiplexer_inventory_response() {
+    let current = ServerMessage {
+        request_id: "multiplexers".to_string(),
+        message: Some(server_message::Message::MultiplexerSessionList(
+            MultiplexerSessionList {
+                sessions: vec![MultiplexerSessionInfo {
+                    kind: MultiplexerKind::Tmux.into(),
+                    target: "release; touch /tmp/never".to_string(),
+                    name: "release; touch /tmp/never".to_string(),
+                    windows: 2,
+                    attached_clients: 0,
+                }],
+                warnings: vec![],
+            },
+        )),
+    };
+
+    let legacy = LegacyServerEnvelope::decode(current.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(legacy.request_id, "multiplexers");
+}
+
+#[test]
+fn real_legacy_session_attach_fixtures_use_id_only() {
+    // Captured old ServerMessage { request_id: "legacy", session_list:
+    // [SessionInfo { session_id: "pty-old", alive: true }] }. It predates
+    // SessionInfo.generation, which must decode to the legacy zero sentinel.
+    const LEGACY_SESSION_LIST: &[u8] = &[
+        0x0a, 0x06, b'l', b'e', b'g', b'a', b'c', b'y', 0xca, 0x01, 0x0d, 0x0a, 0x0b, 0x0a, 0x07,
+        b'p', b't', b'y', b'-', b'o', b'l', b'd', 0x20, 0x01,
+    ];
+    let decoded = ServerMessage::decode(LEGACY_SESSION_LIST).unwrap();
+    let Some(server_message::Message::SessionList(list)) = decoded.message else {
+        panic!("legacy fixture must decode as SessionList");
+    };
+    assert_eq!(list.sessions.len(), 1);
+    assert_eq!(list.sessions[0].session_id, "pty-old");
+    assert_eq!(list.sessions[0].generation, 0);
+
+    // Captured old ClientMessage { request_id: "legacy", attach_session:
+    // AttachSession { session_id: "pty-old" } }. The missing generation check
+    // stays absent, so a new client can deliberately retain this wire path when
+    // it consumes the zero-generation legacy listing above.
+    const LEGACY_ATTACH: &[u8] = &[
+        0x0a, 0x06, b'l', b'e', b'g', b'a', b'c', b'y', 0xc2, 0x01, 0x09, 0x0a, 0x07, b'p', b't',
+        b'y', b'-', b'o', b'l', b'd',
+    ];
+    let decoded = ClientMessage::decode(LEGACY_ATTACH).unwrap();
+    let Some(client_message::Message::AttachSession(attach)) = decoded.message else {
+        panic!("legacy fixture must decode as AttachSession");
+    };
+    assert_eq!(attach.session_id, "pty-old");
+    assert_eq!(attach.expected_generation, None);
+    assert_eq!(attach.expected_agent_binding, None);
 }
 
 #[tokio::test]
@@ -124,6 +336,7 @@ fn try_extract_request_id_from_valid_message() {
         request_id: "abc-123".to_string(),
         message: Some(client_message::Message::Initialize(Initialize {
             auth_token: String::new(),
+            features: vec![],
         })),
     };
     let buf = msg.encode_to_vec();
