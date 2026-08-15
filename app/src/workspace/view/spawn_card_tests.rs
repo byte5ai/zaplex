@@ -452,6 +452,33 @@ fn effort_payload_matches_cli_capability() {
 }
 
 #[test]
+fn claude_spawn_card_exposes_only_cli_default_effort() {
+    let card = SpawnCard {
+        cfg: SpawnCardConfig {
+            claude: provider(true),
+            ..Default::default()
+        },
+        agent: CLIAgent::Claude,
+        model: "sonnet".to_string(),
+        effort: "high".to_string(),
+        account: AccountChoice::Freest,
+        show_accounts: false,
+        host: HostChoice::Local,
+        project: None,
+        prompt: None,
+        remote_dir_editor: None,
+        chip_states: Default::default(),
+        close_button: None,
+    };
+
+    let SpawnCardEvent::Launch { effort, .. } = card.launch_payload().expect("Claude is installed")
+    else {
+        panic!("expected launch payload");
+    };
+    assert_eq!(effort, None);
+}
+
+#[test]
 fn absolute_remote_launch_directory_reaches_request_unchanged() {
     let card = SpawnCard {
         cfg: SpawnCardConfig {
