@@ -1205,8 +1205,7 @@ fn initialize_app(
         manager
     });
 
-    // Custom Agent Provider API keys are stored by an independent singleton in secure storage,
-    // decoupled from ApiKeyManager (BYOK forwarded to warp-server).
+    // Delete any API keys left by the retired custom-provider feature.
     ctx.add_singleton_model(crate::ai::agent_providers::AgentProviderSecrets::new);
 
     // Issue #72: global HTTP proxy Basic Auth password goes through OS keychain.

@@ -4,189 +4,20 @@ use crate::ai::api_error::AIApiError;
 use anyhow::anyhow;
 use chrono::{DateTime, Local, TimeDelta};
 use futures::channel::oneshot;
-use futures_util::StreamExt;
 use uuid::Uuid;
 use warp_multi_agent_api::response_event;
 use warpui::{Entity, ModelContext};
 
 use crate::{
     ai::agent::{
+        AIIdentifiers, CancellationReason,
         api::{self, ConvertToAPITypeError},
         conversation::AIConversationId,
-        AIAgentInput, AIIdentifiers, CancellationReason,
     },
-    ai::blocklist::BlocklistAIHistoryModel,
-    ai::byop_readiness::BlockedByopReadinessError,
     network::NetworkStatus,
     report_error, send_telemetry_from_ctx,
 };
 use warpui::SingletonEntity;
-
-/// BYOP path request dispatch parameters. Extracted from LLMId, settings, and conversation,
-/// then passed once to spawn closure (ctx cannot cross await boundary).
-pub(super) struct PendingTitleGeneration {
-    pub(super) input: crate::ai::agent_providers::chat_stream::TitleGenInput,
-    pub(super) user_query: String,
-    pub(super) task_id: String,
-}
-
-struct ByopDispatch {
-    base_url: String,
-    api_key: String,
-    model_id: String,
-    /// Explicitly specified API protocol type; chat_stream uses this to map genai AdapterKind.
-    api_type: crate::settings::AgentProviderApiType,
-    /// Provider-level reasoning effort preference. When `Auto`, effort is not sent to genai;
-    /// adapter infers from model name suffix. When non-Auto, injected after client capability gate.
-    reasoning_effort: crate::settings::ReasoningEffortSetting,
-    extra_headers: Vec<(String, String)>,
-    /// Root task ID of the conversation — must use a locally registered ID;
-    /// otherwise downstream `Action::AddMessagesToTask` will not find it in task_store, causing `TaskNotFound`.
-    root_task_id: String,
-    /// Task ID where this round's model output should be written. For normal conversations equals root task;
-    /// for CLI subagent, subsequent rounds use subtask.
-    target_task_id: String,
-    /// Whether to emit `CreateTask` to upgrade Optimistic root to Server task.
-    /// Only needed in first round (root task has no source yet); sending again triggers `UnexpectedUpgrade`.
-    needs_create_task: bool,
-    /// Title generation model parameters. Populated only in first round (when needs_create_task) and when
-    /// active title_model decodes to a valid BYOP ID; otherwise background title generation is not started.
-    title_gen: Option<TitleGenParams>,
-    /// `command_id` bound to LRC scenario (= LRC block ID string).
-    lrc_command_id: Option<String>,
-    /// Whether to synthesize subagent CreateTask in chat_stream to upgrade optimistic CLI subtask.
-    lrc_should_spawn_subagent: bool,
-    /// Context window size (tokens) of the selected model. 0/None ⇒ user did not fill and catalog also has none;
-    /// chat_stream skips context_window_usage calculation, UI maintains 100% placeholder.
-    context_window: Option<u32>,
-    /// Attachment capabilities reflecting user settings (image/pdf/audio three-state Override).
-    /// Computed via `resolve_for_model`. UI display and runtime behavior reference the same caps.
-    attachment_caps: crate::ai::agent_providers::attachment_caps::AttachmentCaps,
-}
-
-/// BYOP configuration dedicated to title generation (may be same provider as main base model or different).
-pub(crate) struct TitleGenParams {
-    pub base_url: String,
-    pub api_key: String,
-    pub model_id: String,
-    pub api_type: crate::settings::AgentProviderApiType,
-    pub reasoning_effort: crate::settings::ReasoningEffortSetting,
-}
-
-fn byop_dispatch_info(
-    params: &api::RequestParams,
-    ai_identifiers: &AIIdentifiers,
-    ctx: &warpui::AppContext,
-) -> Option<ByopDispatch> {
-    let (provider, api_key, model_id) =
-        crate::ai::agent_providers::lookup_byop(ctx, &params.model)?;
-    let extra_headers = provider.extra_headers.clone();
-    // Find the current model entry in provider.models and get its context_window (tokens).
-    // 0 is treated as unfilled; subsequent None branch ⇒ chat_stream skips usage calculation.
-    let context_window = provider
-        .models
-        .iter()
-        .find(|m| m.id == model_id)
-        .map(|m| m.context_window)
-        .filter(|n| *n > 0);
-    let conversation_id = ai_identifiers.client_conversation_id.as_ref()?;
-    let history = BlocklistAIHistoryModel::as_ref(ctx);
-    let conversation = history.conversation(conversation_id)?;
-    let root_task_id = conversation.get_root_task_id().to_string();
-    let target_task_id = params
-        .byop_target_task_id
-        .clone()
-        .unwrap_or_else(|| root_task_id.clone());
-    // compute_active_tasks only returns tasks where `task.source().is_some()` —
-    // therefore non-empty ⇒ root has already been upgraded to Server state, do not emit CreateTask again.
-    let needs_create_task = conversation.compute_active_tasks().is_empty();
-
-    // Title generation: only trigger in first round (avoid repeating title per round).
-    // Parse active title_model: may be base_model itself or another BYOP model independently selected by user.
-    // If either model is not BYOP-encoded (e.g., fallback to non-BYOP default), skip it — Zaplex main path is all BYOP;
-    // when actually falling back to base, base itself is BYOP.
-    let llm_prefs = crate::ai::llms::LLMPreferences::as_ref(ctx);
-    let title_gen = if needs_create_task {
-        let title_id = llm_prefs.get_active_title_model(ctx, None).id.clone();
-        crate::ai::agent_providers::lookup_byop(ctx, &title_id).map(
-            |(t_provider, t_api_key, t_model_id)| {
-                let t_effort =
-                    llm_prefs.get_reasoning_effort(None, t_provider.api_type, &t_model_id);
-                TitleGenParams {
-                    base_url: t_provider.base_url,
-                    api_key: t_api_key,
-                    model_id: t_model_id,
-                    api_type: t_provider.api_type,
-                    reasoning_effort: t_effort,
-                }
-            },
-        )
-    } else {
-        None
-    };
-
-    let reasoning_effort = llm_prefs.get_reasoning_effort(None, provider.api_type, &model_id);
-    let attachment_caps = provider
-        .models
-        .iter()
-        .find(|m| m.id == model_id)
-        .map(|m| {
-            crate::ai::agent_providers::attachment_caps::resolve_for_model(
-                &provider.id,
-                provider.api_type,
-                m,
-            )
-        })
-        .unwrap_or_else(|| {
-            log::warn!(
-                "[byop] model '{}' not found in provider.models — falling back to caps_for (user overrides ignored)",
-                model_id
-            );
-            crate::ai::agent_providers::attachment_caps::caps_for(provider.api_type, &model_id)
-        });
-    Some(ByopDispatch {
-        base_url: provider.base_url,
-        api_key,
-        model_id,
-        api_type: provider.api_type,
-        reasoning_effort,
-        extra_headers,
-        root_task_id,
-        target_task_id,
-        needs_create_task,
-        title_gen,
-        lrc_command_id: params.lrc_command_id.clone(),
-        lrc_should_spawn_subagent: params.lrc_should_spawn_subagent,
-        context_window,
-        attachment_caps,
-    })
-}
-
-fn pending_title_generation_from_byop(
-    params: &api::RequestParams,
-    byop: &ByopDispatch,
-) -> Option<PendingTitleGeneration> {
-    let title_gen = byop.title_gen.as_ref()?;
-    let user_query = params.input.iter().find_map(|input| {
-        if let AIAgentInput::UserQuery { query, .. } = input {
-            Some(query.clone())
-        } else {
-            None
-        }
-    })?;
-
-    Some(PendingTitleGeneration {
-        input: crate::ai::agent_providers::chat_stream::TitleGenInput {
-            base_url: title_gen.base_url.clone(),
-            api_key: title_gen.api_key.clone(),
-            model_id: title_gen.model_id.clone(),
-            api_type: title_gen.api_type,
-            reasoning_effort: title_gen.reasoning_effort,
-        },
-        user_query,
-        task_id: byop.root_task_id.clone(),
-    })
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResponseStreamId(String);
@@ -236,8 +67,6 @@ pub struct ResponseStream {
     /// triggered by a previous error.
     can_attempt_resume_on_error: bool,
 
-    pending_title_generation: Option<PendingTitleGeneration>,
-
     /// Whether we should attempt to resume the conversation after the stream finishes.
     ///
     /// This is set when we receive a retryable error after client actions have been received
@@ -265,39 +94,22 @@ impl ResponseStream {
         let start_time = Local::now();
 
         let request_id = Uuid::new_v4();
-        let params_clone = params.clone();
-        // BYOP path: if the selected base model is an LLMId encoded by user-defined provider,
-        // then before spawn, extract (provider, api_key, model_id, root_task_id) from ctx
-        // and use custom chat completions. Otherwise, use warp's own multi-agent endpoint (original path).
-        let byop_dispatch = byop_dispatch_info(&params, &ai_identifiers, ctx);
-        let pending_title_generation = byop_dispatch
-            .as_ref()
-            .and_then(|byop| pending_title_generation_from_byop(&params, byop));
+        let subscription_dispatch = crate::ai::subscription_agent::subscription_dispatch_info(
+            &params,
+            &ai_identifiers,
+            ctx,
+        );
         let _ = ctx.spawn(
             async move {
-                if let Some(byop) = byop_dispatch {
-                    crate::ai::agent_providers::chat_stream::generate_byop_output(
-                        crate::ai::agent_providers::chat_stream::ByopOutputInput {
-                            params: params_clone,
-                            base_url: byop.base_url,
-                            api_key: byop.api_key,
-                            model_id: byop.model_id,
-                            api_type: byop.api_type,
-                            reasoning_effort: byop.reasoning_effort,
-                            extra_headers: byop.extra_headers,
-                            task_id: byop.root_task_id,
-                            target_task_id: byop.target_task_id,
-                            needs_create_task: byop.needs_create_task,
-                            lrc_command_id: byop.lrc_command_id,
-                            lrc_should_spawn_subagent: byop.lrc_should_spawn_subagent,
-                            context_window: byop.context_window,
+                match subscription_dispatch {
+                    Ok(dispatch) => {
+                        crate::ai::subscription_agent::generate_subscription_output(
+                            dispatch,
                             cancellation_rx,
-                            attachment_caps: byop.attachment_caps,
-                        },
-                    )
-                    .await
-                } else {
-                    byop_required_response_stream(cancellation_rx).await
+                        )
+                        .await
+                    }
+                    Err(error) => Err(ConvertToAPITypeError::Other(error)),
                 }
             },
             move |me, stream, ctx| {
@@ -315,14 +127,9 @@ impl ResponseStream {
             has_received_client_actions: false,
             ai_identifiers,
             can_attempt_resume_on_error,
-            pending_title_generation,
             should_resume_conversation_after_stream_finished: false,
             current_request_id: Some(request_id),
         }
-    }
-
-    pub(super) fn take_pending_title_generation(&mut self) -> Option<PendingTitleGeneration> {
-        self.pending_title_generation.take()
     }
 
     pub fn id(&self) -> &ResponseStreamId {
@@ -331,18 +138,6 @@ impl ResponseStream {
 
     pub fn is_lrc_tag_in_request(&self) -> bool {
         self.params.lrc_should_spawn_subagent
-    }
-
-    /// Zaplex BYOP local session compression: returns whether this stream is running SummarizeConversation
-    /// and the overflow flag. Controller calls commit_summarization in the Done branch of
-    /// handle_response_stream_finished to persist the summary to conversation.compaction_state.
-    pub fn summarization_overflow(&self) -> Option<bool> {
-        self.params.input.iter().find_map(|input| match input {
-            crate::ai::agent::AIAgentInput::SummarizeConversation { overflow, .. } => {
-                Some(*overflow)
-            }
-            _ => None,
-        })
     }
 
     /// Returns true if we should attempt to resume the conversation after the stream finishes.
@@ -379,33 +174,22 @@ impl ResponseStream {
 
         let request_id = Uuid::new_v4();
         self.current_request_id = Some(request_id);
-        let params = self.params.clone();
-        let byop_dispatch = byop_dispatch_info(&params, &self.ai_identifiers, ctx);
+        let subscription_dispatch = crate::ai::subscription_agent::subscription_dispatch_info(
+            &self.params,
+            &self.ai_identifiers,
+            ctx,
+        );
         let _ = ctx.spawn(
             async move {
-                if let Some(byop) = byop_dispatch {
-                    crate::ai::agent_providers::chat_stream::generate_byop_output(
-                        crate::ai::agent_providers::chat_stream::ByopOutputInput {
-                            params,
-                            base_url: byop.base_url,
-                            api_key: byop.api_key,
-                            model_id: byop.model_id,
-                            api_type: byop.api_type,
-                            reasoning_effort: byop.reasoning_effort,
-                            extra_headers: byop.extra_headers,
-                            task_id: byop.root_task_id,
-                            target_task_id: byop.target_task_id,
-                            needs_create_task: byop.needs_create_task,
-                            lrc_command_id: byop.lrc_command_id,
-                            lrc_should_spawn_subagent: byop.lrc_should_spawn_subagent,
-                            context_window: byop.context_window,
+                match subscription_dispatch {
+                    Ok(dispatch) => {
+                        crate::ai::subscription_agent::generate_subscription_output(
+                            dispatch,
                             cancellation_rx,
-                            attachment_caps: byop.attachment_caps,
-                        },
-                    )
-                    .await
-                } else {
-                    byop_required_response_stream(cancellation_rx).await
+                        )
+                        .await
+                    }
+                    Err(error) => Err(ConvertToAPITypeError::Other(error)),
                 }
             },
             move |me, stream, ctx| {
@@ -586,19 +370,7 @@ impl ResponseStream {
 }
 
 fn convert_to_api_error(error: ConvertToAPITypeError) -> AIApiError {
-    match &error {
-        ConvertToAPITypeError::Other(inner)
-            if inner.downcast_ref::<BlockedByopReadinessError>().is_some() =>
-        {
-            let blocked = inner
-                .downcast_ref::<BlockedByopReadinessError>()
-                .expect("checked blocked readiness error");
-            AIApiError::Other(BlockedByopReadinessError::new(blocked.category()).into())
-        }
-        ConvertToAPITypeError::Ignore
-        | ConvertToAPITypeError::Unimplemented(_)
-        | ConvertToAPITypeError::Other(_) => AIApiError::Other(anyhow!(error.to_string())),
-    }
+    AIApiError::Other(anyhow!(error.to_string()))
 }
 
 #[derive(Debug)]
@@ -645,17 +417,4 @@ pub enum ResponseStreamEvent {
 
 impl Entity for ResponseStream {
     type Event = ResponseStreamEvent;
-}
-
-async fn byop_required_response_stream(
-    cancellation_rx: oneshot::Receiver<()>,
-) -> Result<api::ResponseStream, ConvertToAPITypeError> {
-    log::debug!("No BYOP provider selected for Zaplex agent request");
-    let error_stream = futures::stream::once(async {
-        Err(Arc::new(AIApiError::Other(anyhow!(
-            "Zaplex's in-app agent needs a model provider. Add one under Settings → Agents → Providers. (Claude Code / Codex run as their own CLI agents and don't need this.)"
-        ))))
-    })
-    .take_until(cancellation_rx);
-    Ok(Box::pin(error_stream))
 }

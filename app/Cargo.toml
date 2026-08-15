@@ -256,6 +256,7 @@ wgpu.workspace = true
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 app-installation-detection.workspace = true
 async-io.workspace = true
+async-process.workspace = true
 axum.workspace = true
 comfy-table = "7.1.4"
 inquire = "0.9.1"
@@ -370,7 +371,6 @@ winreg.workspace = true
 
 [dev-dependencies]
 ai = { workspace = true, features = ["test-util"] }
-async-process.workspace = true
 jsonschema = { workspace = true, default-features = false }
 async-executor = "1.5.1"
 command = { workspace = true, features = ["test-util"] }

@@ -72,7 +72,6 @@ use warpui::{
     ViewHandle,
 };
 
-use super::agent_providers_widget::AgentProvidersWidget;
 use super::execution_profile_view::{ExecutionProfileView, ExecutionProfileViewEvent};
 use super::settings_page::{render_custom_size_header, render_settings_info_banner};
 use super::{
@@ -96,8 +95,6 @@ pub enum AISubpage {
     WarpAgent,
     /// Agent profiles and permissions.
     Profiles,
-    /// Custom AI provider (BYOP) configuration subpage.
-    Providers,
     /// Knowledge / Rules settings.
     Knowledge,
     /// Third-party CLI agent settings.
@@ -109,7 +106,6 @@ impl AISubpage {
         match section {
             SettingsSection::WarpAgent => Some(Self::WarpAgent),
             SettingsSection::AgentProfiles => Some(Self::Profiles),
-            SettingsSection::AgentProviders => Some(Self::Providers),
             SettingsSection::Knowledge => Some(Self::Knowledge),
             SettingsSection::ThirdPartyCLIAgents => Some(Self::ThirdPartyCLIAgents),
             // AgentMCPServers renders the standalone MCPServers page, not an AI subpage.
@@ -1480,7 +1476,6 @@ impl AISettingsPageView {
                 }
                 widgets.push(Box::new(CLIAgentWidget::default()));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
-                widgets.push(Box::new(AgentProvidersWidget::new(ctx)));
                 widgets.push(Box::new(OtherAIWidget::default()));
             }
             Some(AISubpage::WarpAgent) => {
@@ -1513,9 +1508,6 @@ impl AISettingsPageView {
                 }
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(OtherAIWidget::default()));
-            }
-            Some(AISubpage::Providers) => {
-                widgets.push(Box::new(AgentProvidersWidget::new(ctx)));
             }
             Some(AISubpage::Profiles) => {
                 if should_show_usage_widget {

@@ -85,6 +85,27 @@ fn daemon_scoped_open_resolves_translated_node() {
 fn provider(installed: bool) -> ProviderOptions {
     ProviderOptions {
         installed,
+        models: [
+            ("opus", "Opus"),
+            ("sonnet", "Sonnet"),
+            ("gpt-5-codex", "GPT Codex"),
+        ]
+        .into_iter()
+        .map(|(id, display_name)| ModelCapability {
+            id: id.to_string(),
+            display_name: display_name.to_string(),
+            description: None,
+            resolved_model: Some(id.to_string()),
+            is_default: false,
+            supported_efforts: vec![crate::ai::subscription_agent::ModelEffort {
+                id: "high".to_string(),
+                display_name: "High".to_string(),
+            }],
+            default_effort: Some("high".to_string()),
+            context_window: None,
+        })
+        .collect(),
+        model_discovery: ModelDiscoveryState::Ready,
         ..Default::default()
     }
 }
@@ -376,14 +397,23 @@ fn empty_remote_launch_directory_maps_explicitly_to_home() {
 }
 
 #[test]
-fn claude_spawn_card_exposes_only_cli_default_effort() {
-    assert_eq!(effort_options_for(CLIAgent::Claude), &["CLI default"]);
-    assert_eq!(default_effort_for(CLIAgent::Claude), "CLI default");
+fn model_and_effort_options_come_from_discovered_capability() {
+    let options = provider(true);
+    let codex = options
+        .models
+        .iter()
+        .find(|model| model.id == "gpt-5-codex")
+        .unwrap();
+
+    assert_eq!(codex.display_name, "GPT Codex");
     assert_eq!(
-        effort_options_for(CLIAgent::Codex),
-        &["low", "medium", "high"]
+        codex
+            .supported_efforts
+            .iter()
+            .map(|effort| effort.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["high"]
     );
-    assert_eq!(default_effort_for(CLIAgent::Codex), "high");
 }
 
 #[test]
@@ -413,7 +443,7 @@ fn effort_payload_matches_cli_capability() {
     assert_eq!(effort.as_deref(), Some("high"));
 
     card.agent = CLIAgent::Claude;
-    card.effort = default_effort_for(CLIAgent::Claude).to_string();
+    card.effort = "high".to_string();
     let SpawnCardEvent::Launch { effort, .. } = card.launch_payload().expect("Claude is installed")
     else {
         panic!("expected launch payload");

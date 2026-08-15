@@ -32,6 +32,7 @@ pub(crate) mod project_rules_persister;
 pub mod request_usage_model;
 pub(crate) mod restored_conversations;
 pub(crate) mod skills;
+pub(crate) mod subscription_agent;
 pub(crate) mod voice;
 pub use agent_tips::*;
 pub use request_usage_model::*;
@@ -51,6 +52,7 @@ pub mod mcp;
 pub(crate) use ai::paths;
 
 pub fn init(app: &mut AppContext) {
+    app.add_singleton_model(|_| subscription_agent::SubscriptionSessionRegistry::default());
     blocklist::keyboard_navigable_buttons::init(app);
     blocklist::block::number_shortcut_buttons::init(app);
     blocklist::toggleable_items::init(app);
