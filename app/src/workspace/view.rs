@@ -19308,10 +19308,8 @@ impl Workspace {
         installed: bool,
         ctx: &AppContext,
     ) -> spawn_card::ProviderOptions {
-        let mut opts = spawn_card::ProviderOptions {
-            installed,
-            ..Default::default()
-        };
+        let mut opts = spawn_card::ProviderOptions::default();
+        opts.installed = installed;
         if !*crate::cockpit::CockpitSettings::as_ref(ctx).enabled {
             return opts;
         }
