@@ -841,20 +841,27 @@ fn stale_favorite_is_disabled_and_removable() {
         "old-devhost",
     );
     let item = super::favorite_host_menu_item(&favorite, &[]);
-    let MenuItem::Item(fields) = &item else {
-        panic!("a stale favorite must remain visible as a removable menu row");
+    let MenuItem::Submenu { fields, menu } = &item else {
+        panic!("a stale favorite must expose a removal submenu");
     };
 
+    assert!(fields.on_select_action().is_none());
+    assert!(fields
+        .label()
+        .contains(&crate::t!("workspace-favorite-unavailable")));
+    assert_eq!(menu.items().len(), 2);
+    let MenuItem::Item(status) = &menu.items()[0] else {
+        panic!("a stale favorite must show a disabled status row");
+    };
+    assert!(status.is_disabled());
+    assert!(!menu.items()[0].selectable());
+    assert!(status.on_select_action().is_none());
     assert!(matches!(
-        fields.on_select_action(),
+        menu.items()[1].item_on_select_action(),
         Some(WorkspaceAction::RemoveFavorite { kind, target })
             if *kind == zaplex_cockpit::FavoriteKind::Host && target == "deleted-node"
     ));
-    assert!(
-        fields
-            .label()
-            .contains(&crate::t!("workspace-favorite-unavailable"))
-    );
+    assert!(menu.items()[1].selectable());
 }
 
 #[test]
@@ -865,19 +872,26 @@ fn removed_favorite_host_is_disabled_and_never_routed() {
         "removed-host",
     );
     let item = super::favorite_host_menu_item(&favorite, &[]);
-    let MenuItem::Item(fields) = &item else {
-        panic!("a removed host must not retain its live host submenu");
+    let MenuItem::Submenu { fields, menu } = &item else {
+        panic!("a removed host must expose a removal submenu instead of a live host submenu");
     };
 
+    assert!(fields.on_select_action().is_none());
+    let MenuItem::Item(status) = &menu.items()[0] else {
+        panic!("a removed host must show a disabled status row");
+    };
+    assert!(status.is_disabled());
+    assert!(!menu.items()[0].selectable());
+    assert!(status.on_select_action().is_none());
     assert!(matches!(
-        fields.on_select_action(),
+        menu.items()[1].item_on_select_action(),
         Some(WorkspaceAction::RemoveFavorite { kind, target })
             if *kind == zaplex_cockpit::FavoriteKind::Host && target == "removed-node"
     ));
-    assert!(!matches!(
-        fields.on_select_action(),
+    assert!(menu.items().iter().all(|item| !matches!(
+        item.item_on_select_action(),
         Some(WorkspaceAction::OpenSshTerminalByNode { .. } | WorkspaceAction::OpenSpawnCard { .. })
-    ));
+    )));
 }
 
 #[test]

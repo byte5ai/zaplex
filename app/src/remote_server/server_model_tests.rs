@@ -220,23 +220,45 @@ fn binding_status(outcome: super::HandlerOutcome) -> AgentPtyBindingStatus {
 }
 
 #[cfg(unix)]
+fn bind_status(
+    model: &mut ServerModel,
+    conn: uuid::Uuid,
+    msg: BindAgentPty,
+) -> AgentPtyBindingStatus {
+    let identity = msg.agent.as_ref().unwrap();
+    let live_agents = HashSet::from([zaplex_remote_session::agent_binding::AgentIdentity {
+        provider: identity.provider.clone(),
+        session_id: identity.session_id.clone(),
+        account_email: (!identity.account_email.is_empty()).then(|| identity.account_email.clone()),
+        config_dir: (!identity.config_dir.is_empty()).then(|| identity.config_dir.clone()),
+    }]);
+    AgentPtyBindingStatus::try_from(model.execute_bind_agent_pty(conn, msg, &live_agents).status)
+        .unwrap()
+}
+
+#[cfg(unix)]
 #[test]
-fn legacy_client_cannot_bind_agent_pty() {
+fn v1_client_cannot_mutate_agent_pty_binding() {
     let mut model = test_model();
     let conn = uuid::Uuid::new_v4();
     model
+        .connection_features
+        .insert(conn, HashSet::from(["agent-pty-binding".to_string()]));
+    model
         .agent_pty_bindings
-        .register_pty("pty-1", 7, conn.as_u128());
+        .register_pty("pty-1", 7, "test-host-id", conn.as_u128());
 
-    let status = binding_status(model.handle_bind_agent_pty(
+    let status = bind_status(
+        &mut model,
         conn,
         BindAgentPty {
             agent: Some(binding_identity("agent-1")),
             pty_session_id: "pty-1".to_string(),
             pty_session_generation: 7,
             handoff_from: None,
+            host_id: "test-host-id".to_string(),
         },
-    ));
+    );
 
     assert_eq!(status, AgentPtyBindingStatus::CapabilityRequired);
 }
@@ -248,22 +270,24 @@ fn daemon_bind_and_unbind_preserve_historical_agent() {
     let conn = uuid::Uuid::new_v4();
     model
         .connection_features
-        .insert(conn, HashSet::from(["agent-pty-binding".to_string()]));
+        .insert(conn, HashSet::from(["agent-pty-binding-v2".to_string()]));
     model
         .agent_pty_bindings
-        .register_pty("pty-1", 7, conn.as_u128());
+        .register_pty("pty-1", 7, "test-host-id", conn.as_u128());
     let identity = binding_identity("agent-1");
 
     assert_eq!(
-        binding_status(model.handle_bind_agent_pty(
+        bind_status(
+            &mut model,
             conn,
             BindAgentPty {
                 agent: Some(identity.clone()),
                 pty_session_id: "pty-1".to_string(),
                 pty_session_generation: 7,
                 handoff_from: None,
+                host_id: "test-host-id".to_string(),
             },
-        )),
+        ),
         AgentPtyBindingStatus::Bound
     );
     assert_eq!(
@@ -273,6 +297,7 @@ fn daemon_bind_and_unbind_preserve_historical_agent() {
                 agent: Some(identity.clone()),
                 pty_session_id: "pty-1".to_string(),
                 pty_session_generation: 7,
+                host_id: "test-host-id".to_string(),
             },
         )),
         AgentPtyBindingStatus::Unbound
@@ -300,26 +325,152 @@ fn daemon_rejects_stale_and_foreign_agent_pty_bindings() {
     for conn in [owner, foreign] {
         model
             .connection_features
-            .insert(conn, HashSet::from(["agent-pty-binding".to_string()]));
+            .insert(conn, HashSet::from(["agent-pty-binding-v2".to_string()]));
     }
     model
         .agent_pty_bindings
-        .register_pty("pty-1", 7, owner.as_u128());
+        .register_pty("pty-1", 7, "test-host-id", owner.as_u128());
 
     let request = |generation| BindAgentPty {
         agent: Some(binding_identity("agent-1")),
         pty_session_id: "pty-1".to_string(),
         pty_session_generation: generation,
         handoff_from: None,
+        host_id: "test-host-id".to_string(),
     };
     assert_eq!(
-        binding_status(model.handle_bind_agent_pty(owner, request(6))),
+        bind_status(&mut model, owner, request(6)),
         AgentPtyBindingStatus::StaleGeneration
     );
     assert_eq!(
-        binding_status(model.handle_bind_agent_pty(foreign, request(7))),
+        bind_status(&mut model, foreign, request(7)),
         AgentPtyBindingStatus::ForeignConnection
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_rejects_foreign_host_identity_and_undiscovered_agent_tuple() {
+    let mut model = test_model();
+    let conn = uuid::Uuid::new_v4();
+    model
+        .connection_features
+        .insert(conn, HashSet::from(["agent-pty-binding-v2".to_string()]));
+    model
+        .agent_pty_bindings
+        .register_pty("pty-1", 7, "test-host-id", conn.as_u128());
+    let request = |host_id: &str| BindAgentPty {
+        agent: Some(binding_identity("agent-1")),
+        pty_session_id: "pty-1".to_string(),
+        pty_session_generation: 7,
+        handoff_from: None,
+        host_id: host_id.to_string(),
+    };
+
+    assert_eq!(
+        bind_status(&mut model, conn, request("another-daemon")),
+        AgentPtyBindingStatus::ForeignDaemon
+    );
+    let response = model.execute_bind_agent_pty(conn, request("test-host-id"), &HashSet::new());
+    assert_eq!(
+        AgentPtyBindingStatus::try_from(response.status),
+        Ok(AgentPtyBindingStatus::IdentityNotDiscovered)
+    );
+    assert!(model
+        .agent_pty_bindings
+        .foreground_for_pty("pty-1", 7)
+        .is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn dormant_inventory_reconciles_foreground_binding_to_history() {
+    let mut model = test_model();
+    let conn = uuid::Uuid::new_v4();
+    model
+        .connection_features
+        .insert(conn, HashSet::from(["agent-pty-binding-v2".to_string()]));
+    model
+        .agent_pty_bindings
+        .register_pty("pty-1", 7, "test-host-id", conn.as_u128());
+    assert_eq!(
+        bind_status(
+            &mut model,
+            conn,
+            BindAgentPty {
+                agent: Some(binding_identity("agent-ended")),
+                pty_session_id: "pty-1".to_string(),
+                pty_session_generation: 7,
+                handoff_from: None,
+                host_id: "test-host-id".to_string(),
+            },
+        ),
+        AgentPtyBindingStatus::Bound
+    );
+    let mut dormant = vec![AgentSessionInfo {
+        session_id: "agent-ended".to_string(),
+        provider: "codex".to_string(),
+        account_email: "agent@example.com".to_string(),
+        config_dir: "/home/agent/.codex".to_string(),
+        state: "idle".to_string(),
+        ..Default::default()
+    }];
+
+    model.reconcile_and_overlay_agent_bindings(conn, &mut dormant);
+
+    assert_eq!(dormant[0].pty_session_id, "pty-1");
+    assert_eq!(dormant[0].pty_session_generation, 7);
+    assert!(!dormant[0].pty_foreground);
+    assert!(model
+        .agent_pty_bindings
+        .foreground_for_pty("pty-1", 7)
+        .is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_qualified_attach_requires_fresh_exact_live_identity() {
+    let mut model = test_model();
+    let conn = uuid::Uuid::new_v4();
+    model
+        .connection_features
+        .insert(conn, HashSet::from(["agent-pty-binding-v2".to_string()]));
+    model
+        .agent_pty_bindings
+        .register_pty("pty-1", 7, "test-host-id", conn.as_u128());
+    let expected = zaplex_remote_session::agent_binding::AgentIdentity {
+        provider: "codex".to_string(),
+        session_id: "agent-1".to_string(),
+        account_email: Some("agent@example.com".to_string()),
+        config_dir: Some("/home/agent/.codex".to_string()),
+    };
+    assert_eq!(
+        bind_status(
+            &mut model,
+            conn,
+            BindAgentPty {
+                agent: Some(binding_identity("agent-1")),
+                pty_session_id: "pty-1".to_string(),
+                pty_session_generation: 7,
+                handoff_from: None,
+                host_id: "test-host-id".to_string(),
+            },
+        ),
+        AgentPtyBindingStatus::Bound
+    );
+
+    assert!(model
+        .validate_fresh_agent_attach(conn, &expected, &HashSet::from([expected.clone()]))
+        .is_ok());
+    let error = model
+        .validate_fresh_agent_attach(conn, &expected, &HashSet::new())
+        .unwrap_err();
+
+    assert!(error.message.contains("no longer present"));
+    assert!(model
+        .agent_pty_bindings
+        .foreground_for_pty("pty-1", 7)
+        .is_none());
 }
 
 #[test]
@@ -1339,22 +1490,24 @@ mod daemon_session {
                 m.sessions.get_mut(&session_id).unwrap().input_tx = probe_tx;
                 m.connection_features.insert(
                     first,
-                    std::collections::HashSet::from(["agent-pty-binding".to_string()]),
+                    std::collections::HashSet::from(["agent-pty-binding-v2".to_string()]),
                 );
                 m.connection_features.insert(
                     second,
-                    std::collections::HashSet::from(["agent-pty-binding".to_string()]),
+                    std::collections::HashSet::from(["agent-pty-binding-v2".to_string()]),
                 );
                 assert_eq!(
-                    binding_status(m.handle_bind_agent_pty(
+                    bind_status(
+                        m,
                         first,
                         BindAgentPty {
                             agent: Some(binding_identity("agent-1")),
                             pty_session_id: session_id.clone(),
                             pty_session_generation: generation,
                             handoff_from: None,
+                            host_id: "test-host-id".to_string(),
                         },
-                    )),
+                    ),
                     super::AgentPtyBindingStatus::Bound
                 );
                 assert_eq!(
@@ -1437,15 +1590,17 @@ mod daemon_session {
                     "a rejected stale row must not transfer session ownership"
                 );
                 assert_eq!(
-                    binding_status(m.handle_bind_agent_pty(
+                    bind_status(
+                        m,
                         second,
                         BindAgentPty {
                             agent: Some(binding_identity("agent-1")),
                             pty_session_id: session_id.clone(),
                             pty_session_generation: generation,
                             handoff_from: None,
+                            host_id: "test-host-id".to_string(),
                         },
-                    )),
+                    ),
                     super::AgentPtyBindingStatus::ForeignConnection,
                     "a rejected stale row must not transfer PTY mutation authority"
                 );
@@ -1490,7 +1645,7 @@ mod daemon_session {
             model.update(&mut app, |m, _ctx| {
                 m.connection_features.insert(
                     first,
-                    std::collections::HashSet::from(["agent-pty-binding".to_string()]),
+                    std::collections::HashSet::from(["agent-pty-binding-v2".to_string()]),
                 );
             });
             let bind_request = || BindAgentPty {
@@ -1498,23 +1653,36 @@ mod daemon_session {
                 pty_session_id: session_id.clone(),
                 pty_session_generation: generation,
                 handoff_from: None,
+                host_id: "test-host-id".to_string(),
             };
             assert_eq!(
                 model.update(&mut app, |m, _ctx| {
-                    binding_status(m.handle_bind_agent_pty(first, bind_request()))
+                    bind_status(m, first, bind_request())
                 }),
                 super::AgentPtyBindingStatus::ForeignConnection,
                 "the old connection must lose mutation authority even after an id-only attach"
             );
             assert_eq!(
                 model.update(&mut app, |m, _ctx| {
-                    binding_status(m.handle_bind_agent_pty(second, bind_request()))
+                    bind_status(m, second, bind_request())
                 }),
                 super::AgentPtyBindingStatus::Bound
             );
 
             model.update(&mut app, |m, ctx| {
                 m.handle_message(second, close_msg(&session_id), ctx)
+            });
+            model.read(&app, |m, _ctx| {
+                let identity = zaplex_remote_session::agent_binding::AgentIdentity {
+                    provider: "codex".to_string(),
+                    session_id: "agent-1".to_string(),
+                    account_email: Some("agent@example.com".to_string()),
+                    config_dir: Some("/home/agent/.codex".to_string()),
+                };
+                let historical = m.agent_pty_bindings.binding_for(&identity).unwrap();
+                assert_eq!(historical.pty_session_id, session_id);
+                assert_eq!(historical.pty_generation, generation);
+                assert!(!historical.foreground);
             });
         });
     }

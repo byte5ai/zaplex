@@ -354,6 +354,7 @@ impl WaitingTarget {
 pub fn waiting_sessions(tree: &FleetTree) -> Vec<(&HostNode, &SessionSnapshot)> {
     tree.hosts
         .iter()
+        .filter(|h| h.is_available())
         .flat_map(|h| {
             h.projects
                 .iter()

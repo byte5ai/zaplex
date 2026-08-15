@@ -811,6 +811,7 @@ impl RemoteServerClient {
     /// Binds a CLI-agent conversation to its generation-checked daemon PTY.
     pub async fn bind_agent_pty(
         &self,
+        host_id: String,
         agent: AgentSessionIdentity,
         pty_session_id: String,
         pty_session_generation: u64,
@@ -824,6 +825,7 @@ impl RemoteServerClient {
                 pty_session_id,
                 pty_session_generation,
                 handoff_from,
+                host_id,
             })),
         };
         let response = self.send_request(request_id, msg).await?;
@@ -839,6 +841,7 @@ impl RemoteServerClient {
     /// Unbinds one CLI-agent identity from its generation-checked daemon PTY.
     pub async fn unbind_agent_pty(
         &self,
+        host_id: String,
         agent: AgentSessionIdentity,
         pty_session_id: String,
         pty_session_generation: u64,
@@ -850,6 +853,7 @@ impl RemoteServerClient {
                 agent: Some(agent),
                 pty_session_id,
                 pty_session_generation,
+                host_id,
             })),
         };
         let response = self.send_request(request_id, msg).await?;

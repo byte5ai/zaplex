@@ -1167,67 +1167,64 @@ fn sidebar_attach_binds_authoritative_antigravity_account_identity() {
 }
 
 #[test]
-fn antigravity_lifecycle_produces_a_daemon_binding() {
+fn unverifiable_lifecycle_providers_do_not_produce_daemon_bindings() {
     App::test((), |mut app| async move {
         use crate::terminal::cli_agent_sessions::{
             CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
         };
 
         let sessions = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
-        let conn = SessionId::from(28u64);
-        let (listener, _wakeups_rx) = test_listener();
-        let model = Arc::new(FairMutex::new(TerminalModel::mock(
-            None,
-            Some(listener.clone()),
-        )));
-        let terminal_view_id = EntityId::new();
-        let event_loop = app.add_model(|_ctx| EventLoop::new(model, listener, conn));
-        sessions.update(&mut app, |sessions, ctx| {
-            sessions.bind_account_identity(
-                terminal_view_id,
-                CLIAgent::Antigravity,
-                Some("/home/agent/.gemini/antigravity".to_string()),
-                Some("antigravity@example.com".to_string()),
-            );
-            sessions.set_session(
-                terminal_view_id,
-                CLIAgentSession {
-                    agent: CLIAgent::Antigravity,
-                    status: CLIAgentSessionStatus::InProgress,
-                    session_context: CLIAgentSessionContext {
-                        session_id: Some("antigravity-session".to_string()),
-                        ..Default::default()
+        for (index, agent) in [CLIAgent::Grok, CLIAgent::Antigravity]
+            .into_iter()
+            .enumerate()
+        {
+            let conn = SessionId::from(28u64 + index as u64);
+            let (listener, _wakeups_rx) = test_listener();
+            let model = Arc::new(FairMutex::new(TerminalModel::mock(
+                None,
+                Some(listener.clone()),
+            )));
+            let terminal_view_id = EntityId::new();
+            let event_loop = app.add_model(|_ctx| EventLoop::new(model, listener, conn));
+            sessions.update(&mut app, |sessions, ctx| {
+                sessions.bind_account_identity(
+                    terminal_view_id,
+                    agent,
+                    Some("/home/agent/.config".to_string()),
+                    Some("agent@example.com".to_string()),
+                );
+                sessions.set_session(
+                    terminal_view_id,
+                    CLIAgentSession {
+                        agent,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext {
+                            session_id: Some(format!("unsupported-{index}")),
+                            ..Default::default()
+                        },
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input: false,
+                        listener: None,
+                        plugin_version: None,
+                        remote_host: None,
+                        draft_text: None,
+                        custom_command_prefix: None,
                     },
-                    input_state: CLIAgentInputState::Closed,
-                    should_auto_toggle_input: false,
-                    listener: None,
-                    plugin_version: None,
-                    remote_host: None,
-                    draft_text: None,
-                    custom_command_prefix: None,
-                },
-                ctx,
-            );
-        });
+                    ctx,
+                );
+            });
 
-        event_loop.update(&mut app, |me, ctx| {
-            me.terminal_view_id = Some(terminal_view_id);
-            me.awaiting_attach_snapshot = true;
-            me.refresh_desired_agent_binding(ctx);
-        });
+            event_loop.update(&mut app, |me, ctx| {
+                me.terminal_view_id = Some(terminal_view_id);
+                me.awaiting_attach_snapshot = true;
+                me.refresh_desired_agent_binding(ctx);
+            });
 
-        event_loop.read(&app, |me, _ctx| {
-            assert_eq!(
-                me.desired_agent_binding.as_ref(),
-                Some(&AgentSessionIdentity {
-                    session_id: "antigravity-session".to_string(),
-                    provider: "antigravity".to_string(),
-                    account_email: "antigravity@example.com".to_string(),
-                    config_dir: "/home/agent/.gemini/antigravity".to_string(),
-                })
-            );
-            assert!(me.desired_agent_binding_from_lifecycle);
-        });
+            event_loop.read(&app, |me, _ctx| {
+                assert!(me.desired_agent_binding.is_none());
+                assert!(me.desired_agent_binding_from_lifecycle);
+            });
+        }
     });
 }
 

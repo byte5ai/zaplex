@@ -46,6 +46,10 @@ pub struct HostSessions {
     /// this id, never by the label, so a label collision can't send a
     /// host-local `pid` signal to the wrong machine.
     pub host_id: Option<String>,
+    /// SSH-registry node that established this daemon connection, when any.
+    /// The registry merge validates that the node still exists before treating
+    /// the daemon as available.
+    pub registry_node_id: Option<String>,
     pub sessions: Vec<SessionSnapshot>,
 }
 
@@ -61,6 +65,21 @@ pub struct RemoteHost {
     /// Stable, opaque per-daemon id (from the daemon's `InitializeResponse`).
     /// Unique per connected host even when labels collide.
     pub host_id: String,
+    /// SSH-registry node that established this connection. It can outlive the
+    /// registry row in the daemon manager, so the merge must validate it
+    /// against the current registry before exposing routes.
+    pub registry_node_id: Option<String>,
+}
+
+/// Whether a host can currently be used as a navigation/routing target.
+///
+/// A connected daemon can briefly outlive the SSH-registry node that created
+/// it. Such a host remains visible so the UI does not pretend its observed
+/// sessions vanished, but every route through it must fail closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostAvailability {
+    Available,
+    Removed,
 }
 
 /// One SSH-registry host and its optional live daemon association.
@@ -111,6 +130,9 @@ pub struct HostNode {
     /// alias / matching hostname) route to their own machine, never to each
     /// other's. The label is kept for display only.
     pub host_id: Option<String>,
+    /// Explicit routing state. Consumers must not infer availability from the
+    /// label or from the presence of a daemon/registry id.
+    pub availability: HostAvailability,
     /// The SSH-registry `node.id` for this host, when it maps to a registered
     /// SSH host. Set for registry-only hosts merged into the tree (so the
     /// Conductor is the full host navigator — every registered host is a root,
@@ -121,6 +143,12 @@ pub struct HostNode {
     /// Sum of the projects' needs-me counts.
     pub needs_me: usize,
     pub projects: Vec<ProjectNode>,
+}
+
+impl HostNode {
+    pub fn is_available(&self) -> bool {
+        self.availability == HostAvailability::Available
+    }
 }
 
 /// The whole fleet, with a grand needs-me total.
@@ -200,10 +228,11 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
                 host: h.host,
                 is_local: h.is_local,
                 host_id: h.host_id,
-                // Session-derived hosts don't carry a registry id here; the app
-                // layer sets it (and merges registry-only hosts) — see
-                // `CockpitModel` inventory merge.
-                registry_node_id: None,
+                availability: HostAvailability::Available,
+                // For a daemon contribution this is the registry node that
+                // established the connection. The merge below validates it
+                // against the current registry before leaving the host usable.
+                registry_node_id: h.registry_node_id,
                 needs_me,
                 projects,
             }
@@ -216,8 +245,9 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
 
 fn sort_hosts(hosts: &mut [HostNode]) {
     hosts.sort_by(|a, b| {
-        b.needs_me
-            .cmp(&a.needs_me)
+        b.is_available()
+            .cmp(&a.is_available())
+            .then_with(|| b.needs_me.cmp(&a.needs_me))
             .then_with(|| a.host.cmp(&b.host))
             .then_with(|| b.is_local.cmp(&a.is_local))
             .then_with(|| a.host_id.cmp(&b.host_id))
@@ -244,6 +274,28 @@ pub fn merge_registered_hosts(tree: &mut FleetTree, registered: &[RegisteredHost
             || host.registry_node_id.is_none()
     });
     for host in &mut tree.hosts {
+        if host.is_local {
+            host.availability = HostAvailability::Available;
+            host.registry_node_id = None;
+            continue;
+        }
+
+        // A daemon connection opened through a registry node is only usable
+        // while that exact node remains in the current registry. Preserve the
+        // observed host and sessions when it was removed, but fail closed for
+        // every route. Unscoped daemon contributions remain available.
+        host.availability = match host.registry_node_id.as_deref() {
+            Some(node_id)
+                if !registered.iter().any(|entry| {
+                    entry.node_id == node_id
+                        && entry.live_host_id.as_deref() == host.host_id.as_deref()
+                }) =>
+            {
+                HostAvailability::Removed
+            }
+            Some(_) => HostAvailability::Available,
+            None => host.availability,
+        };
         host.registry_node_id = None;
     }
 
@@ -257,10 +309,10 @@ pub fn merge_registered_hosts(tree: &mut FleetTree, registered: &[RegisteredHost
     for registered_host in registered {
         if let Some(live_host_id) = registered_host.live_host_id.as_deref() {
             if let Some(live) = tree.hosts.iter_mut().find(|host| {
-                host.host_id.as_deref() == Some(live_host_id)
-                    && host.registry_node_id.is_none()
+                host.host_id.as_deref() == Some(live_host_id) && host.registry_node_id.is_none()
             }) {
                 live.host = registered_host.label;
+                live.availability = HostAvailability::Available;
                 live.registry_node_id = Some(registered_host.node_id);
                 continue;
             }
@@ -270,6 +322,7 @@ pub fn merge_registered_hosts(tree: &mut FleetTree, registered: &[RegisteredHost
             host: registered_host.label,
             is_local: false,
             host_id: None,
+            availability: HostAvailability::Available,
             registry_node_id: Some(registered_host.node_id),
             needs_me: 0,
             projects: Vec::new(),
@@ -277,6 +330,12 @@ pub fn merge_registered_hosts(tree: &mut FleetTree, registered: &[RegisteredHost
     }
 
     sort_hosts(&mut tree.hosts);
+    tree.needs_me = tree
+        .hosts
+        .iter()
+        .filter(|host| host.is_available())
+        .map(|host| host.needs_me)
+        .sum();
 }
 
 /// Fold this machine's local sessions plus every connected daemon's
@@ -319,6 +378,7 @@ pub fn fold_inventory(
         host: local_label.into(),
         is_local: true,
         host_id: None,
+        registry_node_id: None,
         sessions: local,
     });
     for (remote, sessions) in remotes {
@@ -326,6 +386,7 @@ pub fn fold_inventory(
             host: remote.label,
             is_local: false,
             host_id: Some(remote.host_id),
+            registry_node_id: remote.registry_node_id,
             sessions,
         });
     }
@@ -377,6 +438,7 @@ pub fn sessions_of_account<'a>(
     };
     tree.hosts
         .iter()
+        .filter(|h| h.is_available())
         .flat_map(|h| {
             h.projects
                 .iter()

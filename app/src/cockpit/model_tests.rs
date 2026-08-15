@@ -53,6 +53,7 @@ fn nonempty_hosts_is_not_blank() {
         host: "devbox".to_string(),
         is_local: true,
         host_id: None,
+        availability: zaplex_cockpit::HostAvailability::Available,
         registry_node_id: None,
         projects: Vec::new(),
         needs_me: 0,
@@ -101,6 +102,21 @@ fn pty_routes_require_daemon_binding_capability() {
     assert!(legacy.pty_session_generation.is_none());
     assert!(!legacy.pty_foreground);
 
+    let mut v1_only = session("v1-only", zaplex_cockpit::SessionState::Active);
+    v1_only.pty_session_id = Some("pty-v1".to_string());
+    v1_only.pty_session_generation = Some(8);
+    v1_only.pty_foreground = true;
+    retain_negotiated_agent_pty_routes(
+        &[
+            "agent-inventory".to_string(),
+            "agent-pty-binding".to_string(),
+        ],
+        std::slice::from_mut(&mut v1_only),
+    );
+    assert!(v1_only.pty_session_id.is_none());
+    assert!(v1_only.pty_session_generation.is_none());
+    assert!(!v1_only.pty_foreground);
+
     let mut capable = session("capable", zaplex_cockpit::SessionState::Active);
     capable.pty_session_id = Some("pty-2".to_string());
     capable.pty_session_generation = Some(8);
@@ -109,6 +125,7 @@ fn pty_routes_require_daemon_binding_capability() {
         &[
             "agent-inventory".to_string(),
             "agent-pty-binding".to_string(),
+            "agent-pty-binding-v2".to_string(),
         ],
         std::slice::from_mut(&mut capable),
     );
@@ -124,6 +141,7 @@ fn remote_host(label: &str, host_id: &str, session: SessionSnapshot) -> HostNode
         host: label.into(),
         is_local: false,
         host_id: Some(host_id.into()),
+        availability: zaplex_cockpit::HostAvailability::Available,
         registry_node_id: None,
         projects: vec![zaplex_cockpit::ProjectNode {
             root: "/w".into(),
@@ -180,6 +198,28 @@ fn same_label_hosts_do_not_mask_each_others_waiting_transition() {
 }
 
 #[test]
+fn removed_host_does_not_emit_an_actionable_waiting_transition() {
+    use zaplex_cockpit::{HostAvailability, SessionState};
+
+    let old = FleetTree {
+        hosts: vec![remote_host(
+            "box",
+            "host-A",
+            session("s1", SessionState::Active),
+        )],
+        needs_me: 0,
+    };
+    let mut removed = remote_host("box", "host-A", session("s1", SessionState::Waiting));
+    removed.availability = HostAvailability::Removed;
+    let new = FleetTree {
+        hosts: vec![removed],
+        needs_me: 0,
+    };
+
+    assert!(fleet_transitions_to_waiting(&old, &new).is_empty());
+}
+
+#[test]
 fn same_host_and_session_id_in_different_accounts_do_not_mask_waiting_transition() {
     use zaplex_cockpit::SessionState;
 
@@ -196,6 +236,7 @@ fn same_host_and_session_id_in_different_accounts_do_not_mask_waiting_transition
         host: "box".to_string(),
         is_local: false,
         host_id: Some("host-A".to_string()),
+        availability: zaplex_cockpit::HostAvailability::Available,
         registry_node_id: None,
         projects: vec![zaplex_cockpit::ProjectNode {
             root: "/w".to_string(),

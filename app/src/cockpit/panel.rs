@@ -24,8 +24,8 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 use zaplex_cockpit::{
     fleet_is_large, format_cost, format_relative, heat_fill, heat_pct_label_with_provenance,
     host_auto_collapsed, host_ident, host_session_count, session_glyph, session_key, AccountUsage,
-    Favorite, FavoriteKind, FleetTree, HostNode, SessionSnapshot, SessionState, TaskItem,
-    TaskState, TaskStatus, UsageProvenance,
+    Favorite, FavoriteKind, FleetTree, HostAvailability, HostNode, SessionSnapshot, SessionState,
+    TaskItem, TaskState, TaskStatus, UsageProvenance,
 };
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
@@ -81,6 +81,30 @@ fn open_registered_host_files_action(node_id: &str) -> WorkspaceAction {
     }
 }
 
+fn open_removed_host_repair_action() -> WorkspaceAction {
+    WorkspaceAction::OpenSshManager
+}
+
+fn available_registry_node_id(host: &HostNode) -> Option<&str> {
+    match host.availability {
+        HostAvailability::Available => host.registry_node_id.as_deref(),
+        HostAvailability::Removed => None,
+    }
+}
+
+fn host_display_label(host: &HostNode, removed_label: &str) -> String {
+    match host.availability {
+        HostAvailability::Available => host.host.clone(),
+        HostAvailability::Removed => format!("{} — {removed_label}", host.host),
+    }
+}
+
+fn available_registered_host<'a>(tree: &'a FleetTree, node_id: &str) -> Option<&'a HostNode> {
+    tree.hosts
+        .iter()
+        .find(|host| available_registry_node_id(host) == Some(node_id))
+}
+
 fn registered_host_click_target(
     node_id: &str,
     content: Box<dyn Element>,
@@ -89,6 +113,23 @@ fn registered_host_click_target(
 ) -> Box<dyn Element> {
     let action = open_registered_host_action(node_id);
     let position_id = format!("cockpit_host:{node_id}");
+    let target = Hoverable::new(state, move |mouse| {
+        hover_row(content, mouse.is_hovered(), appearance)
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+    .finish();
+    SavePosition::new(target, &position_id).finish()
+}
+
+fn removed_host_click_target(
+    host_ident: &str,
+    content: Box<dyn Element>,
+    state: MouseStateHandle,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let action = open_removed_host_repair_action();
+    let position_id = format!("cockpit_removed_host:{host_ident}");
     let target = Hoverable::new(state, move |mouse| {
         hover_row(content, mouse.is_hovered(), appearance)
     })
@@ -123,6 +164,9 @@ pub struct CockpitPanel {
     /// `node_id`. Clicking a registered host row (with no live agent) opens a
     /// terminal on that host.
     conductor_host_states: HashMap<String, MouseStateHandle>,
+    /// Stable repair-click state for removed daemon roots, keyed by stable
+    /// daemon identity rather than their display label.
+    removed_host_states: HashMap<String, MouseStateHandle>,
     /// Fixed-width ☆ actions for adding a host favorite.
     conductor_host_favorite_actions: HashMap<String, CompactRowAction>,
     /// Fixed-width ★ actions for removing a host favorite.
@@ -260,6 +304,7 @@ impl CockpitPanel {
             conductor_peek_states: HashMap::new(),
             card_states: HashMap::new(),
             conductor_host_states: HashMap::new(),
+            removed_host_states: HashMap::new(),
             conductor_host_favorite_actions: HashMap::new(),
             conductor_host_unfavorite_actions: HashMap::new(),
             conductor_host_manage_actions: HashMap::new(),
@@ -278,9 +323,21 @@ impl CockpitPanel {
     /// Keep one stable row handle per live fleet session (hover needs a stable
     /// handle across renders); drop handles of sessions that disappeared.
     fn sync_conductor_states(&mut self, ctx: &mut ViewContext<Self>) {
-        let (live, host_nodes, project_keys) = {
+        let (routable, visible, host_nodes, removed_hosts, project_keys) = {
             let inv = CockpitModel::as_ref(ctx).inventory();
-            let live: std::collections::HashSet<String> = inv
+            let routable: std::collections::HashSet<String> = inv
+                .hosts
+                .iter()
+                .filter(|h| h.is_available())
+                .flat_map(|h| {
+                    h.projects.iter().flat_map(move |p| {
+                        p.sessions
+                            .iter()
+                            .map(move |s| session_key(h.is_local, h.host_id.as_deref(), s))
+                    })
+                })
+                .collect();
+            let visible: std::collections::HashSet<String> = inv
                 .hosts
                 .iter()
                 .flat_map(|h| {
@@ -294,7 +351,13 @@ impl CockpitPanel {
             let host_nodes: std::collections::HashSet<String> = inv
                 .hosts
                 .iter()
-                .filter_map(|h| h.registry_node_id.clone())
+                .filter_map(|h| available_registry_node_id(h).map(str::to_string))
+                .collect();
+            let removed_hosts: std::collections::HashSet<String> = inv
+                .hosts
+                .iter()
+                .filter(|h| h.availability == HostAvailability::Removed)
+                .map(|h| host_ident(h.is_local, h.host_id.as_deref()))
                 .collect();
             let project_keys: std::collections::HashSet<String> = inv
                 .hosts
@@ -304,12 +367,16 @@ impl CockpitPanel {
                     h.projects.iter().map(move |p| project_key(&ident, &p.root))
                 })
                 .collect();
-            (live, host_nodes, project_keys)
+            (routable, visible, host_nodes, removed_hosts, project_keys)
         };
-        self.conductor_row_states.retain(|k, _| live.contains(k));
-        self.conductor_peek_states.retain(|k, _| live.contains(k));
-        for key in live {
-            self.conductor_row_states.entry(key.clone()).or_default();
+        self.conductor_row_states
+            .retain(|k, _| routable.contains(k));
+        self.conductor_peek_states
+            .retain(|k, _| visible.contains(k));
+        for key in routable {
+            self.conductor_row_states.entry(key).or_default();
+        }
+        for key in visible {
             self.conductor_peek_states.entry(key).or_default();
         }
         // Card hover handles, keyed by account `key` (one stable handle per card
@@ -328,6 +395,8 @@ impl CockpitPanel {
         // handle per clickable host header); drop handles of hosts that vanished.
         self.conductor_host_states
             .retain(|k, _| host_nodes.contains(k));
+        self.removed_host_states
+            .retain(|k, _| removed_hosts.contains(k));
         self.conductor_host_favorite_actions
             .retain(|k, _| host_nodes.contains(k));
         self.conductor_host_unfavorite_actions
@@ -400,6 +469,9 @@ impl CockpitPanel {
                     ),
                 );
             }
+        }
+        for host_ident in removed_hosts {
+            self.removed_host_states.entry(host_ident).or_default();
         }
         // Project-group header handles + collapse overrides, keyed by
         // `project_key` (host identity + project name — never the label alone).
@@ -802,7 +874,12 @@ impl CockpitPanel {
                 .with_child(
                     Shrinkable::new(
                         1.0,
-                        Self::identity_text(host.host.clone(), family, body, main),
+                        Self::identity_text(
+                            host_display_label(host, &crate::t!("cockpit-host-removed")),
+                            family,
+                            body,
+                            main,
+                        ),
                     )
                     .finish(),
                 );
@@ -820,16 +897,26 @@ impl CockpitPanel {
             // is the WHOLE glance span via the shared row grammar (`hover_row`)
             // — not a text-width sliver around the word (audit P0.2). Live-only
             // hosts get the same geometry, hover-less, so the column aligns.
-            let label_el: Box<dyn Element> = match host.registry_node_id.clone() {
-                Some(node_id) => {
+            let label_el: Box<dyn Element> = match host.availability {
+                HostAvailability::Available => match available_registry_node_id(host) {
+                    Some(node_id) => {
+                        let handle = self
+                            .conductor_host_states
+                            .get(node_id)
+                            .cloned()
+                            .unwrap_or_default();
+                        registered_host_click_target(node_id, head_el, handle, appearance)
+                    }
+                    None => hover_row(head_el, false, appearance),
+                },
+                HostAvailability::Removed => {
                     let handle = self
-                        .conductor_host_states
-                        .get(&node_id)
+                        .removed_host_states
+                        .get(&ident)
                         .cloned()
                         .unwrap_or_default();
-                    registered_host_click_target(&node_id, head_el, handle, appearance)
+                    removed_host_click_target(&ident, head_el, handle, appearance)
                 }
-                None => hover_row(head_el, false, appearance),
             };
             // Compose the header: identity takes every flexible pixel; repeated
             // secondary actions occupy fixed icon squares. Keeping the actions
@@ -839,7 +926,7 @@ impl CockpitPanel {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
                 .with_child(Shrinkable::new(1.0, label_el).finish());
-            if let Some(node_id) = host.registry_node_id.clone() {
+            if let Some(node_id) = available_registry_node_id(host).map(str::to_string) {
                 let is_fav = favorites
                     .iter()
                     .any(|f| f.same_target(FavoriteKind::Host, &node_id));
@@ -912,6 +999,7 @@ impl CockpitPanel {
                                 host.host_id.as_deref(),
                                 session,
                                 is_local,
+                                host.is_available(),
                                 appearance,
                             ))
                             .with_padding_left(22.0)
@@ -968,6 +1056,7 @@ impl CockpitPanel {
         host_id: Option<&str>,
         session: &SessionSnapshot,
         is_local: bool,
+        can_attach: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -1013,28 +1102,32 @@ impl CockpitPanel {
         // The whole glance line attaches on click — BOTH local and remote (remote
         // in-place adopt is wired via `attach_fleet_session`).
         let key = session_key(is_local, host_id, session);
-        let row = match self.conductor_row_states.get(&key).cloned() {
-            Some(state) => {
-                let action = WorkspaceAction::AttachFleetSession {
-                    host: host_label.to_string(),
-                    host_id: host_id.map(str::to_string),
-                    session_id: session.session_id.clone(),
-                    provider: session.provider,
-                    config_dir: session.config_dir.clone(),
-                    account_email: session.account_email.clone(),
-                    is_local,
-                };
-                // Same full-span hover grammar as the host rows (`hover_row`).
-                // The mouse state used to be discarded here — a clickable row
-                // that never says so (audit P0.2).
-                Hoverable::new(state, move |mouse| {
-                    hover_row(glance, mouse.is_hovered(), appearance)
-                })
-                .with_cursor(Cursor::PointingHand)
-                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                .finish()
+        let row = if can_attach {
+            match self.conductor_row_states.get(&key).cloned() {
+                Some(state) => {
+                    let action = WorkspaceAction::AttachFleetSession {
+                        host: host_label.to_string(),
+                        host_id: host_id.map(str::to_string),
+                        session_id: session.session_id.clone(),
+                        provider: session.provider,
+                        config_dir: session.config_dir.clone(),
+                        account_email: session.account_email.clone(),
+                        is_local,
+                    };
+                    // Same full-span hover grammar as the host rows (`hover_row`).
+                    // The mouse state used to be discarded here — a clickable row
+                    // that never says so (audit P0.2).
+                    Hoverable::new(state, move |mouse| {
+                        hover_row(glance, mouse.is_hovered(), appearance)
+                    })
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                    .finish()
+                }
+                None => hover_row(glance, false, appearance),
             }
-            None => hover_row(glance, false, appearance),
+        } else {
+            hover_row(glance, false, appearance)
         };
 
         let Some(peek_state) = self.conductor_peek_states.get(&key).cloned() else {
@@ -1543,12 +1636,9 @@ impl TypedActionView for CockpitPanel {
                 ctx.emit(CockpitPanelEvent::OpenCockpitPane(None));
             }
             CockpitPanelAction::ToggleHostFavorite(node_id) => {
-                let host = CockpitModel::as_ref(ctx)
-                    .inventory()
-                    .hosts
-                    .iter()
-                    .find(|host| host.registry_node_id.as_deref() == Some(node_id.as_str()))
-                    .map(|host| host.host.clone());
+                let host =
+                    available_registered_host(CockpitModel::as_ref(ctx).inventory(), node_id)
+                        .map(|host| host.host.clone());
                 if let Some(host) = host {
                     ctx.dispatch_typed_action(&toggle_host_favorite_action(node_id, &host));
                 } else {
@@ -1556,12 +1646,9 @@ impl TypedActionView for CockpitPanel {
                 }
             }
             CockpitPanelAction::OpenHostAgent(node_id) => {
-                let host = CockpitModel::as_ref(ctx)
-                    .inventory()
-                    .hosts
-                    .iter()
-                    .find(|host| host.registry_node_id.as_deref() == Some(node_id.as_str()))
-                    .map(|host| host.host.clone());
+                let host =
+                    available_registered_host(CockpitModel::as_ref(ctx).inventory(), node_id)
+                        .map(|host| host.host.clone());
                 if let Some(host) = host {
                     ctx.dispatch_typed_action(&open_registered_host_agent_action(node_id, &host));
                 } else {
@@ -1569,10 +1656,22 @@ impl TypedActionView for CockpitPanel {
                 }
             }
             CockpitPanelAction::OpenHostFiles(node_id) => {
-                ctx.dispatch_typed_action(&open_registered_host_files_action(node_id));
+                if available_registered_host(CockpitModel::as_ref(ctx).inventory(), node_id)
+                    .is_some()
+                {
+                    ctx.dispatch_typed_action(&open_registered_host_files_action(node_id));
+                } else {
+                    log::warn!("files action ignored for unavailable host node {node_id}");
+                }
             }
             CockpitPanelAction::ManageHost(node_id) => {
-                ctx.dispatch_typed_action(&manage_registered_host_action(node_id));
+                if available_registered_host(CockpitModel::as_ref(ctx).inventory(), node_id)
+                    .is_some()
+                {
+                    ctx.dispatch_typed_action(&manage_registered_host_action(node_id));
+                } else {
+                    log::warn!("manage action ignored for unavailable host node {node_id}");
+                }
             }
             CockpitPanelAction::ToggleProject(key) => {
                 // Absent = expanded (default); the first toggle collapses to false.

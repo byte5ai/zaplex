@@ -45,7 +45,7 @@ use zaplex_remote_session::agent_binding::{
 #[cfg(unix)]
 use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
-    supported_features, FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_PTY_BINDING,
+    supported_features, FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_PTY_BINDING_V2,
     FEATURE_SAFE_FILE_TRANSACTIONS_V1,
 };
 
@@ -920,7 +920,7 @@ impl ServerModel {
             // replay the output it missed (Stage 3).
             #[cfg(unix)]
             Some(client_message::Message::AttachSession(msg)) => {
-                self.handle_attach_session(conn_id, msg)
+                self.handle_attach_session_request(&request_id, conn_id, msg, ctx)
             }
             #[cfg(unix)]
             Some(client_message::Message::DetachSession(msg)) => {
@@ -939,7 +939,7 @@ impl ServerModel {
             Some(client_message::Message::SetBootstrapPreamble(_)) => return,
             #[cfg(unix)]
             Some(client_message::Message::BindAgentPty(msg)) => {
-                self.handle_bind_agent_pty(conn_id, msg)
+                self.handle_bind_agent_pty(&request_id, conn_id, msg, ctx)
             }
             #[cfg(unix)]
             Some(client_message::Message::UnbindAgentPty(msg)) => {
@@ -992,7 +992,7 @@ impl ServerModel {
             ) => HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
                 AgentPtyBindingResponse {
                     status: AgentPtyBindingStatus::CapabilityRequired.into(),
-                    message: "agent-pty-binding requires a unix daemon".to_string(),
+                    message: "agent-pty-binding-v2 requires a unix daemon".to_string(),
                 },
             )),
             #[cfg(not(unix))]
@@ -1212,7 +1212,7 @@ impl ServerModel {
     fn client_supports_agent_pty_binding(&self, conn_id: ConnectionId) -> bool {
         self.connection_features
             .get(&conn_id)
-            .is_some_and(|features| features.contains(FEATURE_AGENT_PTY_BINDING))
+            .is_some_and(|features| features.contains(FEATURE_AGENT_PTY_BINDING_V2))
     }
 
     fn client_supports_agent_process_signal(&self, conn_id: ConnectionId) -> bool {
@@ -2502,23 +2502,7 @@ impl ServerModel {
             },
             move |me, mut sessions, _ctx| {
                 #[cfg(unix)]
-                if me.client_supports_agent_pty_binding(conn_id_for_response) {
-                    for session in &mut sessions {
-                        let identity = AgentIdentity {
-                            provider: session.provider.clone(),
-                            session_id: session.session_id.clone(),
-                            account_email: (!session.account_email.is_empty())
-                                .then(|| session.account_email.clone()),
-                            config_dir: (!session.config_dir.is_empty())
-                                .then(|| session.config_dir.clone()),
-                        };
-                        if let Some(binding) = me.agent_pty_bindings.binding_for(&identity) {
-                            session.pty_session_id = binding.pty_session_id.clone();
-                            session.pty_session_generation = binding.pty_generation;
-                            session.pty_foreground = binding.foreground;
-                        }
-                    }
-                }
+                me.reconcile_and_overlay_agent_bindings(conn_id_for_response, &mut sessions);
                 me.send_server_message(
                     Some(conn_id_for_response),
                     Some(&request_id_for_response),
@@ -2591,6 +2575,22 @@ fn agent_identity_to_proto(identity: &AgentIdentity) -> AgentSessionIdentity {
 }
 
 #[cfg(unix)]
+fn live_agent_identities(sessions: &[AgentSessionInfo]) -> HashSet<AgentIdentity> {
+    sessions
+        .iter()
+        .filter(|session| session.state != "idle")
+        .filter(|session| !session.provider.is_empty() && !session.session_id.is_empty())
+        .map(|session| AgentIdentity {
+            provider: session.provider.clone(),
+            session_id: session.session_id.clone(),
+            account_email: (!session.account_email.is_empty())
+                .then(|| session.account_email.clone()),
+            config_dir: (!session.config_dir.is_empty()).then(|| session.config_dir.clone()),
+        })
+        .collect()
+}
+
+#[cfg(unix)]
 fn agent_pty_binding_response(
     status: AgentPtyBindingStatus,
     message: impl Into<String>,
@@ -2611,6 +2611,10 @@ fn binding_error_response(error: BindingError) -> AgentPtyBindingResponse {
         BindingError::StaleGeneration => agent_pty_binding_response(
             AgentPtyBindingStatus::StaleGeneration,
             "PTY generation is stale",
+        ),
+        BindingError::ForeignDaemon => agent_pty_binding_response(
+            AgentPtyBindingStatus::ForeignDaemon,
+            "request targets another daemon instance",
         ),
         BindingError::ForeignConnection => agent_pty_binding_response(
             AgentPtyBindingStatus::ForeignConnection,
@@ -2639,39 +2643,87 @@ fn binding_error_response(error: BindingError) -> AgentPtyBindingResponse {
 impl ServerModel {
     fn handle_bind_agent_pty(
         &mut self,
+        request_id: &RequestId,
         conn_id: ConnectionId,
         msg: BindAgentPty,
+        ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
         if !self.client_supports_agent_pty_binding(conn_id) {
             return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
                 agent_pty_binding_response(
                     AgentPtyBindingStatus::CapabilityRequired,
-                    "client did not negotiate agent-pty-binding",
+                    "client did not negotiate agent-pty-binding-v2",
                 ),
             ));
         }
+        if msg.host_id != self.host_id {
+            return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
+                agent_pty_binding_response(
+                    AgentPtyBindingStatus::ForeignDaemon,
+                    "request targets another daemon instance",
+                ),
+            ));
+        }
+        let request_id_for_response = request_id.clone();
+        let transcript_cache = Arc::clone(&self.agent_transcript_cache);
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let mut cache = transcript_cache.lock().unwrap_or_else(|poisoned| {
+                    log::warn!(
+                        "Daemon: agent transcript cache mutex was poisoned; recovering its state"
+                    );
+                    poisoned.into_inner()
+                });
+                live_agent_identities(&collect_agent_sessions(&mut cache))
+            },
+            move |me, live_agents, _ctx| {
+                let response = me.execute_bind_agent_pty(conn_id, msg, &live_agents);
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::AgentPtyBindingResponse(response),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    fn execute_bind_agent_pty(
+        &mut self,
+        conn_id: ConnectionId,
+        msg: BindAgentPty,
+        live_agents: &HashSet<AgentIdentity>,
+    ) -> AgentPtyBindingResponse {
+        if !self.client_supports_agent_pty_binding(conn_id) {
+            return agent_pty_binding_response(
+                AgentPtyBindingStatus::CapabilityRequired,
+                "client did not negotiate agent-pty-binding-v2",
+            );
+        }
         let agent = match agent_identity_from_proto(msg.agent) {
             Ok(agent) => agent,
-            Err(response) => {
-                return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
-                    response,
-                ));
-            }
+            Err(response) => return response,
         };
         let handoff_from = match msg.handoff_from {
             Some(identity) => match agent_identity_from_proto(Some(identity)) {
                 Ok(identity) => Some(identity),
-                Err(response) => {
-                    return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
-                        response,
-                    ));
-                }
+                Err(response) => return response,
             },
             None => None,
         };
-        let response = match self.agent_pty_bindings.bind(
+        self.agent_pty_bindings.reconcile_live_agents(live_agents);
+        if !live_agents.contains(&agent) {
+            return agent_pty_binding_response(
+                AgentPtyBindingStatus::IdentityNotDiscovered,
+                "agent identity is not present in the current live inventory",
+            );
+        }
+        match self.agent_pty_bindings.bind(
             conn_id.as_u128(),
             BindingRequest {
+                host_id: msg.host_id,
                 pty_session_id: msg.pty_session_id,
                 pty_generation: msg.pty_session_generation,
                 agent,
@@ -2682,8 +2734,33 @@ impl ServerModel {
                 agent_pty_binding_response(AgentPtyBindingStatus::Bound, "agent bound to PTY")
             }
             Err(error) => binding_error_response(error),
-        };
-        HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(response))
+        }
+    }
+
+    fn reconcile_and_overlay_agent_bindings(
+        &mut self,
+        conn_id: ConnectionId,
+        sessions: &mut [AgentSessionInfo],
+    ) {
+        let live_agents = live_agent_identities(sessions);
+        self.agent_pty_bindings.reconcile_live_agents(&live_agents);
+        if !self.client_supports_agent_pty_binding(conn_id) {
+            return;
+        }
+        for session in sessions {
+            let identity = AgentIdentity {
+                provider: session.provider.clone(),
+                session_id: session.session_id.clone(),
+                account_email: (!session.account_email.is_empty())
+                    .then(|| session.account_email.clone()),
+                config_dir: (!session.config_dir.is_empty()).then(|| session.config_dir.clone()),
+            };
+            if let Some(binding) = self.agent_pty_bindings.binding_for(&identity) {
+                session.pty_session_id = binding.pty_session_id.clone();
+                session.pty_session_generation = binding.pty_generation;
+                session.pty_foreground = binding.foreground;
+            }
+        }
     }
 
     fn handle_unbind_agent_pty(
@@ -2695,7 +2772,7 @@ impl ServerModel {
             return HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(
                 agent_pty_binding_response(
                     AgentPtyBindingStatus::CapabilityRequired,
-                    "client did not negotiate agent-pty-binding",
+                    "client did not negotiate agent-pty-binding-v2",
                 ),
             ));
         }
@@ -2709,6 +2786,7 @@ impl ServerModel {
         };
         let response = match self.agent_pty_bindings.unbind(
             conn_id.as_u128(),
+            &msg.host_id,
             &agent,
             &msg.pty_session_id,
             msg.pty_session_generation,
@@ -2808,8 +2886,12 @@ impl ServerModel {
                 ),
             },
         );
-        self.agent_pty_bindings
-            .register_pty(session_id.clone(), generation, conn_id.as_u128());
+        self.agent_pty_bindings.register_pty(
+            session_id.clone(),
+            generation,
+            self.host_id.clone(),
+            conn_id.as_u128(),
+        );
 
         let spawner = ctx.spawner();
         let exec = ctx.background_executor();
@@ -3037,6 +3119,82 @@ impl ServerModel {
     /// stream at `conn_id`, so subsequent `SessionOutput` pushes go to the
     /// reconnected client. This is the heart of "survives the drop": the session
     /// kept running and buffering into its ring while the client was gone.
+    fn handle_attach_session_request(
+        &mut self,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        msg: AttachSession,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let Some(expected_proto) = msg.expected_agent_binding.clone() else {
+            return self.handle_attach_session(conn_id, msg);
+        };
+        if !self.client_supports_agent_pty_binding(conn_id) {
+            return self.handle_attach_session(conn_id, msg);
+        }
+        let expected_agent = match agent_identity_from_proto(Some(expected_proto)) {
+            Ok(identity) => identity,
+            Err(response) => {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: response.message,
+                }));
+            }
+        };
+        let request_id_for_response = request_id.clone();
+        let transcript_cache = Arc::clone(&self.agent_transcript_cache);
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let mut cache = transcript_cache.lock().unwrap_or_else(|poisoned| {
+                    log::warn!(
+                        "Daemon: agent transcript cache mutex was poisoned; recovering its state"
+                    );
+                    poisoned.into_inner()
+                });
+                live_agent_identities(&collect_agent_sessions(&mut cache))
+            },
+            move |me, live_agents, _ctx| {
+                let message =
+                    match me.validate_fresh_agent_attach(conn_id, &expected_agent, &live_agents) {
+                        Ok(()) => match me.handle_attach_session(conn_id, msg) {
+                            HandlerOutcome::Sync(message) => message,
+                            HandlerOutcome::Async(_) => {
+                                unreachable!("validated attach execution is synchronous")
+                            }
+                        },
+                        Err(error) => server_message::Message::Error(error),
+                    };
+                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    fn validate_fresh_agent_attach(
+        &mut self,
+        conn_id: ConnectionId,
+        expected_agent: &AgentIdentity,
+        live_agents: &HashSet<AgentIdentity>,
+    ) -> Result<(), ErrorResponse> {
+        self.agent_pty_bindings.reconcile_live_agents(live_agents);
+        if !self.client_supports_agent_pty_binding(conn_id) {
+            return Err(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "agent-pty-binding-v2 connection changed during inventory refresh"
+                    .to_string(),
+            });
+        }
+        if !live_agents.contains(expected_agent) {
+            return Err(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "agent is no longer present in the current live inventory".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     fn handle_attach_session(
         &mut self,
         conn_id: ConnectionId,
@@ -3046,13 +3204,13 @@ impl ServerModel {
         if client_supports_agent_pty_binding && msg.expected_generation.is_none() {
             return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                 code: ErrorCode::InvalidRequest.into(),
-                message: "agent-pty-binding attach requires a PTY generation".to_string(),
+                message: "agent-pty-binding-v2 attach requires a PTY generation".to_string(),
             }));
         }
         if msg.expected_agent_binding.is_some() && !client_supports_agent_pty_binding {
             return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                 code: ErrorCode::InvalidRequest.into(),
-                message: "agent-pty-binding capability was not negotiated".to_string(),
+                message: "agent-pty-binding-v2 capability was not negotiated".to_string(),
             }));
         }
         let expected_agent_binding = match msg.expected_agent_binding.clone() {

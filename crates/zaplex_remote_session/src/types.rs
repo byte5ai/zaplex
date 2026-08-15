@@ -54,11 +54,18 @@ pub const FEATURE_AGENT_INVENTORY: &str = "agent-inventory";
 /// to any other shell-command path.
 pub const FEATURE_AGENT_PROCESS_SIGNAL_V1: &str = "agent-process-signal-v1";
 
-/// Capability identifier for generation-checked agent-to-PTY binding.
+/// Base capability identifier for generation-checked agent-to-PTY inventory.
 ///
-/// Both peers must advertise this feature before the client may send binding
-/// operations or trust PTY ids returned in agent inventory.
+/// Version 1 predates daemon-identity pinning and fresh inventory validation.
+/// It remains advertised for protocol discovery, but clients must not use it
+/// to mutate bindings or trust PTY ids as attach authorization.
 pub const FEATURE_AGENT_PTY_BINDING: &str = "agent-pty-binding";
+
+/// Versioned capability for daemon-pinned, freshly verified PTY bindings.
+///
+/// Both peers must advertise this exact version before the client may send
+/// binding operations or trust PTY ids returned in agent inventory.
+pub const FEATURE_AGENT_PTY_BINDING_V2: &str = "agent-pty-binding-v2";
 
 /// Capability identifier for descriptor-bound, journaled remote file
 /// transactions used by the file manager.
@@ -150,6 +157,7 @@ pub fn supported_features() -> Vec<String> {
         features.push(FEATURE_SESSION_HOST.to_string());
         features.push(FEATURE_STARTUP_COMMAND_ACK.to_string());
         features.push(FEATURE_AGENT_PTY_BINDING.to_string());
+        features.push(FEATURE_AGENT_PTY_BINDING_V2.to_string());
         features.push(FEATURE_MULTIPLEXER_INVENTORY_V1.to_string());
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -172,6 +180,7 @@ pub fn supported_client_features() -> Vec<String> {
         FEATURE_AGENT_INVENTORY.to_string(),
         FEATURE_AGENT_PROCESS_SIGNAL_V1.to_string(),
         FEATURE_AGENT_PTY_BINDING.to_string(),
+        FEATURE_AGENT_PTY_BINDING_V2.to_string(),
         FEATURE_SAFE_FILE_TRANSACTIONS_V1.to_string(),
         FEATURE_HOST_EXEC.to_string(),
         FEATURE_MULTIPLEXER_INVENTORY_V1.to_string(),

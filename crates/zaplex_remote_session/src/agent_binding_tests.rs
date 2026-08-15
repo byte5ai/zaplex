@@ -1,4 +1,7 @@
 use super::{AgentIdentity, AgentPtyBindings, BindingError, BindingRequest};
+use std::collections::HashSet;
+
+const HOST: &str = "daemon-host-1";
 
 fn identity(provider: &str, session_id: &str) -> AgentIdentity {
     AgentIdentity {
@@ -15,6 +18,7 @@ fn request(
     handoff_from: Option<AgentIdentity>,
 ) -> BindingRequest {
     BindingRequest {
+        host_id: HOST.to_string(),
         pty_session_id: "pty-1".to_string(),
         pty_generation: generation,
         agent,
@@ -25,7 +29,7 @@ fn request(
 #[test]
 fn bind_and_unbind_follow_agent_and_pty_lifecycle() {
     let mut bindings = AgentPtyBindings::default();
-    bindings.register_pty("pty-1", 7, 11);
+    bindings.register_pty("pty-1", 7, HOST, 11);
     let agent = identity("codex", "agent-1");
 
     bindings.bind(11, request(agent.clone(), 7, None)).unwrap();
@@ -34,19 +38,21 @@ fn bind_and_unbind_follow_agent_and_pty_lifecycle() {
         "pty-1"
     );
 
-    bindings.unbind(11, &agent, "pty-1", 7).unwrap();
+    bindings.unbind(11, HOST, &agent, "pty-1", 7).unwrap();
     assert!(!bindings.binding_for(&agent).unwrap().foreground);
 
     bindings.bind(11, request(agent.clone(), 7, None)).unwrap();
     assert!(bindings.binding_for(&agent).unwrap().foreground);
     bindings.remove_pty("pty-1", 7);
-    assert!(bindings.binding_for(&agent).is_none());
+    let historical = bindings.binding_for(&agent).unwrap();
+    assert!(!historical.foreground);
+    assert_eq!(historical.pty_generation, 7);
 }
 
 #[test]
 fn stale_binding_generation_cannot_replace_current_binding() {
     let mut bindings = AgentPtyBindings::default();
-    bindings.register_pty("pty-1", 8, 11);
+    bindings.register_pty("pty-1", 8, HOST, 11);
 
     assert_eq!(
         bindings
@@ -59,7 +65,20 @@ fn stale_binding_generation_cannot_replace_current_binding() {
 #[test]
 fn foreign_host_or_daemon_binding_is_rejected() {
     let mut bindings = AgentPtyBindings::default();
-    bindings.register_pty("pty-1", 7, 11);
+    bindings.register_pty("pty-1", 7, HOST, 11);
+    let mut foreign = request(identity("claude", "agent-1"), 7, None);
+    foreign.host_id = "daemon-host-2".to_string();
+
+    assert_eq!(
+        bindings.bind(11, foreign).unwrap_err(),
+        BindingError::ForeignDaemon
+    );
+}
+
+#[test]
+fn foreign_connection_is_rejected_independently_of_daemon_identity() {
+    let mut bindings = AgentPtyBindings::default();
+    bindings.register_pty("pty-1", 7, HOST, 11);
 
     assert_eq!(
         bindings
@@ -84,7 +103,7 @@ fn unknown_pty_binding_is_never_attached() {
 #[test]
 fn multiple_agent_sessions_can_reference_the_same_pty() {
     let mut bindings = AgentPtyBindings::default();
-    bindings.register_pty("pty-1", 7, 11);
+    bindings.register_pty("pty-1", 7, HOST, 11);
     let first = identity("claude", "agent-1");
     let second = identity("claude", "agent-2");
 
@@ -101,7 +120,7 @@ fn multiple_agent_sessions_can_reference_the_same_pty() {
 #[test]
 fn second_live_agent_binding_to_same_pty_is_rejected() {
     let mut bindings = AgentPtyBindings::default();
-    bindings.register_pty("pty-1", 7, 11);
+    bindings.register_pty("pty-1", 7, HOST, 11);
     let first = identity("codex", "agent-1");
     let second = identity("codex", "agent-2");
 
@@ -125,8 +144,8 @@ fn second_live_agent_binding_to_same_pty_is_rejected() {
 #[test]
 fn agent_identity_cannot_bind_to_two_ptys() {
     let mut bindings = AgentPtyBindings::default();
-    bindings.register_pty("pty-1", 7, 11);
-    bindings.register_pty("pty-2", 8, 11);
+    bindings.register_pty("pty-1", 7, HOST, 11);
+    bindings.register_pty("pty-2", 8, HOST, 11);
     let agent = identity("codex", "agent-1");
 
     bindings.bind(11, request(agent.clone(), 7, None)).unwrap();
@@ -135,6 +154,7 @@ fn agent_identity_cannot_bind_to_two_ptys() {
             .bind(
                 11,
                 BindingRequest {
+                    host_id: HOST.to_string(),
                     pty_session_id: "pty-2".to_string(),
                     pty_generation: 8,
                     agent,
@@ -149,16 +169,17 @@ fn agent_identity_cannot_bind_to_two_ptys() {
 #[test]
 fn unbound_identity_can_move_to_another_pty_and_keeps_history() {
     let mut bindings = AgentPtyBindings::default();
-    bindings.register_pty("pty-1", 7, 11);
-    bindings.register_pty("pty-2", 8, 11);
+    bindings.register_pty("pty-1", 7, HOST, 11);
+    bindings.register_pty("pty-2", 8, HOST, 11);
     let agent = identity("codex", "agent-1");
 
     bindings.bind(11, request(agent.clone(), 7, None)).unwrap();
-    bindings.unbind(11, &agent, "pty-1", 7).unwrap();
+    bindings.unbind(11, HOST, &agent, "pty-1", 7).unwrap();
     bindings
         .bind(
             11,
             BindingRequest {
+                host_id: HOST.to_string(),
                 pty_session_id: "pty-2".to_string(),
                 pty_generation: 8,
                 agent: agent.clone(),
@@ -175,4 +196,39 @@ fn unbound_identity_can_move_to_another_pty_and_keeps_history() {
         "pty-2",
         "inventory must route to the one live foreground association"
     );
+}
+
+#[test]
+fn ended_agent_is_demoted_but_keeps_its_historical_pty() {
+    let mut bindings = AgentPtyBindings::default();
+    bindings.register_pty("pty-1", 7, HOST, 11);
+    let ended = identity("codex", "agent-ended");
+    bindings.bind(11, request(ended.clone(), 7, None)).unwrap();
+
+    bindings.reconcile_live_agents(&HashSet::new());
+
+    let historical = bindings.binding_for(&ended).unwrap();
+    assert!(!historical.foreground);
+    assert_eq!(historical.pty_session_id, "pty-1");
+    assert_eq!(historical.pty_generation, 7);
+    assert!(bindings.foreground_for_pty("pty-1", 7).is_none());
+}
+
+#[test]
+fn reused_pty_id_keeps_generations_distinct_and_old_history_non_attachable() {
+    let mut bindings = AgentPtyBindings::default();
+    let old = identity("codex", "agent-old");
+    let new = identity("codex", "agent-new");
+    bindings.register_pty("pty-1", 7, HOST, 11);
+    bindings.bind(11, request(old.clone(), 7, None)).unwrap();
+
+    bindings.register_pty("pty-1", 8, HOST, 11);
+    bindings.bind(11, request(new.clone(), 8, None)).unwrap();
+
+    assert_eq!(bindings.bindings_for_pty("pty-1", 7).len(), 1);
+    assert!(!bindings.bindings_for_pty("pty-1", 7)[0].foreground);
+    assert_eq!(bindings.bindings_for_pty("pty-1", 8).len(), 1);
+    assert!(bindings.bindings_for_pty("pty-1", 8)[0].foreground);
+    assert!(!bindings.binding_for(&old).unwrap().foreground);
+    assert!(bindings.binding_for(&new).unwrap().foreground);
 }

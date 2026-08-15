@@ -86,6 +86,7 @@ cockpit-host-action-agent = Agent öffnen
 cockpit-host-action-files = Dateien öffnen
 cockpit-tt-review = Änderungen prüfen
 cockpit-host-no-agents = Keine laufenden Sessions
+cockpit-host-removed = aus Verbindungen entfernt
 cockpit-conductor-rest-show-both = { $running } laufend · { $idle } ruhend — zeigen
 cockpit-conductor-rest-show-running = { $running } laufend — zeigen
 cockpit-conductor-rest-show-idle = { $idle } ruhend — zeigen

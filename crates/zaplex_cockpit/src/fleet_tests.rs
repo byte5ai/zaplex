@@ -60,6 +60,7 @@ fn host(name: &str, sessions: Vec<SessionSnapshot>) -> HostSessions {
         // that care (see the fold + collision tests below).
         is_local: false,
         host_id: None,
+        registry_node_id: None,
         sessions,
     }
 }
@@ -69,6 +70,7 @@ fn remote_host(label: &str, host_id: &str) -> RemoteHost {
     RemoteHost {
         label: label.into(),
         host_id: host_id.into(),
+        registry_node_id: None,
     }
 }
 
@@ -205,6 +207,7 @@ fn fold_empty_remote_list_is_exactly_the_local_tree() {
         host: "local".into(),
         is_local: true, // fold marks the local contribution local
         host_id: None,  // the local node carries no daemon id
+        registry_node_id: None,
         sessions: local,
     }]);
     assert_eq!(folded, expected);
@@ -545,27 +548,17 @@ fn local_host_is_rendered_exactly_once() {
 
 #[test]
 fn removed_host_is_never_routed_as_available() {
+    let mut removed_remote = remote_host("devhost", "daemon-dev");
+    removed_remote.registry_node_id = Some("node-dev".to_string());
+    let mut removed_session = session("a", "/p/x", SessionState::Waiting, 10);
+    removed_session.account_email = Some("me@example.com".to_string());
     let mut tree = fold_inventory(
         "local",
         Vec::new(),
-        vec![(
-            remote_host("devhost", "daemon-dev"),
-            vec![session("a", "/p/x", SessionState::Active, 10)],
-        )],
+        vec![(removed_remote, vec![removed_session])],
     );
-    merge_registered_hosts(
-        &mut tree,
-        &[RegisteredHost {
-            node_id: "node-dev".to_string(),
-            label: "devhost".to_string(),
-            live_host_id: Some("daemon-dev".to_string()),
-        }],
-    );
-    assert!(tree
-        .hosts
-        .iter()
-        .any(|host| host.registry_node_id.as_deref() == Some("node-dev")));
 
+    merge_registered_hosts(&mut tree, &[]);
     merge_registered_hosts(&mut tree, &[]);
 
     let live = tree
@@ -573,9 +566,31 @@ fn removed_host_is_never_routed_as_available() {
         .iter()
         .find(|host| host.host_id.as_deref() == Some("daemon-dev"))
         .expect("live inventory remains visible");
+    assert_eq!(live.availability, HostAvailability::Removed);
+    assert!(live.registry_node_id.is_none());
+    assert_eq!(
+        live.projects[0].sessions[0].session_id, "a",
+        "observed sessions remain honestly visible on the removed reference"
+    );
+    assert_eq!(
+        tree.needs_me, 0,
+        "removed hosts do not contribute actionable attention"
+    );
     assert!(
-        live.registry_node_id.is_none(),
-        "a deleted registry id must not remain as a routable host action"
+        sessions_of_account(
+            &tree,
+            &account(
+                Provider::Claude,
+                Some("me@example.com"),
+                "/Users/me/.claude"
+            )
+        )
+        .is_empty(),
+        "account routing must not expose a removed host's sessions"
+    );
+    assert!(
+        crate::conductor::waiting_sessions(&tree).is_empty(),
+        "keyboard waiting-session routing must ignore removed hosts"
     );
 }
 
@@ -619,6 +634,7 @@ fn an_accounts_sessions_are_found_on_every_host() {
             host: "mac".into(),
             is_local: true,
             host_id: None,
+            registry_node_id: None,
             sessions: vec![owned(
                 "local",
                 "/p/a",
@@ -631,6 +647,7 @@ fn an_accounts_sessions_are_found_on_every_host() {
             host: "devhost".into(),
             is_local: false,
             host_id: Some("daemon-1".into()),
+            registry_node_id: None,
             sessions: vec![owned(
                 "remote",
                 "/p/b",
@@ -682,6 +699,7 @@ fn a_second_account_on_another_host_is_not_claimed_as_ours() {
             host: "mac".into(),
             is_local: true,
             host_id: None,
+            registry_node_id: None,
             sessions: vec![owned(
                 "mine",
                 "/p/a",
@@ -694,6 +712,7 @@ fn a_second_account_on_another_host_is_not_claimed_as_ours() {
             host: "devhost".into(),
             is_local: false,
             host_id: Some("daemon-1".into()),
+            registry_node_id: None,
             // Same provider, same (empty) pin — a different subscription.
             sessions: vec![owned(
                 "theirs",
@@ -726,6 +745,7 @@ fn the_same_address_on_two_providers_stays_two_accounts() {
         host: "mac".into(),
         is_local: true,
         host_id: None,
+        registry_node_id: None,
         sessions: vec![
             owned("c", "/p/a", Provider::Claude, Some("me@x.de"), None),
             owned("x", "/p/b", Provider::Codex, Some("me@x.de"), None),
@@ -755,6 +775,7 @@ fn a_session_that_names_no_account_joins_none() {
         host: "old-daemon".into(),
         is_local: false,
         host_id: Some("daemon-old".into()),
+        registry_node_id: None,
         sessions: vec![owned("anon", "/p/a", Provider::Claude, None, None)],
     }]);
 
@@ -776,6 +797,7 @@ fn an_account_without_an_email_claims_nothing() {
         host: "mac".into(),
         is_local: true,
         host_id: None,
+        registry_node_id: None,
         sessions: vec![owned("anon", "/p/a", Provider::Claude, None, None)],
     }]);
 
@@ -794,6 +816,7 @@ fn the_join_does_not_hinge_on_how_the_address_is_capitalised() {
         host: "devhost".into(),
         is_local: false,
         host_id: Some("daemon-1".into()),
+        registry_node_id: None,
         sessions: vec![owned(
             "remote",
             "/p/a",
