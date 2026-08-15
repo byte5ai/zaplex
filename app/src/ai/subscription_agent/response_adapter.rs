@@ -34,7 +34,7 @@ impl ResponseEventAdapter {
             r#type: Some(api::response_event::Type::Init(
                 api::response_event::StreamInit {
                     request_id: self.request_id.clone(),
-                    conversation_id: None,
+                    conversation_id: String::new(),
                     run_id: String::new(),
                 },
             )),

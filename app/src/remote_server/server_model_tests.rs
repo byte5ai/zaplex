@@ -776,7 +776,7 @@ fn create_directory_creates_nested_directories() {
 #[cfg(unix)]
 mod daemon_session {
     use super::super::HOST_RING_CAP_BYTES;
-    use super::{binding_identity, binding_status, test_model};
+    use super::{bind_status, binding_identity, test_model};
     use crate::remote_server::proto::{
         client_message, server_message, AttachSession, BindAgentPty, ClientMessage, CloseSession,
         DetachSession, ListSessions, OpenSession, ResizeSession, ServerMessage, SessionInput,

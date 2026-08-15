@@ -180,7 +180,8 @@ impl ProcessLaunch {
         env_args.push(self.program.to_string_lossy().into_owned());
         env_args.extend(self.args.iter().cloned());
 
-        let cwd = shell_words::quote(&self.working_directory.to_string_lossy());
+        let working_directory = self.working_directory.to_string_lossy();
+        let cwd = shell_words::quote(&working_directory);
         let process = env_args
             .iter()
             .map(|arg| shell_words::quote(arg))

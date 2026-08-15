@@ -1,6 +1,7 @@
 use super::*;
 use crate::ai::subscription_agent::{
-    AccountIdentity, HostIdentity, InstallationIdentity, ModelCapability, SubscriptionAgent,
+    AccountIdentity, ApprovalDecision, HostIdentity, InstallationIdentity, ModelCapability,
+    SubscriptionAgent,
 };
 
 fn target() -> SubscriptionTarget {

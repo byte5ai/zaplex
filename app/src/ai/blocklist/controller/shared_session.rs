@@ -327,8 +327,6 @@ impl BlocklistAIController {
             finished,
             conversation_id,
             did_exchange_contain_user_query,
-            // The shared session path does not trigger local compaction (it comes from the remote viewer sync stream), always None
-            None,
             ctx,
         );
     }
