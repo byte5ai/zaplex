@@ -2843,7 +2843,7 @@ cockpit-pane-title = Cockpit
 cockpit-pane-col-today = Today
 cockpit-pane-col-5h = 5h block
 cockpit-pane-col-week = Week
-cockpit-pane-provenance-legend = ~ = estimated from transcripts · unmarked = live subscription usage
+cockpit-pane-provenance-legend = ~ = transcript estimate · API list prices verified { $date } · unmarked = live subscription usage
 cockpit-session-adopt = ▸ adopt
 cockpit-session-transcript = log
 cockpit-session-fork = fork

@@ -117,5 +117,6 @@ fn known_estimated_cost_has_provenance_marker() {
         .unwrap();
     assert!(estimate.is_estimate());
     assert_eq!(estimate.source, PricingSource::BundledListPrice);
+    assert_eq!(estimate.source.as_of(), Some("2026-07-31"));
     assert!(crate::format_cost(estimate.usd).starts_with('~'));
 }

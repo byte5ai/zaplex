@@ -6,6 +6,14 @@ fn desc(id: u64, fs: FsNamespace, path: &str) -> FmPaneDescriptor {
         label: format!("pane{id}"),
         fs,
         current_path: PathBuf::from(path),
+        pane_group_id: None,
+    }
+}
+
+fn desc_in_group(id: u64, fs: FsNamespace, path: &str, group: EntityId) -> FmPaneDescriptor {
+    FmPaneDescriptor {
+        pane_group_id: Some(group),
+        ..desc(id, fs, path)
     }
 }
 
@@ -120,27 +128,102 @@ fn plan_transfer_covers_every_direction() {
 #[test]
 fn one_other_visible_file_manager_is_default_target() {
     let mut reg = FileManagerRegistry::new();
-    reg.upsert(desc(10, FsNamespace::Local, "/source"));
-    reg.upsert(desc(20, FsNamespace::Remote("host".into()), "/target"));
+    let group = EntityId::from_usize(1);
+    reg.upsert(desc_in_group(10, FsNamespace::Local, "/source", group));
+    reg.upsert(desc_in_group(
+        20,
+        FsNamespace::Remote("host".into()),
+        "/target",
+        group,
+    ));
 
-    let targets = reg.others(10);
-    assert_eq!(targets.len(), 1);
-    assert_eq!(targets[0].id, 20);
+    let targets = reg.transfer_targets(10);
+    assert_eq!(targets.selectable.len(), 1);
+    assert_eq!(targets.default.map(|pane| pane.id), Some(20));
 }
 
 #[test]
 fn hidden_tab_file_managers_are_selectable_targets() {
     let mut reg = FileManagerRegistry::new();
-    reg.upsert(desc(10, FsNamespace::Local, "/source"));
+    reg.upsert(desc_in_group(
+        10,
+        FsNamespace::Local,
+        "/source",
+        EntityId::from_usize(1),
+    ));
     // Simulate panes registered from inactive tabs in an arbitrary
     // activation order. Target discovery must not inherit that order.
-    reg.upsert(desc(30, FsNamespace::Remote("hidden-b".into()), "/b"));
-    reg.upsert(desc(20, FsNamespace::Remote("hidden-a".into()), "/a"));
+    reg.upsert(desc_in_group(
+        30,
+        FsNamespace::Remote("hidden-b".into()),
+        "/b",
+        EntityId::from_usize(3),
+    ));
+    reg.upsert(desc_in_group(
+        20,
+        FsNamespace::Remote("hidden-a".into()),
+        "/a",
+        EntityId::from_usize(2),
+    ));
 
-    let target_ids = reg
-        .others(10)
+    let targets = reg.transfer_targets(10);
+    assert!(targets.default.is_none());
+    let target_ids = targets
+        .selectable
         .into_iter()
         .map(|pane| pane.id)
         .collect::<Vec<_>>();
     assert_eq!(target_ids, vec![20, 30]);
+}
+
+#[test]
+fn one_visible_target_wins_over_hidden_tab_candidates() {
+    let mut reg = FileManagerRegistry::new();
+    let visible_group = EntityId::from_usize(1);
+    reg.upsert(desc_in_group(
+        10,
+        FsNamespace::Local,
+        "/source",
+        visible_group,
+    ));
+    reg.upsert(desc_in_group(
+        20,
+        FsNamespace::Local,
+        "/visible",
+        visible_group,
+    ));
+    reg.upsert(desc_in_group(
+        30,
+        FsNamespace::Remote("hidden".into()),
+        "/hidden",
+        EntityId::from_usize(2),
+    ));
+
+    let targets = reg.transfer_targets(10);
+    assert_eq!(targets.default.map(|pane| pane.id), Some(20));
+    assert_eq!(targets.selectable.len(), 2);
+}
+
+#[test]
+fn multiple_visible_targets_require_an_explicit_choice() {
+    let mut reg = FileManagerRegistry::new();
+    let group = EntityId::from_usize(1);
+    for id in [10, 20, 30] {
+        reg.upsert(desc_in_group(id, FsNamespace::Local, "/", group));
+    }
+
+    let targets = reg.transfer_targets(10);
+    assert!(targets.default.is_none());
+    assert_eq!(targets.selectable.len(), 2);
+}
+
+#[test]
+fn unattached_source_never_implicitly_targets_another_pane() {
+    let mut reg = FileManagerRegistry::new();
+    reg.upsert(desc(10, FsNamespace::Local, "/source"));
+    reg.upsert(desc(20, FsNamespace::Local, "/other"));
+
+    let targets = reg.transfer_targets(10);
+    assert!(targets.default.is_none());
+    assert_eq!(targets.selectable.len(), 1);
 }

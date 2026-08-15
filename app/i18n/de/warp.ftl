@@ -27,7 +27,7 @@ cockpit-pane-title = Cockpit
 cockpit-pane-col-today = Heute
 cockpit-pane-col-5h = 5-Std-Block
 cockpit-pane-col-week = Woche
-cockpit-pane-provenance-legend = ~ = aus Transkripten geschätzt · ohne Markierung = Live-Abo-Verbrauch
+cockpit-pane-provenance-legend = ~ = Transkript-Schätzung · API-Listenpreise geprüft { $date } · ohne Markierung = Live-Abo-Verbrauch
 cockpit-sessions-waiting-toast = Wartet auf dich: { $sessions }
 cockpit-attention-inbox-title = Offene Punkte
 cockpit-attention-inbox-count = { $count ->

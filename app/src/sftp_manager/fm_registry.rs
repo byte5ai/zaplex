@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use warpui::{Entity, SingletonEntity};
+use warpui::{Entity, EntityId, SingletonEntity};
 
 use super::sftp_backend::SftpBackend;
 
@@ -45,6 +45,19 @@ pub struct FmPaneDescriptor {
     pub fs: FsNamespace,
     /// The pane's current directory — the copy/move destination.
     pub current_path: PathBuf,
+    /// The pane group that currently owns this pane. Panes in the source's
+    /// group are visible beside it; panes in other groups remain selectable
+    /// targets but must not be chosen implicitly.
+    pub pane_group_id: Option<EntityId>,
+}
+
+/// Candidate destinations for an F5/F6 operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransferTargets {
+    /// The sole other pane visible beside the source, if there is exactly one.
+    pub default: Option<FmPaneDescriptor>,
+    /// Every other open pane, including panes in inactive tabs.
+    pub selectable: Vec<FmPaneDescriptor>,
 }
 
 /// How a copy/move between two panes must be carried out, decided purely from
@@ -152,6 +165,39 @@ impl FileManagerRegistry {
             .collect::<Vec<_>>();
         panes.sort_unstable_by_key(|pane| pane.id);
         panes
+    }
+
+    /// Resolve the MC default destination without hiding any valid target.
+    /// Exactly one other pane in the source's pane group is the default. If
+    /// there are zero or multiple visible peers, the caller must present the
+    /// complete `selectable` list, including panes in inactive tabs.
+    pub fn transfer_targets(&self, self_id: u64) -> TransferTargets {
+        let selectable = self.others(self_id);
+        let source_group = self
+            .panes
+            .iter()
+            .find(|pane| pane.id == self_id)
+            .and_then(|pane| pane.pane_group_id);
+
+        let default = match source_group {
+            Some(source_group) => {
+                let mut visible = selectable
+                    .iter()
+                    .filter(|pane| pane.pane_group_id == Some(source_group));
+                let only = visible.next().cloned();
+                if visible.next().is_none() {
+                    only
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+
+        TransferTargets {
+            default,
+            selectable,
+        }
     }
 
     /// All registered panes (for tests/diagnostics).

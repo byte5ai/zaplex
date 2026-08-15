@@ -35,6 +35,17 @@ pub enum PricingSource {
     CustomStatic,
 }
 
+impl PricingSource {
+    /// Date the bundled list prices were last verified against their published
+    /// vendor sources. Custom static prices have no vendor verification date.
+    pub const fn as_of(self) -> Option<&'static str> {
+        match self {
+            PricingSource::BundledListPrice => Some("2026-07-31"),
+            PricingSource::CustomStatic => None,
+        }
+    }
+}
+
 /// A local calculation from one transcript turn and a static price table.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CostEstimate {

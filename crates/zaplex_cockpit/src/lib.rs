@@ -60,7 +60,7 @@ pub use guardrails::{
 };
 pub use oauth::{apply_oauth_usage, parse_oauth_usage, OauthUsage, OauthWindow};
 pub use overrides::{set_label_override, AccountOverride, AccountOverrides};
-pub use pricing::{ModelPrice, PricingTable};
+pub use pricing::{ModelPrice, PricingSource, PricingTable};
 pub use process_identity::{
     current_process_fingerprint, local_process_signalling_supported, probe_registered_process,
     send_verified_process_signal, ProcessProbe, ProcessSignalError,
