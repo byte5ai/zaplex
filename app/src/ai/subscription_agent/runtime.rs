@@ -1,7 +1,7 @@
 use super::{
     discover_capabilities, query_cli_version, route_target, AccountIdentity, AgentCapability,
     AgentLifecycle, HostIdentity, InstallationIdentity, ProcessLocation, ResponseEventAdapter,
-    RoutePreferences, RouteResult, SessionIdentity, SubscriptionAgent, SubscriptionSession,
+    RoutePreferences, RouteResult, SubscriptionAgent, SubscriptionSession,
     SubscriptionSessionRegistry, SubscriptionTarget,
 };
 use crate::ai::agent::{api, AIAgentInput, AIIdentifiers};
@@ -233,16 +233,22 @@ pub(crate) async fn generate_subscription_output(
         let cancellation = cancellation_rx.fuse();
         futures_util::pin_mut!(cancellation);
         loop {
-            let next_event = session.next_event().fuse();
-            futures_util::pin_mut!(next_event);
-            let event = select! {
-                _ = cancellation => {
+            let event = {
+                let next_event = session.next_event().fuse();
+                futures_util::pin_mut!(next_event);
+                select! {
+                    _ = cancellation => None,
+                    event = next_event => Some(event),
+                }
+            };
+            let event = match event {
+                None => {
                     let _ = session.cancel().await;
                     registry.clear_approvals(&conversation_id);
                     mark_cancelled(&registry, &conversation_id);
                     break;
                 }
-                event = next_event => match event {
+                Some(event) => match event {
                     Ok(Some(event)) => event,
                     Ok(None) => break,
                     Err(error) => {

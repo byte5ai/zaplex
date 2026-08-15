@@ -3714,7 +3714,7 @@ impl SftpBrowserView {
                         matches!(entry.identity.backend.file_type, FileEntryType::Directory),
                     )?;
                 }
-                Ok(())
+                Ok::<(), sftp_ops::SftpOpsError>(())
             },
             move |me, result, ctx| {
                 me.is_loading = false;
