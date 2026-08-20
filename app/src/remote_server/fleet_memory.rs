@@ -183,6 +183,19 @@ struct LinuxProcessStat {
     pid: u32,
     process_session_id: i32,
     start_time_ticks: u64,
+    state: u8,
+}
+
+impl LinuxProcessStat {
+    fn has_exited(self) -> bool {
+        matches!(self.state, b'Z' | b'X' | b'x')
+    }
+
+    fn same_identity(self, other: Self) -> bool {
+        self.pid == other.pid
+            && self.process_session_id == other.process_session_id
+            && self.start_time_ticks == other.start_time_ticks
+    }
 }
 
 pub(crate) fn read_linux_process_identity(
@@ -273,7 +286,13 @@ fn collect_linux_process_session_pss_inner(
                 MemoryDiagnostic::PartialProcessTree,
             );
         };
-        if read_process_stat(reader, expected.pid) != Ok(expected) {
+        let Ok(observed) = read_process_stat(reader, expected.pid) else {
+            return MemoryMeasurement::unavailable(
+                MemoryProvenance::LinuxProcSmapsRollup,
+                MemoryDiagnostic::ProcessIdentityChanged,
+            );
+        };
+        if !observed.same_identity(expected) {
             return MemoryMeasurement::unavailable(
                 MemoryProvenance::LinuxProcSmapsRollup,
                 MemoryDiagnostic::ProcessIdentityChanged,
@@ -370,7 +389,13 @@ fn linux_process_session_members_for_termination(
         let Some(stat) = read_process_stat_optional(reader, pid)? else {
             continue;
         };
-        if stat.process_session_id == root.process_session_id {
+        if stat.pid == root.pid
+            && (stat.start_time_ticks != root.start_time_ticks
+                || stat.process_session_id != root.process_session_id)
+        {
+            return Err(MemoryDiagnostic::ProcessIdentityChanged);
+        }
+        if stat.process_session_id == root.process_session_id && !stat.has_exited() {
             members.push(stat);
         }
     }
@@ -397,7 +422,7 @@ fn terminate_linux_process_session_with<T>(
             let Some((target, observed)) = acquire(expected)? else {
                 continue;
             };
-            if observed != expected {
+            if !observed.same_identity(expected) {
                 return Err(MemoryDiagnostic::ProcessIdentityChanged);
             }
             match signal(target) {
@@ -410,8 +435,8 @@ fn terminate_linux_process_session_with<T>(
     }
 
     // A successful lifecycle response requires an explicit final proof that
-    // no process remains in the kernel session. This catches children forked
-    // between an earlier enumeration and its signal pass.
+    // no live process remains in the kernel session. This catches children
+    // forked between an earlier enumeration and its signal pass.
     if linux_process_session_members_for_termination(reader, root)?.is_empty() {
         Ok(signalled)
     } else {
@@ -580,6 +605,10 @@ fn parse_process_stat(contents: &str) -> Result<LinuxProcessStat, MemoryDiagnost
     if fields.len() <= 19 {
         return Err(MemoryDiagnostic::MissingField);
     }
+    let state = match fields[0].as_bytes() {
+        [state] => *state,
+        _ => return Err(MemoryDiagnostic::InvalidValue),
+    };
     let process_session_id = fields[3]
         .parse::<i32>()
         .map_err(|_| MemoryDiagnostic::InvalidValue)?;
@@ -590,6 +619,7 @@ fn parse_process_stat(contents: &str) -> Result<LinuxProcessStat, MemoryDiagnost
         pid,
         process_session_id,
         start_time_ticks,
+        state,
     })
 }
 

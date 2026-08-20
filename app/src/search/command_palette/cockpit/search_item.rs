@@ -3,6 +3,7 @@ use ordered_float::OrderedFloat;
 use warpui::elements::{Align, ConstrainedBox, Flex, ParentElement, Shrinkable, Text};
 use warpui::{AppContext, Element, SingletonEntity};
 
+use super::data_source::WAITING_SCORE_BONUS;
 use crate::appearance::Appearance;
 use crate::cockpit::palette::{CockpitPaletteKind, CockpitPaletteRecord, CockpitPaletteTarget};
 use crate::search::action::search_item::styles;
@@ -90,7 +91,12 @@ impl SearchItemTrait for SearchItem {
         // A one-point bonus only breaks equal fuzzy matches. It does not let an
         // unrelated waiting result outrank a materially better textual match.
         OrderedFloat::from(
-            self.match_result.score as f64 + if self.record.waiting { 1. } else { 0. },
+            self.match_result.score as f64
+                + if self.record.waiting {
+                    WAITING_SCORE_BONUS as f64
+                } else {
+                    0.
+                },
         )
     }
 

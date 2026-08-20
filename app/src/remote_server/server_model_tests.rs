@@ -2454,7 +2454,9 @@ mod daemon_session {
             };
             assert_eq!(
                 ManagedSessionLifecycleStatus::try_from(stopped.status).unwrap(),
-                ManagedSessionLifecycleStatus::Stopped
+                ManagedSessionLifecycleStatus::Stopped,
+                "managed stop failed with diagnostic code: {}",
+                stopped.diagnostic_code
             );
             async_io::Timer::after(Duration::from_millis(100)).await;
             model.read(&app, |m, _ctx| {

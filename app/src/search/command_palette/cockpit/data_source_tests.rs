@@ -89,19 +89,24 @@ fn result_bound_keeps_the_best_match_even_when_it_was_indexed_last() {
                 &format!("background-{index}"),
                 "Background",
                 "needle background session",
-                false,
+                true,
             )
         })
         .collect::<Vec<_>>();
     records.push(record(
         "exact",
-        "Needle",
+        "NeEdLe",
         "Claude local zaplex needle",
         false,
     ));
 
     let results = search_records(records, "needle");
     assert_eq!(results.len(), MAX_COCKPIT_RESULTS);
+    assert!(matches!(
+        results[0].accept_result().to_summary(),
+        crate::search::command_palette::mixer::ItemSummary::Cockpit { key }
+            if key == "exact"
+    ));
     assert!(results.iter().any(|result| {
         matches!(
             result.accept_result().to_summary(),
@@ -109,6 +114,25 @@ fn result_bound_keeps_the_best_match_even_when_it_was_indexed_last() {
                 if key == "exact"
         )
     }));
+}
+
+#[test]
+fn case_insensitive_exact_label_outranks_a_waiting_prefix_match() {
+    let results = search_records(
+        vec![
+            record("prefix", "Background", "needle background", true),
+            record("exact", "NeEdLe", "Claude local zaplex needle", false),
+        ],
+        "needle",
+    );
+
+    assert_eq!(results.len(), 2);
+    assert!(results[0].score() > results[1].score());
+    assert!(matches!(
+        results[0].accept_result().to_summary(),
+        crate::search::command_palette::mixer::ItemSummary::Cockpit { key }
+            if key == "exact"
+    ));
 }
 
 #[test]

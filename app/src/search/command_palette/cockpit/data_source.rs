@@ -14,7 +14,8 @@ use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
 use crate::terminal::cli_agent::CLIAgentInstallModel;
 
 const MAX_COCKPIT_RESULTS: usize = 200;
-const EXACT_CLASS_OR_LABEL_BONUS: i64 = 2;
+pub(super) const WAITING_SCORE_BONUS: i64 = 1;
+const EXACT_PRIORITY_MARGIN: i64 = WAITING_SCORE_BONUS + 1;
 
 fn class_label(kind: CockpitPaletteKind) -> &'static str {
     match kind {
@@ -31,6 +32,13 @@ fn search_records(
     query: &str,
 ) -> Vec<QueryResult<CommandPaletteItemAction>> {
     let query = query.trim();
+    let canonical_exact_score = if query.is_empty() {
+        0
+    } else {
+        match_indices_case_insensitive(query, query)
+            .expect("a non-empty query must match itself")
+            .score
+    };
     let mut matches = records
         .into_iter()
         .filter_map(|record| {
@@ -46,15 +54,23 @@ fn search_records(
                 .flatten()
                 .max_by_key(|result| result.score)?
             };
-            if !query.is_empty()
+            let is_exact = !query.is_empty()
                 && (record.primary.trim().eq_ignore_ascii_case(query)
-                    || class_label(record.kind).eq_ignore_ascii_case(query))
-            {
+                    || class_label(record.kind).eq_ignore_ascii_case(query));
+            if is_exact {
+                // Normalize away matcher case penalties, then keep exact
+                // labels ahead of the strongest non-exact waiting result.
                 match_result.score = match_result
                     .score
-                    .saturating_add(EXACT_CLASS_OR_LABEL_BONUS);
+                    .max(canonical_exact_score)
+                    .saturating_add(EXACT_PRIORITY_MARGIN);
             }
-            let score = match_result.score as f64 + if record.waiting { 1. } else { 0. };
+            let score = match_result.score as f64
+                + if record.waiting {
+                    WAITING_SCORE_BONUS as f64
+                } else {
+                    0.
+                };
             Some((score, record, match_result))
         })
         .collect_vec();

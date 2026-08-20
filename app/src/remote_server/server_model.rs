@@ -5016,7 +5016,7 @@ impl ServerModel {
     }
 
     /// Closes one managed session only after its Linux process session has
-    /// reached a verified empty fixed point.
+    /// reached a verified fixed point without live processes.
     #[cfg(target_os = "linux")]
     fn handle_close_managed_session_verified(
         &mut self,
@@ -5061,7 +5061,7 @@ impl ServerModel {
                 .ok_or(super::fleet_memory::MemoryDiagnostic::ProcessIdentityChanged)?;
 
             // Keep the registry entry authoritative until the bounded process-
-            // session termination has reached a verified empty fixed point.
+            // session termination has reached a verified live-process fixed point.
             super::fleet_memory::terminate_linux_process_session(process_root, || {
                 let _ = session.child.try_wait();
             })?;

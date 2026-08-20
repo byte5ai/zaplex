@@ -58,9 +58,20 @@ impl ProcfsReader for FakeProcfs {
 }
 
 fn stat(pid: u32, process_session_id: i32, start_time: u64, name: &str) -> String {
+    stat_with_state(pid, process_session_id, start_time, name, b'S')
+}
+
+fn stat_with_state(
+    pid: u32,
+    process_session_id: i32,
+    start_time: u64,
+    name: &str,
+    state: u8,
+) -> String {
     // state (3), ppid (4), pgrp (5), session (6), then fields through starttime (22).
     format!(
-        "{pid} ({name}) S 1 2 {process_session_id} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 {start_time} 0"
+        "{pid} ({name}) {} 1 2 {process_session_id} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 {start_time} 0",
+        char::from(state)
     )
 }
 
@@ -131,6 +142,37 @@ fn process_stat_parser_handles_spaces_and_closing_parentheses_in_name() {
     assert_eq!(parsed.pid, 42);
     assert_eq!(parsed.process_session_id, 42);
     assert_eq!(parsed.start_time_ticks, 9001);
+    assert_eq!(parsed.state, b'S');
+    assert_eq!(
+        parse_process_stat(&stat_with_state(42, 42, 9001, "claude", b'Z'))
+            .unwrap()
+            .state,
+        b'Z'
+    );
+    assert_eq!(
+        parse_process_stat(&stat(42, 42, 9001, "claude").replacen(" S ", " RUNNING ", 1)),
+        Err(MemoryDiagnostic::InvalidValue)
+    );
+}
+
+#[test]
+fn process_identity_ignores_state_changes_but_not_pid_reuse() {
+    let sleeping = parse_process_stat(&stat_with_state(42, 42, 9001, "claude", b'S')).unwrap();
+    let running = parse_process_stat(&stat_with_state(42, 42, 9001, "claude", b'R')).unwrap();
+    let reused = parse_process_stat(&stat_with_state(42, 42, 9002, "claude", b'R')).unwrap();
+
+    assert!(sleeping.same_identity(running));
+    assert!(!sleeping.same_identity(reused));
+}
+
+#[test]
+fn linux_dead_states_are_not_live_termination_targets() {
+    for state in [b'Z', b'X', b'x'] {
+        let stat = parse_process_stat(&stat_with_state(42, 42, 9001, "claude", state)).unwrap();
+        assert!(stat.has_exited());
+    }
+    let live = parse_process_stat(&stat_with_state(42, 42, 9001, "claude", b'D')).unwrap();
+    assert!(!live.has_exited());
 }
 
 #[test]
@@ -367,6 +409,132 @@ fn busy_memory_measurements_are_typed_and_secret_free() {
             Some("busy")
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn termination_treats_a_zombie_only_session_as_exited() {
+    let fs = FakeProcfs::default()
+        .with_pids(vec![42, 43])
+        .with_file(
+            "/proc/42/stat",
+            &stat_with_state(42, 42, 9001, "shell", b'Z'),
+        )
+        .with_file(
+            "/proc/43/stat",
+            &stat_with_state(43, 42, 9002, "agent", b'Z'),
+        );
+    let root = LinuxProcessIdentity {
+        pid: 42,
+        start_time_ticks: 9001,
+        process_session_id: 42,
+    };
+
+    let result = terminate_linux_process_session_with::<u32>(
+        &fs,
+        root,
+        |_| panic!("zombies must not be acquired"),
+        |_| panic!("zombies must not be signalled"),
+        || {},
+    );
+
+    assert_eq!(result, Ok(0));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn termination_signals_a_live_descendant_beside_a_zombie_leader() {
+    struct ZombieLeaderProcfs {
+        scans: std::cell::Cell<usize>,
+    }
+
+    impl ProcfsReader for ZombieLeaderProcfs {
+        fn read_to_string(&self, path: &Path) -> io::Result<String> {
+            if path == Path::new("/proc/42/stat") {
+                return Ok(stat_with_state(42, 42, 9001, "shell", b'Z'));
+            }
+            if path == Path::new("/proc/43/stat") {
+                return Ok(stat_with_state(43, 42, 9002, "agent", b'S'));
+            }
+            Err(io::Error::new(io::ErrorKind::NotFound, "missing"))
+        }
+
+        fn list_pids(&self) -> io::Result<Vec<u32>> {
+            let scan = self.scans.get();
+            self.scans.set(scan + 1);
+            Ok(if scan == 0 { vec![42, 43] } else { vec![42] })
+        }
+    }
+
+    let fs = ZombieLeaderProcfs {
+        scans: std::cell::Cell::new(0),
+    };
+    let root = LinuxProcessIdentity {
+        pid: 42,
+        start_time_ticks: 9001,
+        process_session_id: 42,
+    };
+    let mut signals = Vec::new();
+
+    let result = terminate_linux_process_session_with(
+        &fs,
+        root,
+        |expected| {
+            Ok(read_process_stat_optional(&fs, expected.pid)?
+                .map(|observed| (expected.pid, observed)))
+        },
+        |pid| {
+            signals.push(pid);
+            Ok(())
+        },
+        || {},
+    );
+
+    assert_eq!(result, Ok(1));
+    assert_eq!(signals, vec![43]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn termination_rejects_leader_pid_reuse_between_scans() {
+    struct ReusedLeaderProcfs {
+        root_reads: std::cell::Cell<usize>,
+    }
+
+    impl ProcfsReader for ReusedLeaderProcfs {
+        fn read_to_string(&self, path: &Path) -> io::Result<String> {
+            if path == Path::new("/proc/42/stat") {
+                let read = self.root_reads.get();
+                self.root_reads.set(read + 1);
+                let start_time = if read == 0 { 9001 } else { 9002 };
+                return Ok(stat(42, 42, start_time, "shell"));
+            }
+            Err(io::Error::new(io::ErrorKind::NotFound, "missing"))
+        }
+
+        fn list_pids(&self) -> io::Result<Vec<u32>> {
+            Ok(vec![42])
+        }
+    }
+
+    let fs = ReusedLeaderProcfs {
+        root_reads: std::cell::Cell::new(0),
+    };
+    let root = LinuxProcessIdentity {
+        pid: 42,
+        start_time_ticks: 9001,
+        process_session_id: 42,
+    };
+
+    let result = terminate_linux_process_session_with::<u32>(
+        &fs,
+        root,
+        |_| panic!("a reused leader must not be acquired"),
+        |_| panic!("a reused leader must not be signalled"),
+        || {},
+    );
+
+    assert_eq!(result, Err(MemoryDiagnostic::ProcessIdentityChanged));
 }
 
 #[cfg(target_os = "linux")]
