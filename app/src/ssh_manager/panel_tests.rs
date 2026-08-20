@@ -111,7 +111,13 @@ impl View for ConnectionRowTestView {
         )
         .finish();
 
-        compose_connection_row_targets(primary_target, Some(favorite_action), None)
+        Stack::new()
+            .with_child(compose_connection_row_targets(
+                primary_target,
+                Some(favorite_action),
+                None,
+            ))
+            .finish()
     }
 }
 
