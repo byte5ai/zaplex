@@ -35,6 +35,14 @@ transport are not available there.
   remain deterministic automated artifacts.
 - The evidence bundle accepts no extra files, symlinks, raw host ids, account identities, provider
   tokens, transcript text, or personal filesystem paths.
+- A local upload helper validates and deterministically packages only the closed-world bundle. It
+  canonicalizes JSON/text, strips PNG metadata, and may seed CI only through a draft release bound
+  to the exact current `main` SHA; it never publishes a release, replaces an asset, or uploads into
+  a release containing other assets.
+- Manual dispatch accepts either the existing Actions-run artifact source or the SHA-bound draft
+  source, never both. Draft access is isolated in a manual exact-`main` seed job; the normal audit
+  remains read-only. Only a strictly validated six-file bundle is retained as the
+  `cockpit-runtime-smoke` Actions artifact, outside the general audit-report artifact.
 
 ## Non-goals
 
@@ -48,11 +56,14 @@ transport are not available there.
 
 1. Relevant pull requests and manual workflow dispatches run `cargo check`, the focused Cockpit and
    daemon suites, reference synchronization/probes, negative gate self-tests, and UI screenshots.
-2. Provider, host, status, missing-test, and runtime-evidence mutations fail deterministically.
+2. Provider, host, status, missing/ignored/zero-execution-test, and runtime-evidence mutations fail
+   deterministically.
 3. The assembled report contains the Zaplex revision, both reference branches/SHAs, audit time,
    automated component results, and the explicit runtime state.
 4. A documented command validates a real runtime bundle and can require a pass for a release.
 5. The manual procedure covers local Claude, local Codex, one remote host, and the combined
    two-host lifecycle without exposing secrets.
-6. GH-160 is not considered completely verified until a linked report shows both automated and
+6. A documented local command securely seeds a strict workflow run without requiring a committed
+   evidence file, and malformed, ambiguous, published, or revision-mismatched sources fail closed.
+7. GH-160 is not considered completely verified until a linked report shows both automated and
    runtime release gates passing for the same revision.

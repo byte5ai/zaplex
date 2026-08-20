@@ -537,6 +537,11 @@ impl SshManagerPanel {
             .collect();
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_nodes_for_test(&mut self, nodes: Vec<SshNode>) {
+        self.nodes = nodes;
+    }
+
     fn sync_connected_hosts(&mut self, ctx: &mut ViewContext<Self>) {
         self.connected_host_ids = RemoteServerManager::as_ref(ctx)
             .connected_registry_hosts()

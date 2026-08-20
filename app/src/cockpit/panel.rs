@@ -74,12 +74,40 @@ fn container_count_presentation(
     })
 }
 
+fn account_count_presentation(
+    health: &zaplex_cockpit::ScanHealth,
+    account_count: usize,
+) -> Option<usize> {
+    (account_count > 0 || matches!(health, zaplex_cockpit::ScanHealth::Loaded))
+        .then_some(account_count)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct WaitingPulseFrame {
     core_opacity: u8,
     ring_diameter: f32,
     ring_opacity: u8,
     repaint: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SessionGlyphPresentation {
+    visible_label: &'static str,
+    semantic_label: String,
+}
+
+fn session_glyph_presentation(state: SessionState) -> SessionGlyphPresentation {
+    let semantic_label = match state {
+        SessionState::Waiting => crate::t!("cockpit-task-peek-state-waiting"),
+        SessionState::Active | SessionState::Monitor => {
+            crate::t!("cockpit-task-peek-state-working")
+        }
+        SessionState::Idle => crate::t!("cockpit-task-peek-state-idle"),
+    };
+    SessionGlyphPresentation {
+        visible_label: session_glyph(state),
+        semantic_label,
+    }
 }
 
 fn waiting_pulse_frame(elapsed: Duration, reduce_motion: bool) -> WaitingPulseFrame {
@@ -208,16 +236,23 @@ pub struct CockpitPanel {
     /// Clicking a row attaches the agent.
     conductor_row_states: HashMap<String, MouseStateHandle>,
     conductor_peek_states: HashMap<String, MouseStateHandle>,
+    /// Tooltip hover state for each agent status glyph. Kept separate from the
+    /// clickable row and task-peek handles so only the glyph owns this tooltip.
+    conductor_row_glyph_states: HashMap<String, MouseStateHandle>,
     /// Hover state per account card (key = account `key`). The whole card is a
     /// click target that opens the roomy dashboard pane.
     card_states: HashMap<String, MouseStateHandle>,
     /// Hover/click state per connected host root, keyed by stable host identity.
     conductor_host_states: HashMap<String, MouseStateHandle>,
+    /// Tooltip hover state for each host summary glyph.
+    conductor_host_glyph_states: HashMap<String, MouseStateHandle>,
     /// Explicit host expansion overrides. Absent means expanded.
     expanded_hosts: HashMap<String, bool>,
     /// Hover state of the „KI-KONTEN" header's fleet total — the cross-account
     /// spend figure doubles as the entry point to the fleet pane (spec v3 §S1).
     fleet_total_btn: MouseStateHandle,
+    /// Stable hover state for the waiting-summary glyph in the Sessions header.
+    conductor_attention_state: MouseStateHandle,
     /// Hover/click state for the account-zone "try again" retry (the loading /
     /// scan-failed / empty placeholder). A **stable** handle: `Hoverable` tracks
     /// mouse-down in it, so a fresh one each render would drop the click.
@@ -319,10 +354,13 @@ impl CockpitPanel {
             scroll_state: ClippedScrollStateHandle::default(),
             conductor_row_states: HashMap::new(),
             conductor_peek_states: HashMap::new(),
+            conductor_row_glyph_states: HashMap::new(),
             card_states: HashMap::new(),
             conductor_host_states: HashMap::new(),
+            conductor_host_glyph_states: HashMap::new(),
             expanded_hosts: HashMap::new(),
             fleet_total_btn: MouseStateHandle::default(),
+            conductor_attention_state: MouseStateHandle::default(),
             rescan_btn: MouseStateHandle::default(),
             conductor_project_states: HashMap::new(),
             expanded_projects: HashMap::new(),
@@ -395,11 +433,14 @@ impl CockpitPanel {
             .retain(|k, _| routable.contains(k));
         self.conductor_peek_states
             .retain(|k, _| visible.contains(k));
+        self.conductor_row_glyph_states
+            .retain(|k, _| visible.contains(k));
         for key in routable {
             self.conductor_row_states.entry(key).or_default();
         }
         for key in visible {
-            self.conductor_peek_states.entry(key).or_default();
+            self.conductor_peek_states.entry(key.clone()).or_default();
+            self.conductor_row_glyph_states.entry(key).or_default();
         }
         // Card hover handles, keyed by account `key` (one stable handle per card
         // across renders); drop handles of accounts that disappeared.
@@ -416,9 +457,12 @@ impl CockpitPanel {
         // Connected host handles and explicit expansion overrides.
         self.conductor_host_states
             .retain(|key, _| host_keys.contains(key));
+        self.conductor_host_glyph_states
+            .retain(|key, _| host_keys.contains(key));
         self.expanded_hosts.retain(|key, _| host_keys.contains(key));
         for key in host_keys {
-            self.conductor_host_states.entry(key).or_default();
+            self.conductor_host_states.entry(key.clone()).or_default();
+            self.conductor_host_glyph_states.entry(key).or_default();
         }
         // Project-group header handles + collapse overrides, keyed by
         // `project_key` (host identity + repository root — never the label alone).
@@ -465,17 +509,27 @@ impl CockpitPanel {
         state: SessionState,
         pulse_waiting: bool,
         reduce_motion: bool,
+        tooltip_state: MouseStateHandle,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        if state == SessionState::Waiting && pulse_waiting {
+        let presentation = session_glyph_presentation(state);
+        let glyph = if state == SessionState::Waiting && pulse_waiting {
             WaitingPulseElement::new(attention_coloru(appearance), reduce_motion).finish()
         } else {
             glyph_cell(
-                session_glyph(state),
+                presentation.visible_label,
                 status_dot_coloru(state, appearance),
                 appearance,
             )
-        }
+        };
+        appearance.ui_builder().overlay_tool_tip_on_element(
+            presentation.semantic_label,
+            tooltip_state,
+            glyph,
+            ParentAnchor::TopMiddle,
+            ChildAnchor::BottomMiddle,
+            vec2f(0.0, -4.0),
+        )
     }
 
     /// The account-zone placeholder, disambiguated by scan health so an empty
@@ -692,7 +746,7 @@ impl CockpitPanel {
     /// glyph + needs-attention count, never a repeated status word.
     fn render_zone_header(
         label: String,
-        count: usize,
+        count: Option<usize>,
         trailing: Option<Box<dyn Element>>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -710,10 +764,12 @@ impl CockpitPanel {
             .with_spacing(6.0)
             // The label is scaffolding, not content: muted + uppercase, so the eye
             // reads it as structure and skips to the rows (spec v3 §0).
-            .with_child(Self::text(label.to_uppercase(), family, sub, muted))
-            .with_child(
+            .with_child(Self::text(label.to_uppercase(), family, sub, muted));
+        if let Some(count) = count {
+            row = row.with_child(
                 Shrinkable::new(1.0, Self::text(count.to_string(), family, sub, faint)).finish(),
             );
+        }
         if let Some(trailing) = trailing {
             row = row.with_child(trailing);
         }
@@ -755,7 +811,14 @@ impl CockpitPanel {
                 .with_height(GLYPH_COL_WIDTH)
                 .finish(),
             )
-            .with_child(Self::host_status_dot(host, appearance))
+            .with_child(Self::host_status_dot(
+                host,
+                self.conductor_host_glyph_states
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default(),
+                appearance,
+            ))
             .with_child(
                 Shrinkable::new(1.0, Self::identity_text(label, family, body, main)).finish(),
             );
@@ -877,6 +940,7 @@ impl CockpitPanel {
                     SessionState::Waiting,
                     true,
                     reduce_motion,
+                    self.conductor_attention_state.clone(),
                     appearance,
                 ))
                 .with_child(Self::text(
@@ -897,7 +961,7 @@ impl CockpitPanel {
             .with_child(
                 Container::new(Self::render_zone_header(
                     crate::t!("cockpit-zone-sessions").to_string(),
-                    fleet_conductor_session_count(tree),
+                    Some(fleet_conductor_session_count(tree)),
                     attention,
                     appearance,
                 ))
@@ -1043,6 +1107,7 @@ impl CockpitPanel {
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
         let label = agent_leaf_label(session.provider, &session.model);
+        let key = session_key(is_local, host_id, session);
 
         let mut glance = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -1051,6 +1116,10 @@ impl CockpitPanel {
                 session.state,
                 true,
                 reduce_motion,
+                self.conductor_row_glyph_states
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_default(),
                 appearance,
             ))
             .with_child(
@@ -1063,7 +1132,6 @@ impl CockpitPanel {
 
         // The whole glance line attaches on click — BOTH local and remote (remote
         // in-place adopt is wired via `attach_fleet_session`).
-        let key = session_key(is_local, host_id, session);
         let row = if can_attach {
             match self.conductor_row_states.get(&key).cloned() {
                 Some(state) => {
@@ -1151,13 +1219,7 @@ impl CockpitPanel {
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
         let accent = theme.accent().into_solid();
-        let state_label = match state {
-            SessionState::Waiting => crate::t!("cockpit-task-peek-state-waiting"),
-            SessionState::Active | SessionState::Monitor => {
-                crate::t!("cockpit-task-peek-state-working")
-            }
-            SessionState::Idle => crate::t!("cockpit-task-peek-state-idle"),
-        };
+        let state_label = session_glyph_presentation(state).semantic_label;
         let header = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_main_axis_size(MainAxisSize::Max)
@@ -1256,7 +1318,11 @@ impl CockpitPanel {
     /// The leading worst-child status dot for a host header: waiting if any child
     /// waits (the whole host reads amber), else working if any child works, else
     /// idle — so attention bubbles up without opening the host (spec §3).
-    fn host_status_dot(host: &HostNode, appearance: &Appearance) -> Box<dyn Element> {
+    fn host_status_dot(
+        host: &HostNode,
+        tooltip_state: MouseStateHandle,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let state = if host.needs_me > 0 {
             SessionState::Waiting
         } else if host
@@ -1269,11 +1335,7 @@ impl CockpitPanel {
         } else {
             SessionState::Idle
         };
-        glyph_cell(
-            session_glyph(state),
-            status_dot_coloru(state, appearance),
-            appearance,
-        )
+        Self::state_glyph(state, false, false, tooltip_state, appearance)
     }
 
     /// A **project group header** — the collapsible middle level of the tree
@@ -1387,7 +1449,7 @@ impl CockpitPanel {
         );
         Self::render_zone_header(
             crate::t!("cockpit-zone-accounts").to_string(),
-            snapshot_len,
+            Some(snapshot_len),
             Some(total),
             appearance,
         )
@@ -1454,16 +1516,15 @@ impl View for CockpitPanel {
         // accounts show a calm hint instead (a section under the hosts, not the
         // whole panel — hosts stay visible without an account).
         if snapshot.accounts.is_empty() {
-            // Even with no accounts the zone keeps its header („KI-KONTEN 0"), so
-            // the section reads as a deliberate empty state, not a missing panel
-            // (spec §S1). No fleet total here — there is no fleet to open into.
+            // Keep the section header, but show zero only after a successful scan.
+            // Pending or degraded discovery is unknown rather than empty.
             let empty = Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_child(
                     Container::new(Self::render_zone_header(
                         crate::t!("cockpit-zone-accounts").to_string(),
-                        0,
+                        account_count_presentation(&snapshot.health, 0),
                         None,
                         appearance,
                     ))

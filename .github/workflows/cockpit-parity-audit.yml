@@ -16,13 +16,20 @@ on:
       - 'app/src/control_surface_tests.rs'
       - 'app/src/lib.rs'
       - 'app/src/pane_group/pane/code_pane.rs'
+      - 'app/src/pane_group/pane/cockpit_pane.rs'
       - 'app/src/remote_server/**'
+      - 'app/src/search/command_palette/cockpit/**'
+      - 'app/src/search/command_palette/data_sources.rs'
+      - 'app/src/search/command_palette/mixer.rs'
+      - 'app/src/search/command_palette/view.rs'
       - 'app/src/ssh_manager/**'
       - 'app/src/terminal/daemon_tty/**'
       - 'app/src/terminal/cli_agent_sessions/**'
+      - 'app/src/test_util/terminal.rs'
       - 'app/src/workspace/action.rs'
       - 'app/src/workspace/action_tests.rs'
       - 'app/src/workspace/view.rs'
+      - 'app/src/workspace/view_test.rs'
       - 'app/src/workspace/view/**'
       - 'crates/remote_server/**'
       - 'crates/warp_cli/**'
@@ -32,6 +39,9 @@ on:
       - 'crates/zaplex_remote_session/**'
       - 'docs/ui/cockpit-sidebar-connections.html'
       - 'script/cockpit-parity-audit'
+      - 'script/upload-cockpit-runtime-evidence'
+      - 'specs/GH-160/**'
+      - 'specs/gh-169/**'
       - 'specs/parity/**'
   workflow_dispatch:
     inputs:
@@ -43,6 +53,15 @@ on:
         description: Artifact name in runtime_evidence_run_id
         required: false
         default: cockpit-runtime-smoke
+        type: string
+      runtime_evidence_release_tag:
+        description: Optional draft release tag created by the runtime upload helper
+        required: false
+        type: string
+      runtime_evidence_release_asset:
+        description: Asset name in runtime_evidence_release_tag
+        required: false
+        default: cockpit-runtime-smoke.zip
         type: string
       require_manual_runtime:
         description: Enforce the real two-host runtime evidence release gate
@@ -63,8 +82,137 @@ env:
   CHANNEL: oss
 
 jobs:
+  runtime_seed:
+    name: Validate SHA-bound draft runtime evidence
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.runtime_evidence_release_tag != '' &&
+      github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate draft source inputs
+        env:
+          RUNTIME_EVIDENCE_RUN_ID: ${{ inputs.runtime_evidence_run_id }}
+          RUNTIME_EVIDENCE_RELEASE_TAG: ${{ inputs.runtime_evidence_release_tag }}
+          RUNTIME_EVIDENCE_RELEASE_ASSET: ${{ inputs.runtime_evidence_release_asset }}
+        run: |
+          set -euo pipefail
+          [[ -z "$RUNTIME_EVIDENCE_RUN_ID" ]] || {
+            echo "runtime evidence must use either a run artifact or a draft release, not both" >&2
+            exit 2
+          }
+          [[ "$RUNTIME_EVIDENCE_RELEASE_TAG" == "cockpit-runtime-evidence-${GITHUB_SHA}" ]] || {
+            echo "runtime evidence draft tag must bind the exact main SHA" >&2
+            exit 2
+          }
+          [[ "$RUNTIME_EVIDENCE_RELEASE_ASSET" == "cockpit-runtime-smoke.zip" ]] || {
+            echo "runtime evidence draft asset must be cockpit-runtime-smoke.zip" >&2
+            exit 2
+          }
+        shell: bash
+
+      - name: Download and safely extract draft runtime evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_EVIDENCE_RELEASE_TAG: ${{ inputs.runtime_evidence_release_tag }}
+          RUNTIME_EVIDENCE_RELEASE_ASSET: ${{ inputs.runtime_evidence_release_asset }}
+        run: |
+          set -euo pipefail
+          evidence_dir="${RUNNER_TEMP}/cockpit-runtime-smoke"
+          mkdir -m 700 "$evidence_dir"
+          release_pages="${RUNNER_TEMP}/cockpit-runtime-releases.json"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$release_pages"
+          release_json="${RUNNER_TEMP}/cockpit-runtime-release.json"
+          python3 - \
+            "$release_pages" \
+            "$release_json" \
+            "$RUNTIME_EVIDENCE_RELEASE_TAG" \
+            "$GITHUB_SHA" \
+            "$RUNTIME_EVIDENCE_RELEASE_ASSET" <<'PY'
+          import json
+          import sys
+
+          text = open(sys.argv[1], encoding="utf-8").read()
+          decoder = json.JSONDecoder()
+          releases = []
+          offset = 0
+          while offset < len(text):
+              while offset < len(text) and text[offset].isspace():
+                  offset += 1
+              if offset == len(text):
+                  break
+              page, offset = decoder.raw_decode(text, offset)
+              if not isinstance(page, list):
+                  raise SystemExit("GitHub releases response is not a list")
+              releases.extend(page)
+          output_path, tag, revision, asset_name = sys.argv[2:]
+          matches = [release for release in releases if release.get("tag_name") == tag]
+          if len(matches) != 1:
+              raise SystemExit("expected exactly one matching draft release")
+          release = matches[0]
+          assets = release.get("assets", [])
+          if (
+              release.get("draft") is not True
+              or release.get("published_at") is not None
+              or release.get("target_commitish") != revision
+              or len(assets) != 1
+              or assets[0].get("name") != asset_name
+              or not isinstance(assets[0].get("size"), int)
+              or not 0 < assets[0]["size"] <= 100 * 1024 * 1024
+          ):
+              raise SystemExit("draft release is not exact, unpublished, single-asset, and size-bounded")
+          with open(output_path, "w", encoding="utf-8") as output:
+              json.dump(release, output, sort_keys=True)
+          PY
+          asset_id="$(jq -er '.assets[0].id | tostring' "$release_json")"
+          archive="${RUNNER_TEMP}/${RUNTIME_EVIDENCE_RELEASE_ASSET}"
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" > "$archive"
+          script/cockpit-parity-audit extract-runtime \
+            --archive "$archive" \
+            --destination "$evidence_dir"
+        shell: bash
+
+      - name: Require a clean same-revision runtime bundle
+        run: >-
+          script/cockpit-parity-audit validate-runtime
+          --evidence-dir "${RUNNER_TEMP}/cockpit-runtime-smoke"
+          --expected-zaplex-revision "${GITHUB_SHA}"
+          --require-pass
+          --output "${RUNNER_TEMP}/runtime-seed-validation.json"
+        shell: bash
+
+      - name: Seed the read-only audit job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cockpit-runtime-seed-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/cockpit-runtime-smoke/observations.json
+            ${{ runner.temp }}/cockpit-runtime-smoke/versions.txt
+            ${{ runner.temp }}/cockpit-runtime-smoke/local-claude.png
+            ${{ runner.temp }}/cockpit-runtime-smoke/local-codex.png
+            ${{ runner.temp }}/cockpit-runtime-smoke/remote-host.png
+            ${{ runner.temp }}/cockpit-runtime-smoke/reattach.png
+          if-no-files-found: error
+          retention-days: 1
+
   audit:
     name: GH-160 executable parity matrix
+    needs: runtime_seed
+    if: >-
+      !cancelled() &&
+      (needs.runtime_seed.result == 'success' ||
+      needs.runtime_seed.result == 'skipped')
     runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 150
     steps:
@@ -79,6 +227,45 @@ jobs:
             printf '{"schema_version":1,"status":"fail","errors":["step did not complete"]}\n' > "artifacts/${report}.json"
           done
           cp docs/ui/cockpit-sidebar-connections.html artifacts/cockpit-sidebar-connections.html
+        shell: bash
+
+      - name: Validate runtime evidence source inputs
+        env:
+          RUNTIME_EVIDENCE_RUN_ID: ${{ inputs.runtime_evidence_run_id }}
+          RUNTIME_EVIDENCE_ARTIFACT: ${{ inputs.runtime_evidence_artifact }}
+          RUNTIME_EVIDENCE_RELEASE_TAG: ${{ inputs.runtime_evidence_release_tag }}
+          RUNTIME_EVIDENCE_RELEASE_ASSET: ${{ inputs.runtime_evidence_release_asset }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$RUNTIME_EVIDENCE_RUN_ID" && -n "$RUNTIME_EVIDENCE_RELEASE_TAG" ]]; then
+            echo "runtime evidence must use either a run artifact or a draft release, not both" >&2
+            exit 2
+          fi
+          if [[ -n "$RUNTIME_EVIDENCE_RUN_ID" ]]; then
+            [[ "$RUNTIME_EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]] || {
+              echo "runtime_evidence_run_id must be numeric" >&2
+              exit 2
+            }
+            [[ "$RUNTIME_EVIDENCE_ARTIFACT" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || {
+              echo "runtime_evidence_artifact has an invalid format" >&2
+              exit 2
+            }
+          fi
+          if [[ -n "$RUNTIME_EVIDENCE_RELEASE_TAG" ]]; then
+            expected_tag="cockpit-runtime-evidence-${GITHUB_SHA}"
+            [[ "$GITHUB_REF" == "refs/heads/main" ]] || {
+              echo "draft runtime evidence is accepted only by an exact-main dispatch" >&2
+              exit 2
+            }
+            [[ "$RUNTIME_EVIDENCE_RELEASE_TAG" == "$expected_tag" ]] || {
+              echo "runtime evidence draft tag must equal ${expected_tag}" >&2
+              exit 2
+            }
+            [[ "$RUNTIME_EVIDENCE_RELEASE_ASSET" == "cockpit-runtime-smoke.zip" ]] || {
+              echo "runtime evidence draft asset must be cockpit-runtime-smoke.zip" >&2
+              exit 2
+            }
+          fi
         shell: bash
 
       - name: Validate parity contract
@@ -162,22 +349,68 @@ jobs:
       - name: Download optional real runtime evidence
         id: runtime_download
         if: inputs.runtime_evidence_run_id != ''
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           RUNTIME_EVIDENCE_RUN_ID: ${{ inputs.runtime_evidence_run_id }}
           RUNTIME_EVIDENCE_ARTIFACT: ${{ inputs.runtime_evidence_artifact }}
         run: |
-          mkdir -p artifacts/runtime-smoke
-          if [[ ! "$RUNTIME_EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]; then
-            echo "runtime_evidence_run_id must be numeric" >&2
+          set -euo pipefail
+          artifact_pages="${RUNNER_TEMP}/cockpit-runtime-artifacts.json"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${RUNTIME_EVIDENCE_RUN_ID}/artifacts?per_page=100" \
+            > "$artifact_pages"
+          artifact_id="$(python3 - \
+            "$artifact_pages" \
+            "$RUNTIME_EVIDENCE_ARTIFACT" <<'PY'
+          import json
+          import sys
+
+          text = open(sys.argv[1], encoding="utf-8").read()
+          decoder = json.JSONDecoder()
+          artifacts = []
+          offset = 0
+          while offset < len(text):
+              while offset < len(text) and text[offset].isspace():
+                  offset += 1
+              if offset == len(text):
+                  break
+              page, offset = decoder.raw_decode(text, offset)
+              if not isinstance(page, dict) or not isinstance(page.get("artifacts"), list):
+                  raise SystemExit("GitHub artifacts response is malformed")
+              artifacts.extend(page["artifacts"])
+          matches = [artifact for artifact in artifacts if artifact.get("name") == sys.argv[2]]
+          if (
+              len(matches) != 1
+              or matches[0].get("expired") is not False
+              or not isinstance(matches[0].get("size_in_bytes"), int)
+              or not 0 < matches[0]["size_in_bytes"] <= 100 * 1024 * 1024
+          ):
+              raise SystemExit("runtime artifact must be unique, live, and at most 100 MiB")
+          print(matches[0]["id"])
+          PY
+          )"
+          [[ "$artifact_id" =~ ^[0-9]+$ ]] || {
+            echo "runtime artifact id is invalid" >&2
             exit 2
-          fi
-          gh run download "$RUNTIME_EVIDENCE_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "$RUNTIME_EVIDENCE_ARTIFACT" \
-            --dir artifacts/runtime-smoke
+          }
+          archive="${RUNNER_TEMP}/cockpit-runtime-smoke.zip"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
+            > "$archive"
+          evidence_dir="${RUNNER_TEMP}/cockpit-runtime-smoke"
+          mkdir -m 700 "$evidence_dir"
+          script/cockpit-parity-audit extract-runtime \
+            --archive "$archive" \
+            --destination "$evidence_dir"
         shell: bash
+
+      - name: Download validated draft runtime seed
+        if: inputs.runtime_evidence_release_tag != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cockpit-runtime-seed-${{ github.sha }}
+          path: ${{ runner.temp }}/cockpit-runtime-smoke
 
       - name: Validate or explicitly record missing runtime evidence
         id: runtime
@@ -185,10 +418,37 @@ jobs:
         continue-on-error: true
         run: >-
           script/cockpit-parity-audit validate-runtime
-          --evidence-dir artifacts/runtime-smoke
+          --evidence-dir "${RUNNER_TEMP}/cockpit-runtime-smoke"
           --expected-zaplex-revision "${GITHUB_SHA}"
           --output artifacts/runtime-evidence.json
         shell: bash
+
+      - name: Confirm strict runtime evidence passed
+        id: runtime_artifact_gate
+        if: always() && inputs.require_manual_runtime
+        run: >-
+          jq -e
+          '.schema_version == 1 and .status == "pass" and .errors == []'
+          artifacts/runtime-evidence.json
+        shell: bash
+
+      - name: Re-upload validated runtime evidence
+        if: >-
+          always() &&
+          inputs.require_manual_runtime &&
+          steps.runtime_artifact_gate.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cockpit-runtime-smoke
+          path: |
+            ${{ runner.temp }}/cockpit-runtime-smoke/observations.json
+            ${{ runner.temp }}/cockpit-runtime-smoke/versions.txt
+            ${{ runner.temp }}/cockpit-runtime-smoke/local-claude.png
+            ${{ runner.temp }}/cockpit-runtime-smoke/local-codex.png
+            ${{ runner.temp }}/cockpit-runtime-smoke/remote-host.png
+            ${{ runner.temp }}/cockpit-runtime-smoke/reattach.png
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Assemble machine-readable audit report
         id: assemble

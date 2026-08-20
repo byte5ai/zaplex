@@ -191,6 +191,33 @@ fn account_identity_uses_provider_headline_and_deduplicates_email() {
 }
 
 #[test]
+fn provider_is_visible_and_account_identity_is_not_duplicated() {
+    let cases = [
+        (Provider::Claude, "Claude", "claude@example.invalid"),
+        (Provider::Codex, "Codex", "codex@example.invalid"),
+    ];
+
+    for (provider, provider_label, email) in cases {
+        let account = Account {
+            provider,
+            key: format!("{}:acceptance", provider_label.to_lowercase()),
+            config_dir: "/tmp/acceptance-account".into(),
+            label: email.into(),
+            email: Some(email.into()),
+            org: None,
+            role: None,
+            plan_tier: Some("Max".into()),
+            is_default: false,
+        };
+
+        let presentation = account_identity(&account);
+        assert_eq!(presentation.provider, provider_label);
+        assert_eq!(presentation.subline.matches(email).count(), 1);
+        assert_eq!(presentation.subline, format!("{email} · Max"));
+    }
+}
+
+#[test]
 fn account_identity_falls_back_to_email_when_label_is_empty() {
     let account = Account {
         provider: Provider::Codex,

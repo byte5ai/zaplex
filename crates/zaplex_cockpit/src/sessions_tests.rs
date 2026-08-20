@@ -229,6 +229,28 @@ fn modern_statusless_shell_helper_is_still_hidden() {
 }
 
 #[test]
+fn claude_shell_helper_is_not_a_session() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "shell-helper",
+        "",
+        "shell",
+        &[assistant_line("end_turn")],
+    );
+
+    let registry = tmp.path().join("sessions").join("shell-helper.json");
+    let mut entry: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&registry).unwrap()).unwrap();
+    entry.as_object_mut().unwrap().remove("status");
+    std::fs::write(registry, serde_json::to_vec(&entry).unwrap()).unwrap();
+
+    let scan = scan_sessions(tmp.path(), Utc::now(), Duration::hours(6), 24);
+    assert!(scan.live.is_empty());
+    assert!(scan.idle.is_empty());
+}
+
+#[test]
 fn modern_statusless_unknown_helper_is_still_hidden() {
     let tmp = tempfile::tempdir().unwrap();
     fake_account(
@@ -266,6 +288,28 @@ fn recent_substantial_transcript_survives_registry_cleanup_only_as_idle() {
     assert_eq!(scan.idle[0].state, SessionState::Idle);
     assert_eq!(scan.idle[0].cwd, "/tmp/proj");
     assert_eq!(scan.idle[0].pid, 0, "history is not a running process");
+}
+
+#[test]
+fn legacy_claude_transcript_without_registry_is_resumable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut first = assistant_line("end_turn");
+    first["cwd"] = json!("/tmp/legacy-project");
+    fake_account(
+        tmp.path(),
+        "legacy-history",
+        "idle",
+        "interactive",
+        &[first, assistant_line("end_turn")],
+    );
+    std::fs::remove_file(tmp.path().join("sessions").join("legacy-history.json")).unwrap();
+
+    let scan = scan_sessions(tmp.path(), Utc::now(), Duration::hours(6), 24);
+    assert!(scan.live.is_empty());
+    assert_eq!(scan.idle.len(), 1);
+    assert_eq!(scan.idle[0].session_id, "legacy-history");
+    assert_eq!(scan.idle[0].cwd, "/tmp/legacy-project");
+    assert_eq!(scan.idle[0].state, SessionState::Idle);
 }
 
 #[test]
@@ -605,6 +649,37 @@ fn live_and_dormant_sessions_never_overlap() {
             .all(|l| idle.iter().all(|i| i.session_id != l.session_id)),
         "a session must never appear as both running and dormant"
     );
+}
+
+#[test]
+fn dormant_history_never_enters_live_tree() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "live-session",
+        "busy",
+        "interactive",
+        &[assistant_line("tool_use")],
+    );
+    fake_account_at(
+        tmp.path(),
+        "dormant-session",
+        "idle",
+        "interactive",
+        &[assistant_line("end_turn")],
+        dead_pid(),
+        Utc::now(),
+    );
+
+    let scan = scan_sessions(tmp.path(), Utc::now(), MAX_AGE, 50);
+    assert_eq!(scan.live.len(), 1);
+    assert_eq!(scan.live[0].session_id, "live-session");
+    assert_eq!(scan.idle.len(), 1);
+    assert_eq!(scan.idle[0].session_id, "dormant-session");
+    assert!(scan
+        .live
+        .iter()
+        .all(|session| session.session_id != "dormant-session"));
 }
 
 /// pid 0 means the registry never recorded one — unknown, not dead. Claiming

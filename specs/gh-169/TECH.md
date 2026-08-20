@@ -7,12 +7,15 @@
 `specs/parity/cockpit-matrix.json` remains the source of truth for required dimensions,
 capabilities, named Rust evidence, reference probes, and deterministic UI screenshot contracts.
 `script/cockpit-parity-audit validate` resolves every named test from source and rejects unknown,
-missing, duplicated, or uncovered matrix entries.
+missing, duplicated, ignored, or uncovered matrix entries. CI first executes each exact Cargo
+filter with libtest `--list`, requires every catalogued function assigned to that suite to appear
+exactly once, and then requires the real run summary to show every listed test passed with none
+ignored. A successful Cargo process that matched zero tests is therefore a gate failure.
 
-`self-test` mutates provider, location, and status coverage; exact remote boundaries; and named test
-evidence. It additionally exercises the runtime validator with a valid synthetic fixture and
-fail-closed mutations. Synthetic images are used only inside the validator self-test and are never
-reported as runtime evidence.
+`self-test` mutates provider, location, and status coverage; exact remote boundaries; named,
+mandatory, ignored, and zero-execution test evidence. It additionally exercises the runtime
+validator and archive extractor with valid synthetic fixtures and fail-closed mutations. Synthetic
+images are used only inside the validator self-test and are never reported as runtime evidence.
 
 ### Runtime evidence validator
 
@@ -46,6 +49,42 @@ turns `not-run` into a non-zero release-gate result. Existing but invalid eviden
 non-zero. `--expected-zaplex-revision` prevents evidence captured against another commit from
 passing.
 
+### Draft-release seed transport
+
+`script/upload-cockpit-runtime-evidence` is the local bridge between real-machine evidence and a
+hosted strict audit. It:
+
+1. copies only the exact six files through no-follow, non-blocking, size-capped file descriptors
+   into a private staging directory and rejects files that change during the copy;
+2. rejects duplicate JSON/text keys, canonicalizes both text files, strips all ancillary PNG
+   chunks, and validates only that metadata-free staging copy against the exact build SHA;
+3. writes a deterministic uncompressed ZIP with fixed ordering, timestamps, and modes;
+4. pins the destination to the verified `byte5ai/zaplex` origin, requires the SHA to equal current
+   `main`, and refuses a real Git tag at the reserved evidence name;
+5. creates or reuses only an empty draft release named `cockpit-runtime-evidence-<SHA>` with
+   `target_commitish=<SHA>`, then uploads exactly `cockpit-runtime-smoke.zip` without replacement.
+
+Existing draft releases must have the exact tag, target, draft state, and no assets. Any uncertainty
+or collision fails before upload. The helper never publishes or deletes a release automatically.
+
+The workflow's draft-release input is mutually exclusive with `runtime_evidence_run_id`. It is
+accepted only on an exact `main` dispatch; the tag must equal
+`cockpit-runtime-evidence-${GITHUB_SHA}` and the asset must equal `cockpit-runtime-smoke.zip`. A
+small manual seed job has `contents: write`, checks out only that trusted main revision without
+persisting credentials, lists drafts through the authenticated Releases API, and requires exactly
+one asset and the exact draft target. It validates ZIP entries and then executes the same-revision
+runtime validator before creating a one-day internal seed artifact. The main audit job has only
+read permissions, rejects oversize draft or run artifacts from API metadata before downloading,
+downloads run artifacts by the immutable checked artifact id, and passes both transports through
+the same self-tested closed-world extractor with compressed, declared, and actually expanded size
+limits. It validates the seed again and never places raw runtime files or untrusted input values
+under the general `artifacts/` tree.
+
+On `require_manual_runtime=true`, a separate gate requires `runtime-evidence.json` to be a clean
+`pass` before `actions/upload-artifact` retains the exact six metadata-free files under the fixed
+`cockpit-runtime-smoke` name. Invalid sources remain outside the general report artifact. The final
+`enforce --require-runtime` remains authoritative.
+
 ### Report assembly and enforcement
 
 The workflow always creates `runtime-evidence.json`. On ordinary hosted CI the evidence directory
@@ -68,6 +107,9 @@ mode and rejects both `not-run` and `fail`.
   uploaded artifact.
 - Screenshot contents require human sanitization; the validator checks only format, size,
   dimensions, and distinctness.
+- Draft evidence releases are private transport objects, never published product releases. They
+  contain only the sanitized deterministic ZIP and should be deleted after the passing Actions
+  report has been retained and linked.
 - Reference repositories are synchronized read-only and are never packaged or loaded by Zaplex.
 
 ## Verification
@@ -77,6 +119,8 @@ Static verification on development hosts:
 ```text
 script/cockpit-parity-audit validate
 script/cockpit-parity-audit self-test
+script/upload-cockpit-runtime-evidence --help
+bash -n script/upload-cockpit-runtime-evidence
 python3 -m py_compile script/cockpit-parity-audit
 git diff --check
 ```

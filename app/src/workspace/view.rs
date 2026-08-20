@@ -1658,6 +1658,46 @@ fn favorite_host_menu_items(
         .collect()
 }
 
+fn favorites_menu_items_from_sources(
+    favorites_store: &crate::cockpit::favorites::FavoritesStore,
+    host_nodes: Vec<(String, String)>,
+    host_registry_unavailable: bool,
+) -> Vec<MenuItem<WorkspaceAction>> {
+    let persistence_is_protected = favorites_store.persistence_is_protected();
+    let favorites = favorites_store
+        .host_menu_items()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let mut items = vec![MenuItem::Separator];
+    items.push(MenuItem::Header {
+        fields: MenuItemFields::new(crate::t!("workspace-favorites-header")),
+        clickable: false,
+        right_side_fields: None,
+    });
+
+    if persistence_is_protected {
+        items.push(
+            MenuItemFields::new(crate::t!("workspace-favorites-store-protected"))
+                .with_disabled(true)
+                .with_icon(icons::Icon::AlertTriangle)
+                .into_item(),
+        );
+    } else if favorites.is_empty() {
+        items.push(
+            MenuItemFields::new(crate::t!("workspace-favorites-empty"))
+                .with_disabled(true)
+                .into_item(),
+        );
+    }
+    items.extend(favorite_host_menu_items(
+        &favorites,
+        &host_nodes,
+        persistence_is_protected || host_registry_unavailable,
+    ));
+    items
+}
+
 fn primary_host_navigation_views(cockpit_enabled: bool) -> Vec<ToolPanelView> {
     if cockpit_enabled {
         vec![ToolPanelView::Cockpit, ToolPanelView::SshManager]
@@ -11133,39 +11173,7 @@ impl Workspace {
 
         let favorites_store = crate::cockpit::favorites::FavoritesStore::handle(ctx);
         let favorites_store = favorites_store.as_ref(ctx);
-        let persistence_is_protected = favorites_store.persistence_is_protected();
-        let favorites = favorites_store
-            .host_menu_items()
-            .cloned()
-            .collect::<Vec<_>>();
-
-        let mut items = vec![MenuItem::Separator];
-        items.push(MenuItem::Header {
-            fields: MenuItemFields::new(crate::t!("workspace-favorites-header")),
-            clickable: false,
-            right_side_fields: None,
-        });
-
-        if persistence_is_protected {
-            items.push(
-                MenuItemFields::new(crate::t!("workspace-favorites-store-protected"))
-                    .with_disabled(true)
-                    .with_icon(icons::Icon::AlertTriangle)
-                    .into_item(),
-            );
-        } else if favorites.is_empty() {
-            items.push(
-                MenuItemFields::new(crate::t!("workspace-favorites-empty"))
-                    .with_disabled(true)
-                    .into_item(),
-            );
-        }
-        items.extend(favorite_host_menu_items(
-            &favorites,
-            &host_nodes,
-            persistence_is_protected || host_registry_unavailable,
-        ));
-        items
+        favorites_menu_items_from_sources(favorites_store, host_nodes, host_registry_unavailable)
     }
 
     fn unified_new_session_menu_items(

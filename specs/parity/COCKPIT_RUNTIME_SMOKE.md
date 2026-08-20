@@ -139,22 +139,60 @@ may be Claude or Codex, but it must match `versions.txt`.
 }
 ```
 
-Validate the bundle against the exact build revision before upload:
+Inspect every image before upload. Raw screenshots commonly contain ancillary color, density, or
+capture-tool PNG chunks, so the strict metadata-free validator is intentionally not run directly
+against the capture directory. The upload helper below copies into private staging, removes those
+chunks without changing the source files, canonicalizes the text records, and then runs the
+authoritative exact-revision validation before any release is created or asset uploaded. That
+validator checks the closed file set, schema, revision, freshness, topology, coverage, cases, PNG
+structure/dimensions, and that all four screenshots differ. It cannot detect secrets rendered
+inside otherwise valid pixels; visual inspection therefore remains mandatory.
+
+Concretely, the helper runs `cockpit-parity-audit validate-runtime --require-pass` against its
+sanitized staging copy. Run that subcommand directly only when inspecting an already canonicalized
+bundle downloaded from a passing audit, never as the first step on raw capture-tool PNGs.
+
+## Seed the strict audit
+
+The checked-in upload helper copies only the exact six closed-world files through no-follow,
+non-blocking, size-capped file descriptors, canonicalizes the JSON/text files, strips ancillary PNG
+metadata, repeats strict validation, creates a deterministic ZIP, and uploads it using the
+repository-approved `gho "$(getpat)"` authentication path:
 
 ```text
-script/cockpit-parity-audit validate-runtime \
+script/upload-cockpit-runtime-evidence \
   --evidence-dir runtime-smoke \
-  --expected-zaplex-revision <40-hex-sha> \
-  --require-pass \
-  --output runtime-evidence.json
+  --zaplex-revision <40-hex-sha>
 ```
 
-The validator checks the closed file set, schema, revision, freshness, topology, coverage, cases,
-PNG structure/dimensions, and that all four screenshots differ. It cannot detect secrets rendered
-inside an otherwise valid PNG, so inspect every image before upload.
+The only accepted destination is a draft release named
+`cockpit-runtime-evidence-<40-hex-sha>` whose `target_commitish` is that exact current `main` SHA.
+Its only asset is `cockpit-runtime-smoke.zip`. The helper pins the repository to the verified
+`byte5ai/zaplex` origin and refuses published releases, real Git tags, mismatched targets, existing
+assets, replacement, and mixed release contents. Draft releases keep the
+sanitized bundle out of the public release list; authorized repository users can still inspect it,
+so the screenshot review above remains mandatory.
 
-Upload the directory as an Actions artifact named `cockpit-runtime-smoke`. A manually dispatched
-Cockpit parity audit can consume it using the source run id and can enable
-`require_manual_runtime`. The assembled report then passes `release_gate_status` only when the
-automated audit and the runtime evidence use the same Zaplex revision. Without such an artifact,
-`manual_runtime` and `release_gate_status` remain `not-run`; they are never an implicit pass.
+The helper prints the exact workflow inputs. Dispatch the Cockpit parity workflow on `main` with
+the printed draft-release tag and `require_manual_runtime=true`. The workflow rejects a simultaneous
+run-id and draft-release source. A minimal manual seed job receives temporary contents-write access
+solely to list and download the exact draft; it runs only for `refs/heads/main`, does not persist
+checkout credentials, validates the ZIP and same-revision bundle, and hands a one-day internal
+artifact to the normal read-only audit job. The existing source-run artifact input remains
+supported.
+
+After validation, a strict dispatch re-uploads the six metadata-free files as an Actions artifact
+named `cockpit-runtime-smoke`; unvalidated runtime files are never included in the general audit
+artifact, and its failure report never reflects untrusted input values. Draft and source-run
+artifacts are size-checked through GitHub metadata before download; source-run artifacts are then
+downloaded by the checked immutable artifact id, and both transports use the same bounded
+closed-world ZIP extractor. The assembled report passes
+`release_gate_status` only when automated and
+runtime evidence use the same Zaplex revision. Download and inspect
+`cockpit-parity-<GITHUB_SHA>/cockpit-parity-report.json`; both `status` and
+`release_gate_status` must be `pass` before linking the run from GH-160/GH-169.
+
+After the report is retained and linked, delete the temporary draft release through the normal
+GitHub UI or the authenticated repository helper. Never publish it. Without either a source-run
+artifact or the SHA-bound draft asset, `manual_runtime` and `release_gate_status` remain `not-run`;
+they are never an implicit pass.

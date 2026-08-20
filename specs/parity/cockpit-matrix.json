@@ -180,6 +180,34 @@
       "timeout_seconds": 5400
     },
     {
+      "id": "workspace-view-acceptance",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "workspace::view::tests::connections_registry_drives_favorite_launch_menu"
+      ],
+      "timeout_seconds": 5400
+    },
+    {
+      "id": "ssh-manager-app",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "ssh_manager::panel::tests::"
+      ],
+      "timeout_seconds": 5400
+    },
+    {
       "id": "remote-daemon-app",
       "command": [
         "cargo",
@@ -376,6 +404,90 @@
       "name": "remote_account_results_require_the_exact_live_connection"
     },
     {
+      "id": "connections-favorite-launch",
+      "suite": "workspace-view-acceptance",
+      "source": "app/src/workspace/view_test.rs",
+      "name": "connections_registry_drives_favorite_launch_menu"
+    },
+    {
+      "id": "connections-row-actions",
+      "suite": "ssh-manager-app",
+      "source": "app/src/ssh_manager/panel_tests.rs",
+      "name": "connection_server_rows_expose_favorite_connect_disconnect_and_management_actions"
+    },
+    {
+      "id": "connections-compact-secondary-action",
+      "suite": "ssh-manager-app",
+      "source": "app/src/ssh_manager/panel_tests.rs",
+      "name": "compact_connection_secondary_action_survives_rerender_without_triggering_primary_row_click"
+    },
+    {
+      "id": "registry-only-host-exclusion",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/fleet_tests.rs",
+      "name": "cockpit_excludes_registry_only_hosts"
+    },
+    {
+      "id": "local-session-root",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/fleet_tests.rs",
+      "name": "local_sessions_remain_visible_without_remote_connections"
+    },
+    {
+      "id": "remote-stale-inventory",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/model_tests.rs",
+      "name": "stale_inventory_cannot_readd_disconnected_host"
+    },
+    {
+      "id": "tree-hierarchy-contract",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/conductor_tests.rs",
+      "name": "tree_hierarchy_is_host_project_pty_agent"
+    },
+    {
+      "id": "tree-glyph-only",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/panel_tests.rs",
+      "name": "tree_status_is_glyph_only"
+    },
+    {
+      "id": "waiting-glyph-reduced-motion",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/panel_tests.rs",
+      "name": "waiting_glyph_motion_respects_reduced_motion"
+    },
+    {
+      "id": "provider-account-presentation",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/mod_test.rs",
+      "name": "provider_is_visible_and_account_identity_is_not_duplicated"
+    },
+    {
+      "id": "account-scan-error-state",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/panel_tests.rs",
+      "name": "account_scan_error_is_not_rendered_as_zero_accounts"
+    },
+    {
+      "id": "legacy-claude-resumable",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/sessions_tests.rs",
+      "name": "legacy_claude_transcript_without_registry_is_resumable"
+    },
+    {
+      "id": "claude-shell-helper-exclusion",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/sessions_tests.rs",
+      "name": "claude_shell_helper_is_not_a_session"
+    },
+    {
+      "id": "dormant-history-exclusion",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/sessions_tests.rs",
+      "name": "dormant_history_never_enters_live_tree"
+    },
+    {
       "id": "provider-account-boundary",
       "suite": "cockpit-data-spine",
       "source": "crates/zaplex_cockpit/src/conductor_tests.rs",
@@ -415,7 +527,7 @@
       "id": "waiting-row-attention",
       "suite": "cockpit-app",
       "source": "app/src/cockpit/pane_tests.rs",
-      "name": "only_waiting_session_rows_receive_attention_background"
+      "name": "needs_user_session_highlights_the_full_stable_row"
     },
     {
       "id": "codex-transcript-ui-states",
@@ -806,7 +918,7 @@
         "state": ["live"]
       },
       "capabilities": ["api", "launch", "lifecycle"],
-      "evidence": ["claude-default-account", "claude-live", "exact-launch-account-binding", "cockpit-json-runtime", "cockpit-json-degraded", "cockpit-ipc-auth", "github-picker-freezes-target", "github-cancel-no-mutation", "lifecycle-local-restart", "lifecycle-menu-gate"]
+      "evidence": ["claude-default-account", "claude-live", "connections-favorite-launch", "connections-row-actions", "connections-compact-secondary-action", "registry-only-host-exclusion", "local-session-root", "tree-hierarchy-contract", "tree-glyph-only", "provider-account-presentation", "account-scan-error-state", "exact-launch-account-binding", "cockpit-json-runtime", "cockpit-json-degraded", "cockpit-ipc-auth", "github-picker-freezes-target", "github-cancel-no-mutation", "lifecycle-local-restart", "lifecycle-menu-gate"]
     },
     {
       "id": "claude-pinned-local-waiting",
@@ -817,7 +929,7 @@
         "state": ["waiting"]
       },
       "capabilities": ["transcript", "usage", "attention"],
-      "evidence": ["claude-pinned-account", "claude-waiting", "claude-usage", "waiting-row-attention", "waiting-pulse", "lifecycle-rename-persisted"]
+      "evidence": ["claude-pinned-account", "claude-waiting", "claude-usage", "waiting-row-attention", "waiting-pulse", "waiting-glyph-reduced-motion", "lifecycle-rename-persisted"]
     },
     {
       "id": "claude-multiple-local-dormant",
@@ -828,7 +940,7 @@
         "state": ["dormant"]
       },
       "capabilities": ["reattach", "transcript", "lifecycle"],
-      "evidence": ["claude-multiple-accounts", "claude-dormant", "exact-reattach-boundary", "lifecycle-cleanup-recheck"]
+      "evidence": ["claude-multiple-accounts", "claude-dormant", "legacy-claude-resumable", "claude-shell-helper-exclusion", "dormant-history-exclusion", "exact-reattach-boundary", "lifecycle-cleanup-recheck"]
     },
     {
       "id": "codex-default-local-waiting",
@@ -872,7 +984,7 @@
         "state": ["live"]
       },
       "capabilities": ["launch", "reattach", "transcript", "lifecycle"],
-      "evidence": ["remote-first-session", "remote-last-session", "exact-reattach-boundary", "daemon-default-account", "daemon-route-dimensions", "daemon-binding-lifecycle", "daemon-account-id-opaque", "remote-claude-transcript-projection", "remote-transcript-ui-gate", "remote-transcript-ui-current", "remote-transcript-ui-projection", "remote-transcript-ui-statuses", "remote-transcript-ui-fail-closed", "generated-read-only-source", "generated-read-only-header", "generated-read-only-no-merge", "lifecycle-remote-restart", "remote-launch-transport-first", "remote-launch-inventory-first", "remote-launch-parallel-account", "remote-selected-second-account", "remote-freest-host-scope", "remote-path-boundary", "managed-headroom-policy", "managed-memory-pss", "managed-memory-global-bound", "managed-account-identity-fresh", "managed-project-identity-fresh", "managed-start-identity-fresh", "managed-signal-pidfd", "managed-unexpected-exit-restart", "managed-stopped-restart", "managed-exit-record-bound", "managed-exit-projection", "managed-stopped-projection", "managed-account-label-projection", "managed-client-envelope"]
+      "evidence": ["remote-first-session", "remote-last-session", "remote-stale-inventory", "exact-reattach-boundary", "daemon-default-account", "daemon-route-dimensions", "daemon-binding-lifecycle", "daemon-account-id-opaque", "remote-claude-transcript-projection", "remote-transcript-ui-gate", "remote-transcript-ui-current", "remote-transcript-ui-projection", "remote-transcript-ui-statuses", "remote-transcript-ui-fail-closed", "generated-read-only-source", "generated-read-only-header", "generated-read-only-no-merge", "lifecycle-remote-restart", "remote-launch-transport-first", "remote-launch-inventory-first", "remote-launch-parallel-account", "remote-selected-second-account", "remote-freest-host-scope", "remote-path-boundary", "managed-headroom-policy", "managed-memory-pss", "managed-memory-global-bound", "managed-account-identity-fresh", "managed-project-identity-fresh", "managed-start-identity-fresh", "managed-signal-pidfd", "managed-unexpected-exit-restart", "managed-stopped-restart", "managed-exit-record-bound", "managed-exit-projection", "managed-stopped-projection", "managed-account-label-projection", "managed-client-envelope"]
     },
     {
       "id": "remote-codex-waiting-attention",
