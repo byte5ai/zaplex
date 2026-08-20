@@ -2,6 +2,8 @@ use crate::terminal::bootstrap::{daemon_bootstrap_delivery, DaemonBootstrapDeliv
 use crate::terminal::shell::ShellType;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
+#[cfg(unix)]
+use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -9,6 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use warp_core::channel::ChannelState;
 use warp_core::SessionId;
+#[cfg(unix)]
+use warp_util::path::ShellFamily;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::platform::TerminationMode;
 use warpui::r#async::{Spawnable, SpawnableOutput, SpawnedFutureHandle};
@@ -25,16 +29,19 @@ use super::proto::{
     AgentPtyBindingStatus, AgentSessionIdentity, AgentSessionInfo, AgentSessionList, Authenticate,
     ClientMessage, DeleteFile, DeleteFileResponse, DeleteFileSuccess, ErrorCode, ErrorResponse,
     FailedFileRead, FileContextProto, FileOperationError, HostExec, HostExecResult, Initialize,
-    InitializeResponse, NavigatedToDirectory, NavigatedToDirectoryResponse, ReadAgentTranscript,
+    InitializeResponse, ManagedSessionLifecycleResponse, ManagedSessionLifecycleStatus,
+    NavigatedToDirectory, NavigatedToDirectoryResponse, ReadAgentTranscript,
     ReadFileContextResponse, RunCommandError, RunCommandErrorCode, RunCommandRequest,
     RunCommandResponse, RunCommandSuccess, ServerMessage, SessionBootstrapped, StartupCommandAck,
     WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 #[cfg(unix)]
 use super::proto::{
-    AttachSession, BindAgentPty, CloseSession, DetachSession, OpenSession, ResizeSession,
-    SessionAttached, SessionExited, SessionInfo, SessionInput, SessionList, SessionNotice,
-    SessionOpened, SessionOutput, SessionSize, SetBootstrapPreamble, UnbindAgentPty,
+    AttachSession, BindAgentPty, CloseSession, DetachSession, ManagedLaunch,
+    ManagedSessionExitInfo, ManagedSessionInfo, ManagedSessionLifecycleAction,
+    ManagedSessionLifecycleRequest, MemoryMeasurement, MemoryMeasurementStatus, OpenSession,
+    ResizeSession, SessionAttached, SessionExited, SessionInfo, SessionInput, SessionList,
+    SessionNotice, SessionOpened, SessionOutput, SessionSize, SetBootstrapPreamble, UnbindAgentPty,
 };
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -47,7 +54,7 @@ use zaplex_remote_session::agent_binding::{
 use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
     supported_features, FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PROCESS_SIGNAL_V1,
-    FEATURE_AGENT_PTY_BINDING_V2, FEATURE_AGENT_TRANSCRIPT_READ_V1,
+    FEATURE_AGENT_PTY_BINDING_V2, FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
     FEATURE_SAFE_FILE_TRANSACTIONS_V1,
 };
 
@@ -87,6 +94,12 @@ const HOST_RING_CAP_BYTES: usize = 256 * 1024 * 1024;
 #[cfg(unix)]
 const GC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 const MAX_CONCURRENT_AGENT_TRANSCRIPT_READS: usize = 2;
+#[cfg(unix)]
+const MAX_CONCURRENT_MANAGED_MEMORY_READS: usize = 1;
+#[cfg(unix)]
+const MAX_RECENT_MANAGED_EXITS: usize = 32;
+#[cfg(unix)]
+const RECENT_MANAGED_EXIT_TTL_MILLIS: u64 = 15 * 60 * 1000;
 
 /// Unique identifier for a connected proxy session in daemon mode.
 pub type ConnectionId = uuid::Uuid;
@@ -139,6 +152,102 @@ impl Drop for AgentTranscriptReadPermit {
         let previous = self.in_flight.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(previous > 0);
     }
+}
+
+#[cfg(unix)]
+struct ManagedMemoryReadPermit {
+    in_flight: Arc<AtomicUsize>,
+}
+
+#[cfg(unix)]
+impl ManagedMemoryReadPermit {
+    fn try_acquire(in_flight: Arc<AtomicUsize>) -> Option<Self> {
+        in_flight
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current < MAX_CONCURRENT_MANAGED_MEMORY_READS).then_some(current + 1)
+            })
+            .ok()
+            .map(|_| Self { in_flight })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ManagedMemoryReadPermit {
+    fn drop(&mut self) {
+        let previous = self.in_flight.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0);
+    }
+}
+
+#[cfg(unix)]
+#[derive(Clone, Debug)]
+struct ManagedExitRecord {
+    plan: super::managed_fleet::ManagedLaunchPlan,
+    account_route_identity: super::agent_account::AccountRouteIdentity,
+    session_id: String,
+    generation: u64,
+    exit_code: Option<i32>,
+    exited_at_epoch_millis: u64,
+    shell: String,
+    rows: usize,
+    cols: usize,
+    ring_ceiling_bytes: u64,
+    diagnostic: ManagedExitDiagnostic,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ManagedExitDiagnostic {
+    ProcessEnded,
+    Stopped,
+}
+
+#[cfg(unix)]
+impl ManagedExitDiagnostic {
+    fn protocol_code(self) -> &'static str {
+        match self {
+            Self::ProcessEnded => "process-ended",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+#[cfg(unix)]
+impl ManagedExitRecord {
+    fn matches(&self, request: &ManagedSessionLifecycleRequest) -> bool {
+        self.session_id == request.session_id
+            && self.generation == request.expected_generation
+            && self.plan.launch_id() == request.launch_id
+            && self.plan.launch_key().provider() == request.provider
+            && self.plan.launch_key().account_id() == request.account_id
+            && self.plan.launch_key().project_root() == request.project_root
+    }
+
+    fn to_proto(&self) -> ManagedSessionExitInfo {
+        ManagedSessionExitInfo {
+            managed: Some(managed_session_plan_info(&self.plan, self.generation)),
+            session_id: self.session_id.clone(),
+            exit_code: self.exit_code,
+            exited_at_epoch_millis: self.exited_at_epoch_millis,
+            diagnostic_code: self.diagnostic.protocol_code().to_string(),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn push_recent_managed_exit(records: &mut VecDeque<ManagedExitRecord>, record: ManagedExitRecord) {
+    records.retain(|existing| {
+        record
+            .exited_at_epoch_millis
+            .saturating_sub(existing.exited_at_epoch_millis)
+            <= RECENT_MANAGED_EXIT_TTL_MILLIS
+            && (existing.session_id != record.session_id
+                || existing.generation != record.generation)
+    });
+    while records.len() >= MAX_RECENT_MANAGED_EXITS {
+        records.pop_front();
+    }
+    records.push_back(record);
 }
 
 #[cfg(test)]
@@ -269,7 +378,9 @@ fn server_features_with_runtime_support(
 ) -> Vec<String> {
     let mut features = supported_features();
     if !process_signalling_supported {
-        features.retain(|feature| feature != FEATURE_AGENT_PROCESS_SIGNAL_V1);
+        features.retain(|feature| {
+            feature != FEATURE_AGENT_PROCESS_SIGNAL_V1 && feature != FEATURE_MANAGED_AGENT_FLEET_V1
+        });
     }
     if !safe_file_transactions_supported {
         features.retain(|feature| feature != FEATURE_SAFE_FILE_TRANSACTIONS_V1);
@@ -414,9 +525,24 @@ pub struct ServerModel {
     /// Opaque account ids from the latest daemon-local inventory mapped to
     /// provider config roots that never cross the wire.
     agent_account_routes: super::agent_account::AccountRouteCache,
+    #[cfg(test)]
+    fresh_agent_account_routes_for_test: Option<super::agent_account::AccountRoutes>,
     /// Daemon-wide cap for transcript filesystem scans and parsing. The permit
     /// is owned by the abortable future, so cancellation releases it as well.
     agent_transcript_reads_in_flight: Arc<AtomicUsize>,
+    /// Global daemon cap for procfs-backed managed memory inventory work.
+    /// Busy callers get typed unavailable measurements instead of starting a
+    /// requests-times-sessions fan-out.
+    #[cfg(unix)]
+    managed_memory_reads_in_flight: Arc<AtomicUsize>,
+    /// Bounded, time-limited explanations and exact restart identities for
+    /// managed sessions that ended or were explicitly stopped.
+    #[cfg(unix)]
+    recent_managed_exits: VecDeque<ManagedExitRecord>,
+    /// Parsed once at daemon startup. Invalid configuration keeps the managed
+    /// start gate closed without weakening ordinary terminal sessions.
+    #[cfg(unix)]
+    managed_min_available_bytes: Result<u64, super::managed_fleet::FleetValidationError>,
 }
 
 impl Entity for ServerModel {
@@ -428,6 +554,8 @@ impl SingletonEntity for ServerModel {}
 impl ServerModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let host_id = uuid::Uuid::new_v4().to_string();
+        #[cfg(unix)]
+        let configured_managed_headroom = std::env::var("ZAPLEX_MANAGED_MIN_AVAILABLE_MB").ok();
         log::info!(
             "Daemon started: PID={}, host_id={}",
             std::process::id(),
@@ -457,7 +585,17 @@ impl ServerModel {
                 zaplex_cockpit::TranscriptScanCache::default(),
             )),
             agent_account_routes: Default::default(),
+            #[cfg(test)]
+            fresh_agent_account_routes_for_test: None,
             agent_transcript_reads_in_flight: Arc::new(AtomicUsize::new(0)),
+            #[cfg(unix)]
+            managed_memory_reads_in_flight: Arc::new(AtomicUsize::new(0)),
+            #[cfg(unix)]
+            recent_managed_exits: VecDeque::new(),
+            #[cfg(unix)]
+            managed_min_available_bytes: super::managed_fleet::daemon_headroom_floor_bytes(
+                configured_managed_headroom.as_deref(),
+            ),
         };
         // Subscribe to FileModel and RepoMetadataModel events
         // file operation results and repo metadata pushes are forwarded to all
@@ -928,7 +1066,7 @@ impl ServerModel {
             // host on unix; attach/detach/list land in Stages 3-4.
             #[cfg(unix)]
             Some(client_message::Message::OpenSession(msg)) => {
-                self.handle_open_session(conn_id, msg, ctx)
+                self.handle_open_session(&request_id, conn_id, msg, ctx)
             }
             #[cfg(unix)]
             Some(client_message::Message::SessionInput(msg)) => {
@@ -1054,7 +1192,28 @@ impl ServerModel {
             }
             // Multi-session listing for the sidebar / adopt-by-id (Stage 4).
             #[cfg(unix)]
-            Some(client_message::Message::ListSessions(_)) => self.handle_list_sessions(),
+            Some(client_message::Message::ListSessions(_)) => {
+                self.handle_list_sessions(&request_id, conn_id, ctx)
+            }
+            #[cfg(target_os = "linux")]
+            Some(client_message::Message::ManagedSessionLifecycle(request)) => {
+                self.handle_managed_session_lifecycle(&request_id, conn_id, request, ctx)
+            }
+            #[cfg(not(target_os = "linux"))]
+            Some(client_message::Message::ManagedSessionLifecycle(request)) => {
+                HandlerOutcome::Sync(server_message::Message::ManagedSessionLifecycleResponse(
+                    ManagedSessionLifecycleResponse {
+                        schema_version: 1,
+                        action: request.action,
+                        status: ManagedSessionLifecycleStatus::CapabilityRequired.into(),
+                        session_id: request.session_id,
+                        generation: request.expected_generation,
+                        replacement_session_id: String::new(),
+                        replacement_generation: 0,
+                        diagnostic_code: "unsupported-platform".to_string(),
+                    },
+                ))
+            }
             #[cfg(not(unix))]
             Some(client_message::Message::ListSessions(_)) => {
                 HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
@@ -1273,6 +1432,28 @@ impl ServerModel {
                 .connection_features
                 .get(&conn_id)
                 .is_some_and(|features| features.contains(FEATURE_AGENT_PROCESS_SIGNAL_V1))
+    }
+
+    #[cfg(unix)]
+    fn client_supports_managed_fleet(&self, conn_id: ConnectionId) -> bool {
+        self.client_supports_managed_fleet_with_runtime(
+            conn_id,
+            zaplex_cockpit::local_process_signalling_supported(),
+        )
+    }
+
+    #[cfg(unix)]
+    fn client_supports_managed_fleet_with_runtime(
+        &self,
+        conn_id: ConnectionId,
+        process_signalling_supported: bool,
+    ) -> bool {
+        cfg!(target_os = "linux")
+            && process_signalling_supported
+            && self
+                .connection_features
+                .get(&conn_id)
+                .is_some_and(|features| features.contains(FEATURE_MANAGED_AGENT_FLEET_V1))
     }
 
     #[cfg(unix)]
@@ -2551,8 +2732,9 @@ impl ServerModel {
     }
 
     /// Resolves and reads one provider transcript entirely on this daemon.
-    /// Account routing is checked synchronously against the fresh opaque route
-    /// cache; bounded filesystem parsing then runs off the model thread.
+    /// Account discovery, exact opaque-route resolution, and bounded parsing
+    /// share one global permit and run off the model thread. No cached route is
+    /// trusted to select a transcript root.
     fn handle_read_agent_transcript(
         &mut self,
         request_id: &RequestId,
@@ -2566,30 +2748,35 @@ impl ServerModel {
                 message: "agent-transcript-read-v1 capability was not negotiated".to_string(),
             }));
         }
-        let resolved =
-            match super::transcript_rpc::resolve_request(&self.agent_account_routes, request) {
-                Ok(resolved) => resolved,
-                Err(response) => {
-                    return HandlerOutcome::Sync(server_message::Message::AgentTranscriptResponse(
-                        response,
-                    ));
-                }
-            };
         let Some(permit) = AgentTranscriptReadPermit::try_acquire(Arc::clone(
             &self.agent_transcript_reads_in_flight,
         )) else {
             return HandlerOutcome::Sync(server_message::Message::AgentTranscriptResponse(
-                super::transcript_rpc::busy_response(&resolved),
+                super::transcript_rpc::busy_response(&request),
             ));
         };
         let request_id_for_response = request_id.clone();
+        #[cfg(test)]
+        let fresh_routes_for_test = self.fresh_agent_account_routes_for_test.clone();
         let handle = self.spawn_request_handler(
             request_id.clone(),
             async move {
                 let _permit = permit;
-                super::transcript_rpc::read_transcript(resolved)
+                #[cfg(test)]
+                let routes = match fresh_routes_for_test {
+                    Some(routes) => routes,
+                    None => super::agent_account::scan_agent_accounts().routes,
+                };
+                #[cfg(not(test))]
+                let routes = super::agent_account::scan_agent_accounts().routes;
+                let response = match super::transcript_rpc::resolve_request(&routes, request) {
+                    Ok(resolved) => super::transcript_rpc::read_transcript(resolved),
+                    Err(response) => response,
+                };
+                (routes, response)
             },
-            move |me, response, _ctx| {
+            move |me, (routes, response), _ctx| {
+                me.agent_account_routes.replace(routes);
                 me.send_server_message(
                     Some(conn_id),
                     Some(&request_id_for_response),
@@ -2810,7 +2997,571 @@ fn binding_error_response(error: BindingError) -> AgentPtyBindingResponse {
 }
 
 #[cfg(unix)]
+fn managed_launch_plan(
+    host_id: &str,
+    msg: &mut OpenSession,
+) -> Result<super::managed_fleet::ManagedLaunchPlan, &'static str> {
+    use super::managed_fleet::{
+        ClaudePermissionMode, ClaudeRemoteControlSpec, ClaudeSpawnMode, ManagedLaunchKey,
+        ManagedLaunchPlan, MANAGED_FLEET_SCHEMA_VERSION,
+    };
+
+    let launch = msg
+        .managed_launch
+        .as_ref()
+        .ok_or("missing-managed-launch")?;
+    let route = msg
+        .agent_launch_route
+        .as_ref()
+        .ok_or("missing-account-route")?;
+    if launch.schema_version != MANAGED_FLEET_SCHEMA_VERSION
+        || route.schema_version != super::agent_account::ACCOUNT_ROUTING_SCHEMA_VERSION
+        || launch.provider != route.provider
+        || launch.project_root != msg.cwd.as_deref().unwrap_or_default()
+        || msg.requested_min_available_bytes == Some(0)
+    {
+        return Err("invalid-managed-envelope");
+    }
+    let canonical =
+        std::fs::canonicalize(&launch.project_root).map_err(|_| "project-unavailable")?;
+    if !canonical.is_dir() {
+        return Err("project-unavailable");
+    }
+    let project_identity = super::managed_fleet::ManagedProjectIdentity::capture(&canonical)
+        .ok_or("project-identity-unavailable")?;
+    let canonical = canonical.to_str().ok_or("project-not-utf8")?.to_string();
+    msg.cwd = Some(canonical.clone());
+    let key = ManagedLaunchKey::new(host_id, &route.account_id, &canonical, &launch.provider)
+        .map_err(|error| error.protocol_code())?;
+    let plan = match launch.kind.as_str() {
+        "interactive-agent"
+            if launch.spawn_mode.is_empty()
+                && launch.capacity == 0
+                && launch.permission_mode.is_empty()
+                && launch.display_name.is_empty() =>
+        {
+            ManagedLaunchPlan::interactive_agent(&launch.launch_id, key)
+                .map_err(|error| error.protocol_code())
+        }
+        "claude-remote-control" => {
+            let spawn_mode = match launch.spawn_mode.as_str() {
+                "same-dir" => ClaudeSpawnMode::SameDir,
+                "worktree" => ClaudeSpawnMode::Worktree,
+                "session" => ClaudeSpawnMode::Session,
+                _ => return Err("invalid-spawn-mode"),
+            };
+            let permission_mode = match launch.permission_mode.as_str() {
+                "" => None,
+                "acceptEdits" => Some(ClaudePermissionMode::AcceptEdits),
+                "auto" => Some(ClaudePermissionMode::Auto),
+                "bypassPermissions" => Some(ClaudePermissionMode::BypassPermissions),
+                "default" => Some(ClaudePermissionMode::Default),
+                "dontAsk" => Some(ClaudePermissionMode::DontAsk),
+                "plan" => Some(ClaudePermissionMode::Plan),
+                _ => return Err("invalid-permission-mode"),
+            };
+            let capacity = u16::try_from(launch.capacity).map_err(|_| "invalid-capacity")?;
+            let spec = ClaudeRemoteControlSpec::new(
+                spawn_mode,
+                capacity,
+                permission_mode,
+                (!launch.display_name.is_empty()).then_some(launch.display_name.as_str()),
+            )
+            .map_err(|error| error.protocol_code())?;
+            ManagedLaunchPlan::claude_remote_control(&launch.launch_id, key, spec)
+                .map_err(|error| error.protocol_code())
+        }
+        "interactive-agent" | "claude-remote-control" => Err("invalid-managed-options"),
+        _ => Err("unsupported-managed-kind"),
+    }?;
+    Ok(plan.with_project_identity(project_identity))
+}
+
+#[cfg(unix)]
+fn fresh_managed_launch_identity(
+    routes: &super::agent_account::AccountRoutes,
+    plan: &super::managed_fleet::ManagedLaunchPlan,
+) -> Result<super::agent_account::AccountRouteIdentity, &'static str> {
+    if !plan.project_identity_is_current() {
+        return Err("project-identity-changed");
+    }
+    super::agent_account::fresh_account_route_identity(
+        routes,
+        plan.launch_key().provider(),
+        plan.launch_key().account_id(),
+    )
+    .map_err(|_| "account-route-changed")
+}
+
+#[cfg(unix)]
+fn memory_measurement_to_proto(
+    measurement: &super::fleet_memory::MemoryMeasurement,
+) -> MemoryMeasurement {
+    let status = match measurement.status() {
+        super::fleet_memory::MemoryMeasurementStatus::Measured => MemoryMeasurementStatus::Measured,
+        super::fleet_memory::MemoryMeasurementStatus::Unavailable => {
+            MemoryMeasurementStatus::Unavailable
+        }
+        super::fleet_memory::MemoryMeasurementStatus::Unsupported => {
+            MemoryMeasurementStatus::Unsupported
+        }
+    };
+    MemoryMeasurement {
+        status: status.into(),
+        bytes: measurement.bytes(),
+        provenance: measurement.provenance().protocol_name().to_string(),
+        diagnostic_code: measurement
+            .diagnostic()
+            .map(|diagnostic| diagnostic.protocol_code().to_string())
+            .unwrap_or_default(),
+    }
+}
+
+#[cfg(unix)]
+fn managed_session_info(
+    metadata: &super::managed_fleet::ManagedSessionMetadata,
+    generation: u64,
+) -> ManagedSessionInfo {
+    managed_session_plan_info(metadata.plan(), generation)
+}
+
+#[cfg(unix)]
+fn managed_session_plan_info(
+    plan: &super::managed_fleet::ManagedLaunchPlan,
+    generation: u64,
+) -> ManagedSessionInfo {
+    ManagedSessionInfo {
+        schema_version: super::managed_fleet::MANAGED_FLEET_SCHEMA_VERSION,
+        provider: plan.launch_key().provider().to_string(),
+        account_id: plan.launch_key().account_id().to_string(),
+        project_root: plan.launch_key().project_root().to_string(),
+        launch_kind: plan.kind().protocol_name().to_string(),
+        launch_id: plan.launch_id().to_string(),
+        generation,
+    }
+}
+
+#[cfg(unix)]
+fn managed_launch_to_proto(plan: &super::managed_fleet::ManagedLaunchPlan) -> ManagedLaunch {
+    let (spawn_mode, capacity, permission_mode, display_name) = match plan.claude_spec() {
+        Some(spec) => (
+            spec.spawn_mode().cli_value().to_string(),
+            u32::from(spec.capacity()),
+            spec.permission_mode()
+                .map(|mode| mode.cli_value().to_string())
+                .unwrap_or_default(),
+            spec.display_name().unwrap_or_default().to_string(),
+        ),
+        None => (String::new(), 0, String::new(), String::new()),
+    };
+    ManagedLaunch {
+        schema_version: super::managed_fleet::MANAGED_FLEET_SCHEMA_VERSION,
+        launch_id: plan.launch_id().to_string(),
+        provider: plan.launch_key().provider().to_string(),
+        project_root: plan.launch_key().project_root().to_string(),
+        kind: plan.kind().protocol_name().to_string(),
+        spawn_mode,
+        capacity,
+        permission_mode,
+        display_name,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn managed_lifecycle_response(
+    request: &ManagedSessionLifecycleRequest,
+    status: ManagedSessionLifecycleStatus,
+    replacement: Option<&SessionOpened>,
+    diagnostic_code: impl Into<String>,
+) -> ManagedSessionLifecycleResponse {
+    ManagedSessionLifecycleResponse {
+        schema_version: super::managed_fleet::MANAGED_FLEET_SCHEMA_VERSION,
+        action: request.action,
+        status: status.into(),
+        session_id: request.session_id.clone(),
+        generation: request.expected_generation,
+        replacement_session_id: replacement
+            .map(|opened| opened.session_id.clone())
+            .unwrap_or_default(),
+        replacement_generation: replacement
+            .map(|opened| opened.generation)
+            .unwrap_or_default(),
+        diagnostic_code: diagnostic_code.into(),
+    }
+}
+
+#[cfg(unix)]
 impl ServerModel {
+    fn prune_recent_managed_exits(&mut self, now_epoch_millis: u64) {
+        self.recent_managed_exits.retain(|record| {
+            now_epoch_millis.saturating_sub(record.exited_at_epoch_millis)
+                <= RECENT_MANAGED_EXIT_TTL_MILLIS
+        });
+    }
+
+    fn record_managed_exit(
+        &mut self,
+        session_id: &str,
+        session: &super::session_host::Session,
+        exit_code: Option<i32>,
+        diagnostic: ManagedExitDiagnostic,
+    ) {
+        let Some(metadata) = session.managed.as_ref() else {
+            return;
+        };
+        let Some(account_route_identity) = metadata.account_route_identity().copied() else {
+            return;
+        };
+        let now = now_epoch_millis();
+        push_recent_managed_exit(
+            &mut self.recent_managed_exits,
+            ManagedExitRecord {
+                plan: metadata.plan().clone(),
+                account_route_identity,
+                session_id: session_id.to_string(),
+                generation: session.generation,
+                exit_code,
+                exited_at_epoch_millis: now,
+                shell: session.shell.clone(),
+                rows: session.rows,
+                cols: session.cols,
+                ring_ceiling_bytes: session.ring.capacity() as u64,
+                diagnostic,
+            },
+        );
+    }
+
+    fn managed_lifecycle_target_matches(&self, request: &ManagedSessionLifecycleRequest) -> bool {
+        let Some(session) = self.sessions.get(&request.session_id) else {
+            return false;
+        };
+        let Some(metadata) = session.managed.as_ref() else {
+            return false;
+        };
+        let Ok(key) = super::managed_fleet::ManagedLaunchKey::new(
+            &self.host_id,
+            &request.account_id,
+            &request.project_root,
+            &request.provider,
+        ) else {
+            return false;
+        };
+        let Ok(identity) = super::managed_fleet::ManagedFleetIdentity::new(
+            metadata.plan().launch_key().clone(),
+            &request.session_id,
+            session.generation,
+        ) else {
+            return false;
+        };
+        metadata.plan().launch_id() == request.launch_id
+            && identity.matches_action(&key, &request.session_id, request.expected_generation)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn handle_managed_session_lifecycle(
+        &mut self,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        request: ManagedSessionLifecycleRequest,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        if !self.client_supports_managed_fleet(conn_id) {
+            return HandlerOutcome::Sync(server_message::Message::ManagedSessionLifecycleResponse(
+                managed_lifecycle_response(
+                    &request,
+                    ManagedSessionLifecycleStatus::CapabilityRequired,
+                    None,
+                    "capability-required",
+                ),
+            ));
+        }
+        let action = ManagedSessionLifecycleAction::try_from(request.action).ok();
+        if request.schema_version != super::managed_fleet::MANAGED_FLEET_SCHEMA_VERSION
+            || matches!(
+                action,
+                None | Some(ManagedSessionLifecycleAction::Unspecified)
+            )
+        {
+            return HandlerOutcome::Sync(server_message::Message::ManagedSessionLifecycleResponse(
+                managed_lifecycle_response(
+                    &request,
+                    ManagedSessionLifecycleStatus::Failed,
+                    None,
+                    "invalid-request",
+                ),
+            ));
+        }
+        let action = action.expect("validated lifecycle action");
+        self.prune_recent_managed_exits(now_epoch_millis());
+        let live_target = self.sessions.contains_key(&request.session_id);
+        let (plan, account_route_identity, shell, rows, cols, ring_ceiling_bytes) = if live_target {
+            if !self.managed_lifecycle_target_matches(&request) {
+                return HandlerOutcome::Sync(
+                    server_message::Message::ManagedSessionLifecycleResponse(
+                        managed_lifecycle_response(
+                            &request,
+                            ManagedSessionLifecycleStatus::StaleIdentity,
+                            None,
+                            "stale-identity",
+                        ),
+                    ),
+                );
+            }
+            let session = self
+                .sessions
+                .get(&request.session_id)
+                .expect("validated live managed session exists");
+            let metadata = session
+                .managed
+                .as_ref()
+                .expect("validated managed metadata exists");
+            let Some(account_route_identity) = metadata.account_route_identity().copied() else {
+                return HandlerOutcome::Sync(
+                    server_message::Message::ManagedSessionLifecycleResponse(
+                        managed_lifecycle_response(
+                            &request,
+                            ManagedSessionLifecycleStatus::StaleIdentity,
+                            None,
+                            "account-route-identity-unavailable",
+                        ),
+                    ),
+                );
+            };
+            (
+                metadata.plan().clone(),
+                account_route_identity,
+                session.shell.clone(),
+                session.rows,
+                session.cols,
+                session.ring.capacity() as u64,
+            )
+        } else {
+            if action != ManagedSessionLifecycleAction::Restart {
+                return HandlerOutcome::Sync(
+                    server_message::Message::ManagedSessionLifecycleResponse(
+                        managed_lifecycle_response(
+                            &request,
+                            ManagedSessionLifecycleStatus::NotRunning,
+                            None,
+                            "not-running",
+                        ),
+                    ),
+                );
+            }
+            let Some(record) = self
+                .recent_managed_exits
+                .iter()
+                .find(|record| record.matches(&request))
+            else {
+                return HandlerOutcome::Sync(
+                    server_message::Message::ManagedSessionLifecycleResponse(
+                        managed_lifecycle_response(
+                            &request,
+                            ManagedSessionLifecycleStatus::NotRunning,
+                            None,
+                            "not-running",
+                        ),
+                    ),
+                );
+            };
+            (
+                record.plan.clone(),
+                record.account_route_identity,
+                record.shell.clone(),
+                record.rows,
+                record.cols,
+                record.ring_ceiling_bytes,
+            )
+        };
+
+        let daemon_floor = match (action, self.managed_min_available_bytes) {
+            (ManagedSessionLifecycleAction::Restart, Err(error)) => {
+                return HandlerOutcome::Sync(
+                    server_message::Message::ManagedSessionLifecycleResponse(
+                        managed_lifecycle_response(
+                            &request,
+                            ManagedSessionLifecycleStatus::Blocked,
+                            None,
+                            error.protocol_code(),
+                        ),
+                    ),
+                );
+            }
+            (ManagedSessionLifecycleAction::Restart, Ok(floor)) => Some(floor),
+            (ManagedSessionLifecycleAction::Stop, _) => None,
+            (ManagedSessionLifecycleAction::Unspecified, _) => {
+                unreachable!("invalid lifecycle action returned before preflight")
+            }
+        };
+        let open = OpenSession {
+            cwd: Some(plan.launch_key().project_root().to_string()),
+            shell: Some(shell),
+            env: HashMap::new(),
+            size: Some(SessionSize {
+                rows: rows as u32,
+                cols: cols as u32,
+                pixel_width: 0,
+                pixel_height: 0,
+            }),
+            ring_ceiling_bytes: Some(ring_ceiling_bytes),
+            agent_launch_route: Some(super::proto::AgentLaunchRoute {
+                schema_version: super::agent_account::ACCOUNT_ROUTING_SCHEMA_VERSION,
+                provider: plan.launch_key().provider().to_string(),
+                account_id: plan.launch_key().account_id().to_string(),
+            }),
+            managed_launch: Some(managed_launch_to_proto(&plan)),
+            requested_min_available_bytes: None,
+        };
+        let collected_at = now_epoch_millis();
+        let provider = plan.launch_key().provider().to_string();
+        let account_id = plan.launch_key().account_id().to_string();
+        let plan_for_preflight = plan.clone();
+        let request_id_for_response = request_id.clone();
+        let request_for_response = request.clone();
+        #[cfg(test)]
+        let fresh_routes_for_test = self.fresh_agent_account_routes_for_test.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                #[cfg(test)]
+                let routes = match fresh_routes_for_test {
+                    Some(routes) => routes,
+                    None => super::agent_account::scan_agent_accounts().routes,
+                };
+                #[cfg(not(test))]
+                let routes = super::agent_account::scan_agent_accounts().routes;
+                let route_current = super::agent_account::fresh_account_route_identity(
+                    &routes,
+                    &provider,
+                    &account_id,
+                ) == Ok(account_route_identity);
+                let project_current = plan_for_preflight.project_identity_is_current();
+                let memory =
+                    daemon_floor.map(|_| super::fleet_memory::collect_host_memory(collected_at));
+                (routes, route_current, project_current, memory)
+            },
+            move |me, (routes, route_current, project_current, memory), ctx| {
+                me.agent_account_routes.replace(routes);
+                let target_current = if live_target {
+                    me.managed_lifecycle_target_matches(&request_for_response)
+                } else {
+                    me.recent_managed_exits
+                        .iter()
+                        .any(|record| record.matches(&request_for_response))
+                };
+                let response = if !target_current {
+                    managed_lifecycle_response(
+                        &request_for_response,
+                        ManagedSessionLifecycleStatus::StaleIdentity,
+                        None,
+                        "stale-identity",
+                    )
+                } else if !route_current {
+                    managed_lifecycle_response(
+                        &request_for_response,
+                        ManagedSessionLifecycleStatus::StaleIdentity,
+                        None,
+                        "account-route-changed",
+                    )
+                } else if !project_current {
+                    managed_lifecycle_response(
+                        &request_for_response,
+                        ManagedSessionLifecycleStatus::StaleIdentity,
+                        None,
+                        "project-identity-changed",
+                    )
+                } else if action == ManagedSessionLifecycleAction::Stop {
+                    match me.handle_close_managed_session_verified(
+                        &request_for_response.session_id,
+                        ctx,
+                    ) {
+                        Ok(()) => managed_lifecycle_response(
+                            &request_for_response,
+                            ManagedSessionLifecycleStatus::Stopped,
+                            None,
+                            String::new(),
+                        ),
+                        Err(error) => managed_lifecycle_response(
+                            &request_for_response,
+                            ManagedSessionLifecycleStatus::Failed,
+                            None,
+                            error.protocol_code(),
+                        ),
+                    }
+                } else {
+                    let policy = super::managed_fleet::HeadroomPolicy::new(
+                        daemon_floor.expect("restart daemon floor was validated"),
+                        None,
+                        super::managed_fleet::DEFAULT_MAX_MEASUREMENT_AGE_MILLIS,
+                    )
+                    .expect("validated daemon floor and constant freshness");
+                    let snapshot = memory.expect("restart memory preflight was collected");
+                    if let super::managed_fleet::HeadroomDecision::Denied { reason, .. } =
+                        super::managed_fleet::evaluate_headroom(
+                            policy,
+                            &snapshot,
+                            now_epoch_millis(),
+                        )
+                    {
+                        managed_lifecycle_response(
+                            &request_for_response,
+                            ManagedSessionLifecycleStatus::Blocked,
+                            None,
+                            reason.protocol_code(),
+                        )
+                    } else {
+                        let close_result = if live_target {
+                            me.handle_close_managed_session_verified(
+                                &request_for_response.session_id,
+                                ctx,
+                            )
+                        } else {
+                            Ok(())
+                        };
+                        if let Err(error) = close_result {
+                            managed_lifecycle_response(
+                                &request_for_response,
+                                ManagedSessionLifecycleStatus::Failed,
+                                None,
+                                error.protocol_code(),
+                            )
+                        } else {
+                            match me.open_session_ready(conn_id, open, Some(plan), ctx) {
+                                HandlerOutcome::Sync(server_message::Message::SessionOpened(
+                                    opened,
+                                )) => {
+                                    me.recent_managed_exits
+                                        .retain(|record| !record.matches(&request_for_response));
+                                    managed_lifecycle_response(
+                                        &request_for_response,
+                                        ManagedSessionLifecycleStatus::Restarted,
+                                        Some(&opened),
+                                        String::new(),
+                                    )
+                                }
+                                HandlerOutcome::Sync(_) | HandlerOutcome::Async(_) => {
+                                    managed_lifecycle_response(
+                                        &request_for_response,
+                                        ManagedSessionLifecycleStatus::Failed,
+                                        None,
+                                        "restart-start-failed",
+                                    )
+                                }
+                            }
+                        }
+                    }
+                };
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::ManagedSessionLifecycleResponse(response),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
     fn handle_bind_agent_pty(
         &mut self,
         request_id: &RequestId,
@@ -3009,12 +3760,195 @@ impl ServerModel {
         HandlerOutcome::Sync(server_message::Message::AgentPtyBindingResponse(response))
     }
 
-    /// Opens a new daemon-hosted session: allocates a PTY, spawns a login
-    /// shell, registers the session, and starts its reader + writer tasks.
+    fn existing_managed_launch(
+        &self,
+        plan: &super::managed_fleet::ManagedLaunchPlan,
+    ) -> Result<Option<SessionOpened>, &'static str> {
+        for (session_id, session) in &self.sessions {
+            let Some(metadata) = session.managed.as_ref() else {
+                continue;
+            };
+            let existing = metadata.plan();
+            if !existing.project_identity_is_current() {
+                return Err("project-identity-changed");
+            }
+            if existing.launch_id() == plan.launch_id() {
+                return if existing.is_retry_of(plan) {
+                    Ok(Some(SessionOpened {
+                        session_id: session_id.clone(),
+                        generation: session.generation,
+                    }))
+                } else {
+                    Err("launch-id-conflict")
+                };
+            }
+            if existing.launch_key() == plan.launch_key() {
+                return if existing.same_route_and_configuration(plan) {
+                    Ok(Some(SessionOpened {
+                        session_id: session_id.clone(),
+                        generation: session.generation,
+                    }))
+                } else {
+                    Err("managed-route-conflict")
+                };
+            }
+        }
+        Ok(None)
+    }
+
     fn handle_open_session(
+        &mut self,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        mut msg: OpenSession,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        if msg.managed_launch.is_none() {
+            return self.open_session_ready(conn_id, msg, None, ctx);
+        }
+        if !self.client_supports_managed_fleet(conn_id)
+            || !self.client_supports_agent_account_routing(conn_id)
+        {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "managed-agent-fleet-v1 capability was not negotiated".to_string(),
+            }));
+        }
+        let plan = match managed_launch_plan(&self.host_id, &mut msg) {
+            Ok(plan) => plan,
+            Err(code) => {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: format!("managed launch rejected: {code}"),
+                }));
+            }
+        };
+        match self.existing_managed_launch(&plan) {
+            Ok(Some(_)) | Ok(None) => {}
+            Err(code) => {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: format!("managed launch rejected: {code}"),
+                }));
+            }
+        }
+        let daemon_floor = match self.managed_min_available_bytes {
+            Ok(floor) => floor,
+            Err(error) => {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: format!("managed launch rejected: {}", error.protocol_code()),
+                }));
+            }
+        };
+        let policy = match super::managed_fleet::HeadroomPolicy::new(
+            daemon_floor,
+            msg.requested_min_available_bytes,
+            super::managed_fleet::DEFAULT_MAX_MEASUREMENT_AGE_MILLIS,
+        ) {
+            Ok(policy) => policy,
+            Err(error) => {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message: format!("managed launch rejected: {}", error.protocol_code()),
+                }));
+            }
+        };
+        let collected_at = now_epoch_millis();
+        let request_id_for_response = request_id.clone();
+        let plan_for_preflight = plan.clone();
+        #[cfg(test)]
+        let fresh_routes_for_test = self.fresh_agent_account_routes_for_test.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                #[cfg(test)]
+                let routes = match fresh_routes_for_test {
+                    Some(routes) => routes,
+                    None => super::agent_account::scan_agent_accounts().routes,
+                };
+                #[cfg(not(test))]
+                let routes = super::agent_account::scan_agent_accounts().routes;
+                let route_identity = fresh_managed_launch_identity(&routes, &plan_for_preflight);
+                let snapshot = super::fleet_memory::collect_host_memory(collected_at);
+                (routes, route_identity, snapshot)
+            },
+            move |me, (routes, route_identity, snapshot), ctx| {
+                me.agent_account_routes.replace(routes);
+                let project_current = plan.project_identity_is_current();
+                let route_current = route_identity.as_ref().is_ok_and(|expected| {
+                    super::agent_account::current_account_route_identity(
+                        &me.agent_account_routes,
+                        plan.launch_key().provider(),
+                        plan.launch_key().account_id(),
+                    ) == Ok(*expected)
+                });
+                let message = match route_identity {
+                    Err(code) => server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: format!("managed launch rejected: {code}"),
+                    }),
+                    Ok(_) if !project_current => {
+                        server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::InvalidRequest.into(),
+                            message:
+                                "managed launch rejected: project-identity-changed".to_string(),
+                        })
+                    }
+                    Ok(_) if !route_current => server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: "managed launch rejected: account-route-changed".to_string(),
+                    }),
+                    Ok(_) => match me.existing_managed_launch(&plan) {
+                        Ok(Some(opened)) => server_message::Message::SessionOpened(opened),
+                        Ok(None) => match super::managed_fleet::evaluate_headroom(
+                            policy,
+                            &snapshot,
+                            now_epoch_millis(),
+                        ) {
+                            super::managed_fleet::HeadroomDecision::Allowed { .. } => {
+                                match me.open_session_ready(conn_id, msg, Some(plan), ctx) {
+                                    HandlerOutcome::Sync(message) => message,
+                                    HandlerOutcome::Async(_) => unreachable!(
+                                        "ready managed session creation is synchronous"
+                                    ),
+                                }
+                            }
+                            super::managed_fleet::HeadroomDecision::Denied {
+                                reason,
+                                available_bytes,
+                                required_bytes,
+                            } => server_message::Message::Error(ErrorResponse {
+                                code: ErrorCode::InvalidRequest.into(),
+                                message: format!(
+                                    "managed launch blocked: {}; available={}; required={required_bytes}",
+                                    reason.protocol_code(),
+                                    available_bytes
+                                        .map(|bytes| bytes.to_string())
+                                        .unwrap_or_else(|| "unavailable".to_string())
+                                ),
+                            }),
+                        },
+                        Err(code) => server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::InvalidRequest.into(),
+                            message: format!("managed launch rejected: {code}"),
+                        }),
+                    },
+                };
+                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Opens a new daemon-hosted session after any managed headroom gate has
+    /// passed: allocates a PTY, registers it, and starts reader/writer tasks.
+    fn open_session_ready(
         &mut self,
         conn_id: ConnectionId,
         mut msg: OpenSession,
+        managed_plan: Option<super::managed_fleet::ManagedLaunchPlan>,
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
         let supports_agent_account_routing = self.client_supports_agent_account_routing(conn_id);
@@ -3036,6 +3970,29 @@ impl ServerModel {
                 }));
             }
         }
+        #[cfg(target_os = "linux")]
+        let managed_account_route_identity = match managed_plan.as_ref() {
+            Some(plan) => match super::agent_account::current_account_route_identity(
+                &self.agent_account_routes,
+                plan.launch_key().provider(),
+                plan.launch_key().account_id(),
+            ) {
+                Ok(identity) if plan.project_identity_is_current() => Some(identity),
+                Ok(_) => {
+                    return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: "managed launch rejected: project-identity-changed".to_string(),
+                    }));
+                }
+                Err(_) => {
+                    return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: "managed launch rejected: account-route-changed".to_string(),
+                    }));
+                }
+            },
+            None => None,
+        };
         let generation = self.next_pty_generation;
         let Some(next_pty_generation) = generation.checked_add(1) else {
             return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
@@ -3063,22 +4020,23 @@ impl ServerModel {
             .map(|b| (b as usize).min(HOST_RING_CAP_BYTES))
             .unwrap_or(super::session_host::RING_CEILING_BYTES);
 
-        let (leader_fd, child, bootstrap_file) = match crate::terminal::local_tty::spawn_session_pty(
-            cwd.as_deref().map(std::path::Path::new),
-            &shell,
-            &msg.env,
-            rows,
-            cols,
-        ) {
-            Ok(pair) => pair,
-            Err(e) => {
-                log::warn!("Daemon: OpenSession failed: {e:#}");
-                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                    code: ErrorCode::Internal.into(),
-                    message: format!("failed to open session: {e:#}"),
-                }));
-            }
-        };
+        let (leader_fd, mut child, bootstrap_file) =
+            match crate::terminal::local_tty::spawn_session_pty(
+                cwd.as_deref().map(std::path::Path::new),
+                &shell,
+                &msg.env,
+                rows,
+                cols,
+            ) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    log::warn!("Daemon: OpenSession failed: {e:#}");
+                    return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::Internal.into(),
+                        message: format!("failed to open session: {e:#}"),
+                    }));
+                }
+            };
 
         let async_leader = match async_io::Async::new(std::fs::File::from(leader_fd)) {
             Ok(a) => std::sync::Arc::new(a),
@@ -3091,9 +4049,77 @@ impl ServerModel {
         };
 
         let session_id = uuid::Uuid::new_v4().to_string();
-        self.next_pty_generation = next_pty_generation;
         let (input_tx, input_rx) = async_channel::unbounded::<super::session_host::PtyInput>();
         let shell_pid = child.id();
+        let shell_type = crate::terminal::local_tty::shell::supported_shell_path_and_type(&shell)
+            .map(|(_, shell_type)| shell_type);
+        let managed_startup = managed_plan.as_ref().map(|plan| {
+            plan.startup_command(
+                shell_type
+                    .map(ShellFamily::from)
+                    .unwrap_or(ShellFamily::Posix),
+            )
+        });
+        #[cfg(target_os = "linux")]
+        let managed_process_root = match super::fleet_memory::managed_linux_process_identity(
+            &super::fleet_memory::RealProcfs,
+            shell_pid,
+            managed_plan.is_some(),
+        ) {
+            Ok(identity) => identity,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::Internal.into(),
+                    message: format!(
+                        "managed launch rejected: process-identity-unavailable ({})",
+                        error.protocol_code()
+                    ),
+                }));
+            }
+        };
+        #[cfg(not(target_os = "linux"))]
+        let managed_process_root = None;
+        #[cfg(target_os = "linux")]
+        let managed = match managed_plan {
+            Some(plan) => {
+                if !plan.project_identity_is_current() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: "managed launch rejected: project-identity-changed".to_string(),
+                    }));
+                }
+                let expected_account_route = managed_account_route_identity
+                    .expect("managed account route identity was required");
+                if super::agent_account::current_account_route_identity(
+                    &self.agent_account_routes,
+                    plan.launch_key().provider(),
+                    plan.launch_key().account_id(),
+                ) != Ok(expected_account_route)
+                {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: "managed launch rejected: account-route-changed".to_string(),
+                    }));
+                }
+                Some(super::managed_fleet::ManagedSessionMetadata::new_verified(
+                    plan,
+                    managed_process_root.expect("managed process identity was required"),
+                    expected_account_route,
+                ))
+            }
+            None => None,
+        };
+        #[cfg(not(target_os = "linux"))]
+        let managed = managed_plan.map(|plan| {
+            super::managed_fleet::ManagedSessionMetadata::new(plan, managed_process_root)
+        });
+        self.next_pty_generation = next_pty_generation;
         self.sessions.insert(
             session_id.clone(),
             super::session_host::Session {
@@ -3113,6 +4139,7 @@ impl ServerModel {
                 preamble: super::session_host::BootstrapPreamble::new(
                     super::session_host::BOOTSTRAP_PREAMBLE_CAP_BYTES,
                 ),
+                managed,
             },
         );
         self.agent_pty_bindings.register_pty(
@@ -3133,8 +4160,7 @@ impl ServerModel {
         exec.spawn(super::session_host::run_session_writer(
             async_leader,
             input_rx,
-            crate::terminal::local_tty::shell::supported_shell_path_and_type(&shell)
-                .map(|(_, shell_type)| shell_type),
+            shell_type,
         ))
         .detach();
         // Advisory probe: did the user's profile auto-attach tmux/screen into
@@ -3169,8 +4195,6 @@ impl ServerModel {
         //     body from the session-owned temporary file. Nothing is typed
         //     through the PTY, avoiding fish long-paste and pwsh input loss.
         //   • unclassified $SHELL — plain login shell, no integration.
-        let shell_type = crate::terminal::local_tty::shell::supported_shell_path_and_type(&shell)
-            .map(|(_, shell_type)| shell_type);
         let bootstrap_delivery = daemon_bootstrap_delivery(shell_type);
         let bootstrap = match bootstrap_delivery {
             DaemonBootstrapDelivery::OrderedPty => match shell_type {
@@ -3227,6 +4251,19 @@ impl ServerModel {
                     );
                 }
             },
+        }
+
+        if let Some(startup) = managed_startup {
+            if let Some(session) = self.sessions.get(&session_id) {
+                if let Err(error) = session
+                    .input_tx
+                    .try_send(super::session_host::PtyInput::Startup(startup))
+                {
+                    log::warn!(
+                        "Daemon: failed to enqueue managed startup for {session_id}: {error}"
+                    );
+                }
+            }
         }
 
         log::info!("Daemon: opened session {session_id} ({rows}x{cols}, shell={shell})");
@@ -3357,6 +4394,22 @@ impl ServerModel {
         msg: AttachSession,
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
+        let managed_session = self
+            .sessions
+            .get(&msg.session_id)
+            .is_some_and(|session| session.managed.is_some());
+        if managed_session
+            && (msg
+                .expected_generation
+                .is_none_or(|generation| generation == 0)
+                || msg.expected_agent_binding.is_none())
+        {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "managed attach requires an exact nonzero generation and foreground agent binding"
+                    .to_string(),
+            }));
+        }
         let Some(expected_proto) = msg.expected_agent_binding.clone() else {
             return self.handle_attach_session(conn_id, msg);
         };
@@ -3380,6 +4433,23 @@ impl ServerModel {
                 }));
             }
         };
+        if managed_session
+            && !self
+                .sessions
+                .get(&msg.session_id)
+                .and_then(|session| session.managed.as_ref())
+                .is_some_and(|managed| {
+                    managed.plan().launch_key().provider() == expected_agent.provider.as_str()
+                        && Some(managed.plan().launch_key().account_id())
+                            == expected_agent.account_id.as_deref()
+                })
+        {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "managed attach agent identity does not match the managed launch route"
+                    .to_string(),
+            }));
+        }
         let request_id_for_response = request_id.clone();
         let supports_account_routing = self.client_supports_agent_account_routing(conn_id);
         let transcript_cache = Arc::clone(&self.agent_transcript_cache);
@@ -3447,6 +4517,22 @@ impl ServerModel {
         msg: AttachSession,
     ) -> HandlerOutcome {
         let client_supports_agent_pty_binding = self.client_supports_agent_pty_binding(conn_id);
+        let managed_session = self
+            .sessions
+            .get(&msg.session_id)
+            .is_some_and(|session| session.managed.is_some());
+        if managed_session
+            && (msg
+                .expected_generation
+                .is_none_or(|generation| generation == 0)
+                || msg.expected_agent_binding.is_none())
+        {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest.into(),
+                message: "managed attach requires an exact nonzero generation and foreground agent binding"
+                    .to_string(),
+            }));
+        }
         if client_supports_agent_pty_binding && msg.expected_generation.is_none() {
             return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                 code: ErrorCode::InvalidRequest.into(),
@@ -3477,6 +4563,20 @@ impl ServerModel {
                 message: format!("no such session: {}", msg.session_id),
             }));
         };
+        if let Some(managed) = session.managed.as_ref() {
+            let matches_managed_route = expected_agent_binding.as_ref().is_some_and(|agent| {
+                managed.plan().launch_key().provider() == agent.provider.as_str()
+                    && Some(managed.plan().launch_key().account_id()) == agent.account_id.as_deref()
+            });
+            if !matches_managed_route {
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest.into(),
+                    message:
+                        "managed attach agent identity does not match the managed launch route"
+                            .to_string(),
+                }));
+            }
+        }
         if msg
             .expected_generation
             .is_some_and(|expected| expected != session.generation)
@@ -3620,8 +4720,22 @@ impl ServerModel {
     /// Lists all live daemon-hosted sessions (Stage 4: multi-session UI / adopt).
     /// Registry membership means alive — exited sessions are removed (and
     /// `SessionExited`-announced) by the reader-EOF/close paths.
-    fn handle_list_sessions(&self) -> HandlerOutcome {
-        let sessions = self
+    fn handle_list_sessions(
+        &mut self,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        self.prune_recent_managed_exits(now_epoch_millis());
+        let recent_managed_exits: Vec<_> = self
+            .recent_managed_exits
+            .iter()
+            .map(ManagedExitRecord::to_proto)
+            .collect();
+        let sessions: Vec<(
+            SessionInfo,
+            Option<super::fleet_memory::LinuxProcessIdentity>,
+        )> = self
             .sessions
             .iter()
             .map(|(id, session)| {
@@ -3640,23 +4754,100 @@ impl ServerModel {
                             .map(|b| b.to_string_lossy().into_owned())
                             .unwrap_or_else(|| session.shell.clone())
                     });
-                SessionInfo {
-                    session_id: id.clone(),
-                    title,
-                    cwd: session.cwd.clone().unwrap_or_default(),
-                    alive: true,
-                    last_attached_epoch_millis: session.last_attached_ms,
-                    // Per-session output-ring footprint the memory governor
-                    // accounts against the host cap (see `gc_sessions`).
-                    ring_bytes: session.ring.len() as u64,
-                    generation: session.generation,
-                }
+                (
+                    SessionInfo {
+                        session_id: id.clone(),
+                        title,
+                        cwd: session.cwd.clone().unwrap_or_default(),
+                        alive: true,
+                        last_attached_epoch_millis: session.last_attached_ms,
+                        // Per-session output-ring footprint the memory governor
+                        // accounts against the host cap (see `gc_sessions`).
+                        ring_bytes: session.ring.len() as u64,
+                        generation: session.generation,
+                        managed: session
+                            .managed
+                            .as_ref()
+                            .map(|managed| managed_session_info(managed, session.generation)),
+                        process_memory: None,
+                    },
+                    session
+                        .managed
+                        .as_ref()
+                        .and_then(super::managed_fleet::ManagedSessionMetadata::process_root),
+                )
             })
             .collect();
-        HandlerOutcome::Sync(server_message::Message::SessionList(SessionList {
-            sessions,
-            host_ring_cap_bytes: HOST_RING_CAP_BYTES as u64,
-        }))
+        let daemon_min_available_bytes = self.managed_min_available_bytes.unwrap_or(0);
+        let collected_at_epoch_millis = now_epoch_millis();
+        let Some(memory_permit) =
+            ManagedMemoryReadPermit::try_acquire(Arc::clone(&self.managed_memory_reads_in_flight))
+        else {
+            let host = super::fleet_memory::busy_host_memory_measurement();
+            let sessions = sessions
+                .into_iter()
+                .map(|(mut info, _process_root)| {
+                    if info.managed.is_some() {
+                        info.process_memory = Some(memory_measurement_to_proto(
+                            &super::fleet_memory::busy_process_memory_measurement(),
+                        ));
+                    }
+                    info
+                })
+                .collect();
+            return HandlerOutcome::Sync(server_message::Message::SessionList(SessionList {
+                sessions,
+                host_ring_cap_bytes: HOST_RING_CAP_BYTES as u64,
+                host_available_memory: Some(memory_measurement_to_proto(&host)),
+                daemon_min_available_bytes,
+                collected_at_epoch_millis,
+                recent_managed_exits,
+            }));
+        };
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let _memory_permit = memory_permit;
+                let host = super::fleet_memory::collect_host_memory(collected_at_epoch_millis);
+                let sessions = sessions
+                    .into_iter()
+                    .map(|(mut info, process_root)| {
+                        if info.managed.is_some() {
+                            let process = match process_root {
+                                Some(root) => {
+                                    super::fleet_memory::collect_process_session_pss(
+                                        root,
+                                        collected_at_epoch_millis,
+                                    )
+                                    .pss
+                                }
+                                None => super::fleet_memory::missing_process_root_measurement(),
+                            };
+                            info.process_memory = Some(memory_measurement_to_proto(&process));
+                        }
+                        info
+                    })
+                    .collect();
+                SessionList {
+                    sessions,
+                    host_ring_cap_bytes: HOST_RING_CAP_BYTES as u64,
+                    host_available_memory: Some(memory_measurement_to_proto(&host.available)),
+                    daemon_min_available_bytes,
+                    collected_at_epoch_millis,
+                    recent_managed_exits,
+                }
+            },
+            move |me, inventory, _ctx| {
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::SessionList(inventory),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
     }
 
     /// Memory governor (Stage 4): reaps detached sessions that are either idle
@@ -3680,7 +4871,13 @@ impl ServerModel {
                 .filter(|(_, s)| {
                     let detached =
                         s.attached == uuid::Uuid::nil() || !senders.contains_key(&s.attached);
-                    detached && now_ms.saturating_sub(s.last_attached_ms) >= max_detached_age_ms
+                    super::managed_fleet::eligible_for_detached_age_gc(
+                        s.managed.as_ref(),
+                        detached,
+                        now_ms,
+                        s.last_attached_ms,
+                        max_detached_age_ms,
+                    )
                 })
                 .map(|(id, _)| id.clone())
                 .collect()
@@ -3704,7 +4901,12 @@ impl ServerModel {
                 self.sessions
                     .iter()
                     .filter(|(_, s)| {
-                        s.attached == uuid::Uuid::nil() || !senders.contains_key(&s.attached)
+                        let detached =
+                            s.attached == uuid::Uuid::nil() || !senders.contains_key(&s.attached);
+                        super::managed_fleet::eligible_for_ring_pressure_gc(
+                            s.managed.as_ref(),
+                            detached,
+                        )
                     })
                     .map(|(id, s)| (s.last_attached_ms, id.clone()))
                     .collect()
@@ -3813,8 +5015,98 @@ impl ServerModel {
         }
     }
 
+    /// Closes one managed session only after its Linux process session has
+    /// reached a verified fixed point without live processes.
+    #[cfg(target_os = "linux")]
+    fn handle_close_managed_session_verified(
+        &mut self,
+        session_id: &str,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), super::fleet_memory::MemoryDiagnostic> {
+        let (plan, expected_account_route, process_root) = {
+            let session = self
+                .sessions
+                .get(session_id)
+                .ok_or(super::fleet_memory::MemoryDiagnostic::ProcessIdentityChanged)?;
+            let metadata = session
+                .managed
+                .as_ref()
+                .ok_or(super::fleet_memory::MemoryDiagnostic::ProcessIdentityChanged)?;
+            (
+                metadata.plan().clone(),
+                metadata
+                    .account_route_identity()
+                    .copied()
+                    .ok_or(super::fleet_memory::MemoryDiagnostic::AccountRouteChanged)?,
+                metadata
+                    .process_root()
+                    .ok_or(super::fleet_memory::MemoryDiagnostic::ProcessIdentityChanged)?,
+            )
+        };
+        if !plan.project_identity_is_current() {
+            return Err(super::fleet_memory::MemoryDiagnostic::ProjectIdentityChanged);
+        }
+        if super::agent_account::current_account_route_identity(
+            &self.agent_account_routes,
+            plan.launch_key().provider(),
+            plan.launch_key().account_id(),
+        ) != Ok(expected_account_route)
+        {
+            return Err(super::fleet_memory::MemoryDiagnostic::AccountRouteChanged);
+        }
+        {
+            let session = self
+                .sessions
+                .get_mut(session_id)
+                .ok_or(super::fleet_memory::MemoryDiagnostic::ProcessIdentityChanged)?;
+
+            // Keep the registry entry authoritative until the bounded process-
+            // session termination has reached a verified live-process fixed point.
+            super::fleet_memory::terminate_linux_process_session(process_root, || {
+                let _ = session.child.try_wait();
+            })?;
+        }
+
+        let mut session = self
+            .sessions
+            .remove(session_id)
+            .ok_or(super::fleet_memory::MemoryDiagnostic::ProcessIdentityChanged)?;
+        self.agent_pty_bindings
+            .remove_pty(session_id, session.generation);
+        let _ = session.child.kill();
+        let exit_code = session.child.wait().ok().and_then(|status| status.code());
+        self.record_managed_exit(
+            session_id,
+            &session,
+            exit_code,
+            ManagedExitDiagnostic::Stopped,
+        );
+        let conn = session.attached;
+        self.send_server_message(
+            Some(conn),
+            None,
+            server_message::Message::SessionExited(SessionExited {
+                session_id: session_id.to_string(),
+                exit_code,
+            }),
+        );
+        self.maybe_arm_grace_when_idle(ctx);
+        Ok(())
+    }
+
     /// Closes a session: kills + reaps the shell and emits `SessionExited`.
     fn handle_close_session(&mut self, msg: CloseSession, ctx: &mut ModelContext<Self>) {
+        if self
+            .sessions
+            .get(&msg.session_id)
+            .is_some_and(|session| session.managed.is_some())
+        {
+            log::warn!(
+                "Daemon: rejecting generic CloseSession for managed session {}; use the validated managed lifecycle RPC",
+                msg.session_id
+            );
+            return;
+        }
         let Some(mut session) = self.sessions.remove(&msg.session_id) else {
             return;
         };
@@ -3888,6 +5180,14 @@ impl ServerModel {
         self.agent_pty_bindings
             .remove_pty(session_id, session.generation);
         let exit_code = session.child.wait().ok().and_then(|s| s.code());
+        if session.managed.is_some() {
+            self.record_managed_exit(
+                session_id,
+                &session,
+                exit_code,
+                ManagedExitDiagnostic::ProcessEnded,
+            );
+        }
         let conn = session.attached;
         self.send_server_message(
             Some(conn),

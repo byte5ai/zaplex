@@ -43,6 +43,12 @@ impl OutputRing {
         self.buf.len()
     }
 
+    /// Configured retention ceiling, distinct from the currently retained
+    /// byte count. Managed-session restart preserves this launch setting.
+    pub fn capacity(&self) -> usize {
+        self.max_bytes
+    }
+
     /// Whether the ring currently holds no bytes.
     pub fn is_empty(&self) -> bool {
         self.buf.is_empty()

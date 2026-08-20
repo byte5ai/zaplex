@@ -8,7 +8,9 @@ use crate::proto::{
     AgentProcessSignalStatus, AgentPtyBindingResponse, AgentPtyBindingStatus, AgentSessionIdentity,
     AgentSessionInfo, AgentSessionList, AgentTaskItem, AgentTranscriptResponse,
     AgentTranscriptStatus, AgentTranscriptTool, AgentTranscriptTurn, ClientMessage, ErrorCode,
-    FileSystemEntryKind, HostExecResult, InitializeResponse, MultiplexerKind,
+    FileSystemEntryKind, HostExecResult, InitializeResponse, ManagedLaunch, ManagedSessionExitInfo,
+    ManagedSessionInfo, ManagedSessionLifecycleAction, ManagedSessionLifecycleRequest,
+    ManagedSessionLifecycleResponse, ManagedSessionLifecycleStatus, MultiplexerKind,
     MultiplexerSessionInfo, MultiplexerSessionList, ReadFileChunkResponse, ReadFileChunkSuccess,
     ResolvePathResponse, ResolvePathSuccess, RunCommandResponse, RunCommandSuccess,
     SafeFileEntryKind, SafeFileIdentity, SafeFileMutationResult, SafeFileMutationState,
@@ -560,6 +562,32 @@ async fn open_session_round_trip() {
 }
 
 #[tokio::test]
+async fn open_session_preserves_a_typed_server_error() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        assert!(matches!(
+            msg.message,
+            Some(client_message::Message::OpenSession(_))
+        ));
+        server_message::Message::Error(crate::proto::ErrorResponse {
+            code: ErrorCode::InvalidRequest.into(),
+            message: "managed launch blocked: insufficient-headroom".to_string(),
+        })
+    });
+
+    let result = client
+        .open_session(None, None, std::collections::HashMap::new(), 24, 80, None)
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(ClientError::ServerError {
+            code: ErrorCode::InvalidRequest,
+            ref message,
+        }) if message == "managed launch blocked: insufficient-headroom"
+    ));
+}
+
+#[tokio::test]
 async fn open_session_for_agent_account_carries_only_the_opaque_route() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
         let Some(client_message::Message::OpenSession(open)) = &msg.message else {
@@ -982,6 +1010,8 @@ async fn list_sessions_round_trip() {
                     last_attached_epoch_millis: 123,
                     ring_bytes: 0,
                     generation: 7,
+                    managed: None,
+                    process_memory: None,
                 },
                 SessionInfo {
                     session_id: "s2".to_string(),
@@ -991,19 +1021,130 @@ async fn list_sessions_round_trip() {
                     last_attached_epoch_millis: 456,
                     ring_bytes: 0,
                     generation: 8,
+                    managed: None,
+                    process_memory: None,
                 },
             ],
             host_ring_cap_bytes: 256 * 1024 * 1024,
+            host_available_memory: None,
+            daemon_min_available_bytes: 0,
+            collected_at_epoch_millis: 0,
+            recent_managed_exits: vec![ManagedSessionExitInfo {
+                managed: Some(ManagedSessionInfo {
+                    schema_version: 1,
+                    provider: "claude".to_string(),
+                    account_id: "opaque".to_string(),
+                    project_root: "/home/me/work".to_string(),
+                    launch_kind: "interactive-agent".to_string(),
+                    launch_id: "launch-ended".to_string(),
+                    generation: 6,
+                }),
+                session_id: "ended".to_string(),
+                exit_code: Some(1),
+                exited_at_epoch_millis: 789,
+                diagnostic_code: "process-ended".to_string(),
+            }],
         })
     });
 
     let resp = client.list_sessions().await.unwrap();
+    assert_eq!(resp.recent_managed_exits.len(), 1);
+    assert_eq!(resp.recent_managed_exits[0].session_id, "ended");
     assert_eq!(resp.sessions.len(), 2);
     assert_eq!(resp.sessions[0].session_id, "s1");
     assert_eq!(resp.sessions[0].cwd, "/home/me/work");
     assert!(resp.sessions[0].alive);
     assert_eq!(resp.sessions[1].last_attached_epoch_millis, 456);
     assert_eq!(resp.host_ring_cap_bytes, 256 * 1024 * 1024);
+}
+
+#[tokio::test]
+async fn managed_open_keeps_account_and_launch_identity_typed() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        let Some(client_message::Message::OpenSession(open)) = &msg.message else {
+            panic!("expected OpenSession");
+        };
+        let route = open.agent_launch_route.as_ref().expect("opaque route");
+        let launch = open.managed_launch.as_ref().expect("managed launch");
+        assert_eq!(route.account_id, "opaque-account");
+        assert_eq!(launch.launch_id, "launch-1");
+        assert_eq!(launch.project_root, "/srv/project");
+        assert_eq!(open.requested_min_available_bytes, Some(3_000));
+        server_message::Message::SessionOpened(SessionOpened {
+            session_id: "managed-pty".into(),
+            generation: 9,
+        })
+    });
+
+    let opened = client
+        .open_managed_agent_session(
+            "/srv/project".into(),
+            None,
+            Default::default(),
+            24,
+            80,
+            None,
+            AgentLaunchRoute {
+                schema_version: 1,
+                provider: "claude".into(),
+                account_id: "opaque-account".into(),
+            },
+            ManagedLaunch {
+                schema_version: 1,
+                launch_id: "launch-1".into(),
+                provider: "claude".into(),
+                project_root: "/srv/project".into(),
+                kind: "interactive-agent".into(),
+                spawn_mode: String::new(),
+                capacity: 0,
+                permission_mode: String::new(),
+                display_name: String::new(),
+            },
+            Some(3_000),
+        )
+        .await
+        .unwrap();
+    assert_eq!(opened.session_id, "managed-pty");
+    assert_eq!(opened.generation, 9);
+}
+
+#[tokio::test]
+async fn managed_lifecycle_round_trip_preserves_exact_generation() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        let Some(client_message::Message::ManagedSessionLifecycle(request)) = &msg.message else {
+            panic!("expected managed lifecycle request");
+        };
+        assert_eq!(request.session_id, "managed-pty");
+        assert_eq!(request.expected_generation, 9);
+        server_message::Message::ManagedSessionLifecycleResponse(ManagedSessionLifecycleResponse {
+            schema_version: 1,
+            action: request.action,
+            status: ManagedSessionLifecycleStatus::Stopped.into(),
+            session_id: request.session_id.clone(),
+            generation: request.expected_generation,
+            replacement_session_id: String::new(),
+            replacement_generation: 0,
+            diagnostic_code: String::new(),
+        })
+    });
+
+    let response = client
+        .managed_session_lifecycle(ManagedSessionLifecycleRequest {
+            schema_version: 1,
+            action: ManagedSessionLifecycleAction::Stop.into(),
+            session_id: "managed-pty".into(),
+            expected_generation: 9,
+            launch_id: "launch-1".into(),
+            provider: "claude".into(),
+            account_id: "opaque-account".into(),
+            project_root: "/srv/project".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        ManagedSessionLifecycleStatus::try_from(response.status).unwrap(),
+        ManagedSessionLifecycleStatus::Stopped
+    );
 }
 
 #[tokio::test]

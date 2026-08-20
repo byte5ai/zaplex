@@ -18,7 +18,8 @@ use std::sync::Arc;
 use warp_core::SessionId;
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 use zaplex_remote_session::types::{
-    FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PTY_BINDING_V2, FEATURE_STARTUP_COMMAND_ACK,
+    FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PTY_BINDING_V2, FEATURE_MANAGED_AGENT_FLEET_V1,
+    FEATURE_STARTUP_COMMAND_ACK,
 };
 
 use super::terminal_manager::OpenSessionParams;
@@ -112,6 +113,9 @@ pub(super) struct EventLoop {
     /// The `OpenSession` request, held until the transport is `Connected`. Taken
     /// (once) by `try_open`. `None` after the session has been opened.
     pending_open: Option<(OpenSessionParams, SizeInfo)>,
+    /// Stable correlation id for a managed OpenSession. It is consumed only
+    /// after an authoritative daemon Ack or terminal failure.
+    managed_launch_id: Option<String>,
     /// The host's startup command, captured from `OpenSessionParams` and run once
     /// (taken) only after the terminal model confirms that shell bootstrap has
     /// completed — the daemon-path analog of the local-PTY SSH startup-command
@@ -178,6 +182,10 @@ impl EventLoop {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let mut event_loop = Self::new(model, channel_event_listener, connection_session_id);
+        event_loop.managed_launch_id = open_params
+            .managed_launch
+            .as_ref()
+            .map(|launch| launch.launch_id.clone());
         // Every session this loop drives is daemon-hosted; for bash/zsh the
         // daemon delivers the root shell's complete bootstrap (bash/zsh through
         // ordered input; fish/PowerShell through guarded body files) server-side.
@@ -308,7 +316,7 @@ impl EventLoop {
                 phase,
                 error,
             } if *session_id == me.connection_session_id => {
-                me.on_connect_failed(&format!("{phase:?}"), error);
+                me.on_connect_failed(&format!("{phase:?}"), error, ctx);
             }
             // Advisory from the daemon: this session landed inside a terminal
             // multiplexer (hand-rolled auto-attach). zaplex owns persistence
@@ -388,6 +396,7 @@ impl EventLoop {
             pending_output_overflowed: false,
             pending_exit: None,
             pending_open: None,
+            managed_launch_id: None,
             startup_command: None,
             startup_command_id: None,
             startup_command_in_flight: None,
@@ -889,7 +898,10 @@ impl EventLoop {
         })
     }
 
-    fn open_client(&self, ctx: &mut ModelContext<Self>) -> Option<(Arc<RemoteServerClient>, bool)> {
+    fn open_client(
+        &self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<(Arc<RemoteServerClient>, bool, bool)> {
         let session_id = self.connection_session_id;
         let manager = RemoteServerManager::handle(ctx);
         manager.read(ctx, |manager, _ctx| {
@@ -899,7 +911,9 @@ impl EventLoop {
                 .map(|client| {
                     let supports_account_routing = manager
                         .session_supports_feature(session_id, FEATURE_AGENT_ACCOUNT_ROUTING_V1);
-                    (client, supports_account_routing)
+                    let supports_managed_fleet = manager
+                        .session_supports_feature(session_id, FEATURE_MANAGED_AGENT_FLEET_V1);
+                    (client, supports_account_routing, supports_managed_fleet)
                 })
         })
     }
@@ -932,7 +946,9 @@ impl EventLoop {
         if self.pty_session_id.is_some() || self.pending_open.is_none() {
             return;
         }
-        let Some((client, supports_account_routing)) = self.open_client(ctx) else {
+        let Some((client, supports_account_routing, supports_managed_fleet)) =
+            self.open_client(ctx)
+        else {
             return; // Not connected yet; wait for `SessionConnected`.
         };
         let (open_params, size_info) = self
@@ -942,6 +958,7 @@ impl EventLoop {
         self.open_session(
             client,
             supports_account_routing,
+            supports_managed_fleet,
             open_params,
             size_info,
             ctx,
@@ -955,6 +972,7 @@ impl EventLoop {
         &mut self,
         client: Arc<RemoteServerClient>,
         supports_account_routing: bool,
+        supports_managed_fleet: bool,
         open_params: OpenSessionParams,
         size_info: SizeInfo,
         ctx: &mut ModelContext<Self>,
@@ -966,17 +984,50 @@ impl EventLoop {
             ring_ceiling_bytes,
             startup_command,
             agent_launch_route,
+            managed_launch,
+            requested_min_available_bytes,
         } = open_params;
         if !account_route_is_compatible(agent_launch_route.as_ref(), supports_account_routing) {
             self.write_notice(
                 "this host daemon is too old for remote AI-account routing; update it and reconnect",
             );
             self.pending_open = None;
+            self.report_managed_launch_failed(
+                "The host does not support the selected account route.".to_string(),
+                ctx,
+            );
+            return;
+        }
+        if managed_launch.is_some() && !supports_managed_fleet {
+            self.write_notice(
+                "this host daemon does not support managed agents; update it and reconnect",
+            );
+            self.pending_open = None;
+            self.report_managed_launch_failed(
+                "The host does not support managed agents.".to_string(),
+                ctx,
+            );
+            return;
+        }
+        if managed_launch.is_some()
+            && (agent_launch_route.is_none()
+                || cwd.as_deref().is_none_or(|path| path.trim().is_empty()))
+        {
+            self.write_notice("managed agents require an exact remote account and project");
+            self.pending_open = None;
+            self.report_managed_launch_failed(
+                "The managed account or project route is incomplete.".to_string(),
+                ctx,
+            );
             return;
         }
         // Run once after this shell reaches the real bootstrap boundary (see
         // `maybe_dispatch_startup_command`).
-        self.startup_command = startup_command.filter(|command| !command.is_empty());
+        self.startup_command = managed_launch
+            .is_none()
+            .then_some(startup_command)
+            .flatten()
+            .filter(|command| !command.is_empty());
         self.startup_command_id = self
             .startup_command
             .as_ref()
@@ -985,8 +1036,23 @@ impl EventLoop {
         let cols = size_info.columns as u32;
         log::info!("daemon_tty: issuing OpenSession (cwd={cwd:?}, shell={shell:?}, {rows}x{cols}, ring_ceiling={ring_ceiling_bytes:?})");
         let future = async move {
-            match agent_launch_route {
-                Some(route) => {
+            match (agent_launch_route, managed_launch) {
+                (Some(route), Some(launch)) => {
+                    client
+                        .open_managed_agent_session(
+                            cwd.expect("managed cwd was validated above"),
+                            shell,
+                            env,
+                            rows,
+                            cols,
+                            ring_ceiling_bytes,
+                            route,
+                            launch,
+                            requested_min_available_bytes,
+                        )
+                        .await
+                }
+                (Some(route), None) => {
                     client
                         .open_session_for_agent_account(
                             cwd,
@@ -999,11 +1065,12 @@ impl EventLoop {
                         )
                         .await
                 }
-                None => {
+                (None, None) => {
                     client
                         .open_session(cwd, shell, env, rows, cols, ring_ceiling_bytes)
                         .await
                 }
+                (None, Some(_)) => unreachable!("managed route was validated above"),
             }
         };
         ctx.spawn(future, |me, result, ctx| match result {
@@ -1016,11 +1083,40 @@ impl EventLoop {
                 log::error!("daemon_tty: OpenSession failed: {err:?}");
                 me.write_notice(&format!("could not start session: {err}"));
                 me.pending_open = None;
+                me.report_managed_launch_failed(format!("{err}"), ctx);
             }
         });
     }
 
-    fn on_connect_failed(&mut self, phase: &str, error: &str) {
+    fn report_managed_launch_failed(&mut self, error: String, ctx: &mut ModelContext<Self>) {
+        let Some(launch_id) = self.managed_launch_id.take() else {
+            return;
+        };
+        RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.report_managed_launch_failed(launch_id, error, ctx);
+        });
+    }
+
+    fn report_managed_launch_opened(
+        &mut self,
+        pty_session_id: &str,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(launch_id) = self.managed_launch_id.take() else {
+            return;
+        };
+        RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.report_managed_launch_opened(
+                launch_id,
+                pty_session_id.to_string(),
+                generation,
+                ctx,
+            );
+        });
+    }
+
+    fn on_connect_failed(&mut self, phase: &str, error: &str, ctx: &mut ModelContext<Self>) {
         log::error!(
             "daemon connect failed for {:?} at {phase}: {error}",
             self.connection_session_id
@@ -1030,6 +1126,7 @@ impl EventLoop {
         self.write_notice(&format!("connection failed ({phase}): {error}"));
         // Drop the pending open so a later spurious event can't reopen it.
         self.pending_open = None;
+        self.report_managed_launch_failed(format!("connection failed ({phase}): {error}"), ctx);
     }
 
     fn on_session_opened(
@@ -1041,6 +1138,33 @@ impl EventLoop {
         log::info!("daemon_tty: session opened, pty_session_id={pty_session_id}");
         self.pty_session_id = Some(pty_session_id.clone());
         self.pty_generation = (generation != 0).then_some(generation);
+        if self.managed_launch_id.is_some() {
+            if generation == 0 {
+                self.report_managed_launch_failed(
+                    "The daemon returned an invalid managed session generation.".to_string(),
+                    ctx,
+                );
+            } else {
+                self.report_managed_launch_opened(&pty_session_id, generation, ctx);
+            }
+        }
+        if let (Some(terminal_view_id), Some(generation)) =
+            (self.terminal_view_id, self.pty_generation)
+        {
+            let host_id = RemoteServerManager::handle(ctx).read(ctx, |manager, _ctx| {
+                manager
+                    .host_id_for_session(self.connection_session_id)
+                    .map(|host_id| host_id.as_str().to_string())
+            });
+            if let Some(host_id) = host_id {
+                crate::cockpit::launch_registry::attach_remote_terminal(
+                    terminal_view_id,
+                    &host_id,
+                    &pty_session_id,
+                    generation,
+                );
+            }
+        }
         if self.drain_pending_output() {
             self.awaiting_attach_snapshot = true;
             self.reattach(ctx);

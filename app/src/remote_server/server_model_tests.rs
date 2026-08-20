@@ -16,12 +16,17 @@ use super::{
     execute_agent_process_signal_with, server_features_with_runtime_support,
     AgentTranscriptReadPermit, PendingFileOps, ServerModel, MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
 };
+#[cfg(unix)]
+use super::{
+    push_recent_managed_exit, ManagedExitRecord, ManagedMemoryReadPermit,
+    MAX_CONCURRENT_MANAGED_MEMORY_READS, MAX_RECENT_MANAGED_EXITS, RECENT_MANAGED_EXIT_TTL_MILLIS,
+};
 use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
 #[cfg(unix)]
 use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
     FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PROCESS_SIGNAL_V1,
-    FEATURE_AGENT_TRANSCRIPT_READ_V1,
+    FEATURE_AGENT_TRANSCRIPT_READ_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
 };
 
 fn test_model() -> ServerModel {
@@ -49,9 +54,16 @@ fn test_model() -> ServerModel {
             zaplex_cockpit::TranscriptScanCache::default(),
         )),
         agent_account_routes: Default::default(),
+        fresh_agent_account_routes_for_test: None,
         agent_transcript_reads_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(
             0,
         )),
+        #[cfg(unix)]
+        managed_memory_reads_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        #[cfg(unix)]
+        recent_managed_exits: std::collections::VecDeque::new(),
+        #[cfg(unix)]
+        managed_min_available_bytes: Ok(super::super::managed_fleet::DEFAULT_MIN_AVAILABLE_BYTES),
     }
 }
 
@@ -76,6 +88,143 @@ fn transcript_read_permits_cap_parallel_work_and_release_on_drop() {
     assert!(AgentTranscriptReadPermit::try_acquire(std::sync::Arc::clone(&in_flight)).is_none());
     drop(permits);
     assert!(AgentTranscriptReadPermit::try_acquire(in_flight).is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn managed_memory_permit_bounds_global_procfs_work_and_releases() {
+    let in_flight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let permits: Vec<_> = (0..MAX_CONCURRENT_MANAGED_MEMORY_READS)
+        .map(|_| ManagedMemoryReadPermit::try_acquire(std::sync::Arc::clone(&in_flight)).unwrap())
+        .collect();
+
+    assert!(ManagedMemoryReadPermit::try_acquire(std::sync::Arc::clone(&in_flight)).is_none());
+    drop(permits);
+    assert!(ManagedMemoryReadPermit::try_acquire(in_flight).is_some());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn list_sessions_returns_typed_busy_measurement_without_starting_more_procfs_work() {
+    warpui::App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_ctx| test_model());
+        let message = model.update(&mut app, |model, ctx| {
+            model.managed_memory_reads_in_flight.store(
+                MAX_CONCURRENT_MANAGED_MEMORY_READS,
+                std::sync::atomic::Ordering::Release,
+            );
+            model
+                .handle_list_sessions(&request_id(), uuid::Uuid::new_v4(), ctx)
+                .into_message()
+        });
+        let server_message::Message::SessionList(list) = message else {
+            panic!("expected busy SessionList");
+        };
+        let host = list.host_available_memory.expect("typed busy measurement");
+        assert_eq!(host.diagnostic_code, "busy");
+        assert!(host.bytes.is_none());
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn recent_managed_exit_records_are_deduplicated_ttl_pruned_and_bounded() {
+    let key =
+        super::super::managed_fleet::ManagedLaunchKey::new("host", "opaque", "/project", "claude")
+            .unwrap();
+    let plan =
+        super::super::managed_fleet::ManagedLaunchPlan::interactive_agent("launch", key).unwrap();
+    let make_record = |index: usize, exited_at_epoch_millis: u64| ManagedExitRecord {
+        plan: plan.clone(),
+        account_route_identity: super::super::agent_account::AccountRouteIdentity::DefaultAccount,
+        session_id: format!("session-{index}"),
+        generation: index as u64 + 1,
+        exit_code: Some(1),
+        exited_at_epoch_millis,
+        shell: "/bin/sh".to_string(),
+        rows: 24,
+        cols: 80,
+        ring_ceiling_bytes: 1024,
+        diagnostic: super::ManagedExitDiagnostic::ProcessEnded,
+    };
+    let mut records = std::collections::VecDeque::new();
+    for index in 0..=MAX_RECENT_MANAGED_EXITS {
+        push_recent_managed_exit(&mut records, make_record(index, 10_000));
+    }
+    assert_eq!(records.len(), MAX_RECENT_MANAGED_EXITS);
+    assert_eq!(records.front().unwrap().session_id, "session-1");
+
+    let duplicate = make_record(MAX_RECENT_MANAGED_EXITS, 11_000);
+    push_recent_managed_exit(&mut records, duplicate);
+    assert_eq!(records.len(), MAX_RECENT_MANAGED_EXITS);
+
+    push_recent_managed_exit(
+        &mut records,
+        make_record(100, 11_000 + RECENT_MANAGED_EXIT_TTL_MILLIS + 1),
+    );
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].session_id, "session-100");
+    let proto = records[0].to_proto();
+    assert_eq!(proto.diagnostic_code, "process-ended");
+    assert_eq!(proto.exit_code, Some(1));
+    let mut stopped = make_record(101, proto.exited_at_epoch_millis + 1);
+    stopped.diagnostic = super::ManagedExitDiagnostic::Stopped;
+    assert_eq!(stopped.to_proto().diagnostic_code, "stopped");
+
+    let exact_restart = super::super::proto::ManagedSessionLifecycleRequest {
+        schema_version: 1,
+        action: super::super::proto::ManagedSessionLifecycleAction::Restart.into(),
+        session_id: "session-100".to_string(),
+        expected_generation: 101,
+        launch_id: "launch".to_string(),
+        provider: "claude".to_string(),
+        account_id: "opaque".to_string(),
+        project_root: "/project".to_string(),
+    };
+    assert!(records[0].matches(&exact_restart));
+    assert!(
+        !records[0].matches(&super::super::proto::ManagedSessionLifecycleRequest {
+            expected_generation: 102,
+            ..exact_restart
+        })
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn initial_managed_start_never_uses_a_stale_same_inode_account_route() {
+    let project = tempfile::tempdir().unwrap();
+    let account = tempfile::tempdir().unwrap();
+    let project_root = std::fs::canonicalize(project.path()).unwrap();
+    let account_root = std::fs::canonicalize(account.path()).unwrap();
+    let project_identity =
+        super::super::managed_fleet::ManagedProjectIdentity::capture(&project_root).unwrap();
+    let key = super::super::managed_fleet::ManagedLaunchKey::new(
+        "host",
+        "stale-account-id",
+        project_root.to_str().unwrap(),
+        "claude",
+    )
+    .unwrap();
+    let plan = super::super::managed_fleet::ManagedLaunchPlan::interactive_agent("launch", key)
+        .unwrap()
+        .with_project_identity(project_identity);
+
+    let mut stale_cache = super::super::agent_account::AccountRouteCache::default();
+    stale_cache.replace_for_test("claude", "stale-account-id", Some(account_root.clone()));
+    assert!(super::super::agent_account::current_account_route_identity(
+        &stale_cache,
+        "claude",
+        "stale-account-id",
+    )
+    .is_ok());
+
+    let mut fresh_scan = super::super::agent_account::AccountRouteCache::default();
+    fresh_scan.replace_for_test("claude", "current-account-id", Some(account_root));
+    assert_eq!(
+        super::fresh_managed_launch_identity(fresh_scan.routes_for_test(), &plan),
+        Err("account-route-changed")
+    );
 }
 
 #[test]
@@ -180,6 +329,9 @@ fn daemon_signal_advertisement_requires_runtime_backend_support() {
     assert!(!unsupported
         .iter()
         .any(|feature| feature == FEATURE_AGENT_PROCESS_SIGNAL_V1));
+    assert!(!unsupported
+        .iter()
+        .any(|feature| feature == FEATURE_MANAGED_AGENT_FLEET_V1));
 
     let supported = server_features_with_runtime_support(true, true);
     assert_eq!(
@@ -191,6 +343,29 @@ fn daemon_signal_advertisement_requires_runtime_backend_support() {
     assert!(supported
         .iter()
         .any(|feature| feature == FEATURE_AGENT_TRANSCRIPT_READ_V1));
+    assert_eq!(
+        supported
+            .iter()
+            .any(|feature| feature == FEATURE_MANAGED_AGENT_FLEET_V1),
+        cfg!(target_os = "linux")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn managed_fleet_negotiation_is_usable_only_on_linux_daemons() {
+    let mut model = test_model();
+    let conn = uuid::Uuid::new_v4();
+    model.connection_features.insert(
+        conn,
+        HashSet::from([FEATURE_MANAGED_AGENT_FLEET_V1.to_string()]),
+    );
+
+    assert!(!model.client_supports_managed_fleet_with_runtime(conn, false));
+    assert_eq!(
+        model.client_supports_managed_fleet_with_runtime(conn, true),
+        cfg!(target_os = "linux")
+    );
 }
 
 #[test]
@@ -831,12 +1006,17 @@ mod daemon_session {
     use super::{bind_status, binding_identity, test_model};
     use crate::remote_server::proto::{
         client_message, server_message, AttachSession, BindAgentPty, ClientMessage, CloseSession,
-        DetachSession, ListSessions, OpenSession, ResizeSession, ServerMessage, SessionInput,
-        SessionList, SessionSize,
+        DetachSession, ListSessions, ManagedLaunch, ManagedSessionLifecycleAction,
+        ManagedSessionLifecycleRequest, ManagedSessionLifecycleStatus, OpenSession,
+        ReadAgentTranscript, ResizeSession, ServerMessage, SessionInput, SessionList, SessionSize,
     };
     use futures::future::Either;
     use std::time::Duration;
     use warpui::App;
+    use zaplex_remote_session::types::{
+        FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_TRANSCRIPT_READ_V1,
+        FEATURE_MANAGED_AGENT_FLEET_V1,
+    };
 
     /// Awaits `rx.recv()` but gives up after `dur` so a stuck test fails instead
     /// of hanging the CI job.
@@ -946,6 +1126,8 @@ mod daemon_session {
                     pixel_height: 0,
                 }),
                 agent_launch_route: None,
+                managed_launch: None,
+                requested_min_available_bytes: None,
             })),
         }
     }
@@ -1863,6 +2045,8 @@ mod daemon_session {
                     pixel_height: 0,
                 }),
                 agent_launch_route: None,
+                managed_launch: None,
+                requested_min_available_bytes: None,
             })),
         }
     }
@@ -1902,6 +2086,559 @@ mod daemon_session {
             }
         }
         None
+    }
+
+    fn managed_open(cwd: &str, launch_id: &str) -> ClientMessage {
+        ClientMessage {
+            request_id: format!("open-{launch_id}"),
+            message: Some(client_message::Message::OpenSession(OpenSession {
+                cwd: Some(cwd.to_string()),
+                shell: Some("/bin/bash".to_string()),
+                env: std::collections::HashMap::new(),
+                size: Some(SessionSize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                }),
+                ring_ceiling_bytes: None,
+                agent_launch_route: Some(crate::remote_server::proto::AgentLaunchRoute {
+                    schema_version: 1,
+                    provider: "claude".to_string(),
+                    account_id: "opaque-account".to_string(),
+                }),
+                managed_launch: Some(ManagedLaunch {
+                    schema_version: 1,
+                    launch_id: launch_id.to_string(),
+                    provider: "claude".to_string(),
+                    project_root: cwd.to_string(),
+                    kind: "interactive-agent".to_string(),
+                    spawn_mode: String::new(),
+                    capacity: 0,
+                    permission_mode: String::new(),
+                    display_name: String::new(),
+                }),
+                requested_min_available_bytes: None,
+            })),
+        }
+    }
+
+    fn enable_managed_fleet(model: &mut super::super::ServerModel, conn_id: uuid::Uuid) {
+        model.connection_features.insert(
+            conn_id,
+            std::collections::HashSet::from([
+                FEATURE_AGENT_ACCOUNT_ROUTING_V1.to_string(),
+                FEATURE_MANAGED_AGENT_FLEET_V1.to_string(),
+            ]),
+        );
+        model
+            .agent_account_routes
+            .replace_for_test("claude", "opaque-account", None);
+        model.fresh_agent_account_routes_for_test =
+            Some(model.agent_account_routes.routes_for_test().clone());
+    }
+
+    #[test]
+    fn transcript_read_rejects_stale_cached_account_after_fresh_same_inode_scan() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            let account = tempfile::tempdir().unwrap();
+            let account_root = std::fs::canonicalize(account.path()).unwrap();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx);
+                m.connection_features.insert(
+                    conn_id,
+                    std::collections::HashSet::from([
+                        FEATURE_AGENT_ACCOUNT_ROUTING_V1.to_string(),
+                        FEATURE_AGENT_TRANSCRIPT_READ_V1.to_string(),
+                    ]),
+                );
+                m.agent_account_routes.replace_for_test(
+                    "claude",
+                    "stale-account",
+                    Some(account_root.clone()),
+                );
+                let mut fresh_scan =
+                    super::super::super::agent_account::AccountRouteCache::default();
+                fresh_scan.replace_for_test(
+                    "claude",
+                    "current-account",
+                    Some(account_root.clone()),
+                );
+                m.fresh_agent_account_routes_for_test = Some(fresh_scan.routes_for_test().clone());
+                m.handle_message(
+                    conn_id,
+                    ClientMessage {
+                        request_id: "stale-transcript".to_string(),
+                        message: Some(client_message::Message::ReadAgentTranscript(
+                            ReadAgentTranscript {
+                                schema_version: 1,
+                                provider: "claude".to_string(),
+                                account_id: "stale-account".to_string(),
+                                session_id: "019f135f-7fcc-7d93-8a28-4835d98f8f0a".to_string(),
+                                known_revision: String::new(),
+                            },
+                        )),
+                    },
+                    ctx,
+                );
+            });
+
+            let response = loop {
+                let message = recv_deadline(&conn_rx, Duration::from_secs(10))
+                    .await
+                    .expect("fresh transcript route response");
+                if let Some(server_message::Message::AgentTranscriptResponse(response)) =
+                    message.message
+                {
+                    break response;
+                }
+            };
+            assert_eq!(
+                super::super::super::proto::AgentTranscriptStatus::try_from(response.status)
+                    .unwrap(),
+                super::super::super::proto::AgentTranscriptStatus::InvalidRequest
+            );
+            assert!(response.turns.is_empty());
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unexpected_managed_eof_records_a_bounded_restart_identity() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            let project = tempfile::tempdir().unwrap();
+            let cwd = project.path().to_string_lossy().to_string();
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in(&cwd), ctx)
+            });
+            let session_id = recv_session_opened(&conn_rx)
+                .await
+                .expect("ordinary session opened");
+
+            model.update(&mut app, |m, ctx| {
+                let project_identity =
+                    super::super::super::managed_fleet::ManagedProjectIdentity::capture(
+                        project.path(),
+                    )
+                    .unwrap();
+                let key = super::super::super::managed_fleet::ManagedLaunchKey::new(
+                    &m.host_id,
+                    "opaque-account",
+                    &cwd,
+                    "claude",
+                )
+                .unwrap();
+                let plan =
+                    super::super::super::managed_fleet::ManagedLaunchPlan::interactive_agent(
+                        "ended-1", key,
+                    )
+                    .unwrap()
+                    .with_project_identity(project_identity);
+                let session = m.sessions.get_mut(&session_id).unwrap();
+                let process_root =
+                    super::super::super::fleet_memory::managed_linux_process_identity(
+                        &super::super::super::fleet_memory::RealProcfs,
+                        session.child.id(),
+                        true,
+                    )
+                    .unwrap()
+                    .unwrap();
+                session.managed = Some(
+                    super::super::super::managed_fleet::ManagedSessionMetadata::new_verified(
+                        plan,
+                        process_root,
+                        super::super::super::agent_account::AccountRouteIdentity::DefaultAccount,
+                    ),
+                );
+                session.child.kill().unwrap();
+                m.on_session_reader_eof(&session_id, ctx);
+
+                assert!(!m.sessions.contains_key(&session_id));
+                assert_eq!(m.recent_managed_exits.len(), 1);
+                let exit = m.recent_managed_exits[0].to_proto();
+                assert_eq!(exit.session_id, session_id);
+                assert_eq!(exit.diagnostic_code, "process-ended");
+                assert_eq!(exit.managed.unwrap().generation, 1);
+            });
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn managed_stop_is_visible_and_exactly_restartable_without_eof_double_recording() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx);
+                enable_managed_fleet(m, conn_id);
+                m.managed_min_available_bytes = Ok(1);
+            });
+            let project = tempfile::tempdir().unwrap();
+            let cwd = project.path().to_string_lossy().to_string();
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, managed_open(&cwd, "keepalive-1"), ctx)
+            });
+            let opened = loop {
+                let message = recv_deadline(&conn_rx, Duration::from_secs(10))
+                    .await
+                    .expect("managed open response");
+                if let Some(server_message::Message::SessionOpened(opened)) = message.message {
+                    break opened;
+                }
+            };
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, close_msg(&opened.session_id), ctx);
+                assert!(
+                    m.sessions.contains_key(&opened.session_id),
+                    "generic CloseSession must not remove a managed session"
+                );
+            });
+
+            model.update(&mut app, |m, ctx| m.deregister_connection(conn_id, ctx));
+            model.update(&mut app, |m, _ctx| {
+                assert_eq!(m.gc_sessions(u64::MAX, 1, 0), 0);
+                assert!(m.sessions.contains_key(&opened.session_id));
+            });
+
+            let (conn_tx2, conn_rx2) = async_channel::unbounded::<ServerMessage>();
+            let conn_id2 = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id2, conn_tx2, ctx);
+                enable_managed_fleet(m, conn_id2);
+                m.handle_message(
+                    conn_id2,
+                    ClientMessage {
+                        request_id: "attach-managed".to_string(),
+                        message: Some(client_message::Message::AttachSession(AttachSession {
+                            session_id: opened.session_id.clone(),
+                            last_seq: 0,
+                            supports_bootstrap_preamble: true,
+                            expected_generation: None,
+                            expected_agent_binding: None,
+                        })),
+                    },
+                    ctx,
+                );
+            });
+            let attach_error = loop {
+                let message = recv_deadline(&conn_rx2, Duration::from_secs(10))
+                    .await
+                    .expect("managed attach rejection");
+                if let Some(server_message::Message::Error(error)) = message.message {
+                    break error;
+                }
+            };
+            assert!(attach_error.message.contains(
+                "managed attach requires an exact nonzero generation and foreground agent binding"
+            ));
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id2,
+                    ClientMessage {
+                        request_id: "attach-managed-without-binding".to_string(),
+                        message: Some(client_message::Message::AttachSession(AttachSession {
+                            session_id: opened.session_id.clone(),
+                            last_seq: 0,
+                            supports_bootstrap_preamble: true,
+                            expected_generation: Some(opened.generation),
+                            expected_agent_binding: None,
+                        })),
+                    },
+                    ctx,
+                );
+            });
+            let missing_binding_error = loop {
+                let message = recv_deadline(&conn_rx2, Duration::from_secs(10))
+                    .await
+                    .expect("managed binding rejection");
+                if let Some(server_message::Message::Error(error)) = message.message {
+                    break error;
+                }
+            };
+            assert!(missing_binding_error.message.contains(
+                "managed attach requires an exact nonzero generation and foreground agent binding"
+            ));
+            model.read(&app, |m, _ctx| {
+                assert!(m.sessions.contains_key(&opened.session_id));
+            });
+
+            model.update(&mut app, |m, ctx| {
+                let mut changed_routes =
+                    super::super::super::agent_account::AccountRouteCache::default();
+                changed_routes.replace_for_test("claude", "replacement-account", None);
+                m.fresh_agent_account_routes_for_test =
+                    Some(changed_routes.routes_for_test().clone());
+                m.handle_message(
+                    conn_id2,
+                    ClientMessage {
+                        request_id: "stop-managed-changed-route".to_string(),
+                        message: Some(client_message::Message::ManagedSessionLifecycle(
+                            ManagedSessionLifecycleRequest {
+                                schema_version: 1,
+                                action: ManagedSessionLifecycleAction::Stop.into(),
+                                session_id: opened.session_id.clone(),
+                                expected_generation: opened.generation,
+                                launch_id: "keepalive-1".to_string(),
+                                provider: "claude".to_string(),
+                                account_id: "opaque-account".to_string(),
+                                project_root: cwd.clone(),
+                            },
+                        )),
+                    },
+                    ctx,
+                );
+            });
+            let changed_route = loop {
+                let message = recv_deadline(&conn_rx2, Duration::from_secs(10))
+                    .await
+                    .expect("changed-route stop response");
+                if let Some(server_message::Message::ManagedSessionLifecycleResponse(response)) =
+                    message.message
+                {
+                    break response;
+                }
+            };
+            assert_eq!(
+                ManagedSessionLifecycleStatus::try_from(changed_route.status).unwrap(),
+                ManagedSessionLifecycleStatus::StaleIdentity
+            );
+            assert_eq!(changed_route.diagnostic_code, "account-route-changed");
+            model.update(&mut app, |m, _ctx| {
+                assert!(m.sessions.contains_key(&opened.session_id));
+                enable_managed_fleet(m, conn_id2);
+            });
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id2,
+                    ClientMessage {
+                        request_id: "stop-managed".to_string(),
+                        message: Some(client_message::Message::ManagedSessionLifecycle(
+                            ManagedSessionLifecycleRequest {
+                                schema_version: 1,
+                                action: ManagedSessionLifecycleAction::Stop.into(),
+                                session_id: opened.session_id.clone(),
+                                expected_generation: opened.generation,
+                                launch_id: "keepalive-1".to_string(),
+                                provider: "claude".to_string(),
+                                account_id: "opaque-account".to_string(),
+                                project_root: cwd.clone(),
+                            },
+                        )),
+                    },
+                    ctx,
+                );
+            });
+            let stopped = loop {
+                let message = recv_deadline(&conn_rx2, Duration::from_secs(10))
+                    .await
+                    .expect("managed stop response");
+                if let Some(server_message::Message::ManagedSessionLifecycleResponse(response)) =
+                    message.message
+                {
+                    break response;
+                }
+            };
+            assert_eq!(
+                ManagedSessionLifecycleStatus::try_from(stopped.status).unwrap(),
+                ManagedSessionLifecycleStatus::Stopped,
+                "managed stop failed with diagnostic code: {}",
+                stopped.diagnostic_code
+            );
+            async_io::Timer::after(Duration::from_millis(100)).await;
+            model.read(&app, |m, _ctx| {
+                assert!(!m.sessions.contains_key(&opened.session_id));
+                assert_eq!(m.recent_managed_exits.len(), 1);
+                assert_eq!(
+                    m.recent_managed_exits[0].diagnostic,
+                    super::super::ManagedExitDiagnostic::Stopped
+                );
+            });
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id2, list_msg(), ctx)
+            });
+            let listed = recv_session_list(&conn_rx2)
+                .await
+                .expect("stopped managed inventory");
+            assert!(listed.sessions.is_empty());
+            assert_eq!(listed.recent_managed_exits.len(), 1);
+            assert_eq!(listed.recent_managed_exits[0].diagnostic_code, "stopped");
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id2,
+                    ClientMessage {
+                        request_id: "restart-stale-managed".to_string(),
+                        message: Some(client_message::Message::ManagedSessionLifecycle(
+                            ManagedSessionLifecycleRequest {
+                                schema_version: 1,
+                                action: ManagedSessionLifecycleAction::Restart.into(),
+                                session_id: opened.session_id.clone(),
+                                expected_generation: opened.generation + 1,
+                                launch_id: "keepalive-1".to_string(),
+                                provider: "claude".to_string(),
+                                account_id: "opaque-account".to_string(),
+                                project_root: cwd.clone(),
+                            },
+                        )),
+                    },
+                    ctx,
+                );
+            });
+            let stale_restart = loop {
+                let message = recv_deadline(&conn_rx2, Duration::from_secs(10))
+                    .await
+                    .expect("stale restart response");
+                if let Some(server_message::Message::ManagedSessionLifecycleResponse(response)) =
+                    message.message
+                {
+                    break response;
+                }
+            };
+            assert_eq!(
+                ManagedSessionLifecycleStatus::try_from(stale_restart.status).unwrap(),
+                ManagedSessionLifecycleStatus::NotRunning
+            );
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(
+                    conn_id2,
+                    ClientMessage {
+                        request_id: "restart-stopped-managed".to_string(),
+                        message: Some(client_message::Message::ManagedSessionLifecycle(
+                            ManagedSessionLifecycleRequest {
+                                schema_version: 1,
+                                action: ManagedSessionLifecycleAction::Restart.into(),
+                                session_id: opened.session_id.clone(),
+                                expected_generation: opened.generation,
+                                launch_id: "keepalive-1".to_string(),
+                                provider: "claude".to_string(),
+                                account_id: "opaque-account".to_string(),
+                                project_root: cwd.clone(),
+                            },
+                        )),
+                    },
+                    ctx,
+                );
+            });
+            let restarted = loop {
+                let message = recv_deadline(&conn_rx2, Duration::from_secs(10))
+                    .await
+                    .expect("exact restart response");
+                if let Some(server_message::Message::ManagedSessionLifecycleResponse(response)) =
+                    message.message
+                {
+                    break response;
+                }
+            };
+            assert_eq!(
+                ManagedSessionLifecycleStatus::try_from(restarted.status).unwrap(),
+                ManagedSessionLifecycleStatus::Restarted
+            );
+            assert!(!restarted.replacement_session_id.is_empty());
+            assert_ne!(restarted.replacement_generation, 0);
+            model.update(&mut app, |m, ctx| {
+                assert!(m.recent_managed_exits.is_empty());
+                m.handle_close_managed_session_verified(&restarted.replacement_session_id, ctx)
+                    .unwrap();
+                assert_eq!(m.recent_managed_exits.len(), 1);
+                assert_eq!(
+                    m.recent_managed_exits[0].diagnostic,
+                    super::super::ManagedExitDiagnostic::Stopped
+                );
+            });
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn managed_start_is_blocked_before_process_creation_below_daemon_floor() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx);
+                enable_managed_fleet(m, conn_id);
+                m.managed_min_available_bytes = Ok(u64::MAX);
+            });
+            let project = tempfile::tempdir().unwrap();
+            let cwd = project.path().to_string_lossy().to_string();
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, managed_open(&cwd, "blocked-1"), ctx)
+            });
+            let response = loop {
+                let message = recv_deadline(&conn_rx, Duration::from_secs(10))
+                    .await
+                    .expect("managed blocked response");
+                if let Some(server_message::Message::Error(error)) = message.message {
+                    break error;
+                }
+            };
+            assert!(response.message.contains("below-floor"));
+            model.update(&mut app, |m, _ctx| assert!(m.sessions.is_empty()));
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn managed_start_rejects_stale_cached_account_after_fresh_same_inode_scan() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            let account = tempfile::tempdir().unwrap();
+            let account_root = std::fs::canonicalize(account.path()).unwrap();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx);
+                enable_managed_fleet(m, conn_id);
+                m.managed_min_available_bytes = Ok(1);
+                m.agent_account_routes.replace_for_test(
+                    "claude",
+                    "opaque-account",
+                    Some(account_root.clone()),
+                );
+                let mut fresh_scan =
+                    super::super::super::agent_account::AccountRouteCache::default();
+                fresh_scan.replace_for_test(
+                    "claude",
+                    "replacement-account",
+                    Some(account_root.clone()),
+                );
+                m.fresh_agent_account_routes_for_test = Some(fresh_scan.routes_for_test().clone());
+            });
+            let project = tempfile::tempdir().unwrap();
+            let cwd = project.path().to_string_lossy().to_string();
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, managed_open(&cwd, "stale-route-1"), ctx)
+            });
+            let response = loop {
+                let message = recv_deadline(&conn_rx, Duration::from_secs(10))
+                    .await
+                    .expect("managed stale-route response");
+                if let Some(server_message::Message::Error(error)) = message.message {
+                    break error;
+                }
+            };
+            assert!(response.message.contains("account-route-changed"));
+            model.update(&mut app, |m, _ctx| assert!(m.sessions.is_empty()));
+        });
     }
 
     /// Stage 4: multiple sessions per daemon are listable, carry their cwd, and

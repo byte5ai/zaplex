@@ -314,6 +314,36 @@ impl CLIAgent {
         Some(self.pin_config_dir(self.resume_command(session_id)?, config_dir))
     }
 
+    /// Resume one provider conversation with the complete launch route that
+    /// originally created it. This retains API-key scrubbing, the exact account
+    /// config root, model, and supported effort flags instead of falling back to
+    /// a bare provider command during restart.
+    pub fn resume_command_routed_with(
+        &self,
+        session_id: &str,
+        config_dir: Option<&Path>,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> Option<String> {
+        if session_id.trim().is_empty() {
+            return None;
+        }
+        let mut launch = self.routed_launch(config_dir, model, effort);
+        match self {
+            CLIAgent::Claude | CLIAgent::Grok => launch
+                .args
+                .extend(["--resume".to_string(), session_id.to_string()]),
+            CLIAgent::Codex => launch
+                .args
+                .extend(["resume".to_string(), session_id.to_string()]),
+            CLIAgent::Antigravity => launch
+                .args
+                .extend(["--conversation".to_string(), session_id.to_string()]),
+            _ => return None,
+        }
+        Some(launch.shell_command())
+    }
+
     /// Whether this CLI takes **in-conversation slash commands** (`/compact`,
     /// `/clear`) typed into a resumed session.
     ///

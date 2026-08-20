@@ -42,6 +42,13 @@ pub struct OpenSessionParams {
     /// Opaque account identity returned by this daemon's account inventory.
     /// Local config paths must never be translated into this field.
     pub agent_launch_route: Option<remote_server::proto::AgentLaunchRoute>,
+    /// Present only for an explicit managed-fleet launch. The daemon validates
+    /// this typed intent and its opaque account route; it must never degrade to
+    /// an ordinary startup command on an older peer.
+    pub managed_launch: Option<remote_server::proto::ManagedLaunch>,
+    /// Optional stricter client floor. `None` leaves the daemon's configured
+    /// minimum authoritative.
+    pub requested_min_available_bytes: Option<u64>,
 }
 
 /// A request to back a newly created terminal with a daemon-hosted session on an

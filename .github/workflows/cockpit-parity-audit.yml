@@ -34,6 +34,21 @@ on:
       - 'script/cockpit-parity-audit'
       - 'specs/parity/**'
   workflow_dispatch:
+    inputs:
+      runtime_evidence_run_id:
+        description: Optional run id containing a cockpit-runtime-smoke artifact
+        required: false
+        type: string
+      runtime_evidence_artifact:
+        description: Artifact name in runtime_evidence_run_id
+        required: false
+        default: cockpit-runtime-smoke
+        type: string
+      require_manual_runtime:
+        description: Enforce the real two-host runtime evidence release gate
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -41,6 +56,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -59,7 +75,7 @@ jobs:
       - name: Initialize fail-closed audit artifacts
         run: |
           mkdir -p artifacts/logs artifacts/screenshots references
-          for report in contract-validation gate-self-test reference-revisions suite-results; do
+          for report in contract-validation gate-self-test reference-revisions suite-results runtime-evidence; do
             printf '{"schema_version":1,"status":"fail","errors":["step did not complete"]}\n' > "artifacts/${report}.json"
           done
           cp docs/ui/cockpit-sidebar-connections.html artifacts/cockpit-sidebar-connections.html
@@ -143,6 +159,37 @@ jobs:
             --output=artifacts/playwright-results
         shell: bash
 
+      - name: Download optional real runtime evidence
+        id: runtime_download
+        if: inputs.runtime_evidence_run_id != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_EVIDENCE_RUN_ID: ${{ inputs.runtime_evidence_run_id }}
+          RUNTIME_EVIDENCE_ARTIFACT: ${{ inputs.runtime_evidence_artifact }}
+        run: |
+          mkdir -p artifacts/runtime-smoke
+          if [[ ! "$RUNTIME_EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "runtime_evidence_run_id must be numeric" >&2
+            exit 2
+          fi
+          gh run download "$RUNTIME_EVIDENCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$RUNTIME_EVIDENCE_ARTIFACT" \
+            --dir artifacts/runtime-smoke
+        shell: bash
+
+      - name: Validate or explicitly record missing runtime evidence
+        id: runtime
+        if: always()
+        continue-on-error: true
+        run: >-
+          script/cockpit-parity-audit validate-runtime
+          --evidence-dir artifacts/runtime-smoke
+          --expected-zaplex-revision "${GITHUB_SHA}"
+          --output artifacts/runtime-evidence.json
+        shell: bash
+
       - name: Assemble machine-readable audit report
         id: assemble
         if: always()
@@ -153,6 +200,7 @@ jobs:
           --self-test artifacts/gate-self-test.json
           --references artifacts/reference-revisions.json
           --suites artifacts/suite-results.json
+          --runtime artifacts/runtime-evidence.json
           --screenshot-dir artifacts/screenshots
           --output artifacts/cockpit-parity-report.json
         shell: bash
@@ -169,4 +217,12 @@ jobs:
       - name: Enforce automated parity result
         if: always()
         run: script/cockpit-parity-audit enforce --report artifacts/cockpit-parity-report.json
+        shell: bash
+
+      - name: Enforce real runtime release gate when requested
+        if: always() && inputs.require_manual_runtime
+        run: >-
+          script/cockpit-parity-audit enforce
+          --report artifacts/cockpit-parity-report.json
+          --require-runtime
         shell: bash

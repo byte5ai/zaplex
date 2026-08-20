@@ -35,9 +35,11 @@ use zaplex_cockpit::{
 // are gated to match.
 #[cfg(not(target_family = "wasm"))]
 use zaplex_remote_session::types::{
-    has_feature, FEATURE_AGENT_INVENTORY, FEATURE_AGENT_PTY_BINDING_V2,
+    has_feature, FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_INVENTORY,
+    FEATURE_AGENT_PTY_BINDING_V2, FEATURE_MANAGED_AGENT_FLEET_V1,
 };
 
+use crate::cockpit::fleet_details::ManagedFleetInventory;
 use crate::cockpit::oauth::{self, CachedOauth};
 use crate::cockpit::settings::CockpitSettings;
 #[cfg(not(target_family = "wasm"))]
@@ -101,6 +103,10 @@ pub struct CockpitModel {
     /// daemon is connected. Read by the attention ambient-bit (`needs_me`) and
     /// the Conductor UI (`inventory`).
     inventory: FleetTree,
+    /// Daemon-owned managed PTYs retained by their exact host/session
+    /// generation. Kept separate from conversations because a Claude Remote
+    /// Control PTY may exist before an agent conversation is discoverable.
+    managed_fleet: ManagedFleetInventory,
     pricing: PricingTable,
     /// Per-account real-usage cache (C3b), keyed by the account's config dir.
     /// Lives here so the 15-min TTL survives across refresh cycles; the token
@@ -171,7 +177,10 @@ impl CockpitModel {
             |me, event, ctx| match event {
                 RemoteServerManagerEvent::HostConnected { .. } => me.spawn_refresh(ctx),
                 RemoteServerManagerEvent::HostDisconnected { host_id } => {
-                    if remove_disconnected_host(&mut me.inventory, host_id.as_str()) {
+                    let inventory_changed =
+                        remove_disconnected_host(&mut me.inventory, host_id.as_str());
+                    let managed_changed = me.managed_fleet.remove_host(host_id.as_str());
+                    if inventory_changed || managed_changed {
                         ctx.emit(CockpitEvent::Updated);
                     }
                     me.spawn_refresh(ctx);
@@ -195,6 +204,8 @@ impl CockpitModel {
                 | RemoteServerManagerEvent::SessionOutput { .. }
                 | RemoteServerManagerEvent::SessionExited { .. }
                 | RemoteServerManagerEvent::SessionNotice { .. } => {}
+                RemoteServerManagerEvent::ManagedLaunchOpened { .. }
+                | RemoteServerManagerEvent::ManagedLaunchFailed { .. } => {}
             },
         );
 
@@ -202,6 +213,7 @@ impl CockpitModel {
             snapshot: initial_snapshot(),
             refresh_generation: 0,
             inventory: FleetTree::default(),
+            managed_fleet: ManagedFleetInventory::default(),
             pricing: PricingTable::default(),
             oauth_cache: HashMap::new(),
             transcript_cache: TranscriptScanCache::default(),
@@ -347,6 +359,8 @@ impl CockpitModel {
                         session.effort = super::session_effort(session, true, None);
                     }
                 }
+                let session_names = super::session_names::SessionNameStore::load();
+                session_names.apply_to_local_snapshot(&mut snapshot);
 
                 // Cross-host fold: every connected daemon contributes one host
                 // root. Agent inventory enriches that root when available; an old
@@ -367,9 +381,42 @@ impl CockpitModel {
                     })
                     .collect();
                 #[cfg(not(target_family = "wasm"))]
-                let remotes: Vec<(RemoteHost, Vec<SessionSnapshot>)> = {
+                let (remotes, managed_fleet): (
+                    Vec<(RemoteHost, Vec<SessionSnapshot>)>,
+                    ManagedFleetInventory,
+                ) = {
                     let mut remotes = Vec::with_capacity(inputs.daemons.len());
+                    let mut managed_fleet = ManagedFleetInventory::default();
                     for daemon in inputs.daemons {
+                        if has_feature(&daemon.features, FEATURE_MANAGED_AGENT_FLEET_V1) {
+                            match daemon.client.list_sessions().await {
+                                Ok(list) => managed_fleet.extend_session_list(
+                                    &daemon.host_id,
+                                    &daemon.host_label,
+                                    daemon.registry_node_id.as_deref(),
+                                    list,
+                                ),
+                                Err(error) => log::warn!(
+                                    "cockpit managed fleet: list_sessions failed for host {:?}: {error}",
+                                    daemon.host_label
+                                ),
+                            }
+                            if has_feature(
+                                &daemon.features,
+                                FEATURE_AGENT_ACCOUNT_ROUTING_V1,
+                            ) {
+                                match daemon.client.list_agent_accounts().await {
+                                    Ok(accounts) => managed_fleet.enrich_remote_account_labels(
+                                        &daemon.host_id,
+                                        &accounts,
+                                    ),
+                                    Err(error) => log::warn!(
+                                        "cockpit managed fleet: list_agent_accounts failed for host {:?}: {error}",
+                                        daemon.host_label
+                                    ),
+                                }
+                            }
+                        }
                         if !has_feature(&daemon.features, FEATURE_AGENT_INVENTORY) {
                             remotes.push((
                                 RemoteHost {
@@ -425,14 +472,17 @@ impl CockpitModel {
                             }
                         }
                     }
-                    remotes
+                    (remotes, managed_fleet)
                 };
                 #[cfg(target_family = "wasm")]
-                let remotes: Vec<(RemoteHost, Vec<SessionSnapshot>)> = {
+                let (remotes, managed_fleet): (
+                    Vec<(RemoteHost, Vec<SessionSnapshot>)>,
+                    ManagedFleetInventory,
+                ) = {
                     // No daemon connections on WASM; the captured (empty) list is
                     // consumed here so the fold is honestly local-only.
                     let _ = inputs.daemons;
-                    Vec::new()
+                    (Vec::new(), ManagedFleetInventory::default())
                 };
                 // Local contribution: every live account session plus
                 // Antigravity's per-workspace resume registry. Antigravity is
@@ -475,6 +525,9 @@ impl CockpitModel {
                 })
                 .collect();
                 zaplex_cockpit::reconcile_connected_hosts(&mut inventory, &registered);
+                session_names.apply_to_inventory(&mut inventory);
+                let mut managed_fleet = managed_fleet;
+                managed_fleet.enrich_account_labels(&inventory);
 
                 let _ = spawner
                     .spawn(move |me, ctx| {
@@ -487,6 +540,7 @@ impl CockpitModel {
                             inputs.transcript_cache,
                             overrides,
                             inventory,
+                            managed_fleet,
                             local_label,
                             ctx,
                         )
@@ -536,6 +590,7 @@ impl CockpitModel {
         // first tick is blank but still `Pending` (its initial state), and returning
         // early there would leave every open pane showing "loading…" forever.
         if is_blank(&self.snapshot, &self.inventory)
+            && self.managed_fleet.sessions().is_empty()
             && self.selected_account.is_none()
             && self.snapshot.health.is_loaded()
         {
@@ -548,6 +603,7 @@ impl CockpitModel {
             health: ScanHealth::Loaded,
         };
         self.inventory = FleetTree::default();
+        self.managed_fleet = ManagedFleetInventory::default();
         self.transcript_cache = TranscriptScanCache::default();
         self.selected_account = None;
         ctx.emit(CockpitEvent::Updated);
@@ -560,6 +616,7 @@ impl CockpitModel {
         transcript_cache: TranscriptScanCache,
         overrides: AccountOverrides,
         inventory: FleetTree,
+        managed_fleet: ManagedFleetInventory,
         local_label: String,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -569,8 +626,48 @@ impl CockpitModel {
         // [`fleet_transitions_to_waiting`] for the identity-keying rationale.
         let became_waiting = fleet_transitions_to_waiting(&self.inventory, &inventory);
 
+        // A remote provider lifecycle hook runs on the daemon, not in this
+        // client's local CLI-agent model. Complete launch-intent binding from
+        // the exact capability-gated PTY identity carried by the accepted
+        // inventory generation instead of falling back to coordinates.
+        for host in inventory.hosts.iter().filter(|host| !host.is_local) {
+            let Some(host_id) = host.host_id.as_deref() else {
+                continue;
+            };
+            for session in host
+                .projects
+                .iter()
+                .flat_map(|project| project.sessions.iter())
+                .filter(|session| session.pty_foreground)
+            {
+                let (Some(pty_session_id), Some(generation), Some(account_id)) = (
+                    session.pty_session_id.as_deref(),
+                    session.pty_session_generation,
+                    session.account_id.as_deref(),
+                ) else {
+                    continue;
+                };
+                let agent = match session.provider {
+                    Provider::Claude => crate::terminal::CLIAgent::Claude,
+                    Provider::Codex => crate::terminal::CLIAgent::Codex,
+                    Provider::Antigravity => continue,
+                };
+                crate::cockpit::launch_registry::bind_remote_pty_session(
+                    host_id,
+                    pty_session_id,
+                    generation,
+                    agent,
+                    account_id,
+                    &session.session_id,
+                    Path::new(&session.cwd),
+                    Path::new(&session.project_root),
+                );
+            }
+        }
+
         self.snapshot = snapshot;
         self.inventory = inventory;
+        self.managed_fleet = managed_fleet;
         self.oauth_cache = oauth_cache;
         self.transcript_cache = transcript_cache;
         self.overrides = overrides;
@@ -593,6 +690,10 @@ impl CockpitModel {
     /// the Conductor UI.
     pub fn inventory(&self) -> &FleetTree {
         &self.inventory
+    }
+
+    pub fn managed_fleet(&self) -> &ManagedFleetInventory {
+        &self.managed_fleet
     }
 
     /// The fleet-wide *needs-me* count — the total number of sessions in

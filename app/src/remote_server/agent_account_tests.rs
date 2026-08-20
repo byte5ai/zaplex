@@ -120,6 +120,43 @@ fn selected_account_is_resolved_to_the_daemon_canonical_path() {
     assert!(!env.contains_key(CODEX_HOME));
 }
 
+#[cfg(unix)]
+#[test]
+fn stored_account_route_identity_rejects_a_replaced_config_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_dir = temp.path().join("account");
+    let displaced = temp.path().join("account-old");
+    std::fs::create_dir(&config_dir).unwrap();
+    let canonical = std::fs::canonicalize(&config_dir).unwrap();
+    let key = AccountRouteKey {
+        provider: "claude".to_string(),
+        account_id: "opaque".to_string(),
+    };
+    let routes = HashMap::from([(
+        key.clone(),
+        AccountRouteTarget {
+            provider: "claude".to_string(),
+            config_dir: Some(canonical.clone()),
+        },
+    )]);
+    let expected = fresh_account_route_identity(&routes, "claude", "opaque").unwrap();
+
+    std::fs::rename(&config_dir, &displaced).unwrap();
+    std::fs::create_dir(&config_dir).unwrap();
+    let replaced_routes = HashMap::from([(
+        key,
+        AccountRouteTarget {
+            provider: "claude".to_string(),
+            config_dir: Some(std::fs::canonicalize(&config_dir).unwrap()),
+        },
+    )]);
+
+    assert_ne!(
+        fresh_account_route_identity(&replaced_routes, "claude", "opaque"),
+        Ok(expected)
+    );
+}
+
 #[test]
 fn default_account_clears_all_client_supplied_provider_paths() {
     let account_id = "default-id";

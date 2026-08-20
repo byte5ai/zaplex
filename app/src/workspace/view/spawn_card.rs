@@ -15,7 +15,11 @@
 //! confirm it emits [`SpawnCardEvent::Launch`]; the workspace turns that into a
 //! [`crate::workspace::action::WorkspaceAction::LaunchAgent`] launch.
 
-use std::path::PathBuf;
+pub(crate) mod bulk;
+pub(crate) mod history;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
@@ -38,6 +42,15 @@ use crate::terminal::CLIAgent;
 use crate::ui_components::modal_frame;
 use crate::view_components::action_button::ActionButton;
 
+use self::bulk::{
+    selected_account_ids, BulkLaunchLedger, BulkLaunchPlan, BulkLaunchPlanId, BulkLaunchTarget,
+    BulkLaunchTargetId, LaunchAccountId, LaunchAccountTarget,
+};
+use self::history::{
+    DirectoryValidation, DirectoryValidationRequest, DirectoryValidationState, FolderHistory,
+    FolderHistoryHost, FolderNavigation,
+};
+
 const MODAL_WIDTH: f32 = 480.;
 
 /// One account option offered in the card.
@@ -47,6 +60,10 @@ pub struct AccountOption {
     /// overrides layer replaced it before the snapshot existed).
     pub label: String,
     pub config_dir: PathBuf,
+    /// The provider's default login is routed by absence of a pin. Its config
+    /// root remains part of the stable UI identity, but must not be exported as
+    /// a provider config environment override.
+    pub is_default: bool,
     /// Binding-window utilisation, already formatted (`~` marks an estimate).
     pub heat_label: String,
     /// The same figure as a fraction, so the card can colour it by the one
@@ -55,6 +72,10 @@ pub struct AccountOption {
     /// Plan tier, when the provider told us.
     pub plan: Option<String>,
     pub provider: zaplex_cockpit::Provider,
+}
+
+fn account_config_pin(account: &AccountOption) -> Option<PathBuf> {
+    (!account.is_default).then(|| account.config_dir.clone())
 }
 
 #[derive(Clone, Debug)]
@@ -116,6 +137,17 @@ enum RemoteAccountDiscoveryState {
 pub struct HostOption {
     pub id: String,
     pub name: String,
+    /// True only for a currently connected daemon that negotiated the full
+    /// managed-fleet contract. Registered/offline/old hosts remain ordinary.
+    pub managed_fleet_available: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ManagedLaunchMode {
+    #[default]
+    Ordinary,
+    ManagedInteractive,
+    ClaudeRemoteControl,
 }
 
 /// Everything the workspace injects when opening the card. Rebuilt on each open
@@ -221,13 +253,25 @@ pub struct SpawnCard {
     agent: CLIAgent,
     model: String,
     effort: String,
+    managed_mode: ManagedLaunchMode,
     account: AccountChoice,
+    /// Additional exact account identities selected for a multi-launch. Empty
+    /// retains the calm automatic/single-account path.
+    batch_accounts: BTreeSet<LaunchAccountId>,
+    select_all_accounts: bool,
     /// Whether the account list is unfolded (X1). Collapsed by default: the
     /// router already chose, so the card states the answer instead of asking the
     /// question again on every launch.
     show_accounts: bool,
     host: HostChoice,
     project: Option<PathBuf>,
+    folder_history: FolderHistory,
+    folder_navigation: FolderNavigation,
+    folder_history_open: bool,
+    folder_validation: DirectoryValidationState,
+    history_validation: BTreeMap<PathBuf, DirectoryValidation>,
+    history_search_editor: Option<ViewHandle<EditorView>>,
+    bulk_launch: Option<BulkLaunchLedger>,
     /// Task prompt to prefill into the launched agent after start (contextual
     /// flows); `None` for a plain "new agent" open.
     prompt: Option<String>,
@@ -339,7 +383,32 @@ impl SpawnCard {
         // "Launching: …" summary line stays truthful to the typed path (the
         // child editor's own edits notify *itself*, not this parent view —
         // mirrors the drive enum dialog, which notifies on editor edits).
-        ctx.subscribe_to_view(&remote_dir_editor, |_, _, event, ctx| {
+        ctx.subscribe_to_view(&remote_dir_editor, |card, _, event, ctx| {
+            if matches!(event, EditorEvent::Edited(_)) {
+                if let Some(path) = card.selected_directory(ctx) {
+                    card.folder_navigation.select(path);
+                    card.begin_selected_directory_validation(ctx);
+                } else {
+                    card.folder_validation.clear();
+                }
+                card.invalidate_bulk_plan();
+                ctx.notify();
+            }
+        });
+
+        let history_search_editor = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let options = SingleLineEditorOptions {
+                text: TextOptions::ui_text(Some(13.), appearance),
+                propagate_and_no_op_vertical_navigation_keys:
+                    PropagateAndNoOpNavigationKeys::Always,
+                ..Default::default()
+            };
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text(crate::t!("cockpit-spawn-card-filter-folders"), ctx);
+            editor
+        });
+        ctx.subscribe_to_view(&history_search_editor, |_, _, event, ctx| {
             if matches!(event, EditorEvent::Edited(_)) {
                 ctx.notify();
             }
@@ -352,10 +421,20 @@ impl SpawnCard {
             agent: CLIAgent::Claude,
             model: String::new(),
             effort: String::new(),
+            managed_mode: ManagedLaunchMode::Ordinary,
             account: AccountChoice::Freest,
+            batch_accounts: BTreeSet::new(),
+            select_all_accounts: false,
             show_accounts: false,
             host: HostChoice::Local,
             project: None,
+            folder_history: FolderHistory::load(),
+            folder_navigation: FolderNavigation::default(),
+            folder_history_open: false,
+            folder_validation: DirectoryValidationState::default(),
+            history_validation: BTreeMap::new(),
+            history_search_editor: Some(history_search_editor),
+            bulk_launch: None,
             prompt: None,
             remote_dir_editor: Some(remote_dir_editor),
             chip_states: Default::default(),
@@ -382,7 +461,13 @@ impl SpawnCard {
             .unwrap_or(CLIAgent::Claude);
         self.model.clear();
         self.effort.clear();
+        self.managed_mode = ManagedLaunchMode::Ordinary;
         self.account = AccountChoice::Freest;
+        self.batch_accounts.clear();
+        self.select_all_accounts = false;
+        self.bulk_launch = None;
+        self.folder_history_open = false;
+        self.history_validation.clear();
         // Pre-scope host from a Conductor host/project `+`, else local. Resolve
         // by stable id first so same-named hosts route to the right node.
         self.host = resolve_scoped_host(
@@ -402,6 +487,12 @@ impl SpawnCard {
         self.prompt = cfg.prompt.clone();
         self.cfg = cfg;
 
+        if let Some(editor) = self.history_search_editor.clone() {
+            editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text_with_base_buffer("", ctx);
+            });
+        }
+
         // Prefill the remote-dir input from the pre-scoped project (a Conductor
         // remote project node) so the common case is a single confirm; every other
         // open (local, or remote without a project) resets it to empty (blank =
@@ -415,6 +506,9 @@ impl SpawnCard {
                 ed.set_buffer_text_with_base_buffer(&prefill, ctx);
             });
         }
+
+        self.folder_navigation.reset(self.selected_directory(ctx));
+        self.begin_selected_directory_validation(ctx);
 
         self.request_model_discovery(ctx);
         self.request_remote_account_discovery(ctx);
@@ -440,8 +534,265 @@ impl SpawnCard {
             editor.update(ctx, |ed, ctx| {
                 ed.set_buffer_text_with_base_buffer(&text, ctx);
             });
+            self.folder_navigation.select(path.to_path_buf());
+            self.begin_selected_directory_validation(ctx);
+            self.invalidate_bulk_plan();
             ctx.notify();
         }
+    }
+
+    fn history_host(&self) -> FolderHistoryHost {
+        self.resolved_node_id()
+            .and_then(FolderHistoryHost::remote)
+            .unwrap_or(FolderHistoryHost::Local)
+    }
+
+    fn selected_directory(&self, app: &AppContext) -> Option<PathBuf> {
+        match self.host {
+            HostChoice::Local => self.project.clone(),
+            HostChoice::Remote(_) => self.remote_dir_editor.as_ref().and_then(|editor| {
+                let raw = editor.as_ref(app).buffer_text(app);
+                remote_cwd_from_input(self.host, &raw).ok().flatten()
+            }),
+        }
+    }
+
+    fn set_selected_directory(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {
+        match self.host {
+            HostChoice::Local => self.project = Some(path.clone()),
+            HostChoice::Remote(_) => {
+                if let Some(editor) = self.remote_dir_editor.clone() {
+                    let text = path.display().to_string();
+                    editor.update(ctx, |editor, ctx| {
+                        editor.set_buffer_text_with_base_buffer(&text, ctx);
+                    });
+                }
+            }
+        }
+        self.folder_navigation.select(path);
+        self.begin_selected_directory_validation(ctx);
+        self.invalidate_bulk_plan();
+        ctx.notify();
+    }
+
+    fn begin_selected_directory_validation(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(path) = self.selected_directory(ctx) else {
+            self.folder_validation.clear();
+            return;
+        };
+        let host = self.history_host();
+        let request = self.folder_validation.begin(host, path.clone());
+        self.history_validation
+            .insert(path, DirectoryValidation::Checking);
+        ctx.emit(SpawnCardEvent::ValidateDirectory(request));
+    }
+
+    pub fn apply_directory_validation(
+        &mut self,
+        request: &DirectoryValidationRequest,
+        result: DirectoryValidation,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.history_validation.insert(request.path.clone(), result);
+        self.folder_validation.apply(request, result);
+        ctx.notify();
+    }
+
+    fn invalidate_bulk_plan(&mut self) {
+        self.bulk_launch = None;
+    }
+
+    fn local_account_targets(&self) -> Vec<LaunchAccountTarget> {
+        let Some(options) = self.provider_options() else {
+            return Vec::new();
+        };
+        let all = options
+            .accounts
+            .iter()
+            .map(|account| LaunchAccountTarget {
+                id: LaunchAccountId::local(self.agent, &account.config_dir),
+                label: account.label.clone(),
+                config_dir: account_config_pin(account),
+                account_email: None,
+                remote_route: None,
+            })
+            .collect::<Vec<_>>();
+        let selected = selected_account_ids(&all, &self.batch_accounts, self.select_all_accounts);
+        if !selected.is_empty() {
+            return selected;
+        }
+        match self.account {
+            AccountChoice::Freest => options
+                .freest
+                .as_ref()
+                .map(|account| LaunchAccountTarget {
+                    id: LaunchAccountId::local(self.agent, &account.config_dir),
+                    label: account.label.clone(),
+                    config_dir: account_config_pin(account),
+                    account_email: None,
+                    remote_route: None,
+                })
+                .into_iter()
+                .collect(),
+            AccountChoice::Specific(index) => all.get(index).cloned().into_iter().collect(),
+        }
+    }
+
+    fn remote_account_targets(&self) -> Vec<LaunchAccountTarget> {
+        let Some(options) = self.remote_options_for_selected_host() else {
+            return Vec::new();
+        };
+        let all = options
+            .remote_accounts
+            .iter()
+            .map(|account| LaunchAccountTarget {
+                id: LaunchAccountId::remote(self.agent, &account.route.account_id),
+                label: account.label.clone(),
+                config_dir: None,
+                account_email: account.email.clone(),
+                remote_route: Some(account.route.clone()),
+            })
+            .collect::<Vec<_>>();
+        let selected = selected_account_ids(&all, &self.batch_accounts, self.select_all_accounts);
+        if !selected.is_empty() {
+            return selected;
+        }
+        self.selected_remote_account()
+            .map(|account| LaunchAccountTarget {
+                id: LaunchAccountId::remote(self.agent, &account.route.account_id),
+                label: account.label.clone(),
+                config_dir: None,
+                account_email: account.email.clone(),
+                remote_route: Some(account.route.clone()),
+            })
+            .into_iter()
+            .collect()
+    }
+
+    fn launch_accounts(&self) -> Vec<LaunchAccountTarget> {
+        match self.agent {
+            CLIAgent::Claude | CLIAgent::Codex => match self.host {
+                HostChoice::Local => self.local_account_targets(),
+                HostChoice::Remote(_) => self.remote_account_targets(),
+            },
+            CLIAgent::Antigravity | CLIAgent::Grok => vec![LaunchAccountTarget {
+                id: LaunchAccountId(format!("{}:default", self.agent.to_serialized_name())),
+                label: crate::t!("cockpit-spawn-card-cli-default-login").to_string(),
+                config_dir: None,
+                account_email: None,
+                remote_route: None,
+            }],
+            CLIAgent::Gemini
+            | CLIAgent::Amp
+            | CLIAgent::Droid
+            | CLIAgent::OpenCode
+            | CLIAgent::Copilot
+            | CLIAgent::Pi
+            | CLIAgent::Auggie
+            | CLIAgent::CursorCli
+            | CLIAgent::Goose
+            | CLIAgent::DeepSeek
+            | CLIAgent::Unknown => Vec::new(),
+        }
+    }
+
+    fn build_bulk_plan(&self, app: &AppContext) -> Option<BulkLaunchPlan> {
+        if !self.any_agent_installed() || !self.model_is_ready() || !self.managed_mode_is_valid() {
+            return None;
+        }
+        let cwd = self.selected_directory(app);
+        if self.managed_mode != ManagedLaunchMode::Ordinary && cwd.is_none() {
+            return None;
+        }
+        let node_id = self.resolved_node_id();
+        let managed = self.managed_mode != ManagedLaunchMode::Ordinary;
+        let targets = self
+            .launch_accounts()
+            .into_iter()
+            .map(|account| BulkLaunchTarget {
+                account,
+                agent: self.agent,
+                node_id: node_id.clone(),
+                cwd: cwd.clone(),
+                model: (!managed && !self.model.is_empty()).then(|| self.model.clone()),
+                effort: (!managed && matches!(self.agent, CLIAgent::Codex))
+                    .then(|| self.effort.clone()),
+                prompt: (!managed).then(|| self.prompt.clone()).flatten(),
+                managed_mode: self.managed_mode,
+                managed_launch_id: managed.then(|| uuid::Uuid::new_v4().to_string()),
+            });
+        let plan = BulkLaunchPlan::new(targets);
+        (!plan.targets.is_empty()).then_some(plan)
+    }
+
+    fn launch_attempt(&mut self, app: &AppContext) -> Option<SpawnCardEvent> {
+        if self.bulk_launch.is_none() {
+            let plan = self.build_bulk_plan(app)?;
+            self.bulk_launch = Some(BulkLaunchLedger::new(plan));
+        }
+        let ledger = self.bulk_launch.as_ref()?;
+        let targets = ledger.targets_for_attempt();
+        (!targets.is_empty()).then(|| SpawnCardEvent::LaunchBatch {
+            plan_id: ledger.plan.id,
+            targets,
+        })
+    }
+
+    pub fn apply_launch_result(
+        &mut self,
+        plan_id: BulkLaunchPlanId,
+        target_id: &BulkLaunchTargetId,
+        result: Result<String, String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let history_host = self.history_host();
+        let Some(ledger) = self.bulk_launch.as_mut() else {
+            return;
+        };
+        let already_recorded_history = ledger.any_succeeded();
+        if !ledger.apply(plan_id, target_id, result) {
+            return;
+        }
+        if !already_recorded_history && ledger.any_succeeded() {
+            if let Some(path) = ledger
+                .plan
+                .targets
+                .values()
+                .next()
+                .and_then(|target| target.cwd.as_deref())
+            {
+                if let Err(error) =
+                    self.folder_history
+                        .record_success(&history_host, path, chrono::Utc::now())
+                {
+                    log::error!("failed to record spawn-folder history: {error:#}");
+                }
+            }
+        }
+        ctx.notify();
+    }
+
+    pub fn mark_launch_in_flight(
+        &mut self,
+        plan_id: BulkLaunchPlanId,
+        target_id: &BulkLaunchTargetId,
+        launch_id: String,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let marked = self
+            .bulk_launch
+            .as_mut()
+            .is_some_and(|ledger| ledger.mark_in_flight(plan_id, target_id, launch_id));
+        if marked {
+            ctx.notify();
+        }
+        marked
+    }
+
+    pub fn launch_batch_succeeded(&self, plan_id: BulkLaunchPlanId) -> bool {
+        self.bulk_launch
+            .as_ref()
+            .is_some_and(|ledger| ledger.plan.id == plan_id && ledger.all_succeeded())
     }
 
     /// **X1** — the account section: one calm auto line, and the list only when
@@ -479,6 +830,32 @@ impl SpawnCard {
 
         // Collapsed: the account the router chose, stated plainly.
         if !self.show_accounts {
+            let batch_count = if self.select_all_accounts {
+                opts.accounts.len()
+            } else {
+                self.batch_accounts.len()
+            };
+            if batch_count > 1 {
+                return vec![
+                    Container::new(
+                        Text::new_inline(
+                            crate::t!("cockpit-spawn-card-account-count", count = batch_count),
+                            family,
+                            12.,
+                        )
+                        .with_color(main)
+                        .finish(),
+                    )
+                    .finish(),
+                    self.chip(
+                        "acct-change",
+                        crate::t!("cockpit-spawn-card-change"),
+                        false,
+                        SpawnCardAction::ToggleAccountList,
+                        appearance,
+                    ),
+                ];
+            }
             let Some(freest) = opts.freest.clone() else {
                 // No accounts discovered — the card launches under the provider's
                 // default login, and saying "auto" would imply a choice was made.
@@ -571,12 +948,25 @@ impl SpawnCard {
             SpawnCardAction::SetAccountFreest,
             appearance,
         )];
+        if opts.accounts.len() > 1 {
+            chips.push(self.chip(
+                "acct-all",
+                crate::t!("cockpit-spawn-card-all-accounts"),
+                self.select_all_accounts,
+                SpawnCardAction::SetAllAccounts,
+                appearance,
+            ));
+        }
         for (i, a) in opts.accounts.iter().enumerate() {
+            let id = LaunchAccountId::local(self.agent, &a.config_dir);
             chips.push(self.chip(
                 &format!("acct-{i}"),
                 format!("{} ({})", a.label, a.heat_label),
-                self.account == AccountChoice::Specific(i),
-                SpawnCardAction::SetAccount(i),
+                self.batch_accounts.contains(&id)
+                    || (!self.select_all_accounts
+                        && self.batch_accounts.is_empty()
+                        && self.account == AccountChoice::Specific(i)),
+                SpawnCardAction::ToggleBatchAccount(i),
                 appearance,
             ));
         }
@@ -602,9 +992,13 @@ impl SpawnCard {
         match &options.remote_account_discovery {
             RemoteAccountDiscoveryState::NotRequested | RemoteAccountDiscoveryState::Loading => {
                 return vec![Container::new(
-                    Text::new_inline("Discovering host accounts…", family, 12.)
-                        .with_color(muted)
-                        .finish(),
+                    Text::new_inline(
+                        crate::t!("cockpit-spawn-card-discovering-accounts"),
+                        family,
+                        12.,
+                    )
+                    .with_color(muted)
+                    .finish(),
                 )
                 .finish()];
             }
@@ -621,9 +1015,35 @@ impl SpawnCard {
 
         let selected = self.selected_remote_account();
         if !self.show_accounts {
+            let batch_count = if self.select_all_accounts {
+                options.remote_accounts.len()
+            } else {
+                self.batch_accounts.len()
+            };
+            if batch_count > 1 {
+                return vec![
+                    Container::new(
+                        Text::new_inline(
+                            crate::t!("cockpit-spawn-card-account-count", count = batch_count),
+                            family,
+                            12.,
+                        )
+                        .with_color(muted)
+                        .finish(),
+                    )
+                    .finish(),
+                    self.chip(
+                        "remote-acct-change",
+                        crate::t!("cockpit-spawn-card-change"),
+                        false,
+                        SpawnCardAction::ToggleAccountList,
+                        appearance,
+                    ),
+                ];
+            }
             let label = selected
                 .map(|account| account.label.clone())
-                .unwrap_or_else(|| "Select an account".to_string());
+                .unwrap_or_else(|| crate::t!("cockpit-spawn-card-select-account"));
             return vec![
                 Container::new(
                     Text::new_inline(label, family, 12.)
@@ -651,6 +1071,15 @@ impl SpawnCard {
                 appearance,
             ));
         }
+        if options.remote_accounts.len() > 1 {
+            chips.push(self.chip(
+                "remote-acct-all",
+                crate::t!("cockpit-spawn-card-all-accounts"),
+                self.select_all_accounts,
+                SpawnCardAction::SetAllAccounts,
+                appearance,
+            ));
+        }
         for (index, account) in options.remote_accounts.iter().enumerate() {
             let label = if account.capacity_known {
                 format!(
@@ -664,8 +1093,13 @@ impl SpawnCard {
             chips.push(self.chip(
                 &format!("remote-acct-{index}"),
                 label,
-                self.account == AccountChoice::Specific(index),
-                SpawnCardAction::SetAccount(index),
+                self.batch_accounts.contains(&LaunchAccountId::remote(
+                    self.agent,
+                    &account.route.account_id,
+                )) || (!self.select_all_accounts
+                    && self.batch_accounts.is_empty()
+                    && self.account == AccountChoice::Specific(index)),
+                SpawnCardAction::ToggleBatchAccount(index),
                 appearance,
             ));
         }
@@ -673,15 +1107,17 @@ impl SpawnCard {
     }
 
     fn selected_remote_account(&self) -> Option<&RemoteAccountOption> {
-        let options = self.provider_options()?;
         match self.account {
             AccountChoice::Freest => self.freest_remote_account(),
-            AccountChoice::Specific(index) => options.remote_accounts.get(index),
+            AccountChoice::Specific(index) => self
+                .remote_options_for_selected_host()?
+                .remote_accounts
+                .get(index),
         }
     }
 
     fn freest_remote_account(&self) -> Option<&RemoteAccountOption> {
-        let options = self.provider_options()?;
+        let options = self.remote_options_for_selected_host()?;
         let RemoteAccountDiscoveryState::Ready {
             auto_routing_available: true,
         } = &options.remote_account_discovery
@@ -697,6 +1133,15 @@ impl SpawnCard {
                     .total_cmp(&right.capacity_5h)
                     .then_with(|| left.capacity_week.total_cmp(&right.capacity_week))
             })
+    }
+
+    fn remote_options_for_selected_host(&self) -> Option<&ProviderOptions> {
+        let HostChoice::Remote(index) = self.host else {
+            return None;
+        };
+        let node_id = self.cfg.hosts.get(index)?.id.as_str();
+        let options = self.provider_options()?;
+        (options.remote_account_node_id.as_deref() == Some(node_id)).then_some(options)
     }
 
     fn remote_account_is_ready(&self) -> bool {
@@ -866,7 +1311,40 @@ impl SpawnCard {
             .find(|model| model.id == self.model)
     }
 
+    fn selected_host_supports_managed_fleet(&self) -> bool {
+        match self.host {
+            HostChoice::Local => false,
+            HostChoice::Remote(index) => self
+                .cfg
+                .hosts
+                .get(index)
+                .is_some_and(|host| host.managed_fleet_available),
+        }
+    }
+
+    fn managed_mode_is_valid(&self) -> bool {
+        match self.managed_mode {
+            ManagedLaunchMode::Ordinary => true,
+            ManagedLaunchMode::ManagedInteractive => {
+                self.selected_host_supports_managed_fleet()
+                    && matches!(self.agent, CLIAgent::Claude | CLIAgent::Codex)
+            }
+            ManagedLaunchMode::ClaudeRemoteControl => {
+                self.selected_host_supports_managed_fleet() && self.agent == CLIAgent::Claude
+            }
+        }
+    }
+
+    fn normalize_managed_mode(&mut self) {
+        if !self.managed_mode_is_valid() {
+            self.managed_mode = ManagedLaunchMode::Ordinary;
+        }
+    }
+
     fn model_is_ready(&self) -> bool {
+        if self.managed_mode != ManagedLaunchMode::Ordinary {
+            return self.managed_mode_is_valid();
+        }
         match self.agent {
             CLIAgent::Claude | CLIAgent::Codex => {
                 matches!(
@@ -1008,7 +1486,7 @@ impl SpawnCard {
         let options = self.provider_options()?;
         match self.account {
             AccountChoice::Freest => options.freest_dir.clone(),
-            AccountChoice::Specific(i) => options.accounts.get(i).map(|a| a.config_dir.clone()),
+            AccountChoice::Specific(i) => options.accounts.get(i).and_then(account_config_pin),
         }
     }
 
@@ -1042,28 +1520,36 @@ impl SpawnCard {
     /// `ViewContext`) so the confirm payload — the model/effort/account/host/
     /// project the launch actually carries — is unit-testable.
     fn launch_payload(&self) -> Option<SpawnCardEvent> {
-        (self.any_agent_installed() && self.model_is_ready() && self.remote_account_is_ready())
-            .then(|| SpawnCardEvent::Launch {
-                agent: self.agent,
-                config_dir: self.resolved_config_dir(),
-                agent_launch_route: matches!(self.host, HostChoice::Remote(_))
-                    .then(|| {
-                        self.selected_remote_account()
-                            .map(|account| account.route.clone())
-                    })
-                    .flatten(),
-                remote_account_email: matches!(self.host, HostChoice::Remote(_))
-                    .then(|| {
-                        self.selected_remote_account()
-                            .and_then(|account| account.email.clone())
-                    })
-                    .flatten(),
-                cwd: self.project.clone(),
-                node_id: self.resolved_node_id(),
-                model: (!self.model.is_empty()).then(|| self.model.clone()),
-                effort: matches!(self.agent, CLIAgent::Codex).then(|| self.effort.clone()),
-                prompt: self.prompt.clone(),
-            })
+        let managed = self.managed_mode != ManagedLaunchMode::Ordinary;
+        (self.any_agent_installed()
+            && self.model_is_ready()
+            && self.remote_account_is_ready()
+            && self.managed_mode_is_valid())
+        .then(|| SpawnCardEvent::Launch {
+            agent: self.agent,
+            config_dir: self.resolved_config_dir(),
+            agent_launch_route: matches!(self.host, HostChoice::Remote(_))
+                .then(|| {
+                    self.selected_remote_account()
+                        .map(|account| account.route.clone())
+                })
+                .flatten(),
+            remote_account_email: matches!(self.host, HostChoice::Remote(_))
+                .then(|| {
+                    self.selected_remote_account()
+                        .and_then(|account| account.email.clone())
+                })
+                .flatten(),
+            cwd: self.project.clone(),
+            node_id: self.resolved_node_id(),
+            model: (!managed && !self.model.is_empty()).then(|| self.model.clone()),
+            effort: (!managed && matches!(self.agent, CLIAgent::Codex))
+                .then(|| self.effort.clone()),
+            prompt: (!managed).then(|| self.prompt.clone()).flatten(),
+            managed_mode: self.managed_mode,
+            managed_launch_id: (self.managed_mode != ManagedLaunchMode::Ordinary)
+                .then(|| uuid::Uuid::new_v4().to_string()),
+        })
     }
 
     fn launch_payload_for_remote_input(&self, raw: Option<&str>) -> Option<SpawnCardEvent> {
@@ -1242,7 +1728,11 @@ impl SpawnCard {
             }
         };
         let mut parts = vec![self.agent.display_name().to_string()];
-        if self.model.is_empty() {
+        if self.managed_mode == ManagedLaunchMode::ManagedInteractive {
+            parts.push(crate::t!("cockpit-spawn-card-mode-managed"));
+        } else if self.managed_mode == ManagedLaunchMode::ClaudeRemoteControl {
+            parts.push(crate::t!("cockpit-spawn-card-mode-remote-control"));
+        } else if self.model.is_empty() {
             parts.push(crate::t!("cockpit-spawn-card-cli-default"));
         } else {
             parts.push(self.model.clone());
@@ -1291,6 +1781,186 @@ impl SpawnCard {
             .with_width(MODAL_WIDTH - 48. - 104.)
             .finish(),
         )
+    }
+
+    fn folder_history_controls(
+        &self,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Vec<Box<dyn Element>> {
+        let host = self.history_host();
+        let entries = self.folder_history.entries(&host);
+        let mut controls = Vec::new();
+        if self.folder_navigation.can_back() {
+            controls.push(self.chip(
+                "folder-back",
+                "←".to_string(),
+                false,
+                SpawnCardAction::FolderBack,
+                appearance,
+            ));
+        }
+        if self.folder_navigation.can_forward() {
+            controls.push(self.chip(
+                "folder-forward",
+                "→".to_string(),
+                false,
+                SpawnCardAction::FolderForward,
+                appearance,
+            ));
+        }
+        if !entries.is_empty() {
+            controls.push(
+                self.chip(
+                    "folder-history",
+                    if self.folder_history_open {
+                        "▾"
+                    } else {
+                        "▸"
+                    }
+                    .to_string(),
+                    self.folder_history_open,
+                    SpawnCardAction::ToggleFolderHistory,
+                    appearance,
+                ),
+            );
+        }
+        if !self.folder_history_open || entries.is_empty() {
+            return controls;
+        }
+
+        if let Some(editor) = self.history_search_editor.as_ref() {
+            let theme = appearance.theme();
+            controls.push(
+                ConstrainedBox::new(
+                    Container::new(
+                        appearance
+                            .ui_builder()
+                            .text_input(editor.clone())
+                            .with_style(UiComponentStyles::default())
+                            .build()
+                            .finish(),
+                    )
+                    .with_horizontal_padding(8.)
+                    .with_vertical_padding(4.)
+                    .with_background(theme.surface_2())
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+                    .with_border(Border::all(1.).with_border_fill(theme.outline()))
+                    .finish(),
+                )
+                .with_width(MODAL_WIDTH - 48.)
+                .finish(),
+            );
+            let query = editor.as_ref(app).buffer_text(app);
+            for entry in self.folder_history.search(&host, &query) {
+                let status = match &host {
+                    FolderHistoryHost::Local => {
+                        if std::fs::metadata(&entry.path).is_ok_and(|metadata| metadata.is_dir()) {
+                            String::new()
+                        } else {
+                            crate::t!("cockpit-spawn-card-folder-unavailable")
+                        }
+                    }
+                    FolderHistoryHost::Remote { .. } => match self
+                        .history_validation
+                        .get(&entry.path)
+                        .copied()
+                        .unwrap_or(DirectoryValidation::Unknown)
+                    {
+                        DirectoryValidation::Valid => String::new(),
+                        DirectoryValidation::Stale => {
+                            crate::t!("cockpit-spawn-card-folder-unavailable")
+                        }
+                        DirectoryValidation::Checking => {
+                            crate::t!("cockpit-spawn-card-folder-checking")
+                        }
+                        DirectoryValidation::Unknown | DirectoryValidation::Unverifiable => {
+                            crate::t!("cockpit-spawn-card-folder-verify")
+                        }
+                    },
+                };
+                controls.push(self.chip(
+                    &format!("history:{}", entry.path.display()),
+                    if status.is_empty() {
+                        entry.path.display().to_string()
+                    } else {
+                        format!("{} · {status}", entry.path.display())
+                    },
+                    self.selected_directory(app).as_deref() == Some(entry.path.as_path()),
+                    SpawnCardAction::SelectHistoryPath(entry.path.clone()),
+                    appearance,
+                ));
+            }
+        }
+        controls
+    }
+
+    fn bulk_preview_element(
+        &self,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let plan = match self.bulk_launch.as_ref() {
+            Some(ledger) => ledger.plan.clone(),
+            None => self.build_bulk_plan(app)?,
+        };
+        if plan.targets.len() <= 1 && self.bulk_launch.is_none() {
+            return None;
+        }
+        let host = self
+            .remote_host_name()
+            .map(str::to_string)
+            .unwrap_or_else(|| crate::t!("cockpit-spawn-card-host-local").to_string());
+        let directory = self
+            .selected_directory(app)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| crate::t!("cockpit-spawn-card-sum-default").to_string());
+        let preview = plan.preview(&host, &directory);
+        let label = format!(
+            "{} × {} · {} · {}\n{}",
+            preview.count,
+            preview.provider,
+            preview.host,
+            preview.directory,
+            preview.accounts.join(" · ")
+        );
+        let muted = appearance
+            .theme()
+            .sub_text_color(appearance.theme().background())
+            .into_solid();
+        Some(
+            Container::new(
+                Text::new_inline(label, appearance.ui_font_family(), 12.)
+                    .with_color(muted)
+                    .finish(),
+            )
+            .with_margin_bottom(8.)
+            .finish(),
+        )
+    }
+
+    fn bulk_failure_elements(&self, appearance: &Appearance) -> Vec<Box<dyn Element>> {
+        let Some(ledger) = self.bulk_launch.as_ref() else {
+            return Vec::new();
+        };
+        let error_color = appearance.theme().ui_error_color();
+        ledger
+            .failed()
+            .into_iter()
+            .map(|(target, message)| {
+                Container::new(
+                    Text::new_inline(
+                        format!("{}: {message}", target.account.label),
+                        appearance.ui_font_family(),
+                        12.,
+                    )
+                    .with_color(error_color)
+                    .finish(),
+                )
+                .with_margin_bottom(4.)
+                .finish()
+            })
+            .collect()
     }
 
     fn render_card(&self, app: &AppContext) -> Box<dyn Element> {
@@ -1352,97 +2022,163 @@ impl SpawnCard {
             ));
         }
 
-        // Model row + a live context-window readout when the CLI contract is
-        // known. Antigravity launches with its own default; the card does not
-        // invent a curated model list or a context size.
-        let mut model_chips: Vec<Box<dyn Element>> = match self.provider_options() {
-            Some(options) => match &options.model_discovery {
-                ModelDiscoveryState::NotRequested | ModelDiscoveryState::Loading => {
-                    vec![Container::new(
-                        Text::new_inline("Discovering models…", family, 13.)
-                            .with_color(muted)
-                            .finish(),
+        // Managed launches are an explicit remote-only choice. Capability is
+        // known from the selected connected daemon; an old/offline host gets a
+        // concise unavailable state and never a silent ordinary-session fallback.
+        let mut mode_controls = vec![self.chip(
+            "mode-ordinary",
+            crate::t!("cockpit-spawn-card-mode-ordinary"),
+            self.managed_mode == ManagedLaunchMode::Ordinary,
+            SpawnCardAction::SetManagedMode(ManagedLaunchMode::Ordinary),
+            appearance,
+        )];
+        if self.selected_host_supports_managed_fleet()
+            && matches!(self.agent, CLIAgent::Claude | CLIAgent::Codex)
+        {
+            mode_controls.push(self.chip(
+                "mode-managed",
+                crate::t!("cockpit-spawn-card-mode-managed"),
+                self.managed_mode == ManagedLaunchMode::ManagedInteractive,
+                SpawnCardAction::SetManagedMode(ManagedLaunchMode::ManagedInteractive),
+                appearance,
+            ));
+            if self.agent == CLIAgent::Claude {
+                mode_controls.push(self.chip(
+                    "mode-remote-control",
+                    crate::t!("cockpit-spawn-card-mode-remote-control"),
+                    self.managed_mode == ManagedLaunchMode::ClaudeRemoteControl,
+                    SpawnCardAction::SetManagedMode(ManagedLaunchMode::ClaudeRemoteControl),
+                    appearance,
+                ));
+            }
+        } else if matches!(self.host, HostChoice::Remote(_)) {
+            mode_controls.push(
+                Container::new(
+                    Text::new_inline(
+                        crate::t!("cockpit-spawn-card-managed-unavailable"),
+                        family,
+                        12.,
                     )
-                    .finish()]
-                }
-                ModelDiscoveryState::Error(error) => vec![Container::new(
-                    Text::new_inline(error.clone(), family, 12.)
-                        .with_color(muted)
-                        .finish(),
-                )
-                .finish()],
-                ModelDiscoveryState::Ready => options
-                    .models
-                    .iter()
-                    .map(|model| {
-                        self.chip(
-                            &format!("model-{}", model.id),
-                            model.display_name.clone(),
-                            self.model == model.id,
-                            SpawnCardAction::SetModel(model.id.clone()),
-                            appearance,
-                        )
-                    })
-                    .collect(),
-            },
-            None => vec![Container::new(
-                Text::new_inline(crate::t!("cockpit-spawn-card-cli-default"), family, 13.)
                     .with_color(muted)
                     .finish(),
-            )
-            .finish()],
-        };
-        if let Some(context_window) = self
-            .selected_model_capability()
-            .and_then(|model| model.context_window)
-        {
-            model_chips.push(
-                Container::new(
-                    Text::new_inline(Self::context_label(context_window), family, 12.)
-                        .with_color(muted)
-                        .finish(),
                 )
-                .with_margin_left(8.)
                 .finish(),
             );
         }
         col = col.with_child(self.row(
-            &crate::t!("cockpit-spawn-card-model"),
-            model_chips,
+            &crate::t!("cockpit-spawn-card-mode"),
+            mode_controls,
             appearance,
         ));
 
-        // Effort row.
-        let effort_options = self
-            .selected_model_capability()
-            .map(|model| model.supported_efforts.as_slice())
-            .unwrap_or_default();
-        let effort_chips: Vec<Box<dyn Element>> = if effort_options.is_empty() {
-            vec![Container::new(
-                Text::new_inline(crate::t!("cockpit-spawn-card-cli-default"), family, 13.)
+        // Model row + a live context-window readout when the CLI contract is
+        // known. Antigravity launches with its own default; the card does not
+        // invent a curated model list or a context size.
+        if self.managed_mode == ManagedLaunchMode::Ordinary {
+            let mut model_chips: Vec<Box<dyn Element>> = match self.provider_options() {
+                Some(options) => match &options.model_discovery {
+                    ModelDiscoveryState::NotRequested | ModelDiscoveryState::Loading => {
+                        vec![Container::new(
+                            Text::new_inline("Discovering models…", family, 13.)
+                                .with_color(muted)
+                                .finish(),
+                        )
+                        .finish()]
+                    }
+                    ModelDiscoveryState::Error(error) => vec![Container::new(
+                        Text::new_inline(error.clone(), family, 12.)
+                            .with_color(muted)
+                            .finish(),
+                    )
+                    .finish()],
+                    ModelDiscoveryState::Ready => options
+                        .models
+                        .iter()
+                        .map(|model| {
+                            self.chip(
+                                &format!("model-{}", model.id),
+                                model.display_name.clone(),
+                                self.model == model.id,
+                                SpawnCardAction::SetModel(model.id.clone()),
+                                appearance,
+                            )
+                        })
+                        .collect(),
+                },
+                None => vec![Container::new(
+                    Text::new_inline(crate::t!("cockpit-spawn-card-cli-default"), family, 13.)
+                        .with_color(muted)
+                        .finish(),
+                )
+                .finish()],
+            };
+            if let Some(context_window) = self
+                .selected_model_capability()
+                .and_then(|model| model.context_window)
+            {
+                model_chips.push(
+                    Container::new(
+                        Text::new_inline(Self::context_label(context_window), family, 12.)
+                            .with_color(muted)
+                            .finish(),
+                    )
+                    .with_margin_left(8.)
+                    .finish(),
+                );
+            }
+            col = col.with_child(self.row(
+                &crate::t!("cockpit-spawn-card-model"),
+                model_chips,
+                appearance,
+            ));
+
+            // Effort row.
+            let effort_options = self
+                .selected_model_capability()
+                .map(|model| model.supported_efforts.as_slice())
+                .unwrap_or_default();
+            let effort_chips: Vec<Box<dyn Element>> = if effort_options.is_empty() {
+                vec![Container::new(
+                    Text::new_inline(crate::t!("cockpit-spawn-card-cli-default"), family, 13.)
+                        .with_color(muted)
+                        .finish(),
+                )
+                .finish()]
+            } else {
+                effort_options
+                    .iter()
+                    .map(|effort| {
+                        self.chip(
+                            &format!("effort-{}", effort.id),
+                            effort.display_name.clone(),
+                            self.effort == effort.id,
+                            SpawnCardAction::SetEffort(effort.id.clone()),
+                            appearance,
+                        )
+                    })
+                    .collect()
+            };
+            col = col.with_child(self.row(
+                &crate::t!("cockpit-spawn-card-effort"),
+                effort_chips,
+                appearance,
+            ));
+        } else {
+            col = col.with_child(self.row(
+                &crate::t!("cockpit-spawn-card-settings"),
+                vec![Container::new(
+                    Text::new_inline(
+                        crate::t!("cockpit-spawn-card-managed-provider-defaults"),
+                        family,
+                        12.,
+                    )
                     .with_color(muted)
                     .finish(),
-            )
-            .finish()]
-        } else {
-            effort_options
-                .iter()
-                .map(|effort| {
-                    self.chip(
-                        &format!("effort-{}", effort.id),
-                        effort.display_name.clone(),
-                        self.effort == effort.id,
-                        SpawnCardAction::SetEffort(effort.id.clone()),
-                        appearance,
-                    )
-                })
-                .collect()
-        };
-        col = col.with_child(self.row(
-            &crate::t!("cockpit-spawn-card-effort"),
-            effort_chips,
-            appearance,
-        ));
+                )
+                .finish()],
+                appearance,
+            ));
+        }
 
         // Account row — local config identities stay local; remote identities are
         // opaque daemon account ids discovered for the selected host.
@@ -1547,6 +2283,25 @@ impl SpawnCard {
             ));
         }
 
+        let history_controls = self.folder_history_controls(app, appearance);
+        if !self.folder_history.entries(&self.history_host()).is_empty()
+            || self.folder_navigation.can_back()
+            || self.folder_navigation.can_forward()
+        {
+            col = col.with_child(self.row(
+                &crate::t!("cockpit-spawn-card-recent-folders"),
+                history_controls,
+                appearance,
+            ));
+        }
+
+        if let Some(preview) = self.bulk_preview_element(app, appearance) {
+            col = col.with_child(preview);
+        }
+        for failure in self.bulk_failure_elements(appearance) {
+            col = col.with_child(failure);
+        }
+
         // Summary line.
         col = col.with_child(
             Container::new(
@@ -1566,19 +2321,26 @@ impl SpawnCard {
         // no supported agent CLI is installed — there is nothing it could launch.
         let can_launch = self.any_agent_installed()
             && self.model_is_ready()
+            && self.managed_mode_is_valid()
             && self.remote_account_is_ready()
-            && self.selected_remote_cwd(app).is_ok();
+            && self.selected_remote_cwd(app).is_ok()
+            && (self.managed_mode == ManagedLaunchMode::Ordinary
+                || self.selected_directory(app).is_some())
+            && (self.selected_directory(app).is_none() || self.folder_validation.is_valid());
         let confirm: Box<dyn Element> = if can_launch {
-            self.chip(
-                "confirm",
-                crate::t!(
-                    "cockpit-spawn-card-launch",
-                    agent = self.agent.display_name()
-                ),
-                true,
-                SpawnCardAction::Confirm,
-                appearance,
-            )
+            let label = self
+                .bulk_launch
+                .as_ref()
+                .filter(|ledger| !ledger.failed().is_empty())
+                .map(|_| crate::t!("cockpit-spawn-card-retry-failed"))
+                .unwrap_or_else(|| {
+                    crate::t!(
+                        "cockpit-spawn-card-launch",
+                        agent = self.agent.display_name()
+                    )
+                    .to_string()
+                });
+            self.chip("confirm", label, true, SpawnCardAction::Confirm, appearance)
         } else {
             Container::new(
                 Text::new_inline(crate::t!("cockpit-spawn-card-launch-plain"), family, 13.)
@@ -1645,8 +2407,12 @@ impl TypedActionView for SpawnCard {
             SpawnCardAction::SetAgent(agent) => {
                 if self.agent != *agent {
                     self.agent = *agent;
+                    self.normalize_managed_mode();
                     // Account indices are provider-specific; fall back to freest.
                     self.account = AccountChoice::Freest;
+                    self.batch_accounts.clear();
+                    self.select_all_accounts = false;
+                    self.invalidate_bulk_plan();
                     self.request_model_discovery(ctx);
                     self.request_remote_account_discovery(ctx);
                 }
@@ -1657,10 +2423,18 @@ impl TypedActionView for SpawnCard {
                     .selected_model_capability()
                     .and_then(|model| model.default_effort.clone())
                     .unwrap_or_default();
+                self.invalidate_bulk_plan();
                 ctx.notify();
             }
             SpawnCardAction::SetEffort(e) => {
                 self.effort = e.clone();
+                self.invalidate_bulk_plan();
+                ctx.notify();
+            }
+            SpawnCardAction::SetManagedMode(mode) => {
+                self.managed_mode = *mode;
+                self.normalize_managed_mode();
+                self.invalidate_bulk_plan();
                 ctx.notify();
             }
             SpawnCardAction::ToggleAccountList => {
@@ -1669,6 +2443,9 @@ impl TypedActionView for SpawnCard {
             }
             SpawnCardAction::SetAccountFreest => {
                 self.account = AccountChoice::Freest;
+                self.batch_accounts.clear();
+                self.select_all_accounts = false;
+                self.invalidate_bulk_plan();
                 // Chosen — fold back to the calm line. Leaving the list open
                 // after a pick would keep asking a question already answered.
                 self.show_accounts = false;
@@ -1678,22 +2455,76 @@ impl TypedActionView for SpawnCard {
             }
             SpawnCardAction::SetAccount(i) => {
                 self.account = AccountChoice::Specific(*i);
+                self.batch_accounts.clear();
+                self.select_all_accounts = false;
+                self.invalidate_bulk_plan();
                 self.show_accounts = false;
                 if matches!(self.host, HostChoice::Local) {
                     self.request_model_discovery(ctx);
                 }
             }
+            SpawnCardAction::SetAllAccounts => {
+                self.select_all_accounts = true;
+                self.batch_accounts.clear();
+                self.invalidate_bulk_plan();
+                self.show_accounts = false;
+                ctx.notify();
+            }
+            SpawnCardAction::ToggleBatchAccount(index) => {
+                let id = match self.host {
+                    HostChoice::Local => self.provider_options().and_then(|options| {
+                        options
+                            .accounts
+                            .get(*index)
+                            .map(|account| LaunchAccountId::local(self.agent, &account.config_dir))
+                    }),
+                    HostChoice::Remote(_) => {
+                        self.remote_options_for_selected_host().and_then(|options| {
+                            options.remote_accounts.get(*index).map(|account| {
+                                LaunchAccountId::remote(self.agent, &account.route.account_id)
+                            })
+                        })
+                    }
+                };
+                if let Some(id) = id {
+                    self.select_all_accounts = false;
+                    if !self.batch_accounts.insert(id.clone()) {
+                        self.batch_accounts.remove(&id);
+                    }
+                    // A one-account batch is a valid explicit selection; keep
+                    // the list open so a second account remains one click away.
+                    self.invalidate_bulk_plan();
+                    ctx.notify();
+                }
+            }
             SpawnCardAction::SetHostLocal => {
                 if self.host != HostChoice::Local {
                     self.host = HostChoice::Local;
+                    self.managed_mode = ManagedLaunchMode::Ordinary;
                     self.account = AccountChoice::Freest;
+                    self.batch_accounts.clear();
+                    self.select_all_accounts = false;
+                    self.folder_navigation.reset(self.project.clone());
+                    self.begin_selected_directory_validation(ctx);
+                    self.invalidate_bulk_plan();
                     self.request_model_discovery(ctx);
                 }
             }
             SpawnCardAction::SetHost(i) => {
                 if self.host != HostChoice::Remote(*i) {
                     self.host = HostChoice::Remote(*i);
+                    self.normalize_managed_mode();
                     self.account = AccountChoice::Freest;
+                    self.batch_accounts.clear();
+                    self.select_all_accounts = false;
+                    if let Some(editor) = self.remote_dir_editor.clone() {
+                        editor.update(ctx, |editor, ctx| {
+                            editor.set_buffer_text_with_base_buffer("", ctx);
+                        });
+                    }
+                    self.folder_navigation.reset(None);
+                    self.begin_selected_directory_validation(ctx);
+                    self.invalidate_bulk_plan();
                     self.request_model_discovery(ctx);
                     self.request_remote_account_discovery(ctx);
                 }
@@ -1717,8 +2548,7 @@ impl TypedActionView for SpawnCard {
             }
             SpawnCardAction::DirectorySelected(result) => match result {
                 Ok(path) => {
-                    self.project = Some(PathBuf::from(path));
-                    ctx.notify();
+                    self.set_selected_directory(PathBuf::from(path), ctx);
                 }
                 Err(err) => {
                     log::warn!("Spawn card directory picker error: {err}");
@@ -1726,7 +2556,28 @@ impl TypedActionView for SpawnCard {
             },
             SpawnCardAction::ClearDirectory => {
                 self.project = None;
+                self.folder_navigation.reset(None);
+                self.folder_validation.clear();
+                self.invalidate_bulk_plan();
                 ctx.notify();
+            }
+            SpawnCardAction::ToggleFolderHistory => {
+                self.folder_history_open = !self.folder_history_open;
+                ctx.notify();
+            }
+            SpawnCardAction::SelectHistoryPath(path) => {
+                self.set_selected_directory(path.clone(), ctx);
+                self.folder_history_open = false;
+            }
+            SpawnCardAction::FolderBack => {
+                if let Some(path) = self.folder_navigation.back().map(Path::to_path_buf) {
+                    self.set_selected_directory(path, ctx);
+                }
+            }
+            SpawnCardAction::FolderForward => {
+                if let Some(path) = self.folder_navigation.forward().map(Path::to_path_buf) {
+                    self.set_selected_directory(path, ctx);
+                }
             }
             SpawnCardAction::BrowseRemoteDir => {
                 // Hand off to the workspace: open the host's SFTP browser in pick
@@ -1748,12 +2599,7 @@ impl TypedActionView for SpawnCard {
                 // Guard here too (not just in the chip's on_click), so the
                 // "enter" keybinding can't launch an uninstalled CLI either:
                 // `launch_payload` is `None` when nothing is installed.
-                let remote_input = self
-                    .remote_dir_editor
-                    .as_ref()
-                    .map(|editor| editor.as_ref(ctx).buffer_text(ctx));
-                if let Some(launch) = self.launch_payload_for_remote_input(remote_input.as_deref())
-                {
+                if let Some(launch) = self.launch_attempt(ctx) {
                     ctx.emit(launch);
                 }
             }
@@ -1788,6 +2634,11 @@ pub enum SpawnCardEvent {
         node_id: String,
         start_path: Option<PathBuf>,
     },
+    ValidateDirectory(DirectoryValidationRequest),
+    LaunchBatch {
+        plan_id: BulkLaunchPlanId,
+        targets: Vec<(BulkLaunchTargetId, BulkLaunchTarget)>,
+    },
     Launch {
         agent: CLIAgent,
         config_dir: Option<PathBuf>,
@@ -1800,6 +2651,8 @@ pub enum SpawnCardEvent {
         /// Task prompt to prefill into the launched agent's input, if this launch
         /// came from a contextual "run this task" flow.
         prompt: Option<String>,
+        managed_mode: ManagedLaunchMode,
+        managed_launch_id: Option<String>,
     },
 }
 
@@ -1808,8 +2661,11 @@ pub enum SpawnCardAction {
     SetAgent(CLIAgent),
     SetModel(String),
     SetEffort(String),
+    SetManagedMode(ManagedLaunchMode),
     SetAccountFreest,
     SetAccount(usize),
+    SetAllAccounts,
+    ToggleBatchAccount(usize),
     /// Unfold (or fold) the account list behind the auto line.
     ToggleAccountList,
     SetHostLocal,
@@ -1820,6 +2676,10 @@ pub enum SpawnCardAction {
     DirectorySelected(Result<String, FilePickerError>),
     /// Reset the launch directory to the default (agent's home / cwd).
     ClearDirectory,
+    ToggleFolderHistory,
+    SelectHistoryPath(PathBuf),
+    FolderBack,
+    FolderForward,
     /// Open the remote host's SFTP browser to pick the launch directory (#105).
     BrowseRemoteDir,
     Confirm,

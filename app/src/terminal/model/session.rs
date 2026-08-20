@@ -184,7 +184,9 @@ impl Sessions {
                 | RemoteServerManagerEvent::SessionOutput { .. }
                 | RemoteServerManagerEvent::SessionExited { .. }
                 // Advisory notices are rendered by the daemon tab + workspace.
-                | RemoteServerManagerEvent::SessionNotice { .. } => {}
+                | RemoteServerManagerEvent::SessionNotice { .. }
+                | RemoteServerManagerEvent::ManagedLaunchOpened { .. }
+                | RemoteServerManagerEvent::ManagedLaunchFailed { .. } => {}
                 RemoteServerManagerEvent::SessionReconnected {
                     session_id: sid,
                     client,

@@ -1,7 +1,7 @@
 # GH-160 reference parity audit
 
-This ledger is refreshed four times: baseline before implementation, after account/session
-discovery changes, after UI integration, and after the follow-up parity implementation tranche.
+This ledger is refreshed in successive, timestamped stages: baseline before implementation,
+after account/session discovery, after UI integration, and after each parity-completion tranche.
 Reference repositories are read-only idea and parity sources; they are never runtime dependencies.
 
 ## Stage 1 — baseline
@@ -132,6 +132,89 @@ No local Cargo build/test or real two-host smoke is claimed. Binding policy rese
 verification for CI. Remote transcript revision polling is protocol-ready but the current Cockpit
 action intentionally opens a one-shot snapshot; this is not a reference regression because neither
 reference implements remote multi-provider transcripts, but it remains a possible UX follow-up.
+
+## Stage 5 — parity-completion source audit
+
+Audited: 2026-08-20T13:43:29+02:00
+
+All three remotes were fetched with pruning immediately before this stage. Both reference working
+trees were clean, on their remote default branch, had zero ahead/behind commits, and were explicitly
+fast-forwarded with `--ff-only` (both were already current). The references have not moved since
+Stage 4. The Zaplex feature tree is still uncommitted, so its only reproducible Git revision is the
+exact `origin/main` base/HEAD below; a later CI report must bind every executable result to the
+eventual feature commit rather than this mutable working tree.
+
+| Repository / tree | Branch | Audited revision |
+|---|---|---|
+| `zaplex` | `origin/main` | `f57a81299ff8120bfa3f14e9144bbca9a055dfd2` |
+| Zaplex implementation tree | `feat/parity-completion` (uncommitted; base/HEAD) | `f57a81299ff8120bfa3f14e9144bbca9a055dfd2` |
+| `claudeplex` | `origin/main` | `8c2041ff68d97463aed7aeb01da0f16b708b8e22` |
+| `claudeplex-desktop` | `origin/main` | `8c0aad0a944a8f5b6a26636d0827db57ca22d0f3` |
+
+The unchanged references still provide the concrete benchmark: GitHub issue/PR flows, restart and
+rename, account/folder launch history, a keyboard palette, live transcript watch, and the
+Claude-only tmux remote-control fleet with a PSS ceiling. Zaplex's intended improvement is one
+native multi-provider identity/routing model, daemon-owned durable PTYs, fail-closed headroom, and
+no runtime dependency on either reference repository.
+
+| Issue | Stage-5 source classification | Reproducible evidence and remaining gate |
+|---|---|---|
+| [#161](https://github.com/byte5ai/zaplex/issues/161) | **Reference parity implemented with stricter mutation safety.** A productive native dialog now owns loading/empty/error pickers, explicit account routing, bounded structured analysis, and typed create/comment/review/merge/close confirmations against one frozen repository and target. | `app/src/cockpit/github_flows.rs`, `github_flow_dialog.rs`, their tests, Workspace dialog integration, and the GH-167 palette route. Still required: CI compile/tests and one authenticated disposable-repository runtime pass proving cancel/no-mutation and every confirmed mutation target. |
+| [#162](https://github.com/byte5ai/zaplex/issues/162) | **Backend implemented; productive UI regression still open at audit time.** Exact local/remote restart planning, authoritative rename, and fail-closed Claude stale cleanup exist, but the normal session row menu does not yet dispatch the three new Workspace actions. | `session_lifecycle.rs`, `claude_registry_lifecycle.rs`, `WorkspaceAction::{RestartAgentSession,RenameAgentSession,CleanupStaleClaudeSession}`, Workspace handlers, and focused route/PID/revision/conflict tests. Before parity can be claimed, capability-gated row actions plus confirmation/error UI and CI/runtime evidence must be present. |
+| [#163](https://github.com/byte5ai/zaplex/issues/163) | **Source parity retained and extended beyond both references.** The versioned, deterministic, secret-safe snapshot distinguishes runtime local/remote truth from an explicitly degraded local fallback. | `crates/warp_cli/src/cockpit.rs`, `app/src/control_surface.rs`, and schema/auth/stable-id/null-provenance tests. Still required: green CI and the signed-build runtime comparison between UI counts and both IPC-backed and fallback JSON. |
+| [#164](https://github.com/byte5ai/zaplex/issues/164) | **Reference folder-history parity implemented; multi-account launch exceeds it.** History is host-keyed, bounded, persisted only after success, and revalidated; a frozen bulk plan records per-account success/failure and retries failures without duplicating successes. | `app/src/workspace/view/spawn_card/{history,bulk}.rs`, their tests, Spawn Card UI, and Workspace batch execution. Still required: CI plus local/remote path-history and partial-failure UI runtime evidence. |
+| [#165](https://github.com/byte5ai/zaplex/issues/165) | **Source parity retained and extended to remote multi-provider routing.** Same-UID process discovery covers Claude-only environment roots, while new peers exchange opaque daemon account ids and revalidate exact routes rather than interpreting client paths remotely. | `claude.rs`, daemon `agent_account.rs`, additive protocol/client paths, Spawn Card and resume/fork/attach routing tests. Still required: a real remote host with two accounts, including freest selection and a process-environment-only account. |
+| [#166](https://github.com/byte5ai/zaplex/issues/166) | **Source regression remains fixed.** Launch intent binds to the exact provider conversation across terminal-first/hook-first ordering, parallel same-project starts, account collisions, and daemon reconnect/rehost. | `app/src/cockpit/launch_registry.rs`, terminal/workspace bridges, and ordering/parallel/mismatch/reconnect tests. Still required: green CI and one runtime parallel-start/reconnect observation. |
+| [#167](https://github.com/byte5ai/zaplex/issues/167) | **Reference palette parity implemented and broadened.** Unlike the desktop palette's account/launch/view/GitHub commands, Zaplex indexes exact accounts, live/dormant sessions, connected hosts, projects, and repository-scoped GitHub flows with stable keys and waiting-aware order. | `app/src/cockpit/palette.rs`, `app/src/search/command_palette/cockpit/`, Workspace re-resolution, and key/dedup/capability/generation/keyboard tests. Still required: CI and an open-palette connect/disconnect runtime check. |
+| [#168](https://github.com/byte5ai/zaplex/issues/168) | **Reference fleet behavior implemented as a safer native design at source level.** Managed daemon PTYs are exact and age-reaper-exempt; Start/Stop/Restart/Attach, Claude Remote Control, Linux `MemAvailable`/PSS provenance, a daemon floor, and compact main-pane controls replace the reference's tmux/process-scan model. | Managed-fleet proto/client/server, `managed_fleet.rs`, `fleet_memory.rs`, Spawn Card modes, Cockpit inventory/details, protocol compatibility and daemon lifecycle/headroom/process-memory tests. This is not verified parity until CI passes and a real Linux-daemon/signed-client run proves detach plus app restart, process end, headroom denial, reconnect, and Claude's official mobile pairing flow without exposing its secret. |
+| [#169](https://github.com/byte5ai/zaplex/issues/169) | **Fail-closed automated/runtime gate implemented, but final parity verification is not yet green.** Local static validation resolves 47 named tests across nine scenarios; all thirteen positive/negative validator self-tests pass. Missing real evidence is truthfully `not-run`, and release enforcement rejects it. | `.github/workflows/cockpit-parity-audit.yml`, `script/cockpit-parity-audit`, `specs/parity/*`, and `specs/gh-169/*`. Remaining gates: the current matrix does not yet name the new #161/#162/#164/#167/#168/#170 contracts individually; no feature-commit Cargo/screenshot report exists; and no same-revision two-host runtime bundle exists. |
+| [#170](https://github.com/byte5ai/zaplex/issues/170) | **Reference transcript/watch parity implemented and extended to Codex plus remote sessions.** One exact target model now opens pathless read-only generated documents and follows only live open documents. Local and remote projection share bounded/redacted provider-neutral fields, last-512-turn and 4 MiB display ceilings, revision/no-change handling, and distinct source states. | Claude/Codex loaders, daemon transcript RPC/client, `transcript_view.rs`, Workspace weak-buffer/watch lifecycle, generated-document guards, and provider/route/revision/bounds/redaction tests. Still required: green CI and real local Claude, local Codex, remote, dormant-no-watch, and close-stops-watch observations. |
+
+### Stage-5 conclusion
+
+The feature tree contains substantive source work for every capability represented by #161–#170,
+and several designs are materially stronger than the references. It is nevertheless **not yet
+valid to close #160 or claim release parity**: #162 still lacks its productive row-menu surface at
+this audit point; the named matrix must absorb the new contracts; Cargo/screenshot CI has not run
+for a stable feature commit; and the authenticated same-revision two-host runtime gate is
+`not-run`. Those are release blockers, not documentation caveats.
+
+Stage 5 is a point-in-time record. Its open #162 UI and incomplete matrix findings are superseded
+by the final source audit below.
+
+## Stage 6 — final parity-completion source audit
+
+Audited: 2026-08-20T14:34:58+02:00
+
+Immediately before this stage, all three repositories were fetched with pruning and updated with
+fast-forward-only. Both reference trees were clean and exactly matched `origin/main`; the Zaplex
+main clone matched `origin/main` apart from the pre-existing untracked local audit allow-file. The
+feature tree is still uncommitted, so CI results must later be bound to its eventual commit SHA.
+
+| Repository / tree | Branch | Audited revision |
+|---|---|---|
+| `zaplex` | `origin/main` | `f57a81299ff8120bfa3f14e9144bbca9a055dfd2` |
+| Zaplex implementation tree | `feat/parity-completion` (uncommitted; base/HEAD) | `f57a81299ff8120bfa3f14e9144bbca9a055dfd2` |
+| `claudeplex` | `origin/main` | `8c2041ff68d97463aed7aeb01da0f16b708b8e22` |
+| `claudeplex-desktop` | `origin/main` | `8c0aad0a944a8f5b6a26636d0827db57ca22d0f3` |
+
+| Issues | Final source classification | Reproducible evidence and remaining gate |
+|---|---|---|
+| [#161](https://github.com/byte5ai/zaplex/issues/161) | **Reference flows are productively wired with stronger mutation safety.** Frozen repository/issue/PR identities survive selection through typed result presentation and explicit confirmation; cancel and target drift cannot mutate. | Native dialog, Workspace routing, palette entries, bounded parsers, and named picker/cancel tests. CI and a disposable authenticated repository smoke remain. |
+| [#162](https://github.com/byte5ai/zaplex/issues/162) | **The Stage-5 UI gap is closed.** Capability-gated row actions expose local/remote restart, authoritative rename, and fail-closed Claude cleanup with confirmation and error state. | `pane.rs`, `session_lifecycle.rs`, `session_names.rs`, Claude registry lifecycle, Workspace handlers, and named menu/restart/rename/cleanup tests. CI/runtime remain. |
+| [#163](https://github.com/byte5ai/zaplex/issues/163) | **The machine snapshot is source-complete, including accounts without sessions.** Fresh capability-gated remote account inventories join only the exact still-live daemon connection; raw ids are hashed and unknown usage remains `null`. | CLI schema/golden tests plus zero-session, stale, invalid, secret-safe, IPC-auth, and exact-connection evidence. CI and signed-build comparison remain. |
+| [#164–#167](https://github.com/byte5ai/zaplex/issues/164) | **Folder history, multi-account launch, host-scoped remote routing, exact launch binding, and dynamic keyboard palette are source-complete.** Remote selections are host-scoped opaque identities; local paths never cross the host boundary; parallel same-project starts remain exact. | Host-MRU, bulk Ack/idempotency, selected/freest/path-boundary, transport-ordering, stable-key, live-capability, and GitHub-palette tests. CI/runtime remain. |
+| [#168](https://github.com/byte5ai/zaplex/issues/168) | **Managed Fleet is source-complete with stricter process and identity safety than the references.** Start/transcript/lifecycle use fresh account and project identities; Linux termination is pidfd-bound; memory work is globally bounded; explicit Stop and unexpected EOF retain distinct bounded restart records. Fresh path-free account inventory labels live, stopped, and ended rows without exposing opaque ids. | Headroom/PSS/global-permit, fresh account/project/start, pidfd reuse, explicit stopped restart, EOF restart, record bound, account-label, UI projection, protocol and capability tests. CI plus real Linux-daemon/mobile/reconnect smoke remain. |
+| [#169](https://github.com/byte5ai/zaplex/issues/169) | **The automated gate is structurally complete.** The contract resolves 91 named tests across nine scenarios and ten suites, including dedicated control-surface and Workspace Spawn filters; all thirteen positive/negative validator cases pass. Suite/source ownership is validated so a named test cannot be silently excluded by the Cargo filter. | Workflow, validator, matrix, screenshot contract, and runtime checklist. No Cargo or screenshot result is claimed before the feature-commit CI run; real two-host evidence remains `not-run`. |
+| [#170](https://github.com/byte5ai/zaplex/issues/170) | **Local Claude/Codex and remote transcript source/watch parity is complete.** Reads are bounded, path-safe, provider-neutral, live-watch lifetime is explicit, and remote account identity is freshly rescanned before file access. | Local/remote projection, bounds/redaction, timestamp, revision/forgery, capability, generated-document, watch-lifetime, and same-inode account-swap tests. CI/runtime remain. |
+
+### Stage-6 conclusion
+
+No known source-level functional regression to either reference remains in #161–#170; the Zaplex
+design deliberately exceeds them in multi-provider routing, daemon-owned PTYs, exact process
+identity, and fail-closed remote boundaries. This is not yet a claim of executable or runtime
+parity: the stable feature commit still needs green Cargo/screenshot CI, and #160/#169 require a
+same-revision real local/remote smoke before their strict runtime gate can be marked complete.
 
 ## Repeat procedure
 

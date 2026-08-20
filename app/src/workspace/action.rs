@@ -778,24 +778,35 @@ pub enum WorkspaceAction {
         /// `true` when the source session runs on this machine.
         is_local: bool,
     },
-    /// Open a session's conversation transcript (cockpit "log" verb): reads the
-    /// session's `.jsonl`, renders it to Markdown, and opens it read-only in a
-    /// code/text pane. No regression vs claudeplex/-desktop's transcript view.
-    ViewTranscript {
-        session_id: String,
-        /// The account's config dir under which the transcript lives
-        /// (`projects/<mangled-cwd>/<session_id>.jsonl`).
-        config_dir: PathBuf,
-        /// The session's working directory (for the tab label).
-        cwd: PathBuf,
-        /// Keep the view following the live transcript: register it so each
-        /// cockpit reconcile re-renders + reloads it. `false` = one-shot open.
+    /// Restart one exact provider conversation in its current pane after a
+    /// verified process termination, preserving its complete launch intent.
+    RestartAgentSession {
+        route: crate::cockpit::session_lifecycle::SessionRoute,
+    },
+    /// Persist a provider-scoped Cockpit name for one exact local session.
+    RenameAgentSession {
+        route: crate::cockpit::session_lifecycle::SessionRoute,
+        name: String,
+    },
+    /// Remove one unchanged, proven-dead Claude registry row without deleting
+    /// its transcript history.
+    CleanupStaleClaudeSession {
+        route: crate::cockpit::session_lifecycle::SessionRoute,
+        candidate: zaplex_cockpit::ClaudeStaleRegistryCandidate,
+    },
+    /// Open one exact provider transcript in the shared generated read-only
+    /// document surface. Remote targets contain only opaque daemon identities;
+    /// local account roots never cross a host boundary.
+    ViewAgentTranscript {
+        target: crate::cockpit::transcript_view::TranscriptTarget,
+        /// Follow revisions only while the exact session is live and the
+        /// generated document remains open. Dormant history is one-shot.
         watch: bool,
     },
     /// Open a session's **review** view (cockpit "review" verb, step 6): read
     /// the working changes of the session's repo (`git diff HEAD` + untracked),
     /// render them to Markdown, and open them read-only in a code/text pane —
-    /// the same pane-opening mechanism [`ViewTranscript`] uses. An empty change
+    /// the same pane-opening mechanism [`ViewAgentTranscript`] uses. An empty change
     /// set opens a calm "no changes" state rather than a blank/erroring pane.
     ReviewSession {
         /// Git root of the reviewed session (`SessionSnapshot::project_root`).
@@ -871,6 +882,12 @@ pub enum WorkspaceAction {
         /// Pre-selected project directory (`None` = the default dir).
         project: Option<PathBuf>,
     },
+    /// Execute a keyboard-selected Cockpit object. The target carries stable
+    /// identity only; the workspace revalidates it against the latest model
+    /// before opening/focusing/attaching anything.
+    RunCockpitPaletteTarget {
+        target: crate::cockpit::palette::CockpitPaletteTarget,
+    },
     /// Open a file from the file manager in a code editor pane. `node_id` empty
     /// = a local file (opened directly); non-empty = a remote host — native
     /// remote editing (buffer-sync via the SSH daemon) is a follow-up, so a
@@ -912,6 +929,15 @@ pub enum WorkspaceAction {
         /// path, so a remote host whose label collides with the local hostname
         /// can't be routed to a local adopt.
         is_local: bool,
+    },
+    /// Attach to one exact generation of a daemon-owned managed session.
+    AttachManagedFleetSession {
+        target: crate::cockpit::fleet_details::ManagedFleetSession,
+    },
+    /// Apply an exact, generation-checked lifecycle mutation to a managed PTY.
+    ManagedFleetLifecycle {
+        target: crate::cockpit::fleet_details::ManagedFleetSession,
+        action: remote_server::proto::ManagedSessionLifecycleAction,
     },
     /// The `w`-jump: cycle to the next Waiting agent across the whole fleet (the
     /// Conductor's waiting-first order) and attach it. Cursor + resolution live
@@ -1226,16 +1252,22 @@ impl WorkspaceAction {
             | ForkAgentSession { .. }
             | AdoptAgentSession { .. }
             | SlashCommandSession { .. }
+            | RestartAgentSession { .. }
+            | RenameAgentSession { .. }
+            | CleanupStaleClaudeSession { .. }
             | OpenAttentionInbox
-            | ViewTranscript { .. }
+            | ViewAgentTranscript { .. }
             | ReviewSession { .. }
             | CommitReviewChanges { .. }
             | CreateReviewPr { .. }
             | LaunchAgent { .. }
             | OpenSpawnCard { .. }
+            | RunCockpitPaletteTarget { .. }
             | OpenFileInEditor { .. }
             | OpenReadOnlyTextInEditor { .. }
             | AttachFleetSession { .. }
+            | AttachManagedFleetSession { .. }
+            | ManagedFleetLifecycle { .. }
             | JumpToNextWaiting
             | StopAgent { .. }
             | KillAgentRequest { .. }

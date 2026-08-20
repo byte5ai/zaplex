@@ -80,6 +80,11 @@ pub enum CommandPaletteItemAction {
         node_id: String,
         server: warp_ssh_manager::SshServerInfo,
     },
+    /// Execute one dynamically indexed Cockpit object after the workspace has
+    /// revalidated its stable identity against the latest inventory.
+    RunCockpitTarget {
+        target: crate::cockpit::palette::CockpitPaletteTarget,
+    },
     /// No-op action (used for non-interactable separator items that don't do anything on click).
     NoOp,
 }
@@ -145,6 +150,9 @@ impl CommandPaletteItemAction {
             CommandPaletteItemAction::OpenSshServer { node_id, .. } => ItemSummary::SshServer {
                 node_id: node_id.clone(),
             },
+            CommandPaletteItemAction::RunCockpitTarget { target } => ItemSummary::Cockpit {
+                key: target.stable_key().to_string(),
+            },
             CommandPaletteItemAction::NoOp => ItemSummary::NoOp,
         }
     }
@@ -206,6 +214,9 @@ pub enum ItemSummary {
     /// SSH server (openWarp only). `node_id` is the UUID from the ssh_nodes table.
     SshServer {
         node_id: String,
+    },
+    Cockpit {
+        key: String,
     },
     /// No-op action (used for non-interactable separator items that don't do anything on click).
     NoOp,

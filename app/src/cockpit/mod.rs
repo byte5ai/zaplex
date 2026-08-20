@@ -7,16 +7,22 @@
 pub mod ambient;
 pub mod capabilities;
 pub mod favorites;
+pub(crate) mod fleet_details;
+pub(crate) mod github_flow_dialog;
 pub mod github_flows;
 pub mod launch_registry;
 pub mod model;
 pub mod oauth;
+pub mod palette;
 pub mod pane;
 pub mod panel;
 pub mod reviewed;
+pub(crate) mod session_lifecycle;
+pub(crate) mod session_names;
 pub mod settings;
 pub mod style;
 pub mod tailscale;
+pub mod transcript_view;
 
 pub use ambient::AttentionDriver;
 pub use model::CockpitModel;

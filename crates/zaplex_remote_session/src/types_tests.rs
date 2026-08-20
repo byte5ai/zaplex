@@ -61,6 +61,24 @@ fn supported_features_advertises_typed_multiplexer_inventory_on_unix() {
     ));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn supported_features_advertises_managed_agent_fleet_on_linux() {
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_MANAGED_AGENT_FLEET_V1
+    ));
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn supported_features_omits_managed_agent_fleet_when_unsupported() {
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_MANAGED_AGENT_FLEET_V1
+    ));
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn supported_features_advertises_safe_file_transactions_on_supported_unix() {
@@ -142,6 +160,7 @@ fn supported_client_features_are_explicit_and_platform_independent() {
         FEATURE_SAFE_FILE_TRANSACTIONS_V1,
         FEATURE_HOST_EXEC,
         FEATURE_MULTIPLEXER_INVENTORY_V1,
+        FEATURE_MANAGED_AGENT_FLEET_V1,
     ] {
         assert!(has_feature(&features, feature), "missing {feature}");
     }

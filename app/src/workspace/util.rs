@@ -120,6 +120,9 @@ pub struct WorkspaceState {
     /// The Spawn-Karte: the launch card that makes model + effort a visible
     /// launch attribute (which model / effort / account / host / project).
     pub is_spawn_card_open: bool,
+    /// Native, typed GitHub issue/PR workflow dialog. Analysis stays read-only;
+    /// every mutation is confirmed against its frozen target in this modal.
+    pub is_github_flow_dialog_open: bool,
     /// The calm "Offene Punkte" attention inbox (fleet-wide waiting agents).
     pub is_attention_inbox_open: bool,
     /// Guardrails (step 7) confirmation dialog — per-agent "kill" or fleet-wide
@@ -162,6 +165,7 @@ impl WorkspaceState {
             || self.is_suggested_agent_mode_workflow_modal_open
             || self.is_codex_modal_open
             || self.is_spawn_card_open
+            || self.is_github_flow_dialog_open
             || self.is_attention_inbox_open
             || self.is_tab_config_params_modal_open
             || self.is_session_config_modal_open
@@ -201,6 +205,7 @@ impl WorkspaceState {
         self.is_suggested_agent_mode_workflow_modal_open = false;
         self.is_codex_modal_open = false;
         self.is_spawn_card_open = false;
+        self.is_github_flow_dialog_open = false;
         self.is_attention_inbox_open = false;
         self.is_tab_config_params_modal_open = false;
         self.is_session_config_modal_open = false;

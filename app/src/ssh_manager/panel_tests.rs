@@ -739,6 +739,7 @@ fn host_ring_usage_uses_only_reported_ring_bytes_and_cap() {
             },
         ],
         host_ring_cap_bytes: 100,
+        ..Default::default()
     };
     assert_eq!(
         host_ring_usage(&inventory),
@@ -772,6 +773,7 @@ fn old_daemon_without_host_cap_never_gets_a_guessed_aggregate() {
             ..Default::default()
         }],
         host_ring_cap_bytes: 0,
+        ..Default::default()
     };
     assert_eq!(host_ring_usage(&inventory), None);
 }

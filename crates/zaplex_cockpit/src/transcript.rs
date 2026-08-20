@@ -151,6 +151,15 @@ pub struct TranscriptTurn {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
+/// A bounded provider transcript together with the revision of the exact raw
+/// source that produced it. Consumers use the revision for conditional live
+/// refreshes; it deliberately carries no source path or raw provider payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedTranscript {
+    pub turns: Vec<TranscriptTurn>,
+    pub source_revision: String,
+}
+
 #[derive(Debug, Clone)]
 struct ClaudeTask {
     item: TaskItem,

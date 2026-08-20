@@ -1,9 +1,12 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use crate::cockpit::model::{CockpitEvent, CockpitModel};
+use crate::cockpit::settings::CockpitSettings;
 use crate::drive::settings::WarpDriveSettings;
 use crate::search::action::CommandBindingDataSource;
 use crate::search::binding_source::BindingSource;
+use crate::search::command_palette::cockpit::DataSource as CockpitDataSource;
 use crate::search::command_palette::files;
 use crate::search::command_palette::launch_config;
 use crate::search::command_palette::mixer::{CommandPaletteItemAction, ItemSummary};
@@ -16,6 +19,8 @@ use crate::search::mixer::AddAsyncSourceOptions;
 use crate::search::QueryFilter;
 use crate::session_management::SessionSource;
 use crate::settings::AISettings;
+use crate::terminal::cli_agent::CLIAgentInstallModel;
+use crate::workspace::ActiveSession;
 use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warpui::keymap::BindingId;
@@ -34,6 +39,8 @@ pub struct DataSourceStore {
     historical_conversation_data_source: ModelHandle<conversations::DataSource>,
     all_conversation_data_source: ModelHandle<conversations::DataSource>,
     ssh_servers_data_source: ModelHandle<SshServersDataSource>,
+    cockpit_data_source: ModelHandle<CockpitDataSource>,
+    active_mixer: Option<ModelHandle<CommandPaletteMixer>>,
 }
 
 impl DataSourceStore {
@@ -64,6 +71,24 @@ impl DataSourceStore {
 
         let ssh_servers_data_source = ctx.add_model(|_| SshServersDataSource::new());
 
+        let cockpit_data_source = ctx.add_model(|_| CockpitDataSource::new());
+
+        ctx.subscribe_to_model(&CockpitModel::handle(ctx), |me, event, ctx| {
+            if !matches!(event, CockpitEvent::Updated) {
+                return;
+            }
+            me.rerun_active_query(ctx);
+        });
+        ctx.subscribe_to_model(&CockpitSettings::handle(ctx), |me, _, ctx| {
+            me.rerun_active_query(ctx)
+        });
+        ctx.subscribe_to_model(&ActiveSession::handle(ctx), |me, _, ctx| {
+            me.rerun_active_query(ctx)
+        });
+        ctx.subscribe_to_model(&CLIAgentInstallModel::handle(ctx), |me, _, ctx| {
+            me.rerun_active_query(ctx)
+        });
+
         Self {
             actions_data_source,
             sessions_data_source,
@@ -73,6 +98,8 @@ impl DataSourceStore {
             historical_conversation_data_source,
             all_conversation_data_source,
             ssh_servers_data_source,
+            cockpit_data_source,
+            active_mixer: None,
         }
     }
 
@@ -83,6 +110,7 @@ impl DataSourceStore {
         is_shared_session_viewer: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.active_mixer = Some(mixer.clone());
         mixer.update(ctx, |mixer, ctx| {
             mixer.reset(ctx);
 
@@ -116,6 +144,14 @@ impl DataSourceStore {
 
             mixer.add_sync_source(
                 self.actions_data_source.clone(),
+                HashSet::from([QueryFilter::Actions]),
+            );
+
+            // The source performs runtime capability gating. Keep it registered
+            // while disabled so an enable/rescan event can populate an already
+            // open palette without rebuilding the view.
+            mixer.add_sync_source(
+                self.cockpit_data_source.clone(),
                 HashSet::from([QueryFilter::Actions]),
             );
 
@@ -168,6 +204,18 @@ impl DataSourceStore {
 
             ctx.notify();
         });
+    }
+
+    fn rerun_active_query(&self, ctx: &mut ModelContext<Self>) {
+        let Some(mixer) = self.active_mixer.clone() else {
+            return;
+        };
+        let query = mixer.as_ref(ctx).current_query().cloned();
+        if let Some(query) = query {
+            // Re-running the current query advances SearchMixer's generation,
+            // so a late async source from the old inventory cannot overwrite it.
+            mixer.update(ctx, |mixer, ctx| mixer.run_query(query, ctx));
+        }
     }
 
     /// Returns a [`QueryResult`] from the data sources identified by the `summary`. `None` if none
@@ -272,6 +320,9 @@ impl DataSourceStore {
                 // SSH server recents not displayed for now — opening from SSH manager tree is the primary path,
                 // palette option is supplementary. Returning None does not affect search hits.
                 None
+            }
+            ItemSummary::Cockpit { key } => {
+                self.cockpit_data_source.as_ref(app).query_result(key, app)
             }
             ItemSummary::NoOp => {
                 // No-op action (used for non-interactable separator items that don't do anything on click).

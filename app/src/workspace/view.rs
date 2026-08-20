@@ -400,6 +400,7 @@ use super::rewind_confirmation_dialog::{
     RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
 };
 use super::{ActiveSession, TabBarDropTargetData, TabBarLocation};
+use crate::cockpit::github_flow_dialog::{GitHubFlowDialog, GitHubFlowDialogEvent};
 
 use super::tab_settings::{
     HeaderToolbarChipSelection, NewTabPlacement, TabSettings, TabSettingsChangedEvent,
@@ -454,6 +455,7 @@ use std::sync::{mpsc, Mutex};
 use std::{cmp::Ordering, sync::Arc};
 use warp_core::ui::theme::{color::internal_colors, phenomenon::PhenomenonStyle, Fill};
 use warp_core::ui::{color::coloru_with_opacity, Icon};
+use warp_editor::content::buffer::Buffer;
 use warp_editor::editor::NavigationKey;
 use warpui::keymap::Context;
 use warpui::notification::{RequestPermissionsOutcome, UserNotification};
@@ -478,8 +480,8 @@ use warpui::{
     AppContext, Entity, TypedActionView, UpdateView, View, ViewContext, ViewHandle,
 };
 use warpui::{
-    EntityId, FocusContext, ModelHandle, SingletonEntity, UpdateModel, ViewAsRef, WeakViewHandle,
-    WindowId,
+    EntityId, FocusContext, ModelHandle, SingletonEntity, UpdateModel, ViewAsRef, WeakModelHandle,
+    WeakViewHandle, WindowId,
 };
 
 use crate::terminal::view::LeftPanelTargetView;
@@ -1206,6 +1208,63 @@ fn agent_inventory_confirms_binding(
     })
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn managed_lifecycle_result(
+    expected: &remote_server::proto::ManagedSessionLifecycleRequest,
+    response: &remote_server::proto::ManagedSessionLifecycleResponse,
+) -> Result<&'static str, String> {
+    use remote_server::proto::{ManagedSessionLifecycleAction, ManagedSessionLifecycleStatus};
+
+    if response.schema_version != 1
+        || response.action != expected.action
+        || response.session_id != expected.session_id
+        || response.generation != expected.expected_generation
+    {
+        return Err("Managed action returned a mismatched response.".to_string());
+    }
+    let Some(action) = ManagedSessionLifecycleAction::try_from(response.action).ok() else {
+        return Err("Managed action returned an invalid response.".to_string());
+    };
+    let Some(status) = ManagedSessionLifecycleStatus::try_from(response.status).ok() else {
+        return Err("Managed action returned an invalid response.".to_string());
+    };
+    let empty_replacement =
+        response.replacement_session_id.is_empty() && response.replacement_generation == 0;
+    if action == ManagedSessionLifecycleAction::Stop
+        && status == ManagedSessionLifecycleStatus::Stopped
+        && empty_replacement
+        && response.diagnostic_code.is_empty()
+    {
+        return Ok("Managed agent stopped.");
+    }
+    if action == ManagedSessionLifecycleAction::Restart
+        && status == ManagedSessionLifecycleStatus::Restarted
+        && !response.replacement_session_id.is_empty()
+        && response.replacement_generation != 0
+        && (response.replacement_session_id != response.session_id
+            || response.replacement_generation != response.generation)
+        && response.diagnostic_code.is_empty()
+    {
+        return Ok("Managed agent restarted.");
+    }
+    if matches!(
+        status,
+        ManagedSessionLifecycleStatus::NotRunning
+            | ManagedSessionLifecycleStatus::StaleIdentity
+            | ManagedSessionLifecycleStatus::CapabilityRequired
+            | ManagedSessionLifecycleStatus::Blocked
+            | ManagedSessionLifecycleStatus::Failed
+    ) && empty_replacement
+        && !response.diagnostic_code.is_empty()
+    {
+        return Err(format!(
+            "Managed action was not applied: {status:?} ({}).",
+            response.diagnostic_code
+        ));
+    }
+    Err("Managed action returned an invalid response.".to_string())
+}
+
 #[cfg(unix)]
 fn remember_daemon_node_session(
     daemon_node_sessions: &mut std::collections::HashMap<String, Vec<SessionId>>,
@@ -1251,6 +1310,49 @@ fn resolved_daemon_server(node_id: &str) -> Option<warp_ssh_manager::SshServerIn
     })
     .ok()
     .flatten()
+}
+
+#[cfg(unix)]
+fn daemon_open_session_params(
+    server: &warp_ssh_manager::SshServerInfo,
+    agent_launch_route: Option<&remote_server::proto::AgentLaunchRoute>,
+    managed_launch: Option<&remote_server::proto::ManagedLaunch>,
+) -> crate::terminal::daemon_tty::OpenSessionParams {
+    crate::terminal::daemon_tty::OpenSessionParams {
+        cwd: managed_launch.map(|launch| launch.project_root.clone()),
+        ring_ceiling_bytes: (server.ring_ceiling_mb > 0)
+            .then(|| server.ring_ceiling_mb as u64 * 1024 * 1024),
+        startup_command: managed_launch
+            .is_none()
+            .then(|| server.startup_command.clone())
+            .flatten(),
+        agent_launch_route: agent_launch_route.cloned(),
+        managed_launch: managed_launch.cloned(),
+        ..Default::default()
+    }
+}
+
+struct TranscriptWatchEntry {
+    target: crate::cockpit::transcript_view::TranscriptTarget,
+    state: crate::cockpit::transcript_view::TranscriptWatchState,
+    buffer: WeakModelHandle<Buffer>,
+    rendered_key: String,
+}
+
+enum TranscriptRefreshResult {
+    Modified(crate::cockpit::transcript_view::TranscriptDocument),
+    NotModified,
+    RetryableFailure,
+    FatalFailure,
+}
+
+#[derive(Clone, Debug)]
+enum PendingManagedSpawn {
+    Batch {
+        plan_id: spawn_card::bulk::BulkLaunchPlanId,
+        target_id: spawn_card::bulk::BulkLaunchTargetId,
+    },
+    Standalone,
 }
 
 pub struct Workspace {
@@ -1360,6 +1462,7 @@ pub struct Workspace {
     new_worktree_modal: ModalViewState<Modal<NewWorktreeModal>>,
     close_session_confirmation_dialog: ViewHandle<CloseSessionConfirmationDialog>,
     agent_guardrail_dialog: ViewHandle<AgentGuardrailDialog>,
+    github_flow_dialog: ViewHandle<GitHubFlowDialog>,
     rewind_confirmation_dialog: ViewHandle<RewindConfirmationDialog>,
     delete_conversation_confirmation_dialog: ViewHandle<DeleteConversationConfirmationDialog>,
     resource_center_view: ViewHandle<ResourceCenterView>,
@@ -1395,11 +1498,20 @@ pub struct Workspace {
     /// The calm "Offene Punkte" attention inbox (fleet-wide waiting agents).
     attention_inbox: ViewHandle<AttentionInbox>,
     toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
-    /// Transcript viewer "watch" registry: temp `.md` path → source `.jsonl`.
-    /// On each cockpit reconcile the source is re-parsed, the temp file rewritten
-    /// and its open buffer reloaded, so an opened transcript follows live. Entries
-    /// whose buffer is closed become harmless no-ops on refresh.
-    watched_transcripts: HashMap<PathBuf, PathBuf>,
+    /// Provider-neutral live transcript documents. The buffer handle is weak,
+    /// so closing a generated pane stops its watch instead of retaining it.
+    /// Stable targets keep duplicate labels and copied session ids isolated.
+    watched_transcripts: HashMap<EntityId, TranscriptWatchEntry>,
+    /// App-window-wide cap for expensive local history scans. Individual watch
+    /// generations already dedupe per document; this prevents many open
+    /// documents from flooding the blocking pool together.
+    local_transcript_reads_in_flight: usize,
+    /// Managed Spawn-Card attempts awaiting the daemon's authoritative
+    /// SessionOpened acknowledgement, keyed by their immutable launch id.
+    pending_managed_spawns: HashMap<String, PendingManagedSpawn>,
+    /// A single scoped timer follows open live transcript documents. It stops
+    /// when the final weak document handle or live route disappears.
+    transcript_refresh_timer_active: bool,
     /// `w`-jump cursor: the last Waiting agent the Conductor jumped to, so the
     /// next press advances to the next one across the whole fleet (cycling).
     /// Stored as the **stable** [`zaplex_cockpit::WaitingTarget`] identity
@@ -2182,6 +2294,21 @@ impl Workspace {
             me.handle_agent_guardrail_dialog_event(event, ctx);
         });
         agent_guardrail_dialog
+    }
+
+    fn build_github_flow_dialog(ctx: &mut ViewContext<Self>) -> ViewHandle<GitHubFlowDialog> {
+        let github_flow_dialog = ctx.add_typed_action_view(|_| GitHubFlowDialog::default());
+        ctx.subscribe_to_view(
+            &github_flow_dialog,
+            |workspace, _, event, ctx| match event {
+                GitHubFlowDialogEvent::Close => {
+                    workspace.current_workspace_state.is_github_flow_dialog_open = false;
+                    workspace.focus_active_tab(ctx);
+                    ctx.notify();
+                }
+            },
+        );
+        github_flow_dialog
     }
 
     fn build_rewind_confirmation_dialog(
@@ -3110,6 +3237,7 @@ impl Workspace {
 
         let close_session_confirmation_dialog = Self::build_close_session_confirmation_dialog(ctx);
         let agent_guardrail_dialog = Self::build_agent_guardrail_dialog(ctx);
+        let github_flow_dialog = Self::build_github_flow_dialog(ctx);
         let rewind_confirmation_dialog = Self::build_rewind_confirmation_dialog(ctx);
         let delete_conversation_confirmation_dialog =
             Self::build_delete_conversation_confirmation_dialog(ctx);
@@ -3305,6 +3433,20 @@ impl Workspace {
                             me.daemon_session_servers.remove(session_id);
                         }
                     }
+                }
+                RemoteServerManagerEvent::ManagedLaunchOpened {
+                    launch_id,
+                    pty_session_id,
+                    generation,
+                } => {
+                    me.complete_managed_spawn(
+                        launch_id,
+                        Ok(format!("managed:{pty_session_id}:{generation}")),
+                        ctx,
+                    );
+                }
+                RemoteServerManagerEvent::ManagedLaunchFailed { launch_id, error } => {
+                    me.complete_managed_spawn(launch_id, Err(error.clone()), ctx);
                 }
                 _ => {}
             },
@@ -3607,6 +3749,7 @@ impl Workspace {
             new_worktree_modal,
             close_session_confirmation_dialog,
             agent_guardrail_dialog,
+            github_flow_dialog,
             rewind_confirmation_dialog,
             delete_conversation_confirmation_dialog,
             resource_center_view,
@@ -3629,6 +3772,9 @@ impl Workspace {
             window_id: ctx.window_id(),
             toast_stack,
             watched_transcripts: HashMap::new(),
+            local_transcript_reads_in_flight: 0,
+            pending_managed_spawns: HashMap::new(),
+            transcript_refresh_timer_active: false,
             cockpit_jump_cursor: None,
             agent_toast_stack,
             update_toast_stack,
@@ -5087,6 +5233,486 @@ impl Workspace {
         matched_local
     }
 
+    fn fresh_session_route(
+        route: &crate::cockpit::session_lifecycle::SessionRoute,
+        ctx: &AppContext,
+    ) -> Option<(
+        zaplex_cockpit::SessionSnapshot,
+        crate::cockpit::session_lifecycle::SessionRoute,
+    )> {
+        use crate::cockpit::session_lifecycle::{SessionAccountRoute, SessionHostRoute};
+
+        let (is_local, host_id, node_id) = match &route.host {
+            SessionHostRoute::Local => (true, None, None),
+            SessionHostRoute::Remote { host_id, node_id } => {
+                let current_host = crate::cockpit::CockpitModel::as_ref(ctx)
+                    .inventory()
+                    .hosts
+                    .iter()
+                    .find(|host| {
+                        !host.is_local
+                            && host.is_available()
+                            && host.host_id.as_deref() == Some(host_id.as_str())
+                            && host.registry_node_id.as_deref() == Some(node_id.as_str())
+                    })?;
+                (
+                    false,
+                    current_host.host_id.as_deref(),
+                    current_host.registry_node_id.as_deref(),
+                )
+            }
+        };
+        let (config_dir, account_email, account_id) = match &route.account {
+            SessionAccountRoute::Local {
+                config_dir,
+                account_email,
+            } => (
+                config_dir
+                    .as_deref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                account_email.as_deref(),
+                None,
+            ),
+            SessionAccountRoute::Remote {
+                account_id,
+                account_email,
+            } => (None, account_email.as_deref(), Some(account_id.as_str())),
+        };
+        let session = Self::inventory_agent_session(
+            host_id,
+            &route.session_id,
+            route.provider,
+            config_dir.as_deref(),
+            account_email,
+            account_id,
+            is_local,
+            ctx,
+        )?;
+        let current = crate::cockpit::session_lifecycle::SessionRoute::from_snapshot(
+            &session, is_local, host_id, node_id,
+        )
+        .ok()?;
+        (current == *route).then_some((session, current))
+    }
+
+    fn lifecycle_routes(
+        ctx: &AppContext,
+    ) -> Vec<(crate::cockpit::session_lifecycle::SessionRoute, String)> {
+        let model = crate::cockpit::CockpitModel::as_ref(ctx);
+        let mut routes = Vec::new();
+        for host in &model.inventory().hosts {
+            if !host.is_available() {
+                continue;
+            }
+            for session in host
+                .projects
+                .iter()
+                .flat_map(|project| project.sessions.iter())
+            {
+                if let Ok(route) = crate::cockpit::session_lifecycle::SessionRoute::from_snapshot(
+                    session,
+                    host.is_local,
+                    host.host_id.as_deref(),
+                    host.registry_node_id.as_deref(),
+                ) {
+                    routes.push((route, session.name.clone()));
+                }
+            }
+        }
+        for session in model
+            .snapshot()
+            .accounts
+            .iter()
+            .flat_map(|account| account.idle_sessions.iter())
+        {
+            if let Ok(route) = crate::cockpit::session_lifecycle::SessionRoute::from_snapshot(
+                session, true, None, None,
+            ) {
+                if !routes.iter().any(|(existing, _)| existing == &route) {
+                    routes.push((route, session.name.clone()));
+                }
+            }
+        }
+        routes
+    }
+
+    fn complete_agent_restart(
+        &mut self,
+        plan: crate::cockpit::session_lifecycle::RestartPlan,
+        terminal_view_id: EntityId,
+        signal: GuardrailSendOutcome,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::cockpit::session_lifecycle::{
+            ResumeInvocation, SessionAccountRoute, SessionHostRoute,
+        };
+
+        match signal {
+            GuardrailSendOutcome::Sent => {}
+            signal => {
+                let message = match signal {
+                    GuardrailSendOutcome::Failed(message) => message,
+                    GuardrailSendOutcome::NoRemoteConnection(host) => {
+                        format!("{host} is no longer connected.")
+                    }
+                    GuardrailSendOutcome::RemoteUnsupported(host) => {
+                        format!("{host} cannot verify agent processes.")
+                    }
+                    GuardrailSendOutcome::Sent => unreachable!(),
+                };
+                self.show_agent_launch_error(
+                    format!("Could not restart the session: {message}"),
+                    ctx,
+                );
+                return;
+            }
+        }
+        let Some(terminal_view) = Self::terminal_view_handle(terminal_view_id, &*ctx) else {
+            self.show_agent_launch_error(
+                "Could not restart the session because its pane is no longer open.".to_string(),
+                ctx,
+            );
+            return;
+        };
+        let agent = crate::cockpit::agent_of(plan.route.provider);
+        let command = match &plan.resume {
+            ResumeInvocation::LocalShell { command } => command.clone(),
+            ResumeInvocation::RemoteDaemon {
+                session_id,
+                model,
+                effort,
+                ..
+            } => {
+                let Some(command) = agent.resume_command_routed_with(
+                    session_id,
+                    None,
+                    model.as_deref(),
+                    effort.as_deref(),
+                ) else {
+                    self.show_agent_launch_error(
+                        "This provider cannot resume the selected conversation.".to_string(),
+                        ctx,
+                    );
+                    return;
+                };
+                command
+            }
+        };
+        let (host, config_dir, account_email, account_id) =
+            match (&plan.route.host, &plan.route.account) {
+                (
+                    SessionHostRoute::Local,
+                    SessionAccountRoute::Local {
+                        config_dir,
+                        account_email,
+                    },
+                ) => (None, config_dir.as_deref(), account_email.as_deref(), None),
+                (
+                    SessionHostRoute::Remote { host_id, .. },
+                    SessionAccountRoute::Remote {
+                        account_id,
+                        account_email,
+                    },
+                ) => (
+                    Some(host_id.as_str()),
+                    None,
+                    account_email.as_deref(),
+                    Some(account_id.as_str()),
+                ),
+                (SessionHostRoute::Local, SessionAccountRoute::Remote { .. })
+                | (SessionHostRoute::Remote { .. }, SessionAccountRoute::Local { .. }) => {
+                    self.show_agent_launch_error(
+                        "Could not restart the session because its route changed.".to_string(),
+                        ctx,
+                    );
+                    return;
+                }
+            };
+        crate::terminal::cli_agent_sessions::CLIAgentSessionsModel::handle(ctx)
+            .update(ctx, |sessions, ctx| {
+                sessions.remove_session(terminal_view_id, ctx)
+            });
+        crate::cockpit::launch_registry::clear_terminal_session_binding(terminal_view_id);
+        let launch_id = crate::cockpit::launch_registry::begin_launch_with_account_id(
+            agent,
+            host,
+            Some(&plan.route.cwd),
+            config_dir,
+            account_email,
+            account_id,
+            plan.model.clone(),
+            plan.effort.clone(),
+        );
+        crate::terminal::cli_agent_sessions::CLIAgentSessionsModel::handle(ctx).update(
+            ctx,
+            |sessions, ctx| {
+                sessions.bind_account_identity_with_id(
+                    terminal_view_id,
+                    agent,
+                    config_dir.map(|path| path.to_string_lossy().into_owned()),
+                    account_email.map(str::to_owned),
+                    account_id.map(str::to_owned),
+                );
+                ctx.notify();
+            },
+        );
+        crate::cockpit::launch_registry::attach_terminal(launch_id, terminal_view_id);
+        terminal_view.update(ctx, |view, ctx| {
+            view.execute_command_or_set_pending(&command, ctx);
+        });
+        ctx.focus(&terminal_view);
+        crate::cockpit::CockpitModel::handle(ctx).update(ctx, |model, ctx| model.rescan(ctx));
+    }
+
+    fn restart_agent_session(
+        &mut self,
+        route: crate::cockpit::session_lifecycle::SessionRoute,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::cockpit::session_lifecycle::{
+            RestartPresence, SessionAccountRoute, SessionHostRoute,
+        };
+
+        let Some((_, route)) = Self::fresh_session_route(&route, &*ctx) else {
+            self.session_not_found_toast("", ctx);
+            return;
+        };
+        let (is_local, host_id) = match &route.host {
+            SessionHostRoute::Local => (true, None),
+            SessionHostRoute::Remote { host_id, .. } => (false, Some(host_id.as_str())),
+        };
+        let (config_dir, account_email, account_id) = match &route.account {
+            SessionAccountRoute::Local {
+                config_dir,
+                account_email,
+            } => (
+                config_dir
+                    .as_deref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                account_email.as_deref(),
+                None,
+            ),
+            SessionAccountRoute::Remote {
+                account_id,
+                account_email,
+            } => (None, account_email.as_deref(), Some(account_id.as_str())),
+        };
+        let agent = crate::cockpit::agent_of(route.provider);
+        let Some(terminal_view_id) = Self::terminal_view_id_for_agent_session(
+            agent,
+            &route.session_id,
+            config_dir.as_deref(),
+            account_email,
+            account_id,
+            host_id,
+            is_local,
+            &*ctx,
+        ) else {
+            self.show_agent_launch_error(
+                "Restart requires the exact open pane for this session.".to_string(),
+                ctx,
+            );
+            return;
+        };
+        let record = match crate::cockpit::launch_registry::lookup_bound_session_with_account_id(
+            agent,
+            host_id,
+            match &route.account {
+                SessionAccountRoute::Local { config_dir, .. } => config_dir.as_deref(),
+                SessionAccountRoute::Remote { .. } => None,
+            },
+            account_email,
+            account_id,
+            &route.session_id,
+        ) {
+            crate::cockpit::launch_registry::BoundLaunchLookup::Match(record) => record,
+            crate::cockpit::launch_registry::BoundLaunchLookup::AccountMismatch
+            | crate::cockpit::launch_registry::BoundLaunchLookup::Unbound => {
+                self.show_agent_launch_error(
+                    "Restart requires the session's exact recorded launch intent.".to_string(),
+                    ctx,
+                );
+                return;
+            }
+        };
+        let Ok(plan) = crate::cockpit::session_lifecycle::plan_restart(
+            route.clone(),
+            RestartPresence::VerifiedProcess,
+            &record,
+        ) else {
+            self.show_agent_launch_error(
+                "The selected process identity could not be verified for restart.".to_string(),
+                ctx,
+            );
+            return;
+        };
+        let Some(fingerprint) = route.process_fingerprint.as_deref() else {
+            self.show_agent_launch_error(
+                "The selected process identity could not be verified for restart.".to_string(),
+                ctx,
+            );
+            return;
+        };
+        if is_local {
+            let signal = send_local_guardrail_signal(
+                route.pid,
+                Some(fingerprint),
+                zaplex_cockpit::GuardrailSignal::Kill,
+            );
+            self.complete_agent_restart(plan, terminal_view_id, signal, ctx);
+            return;
+        }
+
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let daemon = RemoteServerManager::as_ref(ctx)
+                .connected_daemons()
+                .into_iter()
+                .find(|daemon| daemon.host_id == host_id.unwrap_or_default());
+            let Some(daemon) = daemon else {
+                self.show_agent_launch_error(
+                    "The session's host is no longer connected.".to_string(),
+                    ctx,
+                );
+                return;
+            };
+            let client = daemon.client;
+            let session_id = route.session_id.clone();
+            let fingerprint = fingerprint.to_string();
+            let pid = route.pid;
+            ctx.spawn(
+                async move {
+                    run_remote_guardrail_signal(
+                        &client,
+                        &session_id,
+                        pid,
+                        &fingerprint,
+                        zaplex_cockpit::GuardrailSignal::Kill,
+                    )
+                    .await
+                },
+                move |workspace, signal, ctx| {
+                    workspace.complete_agent_restart(plan, terminal_view_id, signal, ctx);
+                },
+            );
+        }
+        #[cfg(target_family = "wasm")]
+        self.show_agent_launch_error("Remote restart requires the native app.".to_string(), ctx);
+    }
+
+    fn rename_agent_session(
+        &mut self,
+        route: crate::cockpit::session_lifecycle::SessionRoute,
+        requested: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::cockpit::session_lifecycle::SessionHostRoute;
+
+        let Some((_, route)) = Self::fresh_session_route(&route, &*ctx) else {
+            self.session_not_found_toast("", ctx);
+            return;
+        };
+        if !matches!(&route.host, SessionHostRoute::Local) {
+            self.show_agent_launch_error(
+                "Remote rename requires daemon lifecycle support.".to_string(),
+                ctx,
+            );
+            return;
+        }
+        let routes = Self::lifecycle_routes(&*ctx);
+        let validated = crate::cockpit::session_lifecycle::validate_rename_conflict(
+            &route,
+            requested,
+            routes
+                .iter()
+                .map(|(candidate, name)| (candidate, name.as_str())),
+        );
+        let Ok(name) = validated else {
+            self.show_agent_launch_error(
+                "That session name is invalid or already used by this account.".to_string(),
+                ctx,
+            );
+            return;
+        };
+        if let Err(error) = crate::cockpit::session_names::persist_session_name(&route, name) {
+            self.show_agent_launch_error(format!("Could not rename the session: {error:#}"), ctx);
+            return;
+        }
+        crate::cockpit::CockpitModel::handle(ctx).update(ctx, |model, ctx| model.rescan(ctx));
+    }
+
+    fn cleanup_stale_claude_session(
+        &mut self,
+        route: crate::cockpit::session_lifecycle::SessionRoute,
+        candidate: &zaplex_cockpit::ClaudeStaleRegistryCandidate,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some((_, route)) = Self::fresh_session_route(&route, &*ctx) else {
+            self.session_not_found_toast("", ctx);
+            return;
+        };
+        if route.provider != zaplex_cockpit::Provider::Claude
+            || route.session_id != candidate.session_id
+            || !matches!(
+                &route.host,
+                crate::cockpit::session_lifecycle::SessionHostRoute::Local
+            )
+        {
+            self.show_agent_launch_error(
+                "The stale-session route changed; refresh and try again.".to_string(),
+                ctx,
+            );
+            return;
+        }
+        let account_matches = crate::cockpit::CockpitModel::as_ref(ctx)
+            .snapshot()
+            .accounts
+            .iter()
+            .any(|usage| {
+                usage.account.provider == zaplex_cockpit::Provider::Claude
+                    && usage.account.config_dir == candidate.config_dir
+                    && usage
+                        .idle_sessions
+                        .iter()
+                        .chain(usage.sessions.iter())
+                        .any(|session| {
+                            session.session_id == route.session_id
+                                && session.account_email
+                                    == match &route.account {
+                                        crate::cockpit::session_lifecycle::SessionAccountRoute::Local {
+                                            account_email,
+                                            ..
+                                        } => account_email.clone(),
+                                        crate::cockpit::session_lifecycle::SessionAccountRoute::Remote {
+                                            ..
+                                        } => None,
+                                    }
+                        })
+            });
+        if !account_matches {
+            self.show_agent_launch_error(
+                "The stale-session account route changed; refresh and try again.".to_string(),
+                ctx,
+            );
+            return;
+        }
+        match zaplex_cockpit::cleanup_claude_stale_registry_entry(candidate) {
+            Ok(
+                zaplex_cockpit::ClaudeRegistryCleanupOutcome::Applied
+                | zaplex_cockpit::ClaudeRegistryCleanupOutcome::AlreadyApplied,
+            ) => {
+                crate::cockpit::CockpitModel::handle(ctx)
+                    .update(ctx, |model, ctx| model.rescan(ctx));
+            }
+            Err(error) => {
+                self.show_agent_launch_error(
+                    format!("Could not clean up the stale session: {error}"),
+                    ctx,
+                );
+            }
+        }
+    }
+
     /// Run a Claude Code slash command against a discovered session
     /// (`SlashCommandSession`, cockpit model-levers `/compact` · `/clear`).
     ///
@@ -5488,6 +6114,150 @@ impl Workspace {
         }
     }
 
+    /// Re-resolve a managed target against the latest daemon inventory before
+    /// attaching. Stale rows and downgraded connections fail closed.
+    fn attach_managed_fleet_session(
+        &mut self,
+        target: &crate::cockpit::fleet_details::ManagedFleetSession,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        #[cfg(all(unix, feature = "local_tty"))]
+        {
+            let cockpit = crate::cockpit::CockpitModel::as_ref(ctx);
+            let current = cockpit.managed_fleet().exact_live(target).cloned();
+            let Some(current) = current else {
+                self.session_not_found_toast(&target.host_label, ctx);
+                return;
+            };
+            let mut matching_agents = cockpit
+                .inventory()
+                .hosts
+                .iter()
+                .filter(|host| host.host_id.as_deref() == Some(current.host_id.as_str()))
+                .flat_map(|host| host.projects.iter())
+                .flat_map(|project| project.sessions.iter())
+                .filter(|session| {
+                    current.matches_agent_session(Some(current.host_id.as_str()), session)
+                });
+            let Some(agent_session) = matching_agents.next() else {
+                self.session_not_found_toast(&current.host_label, ctx);
+                return;
+            };
+            let expected_agent_binding =
+                crate::remote_server::agent_session::snapshot_agent_identity(agent_session);
+            if matching_agents.next().is_some() {
+                self.session_not_found_toast(&current.host_label, ctx);
+                return;
+            }
+            let node_id = RemoteServerManager::as_ref(ctx)
+                .connected_daemons()
+                .into_iter()
+                .find(|daemon| {
+                    daemon.host_id == current.host_id
+                        && zaplex_remote_session::types::has_feature(
+                            &daemon.features,
+                            zaplex_remote_session::types::FEATURE_MANAGED_AGENT_FLEET_V1,
+                        )
+                })
+                .and_then(|daemon| daemon.registry_node_id);
+            let Some(server) = node_id.as_deref().and_then(resolved_daemon_server) else {
+                self.session_not_found_toast(&current.host_label, ctx);
+                return;
+            };
+            self.adopt_daemon_session(
+                server,
+                current.session_id,
+                current.generation,
+                Some(expected_agent_binding),
+                ctx,
+            );
+        }
+        #[cfg(not(all(unix, feature = "local_tty")))]
+        self.remote_agent_action_unavailable_toast(&target.host_label, ctx);
+    }
+
+    /// Apply one exact, generation-checked lifecycle mutation. Both the live UI
+    /// inventory and the daemon validate the full opaque identity.
+    fn mutate_managed_fleet_session(
+        &mut self,
+        target: &crate::cockpit::fleet_details::ManagedFleetSession,
+        action: remote_server::proto::ManagedSessionLifecycleAction,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let current = crate::cockpit::CockpitModel::as_ref(ctx)
+                .managed_fleet()
+                .exact(target)
+                .cloned();
+            let Some(current) = current else {
+                self.session_not_found_toast(&target.host_label, ctx);
+                return;
+            };
+            if !current.is_running()
+                && action != remote_server::proto::ManagedSessionLifecycleAction::Restart
+            {
+                self.session_not_found_toast(&current.host_label, ctx);
+                return;
+            }
+            let daemon = RemoteServerManager::as_ref(ctx)
+                .connected_daemons()
+                .into_iter()
+                .find(|daemon| {
+                    daemon.host_id == current.host_id
+                        && zaplex_remote_session::types::has_feature(
+                            &daemon.features,
+                            zaplex_remote_session::types::FEATURE_MANAGED_AGENT_FLEET_V1,
+                        )
+                });
+            let Some(daemon) = daemon else {
+                self.session_not_found_toast(&current.host_label, ctx);
+                return;
+            };
+            let provider = match current.provider {
+                zaplex_cockpit::Provider::Claude => "claude",
+                zaplex_cockpit::Provider::Codex => "codex",
+                zaplex_cockpit::Provider::Antigravity => {
+                    self.session_not_found_toast(&current.host_label, ctx);
+                    return;
+                }
+            };
+            let request = remote_server::proto::ManagedSessionLifecycleRequest {
+                schema_version: 1,
+                action: action.into(),
+                session_id: current.session_id,
+                expected_generation: current.generation,
+                launch_id: current.launch_id,
+                provider: provider.to_string(),
+                account_id: current.account_id,
+                project_root: current.project_root,
+            };
+            let expected_response = request.clone();
+            let client = daemon.client;
+            ctx.spawn(
+                async move { client.managed_session_lifecycle(request).await },
+                move |workspace, result, ctx| {
+                    let message = match result {
+                        Ok(response) => managed_lifecycle_result(&expected_response, &response)
+                            .map(str::to_string)
+                            .unwrap_or_else(|message| message),
+                        Err(error) => format!("Managed action failed: {error}"),
+                    };
+                    workspace.toast_stack.update(ctx, |stack, ctx| {
+                        stack.add_ephemeral_toast(DismissibleToast::default(message), ctx);
+                    });
+                    crate::cockpit::CockpitModel::handle(ctx)
+                        .update(ctx, |model, ctx| model.rescan(ctx));
+                },
+            );
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = action;
+            self.remote_agent_action_unavailable_toast(&target.host_label, ctx);
+        }
+    }
+
     /// The `w`-jump (`JumpToNextWaiting`): advance to the next Waiting agent
     /// across the whole fleet in the Conductor's waiting-first order (cycling)
     /// and attach it. A stale/absent cursor restarts at the first waiting agent;
@@ -5527,56 +6297,275 @@ impl Workspace {
         }
     }
 
-    /// Open a session's conversation transcript (`ViewTranscript`, cockpit "log"
-    /// verb): resolve its `.jsonl`, render it to Markdown, write a temp file, and
-    /// open it in a code/text pane. Honest on failure — a missing/unreadable
-    /// transcript raises a toast rather than opening a blank pane.
-    fn view_transcript(
+    fn show_transcript_open_error(&mut self, ctx: &mut ViewContext<Self>) {
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::error(crate::t!("cockpit-transcript-open-error")),
+                ctx,
+            );
+        });
+    }
+
+    fn transcript_target_state(
+        target: &crate::cockpit::transcript_view::TranscriptTarget,
+        ctx: &AppContext,
+    ) -> Option<zaplex_cockpit::SessionState> {
+        use crate::cockpit::transcript_view::TranscriptTarget;
+
+        let model = crate::cockpit::CockpitModel::as_ref(ctx);
+        let mut matches: Box<dyn Iterator<Item = zaplex_cockpit::SessionState> + '_> = match target
+        {
+            TranscriptTarget::Local {
+                provider,
+                config_root,
+                session_id,
+            } => Box::new(
+                model
+                    .snapshot()
+                    .accounts
+                    .iter()
+                    .filter(move |account| {
+                        account.account.provider == *provider
+                            && account.account.config_dir.as_path() == config_root.as_path()
+                    })
+                    .flat_map(|account| account.sessions.iter().chain(account.idle_sessions.iter()))
+                    .filter(move |session| {
+                        session.provider == *provider
+                            && session.session_id.as_str() == session_id.as_str()
+                    })
+                    .map(|session| session.state),
+            ),
+            TranscriptTarget::Remote {
+                provider,
+                host_id,
+                account_id,
+                session_id,
+            } => Box::new(
+                model
+                    .inventory()
+                    .hosts
+                    .iter()
+                    .filter(move |host| {
+                        !host.is_local
+                            && host.is_available()
+                            && host.host_id.as_deref() == Some(host_id.as_str())
+                    })
+                    .flat_map(|host| host.projects.iter())
+                    .flat_map(|project| project.sessions.iter())
+                    .filter(move |session| {
+                        session.provider == *provider
+                            && session.session_id.as_str() == session_id.as_str()
+                            && session.account_id.as_deref() == Some(account_id.as_str())
+                    })
+                    .map(|session| session.state),
+            ),
+        };
+        let matched = matches.next()?;
+        matches.next().is_none().then_some(matched)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn transcript_daemon(
+        host_id: &str,
+        ctx: &AppContext,
+    ) -> Option<crate::remote_server::manager::ConnectedDaemon> {
+        crate::remote_server::manager::RemoteServerManager::as_ref(ctx)
+            .connected_daemons()
+            .into_iter()
+            .find(|daemon| {
+                daemon.host_id == host_id
+                    && zaplex_remote_session::types::has_feature(
+                        &daemon.features,
+                        zaplex_remote_session::types::FEATURE_AGENT_TRANSCRIPT_READ_V1,
+                    )
+            })
+    }
+
+    fn open_transcript_document(
         &mut self,
-        session_id: &str,
-        config_dir: &Path,
-        cwd: &Path,
+        target: crate::cockpit::transcript_view::TranscriptTarget,
+        watch: bool,
+        document: crate::cockpit::transcript_view::TranscriptDocument,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let pane = CodePane::new_generated_read_only(
+            crate::cockpit::transcript_view::transcript_title(target.provider()),
+            document.markdown.clone(),
+            ctx,
+        );
+        let Some(buffer) = pane
+            .file_view(ctx)
+            .as_ref(ctx)
+            .generated_read_only_buffer(ctx)
+        else {
+            self.show_transcript_open_error(ctx);
+            return;
+        };
+        let watch_id = buffer.id();
+        let weak_buffer = buffer.downgrade();
+        let new_tab_placement_setting = TabSettings::as_ref(ctx).new_tab_placement;
+        let new_idx = match new_tab_placement_setting {
+            NewTabPlacement::AfterAllTabs => self.tab_count(),
+            NewTabPlacement::AfterCurrentTab => self.active_tab_index + 1,
+        };
+        self.add_tab_from_existing_pane(Box::new(pane), new_idx, ctx);
+
+        if watch
+            && crate::cockpit::transcript_view::should_follow_transcript(
+                true,
+                Self::transcript_target_state(&target, ctx),
+            )
+        {
+            self.watched_transcripts.insert(
+                watch_id,
+                TranscriptWatchEntry {
+                    target,
+                    state: crate::cockpit::transcript_view::TranscriptWatchState::with_revision(
+                        document.source_revision.clone(),
+                    ),
+                    buffer: weak_buffer,
+                    rendered_key: Self::transcript_document_key(&document),
+                },
+            );
+            self.schedule_transcript_refresh(ctx);
+        }
+    }
+
+    fn schedule_transcript_refresh(&mut self, ctx: &mut ViewContext<Self>) {
+        const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+        if self.transcript_refresh_timer_active || self.watched_transcripts.is_empty() {
+            return;
+        }
+        self.transcript_refresh_timer_active = true;
+        let _ = ctx.spawn(
+            async move { warpui::r#async::Timer::after(REFRESH_INTERVAL).await },
+            |me, _, ctx| {
+                me.transcript_refresh_timer_active = false;
+                me.refresh_watched_transcripts(ctx);
+                me.schedule_transcript_refresh(ctx);
+            },
+        );
+    }
+
+    fn transcript_document_key(
+        document: &crate::cockpit::transcript_view::TranscriptDocument,
+    ) -> String {
+        document
+            .source_revision
+            .clone()
+            .unwrap_or_else(|| format!("state:{:?}", document.state))
+    }
+
+    fn open_agent_transcript(
+        &mut self,
+        target: crate::cockpit::transcript_view::TranscriptTarget,
         watch: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        let toast_err = |me: &mut Self, ctx: &mut ViewContext<Self>, msg: String| {
-            me.toast_stack.update(ctx, |toast_stack, ctx| {
-                toast_stack.add_ephemeral_toast(DismissibleToast::error(msg), ctx);
-            });
+        use crate::cockpit::transcript_view::{
+            project_remote_transcript, RemoteTranscriptProjection, TranscriptTarget,
         };
-        let Some(path) = zaplex_cockpit::sessions::transcript_path(config_dir, session_id) else {
-            toast_err(
-                self,
-                ctx,
-                "No transcript found for this session.".to_string(),
-            );
-            return;
-        };
-        let markdown = match std::fs::read_to_string(&path) {
-            Ok(raw) => {
-                zaplex_cockpit::format_transcript_markdown(&zaplex_cockpit::parse_transcript(&raw))
-            }
-            Err(e) => {
-                toast_err(self, ctx, format!("Could not read transcript: {e}"));
-                return;
-            }
-        };
-        // A stable temp name per session (re-viewing overwrites, no clutter).
-        let label = cwd
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("session");
-        let tmp = std::env::temp_dir().join(format!("zaplex-transcript-{label}-{session_id}.md"));
-        if let Err(e) = std::fs::write(&tmp, markdown) {
-            toast_err(self, ctx, format!("Could not open transcript: {e}"));
+
+        if Self::transcript_target_state(&target, ctx).is_none() {
+            self.show_transcript_open_error(ctx);
             return;
         }
-        // Watch: register temp→source so each cockpit reconcile re-renders and
-        // reloads the buffer, following the live session.
-        if watch {
-            self.watched_transcripts.insert(tmp.clone(), path);
+        match target.clone() {
+            TranscriptTarget::Local {
+                provider,
+                config_root,
+                session_id,
+            } => {
+                ctx.spawn(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            crate::cockpit::transcript_view::load_local_transcript(
+                                provider,
+                                &config_root,
+                                &session_id,
+                            )
+                        })
+                        .await
+                        .map_err(|_| ())
+                    },
+                    move |me, result, ctx| match result {
+                        Ok(document) => {
+                            me.open_transcript_document(target, watch, document, ctx)
+                        }
+                        Err(()) => me.open_transcript_document(
+                            target.clone(),
+                            watch,
+                            crate::cockpit::transcript_view::state_document(
+                                target.provider(),
+                                crate::cockpit::transcript_view::TranscriptDocumentState::Unavailable,
+                            ),
+                            ctx,
+                        ),
+                    },
+                );
+            }
+            TranscriptTarget::Remote {
+                provider,
+                host_id,
+                account_id,
+                session_id,
+            } => {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    let Some(daemon) = Self::transcript_daemon(&host_id, ctx) else {
+                        self.open_transcript_document(
+                            target.clone(),
+                            watch,
+                            crate::cockpit::transcript_view::state_document(
+                                target.provider(),
+                                crate::cockpit::transcript_view::TranscriptDocumentState::Unavailable,
+                            ),
+                            ctx,
+                        );
+                        return;
+                    };
+                    ctx.spawn(
+                        async move {
+                            daemon
+                                .client
+                                .read_agent_transcript(
+                                    provider.as_str().to_string(),
+                                    account_id,
+                                    session_id.clone(),
+                                    None,
+                                )
+                                .await
+                                .map_err(|_| ())
+                                .and_then(|response| {
+                                    project_remote_transcript(provider, &session_id, None, response)
+                                        .map_err(|_| ())
+                                })
+                        },
+                        move |me, result, ctx| match result {
+                            Ok(RemoteTranscriptProjection::Modified(document)) => {
+                                me.open_transcript_document(target, watch, document, ctx)
+                            }
+                            Ok(RemoteTranscriptProjection::NotModified) | Err(()) => me
+                                .open_transcript_document(
+                                    target.clone(),
+                                    watch,
+                                    crate::cockpit::transcript_view::state_document(
+                                        target.provider(),
+                                        crate::cockpit::transcript_view::TranscriptDocumentState::Unavailable,
+                                    ),
+                                    ctx,
+                                ),
+                        },
+                    );
+                }
+                #[cfg(target_family = "wasm")]
+                {
+                    let _ = (provider, host_id, account_id, session_id, watch);
+                    self.show_transcript_open_error(ctx);
+                }
+            }
         }
-        self.add_tab_for_code_file(tmp, None, ctx);
     }
 
     /// Open a session's **review** view (`ReviewSession`, cockpit "review"
@@ -5731,41 +6720,236 @@ impl Workspace {
         );
     }
 
-    /// Re-render every watched transcript from its source `.jsonl` and reload the
-    /// open buffer, so an opened transcript follows the live session. Called on
-    /// each cockpit reconcile; a closed buffer reloads to a harmless no-op.
-    /// (Cadence follows the cockpit reconcile timer; a faster dedicated tick is a
-    /// follow-up refinement.)
-    #[cfg(feature = "local_fs")]
-    fn refresh_watched_transcripts(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.watched_transcripts.is_empty() {
+    fn complete_transcript_refresh(
+        &mut self,
+        watch_id: EntityId,
+        generation: u64,
+        result: TranscriptRefreshResult,
+        local_read: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if local_read {
+            self.local_transcript_reads_in_flight =
+                self.local_transcript_reads_in_flight.saturating_sub(1);
+        }
+        let Some((document_open, target_state)) =
+            self.watched_transcripts.get(&watch_id).map(|entry| {
+                (
+                    entry.buffer.upgrade(ctx).is_some(),
+                    Self::transcript_target_state(&entry.target, ctx),
+                )
+            })
+        else {
+            return;
+        };
+        if !document_open || target_state.is_none() {
+            self.watched_transcripts.remove(&watch_id);
             return;
         }
-        let entries: Vec<(PathBuf, PathBuf)> = self
-            .watched_transcripts
-            .iter()
-            .map(|(tmp, src)| (tmp.clone(), src.clone()))
-            .collect();
-        for (tmp, src) in entries {
-            let Ok(raw) = std::fs::read_to_string(&src) else {
-                continue;
-            };
-            let markdown =
-                zaplex_cockpit::format_transcript_markdown(&zaplex_cockpit::parse_transcript(&raw));
-            if std::fs::write(&tmp, markdown).is_err() {
-                continue;
+        let keep_following =
+            crate::cockpit::transcript_view::should_follow_transcript(document_open, target_state);
+
+        let mut remove = false;
+        if let Some(entry) = self.watched_transcripts.get_mut(&watch_id) {
+            if entry.buffer.upgrade(ctx).is_none() {
+                remove = true;
+            } else {
+                let (document, revision, not_modified, fatal) = match result {
+                    TranscriptRefreshResult::Modified(document) => {
+                        let revision = document.source_revision.clone();
+                        (Some(document), revision, false, false)
+                    }
+                    TranscriptRefreshResult::NotModified => (None, None, true, false),
+                    TranscriptRefreshResult::RetryableFailure => (None, None, true, false),
+                    TranscriptRefreshResult::FatalFailure => (
+                        Some(crate::cockpit::transcript_view::state_document(
+                            entry.target.provider(),
+                            crate::cockpit::transcript_view::TranscriptDocumentState::Unavailable,
+                        )),
+                        None,
+                        false,
+                        true,
+                    ),
+                };
+                let accepted = if not_modified {
+                    entry.state.finish_not_modified(generation)
+                } else {
+                    entry.state.finish_refresh(generation, revision)
+                };
+                if !accepted {
+                    return;
+                }
+                if let Some(document) = document {
+                    let rendered_key = Self::transcript_document_key(&document);
+                    if rendered_key != entry.rendered_key {
+                        if let Some(buffer) = entry.buffer.upgrade(ctx) {
+                            buffer.update(ctx, |buffer, ctx| {
+                                buffer.replace_all(&document.markdown, ctx)
+                            });
+                            entry.rendered_key = rendered_key;
+                        } else {
+                            remove = true;
+                        }
+                    }
+                }
+                remove |= fatal || !keep_following;
             }
-            crate::code::global_buffer_model::GlobalBufferModel::handle(ctx).update(
-                ctx,
-                |m, ctx| {
-                    m.discard_unsaved_changes(&tmp, ctx);
-                },
-            );
+        }
+        if remove {
+            self.watched_transcripts.remove(&watch_id);
         }
     }
 
-    #[cfg(not(feature = "local_fs"))]
-    fn refresh_watched_transcripts(&mut self, _ctx: &mut ViewContext<Self>) {}
+    /// Refresh live local and remote transcripts on Cockpit reconciliation.
+    /// A weak generated-buffer handle ends polling on pane close; a dormant or
+    /// no-longer-exact route is removed before any new work is scheduled.
+    fn refresh_watched_transcripts(&mut self, ctx: &mut ViewContext<Self>) {
+        use crate::cockpit::transcript_view::{
+            project_remote_transcript, RemoteTranscriptProjection, TranscriptTarget,
+        };
+
+        let watch_ids: Vec<EntityId> = self.watched_transcripts.keys().copied().collect();
+        for watch_id in watch_ids {
+            let should_remove = self.watched_transcripts.get(&watch_id).is_none_or(|entry| {
+                let document_open = entry.buffer.upgrade(ctx).is_some();
+                let target_state = Self::transcript_target_state(&entry.target, ctx);
+                !document_open
+                    || target_state.is_none()
+                    || (!crate::cockpit::transcript_view::should_follow_transcript(
+                        document_open,
+                        target_state,
+                    ) && !entry.state.is_in_flight())
+            });
+            if should_remove {
+                self.watched_transcripts.remove(&watch_id);
+                continue;
+            }
+            let local_read = self
+                .watched_transcripts
+                .get(&watch_id)
+                .is_some_and(|entry| {
+                    matches!(
+                        &entry.target,
+                        crate::cockpit::transcript_view::TranscriptTarget::Local { .. }
+                    )
+                });
+            const MAX_LOCAL_TRANSCRIPT_READS_IN_FLIGHT: usize = 2;
+            if local_read
+                && self.local_transcript_reads_in_flight >= MAX_LOCAL_TRANSCRIPT_READS_IN_FLIGHT
+            {
+                continue;
+            }
+            let Some((generation, target, known_revision)) = self
+                .watched_transcripts
+                .get_mut(&watch_id)
+                .and_then(|entry| {
+                    let generation = entry.state.begin_refresh()?;
+                    Some((
+                        generation,
+                        entry.target.clone(),
+                        entry.state.revision().map(str::to_string),
+                    ))
+                })
+            else {
+                continue;
+            };
+            if local_read {
+                self.local_transcript_reads_in_flight += 1;
+            }
+            match target {
+                TranscriptTarget::Local {
+                    provider,
+                    config_root,
+                    session_id,
+                } => {
+                    ctx.spawn(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                crate::cockpit::transcript_view::load_local_transcript(
+                                    provider,
+                                    &config_root,
+                                    &session_id,
+                                )
+                            })
+                            .await
+                            .map(TranscriptRefreshResult::Modified)
+                            .unwrap_or(TranscriptRefreshResult::RetryableFailure)
+                        },
+                        move |me, result, ctx| {
+                            me.complete_transcript_refresh(watch_id, generation, result, true, ctx)
+                        },
+                    );
+                }
+                TranscriptTarget::Remote {
+                    provider,
+                    host_id,
+                    account_id,
+                    session_id,
+                } => {
+                    #[cfg(not(target_family = "wasm"))]
+                    {
+                        let Some(daemon) = Self::transcript_daemon(&host_id, ctx) else {
+                            self.complete_transcript_refresh(
+                                watch_id,
+                                generation,
+                                TranscriptRefreshResult::FatalFailure,
+                                false,
+                                ctx,
+                            );
+                            continue;
+                        };
+                        ctx.spawn(
+                            async move {
+                                let response = match daemon
+                                    .client
+                                    .read_agent_transcript(
+                                        provider.as_str().to_string(),
+                                        account_id,
+                                        session_id.clone(),
+                                        known_revision.clone(),
+                                    )
+                                    .await
+                                {
+                                    Ok(response) => response,
+                                    Err(_) => return TranscriptRefreshResult::RetryableFailure,
+                                };
+                                match project_remote_transcript(
+                                    provider,
+                                    &session_id,
+                                    known_revision.as_deref(),
+                                    response,
+                                ) {
+                                    Ok(RemoteTranscriptProjection::Modified(document)) => {
+                                        TranscriptRefreshResult::Modified(document)
+                                    }
+                                    Ok(RemoteTranscriptProjection::NotModified) => {
+                                        TranscriptRefreshResult::NotModified
+                                    }
+                                    Err(_) => TranscriptRefreshResult::FatalFailure,
+                                }
+                            },
+                            move |me, result, ctx| {
+                                me.complete_transcript_refresh(
+                                    watch_id, generation, result, false, ctx,
+                                )
+                            },
+                        );
+                    }
+                    #[cfg(target_family = "wasm")]
+                    {
+                        let _ = (provider, host_id, account_id, session_id, known_revision);
+                        self.complete_transcript_refresh(
+                            watch_id,
+                            generation,
+                            TranscriptRefreshResult::FatalFailure,
+                            false,
+                            ctx,
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     /// The worktree half of [`Self::fork_agent_session`]: builds a one-shot
     /// worktree tab config (autogenerated branch name, fork command appended
@@ -5879,7 +7063,139 @@ impl Workspace {
         model: Option<&str>,
         effort: Option<&str>,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> Result<String, String> {
+        self.launch_routed_agent_with_mode(
+            agent,
+            config_dir,
+            account_email,
+            agent_launch_route,
+            cwd,
+            node_id,
+            model,
+            effort,
+            spawn_card::ManagedLaunchMode::Ordinary,
+            None,
+            ctx,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn launch_routed_agent_with_mode(
+        &mut self,
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        account_email: Option<&str>,
+        agent_launch_route: Option<&remote_server::proto::AgentLaunchRoute>,
+        cwd: Option<&Path>,
+        node_id: Option<&str>,
+        model: Option<&str>,
+        effort: Option<&str>,
+        managed_mode: spawn_card::ManagedLaunchMode,
+        managed_launch_id: Option<&str>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Result<String, String> {
+        if managed_mode != spawn_card::ManagedLaunchMode::Ordinary {
+            if config_dir.is_some() || model.is_some() || effort.is_some() {
+                return Err(
+                    "Managed launches use the daemon account route and provider defaults."
+                        .to_string(),
+                );
+            }
+            let node_id = node_id.ok_or_else(|| {
+                "Managed agents are available only on a connected remote host.".to_string()
+            })?;
+            let cwd = cwd
+                .filter(|path| path.to_string_lossy().starts_with('/'))
+                .ok_or_else(|| "Choose an absolute project directory for this host.".to_string())?;
+            let route = agent_launch_route.ok_or_else(|| {
+                "Choose an account discovered on this host before starting a managed agent."
+                    .to_string()
+            })?;
+            let provider = match agent {
+                CLIAgent::Claude => "claude",
+                CLIAgent::Codex => "codex",
+                CLIAgent::Gemini
+                | CLIAgent::Amp
+                | CLIAgent::Droid
+                | CLIAgent::OpenCode
+                | CLIAgent::Copilot
+                | CLIAgent::Pi
+                | CLIAgent::Auggie
+                | CLIAgent::CursorCli
+                | CLIAgent::Goose
+                | CLIAgent::DeepSeek
+                | CLIAgent::Antigravity
+                | CLIAgent::Grok
+                | CLIAgent::Unknown => {
+                    return Err("This provider has no managed entrypoint.".to_string())
+                }
+            };
+            if route.provider != provider {
+                return Err("The selected account belongs to another provider.".to_string());
+            }
+            let launch_id = managed_launch_id
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    "The managed launch identity is missing; retry from the card.".to_string()
+                })?;
+            let project_root = cwd.to_string_lossy().into_owned();
+            let (kind, spawn_mode, capacity) = match managed_mode {
+                spawn_card::ManagedLaunchMode::ManagedInteractive => {
+                    ("interactive-agent", String::new(), 0)
+                }
+                spawn_card::ManagedLaunchMode::ClaudeRemoteControl if agent == CLIAgent::Claude => {
+                    ("claude-remote-control", "worktree".to_string(), 32)
+                }
+                spawn_card::ManagedLaunchMode::ClaudeRemoteControl => {
+                    return Err("Claude Remote Control requires Claude.".to_string())
+                }
+                spawn_card::ManagedLaunchMode::Ordinary => unreachable!(),
+            };
+            let launch = remote_server::proto::ManagedLaunch {
+                schema_version: 1,
+                launch_id: launch_id.to_string(),
+                provider: provider.to_string(),
+                project_root: project_root.clone(),
+                kind: kind.to_string(),
+                spawn_mode,
+                capacity,
+                permission_mode: String::new(),
+                display_name: String::new(),
+            };
+            let server = warp_ssh_manager::with_conn(|conn| {
+                Ok(warp_ssh_manager::SshRepository::get_server(conn, node_id)?)
+            })
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("Couldn't find host '{node_id}'."))?;
+            let launch_record = crate::cockpit::launch_registry::begin_launch_with_account_id(
+                agent,
+                Some(node_id),
+                Some(cwd),
+                None,
+                account_email,
+                Some(route.account_id.as_str()),
+                None,
+                None,
+            );
+            if !self.open_managed_ssh_terminal_for_agent_account(
+                node_id.to_string(),
+                server,
+                route.clone(),
+                launch,
+                ctx,
+            ) {
+                return Err("The managed daemon route could not be opened.".to_string());
+            }
+            self.bind_active_terminal_account_with_id(
+                agent,
+                None,
+                account_email,
+                Some(route.account_id.as_str()),
+                ctx,
+            );
+            self.attach_active_terminal_launch_intent(launch_record, ctx);
+            return Ok(format!("managed:{launch_id}"));
+        }
         // Record the chosen (model, effort) against the new terminal so the
         // first native hook event can bind it to the exact provider session id.
         // Effort is in no transcript, so this registry is its only source.
@@ -5973,21 +7289,17 @@ impl Workspace {
                             ctx,
                         );
                         self.attach_active_terminal_launch_intent(launch_id, ctx);
+                        return Ok(format!("remote:{}", launch_id.opaque_id()));
                     }
+                    return Err("The remote account route could not be opened.".to_string());
                 }
                 _ => {
-                    self.toast_stack.update(ctx, |view, ctx| {
-                        view.add_ephemeral_toast(
-                            DismissibleToast::error(format!(
-                                "Couldn't find host '{node_id}' to launch {} on.",
-                                agent.display_name()
-                            )),
-                            ctx,
-                        );
-                    });
+                    return Err(format!(
+                        "Couldn't find host '{node_id}' to launch {} on.",
+                        agent.display_name()
+                    ));
                 }
             }
-            return;
         }
 
         let cmd = agent.launch_command_routed_with(config_dir, model, effort);
@@ -6019,6 +7331,150 @@ impl Workspace {
                 });
             }
         });
+        Ok(format!("local:{}", launch_id.opaque_id()))
+    }
+
+    fn show_agent_launch_error(&mut self, message: String, ctx: &mut ViewContext<Self>) {
+        self.toast_stack.update(ctx, |view, ctx| {
+            view.add_ephemeral_toast(DismissibleToast::error(message), ctx);
+        });
+    }
+
+    fn execute_spawn_batch(
+        &mut self,
+        plan_id: spawn_card::bulk::BulkLaunchPlanId,
+        targets: Vec<(
+            spawn_card::bulk::BulkLaunchTargetId,
+            spawn_card::bulk::BulkLaunchTarget,
+        )>,
+        validation_error: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        for (target_id, target) in targets {
+            let mut result = if let Some(error) = validation_error.as_ref() {
+                Err(error.clone())
+            } else {
+                let local_account_email = if target.node_id.is_none() {
+                    Self::account_email_for_route(
+                        target.agent,
+                        target.account.config_dir.as_deref(),
+                        &*ctx,
+                    )
+                } else {
+                    None
+                };
+                let account_email = target
+                    .account
+                    .account_email
+                    .as_deref()
+                    .or(local_account_email.as_deref());
+                self.launch_routed_agent_with_mode(
+                    target.agent,
+                    target.account.config_dir.as_deref(),
+                    account_email,
+                    target.account.remote_route.as_ref(),
+                    target.cwd.as_deref(),
+                    target.node_id.as_deref(),
+                    target.model.as_deref(),
+                    target.effort.as_deref(),
+                    target.managed_mode,
+                    target.managed_launch_id.as_deref(),
+                    ctx,
+                )
+            };
+            if result.is_ok() {
+                if let Some(prompt) = target.prompt.as_deref() {
+                    self.prefill_active_tab_input(prompt, ctx);
+                }
+            }
+            if target.managed_mode != spawn_card::ManagedLaunchMode::Ordinary {
+                if result.is_ok() {
+                    if let Some(launch_id) = target
+                        .managed_launch_id
+                        .as_deref()
+                        .filter(|launch_id| !launch_id.is_empty())
+                    {
+                        let expected_token = format!("managed:{launch_id}");
+                        if result.as_deref() != Ok(expected_token.as_str()) {
+                            result = Err(
+                                "The managed launch identity changed before acknowledgement."
+                                    .to_string(),
+                            );
+                            self.spawn_card.update(ctx, |card, ctx| {
+                                card.apply_launch_result(plan_id, &target_id, result, ctx);
+                            });
+                            continue;
+                        }
+                        let marked = self.spawn_card.update(ctx, |card, ctx| {
+                            card.mark_launch_in_flight(
+                                plan_id,
+                                &target_id,
+                                launch_id.to_string(),
+                                ctx,
+                            )
+                        });
+                        if marked {
+                            self.pending_managed_spawns.insert(
+                                launch_id.to_string(),
+                                PendingManagedSpawn::Batch { plan_id, target_id },
+                            );
+                            continue;
+                        }
+                        result = Err("The managed launch could not be tracked safely.".to_string());
+                    } else {
+                        result = Err("The managed launch identity is missing.".to_string());
+                    }
+                }
+            }
+            self.spawn_card.update(ctx, |card, ctx| {
+                card.apply_launch_result(plan_id, &target_id, result, ctx);
+            });
+        }
+
+        if self.spawn_card.as_ref(ctx).launch_batch_succeeded(plan_id) {
+            self.current_workspace_state.is_spawn_card_open = false;
+            self.focus_active_tab(ctx);
+        } else {
+            self.current_workspace_state.is_spawn_card_open = true;
+            ctx.focus(&self.spawn_card);
+        }
+        ctx.notify();
+    }
+
+    fn complete_managed_spawn(
+        &mut self,
+        launch_id: &str,
+        result: Result<String, String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(pending) = self.pending_managed_spawns.remove(launch_id) else {
+            return;
+        };
+        match pending {
+            PendingManagedSpawn::Batch { plan_id, target_id } => {
+                self.spawn_card.update(ctx, |card, ctx| {
+                    card.apply_launch_result(plan_id, &target_id, result.clone(), ctx);
+                });
+                if self.spawn_card.as_ref(ctx).launch_batch_succeeded(plan_id) {
+                    self.current_workspace_state.is_spawn_card_open = false;
+                    self.focus_active_tab(ctx);
+                } else if result.is_err() {
+                    self.current_workspace_state.is_spawn_card_open = true;
+                    ctx.focus(&self.spawn_card);
+                }
+            }
+            PendingManagedSpawn::Standalone => {
+                if let Err(error) = result {
+                    self.current_workspace_state.is_spawn_card_open = true;
+                    self.show_agent_launch_error(error, ctx);
+                    ctx.focus(&self.spawn_card);
+                } else {
+                    self.current_workspace_state.is_spawn_card_open = false;
+                    self.focus_active_tab(ctx);
+                }
+            }
+        }
+        ctx.notify();
     }
 
     fn toggle_ai_assistant_panel(&mut self, ctx: &mut ViewContext<Self>) {
@@ -8290,7 +9746,7 @@ impl Workspace {
         force_classic: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.open_ssh_terminal_command(node_id, server, force_classic, None, None, ctx);
+        self.open_ssh_terminal_command(node_id, server, force_classic, None, None, None, ctx);
     }
 
     #[cfg(all(unix, feature = "local_tty"))]
@@ -8315,7 +9771,7 @@ impl Workspace {
             });
             return false;
         }
-        self.open_ssh_terminal_command(node_id, server, false, None, Some(route), ctx);
+        self.open_ssh_terminal_command(node_id, server, false, None, Some(route), None, ctx);
         true
     }
 
@@ -8338,6 +9794,67 @@ impl Workspace {
         false
     }
 
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn open_managed_ssh_terminal_for_agent_account(
+        &mut self,
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+        route: remote_server::proto::AgentLaunchRoute,
+        launch: remote_server::proto::ManagedLaunch,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let supported = RemoteServerManager::as_ref(ctx)
+            .connected_daemons()
+            .into_iter()
+            .any(|daemon| {
+                daemon.registry_node_id.as_deref() == Some(node_id.as_str())
+                    && zaplex_remote_session::types::has_feature(
+                        &daemon.features,
+                        zaplex_remote_session::types::FEATURE_MANAGED_AGENT_FLEET_V1,
+                    )
+                    && zaplex_remote_session::types::has_feature(
+                        &daemon.features,
+                        zaplex_remote_session::types::FEATURE_AGENT_ACCOUNT_ROUTING_V1,
+                    )
+            });
+        if !supported
+            || !server.session_resilience.is_enabled()
+            || !crate::remote_server::headless_connect::is_headless_capable(&server)
+        {
+            self.show_agent_launch_error(
+                "Managed agents require a connected, up-to-date persistent host.".to_string(),
+                ctx,
+            );
+            return false;
+        }
+        self.open_ssh_terminal_command(
+            node_id,
+            server,
+            false,
+            None,
+            Some(route),
+            Some(launch),
+            ctx,
+        );
+        true
+    }
+
+    #[cfg(not(all(unix, feature = "local_tty")))]
+    fn open_managed_ssh_terminal_for_agent_account(
+        &mut self,
+        _node_id: String,
+        _server: warp_ssh_manager::SshServerInfo,
+        _route: remote_server::proto::AgentLaunchRoute,
+        _launch: remote_server::proto::ManagedLaunch,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        self.show_agent_launch_error(
+            "Managed agents require the native daemon transport.".to_string(),
+            ctx,
+        );
+        false
+    }
+
     fn open_multiplexer_ssh_terminal(
         &mut self,
         node_id: String,
@@ -8352,6 +9869,7 @@ impl Workspace {
             true,
             Some((mode, target.to_string())),
             None,
+            None,
             ctx,
         );
     }
@@ -8363,6 +9881,7 @@ impl Workspace {
         force_classic: bool,
         multiplexer: Option<(warp_ssh_manager::MultiplexerAttachMode, String)>,
         agent_launch_route: Option<remote_server::proto::AgentLaunchRoute>,
+        managed_launch: Option<remote_server::proto::ManagedLaunch>,
         ctx: &mut ViewContext<Self>,
     ) {
         use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshRepository, SshSecretStore};
@@ -8402,12 +9921,13 @@ impl Workspace {
                 &node_id,
                 &server_for_connection,
                 agent_launch_route.clone(),
+                managed_launch.clone(),
                 ctx,
             ) {
                 return;
             }
         }
-        if agent_launch_route.is_some() {
+        if agent_launch_route.is_some() || managed_launch.is_some() {
             self.toast_stack.update(ctx, |view, ctx| {
                 view.add_ephemeral_toast(
                     DismissibleToast::error(
@@ -8560,6 +10080,7 @@ impl Workspace {
         node_id: &str,
         server: &warp_ssh_manager::SshServerInfo,
         agent_launch_route: Option<remote_server::proto::AgentLaunchRoute>,
+        managed_launch: Option<remote_server::proto::ManagedLaunch>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         use crate::remote_server::auth_context::server_api_auth_context;
@@ -8569,7 +10090,7 @@ impl Workspace {
         use crate::remote_server::ssh_transport::{InstallProgress, SshTransport};
 
         if !server.session_resilience.is_enabled() {
-            if agent_launch_route.is_some() {
+            if agent_launch_route.is_some() || managed_launch.is_some() {
                 self.toast_stack.update(ctx, |view, ctx| {
                     view.add_ephemeral_toast(
                         DismissibleToast::error(
@@ -8589,7 +10110,7 @@ impl Workspace {
                  headless-capable (v1: key auth only); using the normal SSH path",
                 server.host
             );
-            if agent_launch_route.is_some() {
+            if agent_launch_route.is_some() || managed_launch.is_some() {
                 self.toast_stack.update(ctx, |view, ctx| {
                     view.add_ephemeral_toast(
                         DismissibleToast::error(
@@ -8623,16 +10144,14 @@ impl Workspace {
 
         let request = crate::terminal::daemon_tty::DaemonSessionRequest {
             connection_session_id: session_id,
-            open_params: crate::terminal::daemon_tty::OpenSessionParams {
-                // Per-host scrollback ceiling (MiB → bytes); 0 → daemon default.
-                ring_ceiling_bytes: (server.ring_ceiling_mb > 0)
-                    .then(|| server.ring_ceiling_mb as u64 * 1024 * 1024),
-                // Honor the host's saved startup command on the daemon path too,
-                // matching the local-PTY SSH path (run once after the session opens).
-                startup_command: server.startup_command.clone(),
-                agent_launch_route: agent_launch_route.clone(),
-                ..Default::default()
-            },
+            // Keep the daemon OpenSession mapping in one testable boundary: the
+            // selected account remains an opaque route and local config paths
+            // never enter the remote request.
+            open_params: daemon_open_session_params(
+                server,
+                agent_launch_route.as_ref(),
+                managed_launch.as_ref(),
+            ),
             adopt_pty_session_id: None,
             adopt_pty_generation: None,
             expected_agent_binding: None,
@@ -8713,7 +10232,7 @@ impl Workspace {
                         log::warn!(
                             "daemon connect [{host}] unavailable; falling back to classic SSH: {e}"
                         );
-                        if agent_launch_route.is_some() {
+                        if agent_launch_route.is_some() || managed_launch.is_some() {
                             let _ = progress_tx.try_send(format!(
                                 "Remote account routing could not start on {host}: {e}"
                             ));
@@ -8859,7 +10378,7 @@ impl Workspace {
                                         host = host.clone(),
                                         error = e.to_string()
                                     );
-                                    if agent_launch_route.is_some() {
+                                    if agent_launch_route.is_some() || managed_launch.is_some() {
                                         return;
                                     }
                                     workspace.fall_back_to_classic_ssh(
@@ -18867,6 +20386,8 @@ impl Workspace {
                 ctx.focus(&self.close_session_confirmation_dialog);
             } else if self.current_workspace_state.is_agent_guardrail_dialog_open {
                 ctx.focus(&self.agent_guardrail_dialog);
+            } else if self.current_workspace_state.is_github_flow_dialog_open {
+                ctx.focus(&self.github_flow_dialog);
             } else if self
                 .current_workspace_state
                 .is_rewind_confirmation_dialog_open
@@ -19489,6 +21010,7 @@ impl Workspace {
         spawn_card::AccountOption {
             label: a.account.label.clone(),
             config_dir: a.account.config_dir.clone(),
+            is_default: a.account.is_default,
             heat_label: zaplex_cockpit::heat_pct_label_with_provenance(
                 zaplex_cockpit::binding_window(a).0,
                 a.provenance,
@@ -19563,6 +21085,186 @@ impl Workspace {
         opts
     }
 
+    /// Revalidate and execute one dynamic Command Palette target. Palette rows
+    /// are snapshots; every branch resolves its stable key again so accepting a
+    /// row during an inventory refresh can never retarget by display name.
+    fn run_cockpit_palette_target(
+        &mut self,
+        target: crate::cockpit::palette::CockpitPaletteTarget,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::cockpit::palette::CockpitPaletteTarget;
+
+        match target {
+            CockpitPaletteTarget::Account { account_key } => {
+                let exists = crate::cockpit::CockpitModel::as_ref(ctx)
+                    .snapshot()
+                    .accounts
+                    .iter()
+                    .any(|usage| usage.account.key == account_key);
+                if !exists {
+                    self.session_not_found_toast("", ctx);
+                    return;
+                }
+                crate::cockpit::CockpitModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.select_account(account_key.clone(), ctx)
+                });
+                self.open_cockpit_pane_for(Some(account_key), ctx);
+            }
+            CockpitPaletteTarget::Session {
+                key,
+                host,
+                host_id,
+                session_id,
+                provider,
+                config_dir,
+                account_email,
+                account_id,
+                is_local,
+            } => {
+                let Some(session) = Self::inventory_agent_session(
+                    host_id.as_deref(),
+                    &session_id,
+                    provider,
+                    config_dir.as_deref(),
+                    account_email.as_deref(),
+                    account_id.as_deref(),
+                    is_local,
+                    &*ctx,
+                ) else {
+                    self.session_not_found_toast(&host, ctx);
+                    return;
+                };
+                if zaplex_cockpit::session_key(is_local, host_id.as_deref(), &session) != key {
+                    self.session_not_found_toast(&host, ctx);
+                    return;
+                }
+                self.current_workspace_state.is_attention_inbox_open = false;
+                self.attach_fleet_session(
+                    &host,
+                    host_id.as_deref(),
+                    &session_id,
+                    session.provider,
+                    session.config_dir.as_deref(),
+                    session.account_email.as_deref(),
+                    session.account_id.as_deref(),
+                    is_local,
+                    ctx,
+                );
+            }
+            CockpitPaletteTarget::Host {
+                key,
+                registry_node_id: _,
+                host_id: _,
+                host,
+                is_local: _,
+            } => {
+                let current = crate::cockpit::CockpitModel::as_ref(ctx)
+                    .inventory()
+                    .hosts
+                    .iter()
+                    .filter(|node| node.is_available())
+                    .find(|node| {
+                        format!(
+                            "host:{}",
+                            zaplex_cockpit::host_ident(node.is_local, node.host_id.as_deref())
+                        ) == key
+                    })
+                    .map(|node| {
+                        (
+                            node.registry_node_id.clone(),
+                            node.host_id.clone(),
+                            node.host.clone(),
+                            node.is_local,
+                        )
+                    });
+                let Some((registry_node_id, host_id, current_host, is_local)) = current else {
+                    self.session_not_found_toast(&host, ctx);
+                    return;
+                };
+                self.open_spawn_card(
+                    (!is_local).then_some(registry_node_id).flatten(),
+                    (!is_local).then_some(host_id).flatten(),
+                    (!is_local).then_some(current_host),
+                    None,
+                    None,
+                    None,
+                    ctx,
+                );
+            }
+            CockpitPaletteTarget::Project {
+                key,
+                registry_node_id: _,
+                host_id: _,
+                host,
+                is_local: _,
+                project_root: _,
+            } => {
+                let current = crate::cockpit::CockpitModel::as_ref(ctx)
+                    .inventory()
+                    .hosts
+                    .iter()
+                    .filter(|node| node.is_available())
+                    .find_map(|node| {
+                        node.projects.iter().find_map(|project| {
+                            let candidate = format!(
+                                "project:{}",
+                                zaplex_cockpit::host_key(
+                                    node.is_local,
+                                    node.host_id.as_deref(),
+                                    &project.root,
+                                )
+                            );
+                            (candidate == key).then(|| {
+                                (
+                                    node.registry_node_id.clone(),
+                                    node.host_id.clone(),
+                                    node.host.clone(),
+                                    node.is_local,
+                                    PathBuf::from(&project.root),
+                                )
+                            })
+                        })
+                    });
+                let Some((registry_node_id, host_id, current_host, is_local, project_root)) =
+                    current
+                else {
+                    self.session_not_found_toast(&host, ctx);
+                    return;
+                };
+                self.open_spawn_card(
+                    (!is_local).then_some(registry_node_id).flatten(),
+                    (!is_local).then_some(host_id).flatten(),
+                    (!is_local).then_some(current_host),
+                    Some(project_root),
+                    None,
+                    None,
+                    ctx,
+                );
+            }
+            CockpitPaletteTarget::GitHubFlow {
+                flow_key,
+                repository,
+                ..
+            } => {
+                if let Err(error) = repository.revalidate() {
+                    self.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack
+                            .add_ephemeral_toast(DismissibleToast::error(error.to_string()), ctx);
+                    });
+                    return;
+                }
+                self.close_all_overlays(ctx);
+                self.github_flow_dialog.update(ctx, |dialog, ctx| {
+                    dialog.begin(&flow_key, repository, ctx);
+                });
+                self.current_workspace_state.is_github_flow_dialog_open = true;
+                ctx.focus(&self.github_flow_dialog);
+                ctx.notify();
+            }
+        }
+    }
+
     /// Open the Spawn-Karte, optionally pre-scoped to a Conductor host/project.
     /// Gathers fresh account/host options, configures the card with smart
     /// defaults, then shows + focuses it.
@@ -19606,6 +21308,20 @@ impl Workspace {
         // here and the remote directory is entered in the card's remote-dir field
         // (a native folder picker can't browse a remote FS, so remote uses a text
         // input — see spawn_card.rs).
+        let managed_nodes: std::collections::HashSet<String> = RemoteServerManager::as_ref(ctx)
+            .connected_daemons()
+            .into_iter()
+            .filter(|daemon| {
+                zaplex_remote_session::types::has_feature(
+                    &daemon.features,
+                    zaplex_remote_session::types::FEATURE_MANAGED_AGENT_FLEET_V1,
+                ) && zaplex_remote_session::types::has_feature(
+                    &daemon.features,
+                    zaplex_remote_session::types::FEATURE_AGENT_ACCOUNT_ROUTING_V1,
+                )
+            })
+            .filter_map(|daemon| daemon.registry_node_id)
+            .collect();
         let hosts =
             warp_ssh_manager::with_conn(|c| Ok(warp_ssh_manager::SshRepository::list_nodes(c)?))
                 .unwrap_or_default()
@@ -19614,6 +21330,7 @@ impl Workspace {
                 .map(|n| spawn_card::HostOption {
                     id: n.id.clone(),
                     name: n.name.clone(),
+                    managed_fleet_available: managed_nodes.contains(&n.id),
                 })
                 .collect();
 
@@ -19906,6 +21623,187 @@ impl Workspace {
                     );
                 });
             }
+            SpawnCardEvent::ValidateDirectory(request) => {
+                let request = request.clone();
+                match &request.host {
+                    spawn_card::history::FolderHistoryHost::Local => {
+                        let result = if std::fs::metadata(&request.path)
+                            .is_ok_and(|metadata| metadata.is_dir())
+                        {
+                            spawn_card::history::DirectoryValidation::Valid
+                        } else {
+                            spawn_card::history::DirectoryValidation::Stale
+                        };
+                        self.spawn_card.update(ctx, |card, ctx| {
+                            card.apply_directory_validation(&request, result, ctx);
+                        });
+                    }
+                    spawn_card::history::FolderHistoryHost::Remote { node_id } => {
+                        #[cfg(not(target_family = "wasm"))]
+                        {
+                            let daemon = RemoteServerManager::as_ref(ctx)
+                                .connected_daemons()
+                                .into_iter()
+                                .find(|daemon| {
+                                    daemon.registry_node_id.as_deref() == Some(node_id.as_str())
+                                });
+                            let Some(daemon) = daemon else {
+                                self.spawn_card.update(ctx, |card, ctx| {
+                                    card.apply_directory_validation(
+                                        &request,
+                                        spawn_card::history::DirectoryValidation::Unverifiable,
+                                        ctx,
+                                    );
+                                });
+                                return;
+                            };
+                            let client = daemon.client;
+                            let path = request.path.to_string_lossy().into_owned();
+                            ctx.spawn(
+                                async move { client.list_directory(path).await },
+                                move |workspace, result, ctx| {
+                                    use remote_server::proto::list_directory_response;
+                                    let validation = match result {
+                                        Ok(response) => match response.result {
+                                            Some(list_directory_response::Result::Success(_)) => {
+                                                spawn_card::history::DirectoryValidation::Valid
+                                            }
+                                            Some(list_directory_response::Result::Error(_)) => {
+                                                spawn_card::history::DirectoryValidation::Stale
+                                            }
+                                            None => spawn_card::history::DirectoryValidation::Unverifiable,
+                                        },
+                                        Err(_) => {
+                                            spawn_card::history::DirectoryValidation::Unverifiable
+                                        }
+                                    };
+                                    workspace.spawn_card.update(ctx, |card, ctx| {
+                                        card.apply_directory_validation(
+                                            &request,
+                                            validation,
+                                            ctx,
+                                        );
+                                    });
+                                },
+                            );
+                        }
+                        #[cfg(target_family = "wasm")]
+                        self.spawn_card.update(ctx, |card, ctx| {
+                            card.apply_directory_validation(
+                                &request,
+                                spawn_card::history::DirectoryValidation::Unverifiable,
+                                ctx,
+                            );
+                        });
+                    }
+                }
+            }
+            SpawnCardEvent::LaunchBatch { plan_id, targets } => {
+                let plan_id = *plan_id;
+                let targets = targets.clone();
+                let Some((_, first)) = targets.first() else {
+                    return;
+                };
+                let route_is_consistent = targets
+                    .iter()
+                    .all(|(_, target)| target.node_id == first.node_id && target.cwd == first.cwd);
+                let account_routes_are_complete = targets.iter().all(|(_, target)| {
+                    match (target.node_id.as_deref(), target.agent) {
+                        (Some(_), CLIAgent::Claude | CLIAgent::Codex) => {
+                            target.account.remote_route.is_some()
+                                && target.account.config_dir.is_none()
+                        }
+                        (None, _) => target.account.remote_route.is_none(),
+                        (Some(_), _) => true,
+                    }
+                });
+                if !route_is_consistent || !account_routes_are_complete {
+                    self.execute_spawn_batch(
+                        plan_id,
+                        targets,
+                        Some(
+                            "The selected launch route changed. Review the preview and retry."
+                                .to_string(),
+                        ),
+                        ctx,
+                    );
+                    return;
+                }
+                let node_id = first.node_id.clone();
+                let cwd = first.cwd.clone();
+                match (node_id, cwd) {
+                    (None, Some(path)) => {
+                        let validation_error = (!std::fs::metadata(&path)
+                            .is_ok_and(|metadata| metadata.is_dir()))
+                        .then(|| {
+                            format!("The launch directory '{}' is unavailable.", path.display())
+                        });
+                        self.execute_spawn_batch(plan_id, targets, validation_error, ctx);
+                    }
+                    (None, None) | (Some(_), None) => {
+                        self.execute_spawn_batch(plan_id, targets, None, ctx);
+                    }
+                    (Some(node_id), Some(path)) => {
+                        #[cfg(not(target_family = "wasm"))]
+                        {
+                            let daemon = RemoteServerManager::as_ref(ctx)
+                                .connected_daemons()
+                                .into_iter()
+                                .find(|daemon| {
+                                    daemon.registry_node_id.as_deref() == Some(node_id.as_str())
+                                });
+                            let Some(daemon) = daemon else {
+                                self.execute_spawn_batch(
+                                    plan_id,
+                                    targets,
+                                    Some(
+                                        "Connect this host before launching into its directory."
+                                            .to_string(),
+                                    ),
+                                    ctx,
+                                );
+                                return;
+                            };
+                            let client = daemon.client;
+                            let path_label = path.display().to_string();
+                            ctx.spawn(
+                                async move {
+                                    client
+                                        .list_directory(path.to_string_lossy().into_owned())
+                                        .await
+                                },
+                                move |workspace, result, ctx| {
+                                    use remote_server::proto::list_directory_response;
+                                    let valid = result.is_ok_and(|response| {
+                                        matches!(
+                                            response.result,
+                                            Some(list_directory_response::Result::Success(_))
+                                        )
+                                    });
+                                    let error = (!valid).then(|| {
+                                        format!(
+                                            "The remote launch directory '{path_label}' is unavailable."
+                                        )
+                                    });
+                                    workspace.execute_spawn_batch(
+                                        plan_id,
+                                        targets,
+                                        error,
+                                        ctx,
+                                    );
+                                },
+                            );
+                        }
+                        #[cfg(target_family = "wasm")]
+                        self.execute_spawn_batch(
+                            plan_id,
+                            targets,
+                            Some("Remote launches require the native app.".to_string()),
+                            ctx,
+                        );
+                    }
+                }
+            }
             SpawnCardEvent::Close => {
                 self.current_workspace_state.is_spawn_card_open = false;
                 self.focus_active_tab(ctx);
@@ -19932,8 +21830,9 @@ impl Workspace {
                 model,
                 effort,
                 prompt,
+                managed_mode,
+                managed_launch_id,
             } => {
-                self.current_workspace_state.is_spawn_card_open = false;
                 let local_account_email = if node_id.is_none() {
                     Self::account_email_for_route(*agent, config_dir.as_deref(), &*ctx)
                 } else {
@@ -19942,7 +21841,7 @@ impl Workspace {
                 let account_email = remote_account_email
                     .as_ref()
                     .or(local_account_email.as_ref());
-                self.launch_routed_agent(
+                let result = self.launch_routed_agent_with_mode(
                     *agent,
                     config_dir.as_deref(),
                     account_email.map(String::as_str),
@@ -19951,8 +21850,44 @@ impl Workspace {
                     node_id.as_deref(),
                     model.as_deref(),
                     effort.as_deref(),
+                    *managed_mode,
+                    managed_launch_id.as_deref(),
                     ctx,
                 );
+                if *managed_mode == spawn_card::ManagedLaunchMode::Ordinary {
+                    self.current_workspace_state.is_spawn_card_open = false;
+                    if let Err(error) = result {
+                        self.show_agent_launch_error(error, ctx);
+                    }
+                } else {
+                    self.current_workspace_state.is_spawn_card_open = true;
+                    match result {
+                        Ok(launch_token) => match managed_launch_id
+                            .as_deref()
+                            .filter(|launch_id| !launch_id.is_empty())
+                        {
+                            Some(launch_id) if launch_token == format!("managed:{launch_id}") => {
+                                self.pending_managed_spawns
+                                    .insert(launch_id.to_string(), PendingManagedSpawn::Standalone);
+                            }
+                            Some(launch_id) => {
+                                self.show_agent_launch_error(
+                                    format!(
+                                        "The managed launch acknowledgement did not match {launch_id}."
+                                    ),
+                                    ctx,
+                                );
+                            }
+                            None => {
+                                self.show_agent_launch_error(
+                                    "The managed launch identity is missing.".to_string(),
+                                    ctx,
+                                );
+                            }
+                        },
+                        Err(error) => self.show_agent_launch_error(error, ctx),
+                    }
+                }
                 // Contextual "run this task" flows carry a prompt: prefill it into
                 // the just-launched agent's input for the human to review and send
                 // (never auto-sent) — the same in-the-loop behavior the old direct
@@ -24035,16 +25970,17 @@ impl TypedActionView for Workspace {
                     ctx,
                 );
             }
+            AttachManagedFleetSession { target } => {
+                self.attach_managed_fleet_session(target, ctx);
+            }
+            ManagedFleetLifecycle { target, action } => {
+                self.mutate_managed_fleet_session(target, *action, ctx);
+            }
             JumpToNextWaiting => {
                 self.jump_to_next_waiting(ctx);
             }
-            ViewTranscript {
-                session_id,
-                config_dir,
-                cwd,
-                watch,
-            } => {
-                self.view_transcript(session_id, config_dir, cwd, *watch, ctx);
+            ViewAgentTranscript { target, watch } => {
+                self.open_agent_transcript(target.clone(), *watch, ctx);
             }
             ReviewSession {
                 project_root,
@@ -24141,7 +26077,7 @@ impl TypedActionView for Workspace {
                 model,
                 effort,
             } => {
-                self.launch_routed_agent(
+                if let Err(error) = self.launch_routed_agent(
                     *agent,
                     config_dir.as_deref(),
                     account_email.as_deref(),
@@ -24151,7 +26087,21 @@ impl TypedActionView for Workspace {
                     model.as_deref(),
                     effort.as_deref(),
                     ctx,
-                );
+                ) {
+                    self.show_agent_launch_error(error, ctx);
+                }
+            }
+            RunCockpitPaletteTarget { target } => {
+                self.run_cockpit_palette_target(target.clone(), ctx);
+            }
+            RestartAgentSession { route } => {
+                self.restart_agent_session(route.clone(), ctx);
+            }
+            RenameAgentSession { route, name } => {
+                self.rename_agent_session(route.clone(), name, ctx);
+            }
+            CleanupStaleClaudeSession { route, candidate } => {
+                self.cleanup_stale_claude_session(route.clone(), candidate, ctx);
             }
             OpenSpawnCard {
                 registry_node_id,
@@ -26651,6 +28601,18 @@ impl View for Workspace {
         if self.current_workspace_state.is_agent_guardrail_dialog_open {
             stack.add_positioned_overlay_child(
                 ChildView::new(&self.agent_guardrail_dialog).finish(),
+                OffsetPositioning::offset_from_parent(
+                    Vector2F::zero(),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::Center,
+                    ChildAnchor::Center,
+                ),
+            );
+        }
+
+        if self.current_workspace_state.is_github_flow_dialog_open {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.github_flow_dialog).finish(),
                 OffsetPositioning::offset_from_parent(
                     Vector2F::zero(),
                     ParentOffsetBounds::WindowByPosition,

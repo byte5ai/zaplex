@@ -7,6 +7,8 @@
 //! peers that did not negotiate account routing.
 
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -39,6 +41,12 @@ pub(crate) struct AccountRouteTarget {
 
 pub(crate) type AccountRoutes = HashMap<AccountRouteKey, AccountRouteTarget>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AccountRouteIdentity {
+    DefaultAccount,
+    UnixDirectory { device: u64, inode: u64 },
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct AccountRouteCache {
     routes: AccountRoutes,
@@ -62,6 +70,79 @@ impl AccountRouteCache {
             None => Err("daemon account inventory has not been loaded".to_string()),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn replace_for_test(
+        &mut self,
+        provider: &str,
+        account_id: &str,
+        config_dir: Option<PathBuf>,
+    ) {
+        self.replace(HashMap::from([(
+            AccountRouteKey {
+                provider: provider.to_string(),
+                account_id: account_id.to_string(),
+            },
+            AccountRouteTarget {
+                provider: provider.to_string(),
+                config_dir,
+            },
+        )]));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn routes_for_test(&self) -> &AccountRoutes {
+        &self.routes
+    }
+}
+
+#[cfg(unix)]
+fn route_target_identity(target: &AccountRouteTarget) -> Result<AccountRouteIdentity, String> {
+    let Some(config_dir) = target.config_dir.as_ref() else {
+        return Ok(AccountRouteIdentity::DefaultAccount);
+    };
+    let canonical = std::fs::canonicalize(config_dir)
+        .map_err(|_| "selected daemon account is no longer available".to_string())?;
+    if canonical != *config_dir || !canonical.is_dir() {
+        return Err("selected daemon account route changed".to_string());
+    }
+    let metadata = std::fs::symlink_metadata(&canonical)
+        .map_err(|_| "selected daemon account route changed".to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("selected daemon account route changed".to_string());
+    }
+    Ok(AccountRouteIdentity::UnixDirectory {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+
+#[cfg(unix)]
+pub(crate) fn current_account_route_identity(
+    cache: &AccountRouteCache,
+    provider: &str,
+    account_id: &str,
+) -> Result<AccountRouteIdentity, String> {
+    fresh_account_route_identity(cache.current_routes()?, provider, account_id)
+}
+
+#[cfg(unix)]
+pub(crate) fn fresh_account_route_identity(
+    routes: &AccountRoutes,
+    provider: &str,
+    account_id: &str,
+) -> Result<AccountRouteIdentity, String> {
+    let key = AccountRouteKey {
+        provider: provider.to_string(),
+        account_id: account_id.to_string(),
+    };
+    let target = routes
+        .get(&key)
+        .ok_or_else(|| "unknown or ambiguous daemon account id".to_string())?;
+    if target.provider != provider {
+        return Err("agent account provider mismatch".to_string());
+    }
+    route_target_identity(target)
 }
 
 pub(crate) fn session_account_id(
@@ -306,6 +387,22 @@ pub(crate) fn prepare_launch_environment(
     route: Option<&AgentLaunchRoute>,
     env: &mut HashMap<String, String>,
 ) -> Result<(), String> {
+    if route.is_none() {
+        if reserved_provider_environment(env) {
+            return Err(
+                "provider config paths are not accepted; select a daemon account id".to_string(),
+            );
+        }
+        return Ok(());
+    }
+    prepare_launch_environment_from_routes(cache.current_routes()?, route, env)
+}
+
+pub(crate) fn prepare_launch_environment_from_routes(
+    routes: &AccountRoutes,
+    route: Option<&AgentLaunchRoute>,
+    env: &mut HashMap<String, String>,
+) -> Result<(), String> {
     let Some(route) = route else {
         if reserved_provider_environment(env) {
             return Err(
@@ -314,7 +411,6 @@ pub(crate) fn prepare_launch_environment(
         }
         return Ok(());
     };
-    let routes = cache.current_routes()?;
     if route.schema_version != ACCOUNT_ROUTING_SCHEMA_VERSION {
         return Err("unsupported agent account route version".to_string());
     }

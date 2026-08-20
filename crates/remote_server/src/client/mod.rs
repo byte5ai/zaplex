@@ -17,15 +17,15 @@ use crate::proto::{
     BindAgentPty, BufferEdit, ClientMessage, CloseBuffer, CreateDirectory, CreateDirectoryResponse,
     DeleteFile, DetachSession, ErrorCode, HostExec, HostExecResult, Initialize, InitializeResponse,
     ListAgentAccounts, ListAgentSessions, ListDirectory, ListDirectoryResponse,
-    ListMultiplexerSessions, ListSessions, LoadRepoMetadataDirectoryResponse,
-    MultiplexerSessionList, NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse,
-    OpenSession, ReadAgentTranscript, ReadFileChunk, ReadFileChunkResponse, ReadFileContextRequest,
-    ReadFileContextResponse, ResizeSession, ResolveConflict, ResolveConflictResponse, ResolvePath,
-    ResolvePathResponse, RunCommandRequest, RunCommandResponse, SafeFileCloseHandle,
-    SafeFileRequest, SafeFileResponse, SaveBuffer, SaveBufferResponse, ServerMessage,
-    SessionAttached, SessionBootstrapped, SessionInput, SessionList, SessionOpened, SessionSize,
-    SetBootstrapPreamble, StartupCommandAck, TextEdit, UnbindAgentPty, WriteFile, WriteFileChunk,
-    WriteFileChunkResponse,
+    ListMultiplexerSessions, ListSessions, LoadRepoMetadataDirectoryResponse, ManagedLaunch,
+    ManagedSessionLifecycleRequest, ManagedSessionLifecycleResponse, MultiplexerSessionList,
+    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, OpenSession, ReadAgentTranscript,
+    ReadFileChunk, ReadFileChunkResponse, ReadFileContextRequest, ReadFileContextResponse,
+    ResizeSession, ResolveConflict, ResolveConflictResponse, ResolvePath, ResolvePathResponse,
+    RunCommandRequest, RunCommandResponse, SafeFileCloseHandle, SafeFileRequest, SafeFileResponse,
+    SaveBuffer, SaveBufferResponse, ServerMessage, SessionAttached, SessionBootstrapped,
+    SessionInput, SessionList, SessionOpened, SessionSize, SetBootstrapPreamble, StartupCommandAck,
+    TextEdit, UnbindAgentPty, WriteFile, WriteFileChunk, WriteFileChunkResponse,
 };
 
 use crate::protocol::{self, ProtocolError, RequestId};
@@ -730,8 +730,18 @@ impl RemoteServerClient {
         cols: u32,
         ring_ceiling_bytes: Option<u64>,
     ) -> Result<SessionOpened, ClientError> {
-        self.open_session_with_account_route(cwd, shell, env, rows, cols, ring_ceiling_bytes, None)
-            .await
+        self.open_session_with_account_route(
+            cwd,
+            shell,
+            env,
+            rows,
+            cols,
+            ring_ceiling_bytes,
+            None,
+            None,
+            None,
+        )
+        .await
     }
 
     /// Opens a daemon-hosted PTY under an account selected from that daemon's
@@ -756,6 +766,36 @@ impl RemoteServerClient {
             cols,
             ring_ceiling_bytes,
             Some(route),
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Opens a daemon-owned managed agent after the daemon has validated the
+    /// opaque account route and its configured memory-headroom floor.
+    pub async fn open_managed_agent_session(
+        &self,
+        cwd: String,
+        shell: Option<String>,
+        env: std::collections::HashMap<String, String>,
+        rows: u32,
+        cols: u32,
+        ring_ceiling_bytes: Option<u64>,
+        route: AgentLaunchRoute,
+        launch: ManagedLaunch,
+        requested_min_available_bytes: Option<u64>,
+    ) -> Result<SessionOpened, ClientError> {
+        self.open_session_with_account_route(
+            Some(cwd),
+            shell,
+            env,
+            rows,
+            cols,
+            ring_ceiling_bytes,
+            Some(route),
+            Some(launch),
+            requested_min_available_bytes,
         )
         .await
     }
@@ -769,6 +809,8 @@ impl RemoteServerClient {
         cols: u32,
         ring_ceiling_bytes: Option<u64>,
         agent_launch_route: Option<AgentLaunchRoute>,
+        managed_launch: Option<ManagedLaunch>,
+        requested_min_available_bytes: Option<u64>,
     ) -> Result<SessionOpened, ClientError> {
         let request_id = RequestId::new();
         let msg = ClientMessage {
@@ -785,6 +827,8 @@ impl RemoteServerClient {
                 }),
                 ring_ceiling_bytes,
                 agent_launch_route,
+                managed_launch,
+                requested_min_available_bytes,
             })),
         };
         let response = self.send_request(request_id, msg).await?;
@@ -922,6 +966,28 @@ impl RemoteServerClient {
             Some(server_message::Message::SessionList(resp)) => Ok(resp),
             other => {
                 log::error!("Unexpected response variant for ListSessions: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Applies one exact generation-checked mutation to a managed daemon PTY.
+    pub async fn managed_session_lifecycle(
+        &self,
+        request: ManagedSessionLifecycleRequest,
+    ) -> Result<ManagedSessionLifecycleResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::ManagedSessionLifecycle(request)),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::ManagedSessionLifecycleResponse(response)) => {
+                Ok(response)
+            }
+            other => {
+                log::error!("Unexpected response variant for ManagedSessionLifecycle: {other:?}");
                 Err(ClientError::UnexpectedResponse)
             }
         }

@@ -115,3 +115,77 @@ fn worktree_directory_never_interprets_branch_as_a_path() {
         )
     );
 }
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn remote_account_results_require_the_exact_live_connection() {
+    let original = Arc::new(());
+    let replacement = Arc::new(());
+
+    assert!(same_connection(
+        "daemon-a", &original, "daemon-a", &original
+    ));
+    assert!(!same_connection(
+        "daemon-a", &original, "daemon-b", &original
+    ));
+    assert!(!same_connection(
+        "daemon-a",
+        &original,
+        "daemon-a",
+        &replacement
+    ));
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn remote_account_projection_preserves_only_path_free_inventory_fields() {
+    let inventory = AgentAccountInventory {
+        schema_version: 1,
+        accounts: vec![remote_server::proto::AgentAccountInfo {
+            provider: "claude".to_string(),
+            account_id: "opaque-account".to_string(),
+            display_label: "Claude account".to_string(),
+            email: "owner@example.test".to_string(),
+            organization: "Example".to_string(),
+            plan_tier: "Max".to_string(),
+            is_default: true,
+            capacity_5h: 0.75,
+            capacity_week: 0.5,
+            capacity_known: true,
+            health: "loaded".to_string(),
+            usage_provenance: "estimate".to_string(),
+        }],
+        health: "loaded".to_string(),
+        health_message: "must not cross the export boundary".to_string(),
+    };
+
+    let projected = remote_account_inventory_snapshot(
+        "daemon-a",
+        &RemoteAccountFetchOutcome::Inventory(inventory),
+    );
+
+    assert_eq!(projected.host_id, "daemon-a");
+    assert_eq!(projected.status, RemoteAccountInventoryStatus::Loaded);
+    assert_eq!(projected.accounts.len(), 1);
+    assert_eq!(projected.accounts[0].account_id, "opaque-account");
+    assert_eq!(projected.accounts[0].capacity_5h, 0.75);
+    assert!(!format!("{projected:?}").contains("must not cross"));
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn unknown_remote_account_schema_is_invalid_not_empty_loaded() {
+    let inventory = AgentAccountInventory {
+        schema_version: 2,
+        accounts: Vec::new(),
+        health: "loaded".to_string(),
+        health_message: String::new(),
+    };
+
+    let projected = remote_account_inventory_snapshot(
+        "daemon-a",
+        &RemoteAccountFetchOutcome::Inventory(inventory),
+    );
+
+    assert_eq!(projected.status, RemoteAccountInventoryStatus::Invalid);
+}

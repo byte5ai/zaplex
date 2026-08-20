@@ -73,6 +73,9 @@ message ClientMessage {
     // Bounded, provider-neutral transcript snapshot resolved entirely on the
     // daemon host. Clients must negotiate "agent-transcript-read-v1".
     ReadAgentTranscript read_agent_transcript = 39;
+    // Generation-checked managed-agent lifecycle. Clients must negotiate
+    // "managed-agent-fleet-v1"; no HostExec fallback is permitted.
+    ManagedSessionLifecycleRequest managed_session_lifecycle = 40;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -126,6 +129,7 @@ message ServerMessage {
     MultiplexerSessionList multiplexer_session_list = 35;
     AgentAccountInventory agent_account_inventory = 36;
     AgentTranscriptResponse agent_transcript_response = 37;
+    ManagedSessionLifecycleResponse managed_session_lifecycle_response = 38;
   }
 }
 
@@ -805,6 +809,24 @@ message OpenSession {
   // the daemon resolves this opaque id on its own host and injects the matching
   // provider environment variable before spawning the shell.
   AgentLaunchRoute agent_launch_route = 6;
+  // Optional daemon-owned managed-agent launch. Absence preserves the legacy
+  // ordinary PTY contract exactly.
+  ManagedLaunch managed_launch = 7;
+  // A client may raise, but never lower, the daemon headroom floor.
+  optional uint64 requested_min_available_bytes = 8;
+}
+
+message ManagedLaunch {
+  uint32 schema_version = 1;
+  string launch_id = 2;
+  string provider = 3;
+  string project_root = 4;
+  // "interactive-agent" or "claude-remote-control".
+  string kind = 5;
+  string spawn_mode = 6;
+  uint32 capacity = 7;
+  string permission_mode = 8;
+  string display_name = 9;
 }
 
 // Daemon → client: OpenSession succeeded, returns the newly assigned
@@ -935,6 +957,8 @@ message SessionInfo {
   // multi-session UI can show per-session RAM. 0 = unknown.
   uint64 ring_bytes = 6;
   uint64 generation = 7;
+  ManagedSessionInfo managed = 8;
+  MemoryMeasurement process_memory = 9;
 }
 
 // Daemon → client: result of ListSessions.
@@ -943,6 +967,85 @@ message SessionList {
   // Host-wide output-ring cap enforced by the daemon. Older daemons omit this
   // field, which decodes as 0 (unknown) and must not be guessed by the client.
   uint64 host_ring_cap_bytes = 2;
+  MemoryMeasurement host_available_memory = 3;
+  uint64 daemon_min_available_bytes = 4;
+  uint64 collected_at_epoch_millis = 5;
+  // Bounded, secret-free records for managed sessions that ended or were
+  // explicitly stopped. They are explanatory/restart identities, not live
+  // inventory rows.
+  repeated ManagedSessionExitInfo recent_managed_exits = 6;
+}
+
+message ManagedSessionInfo {
+  uint32 schema_version = 1;
+  string provider = 2;
+  string account_id = 3;
+  string project_root = 4;
+  string launch_kind = 5;
+  string launch_id = 6;
+  uint64 generation = 7;
+}
+
+message ManagedSessionExitInfo {
+  ManagedSessionInfo managed = 1;
+  string session_id = 2;
+  optional int32 exit_code = 3;
+  uint64 exited_at_epoch_millis = 4;
+  // Fixed vocabulary only: "process-ended" or "stopped".
+  string diagnostic_code = 5;
+}
+
+enum MemoryMeasurementStatus {
+  MEMORY_MEASUREMENT_STATUS_UNSPECIFIED = 0;
+  MEMORY_MEASUREMENT_STATUS_MEASURED = 1;
+  MEMORY_MEASUREMENT_STATUS_UNAVAILABLE = 2;
+  MEMORY_MEASUREMENT_STATUS_UNSUPPORTED = 3;
+}
+
+message MemoryMeasurement {
+  MemoryMeasurementStatus status = 1;
+  optional uint64 bytes = 2;
+  string provenance = 3;
+  string diagnostic_code = 4;
+}
+
+enum ManagedSessionLifecycleAction {
+  MANAGED_SESSION_LIFECYCLE_ACTION_UNSPECIFIED = 0;
+  MANAGED_SESSION_LIFECYCLE_ACTION_STOP = 1;
+  MANAGED_SESSION_LIFECYCLE_ACTION_RESTART = 2;
+}
+
+enum ManagedSessionLifecycleStatus {
+  MANAGED_SESSION_LIFECYCLE_STATUS_UNSPECIFIED = 0;
+  MANAGED_SESSION_LIFECYCLE_STATUS_STOPPED = 1;
+  MANAGED_SESSION_LIFECYCLE_STATUS_RESTARTED = 2;
+  MANAGED_SESSION_LIFECYCLE_STATUS_NOT_RUNNING = 3;
+  MANAGED_SESSION_LIFECYCLE_STATUS_STALE_IDENTITY = 4;
+  MANAGED_SESSION_LIFECYCLE_STATUS_CAPABILITY_REQUIRED = 5;
+  MANAGED_SESSION_LIFECYCLE_STATUS_BLOCKED = 6;
+  MANAGED_SESSION_LIFECYCLE_STATUS_FAILED = 7;
+}
+
+message ManagedSessionLifecycleRequest {
+  uint32 schema_version = 1;
+  ManagedSessionLifecycleAction action = 2;
+  string session_id = 3;
+  uint64 expected_generation = 4;
+  string launch_id = 5;
+  string provider = 6;
+  string account_id = 7;
+  string project_root = 8;
+}
+
+message ManagedSessionLifecycleResponse {
+  uint32 schema_version = 1;
+  ManagedSessionLifecycleAction action = 2;
+  ManagedSessionLifecycleStatus status = 3;
+  string session_id = 4;
+  uint64 generation = 5;
+  string replacement_session_id = 6;
+  uint64 replacement_generation = 7;
+  string diagnostic_code = 8;
 }
 
 // Client → daemon: enumerate existing terminal-multiplexer sessions without

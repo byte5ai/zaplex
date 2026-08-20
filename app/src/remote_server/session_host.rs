@@ -111,6 +111,9 @@ pub(super) struct Session {
     /// The session's captured bootstrap handshake, served to a later adopt whose
     /// ring has evicted it so bootstrap can still be armed (T1.3).
     pub(super) preamble: BootstrapPreamble,
+    /// Present only for daemon-owned agent fleet entries. Managed sessions are
+    /// lifecycle-mutated explicitly and are exempt from detached-session GC.
+    pub(super) managed: Option<super::managed_fleet::ManagedSessionMetadata>,
 }
 
 /// The bootstrap-handshake prefix of a daemon-hosted session (T1.3).
