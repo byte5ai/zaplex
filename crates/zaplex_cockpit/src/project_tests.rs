@@ -34,7 +34,10 @@ fn nested_cwd_in_repo_names_from_origin_url() {
     assert_eq!(p.root, repo.to_string_lossy());
     assert_eq!(p.name, "zaplex", "name comes from the origin url basename");
     assert_eq!(p.branch.as_deref(), Some("main"), "branch from .git/HEAD");
-    assert_eq!(p.worktree, None, "a primary checkout has no linked-worktree name");
+    assert_eq!(
+        p.worktree, None,
+        "a primary checkout has no linked-worktree name"
+    );
 }
 
 #[test]
@@ -177,10 +180,29 @@ fn real_repo_with_worktrees(tmp: &Path, names: &[&str]) -> Option<PathBuf> {
         ok.then_some(())
     };
     git(&["init", "-q", "-b", "main"], &main)?;
-    git(&["remote", "add", "origin", "https://github.com/byte5ai/zaplex.git"], &main)?;
+    git(
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/byte5ai/zaplex.git",
+        ],
+        &main,
+    )?;
     std::fs::write(main.join("README"), "x").ok()?;
     git(&["add", "."], &main)?;
-    git(&["-c", "user.email=t@x", "-c", "user.name=t", "commit", "-qm", "init"], &main)?;
+    git(
+        &[
+            "-c",
+            "user.email=t@x",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-qm",
+            "init",
+        ],
+        &main,
+    )?;
     for name in names {
         let wt = tmp.join(name);
         git(&["worktree", "add", "-q", "-b", name, wt.to_str()?], &main)?;
@@ -218,7 +240,10 @@ fn worktrees_of_one_repo_resolve_to_one_project() {
 
     // …named after the repo, from the shared config — not after its own folder.
     for p in [&main_p, &a, &b, &c] {
-        assert_eq!(p.name, "zaplex", "every worktree answers with the repo's name");
+        assert_eq!(
+            p.name, "zaplex",
+            "every worktree answers with the repo's name"
+        );
     }
 
     // The worktree stays an attribute, and each keeps its OWN tree: a review or a
@@ -227,7 +252,10 @@ fn worktrees_of_one_repo_resolve_to_one_project() {
     assert_eq!(a.branch.as_deref(), Some("wt-a"));
     assert_ne!(a.root, main_p.root);
     assert_ne!(a.root, b.root);
-    assert_eq!(main_p.worktree, None, "the main checkout is not a linked worktree");
+    assert_eq!(
+        main_p.worktree, None,
+        "the main checkout is not a linked worktree"
+    );
 }
 
 /// A mount alias or symlink must not split the main checkout from its linked
@@ -251,10 +279,7 @@ fn symlinked_repo_and_worktree_share_one_canonical_group() {
 
     assert_eq!(main_p.root, normalize(&main));
     assert_eq!(main_p.repo_root, worktree_p.repo_root);
-    assert_eq!(
-        main_p.repo_root,
-        normalize(&main.canonicalize().unwrap())
-    );
+    assert_eq!(main_p.repo_root, normalize(&main.canonicalize().unwrap()));
 }
 
 /// A sub-directory has always grouped under its repo; the repo key must not
@@ -334,7 +359,11 @@ fn a_partial_dot_git_is_not_a_repo_either() {
             normalize(&dir),
             "{name}: an incomplete .git is not a checkout"
         );
-        assert_eq!(resolve_project(&dir).branch, None, "{name}: and has no branch");
+        assert_eq!(
+            resolve_project(&dir).branch,
+            None,
+            "{name}: and has no branch"
+        );
     }
 }
 
@@ -347,6 +376,10 @@ fn a_dangling_worktree_pointer_is_not_a_repo() {
     fs::write(dir.join(".git"), "gitdir: /nowhere/that/exists\n").unwrap();
 
     let p = resolve_project(&dir);
-    assert_eq!(p.root, normalize(&dir), "a dangling pointer is not a worktree");
+    assert_eq!(
+        p.root,
+        normalize(&dir),
+        "a dangling pointer is not a worktree"
+    );
     assert_eq!(p.worktree, None);
 }

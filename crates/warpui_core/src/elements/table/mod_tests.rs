@@ -63,6 +63,14 @@ fn test_table_construction_with_row_render_fn() {
     assert_eq!(table.column_count(), 3);
 }
 
+#[test]
+fn test_table_accepts_optional_row_background_override() {
+    let table = Table::new(create_test_state(), 800.0, 500.0)
+        .with_row_background_fn(|row_idx, _| (row_idx == 1).then(ColorU::white));
+
+    assert!(table.row_background_fn.is_some());
+}
+
 // ============================================================================
 // Column Width Computation Tests
 // ============================================================================

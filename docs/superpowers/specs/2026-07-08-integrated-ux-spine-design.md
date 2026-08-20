@@ -3,6 +3,12 @@
 Status: **authoritative source of truth** · 2026-07-08 · consolidates and *enforces* the
 already-approved concepts that the shipped build did not honour.
 
+**Live-tree amendment (2026-08-17):** `specs/cockpit-live-host-tree/{PRODUCT,TECH}.md` is
+authoritative for the sidebar tree. The Connections panel is the registry/favorites surface; the
+tab menu shows favorite hosts; the Cockpit is the live `Host ▸ Project ▸ Session ▸ Agent` view.
+Local is always present. A remote root exists from its first open Zaplex connection until its last
+open connection closes and is never added merely because it is registered.
+
 > This doc does not invent a new concept. It reconciles the three approved sources below,
 > records where the **shipped build diverged** from them, and turns that into a prioritized,
 > code-bound fix ledger. It lives in git precisely so the concept can no longer "get lost
@@ -35,8 +41,9 @@ rest, it does not count as done.
 
 ## 2. Target: the integrated spine (decisions)
 
-1. **One object model, one tree.** The Conductor `Host ▸ Project ▸ Session {model·effort·ctx·state}`
-   is the primary navigation spine, waiting-first, collapsing under scale (master §5.5). Every
+1. **One object model, one tree.** The Conductor `Host ▸ Project ▸ Session ▸ Agent
+   {provider·model·effort·ctx·state}` is the primary navigation spine, waiting-first, with explicit
+   user-controlled disclosure at every container level. Every
    other surface (terminal panes, FM, code-review, dashboard) is reachable *from* it or *alongside*
    it, never a parallel world.
 2. **One launch grammar = the spawn card.** All app-level agent launches go through the explicit
@@ -88,10 +95,10 @@ that registry means the user enters a host **twice** (sidebar *and* dropdown) �
 bad UX. Removing the old auto-permutation "wall" without a replacement made hosts *unreachable* from
 "+" — a regression.
 
-**Principle.** The registry is the **single source of truth** for hosts. Every launch surface —
-the "+" menu, the spawn card, the object tree — **reads** from it. A host is *entered once* and
-*picked everywhere*. Multiple access points to the same registered object are good UX; a second
-data-entry is not.
+**Principle.** The registry is the **single source of truth** for configured hosts and favorites.
+The "+" menu and spawn card read references from it. The Cockpit tree deliberately reads live
+connections instead: it is operational session state, not a second registry. A host is *entered
+once*, while an open connection determines whether it participates in the live tree.
 
 **Wall vs. curated list — the distinction that matters.** The removed clutter was the
 *combinatorial cross-product* (every agent × every account × every host) rendered as flat rows —
@@ -103,8 +110,9 @@ not an automatically growing inventory.
    hosts. Each host row opens a right-hand submenu with exactly the primary actions **Terminal**
    and **New Agent**. Terminal connects to that explicit host; New Agent opens the real spawn card
    pre-scoped to that host and still requires the normal provider, account, project/directory,
-   model, and effort choices. Non-favorite hosts remain available in the sidebar tree and the spawn
-   card but never appear automatically in "+". No agent × account × host permutations return.
+   model, and effort choices. Non-favorite hosts remain available in Connections and the spawn
+   card but never appear automatically in "+". A remote host appears in the Cockpit only while
+   connected, independently of favorite state. No agent × account × host permutations return.
 2. **Launch/tab configs are for layouts, not hosts.** A saved config captures a *layout / command
    combo*; where it targets a host it stores a **reference** to the registry node (`node_id`), never
    duplicated connection data. This requires making `LeafContents::SshServer` capturable

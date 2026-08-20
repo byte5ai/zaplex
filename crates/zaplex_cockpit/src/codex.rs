@@ -7,8 +7,9 @@
 //! Privacy: reads `auth.json` only for `auth_mode` and decodes the **unverified**
 //! `id_token` JWT payload for an `email` claim. Token strings are never stored.
 
+use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -16,6 +17,13 @@ use serde_json::Value;
 use walkdir::WalkDir;
 
 use crate::types::{Account, Provider, UsageEntry};
+
+/// Result of account-root discovery before rollout/session scanning.
+#[derive(Debug, Default)]
+pub struct AccountDiscovery {
+    pub accounts: Vec<Account>,
+    pub issues: Vec<String>,
+}
 
 /// Recursively find the first sub-value under `key` anywhere in `v`.
 fn find<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
@@ -41,55 +49,153 @@ fn jwt_payload(token: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// Discover the Codex account from `<codex_home>/auth.json`. Codex multi-account is
-/// unconfirmed (design §10), so Increment 1 treats it as a single account.
-pub fn discover_accounts(codex_home: &Path) -> Vec<Account> {
+fn account_key(codex_home: &Path, is_default: bool) -> String {
+    if is_default {
+        return "codex:default".to_string();
+    }
+    let name = codex_home
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("account");
+    let suffix = name
+        .strip_prefix(".codex-")
+        .or_else(|| name.strip_prefix(".codex"))
+        .filter(|suffix| !suffix.is_empty())
+        .unwrap_or(name);
+    format!("codex:{suffix}")
+}
+
+fn account_from_root(
+    codex_home: &Path,
+    is_default: bool,
+) -> Result<Option<(Account, Option<String>)>, String> {
     let auth_path = codex_home.join("auth.json");
-    let Ok(raw) = fs::read_to_string(&auth_path) else {
-        return Vec::new();
+    let raw = match fs::read_to_string(&auth_path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Codex account sign-in file is unreadable".to_string()),
     };
-    let Ok(auth) = serde_json::from_str::<Value>(&raw) else {
-        return Vec::new();
-    };
+    let auth = serde_json::from_str::<Value>(&raw)
+        .map_err(|_| "Codex account sign-in file is malformed".to_string())?;
 
     let auth_mode = auth
         .get("auth_mode")
         .and_then(|x| x.as_str())
+        .filter(|mode| !mode.is_empty())
         .map(|s| s.to_string());
 
     // Email from the id_token JWT payload (best-effort; token itself is never stored).
-    let email = auth
+    let id_token = auth
         .get("tokens")
         .and_then(|t| t.get("id_token"))
-        .and_then(|x| x.as_str())
-        .and_then(jwt_payload)
-        .and_then(|claims| {
-            claims
-                .get("email")
-                .and_then(|e| e.as_str())
-                .map(|s| s.to_string())
-        });
+        .and_then(Value::as_str);
+    let claims = id_token.and_then(jwt_payload);
+    let email = claims.as_ref().and_then(|claims| {
+        claims
+            .get("email")
+            .and_then(|e| e.as_str())
+            .map(|s| s.to_string())
+    });
+    let account_id = auth
+        .get("tokens")
+        .and_then(|tokens| tokens.get("account_id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
+
+    if auth_mode.is_none() && account_id.is_none() && email.is_none() {
+        return Err("Codex account sign-in file is malformed".to_string());
+    }
 
     let label = email
         .clone()
         .or_else(|| auth_mode.clone())
         .unwrap_or_else(|| "codex".to_string());
 
-    vec![Account {
-        provider: Provider::Codex,
-        key: "codex:default".to_string(),
-        config_dir: codex_home.to_path_buf(),
-        label,
-        email,
-        org: None,
-        role: None,
-        // Provider ≠ plan (WS4 S2): `auth_mode` ("chatgpt" / "apikey") is *how* you
-        // authenticate, not a subscription plan. Leaking it into `plan_tier` made
-        // the sidebar render "Codex · chatgpt" (provider in the plan slot). Codex
-        // exposes no plan claim yet, so the plan is honestly unknown (`None`).
-        plan_tier: None,
-        is_default: true,
-    }]
+    Ok(Some((
+        Account {
+            provider: Provider::Codex,
+            key: account_key(codex_home, is_default),
+            config_dir: codex_home.to_path_buf(),
+            label,
+            email,
+            org: None,
+            role: None,
+            // Provider ≠ plan (WS4 S2): `auth_mode` ("chatgpt" / "apikey") is *how* you
+            // authenticate, not a subscription plan. Leaking it into `plan_tier` made
+            // the sidebar render "Codex · chatgpt" (provider in the plan slot). Codex
+            // exposes no plan claim yet, so the plan is honestly unknown (`None`).
+            plan_tier: None,
+            is_default,
+        },
+        account_id,
+    )))
+}
+
+/// Discover Codex accounts from the documented default `~/.codex` root and an
+/// optional root pinned by `$CODEX_HOME`.
+///
+/// Existing roots are canonicalized, then aliases are deduplicated by canonical
+/// path or the stable `account_id` in `auth.json`. Codex itself still exposes one
+/// account per root; this function merely unions the deterministic roots.
+pub fn discover_account_roots(home: &Path, codex_home_env: Option<&Path>) -> AccountDiscovery {
+    let default_root = home.join(".codex");
+    let mut candidates: Vec<(PathBuf, bool, bool)> = vec![(default_root.clone(), true, false)];
+    if let Some(root) = codex_home_env {
+        candidates.push((root.to_path_buf(), root == default_root.as_path(), true));
+    }
+
+    let mut accounts = Vec::new();
+    let mut issues = Vec::new();
+    let mut seen_roots = HashSet::new();
+    let mut seen_identities = HashSet::new();
+    for (root, is_default, is_pinned) in candidates {
+        let canonical_root = match fs::canonicalize(&root) {
+            Ok(canonical_root) => canonical_root,
+            Err(_) if fs::symlink_metadata(&root).is_ok() => {
+                issues.push("Codex account root is unreadable".to_string());
+                continue;
+            }
+            Err(_) if matches!(root.try_exists(), Ok(false)) => root.clone(),
+            Err(_) => {
+                issues.push("Codex account root is unreadable".to_string());
+                continue;
+            }
+        };
+        if !seen_roots.insert(canonical_root.clone()) {
+            if is_pinned && matches!(root.try_exists(), Ok(false)) {
+                issues.push("Codex pinned account root is unavailable".to_string());
+            }
+            continue;
+        }
+        match account_from_root(&canonical_root, is_default) {
+            Ok(Some((account, stable_identity))) => {
+                if stable_identity
+                    .as_ref()
+                    .is_some_and(|identity| !seen_identities.insert(identity.clone()))
+                {
+                    continue;
+                }
+                accounts.push(account);
+            }
+            Ok(None) if is_pinned && matches!(root.try_exists(), Ok(false)) => {
+                issues.push("Codex pinned account root is unavailable".to_string());
+            }
+            Ok(None) => {}
+            Err(issue) => issues.push(issue),
+        }
+    }
+    AccountDiscovery { accounts, issues }
+}
+
+/// Compatibility helper for callers that already resolved one root.
+pub fn discover_accounts(codex_home: &Path) -> Vec<Account> {
+    let root = fs::canonicalize(codex_home).unwrap_or_else(|_| codex_home.to_path_buf());
+    account_from_root(&root, true)
+        .ok()
+        .flatten()
+        .map(|(account, _)| vec![account])
+        .unwrap_or_default()
 }
 
 /// Read `input_tokens` / `output_tokens` / `cached_input_tokens` /
@@ -201,8 +307,7 @@ pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> (Vec<UsageE
                 // NotFound below it or any other error truncates the walk. See
                 // `claude::usage_for_account`.
                 let missing_root = e.depth() == 0
-                    && e.io_error().map(std::io::Error::kind)
-                        == Some(std::io::ErrorKind::NotFound);
+                    && e.io_error().map(std::io::Error::kind) == Some(std::io::ErrorKind::NotFound);
                 if !missing_root {
                     io_error = true;
                 }

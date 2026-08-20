@@ -43,6 +43,7 @@ fn session_in(
         worktree: None,
         config_dir: None,
         account_email: None,
+        account_id: None,
         process_fingerprint: None,
         pty_session_id: None,
         pty_session_generation: None,
@@ -71,6 +72,7 @@ fn remote_host(label: &str, host_id: &str) -> RemoteHost {
         label: label.into(),
         host_id: host_id.into(),
         registry_node_id: None,
+        inventory_status: AgentInventoryStatus::Ready,
     }
 }
 
@@ -195,7 +197,7 @@ fn idle_sessions_never_count_as_needs_me() {
 }
 
 #[test]
-fn fold_empty_remote_list_is_exactly_the_local_tree() {
+fn local_sessions_remain_visible_without_remote_connections() {
     // With no daemons, the fold must equal building a single-host tree from the
     // local sessions — nothing regresses when nothing is connected.
     let local = vec![
@@ -214,6 +216,27 @@ fn fold_empty_remote_list_is_exactly_the_local_tree() {
     assert_eq!(folded.hosts.len(), 1);
     assert_eq!(folded.hosts[0].host, "local");
     assert_eq!(folded.needs_me, 1);
+}
+
+#[test]
+fn first_open_remote_session_adds_one_host_root() {
+    let tree = fold_inventory(
+        "local",
+        Vec::new(),
+        vec![(
+            remote_host("devhost", "daemon-dev"),
+            vec![
+                session("agent-a", "/p/dev", SessionState::Active, 10),
+                session("agent-b", "/p/dev", SessionState::Waiting, 20),
+            ],
+        )],
+    );
+
+    assert_eq!(tree.hosts.iter().filter(|host| host.is_local).count(), 1);
+    let remotes: Vec<&HostNode> = tree.hosts.iter().filter(|host| !host.is_local).collect();
+    assert_eq!(remotes.len(), 1, "one connected host produces one root");
+    assert_eq!(remotes[0].host_id.as_deref(), Some("daemon-dev"));
+    assert_eq!(remotes[0].projects[0].sessions.len(), 2);
 }
 
 #[test]
@@ -391,17 +414,50 @@ fn fold_identity_is_host_scoped_session_id() {
 }
 
 #[test]
-fn empty_remote_hosts_are_dropped_and_empty_fleet_is_zero() {
+fn supplied_empty_remote_hosts_are_retained_and_empty_fleet_is_zero() {
     let tree = build_fleet_tree(vec![
         host("idle", vec![]),
         host("live", vec![session("a", "/p", SessionState::Active, 1)]),
     ]);
-    assert_eq!(tree.hosts.len(), 1, "the idle host is dropped");
-    assert_eq!(tree.hosts[0].host, "live");
+    assert_eq!(tree.hosts.len(), 2, "both supplied host roots stay visible");
+    assert!(tree.hosts.iter().any(|host| host.host == "idle"));
+    assert!(tree.hosts.iter().any(|host| host.host == "live"));
 
     let empty = build_fleet_tree(vec![]);
     assert!(empty.hosts.is_empty());
     assert_eq!(empty.needs_me, 0);
+}
+
+#[test]
+fn connected_empty_unsupported_and_unavailable_remotes_remain_visible() {
+    let mut unsupported = remote_host("legacy", "daemon-legacy");
+    unsupported.inventory_status = AgentInventoryStatus::Unsupported;
+    let mut unavailable = remote_host("offline-inventory", "daemon-unavailable");
+    unavailable.inventory_status = AgentInventoryStatus::Unavailable;
+
+    let tree = fold_inventory(
+        "local",
+        Vec::new(),
+        vec![
+            (remote_host("empty", "daemon-empty"), Vec::new()),
+            (unsupported, Vec::new()),
+            (unavailable, Vec::new()),
+        ],
+    );
+
+    for (host_id, status) in [
+        ("daemon-empty", AgentInventoryStatus::Ready),
+        ("daemon-legacy", AgentInventoryStatus::Unsupported),
+        ("daemon-unavailable", AgentInventoryStatus::Unavailable),
+    ] {
+        let remote = tree
+            .hosts
+            .iter()
+            .find(|host| host.host_id.as_deref() == Some(host_id))
+            .expect("every connected host remains visible without agent rows");
+        assert!(remote.projects.is_empty());
+        assert_eq!(remote.inventory_status, status);
+    }
 }
 
 #[test]
@@ -420,7 +476,7 @@ fn registered_and_live_host_snapshots_join_into_one_host_node() {
         live_host_id: Some("daemon-dev".to_string()),
     }];
 
-    merge_registered_hosts(&mut tree, &registered);
+    reconcile_connected_hosts(&mut tree, &registered);
 
     let joined: Vec<&HostNode> = tree
         .hosts
@@ -433,7 +489,7 @@ fn registered_and_live_host_snapshots_join_into_one_host_node() {
 }
 
 #[test]
-fn registered_offline_host_remains_visible_without_live_inventory() {
+fn cockpit_excludes_registry_only_hosts() {
     let mut tree = fold_inventory("local", Vec::new(), Vec::new());
     let registered = vec![RegisteredHost {
         node_id: "node-offline".to_string(),
@@ -441,16 +497,10 @@ fn registered_offline_host_remains_visible_without_live_inventory() {
         live_host_id: None,
     }];
 
-    merge_registered_hosts(&mut tree, &registered);
+    reconcile_connected_hosts(&mut tree, &registered);
 
-    let offline = tree
-        .hosts
-        .iter()
-        .find(|host| host.registry_node_id.as_deref() == Some("node-offline"))
-        .expect("registered offline host stays in the spine");
-    assert_eq!(offline.host, "offline");
-    assert!(offline.host_id.is_none());
-    assert!(offline.projects.is_empty());
+    assert_eq!(tree.hosts.len(), 1, "only the local root remains");
+    assert!(tree.hosts[0].is_local);
 }
 
 #[test]
@@ -469,7 +519,7 @@ fn live_status_enriches_registered_host_without_duplicate() {
         live_host_id: Some("daemon-dev".to_string()),
     }];
 
-    merge_registered_hosts(&mut tree, &registered);
+    reconcile_connected_hosts(&mut tree, &registered);
 
     let remote: Vec<&HostNode> = tree.hosts.iter().filter(|host| !host.is_local).collect();
     assert_eq!(remote.len(), 1, "stable ids join despite different labels");
@@ -507,7 +557,7 @@ fn same_display_name_hosts_remain_distinct_by_stable_id() {
         },
     ];
 
-    merge_registered_hosts(&mut tree, &registered);
+    reconcile_connected_hosts(&mut tree, &registered);
 
     let remotes: Vec<&HostNode> = tree.hosts.iter().filter(|host| !host.is_local).collect();
     assert_eq!(remotes.len(), 2);
@@ -526,7 +576,7 @@ fn same_display_name_hosts_remain_distinct_by_stable_id() {
 #[test]
 fn local_host_is_rendered_exactly_once() {
     let mut tree = fold_inventory("box", Vec::new(), Vec::new());
-    merge_registered_hosts(
+    reconcile_connected_hosts(
         &mut tree,
         &[RegisteredHost {
             node_id: "remote-box".to_string(),
@@ -537,12 +587,9 @@ fn local_host_is_rendered_exactly_once() {
 
     assert_eq!(tree.hosts.iter().filter(|host| host.is_local).count(), 1);
     assert_eq!(
-        tree.hosts
-            .iter()
-            .filter(|host| host.registry_node_id.as_deref() == Some("remote-box"))
-            .count(),
+        tree.hosts.len(),
         1,
-        "a same-named registered remote remains distinct from local"
+        "an offline registry host is not a live root"
     );
 }
 
@@ -558,8 +605,8 @@ fn removed_host_is_never_routed_as_available() {
         vec![(removed_remote, vec![removed_session])],
     );
 
-    merge_registered_hosts(&mut tree, &[]);
-    merge_registered_hosts(&mut tree, &[]);
+    reconcile_connected_hosts(&mut tree, &[]);
+    reconcile_connected_hosts(&mut tree, &[]);
 
     let live = tree
         .hosts

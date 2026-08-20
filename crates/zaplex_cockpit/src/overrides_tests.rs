@@ -65,9 +65,8 @@ fn label_override_is_applied() {
 fn order_sorts_ascending_with_unordered_last_stable() {
     // b→order 1, default→order 0; a and c are un-ordered and keep their
     // input relative order after the ordered ones.
-    let ov = AccountOverrides::parse(
-        r#"{"claude:b": {"order": 1}, "claude:default": {"order": 0}}"#,
-    );
+    let ov =
+        AccountOverrides::parse(r#"{"claude:b": {"order": 1}, "claude:default": {"order": 0}}"#);
     let out = ov.apply(vec![
         account("claude:a"),
         account("claude:b"),
@@ -110,7 +109,10 @@ fn combined_override_hide_relabel_recolor_reorder() {
 fn broken_json_yields_no_overrides_never_hides_accounts() {
     for bad in ["", "not json", "[1,2,3]", "{\"k\": \"not an object\"}"] {
         let ov = AccountOverrides::parse(bad);
-        assert!(ov.is_empty(), "broken input {bad:?} must yield empty overrides");
+        assert!(
+            ov.is_empty(),
+            "broken input {bad:?} must yield empty overrides"
+        );
         // And apply is a pass-through — accounts survive a broken file.
         let out = ov.apply(vec![account("claude:a")]);
         assert_eq!(keys(&out), vec!["claude:a"]);
@@ -171,7 +173,10 @@ fn clearing_an_alias_removes_it_and_tidies_up_after_itself() {
     set_label_override(&path, "claude:work", Some("   ")).unwrap();
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    assert!(v["claude:work"].get("label").is_none(), "blank is not a name");
+    assert!(
+        v["claude:work"].get("label").is_none(),
+        "blank is not a name"
+    );
     assert_eq!(v["claude:work"]["order"], 1, "the rest of the entry stays");
 
     // Now clear the last thing it held: the entry itself goes.
@@ -246,12 +251,18 @@ fn a_symlinked_file_is_followed_not_replaced() {
     set_label_override(&link, "claude:work", Some("Arbeit")).unwrap();
 
     assert!(
-        std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(),
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
         "the link must still be a link"
     );
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&real).unwrap()).unwrap();
-    assert_eq!(v["claude:work"]["label"], "Arbeit", "and the target got the edit");
+    assert_eq!(
+        v["claude:work"]["label"], "Arbeit",
+        "and the target got the edit"
+    );
     assert_eq!(v["claude:work"]["order"], 1);
 }
 

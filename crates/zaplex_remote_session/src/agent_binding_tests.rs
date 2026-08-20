@@ -9,6 +9,7 @@ fn identity(provider: &str, session_id: &str) -> AgentIdentity {
         session_id: session_id.to_string(),
         account_email: Some("agent@example.com".to_string()),
         config_dir: Some("/home/agent/.config".to_string()),
+        account_id: None,
     }
 }
 

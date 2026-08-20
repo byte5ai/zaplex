@@ -11,26 +11,28 @@ use warpui::r#async::{executor, FutureExt as _};
 
 use crate::proto::{
     client_message, read_file_chunk_response, safe_file_request, server_message, Abort,
-    AgentProcessSignal, AgentProcessSignalRequest, AgentProcessSignalResponse,
-    AgentProcessSignalStatus, AgentPtyBindingResponse, AgentSessionIdentity, AgentSessionList,
-    AttachSession, Authenticate, BindAgentPty, BufferEdit, ClientMessage, CloseBuffer,
-    CreateDirectory, CreateDirectoryResponse, DeleteFile, DetachSession, ErrorCode, HostExec,
-    HostExecResult, Initialize, InitializeResponse, ListAgentSessions, ListDirectory,
-    ListDirectoryResponse, ListMultiplexerSessions, ListSessions,
-    LoadRepoMetadataDirectoryResponse, MultiplexerSessionList, NavigatedToDirectoryResponse,
-    OpenBuffer, OpenBufferResponse, OpenSession, ReadFileChunk, ReadFileChunkResponse,
-    ReadFileContextRequest, ReadFileContextResponse, ResizeSession, ResolveConflict,
-    ResolveConflictResponse, ResolvePath, ResolvePathResponse, RunCommandRequest,
-    RunCommandResponse, SafeFileCloseHandle, SafeFileRequest, SafeFileResponse, SaveBuffer,
-    SaveBufferResponse, ServerMessage, SessionAttached, SessionBootstrapped, SessionInput,
-    SessionList, SessionOpened, SessionSize, SetBootstrapPreamble, StartupCommandAck, TextEdit,
-    UnbindAgentPty, WriteFile, WriteFileChunk, WriteFileChunkResponse,
+    AgentAccountInventory, AgentLaunchRoute, AgentProcessSignal, AgentProcessSignalRequest,
+    AgentProcessSignalResponse, AgentProcessSignalStatus, AgentPtyBindingResponse,
+    AgentSessionIdentity, AgentSessionList, AgentTranscriptResponse, AttachSession, Authenticate,
+    BindAgentPty, BufferEdit, ClientMessage, CloseBuffer, CreateDirectory, CreateDirectoryResponse,
+    DeleteFile, DetachSession, ErrorCode, HostExec, HostExecResult, Initialize, InitializeResponse,
+    ListAgentAccounts, ListAgentSessions, ListDirectory, ListDirectoryResponse,
+    ListMultiplexerSessions, ListSessions, LoadRepoMetadataDirectoryResponse,
+    MultiplexerSessionList, NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse,
+    OpenSession, ReadAgentTranscript, ReadFileChunk, ReadFileChunkResponse, ReadFileContextRequest,
+    ReadFileContextResponse, ResizeSession, ResolveConflict, ResolveConflictResponse, ResolvePath,
+    ResolvePathResponse, RunCommandRequest, RunCommandResponse, SafeFileCloseHandle,
+    SafeFileRequest, SafeFileResponse, SaveBuffer, SaveBufferResponse, ServerMessage,
+    SessionAttached, SessionBootstrapped, SessionInput, SessionList, SessionOpened, SessionSize,
+    SetBootstrapPreamble, StartupCommandAck, TextEdit, UnbindAgentPty, WriteFile, WriteFileChunk,
+    WriteFileChunkResponse,
 };
 
 use crate::protocol::{self, ProtocolError, RequestId};
 
 use warp_core::SessionId;
 use warpui::r#async::TransportStream;
+use zaplex_remote_session::types::FEATURE_AGENT_TRANSCRIPT_READ_V1;
 
 /// Default request timeout (2 minutes).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -225,11 +227,12 @@ impl RemoteServerClient {
         auth_token: Option<&str>,
     ) -> Result<InitializeResponse, ClientError> {
         let request_id = RequestId::new();
+        let features = zaplex_remote_session::types::supported_client_features();
         let msg = ClientMessage {
             request_id: request_id.to_string(),
             message: Some(client_message::Message::Initialize(Initialize {
                 auth_token: auth_token.unwrap_or_default().to_owned(),
-                features: zaplex_remote_session::types::supported_client_features(),
+                features,
             })),
         };
 
@@ -727,6 +730,46 @@ impl RemoteServerClient {
         cols: u32,
         ring_ceiling_bytes: Option<u64>,
     ) -> Result<SessionOpened, ClientError> {
+        self.open_session_with_account_route(cwd, shell, env, rows, cols, ring_ceiling_bytes, None)
+            .await
+    }
+
+    /// Opens a daemon-hosted PTY under an account selected from that daemon's
+    /// [`AgentAccountInventory`]. Callers must first negotiate
+    /// `agent-account-routing-v1`; never derive the route from a local config
+    /// path.
+    pub async fn open_session_for_agent_account(
+        &self,
+        cwd: Option<String>,
+        shell: Option<String>,
+        env: std::collections::HashMap<String, String>,
+        rows: u32,
+        cols: u32,
+        ring_ceiling_bytes: Option<u64>,
+        route: AgentLaunchRoute,
+    ) -> Result<SessionOpened, ClientError> {
+        self.open_session_with_account_route(
+            cwd,
+            shell,
+            env,
+            rows,
+            cols,
+            ring_ceiling_bytes,
+            Some(route),
+        )
+        .await
+    }
+
+    async fn open_session_with_account_route(
+        &self,
+        cwd: Option<String>,
+        shell: Option<String>,
+        env: std::collections::HashMap<String, String>,
+        rows: u32,
+        cols: u32,
+        ring_ceiling_bytes: Option<u64>,
+        agent_launch_route: Option<AgentLaunchRoute>,
+    ) -> Result<SessionOpened, ClientError> {
         let request_id = RequestId::new();
         let msg = ClientMessage {
             request_id: request_id.to_string(),
@@ -741,6 +784,7 @@ impl RemoteServerClient {
                     pixel_height: 0,
                 }),
                 ring_ceiling_bytes,
+                agent_launch_route,
             })),
         };
         let response = self.send_request(request_id, msg).await?;
@@ -928,6 +972,61 @@ impl RemoteServerClient {
             Some(server_message::Message::AgentSessionList(resp)) => Ok(resp),
             other => {
                 log::error!("Unexpected response variant for ListAgentSessions: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Lists the daemon host's secret-free AI-account inventory. Callers must
+    /// negotiate `agent-account-routing-v1`; returned account ids are valid
+    /// only for launch routing on this same daemon host.
+    pub async fn list_agent_accounts(&self) -> Result<AgentAccountInventory, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::ListAgentAccounts(
+                ListAgentAccounts {},
+            )),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::AgentAccountInventory(response)) => Ok(response),
+            other => {
+                log::error!("Unexpected response variant for ListAgentAccounts: {other:?}");
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Reads a bounded transcript snapshot from the daemon that owns the
+    /// provider account and session. The request carries no filesystem path;
+    /// callers must pass an opaque account id from [`Self::list_agent_accounts`]
+    /// and require [`FEATURE_AGENT_TRANSCRIPT_READ_V1`] on the peer.
+    pub async fn read_agent_transcript(
+        &self,
+        provider: String,
+        account_id: String,
+        session_id: String,
+        known_revision: Option<String>,
+    ) -> Result<AgentTranscriptResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage {
+            request_id: request_id.to_string(),
+            message: Some(client_message::Message::ReadAgentTranscript(
+                ReadAgentTranscript {
+                    schema_version: 1,
+                    provider,
+                    account_id,
+                    session_id,
+                    known_revision: known_revision.unwrap_or_default(),
+                },
+            )),
+        };
+        let response = self.send_request(request_id, msg).await?;
+        match response.message {
+            Some(server_message::Message::AgentTranscriptResponse(response)) => Ok(response),
+            other => {
+                log::error!("Unexpected response variant for ReadAgentTranscript: {other:?}");
                 Err(ClientError::UnexpectedResponse)
             }
         }

@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="ui-spec-status" content="approved-2026-08-19">
+  <meta name="ui-spec-route" content="/native/cockpit-sidebar-connections">
+  <meta name="ui-spec-viewports" content="1280x900,760x760">
+  <meta name="ui-spec-issue" content="160">
+  <title>UI-Spezifikation — Cockpit-Sidebar und Verbindungen</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --canvas: #090c12;
+      --app: #0e121a;
+      --sidebar: #111620;
+      --surface: #171d28;
+      --surface-raised: #1d2431;
+      --surface-soft: #202837;
+      --border: #2b3444;
+      --hairline: #2b3444b8;
+      --text: #edf0f5;
+      --muted: #9aa5b6;
+      --faint: #657185;
+      --accent: #8b80f8;
+      --claude: #d98254;
+      --codex: #4aa7e8;
+      --working: #4fc891;
+      --waiting: #dfa64f;
+      --idle: #768397;
+      --waiting-row: #dfa64f12;
+      --radius-card: 11px;
+      --radius-control: 6px;
+      --sidebar-width: 304px;
+      color: var(--text);
+      background: var(--canvas);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; }
+    button { font: inherit; }
+    #spec,
+    #mockups { width: min(1180px, 100%); margin: 0 auto 24px; }
+    #spec {
+      padding: 17px 19px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+    #spec h1 { margin: 0 0 13px; font-size: 18px; }
+    .spec-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
+    .spec-block h2 {
+      margin: 0 0 5px;
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .spec-block ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 11px; }
+    .spec-block li + li { margin-top: 3px; }
+    .spec-block code { color: var(--text); font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .state-matrix {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 15px;
+      padding-top: 14px;
+      border-top: 1px solid var(--hairline);
+    }
+    .state-card { min-width: 0; color: var(--muted); font-size: 11px; }
+    .state-card strong { display: block; margin-bottom: 3px; color: var(--text); font-size: 11px; }
+    .state-card code { color: var(--text); }
+    #mockups { display: grid; gap: 24px; }
+    .viewport {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--app);
+      box-shadow: 0 18px 60px #0009;
+    }
+    .viewport-label {
+      padding: 7px 11px;
+      border-bottom: 1px solid var(--border);
+      color: var(--faint);
+      font-size: 10px;
+    }
+    .window-bar {
+      display: grid;
+      grid-template-columns: var(--sidebar-width) 1fr auto;
+      height: 38px;
+      border-bottom: 1px solid var(--border);
+      background: #121722;
+    }
+    .traffic-lights { display: flex; align-items: center; gap: 7px; padding-left: 13px; }
+    .traffic-lights span { width: 9px; height: 9px; border-radius: 50%; background: #f06a64; }
+    .traffic-lights span:nth-child(2) { background: #e5b754; }
+    .traffic-lights span:nth-child(3) { background: #55bf70; }
+    .tab-title {
+      display: grid;
+      place-items: center;
+      border-left: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .window-actions { display: flex; align-items: center; gap: 13px; padding: 0 13px; color: var(--faint); }
+    .app { min-height: 650px; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
+    .sidebar {
+      min-width: 0;
+      padding: 11px 10px;
+      border-right: 1px solid var(--border);
+      background: var(--sidebar);
+    }
+    .sidebar-toolbar {
+      display: flex;
+      min-height: 29px;
+      align-items: center;
+      gap: 13px;
+      padding: 0 3px 8px;
+      color: var(--faint);
+    }
+    .sidebar-toolbar .active { color: var(--text); }
+    .sidebar-toolbar .close { margin-left: auto; }
+    .sidebar-toolbar svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    .zone {
+      overflow: hidden;
+      border: .5px solid var(--border);
+      border-radius: var(--radius-card);
+      background: var(--surface);
+    }
+    .zone + .zone { margin-top: 9px; }
+    .zone-head {
+      display: flex;
+      min-height: 34px;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px 6px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .zone-head .count { color: var(--faint); font-weight: 500; }
+    .zone-head .head-end { display: flex; align-items: center; gap: 7px; margin-left: auto; }
+    .attention-count { display: inline-flex; align-items: center; gap: 5px; color: var(--waiting); font-variant-numeric: tabular-nums; }
+    .tree { margin: 0; padding: 0 5px 7px; list-style: none; }
+    .tree-row {
+      display: grid;
+      grid-template-columns: 12px minmax(0, 1fr);
+      min-height: 27px;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 5px;
+      border-radius: 5px;
+    }
+    .tree-row:hover { background: var(--surface-raised); }
+    .tree-row.level-1 { padding-left: 20px; color: #cdd3de; }
+    .tree-row.level-2 { padding-left: 36px; color: var(--muted); }
+    .tree-row.level-3 { grid-template-columns: 9px minmax(0, 1fr); padding-left: 55px; }
+    .chevron { color: var(--faint); font-size: 9px; text-align: center; }
+    .tree-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .tree-row.level-0 .tree-label { font-weight: 620; }
+    .agent-name { color: var(--text); }
+    .agent-model { color: var(--faint); font-size: 11px; }
+    .state-dot {
+      position: relative;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      color: var(--idle);
+      background: var(--idle);
+    }
+    .state-dot.working { color: var(--working); background: var(--working); }
+    .state-dot.waiting { color: var(--waiting); background: var(--waiting); }
+    .state-dot.idle { border: 1px solid var(--idle); background: transparent; }
+    .tree .state-dot.waiting::after,
+    .attention-count .state-dot.waiting::after {
+      position: absolute;
+      inset: 0;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      content: "";
+      animation: wait-pulse 1.6s ease-out infinite;
+      transform-origin: center;
+    }
+    @keyframes wait-pulse {
+      0% { opacity: .68; transform: scale(1); }
+      72%, 100% { opacity: 0; transform: scale(2); }
+    }
+    .account-list { display: grid; gap: 3px; padding: 0 6px 7px; }
+    .account-tile {
+      display: grid;
+      grid-template-columns: 10px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      padding: 8px 7px;
+      border-radius: 6px;
+    }
+    .account-tile.selected { background: var(--surface-soft); }
+    .provider-mark { width: 9px; height: 9px; margin-top: 3px; border-radius: 3px; background: var(--claude); }
+    .provider-mark.codex { background: var(--codex); }
+    .account-copy { min-width: 0; }
+    .account-copy strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
+    .account-copy small { display: block; margin-top: 1px; color: var(--muted); font-size: 10px; }
+    .account-meters { grid-column: 2; display: grid; gap: 3px; margin-top: 2px; }
+    .account-meter { display: grid; grid-template-columns: 34px minmax(38px, 1fr) 28px; align-items: center; gap: 5px; color: var(--faint); font-size: 9px; font-variant-numeric: tabular-nums; }
+    .account-meter .track { overflow: hidden; height: 4px; border-radius: 2px; background: #343d4c; }
+    .account-meter .fill { display: block; height: 100%; border-radius: inherit; background: var(--muted); }
+    .account-meter.warning .fill { background: #e07883; }
+    .main-pane { min-width: 0; padding: 14px 15px 18px; background: var(--app); }
+    .provider-pane + .provider-pane { margin-top: 17px; padding-top: 16px; border-top: 1px solid var(--border); }
+    .identity-card {
+      display: grid;
+      grid-template-columns: minmax(150px, 1.4fr) repeat(3, minmax(88px, .7fr));
+      gap: 12px;
+      align-items: center;
+      min-height: 66px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      background: var(--surface);
+    }
+    .identity-copy strong { display: flex; align-items: center; gap: 7px; font-size: 14px; }
+    .identity-copy strong .provider-mark { flex: 0 0 auto; margin-top: 0; }
+    .identity-copy small { color: var(--muted); font-size: 10px; }
+    .usage-metric small { display: block; color: var(--faint); font-size: 9px; }
+    .usage-metric strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+    .usage-metric.warning strong { color: #e07883; }
+    .sessions-card {
+      overflow: hidden;
+      margin-top: 9px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      background: var(--surface);
+    }
+    .sessions-head { display: flex; align-items: center; padding: 8px 10px 5px; color: var(--muted); font-size: 9px; }
+    .sessions-head .summary { margin-left: auto; color: var(--faint); }
+    .table-row {
+      display: grid;
+      grid-template-columns: minmax(120px, 1.15fr) minmax(90px, .95fr) 90px minmax(92px, .85fr) 60px 72px;
+      align-items: center;
+      min-height: 30px;
+      padding: 0 9px;
+      border-top: 1px solid var(--hairline);
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .table-row.header { min-height: 26px; color: var(--faint); font-size: 9px; }
+    .table-row.waiting-row {
+      background: var(--waiting-row);
+    }
+    .table-cell { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .table-cell.status { display: inline-flex; align-items: center; gap: 6px; }
+    .table-cell.status .state-dot { flex: 0 0 auto; }
+    .connections-layout { min-height: 430px; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
+    .connections-list { padding: 0 5px 7px; }
+    .connection-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 22px 22px;
+      min-height: 31px;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 5px 2px 8px;
+      border-radius: 5px;
+    }
+    .connection-row:hover { background: var(--surface-raised); }
+    .connection-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .icon-action {
+      display: grid;
+      width: 22px;
+      height: 22px;
+      place-items: center;
+      padding: 0;
+      border: 0;
+      border-radius: 4px;
+      color: var(--faint);
+      background: transparent;
+    }
+    .icon-action:hover { color: var(--text); background: #ffffff0a; }
+    .icon-action.favorite { color: #8177eb; }
+    .icon-action svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    .icon-action.plugged { color: var(--working); }
+    .connection-main { position: relative; display: grid; place-items: start center; padding: 44px 20px; background: var(--app); }
+    .favorite-menu { width: min(470px, 100%); padding: 7px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+    .favorite-menu-title { padding: 7px 9px; color: var(--faint); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+    .favorite-menu-row { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 7px; min-height: 35px; padding: 0 9px; border-radius: 6px; color: var(--muted); }
+    .favorite-menu-row:hover { color: var(--text); background: var(--surface-raised); }
+    .favorite-menu-row .star { color: #8177eb; }
+    .favorite-menu-row small { color: var(--faint); }
+    .narrow-viewport { width: min(760px, 100%); margin: 0 auto; }
+    .narrow-viewport .window-bar { grid-template-columns: 258px 1fr auto; }
+    .narrow-viewport .app { grid-template-columns: 258px minmax(0, 1fr); min-height: 520px; }
+    .narrow-viewport .main-pane { padding: 11px; }
+    .narrow-viewport .identity-card { grid-template-columns: minmax(120px, 1.2fr) repeat(2, 72px); }
+    .narrow-viewport .identity-card .usage-metric:nth-child(4) { display: none; }
+    .narrow-viewport .table-row { grid-template-columns: minmax(105px, 1fr) 58px 72px; }
+    .narrow-viewport .table-row > :nth-child(2),
+    .narrow-viewport .table-row > :nth-child(3),
+    .narrow-viewport .table-row > :nth-child(4) { display: none; }
+    .narrow-viewport .provider-pane + .provider-pane { display: none; }
+    .narrow-viewport .tree-row.level-3 { padding-left: 49px; }
+    body:has(.viewport:target) #spec,
+    body:has(.viewport:target) .viewport:not(:target) { display: none; }
+    .viewport:target { width: 100%; margin: 0; }
+    @media (max-width: 800px) {
+      body { padding: 10px; }
+      .spec-grid { grid-template-columns: 1fr 1fr; }
+      .state-matrix { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 560px) {
+      .spec-grid { grid-template-columns: 1fr; }
+      .narrow-viewport .window-bar { grid-template-columns: 1fr auto; }
+      .narrow-viewport .traffic-lights { display: none; }
+      .narrow-viewport .app { grid-template-columns: 1fr; }
+      .narrow-viewport .main-pane { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .tree .state-dot.waiting::after,
+      .attention-count .state-dot.waiting::after {
+        opacity: .36;
+        animation: none;
+        transform: scale(1.45);
+      }
+    }
+  </style>
+</head>
+<body>
+  <section id="spec">
+    <h1>UI-Spezifikation — Cockpit-Sidebar und Verbindungen (#160)</h1>
+    <div class="spec-grid">
+      <div class="spec-block">
+        <h2>Flächen und Quellen</h2>
+        <ul>
+          <li><code>#spec C1</code> Verbindungen ist das eigenständige Register für alle konfigurierten Hosts und deren Favoriten.</li>
+          <li><code>#spec C2</code> Das Tab-Menü projiziert ausschließlich favorisierte Hosts; es speichert keine zweite Konfiguration.</li>
+          <li><code>#spec C3</code> Es entsteht keine neue vertikale Symbolleiste. Die vorhandene Sidebar-Navigation bleibt unverändert.</li>
+        </ul>
+      </div>
+      <div class="spec-block">
+        <h2>Live-Baum</h2>
+        <ul>
+          <li><code>#spec T1</code> Hierarchie: Host → Projekt → PTY-Session → Agent.</li>
+          <li><code>#spec T2</code> Lokal ist immer sichtbar; ein Remote-Host nur von der ersten bis zur letzten offenen Verbindung.</li>
+          <li><code>#spec T3</code> Container starten aufgeklappt. Zähler erscheinen nur im zugeklappten Zustand.</li>
+        </ul>
+      </div>
+      <div class="spec-block">
+        <h2>Status und Identität</h2>
+        <ul>
+          <li><code>#spec S1</code> Im Baum stehen keine Wörter wie „wartet“, „aktiv“ oder „idle“; lokalisierte Tooltips und Accessibility-Namen erklären die Glyphen.</li>
+          <li><code>#spec S2</code> Nur „wartet auf Dich“ pulsiert: 1,6 s, Ring maximal etwa 2× Punktdurchmesser; Reduced Motion zeigt einen statischen Halo.</li>
+          <li><code>#spec I1</code> Provider ist die Überschrift, das Konto die Unterzeile; identische Konto-/E-Mail-Werte werden nie doppelt gerendert.</li>
+        </ul>
+      </div>
+      <div class="spec-block">
+        <h2>Abnahme</h2>
+        <ul>
+          <li><code>#spec A1</code> Offline-Registry-Hosts fehlen im Cockpit, bleiben aber in Verbindungen und als Favorit im Tab-Menü erhalten.</li>
+          <li><code>#spec A2</code> Stecker und Stern haben feste 22-px-Slots; keine Statusprosa verschiebt Hostnamen.</li>
+          <li><code>#spec A3</code> Große Tabellen markieren eine wartende Session dezent über die ganze Zeile; Detailansichten dürfen Statuswörter verwenden.</li>
+          <li><code>#spec A4</code> Hover ändert nur Farbe/Füllung und niemals Geometrie oder Inhalt.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="state-matrix" aria-label="Verbindliche Zustände">
+      <div class="state-card"><strong>Verbindung</strong><code>verbunden</code> = grüner intakter Stecker; <code>getrennt</code> = gedämpfter Stecker mit Diagonale. Der Hostname bleibt neutral.</div>
+      <div class="state-card"><strong>Agent im Baum</strong><code>wartet</code> = orange, pulsierend; <code>arbeitet</code> = grün, gefüllt; <code>idle</code> = neutraler Ring. Kein sichtbarer Statustext.</div>
+      <div class="state-card"><strong>Inventar</strong>Ein verbundener Host bleibt auch bei leerem, nicht unterstütztem oder temporär nicht verfügbarem KI-Inventar sichtbar; ein kurzer Inline-Hinweis erklärt den Sonderzustand.</div>
+    </div>
+  </section>
+
+  <main id="mockups">
+    <article class="viewport" id="cockpit-desktop">
+      <div class="viewport-label">Desktop · Cockpit mit Live-Baum und entdoppelten Konten</div>
+      <div class="window-bar">
+        <div class="traffic-lights" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="tab-title">Cockpit</div>
+        <div class="window-actions" aria-hidden="true"><span>＋</span><span>⌘</span><span>⚙</span></div>
+      </div>
+      <div class="app">
+        <aside class="sidebar" aria-label="Cockpit-Sidebar">
+          <div class="sidebar-toolbar" aria-label="Bestehende Sidebar-Werkzeuge">
+            <span class="active">▦</span>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="m10.5 10.5 3 3"></path></svg>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"></path></svg>
+            <span class="close">×</span>
+          </div>
+          <section class="zone">
+            <div class="zone-head">
+              <span>Sessions</span><span class="count">4</span>
+              <span class="head-end"><span class="attention-count" title="1 Session wartet auf Dich"><span class="state-dot waiting" role="img" aria-label="Wartet auf Dich"></span><span>1</span></span></span>
+            </div>
+            <ul class="tree">
+              <li>
+                <div class="tree-row level-0"><span class="chevron">⌄</span><span class="tree-label">Dieser Mac</span></div>
+                <div class="tree-row level-1"><span class="chevron">⌄</span><span class="tree-label">atlas-console</span></div>
+                <div class="tree-row level-2"><span class="chevron">⌄</span><span class="tree-label">Terminal 2</span></div>
+                <div class="tree-row level-3" title="Claude · Opus 4.1 · wartet auf Dich"><span class="state-dot waiting" role="img" aria-label="Wartet auf Dich"></span><span class="tree-label agent-name">Claude <span class="agent-model">· Opus 4.1</span></span></div>
+                <div class="tree-row level-3" title="Codex · gpt-5.6 · arbeitet"><span class="state-dot working" role="img" aria-label="Arbeitet"></span><span class="tree-label agent-name">Codex <span class="agent-model">· gpt-5.6</span></span></div>
+              </li>
+              <li>
+                <div class="tree-row level-0"><span class="chevron">⌄</span><span class="tree-label">build-node</span></div>
+                <div class="tree-row level-1"><span class="chevron">⌄</span><span class="tree-label">payment-api</span></div>
+                <div class="tree-row level-2"><span class="chevron">⌄</span><span class="tree-label">Terminal 1</span></div>
+                <div class="tree-row level-3" title="Claude · Sonnet 4.6 · arbeitet"><span class="state-dot working" role="img" aria-label="Arbeitet"></span><span class="tree-label agent-name">Claude <span class="agent-model">· Sonnet 4.6</span></span></div>
+                <div class="tree-row level-1"><span class="chevron">⌄</span><span class="tree-label">docs-site</span></div>
+                <div class="tree-row level-2"><span class="chevron">⌄</span><span class="tree-label">Terminal 3</span></div>
+                <div class="tree-row level-3" title="Codex · gpt-5.6 · idle"><span class="state-dot idle" role="img" aria-label="Idle"></span><span class="tree-label agent-name">Codex <span class="agent-model">· gpt-5.6</span></span></div>
+              </li>
+            </ul>
+          </section>
+          <section class="zone">
+            <div class="zone-head"><span>KI-Konten</span><span class="count">2</span></div>
+            <div class="account-list">
+              <div class="account-tile selected"><span class="provider-mark"></span><span class="account-copy"><strong>Claude</strong><small>team@example.invalid · Max</small></span><span class="account-meters"><span class="account-meter"><span>5 h</span><span class="track"><span class="fill" style="width:23%"></span></span><span>23 %</span></span><span class="account-meter warning"><span>Woche</span><span class="track"><span class="fill" style="width:95%"></span></span><span>95 %</span></span></span></div>
+              <div class="account-tile"><span class="provider-mark codex"></span><span class="account-copy"><strong>Codex</strong><small>studio@example.invalid · Team</small></span><span class="account-meters"><span class="account-meter"><span>5 h</span><span class="track"><span class="fill" style="width:8%"></span></span><span>8 %</span></span><span class="account-meter"><span>Woche</span><span class="track"><span class="fill" style="width:21%"></span></span><span>21 %</span></span></span></div>
+            </div>
+          </section>
+        </aside>
+
+        <section class="main-pane" aria-label="Konten-Details">
+          <section class="provider-pane">
+            <div class="identity-card">
+              <div class="identity-copy"><strong><span class="provider-mark"></span>Claude</strong><small>team@example.invalid · Max</small></div>
+              <div class="usage-metric"><small>5 Stunden</small><strong>23 %</strong></div>
+              <div class="usage-metric warning"><small>Woche</small><strong>95 %</strong></div>
+              <div class="usage-metric"><small>Heute</small><strong>~$42.80</strong></div>
+            </div>
+            <div class="sessions-card">
+              <div class="sessions-head"><span>Sessions</span><span class="summary">Alle 3 · wartet 1 · aktiv 1 · idle 1</span></div>
+              <div class="table-row header"><span class="table-cell">Session</span><span class="table-cell">Projekt</span><span class="table-cell">Host</span><span class="table-cell">Modell</span><span class="table-cell">Kontext</span><span class="table-cell">Status</span></div>
+              <div class="table-row waiting-row"><span class="table-cell">Navigation prüfen</span><span class="table-cell">atlas-console</span><span class="table-cell">Dieser Mac</span><span class="table-cell">Opus 4.1</span><span class="table-cell">42 %</span><span class="table-cell status"><span class="state-dot waiting"></span>wartet</span></div>
+              <div class="table-row"><span class="table-cell">API-Verträge</span><span class="table-cell">payment-api</span><span class="table-cell">build-node</span><span class="table-cell">Sonnet 4.6</span><span class="table-cell">18 %</span><span class="table-cell status"><span class="state-dot working"></span>aktiv</span></div>
+              <div class="table-row"><span class="table-cell">Release-Notizen</span><span class="table-cell">docs-site</span><span class="table-cell">build-node</span><span class="table-cell">Sonnet 4.6</span><span class="table-cell">—</span><span class="table-cell status"><span class="state-dot idle"></span>idle</span></div>
+            </div>
+          </section>
+          <section class="provider-pane">
+            <div class="identity-card">
+              <div class="identity-copy"><strong><span class="provider-mark codex"></span>Codex</strong><small>studio@example.invalid · Team</small></div>
+              <div class="usage-metric"><small>5 Stunden</small><strong>8 %</strong></div>
+              <div class="usage-metric"><small>Woche</small><strong>21 %</strong></div>
+              <div class="usage-metric"><small>Heute</small><strong>~$0.00</strong></div>
+            </div>
+            <div class="sessions-card">
+              <div class="sessions-head"><span>Sessions</span><span class="summary">Alle 2 · aktiv 1 · idle 1</span></div>
+              <div class="table-row header"><span class="table-cell">Session</span><span class="table-cell">Projekt</span><span class="table-cell">Host</span><span class="table-cell">Modell</span><span class="table-cell">Kontext</span><span class="table-cell">Status</span></div>
+              <div class="table-row"><span class="table-cell">Layout verfeinern</span><span class="table-cell">atlas-console</span><span class="table-cell">Dieser Mac</span><span class="table-cell">gpt-5.6</span><span class="table-cell">27 %</span><span class="table-cell status"><span class="state-dot working"></span>aktiv</span></div>
+              <div class="table-row"><span class="table-cell">Doku-Audit</span><span class="table-cell">docs-site</span><span class="table-cell">build-node</span><span class="table-cell">gpt-5.6</span><span class="table-cell">9 %</span><span class="table-cell status"><span class="state-dot idle"></span>idle</span></div>
+            </div>
+          </section>
+        </section>
+      </div>
+    </article>
+
+    <article class="viewport" id="connections-desktop">
+      <div class="viewport-label">Desktop · eigenständiges Element „Verbindungen“ und Favoriten-Projektion im Tab-Menü</div>
+      <div class="window-bar">
+        <div class="traffic-lights" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="tab-title">Neue Session</div>
+        <div class="window-actions" aria-hidden="true"><span>＋</span><span>⌘</span><span>⚙</span></div>
+      </div>
+      <div class="connections-layout">
+        <aside class="sidebar" aria-label="Verbindungen">
+          <div class="sidebar-toolbar" aria-label="Bestehende Sidebar-Werkzeuge">
+            <span>▦</span>
+            <svg class="active" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v3M10.5 3.5v3M4 6.5h8v2a4 4 0 0 1-4 4 4 4 0 0 1-4-4z"></path><path d="M8 12.5v2"></path></svg>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="m10.5 10.5 3 3"></path></svg>
+            <span class="close">×</span>
+          </div>
+          <section class="zone">
+            <div class="zone-head"><span>Verbindungen</span><span class="count">3</span><span class="head-end"><span title="Host hinzufügen">＋</span><span title="Verbindungen verwalten">⚙</span></span></div>
+            <div class="connections-list">
+              <div class="connection-row">
+                <span class="connection-name">build-node</span>
+                <button class="icon-action favorite" title="Aus Favoriten entfernen" aria-label="build-node aus Favoriten entfernen">★</button>
+                <button class="icon-action plugged" title="Verbunden" aria-label="build-node ist verbunden"><svg viewBox="0 0 16 16"><path d="M5.5 2.5v4M10.5 2.5v4M4 6.5h8v2a4 4 0 0 1-8 0zM8 12.5v2"></path></svg></button>
+              </div>
+              <div class="connection-row">
+                <span class="connection-name">staging-box</span>
+                <button class="icon-action favorite" title="Aus Favoriten entfernen" aria-label="staging-box aus Favoriten entfernen">★</button>
+                <button class="icon-action" title="Nicht verbunden" aria-label="staging-box ist nicht verbunden"><svg viewBox="0 0 16 16"><path d="M5.5 2.5v4M10.5 2.5v4M4 6.5h8v2a4 4 0 0 1-8 0zM8 12.5v2M2.5 2.5l11 11"></path></svg></button>
+              </div>
+              <div class="connection-row">
+                <span class="connection-name">review-node</span>
+                <button class="icon-action" title="Zu Favoriten hinzufügen" aria-label="review-node zu Favoriten hinzufügen">☆</button>
+                <button class="icon-action plugged" title="Verbunden" aria-label="review-node ist verbunden"><svg viewBox="0 0 16 16"><path d="M5.5 2.5v4M10.5 2.5v4M4 6.5h8v2a4 4 0 0 1-8 0zM8 12.5v2"></path></svg></button>
+              </div>
+            </div>
+          </section>
+        </aside>
+        <section class="connection-main">
+          <div class="favorite-menu" aria-label="Favorisierte Hosts im Tab-Menü">
+            <div class="favorite-menu-title">Neue Session · Favorisierte Hosts</div>
+            <div class="favorite-menu-row"><span class="star">★</span><span>build-node</span><small>›</small></div>
+            <div class="favorite-menu-row"><span class="star">★</span><span>staging-box</span><small>›</small></div>
+          </div>
+        </section>
+      </div>
+    </article>
+
+    <article class="viewport narrow-viewport" id="cockpit-narrow">
+      <div class="viewport-label">Schmale Breite · gleiche Hierarchie, weniger Tabellenspalten, keine zusätzliche Icon-Leiste</div>
+      <div class="window-bar">
+        <div class="traffic-lights" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="tab-title">Cockpit</div>
+        <div class="window-actions" aria-hidden="true"><span>＋</span><span>⚙</span></div>
+      </div>
+      <div class="app">
+        <aside class="sidebar" aria-label="Schmale Cockpit-Sidebar">
+          <div class="sidebar-toolbar" aria-label="Bestehende Sidebar-Werkzeuge"><span class="active">▦</span><span>⌕</span><span>▱</span><span class="close">×</span></div>
+          <section class="zone">
+            <div class="zone-head"><span>Sessions</span><span class="count">3</span><span class="head-end"><span class="attention-count" title="1 Session wartet auf Dich"><span class="state-dot waiting" role="img" aria-label="Wartet auf Dich"></span><span>1</span></span></span></div>
+            <ul class="tree">
+              <li>
+                <div class="tree-row level-0"><span class="chevron">⌄</span><span class="tree-label">Dieser Mac</span></div>
+                <div class="tree-row level-1"><span class="chevron">⌄</span><span class="tree-label">atlas-console</span></div>
+                <div class="tree-row level-2"><span class="chevron">⌄</span><span class="tree-label">Terminal 2</span></div>
+                <div class="tree-row level-3" title="Claude · Opus 4.1 · wartet auf Dich"><span class="state-dot waiting" role="img" aria-label="Wartet auf Dich"></span><span class="tree-label agent-name">Claude <span class="agent-model">· Opus 4.1</span></span></div>
+                <div class="tree-row level-3" title="Codex · gpt-5.6 · arbeitet"><span class="state-dot working" role="img" aria-label="Arbeitet"></span><span class="tree-label agent-name">Codex <span class="agent-model">· gpt-5.6</span></span></div>
+              </li>
+              <li>
+                <div class="tree-row level-0"><span class="chevron">⌄</span><span class="tree-label">build-node</span></div>
+                <div class="tree-row level-1"><span class="chevron">›</span><span class="tree-label">payment-api</span></div>
+              </li>
+            </ul>
+          </section>
+          <section class="zone">
+            <div class="zone-head"><span>KI-Konten</span><span class="count">2</span></div>
+            <div class="account-list">
+              <div class="account-tile selected"><span class="provider-mark"></span><span class="account-copy"><strong>Claude</strong><small>team@example.invalid · Max</small></span><span class="account-meters"><span class="account-meter"><span>5 h</span><span class="track"><span class="fill" style="width:23%"></span></span><span>23 %</span></span><span class="account-meter warning"><span>Woche</span><span class="track"><span class="fill" style="width:95%"></span></span><span>95 %</span></span></span></div>
+              <div class="account-tile"><span class="provider-mark codex"></span><span class="account-copy"><strong>Codex</strong><small>studio@example.invalid · Team</small></span><span class="account-meters"><span class="account-meter"><span>5 h</span><span class="track"><span class="fill" style="width:8%"></span></span><span>8 %</span></span><span class="account-meter"><span>Woche</span><span class="track"><span class="fill" style="width:21%"></span></span><span>21 %</span></span></span></div>
+            </div>
+          </section>
+        </aside>
+        <section class="main-pane" aria-label="Schmale Konten-Details">
+          <section class="provider-pane">
+            <div class="identity-card">
+              <div class="identity-copy"><strong><span class="provider-mark"></span>Claude</strong><small>team@example.invalid · Max</small></div>
+              <div class="usage-metric"><small>5 Stunden</small><strong>23 %</strong></div>
+              <div class="usage-metric warning"><small>Woche</small><strong>95 %</strong></div>
+              <div class="usage-metric"><small>Heute</small><strong>~$42.80</strong></div>
+            </div>
+            <div class="sessions-card">
+              <div class="sessions-head"><span>Sessions</span><span class="summary">wartet 1 · aktiv 1</span></div>
+              <div class="table-row header"><span class="table-cell">Session</span><span class="table-cell">Projekt</span><span class="table-cell">Host</span><span class="table-cell">Modell</span><span class="table-cell">Kontext</span><span class="table-cell">Status</span></div>
+              <div class="table-row waiting-row"><span class="table-cell">Navigation prüfen</span><span class="table-cell">atlas-console</span><span class="table-cell">Dieser Mac</span><span class="table-cell">Opus 4.1</span><span class="table-cell">42 %</span><span class="table-cell status"><span class="state-dot waiting"></span>wartet</span></div>
+              <div class="table-row"><span class="table-cell">API-Verträge</span><span class="table-cell">payment-api</span><span class="table-cell">build-node</span><span class="table-cell">Sonnet 4.6</span><span class="table-cell">18 %</span><span class="table-cell status"><span class="state-dot working"></span>aktiv</span></div>
+            </div>
+          </section>
+        </section>
+      </div>
+    </article>
+  </main>
+</body>
+</html>

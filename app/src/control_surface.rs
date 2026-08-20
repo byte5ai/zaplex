@@ -15,6 +15,12 @@ use futures::channel::oneshot;
 use ipc::ServiceCaller as _;
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
+use warp_cli::cockpit::CockpitCommand;
+#[cfg(not(target_family = "wasm"))]
+use warp_cli::cockpit::{
+    CockpitSnapshotDocument, CockpitSnapshotRequest, CockpitSnapshotResponse,
+    CockpitSnapshotService, COCKPIT_SNAPSHOT_PROTOCOL_VERSION,
+};
 use warp_cli::control::{
     ControlAuth, ControlCommand, ControlFailureCode, ControlOrientation, ControlRequest,
     ControlResponse, ControlService, ControlSuccess, ControlVerb, FocusSessionTarget,
@@ -23,6 +29,8 @@ use warp_cli::control::{
 use warpui::r#async::executor::Background;
 use warpui::{Entity, ModelContext, SingletonEntity, ViewHandle};
 
+#[cfg(not(target_family = "wasm"))]
+use crate::cockpit::CockpitModel;
 use crate::pane_group::{tree::Direction, PaneGroup};
 use crate::terminal::TerminalView;
 use crate::workspace::{Workspace, WorkspaceRegistry};
@@ -212,9 +220,21 @@ struct ControlEnvelope {
     response_tx: oneshot::Sender<ControlResponse>,
 }
 
+#[cfg(not(target_family = "wasm"))]
+struct CockpitSnapshotEnvelope {
+    request: CockpitSnapshotRequest,
+    response_tx: oneshot::Sender<CockpitSnapshotResponse>,
+}
+
 #[derive(Clone)]
 struct ControlServiceImpl {
     request_tx: async_channel::Sender<ControlEnvelope>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone)]
+struct CockpitSnapshotServiceImpl {
+    request_tx: async_channel::Sender<CockpitSnapshotEnvelope>,
 }
 
 #[async_trait]
@@ -240,6 +260,30 @@ impl ipc::ServiceImpl for ControlServiceImpl {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
+#[async_trait]
+impl ipc::ServiceImpl for CockpitSnapshotServiceImpl {
+    type Service = CockpitSnapshotService;
+
+    async fn handle_request(&self, request: CockpitSnapshotRequest) -> CockpitSnapshotResponse {
+        let (response_tx, response_rx) = oneshot::channel();
+        if self
+            .request_tx
+            .send(CockpitSnapshotEnvelope {
+                request,
+                response_tx,
+            })
+            .await
+            .is_err()
+        {
+            return cockpit_internal_failure("Cockpit snapshot service is unavailable");
+        }
+        response_rx
+            .await
+            .unwrap_or_else(|_| cockpit_internal_failure("Cockpit snapshot request was cancelled"))
+    }
+}
+
 pub(crate) struct ControlSurfaceServer {
     _server: Option<ipc::Server>,
 }
@@ -247,11 +291,16 @@ pub(crate) struct ControlSurfaceServer {
 impl ControlSurfaceServer {
     pub(crate) fn new(ctx: &mut ModelContext<Self>) -> Self {
         let (request_tx, request_rx) = async_channel::unbounded();
-        let server = match ipc::ServerBuilder::default()
+        #[cfg(not(target_family = "wasm"))]
+        let (cockpit_request_tx, cockpit_request_rx) = async_channel::unbounded();
+        let server_builder = ipc::ServerBuilder::default()
             .with_fixed_address(control_address().to_string())
-            .with_service(ControlServiceImpl { request_tx })
-            .build_and_run(ctx.background_executor())
-        {
+            .with_service(ControlServiceImpl { request_tx });
+        #[cfg(not(target_family = "wasm"))]
+        let server_builder = server_builder.with_service(CockpitSnapshotServiceImpl {
+            request_tx: cockpit_request_tx,
+        });
+        let server = match server_builder.build_and_run(ctx.background_executor()) {
             Ok((server, _)) => server,
             Err(error) => {
                 log::error!("Failed to initialize the local control surface: {error:?}");
@@ -263,6 +312,14 @@ impl ControlSurfaceServer {
             request_rx,
             |server, envelope, ctx| {
                 server.handle_request(envelope, ctx);
+            },
+            |_, _| {},
+        );
+        #[cfg(not(target_family = "wasm"))]
+        ctx.spawn_stream_local(
+            cockpit_request_rx,
+            |server, envelope, ctx| {
+                server.handle_cockpit_snapshot_request(envelope, ctx);
             },
             |_, _| {},
         );
@@ -288,15 +345,7 @@ impl ControlSurfaceServer {
             return;
         }
 
-        let mut callers = WorkspaceRegistry::as_ref(ctx)
-            .all_workspaces(ctx)
-            .into_iter()
-            .flat_map(|(_, workspace)| {
-                workspace
-                    .as_ref(ctx)
-                    .control_surface_matches(workspace.clone(), &request.auth, ctx)
-            })
-            .collect::<Vec<_>>();
+        let mut callers = control_surface_callers(&request.auth, ctx);
         if callers.len() != 1 {
             let _ = response_tx.send(unauthorized_failure());
             return;
@@ -429,6 +478,33 @@ impl ControlSurfaceServer {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_cockpit_snapshot_request(
+        &mut self,
+        envelope: CockpitSnapshotEnvelope,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let CockpitSnapshotEnvelope {
+            request,
+            response_tx,
+        } = envelope;
+        if request.version != COCKPIT_SNAPSHOT_PROTOCOL_VERSION {
+            let _ = response_tx.send(CockpitSnapshotResponse::failure(
+                ControlFailureCode::UnsupportedVersion,
+                "unsupported Cockpit snapshot protocol version",
+            ));
+            return;
+        }
+        if request.validate().is_err() || control_surface_callers(&request.auth, ctx).len() != 1 {
+            let _ = response_tx.send(cockpit_unauthorized_failure());
+            return;
+        }
+
+        let model = CockpitModel::as_ref(ctx);
+        let document = CockpitSnapshotDocument::from_runtime(model.snapshot(), model.inventory());
+        let _ = response_tx.send(CockpitSnapshotResponse::success(document));
+    }
+
     fn open_worktree(
         &mut self,
         pane_group: ViewHandle<PaneGroup>,
@@ -458,6 +534,21 @@ impl ControlSurfaceServer {
             let _ = response_tx.send(response);
         });
     }
+}
+
+fn control_surface_callers(
+    auth: &ControlAuth,
+    ctx: &mut ModelContext<ControlSurfaceServer>,
+) -> Vec<ControlSurfaceMatch> {
+    WorkspaceRegistry::as_ref(ctx)
+        .all_workspaces(ctx)
+        .into_iter()
+        .flat_map(|(_, workspace)| {
+            workspace
+                .as_ref(ctx)
+                .control_surface_matches(workspace.clone(), auth, ctx)
+        })
+        .collect()
 }
 
 impl Entity for ControlSurfaceServer {
@@ -633,6 +724,19 @@ fn unauthorized_failure() -> ControlResponse {
     )
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn cockpit_unauthorized_failure() -> CockpitSnapshotResponse {
+    CockpitSnapshotResponse::failure(
+        ControlFailureCode::Unauthorized,
+        "control authorization failed",
+    )
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn cockpit_internal_failure(message: &str) -> CockpitSnapshotResponse {
+    CockpitSnapshotResponse::failure(ControlFailureCode::Internal, message)
+}
+
 fn not_found_failure(message: &str) -> ControlResponse {
     ControlResponse::failure(ControlFailureCode::NotFound, message)
 }
@@ -654,6 +758,46 @@ pub(crate) fn run_control_command(command: ControlCommand) -> Result<()> {
         }
         Err(failure) => bail!("{}: {}", failure_code_name(failure.code), failure.message),
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn run_cockpit_command(command: CockpitCommand) -> Result<i32> {
+    let variables = [
+        CONTROL_SOCKET_ENV,
+        CONTROL_TOKEN_ENV,
+        SURFACE_ID_ENV,
+        TAB_ID_ENV,
+    ];
+    if variables
+        .iter()
+        .all(|name| std::env::var_os(name).is_none())
+    {
+        return warp_cli::cockpit::run(command);
+    }
+
+    let response = ControlAuth::from_env()
+        .and_then(CockpitSnapshotRequest::new)
+        .and_then(send_cockpit_snapshot_request);
+    let document = match response.and_then(|response| {
+        response.result.map_err(|failure| {
+            anyhow::anyhow!("{}: {}", failure_code_name(failure.code), failure.message)
+        })
+    }) {
+        Ok(document) => document,
+        Err(error) => {
+            log::warn!(
+                "Runtime Cockpit snapshot is unavailable; using degraded local fallback: {error:#}"
+            );
+            return warp_cli::cockpit::run(command);
+        }
+    };
+
+    warp_cli::cockpit::run_with_document(command, document)
+}
+
+#[cfg(target_family = "wasm")]
+pub(crate) fn run_cockpit_command(command: CockpitCommand) -> Result<i32> {
+    warp_cli::cockpit::run(command)
 }
 
 pub(crate) fn forward_hook_event(body: Vec<u8>) -> Result<()> {
@@ -700,6 +844,25 @@ fn send_control_request(request: ControlRequest) -> Result<ControlResponse> {
             .call(request)
             .await
             .context("local Zaplex control request failed")
+    })
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn send_cockpit_snapshot_request(
+    request: CockpitSnapshotRequest,
+) -> Result<CockpitSnapshotResponse> {
+    let address = warp_cli::control::socket_from_env()?;
+    warpui::r#async::block_on(async move {
+        let executor = Arc::new(Background::default());
+        let client = Arc::new(
+            ipc::Client::connect(address.into(), executor)
+                .await
+                .context("failed to connect to the local Zaplex control socket")?,
+        );
+        ipc::service_caller::<CockpitSnapshotService>(client)
+            .call(request)
+            .await
+            .context("local Zaplex Cockpit snapshot request failed")
     })
 }
 

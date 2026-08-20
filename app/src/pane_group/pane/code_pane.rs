@@ -44,6 +44,18 @@ impl CodePane {
         Self::from_view(view, ctx)
     }
 
+    /// Open an ephemeral selectable document without a filesystem backing.
+    pub fn new_generated_read_only<V: View>(
+        title: String,
+        contents: String,
+        ctx: &mut ViewContext<V>,
+    ) -> Self {
+        let view = ctx.add_typed_action_view(move |ctx| {
+            CodeView::new_generated_read_only(title, &contents, ctx)
+        });
+        Self::from_view(view, ctx)
+    }
+
     #[cfg(feature = "local_fs")]
     pub fn new_preview<V: View>(source: CodeSource, ctx: &mut ViewContext<V>) -> Self {
         let view = ctx.add_typed_action_view(move |ctx| CodeView::new_preview(source, ctx));

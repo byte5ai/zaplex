@@ -13,13 +13,16 @@ use super::super::protocol::RequestId;
 #[cfg(feature = "local_fs")]
 use super::super::server_buffer_tracker::ServerBufferTracker;
 use super::{
-    execute_agent_process_signal_with, server_features_with_runtime_support, PendingFileOps,
-    ServerModel,
+    execute_agent_process_signal_with, server_features_with_runtime_support,
+    AgentTranscriptReadPermit, PendingFileOps, ServerModel, MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
 };
 use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
-use zaplex_remote_session::types::FEATURE_AGENT_PROCESS_SIGNAL_V1;
 #[cfg(unix)]
 use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
+use zaplex_remote_session::types::{
+    FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PROCESS_SIGNAL_V1,
+    FEATURE_AGENT_TRANSCRIPT_READ_V1,
+};
 
 fn test_model() -> ServerModel {
     ServerModel {
@@ -45,6 +48,10 @@ fn test_model() -> ServerModel {
         agent_transcript_cache: std::sync::Arc::new(std::sync::Mutex::new(
             zaplex_cockpit::TranscriptScanCache::default(),
         )),
+        agent_account_routes: Default::default(),
+        agent_transcript_reads_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(
+            0,
+        )),
     }
 }
 
@@ -57,6 +64,18 @@ fn fresh_model_starts_without_auth_token() {
     let model = test_model();
 
     assert_eq!(model.auth_token(), None);
+}
+
+#[test]
+fn transcript_read_permits_cap_parallel_work_and_release_on_drop() {
+    let in_flight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let permits: Vec<_> = (0..MAX_CONCURRENT_AGENT_TRANSCRIPT_READS)
+        .map(|_| AgentTranscriptReadPermit::try_acquire(std::sync::Arc::clone(&in_flight)).unwrap())
+        .collect();
+
+    assert!(AgentTranscriptReadPermit::try_acquire(std::sync::Arc::clone(&in_flight)).is_none());
+    drop(permits);
+    assert!(AgentTranscriptReadPermit::try_acquire(in_flight).is_some());
 }
 
 #[test]
@@ -130,6 +149,32 @@ fn agent_process_signal_requires_client_capability_negotiation() {
 }
 
 #[test]
+fn agent_account_routing_requires_client_capability_negotiation() {
+    let mut model = test_model();
+    let conn = uuid::Uuid::new_v4();
+
+    assert!(!model.client_supports_agent_account_routing(conn));
+    model.connection_features.insert(
+        conn,
+        HashSet::from([FEATURE_AGENT_ACCOUNT_ROUTING_V1.to_string()]),
+    );
+    assert!(model.client_supports_agent_account_routing(conn));
+}
+
+#[test]
+fn agent_transcript_read_requires_client_capability_negotiation() {
+    let mut model = test_model();
+    let conn = uuid::Uuid::new_v4();
+
+    assert!(!model.client_supports_agent_transcript_read(conn));
+    model.connection_features.insert(
+        conn,
+        HashSet::from([FEATURE_AGENT_TRANSCRIPT_READ_V1.to_string()]),
+    );
+    assert!(model.client_supports_agent_transcript_read(conn));
+}
+
+#[test]
 fn daemon_signal_advertisement_requires_runtime_backend_support() {
     let unsupported = server_features_with_runtime_support(false, true);
     assert!(!unsupported
@@ -143,6 +188,9 @@ fn daemon_signal_advertisement_requires_runtime_backend_support() {
             .any(|feature| feature == FEATURE_AGENT_PROCESS_SIGNAL_V1),
         cfg!(target_os = "linux")
     );
+    assert!(supported
+        .iter()
+        .any(|feature| feature == FEATURE_AGENT_TRANSCRIPT_READ_V1));
 }
 
 #[test]
@@ -208,6 +256,7 @@ fn binding_identity(session_id: &str) -> AgentSessionIdentity {
         provider: "codex".to_string(),
         account_email: "agent@example.com".to_string(),
         config_dir: "/home/agent/.codex".to_string(),
+        account_id: String::new(),
     }
 }
 
@@ -231,6 +280,7 @@ fn bind_status(
         session_id: identity.session_id.clone(),
         account_email: (!identity.account_email.is_empty()).then(|| identity.account_email.clone()),
         config_dir: (!identity.config_dir.is_empty()).then(|| identity.config_dir.clone()),
+        account_id: None,
     }]);
     AgentPtyBindingStatus::try_from(model.execute_bind_agent_pty(conn, msg, &live_agents).status)
         .unwrap()
@@ -310,6 +360,7 @@ fn daemon_bind_and_unbind_preserve_historical_agent() {
                 session_id: identity.session_id,
                 account_email: Some(identity.account_email),
                 config_dir: Some(identity.config_dir),
+                account_id: None,
             })
             .unwrap()
             .foreground
@@ -443,6 +494,7 @@ fn agent_qualified_attach_requires_fresh_exact_live_identity() {
         session_id: "agent-1".to_string(),
         account_email: Some("agent@example.com".to_string()),
         config_dir: Some("/home/agent/.codex".to_string()),
+        account_id: None,
     };
     assert_eq!(
         bind_status(
@@ -893,6 +945,7 @@ mod daemon_session {
                     pixel_width: 0,
                     pixel_height: 0,
                 }),
+                agent_launch_route: None,
             })),
         }
     }
@@ -1678,6 +1731,7 @@ mod daemon_session {
                     session_id: "agent-1".to_string(),
                     account_email: Some("agent@example.com".to_string()),
                     config_dir: Some("/home/agent/.codex".to_string()),
+                    account_id: None,
                 };
                 let historical = m.agent_pty_bindings.binding_for(&identity).unwrap();
                 assert_eq!(historical.pty_session_id, session_id);
@@ -1808,6 +1862,7 @@ mod daemon_session {
                     pixel_width: 0,
                     pixel_height: 0,
                 }),
+                agent_launch_route: None,
             })),
         }
     }

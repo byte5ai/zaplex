@@ -23,6 +23,11 @@ async-trait.workspace = true
 ipc.workspace = true
 serde.workspace = true
 
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+dirs.workspace = true
+serde_json.workspace = true
+zaplex_cockpit.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
     "Win32_Foundation"

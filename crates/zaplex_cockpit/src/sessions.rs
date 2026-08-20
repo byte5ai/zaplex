@@ -1,6 +1,8 @@
 //! Live-session detection for Claude Code accounts (cockpit C3a).
 //!
-//! Port of claudeplex's status algorithm (`collect.ts` readRegistry/stateOf):
+//! Evolved from claudeplex's status algorithm (`collect.ts`
+//! readRegistry/stateOf), including compatibility with current Claude Code
+//! registries that identify real sessions by `kind` and omit `status`:
 //! Claude Code maintains its own process registry under
 //! `<config_dir>/sessions/*.json` — the authoritative set of running sessions.
 //! Each registry entry is joined to its transcript (`projects/**/<id>.jsonl`)
@@ -12,11 +14,12 @@
 //!   the session needs YOU. The cockpit's most important signal.
 //! - **Monitor** — mid tool-run / live background job: working, hands off.
 //!
-//! [`idle_sessions`] covers the other half: entries whose process is **gone**
-//! but whose transcript survives, i.e. dormant conversations that `--resume` can
-//! pick back up. The pid decides, so the two sets can never overlap.
+//! [`idle_sessions`] covers the other half: conversations whose process is
+//! **gone** but whose transcript survives, including recent substantial history
+//! after Claude has removed the registry row. A registry-backed session is
+//! probed once, so the live and idle sets can never overlap.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -90,7 +93,8 @@ fn read_registry(config_dir: &Path) -> Vec<RegEntry> {
                 .map(str::to_string),
         };
         match by_id.get(&reg.session_id) {
-            Some(prev) if reg.updated_at < prev.updated_at => {}
+            Some(prev)
+                if reg.updated_at.max(reg.started_at) < prev.updated_at.max(prev.started_at) => {}
             _ => {
                 by_id.insert(reg.session_id.clone(), reg);
             }
@@ -104,7 +108,14 @@ fn is_real_reg(r: &RegEntry) -> bool {
     if r.cwd.contains("observer-sessions") || r.cwd.contains(".claude-mem") {
         return false;
     }
-    !(r.status == "shell" || r.status.is_empty())
+    if r.status == "shell" || r.kind == "shell" {
+        return false;
+    }
+    // Older registries used `status` (busy/idle) to distinguish sessions from
+    // shell helpers. Current Claude Code omits that field and uses a typed
+    // `kind` instead. Accept only known conversation kinds on that modern path
+    // so an arbitrary status-less helper does not become an agent row.
+    !r.status.is_empty() || matches!(r.kind.as_str(), "interactive" | "bg")
 }
 
 /// Signals derived from a transcript's tail.
@@ -116,6 +127,14 @@ struct TranscriptTail {
     /// Context-window fill of the latest assistant turn (input + cache tokens).
     ctx_tokens: u64,
     last_ts: Option<DateTime<Utc>>,
+    turns: usize,
+    tools: usize,
+}
+
+impl TranscriptTail {
+    fn is_substantial(&self) -> bool {
+        self.turns >= 2 || self.tools >= 1
+    }
 }
 
 /// Reads the last [`TAIL_BYTES`] of a transcript and derives the tail signals.
@@ -130,11 +149,12 @@ fn read_transcript_tail(path: &Path) -> TranscriptTail {
     if file.seek(SeekFrom::Start(start)).is_err() {
         return tail;
     }
-    let mut buf = String::new();
-    if file.read_to_string(&mut buf).is_err() {
+    let mut buf = Vec::new();
+    if file.read_to_end(&mut buf).is_err() {
         return tail;
     }
-    let mut lines = buf.lines();
+    let text = String::from_utf8_lossy(&buf);
+    let mut lines = text.lines();
     if start > 0 {
         lines.next(); // skip the partial first line
     }
@@ -153,6 +173,26 @@ fn read_transcript_tail(path: &Path) -> TranscriptTail {
                 let Some(message) = v.get("message") else {
                     continue;
                 };
+                match message.get("content") {
+                    Some(Value::Array(parts)) => {
+                        for part in parts {
+                            match part.get("type").and_then(Value::as_str) {
+                                Some("text")
+                                    if part
+                                        .get("text")
+                                        .and_then(Value::as_str)
+                                        .is_some_and(|text| !text.trim().is_empty()) =>
+                                {
+                                    tail.turns += 1;
+                                }
+                                Some("tool_use") => tail.tools += 1,
+                                Some(_) | None => {}
+                            }
+                        }
+                    }
+                    Some(Value::String(text)) if !text.trim().is_empty() => tail.turns += 1,
+                    Some(_) | None => {}
+                }
                 let stop_reason = message.get("stop_reason").and_then(Value::as_str);
                 last_kind_ended = stop_reason != Some("tool_use");
                 if let Some(model) = message.get("model").and_then(Value::as_str) {
@@ -193,6 +233,32 @@ fn read_transcript_tail(path: &Path) -> TranscriptTail {
     }
     tail.ended = last_kind_ended;
     tail
+}
+
+/// Launch directory recorded near the beginning of a Claude transcript.
+fn transcript_cwd(path: &Path) -> Option<String> {
+    const HEAD_BYTES: u64 = 64 * 1024;
+    let mut buf = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(HEAD_BYTES)
+        .read_to_end(&mut buf)
+        .ok()?;
+    String::from_utf8_lossy(&buf).lines().find_map(|line| {
+        serde_json::from_str::<Value>(line)
+            .ok()?
+            .get("cwd")?
+            .as_str()
+            .filter(|cwd| !cwd.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn transcript_modified(path: &Path, now: DateTime<Utc>) -> DateTime<Utc> {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .map(DateTime::<Utc>::from)
+        .unwrap_or(now)
 }
 
 /// claudeplex `stateOf`: busy → Active; live background job → Monitor;
@@ -290,6 +356,7 @@ fn snapshot_of(
         // reads a transcript, which knows nothing about the account above it.
         config_dir: None,
         account_email: None,
+        account_id: None,
         process_fingerprint,
         pty_session_id: None,
         pty_session_generation: None,
@@ -331,7 +398,8 @@ pub struct SessionScan {
 
 /// Classify every registry entry of a Claude Code account **once**: real,
 /// transcript-backed entries are probed for liveness a single time and land in
-/// exactly one half of the [`SessionScan`].
+/// exactly one half of the [`SessionScan`]. Recent substantial transcripts with
+/// no remaining registry row supplement the dormant half.
 ///
 /// Two separate scans would not do. `live` and `idle` ask complementary
 /// questions, but asked at two different moments they can both answer "yes" for
@@ -353,9 +421,11 @@ pub struct SessionScan {
 ///
 /// Cost: a heavy user has hundreds of dead entries, and reading every transcript
 /// on each refresh would be real I/O. So dormant candidates are ranked and
-/// capped on [`recency_estimate`] — registry time plus one `stat` — and only the
-/// surviving `limit` transcripts are opened and read. Live entries are few (a
-/// running process each), so all of them are read. What this does **not** avoid:
+/// capped on [`recency_estimate`] — registry time plus one `stat`. Registry-backed
+/// candidates are parsed only after the final cap; transcript-only history opens
+/// at most `limit * 4` recent tails to reject tiny automation fragments before
+/// the same final cap. Live entries are few (a running process each), so all of
+/// them are read. What this does **not** avoid:
 /// [`transcripts_by_id`] still walks the whole `projects/` tree to build the id
 /// index, as it must for any lookup, and `read_registry` still parses every
 /// entry. The saving is on transcript *contents*, not on the directory scan.
@@ -371,8 +441,13 @@ pub(crate) fn scan_sessions_with_cache(
 
     let mut live_entries: Vec<(RegEntry, PathBuf, Option<String>)> = Vec::new();
     let mut idle_candidates: Vec<(DateTime<Utc>, RegEntry, PathBuf)> = Vec::new();
+    let registry = read_registry(config_dir);
+    let registry_ids: HashSet<String> = registry
+        .iter()
+        .map(|entry| entry.session_id.clone())
+        .collect();
 
-    for r in read_registry(config_dir) {
+    for r in registry {
         if !is_real_reg(&r) {
             continue;
         }
@@ -394,6 +469,52 @@ pub(crate) fn scan_sessions_with_cache(
             if est >= cutoff {
                 idle_candidates.push((est, r, path));
             }
+        }
+    }
+
+    // Claudeplex also shows recent substantial transcript history after the
+    // corresponding process-registry row has disappeared. Preserve that
+    // behavior for account detail panes; these snapshots are Idle and therefore
+    // never enter the live Cockpit tree. Rank cheaply by mtime first, then open
+    // only a bounded recent set to reject tiny automation fragments.
+    if limit > 0 {
+        let mut transcript_only: Vec<(DateTime<Utc>, String, PathBuf)> = transcripts
+            .iter()
+            .filter(|(session_id, _)| !registry_ids.contains(*session_id))
+            .filter_map(|(session_id, path)| {
+                let modified = transcript_modified(path, now);
+                (modified >= cutoff).then(|| (modified, session_id.clone(), path.clone()))
+            })
+            .collect();
+        transcript_only.sort_by(|a, b| b.0.cmp(&a.0));
+        transcript_only.truncate(limit.saturating_mul(4));
+
+        for (modified, session_id, path) in transcript_only {
+            let tail = read_transcript_tail(&path);
+            let Some(cwd) = transcript_cwd(&path) else {
+                continue;
+            };
+            if !tail.is_substantial()
+                || cwd.contains("observer-sessions")
+                || cwd.contains(".claude-mem")
+            {
+                continue;
+            }
+            idle_candidates.push((
+                modified,
+                RegEntry {
+                    session_id,
+                    cwd,
+                    status: String::new(),
+                    kind: "interactive".to_string(),
+                    name: String::new(),
+                    started_at: modified.timestamp_millis(),
+                    updated_at: modified.timestamp_millis(),
+                    pid: 0,
+                    proc_start: None,
+                },
+                path,
+            ));
         }
     }
 

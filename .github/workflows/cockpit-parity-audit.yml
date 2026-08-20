@@ -1,0 +1,172 @@
+name: Cockpit parity audit
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/cockpit-parity-audit.yml'
+      - 'app/i18n/**'
+      - 'app/src/ai/agent_sdk/driver/output.rs'
+      - 'app/src/app_state.rs'
+      - 'app/src/cockpit/**'
+      - 'app/src/code/editor_management.rs'
+      - 'app/src/code/editor_management_tests.rs'
+      - 'app/src/code/view.rs'
+      - 'app/src/code/view_tests.rs'
+      - 'app/src/control_surface.rs'
+      - 'app/src/control_surface_tests.rs'
+      - 'app/src/lib.rs'
+      - 'app/src/pane_group/pane/code_pane.rs'
+      - 'app/src/remote_server/**'
+      - 'app/src/ssh_manager/**'
+      - 'app/src/terminal/daemon_tty/**'
+      - 'app/src/terminal/cli_agent_sessions/**'
+      - 'app/src/workspace/action.rs'
+      - 'app/src/workspace/action_tests.rs'
+      - 'app/src/workspace/view.rs'
+      - 'app/src/workspace/view/**'
+      - 'crates/remote_server/**'
+      - 'crates/warp_cli/**'
+      - 'crates/warp_core/src/ui/icons.rs'
+      - 'crates/warpui_core/src/elements/table/**'
+      - 'crates/zaplex_cockpit/**'
+      - 'crates/zaplex_remote_session/**'
+      - 'docs/ui/cockpit-sidebar-connections.html'
+      - 'script/cockpit-parity-audit'
+      - 'specs/parity/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CHANNEL: oss
+
+jobs:
+  audit:
+    name: GH-160 executable parity matrix
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Initialize fail-closed audit artifacts
+        run: |
+          mkdir -p artifacts/logs artifacts/screenshots references
+          for report in contract-validation gate-self-test reference-revisions suite-results; do
+            printf '{"schema_version":1,"status":"fail","errors":["step did not complete"]}\n' > "artifacts/${report}.json"
+          done
+          cp docs/ui/cockpit-sidebar-connections.html artifacts/cockpit-sidebar-connections.html
+        shell: bash
+
+      - name: Validate parity contract
+        id: validate
+        continue-on-error: true
+        run: script/cockpit-parity-audit validate --output artifacts/contract-validation.json
+        shell: bash
+
+      - name: Prove provider, host, and status regressions fail the gate
+        id: self_test
+        continue-on-error: true
+        run: script/cockpit-parity-audit self-test --output artifacts/gate-self-test.json
+        shell: bash
+
+      - name: Synchronize and probe fresh reference repositories
+        id: references
+        if: steps.validate.outcome == 'success'
+        continue-on-error: true
+        run: >-
+          script/cockpit-parity-audit sync-references
+          --destination references
+          --output artifacts/reference-revisions.json
+        shell: bash
+
+      - uses: ./.github/actions/prepare_environment
+        if: >-
+          steps.validate.outcome == 'success' &&
+          steps.self_test.outcome == 'success' &&
+          steps.references.outcome == 'success'
+        with:
+          target_os: linux
+          is_self_hosted: false
+          install_release_deps: false
+          install_test_deps: true
+
+      - name: Ensure Rust target is installed
+        if: >-
+          steps.validate.outcome == 'success' &&
+          steps.self_test.outcome == 'success' &&
+          steps.references.outcome == 'success'
+        run: rustup target add x86_64-unknown-linux-gnu
+        shell: bash
+
+      - name: Run Cargo check and focused Cockpit suites
+        id: suites
+        if: >-
+          steps.validate.outcome == 'success' &&
+          steps.self_test.outcome == 'success' &&
+          steps.references.outcome == 'success'
+        continue-on-error: true
+        run: >-
+          script/cockpit-parity-audit run-suites
+          --log-dir artifacts/logs
+          --output artifacts/suite-results.json
+        shell: bash
+
+      - name: Install pinned Chromium renderer
+        id: renderer
+        if: steps.validate.outcome == 'success'
+        continue-on-error: true
+        run: |
+          npm install --no-save --no-package-lock @playwright/test@1.55.0
+          npx playwright install --with-deps chromium
+        shell: bash
+
+      - name: Render normal, narrow, and reduced-motion Cockpit contracts
+        id: screenshots
+        if: steps.renderer.outcome == 'success'
+        continue-on-error: true
+        env:
+          COCKPIT_MOCKUP: ${{ github.workspace }}/docs/ui/cockpit-sidebar-connections.html
+          COCKPIT_SCREENSHOT_DIR: ${{ github.workspace }}/artifacts/screenshots
+        run: |
+          npx playwright test \
+            specs/parity/cockpit-screenshots.spec.ts \
+            --workers=1 \
+            --reporter=line \
+            --output=artifacts/playwright-results
+        shell: bash
+
+      - name: Assemble machine-readable audit report
+        id: assemble
+        if: always()
+        continue-on-error: true
+        run: >-
+          script/cockpit-parity-audit assemble
+          --validation artifacts/contract-validation.json
+          --self-test artifacts/gate-self-test.json
+          --references artifacts/reference-revisions.json
+          --suites artifacts/suite-results.json
+          --screenshot-dir artifacts/screenshots
+          --output artifacts/cockpit-parity-report.json
+        shell: bash
+
+      - name: Upload audit report, logs, mockup, and screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cockpit-parity-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce automated parity result
+        if: always()
+        run: script/cockpit-parity-audit enforce --report artifacts/cockpit-parity-report.json
+        shell: bash

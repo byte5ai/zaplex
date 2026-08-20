@@ -2,7 +2,7 @@
 //! + inline folder rename.
 //!
 //! UX rules:
-//! - **Click a server**: connect directly (open a terminal pane running ssh). Use right-click to edit.
+//! - **Click a server**: select it. The trailing plug connects/disconnects; double-click still connects.
 //! - **Click a folder**: select only (highlight); rename via the right-click "Rename" or by typing right after creating it.
 //! - **Enter rename mode immediately after creating a folder** (Drive-style).
 //! - Right-click a server: Edit / Connect / Delete
@@ -45,12 +45,17 @@ use warp_ssh_manager::{
 use remote_server::proto::{
     MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList, SessionList,
 };
+use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_core::HostId;
 
 use settings::Setting;
+use zaplex_cockpit::{Favorite, FavoriteKind};
 
+use crate::cockpit::favorites::FavoritesStore;
 use crate::editor::{
     EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
 };
+use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::settings::SshSettings;
 use crate::ssh_manager::candidates::{CandidateRow, CandidatesViewModel};
 use crate::ssh_manager::{
@@ -78,6 +83,13 @@ const CONTEXT_MENU_ITEM_PADDING_H: f32 = 12.0;
 const MAX_CONTEXT_MENU_ITEMS: usize = 6;
 const SSH_PANEL_POSITION_ID: &str = "ssh_manager_panel_root";
 const DELETE_CONFIRM_BODY_MAX_HEIGHT: f32 = 320.0;
+
+fn tree_row_leading_icon(kind: NodeKind) -> Option<crate::ui_components::icons::Icon> {
+    match kind {
+        NodeKind::Folder => Some(crate::ui_components::icons::Icon::Folder),
+        NodeKind::Server => None,
+    }
+}
 
 fn tailscale_status_output(
     command_factory: &dyn WorkspaceCommandFactory,
@@ -107,6 +119,12 @@ pub enum SshManagerPanelAction {
     Connect,
     Edit,
     CloneServer(String),
+    /// Toggle a registered server in the favorite-host projection used by the
+    /// tab dropdown. The registry row remains the single connection source.
+    ToggleFavorite(String),
+    /// Connect a registered host, or disconnect every open Zaplex session for
+    /// that host when its trailing plug is currently connected.
+    ToggleConnection(String),
     /// Context menu on a server: toggle the inline list of its running daemon
     /// sessions (fetched via connect-to-list on first expand).
     ToggleSessions(String),
@@ -124,7 +142,7 @@ pub enum SshManagerPanelAction {
         attached_clients: u32,
     },
     /// Click a row; the handling depends on the node kind:
-    /// - server: select + emit OpenSshTerminal (connect directly)
+    /// - server: select only (the trailing plug owns connect/disconnect)
     /// - folder: select only
     Click(String),
     StartRename(String),
@@ -265,6 +283,15 @@ pub struct SshManagerPanel {
     add_server_btn: MouseStateHandle,
     toggle_all_btn: MouseStateHandle,
     row_states: HashMap<String, MouseStateHandle>,
+    /// Cached host-favorite membership plus fixed-width add/remove actions.
+    favorite_host_ids: std::collections::HashSet<String>,
+    favorite_actions: HashMap<String, CompactRowAction>,
+    unfavorite_actions: HashMap<String, CompactRowAction>,
+    /// Registry node id to live daemon host id. This is a projection of the
+    /// remote manager, not a second connection registry.
+    connected_host_ids: HashMap<String, String>,
+    connect_actions: HashMap<String, CompactRowAction>,
+    disconnect_actions: HashMap<String, CompactRowAction>,
     /// Per-row DraggableState — preserves drag progress across renders, so it must be cached in the view state.
     row_drag_states: HashMap<String, DraggableState>,
 
@@ -364,6 +391,12 @@ impl SshManagerPanel {
             add_server_btn: MouseStateHandle::default(),
             toggle_all_btn: MouseStateHandle::default(),
             row_states: HashMap::new(),
+            favorite_host_ids: std::collections::HashSet::new(),
+            favorite_actions: HashMap::new(),
+            unfavorite_actions: HashMap::new(),
+            connected_host_ids: HashMap::new(),
+            connect_actions: HashMap::new(),
+            disconnect_actions: HashMap::new(),
             row_drag_states: HashMap::new(),
             context_menu_position: None,
             context_menu_target: None,
@@ -400,6 +433,8 @@ impl SshManagerPanel {
         // host" block (`on_toggle_add_mode`) — never unsolicited on mount, so the
         // saved list never shows hosts the user didn't deliberately add.
         me.refresh_tree(ctx);
+        me.sync_favorite_hosts(ctx);
+        me.sync_connected_hosts(ctx);
 
         ctx.subscribe_to_model(
             &SshTreeChangedNotifier::handle(ctx),
@@ -407,6 +442,24 @@ impl SshManagerPanel {
                 SshTreeChangedEvent::TreeChanged => me.refresh_tree(ctx),
             },
         );
+        ctx.subscribe_to_model(&FavoritesStore::handle(ctx), |me, _, _, ctx| {
+            me.sync_favorite_hosts(ctx);
+            ctx.notify();
+        });
+        ctx.subscribe_to_model(&RemoteServerManager::handle(ctx), |me, _, event, ctx| {
+            if matches!(
+                event,
+                RemoteServerManagerEvent::HostConnected { .. }
+                    | RemoteServerManagerEvent::HostDisconnected { .. }
+                    | RemoteServerManagerEvent::SessionConnected { .. }
+                    | RemoteServerManagerEvent::SessionDisconnected { .. }
+                    | RemoteServerManagerEvent::SessionReconnected { .. }
+                    | RemoteServerManagerEvent::SessionDeregistered { .. }
+            ) {
+                me.sync_connected_hosts(ctx);
+                ctx.notify();
+            }
+        });
 
         // Listen for SshSettings changes; refresh the candidates section when the auto-discovery toggle flips.
         ctx.subscribe_to_model(&SshSettings::handle(ctx), |me, _, _, ctx| {
@@ -416,6 +469,23 @@ impl SshManagerPanel {
         });
 
         me
+    }
+
+    fn sync_favorite_hosts(&mut self, ctx: &mut ViewContext<Self>) {
+        self.favorite_host_ids = FavoritesStore::as_ref(ctx)
+            .items()
+            .iter()
+            .filter(|favorite| favorite.kind == FavoriteKind::Host)
+            .map(|favorite| favorite.target.clone())
+            .collect();
+    }
+
+    fn sync_connected_hosts(&mut self, ctx: &mut ViewContext<Self>) {
+        self.connected_host_ids = RemoteServerManager::as_ref(ctx)
+            .connected_registry_hosts()
+            .into_iter()
+            .map(|(node_id, host_id)| (node_id, host_id.as_str().to_string()))
+            .collect();
     }
 
     fn refresh_tree(&mut self, ctx: &mut ViewContext<Self>) {
@@ -475,6 +545,62 @@ impl SshManagerPanel {
         for n in &self.nodes {
             self.row_states.entry(n.id.clone()).or_default();
             self.row_drag_states.entry(n.id.clone()).or_default();
+        }
+        let server_ids: std::collections::HashSet<String> = self
+            .nodes
+            .iter()
+            .filter(|node| node.kind == NodeKind::Server)
+            .map(|node| node.id.clone())
+            .collect();
+        self.favorite_actions
+            .retain(|id, _| server_ids.contains(id));
+        self.unfavorite_actions
+            .retain(|id, _| server_ids.contains(id));
+        self.connect_actions.retain(|id, _| server_ids.contains(id));
+        self.disconnect_actions
+            .retain(|id, _| server_ids.contains(id));
+        for node_id in server_ids {
+            self.favorite_actions
+                .entry(node_id.clone())
+                .or_insert_with(|| {
+                    CompactRowAction::new(
+                        crate::ui_components::icons::Icon::Star,
+                        crate::t!("cockpit-tt-favorite-add"),
+                        SshManagerPanelAction::ToggleFavorite(node_id.clone()),
+                        ctx,
+                    )
+                });
+            self.unfavorite_actions
+                .entry(node_id.clone())
+                .or_insert_with(|| {
+                    CompactRowAction::new(
+                        crate::ui_components::icons::Icon::StarFilled,
+                        crate::t!("cockpit-tt-favorite-remove"),
+                        SshManagerPanelAction::ToggleFavorite(node_id),
+                        ctx,
+                    )
+                });
+            self.connect_actions
+                .entry(node_id.clone())
+                .or_insert_with(|| {
+                    CompactRowAction::new(
+                        crate::ui_components::icons::Icon::PlugDisconnected,
+                        crate::t!("workspace-left-panel-ssh-manager-connect"),
+                        SshManagerPanelAction::ToggleConnection(node_id.clone()),
+                        ctx,
+                    )
+                });
+            self.disconnect_actions
+                .entry(node_id.clone())
+                .or_insert_with(|| {
+                    CompactRowAction::new_with_icon_ansi_color(
+                        crate::ui_components::icons::Icon::PlugConnected,
+                        Some(AnsiColorIdentifier::Green),
+                        crate::t!("workspace-left-panel-ssh-manager-disconnect"),
+                        SshManagerPanelAction::ToggleConnection(node_id),
+                        ctx,
+                    )
+                });
         }
 
         // Prune per-host adopt-session state for nodes that were deleted, so these
@@ -1287,6 +1413,24 @@ impl SshManagerPanel {
             None => {}
         }
         ctx.notify();
+    }
+
+    fn on_toggle_connection(&mut self, node_id: &str, ctx: &mut ViewContext<Self>) {
+        let Some(host_id) = self.connected_host_ids.get(node_id).cloned() else {
+            self.dispatch_connect_for(node_id, ctx);
+            return;
+        };
+
+        RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+            let host_id = HostId::new(host_id.clone());
+            let session_ids = manager
+                .sessions_for_host(&host_id)
+                .map(|sessions| sessions.iter().copied().collect::<Vec<_>>())
+                .unwrap_or_default();
+            for session_id in session_ids {
+                manager.deregister_session(session_id, false, ctx);
+            }
+        });
     }
 
     fn on_open_context_menu(
@@ -2490,15 +2634,13 @@ impl SshManagerPanel {
             .map(|rs| rs.node_id == node.id)
             .unwrap_or(false);
 
-        let icon = match node.kind {
-            NodeKind::Folder => crate::ui_components::icons::Icon::Folder,
-            NodeKind::Server => crate::ui_components::icons::Icon::Key,
-        };
         let icon_color = theme.sub_text_color(theme.background());
-        let icon_el = ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
-            .with_width(ITEM_ICON_SIZE)
-            .with_height(ITEM_ICON_SIZE)
-            .finish();
+        let icon_el = tree_row_leading_icon(node.kind).map(|icon| {
+            ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
+                .with_width(ITEM_ICON_SIZE)
+                .with_height(ITEM_ICON_SIZE)
+                .finish()
+        });
 
         // Folder rows get a leading chevron (▼ expanded / ▶ collapsed); Server rows use equal-width blank padding
         // so all rows' icons line up.
@@ -2568,9 +2710,11 @@ impl SshManagerPanel {
                     .with_width(depth as f32 * FOLDER_DEPTH_INDENT)
                     .finish(),
             )
-            .with_child(chevron_el)
-            .with_child(icon_el)
-            .with_child(label_or_editor);
+            .with_child(chevron_el);
+        if let Some(icon_el) = icon_el {
+            row_flex = row_flex.with_child(icon_el);
+        }
+        row_flex = row_flex.with_child(label_or_editor);
         // Lightning mark: this host opens as a Zaplexify persistent session
         // (survives disconnects). The icon-font mark (#107) is the at-a-glance
         // signal in the host list — quiet, muted, body-sized, not a shout.
@@ -2600,6 +2744,32 @@ impl SshManagerPanel {
                 .finish(),
             );
         }
+        let show_secondary_actions = node.kind == NodeKind::Server && !is_renaming;
+        if show_secondary_actions {
+            row_flex = row_flex.with_child(Shrinkable::new(1.0, Empty::new().finish()).finish());
+        }
+        let favorite_action: Option<Box<dyn Element>> = if show_secondary_actions {
+            let action = if self.favorite_host_ids.contains(&node.id) {
+                self.unfavorite_actions.get(&node.id)
+            } else {
+                self.favorite_actions.get(&node.id)
+            };
+            debug_assert!(action.is_some());
+            action.map(CompactRowAction::render)
+        } else {
+            None
+        };
+        let connection_action: Option<Box<dyn Element>> = if show_secondary_actions {
+            let action = if self.connected_host_ids.contains_key(&node.id) {
+                self.disconnect_actions.get(&node.id)
+            } else {
+                self.connect_actions.get(&node.id)
+            };
+            debug_assert!(action.is_some());
+            action.map(CompactRowAction::render)
+        } else {
+            None
+        };
         let row = row_flex.with_main_axis_size(MainAxisSize::Max).finish();
 
         let state = self.row_states.get(&node.id).cloned().unwrap_or_default();
@@ -2653,6 +2823,32 @@ impl SshManagerPanel {
         })
         .finish();
 
+        // Keep favorite and connection controls outside the primary click
+        // target: either action must remain independent from row selection.
+        let interactive_row = if favorite_action.is_some() || connection_action.is_some() {
+            let mut actions = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_size(MainAxisSize::Min);
+            if let Some(action) = favorite_action {
+                actions = actions.with_child(action);
+            }
+            if let Some(action) = connection_action {
+                actions = actions.with_child(action);
+            }
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_child(Shrinkable::new(1.0, hoverable).finish())
+                .with_child(
+                    Container::new(actions.finish())
+                        .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                        .finish(),
+                )
+                .finish()
+        } else {
+            hoverable
+        };
+
         // Wrap the row into an element that is "both draggable and accepts drops".
         //
         // **Key nesting**: `DropTarget(Container(Draggable(Hoverable)))`.
@@ -2669,7 +2865,7 @@ impl SshManagerPanel {
             .cloned()
             .unwrap_or_default();
         let dragged_id = node.id.clone();
-        let draggable = Draggable::new(drag_state, hoverable)
+        let draggable = Draggable::new(drag_state, interactive_row)
             .with_accepted_by_drop_target_fn(move |drop_data, _app| {
                 if drop_data.as_any().downcast_ref::<SshDropData>().is_some() {
                     AcceptedByDropTarget::Yes
@@ -2975,6 +3171,19 @@ impl TypedActionView for SshManagerPanel {
             SshManagerPanelAction::Connect => self.on_connect(ctx),
             SshManagerPanelAction::Edit => self.on_edit(ctx),
             SshManagerPanelAction::CloneServer(id) => self.on_clone_server(id, ctx),
+            SshManagerPanelAction::ToggleFavorite(id) => {
+                if let Some(node) = self
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == *id && node.kind == NodeKind::Server)
+                {
+                    let favorite = Favorite::new(FavoriteKind::Host, id.clone(), node.name.clone());
+                    FavoritesStore::handle(ctx).update(ctx, |store, ctx| {
+                        store.toggle(favorite, ctx);
+                    });
+                }
+            }
+            SshManagerPanelAction::ToggleConnection(id) => self.on_toggle_connection(id, ctx),
             SshManagerPanelAction::ToggleSessions(id) => self.on_toggle_sessions(id.clone(), ctx),
             SshManagerPanelAction::AdoptSession {
                 node_id,

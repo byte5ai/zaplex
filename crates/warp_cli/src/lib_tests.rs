@@ -62,6 +62,18 @@ fn model_list_parses() {
 }
 
 #[test]
+fn cockpit_snapshot_requires_and_accepts_json_output() {
+    let args = Args::try_parse_from(["zaplex", "cockpit", "snapshot", "--json"]).unwrap();
+    let Some(Command::Cockpit(crate::cockpit::CockpitCommand::Snapshot(snapshot))) = args.command()
+    else {
+        panic!("expected a Cockpit snapshot command");
+    };
+    assert!(snapshot.json);
+
+    assert!(Args::try_parse_from(["zaplex", "cockpit", "snapshot"]).is_err());
+}
+
+#[test]
 fn agent_run_accepts_file() {
     let args = Args::try_parse_from([
         "warp",

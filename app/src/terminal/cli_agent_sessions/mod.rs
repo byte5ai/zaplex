@@ -239,6 +239,7 @@ pub struct CLIAgentAccountIdentity {
     agent: CLIAgent,
     pub config_dir: Option<String>,
     pub account_email: Option<String>,
+    pub account_id: Option<String>,
 }
 
 impl CLIAgentAccountIdentity {
@@ -504,12 +505,30 @@ impl CLIAgentSessionsModel {
         config_dir: Option<String>,
         account_email: Option<String>,
     ) {
+        self.bind_account_identity_with_id(
+            terminal_view_id,
+            agent,
+            config_dir,
+            account_email,
+            None,
+        );
+    }
+
+    pub fn bind_account_identity_with_id(
+        &mut self,
+        terminal_view_id: EntityId,
+        agent: CLIAgent,
+        config_dir: Option<String>,
+        account_email: Option<String>,
+        account_id: Option<String>,
+    ) {
         self.account_identities.insert(
             terminal_view_id,
             CLIAgentAccountIdentity {
                 agent,
-                config_dir,
+                config_dir: account_id.is_none().then_some(config_dir).flatten(),
                 account_email,
+                account_id,
             },
         );
     }
@@ -525,13 +544,31 @@ impl CLIAgentSessionsModel {
         config_dir: Option<&str>,
         account_email: Option<&str>,
     ) -> bool {
+        self.account_identity_matches_with_id(
+            terminal_view_id,
+            agent,
+            config_dir,
+            account_email,
+            None,
+        )
+    }
+
+    pub fn account_identity_matches_with_id(
+        &self,
+        terminal_view_id: EntityId,
+        agent: CLIAgent,
+        config_dir: Option<&str>,
+        account_email: Option<&str>,
+        account_id: Option<&str>,
+    ) -> bool {
         match self.account_identities.get(&terminal_view_id) {
             Some(identity) => {
                 identity.agent == agent
-                    && identity.config_dir.as_deref() == config_dir
                     && identity.account_email.as_deref() == account_email
+                    && identity.account_id.as_deref() == account_id
+                    && (account_id.is_some() || identity.config_dir.as_deref() == config_dir)
             }
-            None => config_dir.is_none() && account_email.is_none(),
+            None => config_dir.is_none() && account_email.is_none() && account_id.is_none(),
         }
     }
 
@@ -547,6 +584,25 @@ impl CLIAgentSessionsModel {
         session_id: &str,
         config_dir: Option<&str>,
         account_email: Option<&str>,
+        matches_terminal: impl FnMut(EntityId, &CLIAgentSession) -> bool,
+    ) -> Option<EntityId> {
+        self.terminal_view_id_for_agent_session_matching_with_id(
+            agent,
+            session_id,
+            config_dir,
+            account_email,
+            None,
+            matches_terminal,
+        )
+    }
+
+    pub fn terminal_view_id_for_agent_session_matching_with_id(
+        &self,
+        agent: CLIAgent,
+        session_id: &str,
+        config_dir: Option<&str>,
+        account_email: Option<&str>,
+        account_id: Option<&str>,
         mut matches_terminal: impl FnMut(EntityId, &CLIAgentSession) -> bool,
     ) -> Option<EntityId> {
         let mut matches = self
@@ -555,11 +611,12 @@ impl CLIAgentSessionsModel {
             .filter_map(|(terminal_view_id, session)| {
                 (session.agent == agent
                     && session.session_context.session_id.as_deref() == Some(session_id)
-                    && self.account_identity_matches(
+                    && self.account_identity_matches_with_id(
                         *terminal_view_id,
                         agent,
                         config_dir,
                         account_email,
+                        account_id,
                     )
                     && matches_terminal(*terminal_view_id, session))
                 .then_some(*terminal_view_id)

@@ -110,6 +110,27 @@ fn provider(installed: bool) -> ProviderOptions {
     }
 }
 
+fn remote_provider(installed: bool, provider_name: &str) -> ProviderOptions {
+    let mut options = provider(installed);
+    options.remote_accounts = vec![RemoteAccountOption {
+        route: remote_server::proto::AgentLaunchRoute {
+            schema_version: 1,
+            provider: provider_name.to_string(),
+            account_id: format!("{provider_name}:work"),
+        },
+        label: "work@example.com".to_string(),
+        email: Some("work@example.com".to_string()),
+        capacity_5h: 0.8,
+        capacity_week: 0.7,
+        capacity_known: true,
+    }];
+    options.remote_account_discovery = RemoteAccountDiscoveryState::Ready {
+        auto_routing_available: true,
+    };
+    options.remote_account_node_id = Some("node-7".to_string());
+    options
+}
+
 /// Codex review regression: when no supported agent is installed,
 /// there must be no launchable agent — a phantom chip previously let
 /// Confirm emit a `Launch` for a binary that isn't there.
@@ -273,7 +294,7 @@ fn confirm_payload_carries_local_selection() {
 fn confirm_payload_routes_remote_launch_to_node_id() {
     let card = SpawnCard {
         cfg: SpawnCardConfig {
-            claude: provider(true),
+            claude: remote_provider(true, "claude"),
             hosts: vec![host("node-7", "devbox")],
             ..Default::default()
         },
@@ -300,6 +321,8 @@ fn confirm_payload_routes_remote_launch_to_node_id() {
         SpawnCardEvent::Launch {
             node_id,
             config_dir,
+            agent_launch_route,
+            remote_account_email,
             ..
         } => {
             assert_eq!(node_id.as_deref(), Some("node-7"));
@@ -307,9 +330,44 @@ fn confirm_payload_routes_remote_launch_to_node_id() {
                 config_dir, None,
                 "remote launches use the host's own account"
             );
+            assert_eq!(
+                agent_launch_route.map(|route| route.account_id),
+                Some("claude:work".to_string())
+            );
+            assert_eq!(remote_account_email.as_deref(), Some("work@example.com"));
         }
         _ => panic!("Confirm must emit Launch"),
     }
+}
+
+#[test]
+fn degraded_remote_inventory_never_drives_auto_routing() {
+    let mut claude = remote_provider(true, "claude");
+    claude.remote_account_discovery = RemoteAccountDiscoveryState::Ready {
+        auto_routing_available: false,
+    };
+    let mut card = SpawnCard {
+        cfg: SpawnCardConfig {
+            claude,
+            hosts: vec![host("node-7", "devbox")],
+            ..Default::default()
+        },
+        agent: CLIAgent::Claude,
+        model: "opus".to_string(),
+        effort: String::new(),
+        account: AccountChoice::Freest,
+        show_accounts: false,
+        host: HostChoice::Remote(0),
+        project: None,
+        prompt: None,
+        remote_dir_editor: None,
+        chip_states: Default::default(),
+        close_button: None,
+    };
+
+    assert!(card.launch_payload().is_none());
+    card.account = AccountChoice::Specific(0);
+    assert!(card.launch_payload().is_some());
 }
 
 /// Confirm is inert when nothing is installed — no phantom launch of a
@@ -359,7 +417,7 @@ fn relative_remote_launch_directory_is_rejected() {
 
     let card = SpawnCard {
         cfg: SpawnCardConfig {
-            codex: provider(true),
+            codex: remote_provider(true, "codex"),
             hosts: vec![host("node-7", "devbox")],
             ..Default::default()
         },
@@ -482,7 +540,7 @@ fn claude_spawn_card_exposes_only_cli_default_effort() {
 fn absolute_remote_launch_directory_reaches_request_unchanged() {
     let card = SpawnCard {
         cfg: SpawnCardConfig {
-            codex: provider(true),
+            codex: remote_provider(true, "codex"),
             hosts: vec![host("node-7", "devbox")],
             ..Default::default()
         },

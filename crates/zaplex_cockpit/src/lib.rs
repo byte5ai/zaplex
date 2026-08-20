@@ -37,17 +37,18 @@ pub mod windows;
 
 pub use antigravity_sessions::idle_sessions as antigravity_idle_sessions;
 pub use conductor::{
-    fleet_is_large, fleet_session_count, host_auto_collapsed, host_ident, host_key,
-    host_key_is_local, host_session_count, host_summary, model_effort_label, next_waiting,
-    session_attr_line, session_attrs, session_glyph, session_identity_key, session_key,
-    split_host_key, state_word, waiting_sessions, SessionAttrs, WaitingTarget, GLYPH_IDLE,
-    GLYPH_WAITING, GLYPH_WORKING,
+    fleet_conductor_session_count, fleet_is_large, fleet_session_count, group_project_sessions,
+    host_auto_collapsed, host_conductor_session_count, host_ident, host_key, host_key_is_local,
+    host_session_count, host_summary, model_effort_label, next_waiting, session_attr_line,
+    session_attrs, session_glyph, session_identity_key, session_identity_key_with_account_id,
+    session_key, split_host_key, state_word, waiting_sessions, ConductorSession, SessionAttrs,
+    WaitingTarget, GLYPH_IDLE, GLYPH_WAITING, GLYPH_WORKING,
 };
 pub use favorites::{Favorite, FavoriteKind, Favorites};
 pub use fleet::{
-    build_fleet_tree, fold_inventory, merge_registered_hosts, sessions_of_account, AccountSession,
-    AgentSession, FleetTree, HostAvailability, HostNode, HostSessions, ProjectNode, RegisteredHost,
-    RemoteHost,
+    build_fleet_tree, fold_inventory, reconcile_connected_hosts, sessions_of_account,
+    AccountSession, AgentInventoryStatus, AgentSession, FleetTree, HostAvailability, HostNode,
+    HostSessions, ProjectNode, RegisteredHost, RemoteHost,
 };
 pub use format::{
     binding_window, context_fill, context_window, format_cost, format_relative, format_reset,
@@ -114,6 +115,10 @@ pub const IDLE_SESSION_LIMIT: usize = 50;
 /// their transcripts within the widest (week) window, and aggregate per-account
 /// usage / cost / heat.
 ///
+/// `codex_home` is the caller-resolved `$CODEX_HOME`, or `~/.codex` when the
+/// variable is unset. A non-default value is scanned alongside the default root and
+/// retained as the account pin. `claude_config_dir_env` is handled equivalently.
+///
 /// `now` is explicit so windowing is deterministic and testable. `budget_5h` /
 /// `budget_week` size the two heats (0 = disable). This is the crate's single
 /// I/O entry point; the app's `CockpitModel` calls it off the main thread on
@@ -153,20 +158,12 @@ pub fn build_snapshot_with_cache(
     let mut accounts = Vec::new();
     // Reasons the scan degraded (a present-but-unreadable config/dir), collected so an
     // empty/short accounts list is reported as "load failed" rather than "genuinely
-    // empty" — and excluded from freest-account routing. Re-probing the exact dirs the
-    // discovery/usage helpers walk keeps their signatures (and the daemon callers in
-    // server_model.rs) untouched. Messages are English technical detail for logs; the
-    // UI shows its own plain message, not these strings.
+    // empty" — and excluded from freest-account routing. Messages are English
+    // technical detail for logs; the UI shows its own plain message, not these strings.
     let mut degraded: Vec<String> = Vec::new();
-    // discover_accounts silently skips sibling `.claude*` account dirs when home is
-    // unreadable, so a real account can go missing. `try_exists()` distinguishes
-    // "definitely absent" (Ok(false)) from "cannot tell — permission/other" (Err); a
-    // bare `exists()` reports an inaccessible home as absent and would miss the failure.
-    if !matches!(home.try_exists(), Ok(false)) && std::fs::read_dir(home).is_err() {
-        degraded.push("Claude accounts: home directory unreadable".to_string());
-    }
-
-    for account in claude::discover_accounts(home, claude_config_dir_env) {
+    let claude_discovery = claude::discover_accounts_with_health(home, claude_config_dir_env);
+    degraded.extend(claude_discovery.issues);
+    for account in claude_discovery.accounts {
         // The walk reports its own I/O errors now (permission on any subdir, not just
         // the projects/ root) — a silently-truncated scan reads as "never used" and
         // would win freest-account routing.
@@ -208,17 +205,11 @@ pub fn build_snapshot_with_cache(
             idle,
         ));
     }
-    let codex_accounts = codex::discover_accounts(codex_home);
-    // An unreadable/malformed `auth.json` makes discover return no account at all —
-    // bit-for-bit identical to "Codex was never set up". A present-but-readable, valid
-    // auth.json always yields one account, so an empty result with the file present
-    // (Ok(true)) or inaccessible (Err) means it failed to load; only a definite absence
-    // (Ok(false)) is a genuine "no Codex".
-    if codex_accounts.is_empty() && !matches!(codex_home.join("auth.json").try_exists(), Ok(false))
-    {
-        degraded.push("Codex account: sign-in file unreadable".to_string());
-    }
-    for account in codex_accounts {
+    let default_codex_home = home.join(".codex");
+    let pinned_codex_home = (codex_home != default_codex_home.as_path()).then_some(codex_home);
+    let codex_discovery = codex::discover_account_roots(home, pinned_codex_home);
+    degraded.extend(codex_discovery.issues);
+    for account in codex_discovery.accounts {
         let (entries, io_error) = codex::usage_for_account(&account, since);
         if io_error {
             degraded.push(format!("{}: usage history unreadable", account.label));
@@ -334,6 +325,31 @@ mod build_snapshot_health_tests {
             "a present-but-unreadable codex auth.json must degrade, not read as empty: {:?}",
             snap.health,
         );
+    }
+
+    #[test]
+    fn a_malformed_claude_identity_degrades_the_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let codex_home = home.join(".codex");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        fs::write(home.join(".claude/.claude.json"), "{not valid json").unwrap();
+
+        let snap = build_snapshot(
+            &home,
+            &codex_home,
+            None,
+            Utc::now(),
+            0,
+            0,
+            &PricingTable::default(),
+        );
+        assert!(
+            matches!(snap.health, ScanHealth::Degraded(_)),
+            "a malformed Claude identity must degrade, not invent an account: {:?}",
+            snap.health,
+        );
+        assert!(snap.accounts.is_empty());
     }
 
     /// A clean setup with genuinely no accounts is authoritative — an empty list that

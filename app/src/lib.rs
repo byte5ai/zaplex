@@ -643,6 +643,13 @@ pub fn run() -> Result<()> {
             warp_cli::Command::Completions { shell } => {
                 return warp_cli::completions::generate_to_stdout(*shell);
             }
+            warp_cli::Command::Cockpit(command) => {
+                let exit_code = crate::control_surface::run_cockpit_command(command.clone())?;
+                if exit_code != warp_cli::cockpit::EXIT_SUCCESS {
+                    std::process::exit(exit_code);
+                }
+                return Ok(());
+            }
             warp_cli::Command::CommandLine(cmd) => {
                 #[cfg(not(target_family = "wasm"))]
                 if let warp_cli::CliCommand::Control(command) = cmd.as_ref() {
@@ -1522,9 +1529,6 @@ fn initialize_app(
     {
         log::warn!("failed to refresh Zaplex-managed CLI-agent hooks: {error:#}");
     }
-    #[cfg(not(target_family = "wasm"))]
-    ctx.add_singleton_model(crate::control_surface::ControlSurfaceServer::new);
-
     let display_count = ctx.windows().display_count();
     ctx.add_singleton_model(|_| DisplayCount(display_count));
 
@@ -1662,6 +1666,11 @@ fn initialize_app(
 
     // Cockpit data spine: registered after HomeDirectoryWatcher (which it subscribes to).
     ctx.add_singleton_model(cockpit::CockpitModel::new);
+
+    // The authenticated snapshot service reads CockpitModel directly, so the
+    // socket must not accept requests before that singleton exists.
+    #[cfg(not(target_family = "wasm"))]
+    ctx.add_singleton_model(crate::control_surface::ControlSurfaceServer::new);
 
     // Attention ambient-bit driver: subscribes to CockpitModel and paints the
     // fleet-wide needs-me count onto the Dock badge (+ the single calm→needy

@@ -1,15 +1,8 @@
 use super::*;
-
-use std::cell::RefCell;
-use std::collections::HashSet;
-use std::rc::Rc;
-
-use pathfinder_geometry::vector::vec2f;
-use warpui::platform::WindowStyle;
-use warpui::{App, Event, Presenter, WindowInvalidation};
+use zaplex_cockpit::TaskItem;
 
 #[test]
-fn task_glance_preserves_order_and_prefers_in_progress_step() {
+fn current_task_prefers_in_progress_step() {
     let state = TaskState {
         tasks: vec![
             TaskItem {
@@ -30,16 +23,11 @@ fn task_glance_preserves_order_and_prefers_in_progress_step() {
         ],
     };
 
-    let glance = task_glance_from_state(&state);
-    assert_eq!(glance.completed, 1);
-    assert_eq!(glance.total, 3);
-    assert_eq!(glance.current, Some("Current"));
-    assert_eq!(glance.tasks[0].title, "Finished");
-    assert_eq!(glance.tasks[2].title, "Later");
+    assert_eq!(current_task_title(&state), Some("Current"));
 }
 
 #[test]
-fn task_glance_falls_back_to_first_pending_step() {
+fn current_task_falls_back_to_first_pending_step() {
     let state = TaskState {
         tasks: vec![
             TaskItem {
@@ -54,7 +42,7 @@ fn task_glance_falls_back_to_first_pending_step() {
             },
         ],
     };
-    assert_eq!(task_glance_from_state(&state).current, Some("Next"));
+    assert_eq!(current_task_title(&state), Some("Next"));
 }
 
 #[test]
@@ -75,192 +63,81 @@ fn task_activity_uses_the_current_step_without_losing_recency() {
 }
 
 #[test]
-fn host_node_exposes_manage_terminal_agent_and_files_actions() {
-    assert!(matches!(
-        open_registered_host_action("node-dev"),
-        WorkspaceAction::OpenSshTerminalByNode { node_id } if node_id == "node-dev"
-    ));
-    assert!(matches!(
-        toggle_host_favorite_action("node-dev", "devhost"),
-        WorkspaceAction::ToggleFavorite {
-            kind: FavoriteKind::Host,
-            target,
-            label,
-        } if target == "node-dev" && label == "devhost"
-    ));
-    assert!(matches!(
-        manage_registered_host_action("node-dev"),
-        WorkspaceAction::ManageSshHost { node_id } if node_id == "node-dev"
-    ));
-    assert!(matches!(
-        open_registered_host_agent_action("node-dev", "devhost"),
-        WorkspaceAction::OpenSpawnCard {
-            registry_node_id: Some(node_id),
-            host_id: None,
-            host: Some(host),
-            project: None,
-        } if node_id == "node-dev" && host == "devhost"
-    ));
-    assert!(matches!(
-        open_registered_host_files_action("node-dev"),
-        WorkspaceAction::OpenSftpPaneByNode { node_id } if node_id == "node-dev"
-    ));
-}
-
-#[test]
-fn removed_host_is_marked_and_exposes_no_registered_route() {
+fn removed_host_is_marked_and_cannot_attach_agents() {
     let host = HostNode {
         host: "devhost".to_string(),
         is_local: false,
         host_id: Some("daemon-dev".to_string()),
         availability: HostAvailability::Removed,
+        inventory_status: zaplex_cockpit::AgentInventoryStatus::Ready,
         // Deliberately retain a stale id in this presentation-level test: the
         // explicit state, not incidental id clearing, must close every route.
         registry_node_id: Some("node-dev".to_string()),
         needs_me: 1,
         projects: Vec::new(),
     };
-    let tree = FleetTree {
-        hosts: vec![host.clone()],
-        needs_me: 0,
-    };
-
     assert_eq!(
         host_display_label(&host, "removed from Connections"),
         "devhost — removed from Connections"
     );
-    assert_eq!(available_registry_node_id(&host), None);
-    assert_eq!(available_registered_host(&tree, "node-dev"), None);
     assert!(
         !host.is_available(),
         "removed daemon data is visible but cannot seed session click routes"
     );
-    assert!(matches!(
-        open_removed_host_repair_action(),
-        WorkspaceAction::OpenSshManager
-    ));
-}
-
-struct HostRowTestView {
-    state: MouseStateHandle,
-    opened: usize,
-}
-
-impl Entity for HostRowTestView {
-    type Event = ();
-}
-
-impl TypedActionView for HostRowTestView {
-    type Action = WorkspaceAction;
-
-    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
-        if matches!(
-            action,
-            WorkspaceAction::OpenSshTerminalByNode { node_id } if node_id == "node-dev"
-        ) {
-            self.opened += 1;
-            ctx.notify();
-        }
-    }
-}
-
-impl View for HostRowTestView {
-    fn ui_name() -> &'static str {
-        "HostRowTestView"
-    }
-
-    fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        let appearance = Appearance::as_ref(app);
-        let theme = appearance.theme();
-        let content = Text::new_inline(
-            "devhost".to_string(),
-            appearance.ui_font_family(),
-            appearance.ui_font_body(),
-        )
-        .with_color(theme.main_text_color(theme.background()).into_solid())
-        .finish();
-        registered_host_click_target("node-dev", content, self.state.clone(), appearance)
-    }
 }
 
 #[test]
-fn host_row_click_survives_rerender_between_down_and_up() {
-    App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| HostRowTestView {
-            state: MouseStateHandle::default(),
-            opened: 0,
-        });
-        let root_view_id = app
-            .root_view_id(window_id)
-            .expect("test window should contain root view");
-        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
-        let invalidation = WindowInvalidation {
-            updated: HashSet::from([root_view_id]),
-            ..Default::default()
-        };
+fn expanded_containers_hide_counts() {
+    assert_eq!(container_count_presentation(true, 7, 2), None);
+}
 
-        let click_position = app.update({
-            let presenter = presenter.clone();
-            let invalidation = invalidation.clone();
-            move |ctx| {
-                presenter.borrow_mut().invalidate(invalidation, ctx);
-                presenter
-                    .borrow_mut()
-                    .build_scene(vec2f(320., 60.), 1., None, ctx);
-                presenter
-                    .borrow()
-                    .position_cache()
-                    .get_position("cockpit_host:node-dev")
-                    .expect("registered host row should be positioned")
-                    .center()
-            }
-        });
+#[test]
+fn collapsed_counts_carry_hidden_attention_only() {
+    assert_eq!(
+        container_count_presentation(false, 7, 2),
+        Some(ContainerCountPresentation {
+            count: 7,
+            attention: true,
+        })
+    );
+    assert_eq!(
+        container_count_presentation(false, 7, 0),
+        Some(ContainerCountPresentation {
+            count: 7,
+            attention: false,
+        })
+    );
+}
 
-        app.update({
-            let presenter = presenter.clone();
-            move |ctx| {
-                ctx.simulate_window_event(
-                    Event::LeftMouseDown {
-                        position: click_position,
-                        modifiers: Default::default(),
-                        click_count: 1,
-                        is_first_mouse: false,
-                    },
-                    window_id,
-                    presenter,
-                );
-            }
-        });
-        app.update({
-            let presenter = presenter.clone();
-            let invalidation = invalidation.clone();
-            move |ctx| {
-                presenter.borrow_mut().invalidate(invalidation, ctx);
-                presenter
-                    .borrow_mut()
-                    .build_scene(vec2f(320., 60.), 1., None, ctx);
-            }
-        });
-        app.update({
-            let presenter = presenter.clone();
-            move |ctx| {
-                ctx.simulate_window_event(
-                    Event::LeftMouseUp {
-                        position: click_position,
-                        modifiers: Default::default(),
-                    },
-                    window_id,
-                    presenter,
-                );
-            }
-        });
+#[test]
+fn agent_leaf_contains_only_provider_and_optional_model() {
+    assert_eq!(
+        agent_leaf_label(Provider::Claude, "Opus 4.1"),
+        "Claude · Opus 4.1"
+    );
+    assert_eq!(agent_leaf_label(Provider::Codex, "  "), "Codex");
+}
 
-        view.read(&app, |view, _| {
-            assert_eq!(
-                view.opened, 1,
-                "registered host click must fire exactly once across a rerender"
-            );
-        });
-    });
+#[test]
+fn waiting_pulse_is_fixed_and_capped_at_twice_the_core() {
+    let start = waiting_pulse_frame(Duration::ZERO, false);
+    let near_end = waiting_pulse_frame(Duration::from_millis(1599), false);
+
+    assert!(start.repaint);
+    assert!(near_end.repaint);
+    assert!((88..=100).contains(&start.core_opacity));
+    assert!((88..=100).contains(&near_end.core_opacity));
+    assert!(near_end.ring_diameter <= WAITING_GLYPH_CORE_DIAMETER * 2.0);
+    assert!(near_end.ring_diameter > WAITING_GLYPH_CORE_DIAMETER * 1.99);
+    assert_eq!(WAITING_GLYPH_FOOTPRINT, GLYPH_COL_WIDTH);
+}
+
+#[test]
+fn reduced_motion_uses_static_waiting_emphasis() {
+    let frame = waiting_pulse_frame(Duration::from_secs(30), true);
+
+    assert!(!frame.repaint);
+    assert_eq!(frame.core_opacity, 100);
+    assert_eq!(frame.ring_diameter, WAITING_GLYPH_CORE_DIAMETER * 1.45);
+    assert!(frame.ring_opacity > 0);
 }

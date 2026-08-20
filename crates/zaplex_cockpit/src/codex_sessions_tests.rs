@@ -6,6 +6,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 
 use super::*;
+use crate::transcript::{ToolCall, TurnRole};
 use crate::types::{Provider, SessionState, TaskItem, TaskState, TaskStatus};
 
 /// Write a rollout file under `<home>/sessions/2026/07/07/` with the given
@@ -573,4 +574,342 @@ fn an_unexpected_rollout_name_is_not_guessed_at() {
     );
     // No file name at all → no id to invent.
     assert_eq!(session_id_from_path(Path::new("/")), "");
+}
+
+// ── Local transcript history ───────────────────────────────────────────────
+
+fn response_message(role: &str, item_type: &str, text: &str) -> Value {
+    json!({
+        "type":"response_item",
+        "timestamp":ts_now(),
+        "payload":{
+            "type":"message",
+            "role":role,
+            "content":[{"type":item_type,"text":text}]
+        }
+    })
+}
+
+#[test]
+fn transcript_resolver_covers_current_and_archived_codex_layouts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let current_id = "019f135f-7fcc-7d93-8a28-4835d98f8f0a";
+    let current = write_rollout(
+        tmp.path(),
+        &format!("rollout-2026-07-07T12-00-00-{current_id}.jsonl"),
+        &[session_meta("/tmp/current", current_id)],
+    );
+
+    let archived_id = "01a00093-815b-7b11-9c70-9f8275d0d9be";
+    let archived_dir = tmp.path().join("archived_sessions");
+    fs::create_dir_all(&archived_dir).unwrap();
+    let archived = archived_dir.join(format!("rollout-2026-08-14T16-01-02-{archived_id}.jsonl"));
+    fs::write(
+        &archived,
+        serde_json::to_string(&session_meta("/tmp/archived", archived_id)).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        transcript_path(tmp.path(), current_id).unwrap(),
+        Some(current)
+    );
+    assert_eq!(
+        transcript_path(tmp.path(), archived_id).unwrap(),
+        Some(archived)
+    );
+}
+
+#[test]
+fn transcript_resolver_uses_a_bounded_session_meta_fallback() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-legacy.jsonl",
+        &[session_meta("/tmp/project", "stable-custom-id")],
+    );
+
+    assert_eq!(
+        transcript_path(tmp.path(), "stable-custom-id").unwrap(),
+        Some(path)
+    );
+    assert_eq!(transcript_path(tmp.path(), "missing").unwrap(), None);
+}
+
+#[test]
+fn transcript_resolver_fails_closed_at_the_total_header_scan_limit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sessions = tmp.path().join("sessions/2026/07/07");
+    fs::create_dir_all(&sessions).unwrap();
+    let file_count = TRANSCRIPT_HEADER_SCAN_MAX_BYTES / TRANSCRIPT_HEADER_MAX_BYTES + 1;
+    for index in 0..file_count {
+        let path = sessions.join(format!("rollout-2026-07-07T12-00-{index:05}-legacy.jsonl"));
+        fs::File::create(path)
+            .unwrap()
+            .set_len(TRANSCRIPT_HEADER_MAX_BYTES)
+            .unwrap();
+    }
+
+    assert!(matches!(
+        transcript_path(tmp.path(), "unknown-session"),
+        Err(TranscriptError::TranscriptLookupLimitExceeded {
+            max_bytes: TRANSCRIPT_HEADER_SCAN_MAX_BYTES
+        })
+    ));
+}
+
+#[test]
+fn transcript_resolver_rejects_path_like_and_ambiguous_ids() {
+    let tmp = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        transcript_path(tmp.path(), "../auth.json"),
+        Err(TranscriptError::InvalidSessionId)
+    ));
+
+    let id = "019f135f-7fcc-7d93-8a28-4835d98f8f0a";
+    write_rollout(
+        tmp.path(),
+        &format!("rollout-2026-07-07T12-00-00-{id}.jsonl"),
+        &[session_meta("/tmp/current", id)],
+    );
+    let archived_dir = tmp.path().join("archived_sessions");
+    fs::create_dir_all(&archived_dir).unwrap();
+    fs::write(
+        archived_dir.join(format!("rollout-2026-07-07T12-00-00-{id}.jsonl")),
+        serde_json::to_string(&session_meta("/tmp/archived", id)).unwrap(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        transcript_path(tmp.path(), id),
+        Err(TranscriptError::AmbiguousSessionId { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_resolver_never_accepts_a_symlinked_rollout() {
+    use std::os::unix::fs::symlink;
+
+    let home = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let id = "019f135f-7fcc-7d93-8a28-4835d98f8f0a";
+    let file_name = format!("rollout-2026-07-07T12-00-00-{id}.jsonl");
+    let target = outside.path().join(&file_name);
+    fs::write(
+        &target,
+        serde_json::to_string(&response_message(
+            "assistant",
+            "output_text",
+            "must remain outside",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let session_dir = home
+        .path()
+        .join("sessions")
+        .join("2026")
+        .join("07")
+        .join("07");
+    fs::create_dir_all(&session_dir).unwrap();
+    symlink(&target, session_dir.join(file_name)).unwrap();
+
+    assert_eq!(transcript_path(home.path(), id).unwrap(), None);
+    assert_eq!(load_transcript(home.path(), id).unwrap(), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_loader_rejects_a_path_replaced_after_resolution() {
+    let tmp = tempfile::tempdir().unwrap();
+    let id = "019f135f-7fcc-7d93-8a28-4835d98f8f0a";
+    let path = write_rollout(
+        tmp.path(),
+        &format!("rollout-2026-07-07T12-00-00-{id}.jsonl"),
+        &[
+            session_meta("/tmp/project", id),
+            response_message("assistant", "output_text", "original"),
+        ],
+    );
+    let resolved = resolve_transcript(tmp.path(), id).unwrap().unwrap();
+    assert!(resolved.opened.is_none());
+
+    fs::rename(&path, path.with_extension("resolved")).unwrap();
+    fs::write(
+        &path,
+        [
+            serde_json::to_string(&session_meta("/tmp/project", id)).unwrap(),
+            serde_json::to_string(&response_message("assistant", "output_text", "replaced"))
+                .unwrap(),
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        read_resolved_transcript(resolved),
+        Err(TranscriptError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidData
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn session_meta_fallback_reads_and_parses_from_its_bound_handle() {
+    let tmp = tempfile::tempdir().unwrap();
+    let id = "stable-custom-id";
+    let path = write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-legacy.jsonl",
+        &[
+            session_meta("/tmp/project", id),
+            response_message("user", "input_text", "Original question"),
+            response_message("assistant", "output_text", "Original answer"),
+        ],
+    );
+    let resolved = resolve_transcript(tmp.path(), id).unwrap().unwrap();
+    assert!(resolved.opened.is_some());
+
+    fs::rename(&path, path.with_extension("opened")).unwrap();
+    fs::write(
+        &path,
+        serde_json::to_string(&session_meta("/tmp/project", id)).unwrap(),
+    )
+    .unwrap();
+
+    let content = read_resolved_transcript(resolved).unwrap();
+    let turns = parse_transcript_content(&content).unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[0].text, "Original question");
+    assert_eq!(turns[1].text, "Original answer");
+}
+
+#[test]
+fn codex_rollout_loads_provider_neutral_turns_without_sensitive_payloads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let id = "019f135f-7fcc-7d93-8a28-4835d98f8f0a";
+    let path = write_rollout(
+        tmp.path(),
+        &format!("rollout-2026-07-07T12-00-00-{id}.jsonl"),
+        &[
+            session_meta("/tmp/project", id),
+            turn_context("gpt-5.6", "/tmp/project", Some("high")),
+            response_message("developer", "input_text", "internal instructions"),
+            response_message("user", "input_text", "Inspect the project"),
+            json!({
+                "type":"response_item",
+                "timestamp":ts_now(),
+                "payload":{
+                    "type":"reasoning",
+                    "summary":[{"type":"summary_text","text":"Check the files"}],
+                    "encrypted_content":"credential-must-not-appear"
+                }
+            }),
+            json!({
+                "type":"response_item",
+                "timestamp":ts_now(),
+                "payload":{
+                    "type":"function_call",
+                    "name":"read_file",
+                    "arguments":"{\"token\":\"credential-must-not-appear\"}"
+                }
+            }),
+            json!({
+                "type":"response_item",
+                "timestamp":ts_now(),
+                "payload":{
+                    "type":"function_call_output",
+                    "output":"credential-must-not-appear"
+                }
+            }),
+            response_message("assistant", "output_text", "The project is ready."),
+        ],
+    );
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    writeln!(file, "{{trailing partial").unwrap();
+
+    let turns = load_transcript(tmp.path(), id).unwrap().unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[0].role, TurnRole::User);
+    assert_eq!(turns[0].text, "Inspect the project");
+    assert_eq!(turns[1].role, TurnRole::Assistant);
+    assert_eq!(turns[1].text, "The project is ready.");
+    assert_eq!(turns[1].thinking, "Check the files");
+    assert_eq!(turns[1].model.as_deref(), Some("gpt-5.6"));
+    assert_eq!(
+        turns[1].tools,
+        vec![ToolCall {
+            name: "read_file".into()
+        }]
+    );
+    assert!(!format!("{turns:?}").contains("credential-must-not-appear"));
+    assert!(!format!("{turns:?}").contains("internal instructions"));
+}
+
+#[test]
+fn legacy_event_messages_are_used_only_without_canonical_messages() {
+    let tmp = tempfile::tempdir().unwrap();
+    let id = "019f135f-7fcc-7d93-8a28-4835d98f8f0a";
+    write_rollout(
+        tmp.path(),
+        &format!("rollout-2026-07-07T12-00-00-{id}.jsonl"),
+        &[
+            session_meta("/tmp/project", id),
+            turn_context("gpt-5.6", "/tmp/project", Some("high")),
+            json!({"type":"event_msg","timestamp":ts_now(),
+                "payload":{"type":"user_message","message":"Question"}}),
+            json!({"type":"event_msg","timestamp":ts_now(),
+                "payload":{"type":"agent_reasoning","text":"Think"}}),
+            json!({"type":"event_msg","timestamp":ts_now(),
+                "payload":{"type":"agent_message","message":"Answer"}}),
+        ],
+    );
+
+    let turns = load_transcript(tmp.path(), id).unwrap().unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[0].text, "Question");
+    assert_eq!(turns[1].text, "Answer");
+    assert_eq!(turns[1].thinking, "Think");
+}
+
+#[test]
+fn transcript_loader_reports_unsupported_malformed_and_oversized_rollouts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let unsupported_id = "019f135f-7fcc-7d93-8a28-4835d98f8f0a";
+    write_rollout(
+        tmp.path(),
+        &format!("rollout-2026-07-07T12-00-00-{unsupported_id}.jsonl"),
+        &[session_meta("/tmp/project", unsupported_id)],
+    );
+    assert!(matches!(
+        load_transcript(tmp.path(), unsupported_id),
+        Err(TranscriptError::UnsupportedTranscript)
+    ));
+
+    let malformed_id = "01a00093-815b-7b11-9c70-9f8275d0d9be";
+    let malformed = tmp
+        .path()
+        .join("archived_sessions")
+        .join(format!("rollout-2026-08-14T16-01-02-{malformed_id}.jsonl"));
+    fs::create_dir_all(malformed.parent().unwrap()).unwrap();
+    fs::write(&malformed, "not json\n{partial").unwrap();
+    assert!(matches!(
+        load_transcript(tmp.path(), malformed_id),
+        Err(TranscriptError::MalformedTranscript)
+    ));
+
+    let oversized_id = "01a000e4-2d09-7620-952c-0fa2a5acbe7c";
+    let oversized = tmp
+        .path()
+        .join("archived_sessions")
+        .join(format!("rollout-2026-08-14T17-29-08-{oversized_id}.jsonl"));
+    fs::File::create(&oversized)
+        .unwrap()
+        .set_len(TRANSCRIPT_MAX_BYTES + 1)
+        .unwrap();
+    assert!(matches!(
+        load_transcript(tmp.path(), oversized_id),
+        Err(TranscriptError::TranscriptTooLarge { .. })
+    ));
 }

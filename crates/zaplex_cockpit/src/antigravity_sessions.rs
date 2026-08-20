@@ -84,6 +84,7 @@ pub fn idle_sessions(
             worktree: project.worktree,
             config_dir: Some(state_dir.to_string_lossy().into_owned()),
             account_email: None,
+            account_id: None,
             process_fingerprint: None,
             pty_session_id: None,
             pty_session_generation: None,

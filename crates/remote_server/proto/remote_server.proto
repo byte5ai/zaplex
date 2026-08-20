@@ -66,6 +66,13 @@ message ClientMessage {
     // Typed inventory of existing tmux/byobu sessions. Clients must negotiate
     // "multiplexer-inventory-v1" before using this request.
     ListMultiplexerSessions list_multiplexer_sessions = 37;
+    // Secret-free daemon-local AI-account inventory. Clients must negotiate
+    // "agent-account-routing-v1" before using this request or selecting an
+    // account on OpenSession.
+    ListAgentAccounts list_agent_accounts = 38;
+    // Bounded, provider-neutral transcript snapshot resolved entirely on the
+    // daemon host. Clients must negotiate "agent-transcript-read-v1".
+    ReadAgentTranscript read_agent_transcript = 39;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -117,6 +124,8 @@ message ServerMessage {
     AgentPtyBindingResponse agent_pty_binding_response = 33;
     SafeFileResponse safe_file_response = 34;
     MultiplexerSessionList multiplexer_session_list = 35;
+    AgentAccountInventory agent_account_inventory = 36;
+    AgentTranscriptResponse agent_transcript_response = 37;
   }
 }
 
@@ -791,6 +800,11 @@ message OpenSession {
   // Per-host scrollback/replay buffer ceiling in bytes for this session's
   // OutputRing. Absent or 0 means the daemon uses its built-in default.
   optional uint64 ring_ceiling_bytes = 5;
+  // Daemon-local account identity selected from AgentAccountInventory. The
+  // client never sends a CLAUDE_CONFIG_DIR/CODEX_HOME path across this wire;
+  // the daemon resolves this opaque id on its own host and injects the matching
+  // provider environment variable before spawning the shell.
+  AgentLaunchRoute agent_launch_route = 6;
 }
 
 // Daemon → client: OpenSession succeeded, returns the newly assigned
@@ -1039,17 +1053,17 @@ message AgentSessionInfo {
   // decodes cleanly.
   string worktree = 13;
   string branch = 14;
-  // The session account's provider config dir ON THE HOST (a plexed CODEX_HOME /
-  // CLAUDE_CONFIG_DIR), so the client can pin the right subscription when it asks
-  // the daemon to resume the session. Empty = default account (no pin).
+  // Legacy session route: the provider config dir ON THE HOST (a plexed
+  // CODEX_HOME / CLAUDE_CONFIG_DIR). It remains for peers that did not negotiate
+  // agent-account-routing-v1; capable peers receive account_id and this is empty.
   //
   // Routing only — NOT an account identity. It is a path on the daemon's host, so
   // it neither matches how the client spells the same account nor exists at all for
   // a default account. Use account_email to tell whose account a session is.
   string config_dir = 15;
-  // Email of the account this session runs under: the join key (with `provider`)
-  // that lets a client tell which of ITS accounts a remote session belongs to.
-  // Nothing else on this wire identifies a subscription across hosts.
+  // Email of the account this session runs under: the cross-host join key (with
+  // `provider`) that lets a client group the same subscription across hosts.
+  // account_id below is deliberately daemon-local and is used for exact routing.
   //
   // Empty = the daemon could not determine it, or predates this field. Such a
   // session still folds into the host tree; it simply joins no account rather than
@@ -1077,6 +1091,9 @@ message AgentSessionInfo {
   // from a provider that deliberately emitted an empty list.
   bool has_task_state = 22;
   repeated AgentTaskItem task_items = 23;
+  // Opaque daemon-local account identity. Present only when both peers
+  // negotiated "agent-account-routing-v1"; config_dir is then empty.
+  string account_id = 24;
 }
 
 message AgentTaskItem {
@@ -1089,6 +1106,110 @@ message AgentTaskItem {
 // Daemon → client: result of ListAgentSessions.
 message AgentSessionList {
   repeated AgentSessionInfo sessions = 1;
+}
+
+// ── Agent Account Inventory + Launch Routing ─────────────────────────────
+//
+// Capability: "agent-account-routing-v1". Account ids are opaque, stable on
+// one daemon host, and resolve only against an inventory produced by that
+// daemon. No provider config path or credential crosses the protocol boundary.
+
+message ListAgentAccounts {}
+
+message AgentAccountInfo {
+  string provider = 1;
+  string account_id = 2;
+  string display_label = 3;
+  string email = 4;
+  string organization = 5;
+  string plan_tier = 6;
+  bool is_default = 7;
+  // Remaining capacity fractions in [0, 1]. They are safe for routing only
+  // when capacity_known is true.
+  double capacity_5h = 8;
+  double capacity_week = 9;
+  bool capacity_known = 10;
+  // "loaded" or "degraded". Unknown future values must be treated degraded.
+  string health = 11;
+  // "real" or "estimate"; descriptive only, never a credential.
+  string usage_provenance = 12;
+}
+
+message AgentAccountInventory {
+  uint32 schema_version = 1;
+  repeated AgentAccountInfo accounts = 2;
+  // "loaded" or "degraded". An empty loaded inventory means no accounts;
+  // degraded means discovery was incomplete and must not drive auto-routing.
+  string health = 3;
+  // Generic, path-free diagnostic suitable for logs/UI.
+  string health_message = 4;
+}
+
+message AgentLaunchRoute {
+  uint32 schema_version = 1;
+  string provider = 2;
+  string account_id = 3;
+}
+
+// ── Bounded Agent Transcript Read ────────────────────────────────────────
+//
+// Capability: "agent-transcript-read-v1". The request identifies only an
+// opaque daemon account and stable provider session. Provider config paths are
+// resolved on the daemon and never cross the wire. Responses contain the
+// shared display projection only: visible conversation text, reasoning
+// summaries and tool names. Tool arguments/results, encrypted payloads,
+// credential stores and raw JSONL are never protocol data.
+
+message ReadAgentTranscript {
+  uint32 schema_version = 1;
+  string provider = 2;
+  string account_id = 3;
+  string session_id = 4;
+  // Optional opaque revision returned by an earlier snapshot. A matching
+  // revision returns NOT_MODIFIED without retransmitting the transcript.
+  string known_revision = 5;
+}
+
+enum AgentTranscriptStatus {
+  AGENT_TRANSCRIPT_STATUS_UNSPECIFIED = 0;
+  AGENT_TRANSCRIPT_STATUS_LOADED = 1;
+  AGENT_TRANSCRIPT_STATUS_NOT_MODIFIED = 2;
+  AGENT_TRANSCRIPT_STATUS_MISSING = 3;
+  AGENT_TRANSCRIPT_STATUS_EMPTY = 4;
+  AGENT_TRANSCRIPT_STATUS_UNSUPPORTED = 5;
+  AGENT_TRANSCRIPT_STATUS_MALFORMED = 6;
+  AGENT_TRANSCRIPT_STATUS_TOO_LARGE = 7;
+  AGENT_TRANSCRIPT_STATUS_INVALID_REQUEST = 8;
+  AGENT_TRANSCRIPT_STATUS_UNAVAILABLE = 9;
+}
+
+message AgentTranscriptTool {
+  string name = 1;
+}
+
+message AgentTranscriptTurn {
+  // "user" or "assistant". Unknown values must be ignored by clients.
+  string role = 1;
+  string text = 2;
+  string thinking = 3;
+  repeated AgentTranscriptTool tools = 4;
+  string model = 5;
+  string timestamp = 6;
+}
+
+message AgentTranscriptResponse {
+  uint32 schema_version = 1;
+  string provider = 2;
+  string session_id = 3;
+  AgentTranscriptStatus status = 4;
+  repeated AgentTranscriptTurn turns = 5;
+  // True when older turns or oversized display fields were omitted to stay
+  // within the daemon's hard response limits.
+  bool truncated = 6;
+  // Opaque, path-free source revision for efficient polling.
+  string source_revision = 7;
+  // Generic path-free diagnostic. Never contains an OS error or provider path.
+  string message = 8;
 }
 
 // ── Agent-to-PTY Binding ──────────────────────────────────────────────────
@@ -1107,6 +1228,9 @@ message AgentSessionIdentity {
   string provider = 2;
   string account_email = 3;
   string config_dir = 4;
+  // Opaque daemon-local identity from AgentSessionInfo. New routing-capable
+  // peers use this instead of transporting a host config path.
+  string account_id = 5;
 }
 
 message BindAgentPty {

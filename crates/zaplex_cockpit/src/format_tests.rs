@@ -75,7 +75,10 @@ fn token_humanization() {
 fn reset_countdown() {
     let now = ts("2026-06-30T12:00:00Z");
     assert_eq!(format_reset(None, now), "");
-    assert_eq!(format_reset(Some(ts("2026-06-30T11:59:00Z")), now), "resetting");
+    assert_eq!(
+        format_reset(Some(ts("2026-06-30T11:59:00Z")), now),
+        "resetting"
+    );
     assert_eq!(format_reset(Some(ts("2026-06-30T12:45:00Z")), now), "45m");
     assert_eq!(format_reset(Some(ts("2026-06-30T14:13:00Z")), now), "2h13m");
     assert_eq!(format_reset(Some(ts("2026-07-04T13:00:00Z")), now), "4d1h");
@@ -133,5 +136,8 @@ fn a_future_timestamp_reads_as_now_rather_than_negative() {
     let now = DateTime::parse_from_rfc3339("2026-07-17T12:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
-    assert_eq!(format_relative(now + chrono::Duration::hours(3), now), "now");
+    assert_eq!(
+        format_relative(now + chrono::Duration::hours(3), now),
+        "now"
+    );
 }

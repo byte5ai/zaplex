@@ -35,6 +35,8 @@ const DEFAULT_ROW_HEIGHT_ESTIMATE: f32 = 32.0;
 /// Callback type for rendering a single row on demand.
 /// Takes the row index and returns a vector of cell elements for that row.
 pub type TableRowRenderFn = dyn Fn(usize, &AppContext) -> Vec<Box<dyn Element>> + 'static;
+/// Optional paint-only override for an individual row's background.
+pub type TableRowBackgroundFn = dyn Fn(usize, &AppContext) -> Option<ColorU> + 'static;
 
 // ============================================================================
 // SumTree Types for Row Virtualization
@@ -544,6 +546,7 @@ pub struct Table {
     state: TableStateHandle,
     headers: Vec<TableHeader>,
     config: TableConfig,
+    row_background_fn: Option<Arc<TableRowBackgroundFn>>,
     /// Width to use when the table has unconstrained width and no intrinsic content to measure.
     unconstrained_width: f32,
     /// Viewport height to use when height constraint is not finite.
@@ -571,6 +574,7 @@ impl Table {
             state,
             headers: Vec::new(),
             config: TableConfig::default(),
+            row_background_fn: None,
             unconstrained_width,
             unconstrained_height,
             size: None,
@@ -604,6 +608,17 @@ impl Table {
 
     pub fn with_config(mut self, config: TableConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Optionally overrides the background paint for individual data rows
+    /// without changing their layout, padding, virtualization, or divider
+    /// behavior. Returning `None` keeps the configured row background.
+    pub fn with_row_background_fn<F>(mut self, f: F) -> Self
+    where
+        F: Fn(usize, &AppContext) -> Option<ColorU> + 'static,
+    {
+        self.row_background_fn = Some(Arc::new(f));
         self
     }
 
@@ -1255,7 +1270,13 @@ impl Element for Table {
             let absolute_row_idx = visible_start_row_idx + child_idx;
             let row_height_f32 = row_height.as_f32();
 
-            let bg_color = self.config.row_background.color_for_row(absolute_row_idx);
+            let configured_background =
+                || self.config.row_background.color_for_row(absolute_row_idx);
+            let bg_color = self
+                .row_background_fn
+                .as_ref()
+                .and_then(|background_fn| background_fn(absolute_row_idx, app))
+                .unwrap_or_else(configured_background);
             let row_rect = RectF::new(
                 content_origin + vec2f(0.0, current_y),
                 vec2f(total_width, row_height_f32),

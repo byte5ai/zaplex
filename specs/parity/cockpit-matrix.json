@@ -1,0 +1,626 @@
+{
+  "schema_version": 1,
+  "contract": "GH-160",
+  "gate_issue": 169,
+  "required_dimensions": {
+    "provider": [
+      "claude",
+      "codex"
+    ],
+    "account": [
+      "default",
+      "pinned",
+      "multiple"
+    ],
+    "location": [
+      "local",
+      "remote"
+    ],
+    "state": [
+      "live",
+      "waiting",
+      "idle",
+      "dormant"
+    ]
+  },
+  "required_capabilities": [
+    "api",
+    "launch",
+    "reattach",
+    "transcript",
+    "usage",
+    "attention",
+    "lifecycle"
+  ],
+  "references": [
+    {
+      "id": "claudeplex",
+      "repository": "iret77/claudeplex",
+      "url": "https://github.com/iret77/claudeplex.git",
+      "branch": "main",
+      "probes": [
+        {
+          "id": "account-roots-include-process-and-environment",
+          "path": "src/discover.ts",
+          "contains_regex": [
+            "getRunningConfigDirs\\(\\)\\.keys\\(\\)",
+            "process\\.env\\.CLAUDE_CONFIG_DIR"
+          ]
+        },
+        {
+          "id": "live-sessions-require-registry-and-transcript",
+          "path": "src/collect.ts",
+          "contains_regex": [
+            "isRealReg\\(r\\)",
+            "jsonlById\\.has\\(r\\.sessionId\\)",
+            "pidAlive\\(r\\.pid\\)"
+          ]
+        },
+        {
+          "id": "status-and-dormant-contract",
+          "path": "src/collect.ts",
+          "contains_regex": [
+            "status === [\"']busy[\"']",
+            "ended \\? [\"']wartet[\"'] : [\"']monitor[\"']",
+            "live: false",
+            "state: [\"']stale[\"']"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "claudeplex-desktop",
+      "repository": "iret77/claudeplex-desktop",
+      "url": "https://github.com/iret77/claudeplex-desktop.git",
+      "branch": "main",
+      "probes": [
+        {
+          "id": "account-roots-include-process-and-environment",
+          "path": "src/core/discover.ts",
+          "contains_regex": [
+            "getRunningConfigDirs\\(\\)\\.keys\\(\\)",
+            "process\\.env\\.CLAUDE_CONFIG_DIR"
+          ]
+        },
+        {
+          "id": "live-sessions-require-registry-and-transcript",
+          "path": "src/core/collect.ts",
+          "contains_regex": [
+            "isRealReg\\(r\\)",
+            "jsonlById\\.has\\(r\\.sessionId\\)",
+            "pidAlive\\(r\\.pid\\)"
+          ]
+        },
+        {
+          "id": "status-dormant-and-attention-contract",
+          "path": "src/core/collect.ts",
+          "contains_regex": [
+            "status === [\"']busy[\"']",
+            "ended \\? [\"']wartet[\"'] : [\"']monitor[\"']",
+            "live: false",
+            "state: [\"']stale[\"']"
+          ]
+        },
+        {
+          "id": "waiting-sessions-are-surfaced",
+          "path": "src/views/SessionsMain.tsx",
+          "contains_regex": [
+            "s\\.state === [\"']wartet[\"']",
+            "waitingOnYou"
+          ]
+        }
+      ]
+    }
+  ],
+  "suites": [
+    {
+      "id": "cargo-check",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "zaplex"
+      ],
+      "timeout_seconds": 3600
+    },
+    {
+      "id": "cockpit-data-spine",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "zaplex_cockpit",
+        "--lib",
+        "--no-fail-fast"
+      ],
+      "timeout_seconds": 3600
+    },
+    {
+      "id": "cockpit-app",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "cockpit::"
+      ],
+      "timeout_seconds": 5400
+    },
+    {
+      "id": "remote-daemon-app",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "remote_server::"
+      ],
+      "timeout_seconds": 5400
+    },
+    {
+      "id": "generated-read-only-code",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--no-fail-fast",
+        "generated_"
+      ],
+      "timeout_seconds": 3600
+    },
+    {
+      "id": "cockpit-cli",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp_cli",
+        "--lib",
+        "--no-fail-fast",
+        "cockpit::"
+      ],
+      "timeout_seconds": 3600
+    }
+  ],
+  "test_catalog": [
+    {
+      "id": "claude-default-account",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/claude_tests.rs",
+      "name": "discovers_default_account_without_any_session_store"
+    },
+    {
+      "id": "claude-pinned-account",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/claude_tests.rs",
+      "name": "pinned_root_is_non_default_and_routes_back_to_that_root"
+    },
+    {
+      "id": "claude-multiple-accounts",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/claude_tests.rs",
+      "name": "duplicate_stable_claude_identity_is_emitted_once"
+    },
+    {
+      "id": "claude-live",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/sessions_tests.rs",
+      "name": "busy_session_is_active"
+    },
+    {
+      "id": "claude-waiting",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/sessions_tests.rs",
+      "name": "ended_turn_is_waiting"
+    },
+    {
+      "id": "claude-dormant",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/sessions_tests.rs",
+      "name": "recent_substantial_transcript_survives_registry_cleanup_only_as_idle"
+    },
+    {
+      "id": "claude-usage",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/claude_tests.rs",
+      "name": "parse_transcript_extracts_only_assistant_usage"
+    },
+    {
+      "id": "codex-default-account",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/codex_tests.rs",
+      "name": "discovers_account_and_reads_email_from_id_token_without_storing_tokens"
+    },
+    {
+      "id": "codex-pinned-account",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/codex_tests.rs",
+      "name": "discovers_default_and_pinned_roots_with_distinct_routing"
+    },
+    {
+      "id": "codex-multiple-accounts",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/codex_tests.rs",
+      "name": "duplicate_stable_codex_identity_is_emitted_once"
+    },
+    {
+      "id": "codex-waiting",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/codex_sessions_tests.rs",
+      "name": "completed_turn_is_waiting_with_model_effort_ctx"
+    },
+    {
+      "id": "codex-dormant",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/codex_sessions_tests.rs",
+      "name": "a_dormant_rollout_is_discovered_as_idle_and_resumable"
+    },
+    {
+      "id": "codex-transcript",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/codex_sessions_tests.rs",
+      "name": "codex_rollout_loads_provider_neutral_turns_without_sensitive_payloads"
+    },
+    {
+      "id": "codex-usage",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/codex_tests.rs",
+      "name": "codex_usage_subtracts_cached_tokens_from_input_total"
+    },
+    {
+      "id": "cockpit-json-runtime",
+      "suite": "cockpit-cli",
+      "source": "crates/warp_cli/src/cockpit_tests.rs",
+      "name": "runtime_export_uses_loaded_fleet_and_unique_host_scoped_session_ids"
+    },
+    {
+      "id": "cockpit-json-degraded",
+      "suite": "cockpit-cli",
+      "source": "crates/warp_cli/src/cockpit_tests.rs",
+      "name": "degraded_scan_uses_unknown_usage_and_omits_private_collection_data"
+    },
+    {
+      "id": "cockpit-ipc-auth",
+      "suite": "cockpit-app",
+      "source": "app/src/control_surface_tests.rs",
+      "name": "token_is_bound_to_the_exact_surface_and_tab"
+    },
+    {
+      "id": "provider-account-boundary",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/conductor_tests.rs",
+      "name": "session_key_scopes_a_copied_id_by_provider_and_account"
+    },
+    {
+      "id": "remote-first-session",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/fleet_tests.rs",
+      "name": "first_open_remote_session_adds_one_host_root"
+    },
+    {
+      "id": "remote-last-session",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/model_tests.rs",
+      "name": "last_open_remote_session_removes_host_root"
+    },
+    {
+      "id": "remote-provider-boundary",
+      "suite": "cockpit-data-spine",
+      "source": "crates/zaplex_cockpit/src/fleet_tests.rs",
+      "name": "the_same_address_on_two_providers_stays_two_accounts"
+    },
+    {
+      "id": "exact-launch-account-binding",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/launch_registry_tests.rs",
+      "name": "exact_lookup_fails_closed_for_another_account"
+    },
+    {
+      "id": "exact-reattach-boundary",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/capabilities_tests.rs",
+      "name": "session_identity_matching_never_crosses_provider_or_account_boundaries"
+    },
+    {
+      "id": "waiting-row-attention",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/pane_tests.rs",
+      "name": "only_waiting_session_rows_receive_attention_background"
+    },
+    {
+      "id": "codex-transcript-ui-states",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/pane_tests.rs",
+      "name": "codex_transcript_states_distinguish_missing_unsupported_and_malformed"
+    },
+    {
+      "id": "codex-transcript-ui-error-states",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/pane_tests.rs",
+      "name": "local_codex_errors_map_to_safe_provider_neutral_states"
+    },
+    {
+      "id": "remote-transcript-ui-gate",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/pane_tests.rs",
+      "name": "remote_transcript_action_requires_exact_connected_capable_route"
+    },
+    {
+      "id": "remote-transcript-ui-current",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/pane_tests.rs",
+      "name": "remote_transcript_route_must_still_match_one_available_inventory_session"
+    },
+    {
+      "id": "remote-transcript-ui-projection",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/pane_tests.rs",
+      "name": "remote_loaded_transcript_projects_only_safe_provider_neutral_fields"
+    },
+    {
+      "id": "remote-transcript-ui-statuses",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/pane_tests.rs",
+      "name": "remote_transcript_statuses_map_to_distinct_neutral_documents"
+    },
+    {
+      "id": "remote-transcript-ui-fail-closed",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/pane_tests.rs",
+      "name": "remote_transcript_fails_closed_for_invalid_status_envelope_or_payload"
+    },
+    {
+      "id": "waiting-pulse",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/panel_tests.rs",
+      "name": "waiting_pulse_is_fixed_and_capped_at_twice_the_core"
+    },
+    {
+      "id": "reduced-motion",
+      "suite": "cockpit-app",
+      "source": "app/src/cockpit/panel_tests.rs",
+      "name": "reduced_motion_uses_static_waiting_emphasis"
+    },
+    {
+      "id": "daemon-wire-all-states",
+      "suite": "remote-daemon-app",
+      "source": "app/src/remote_server/agent_session_tests.rs",
+      "name": "all_states_map_both_directions"
+    },
+    {
+      "id": "generated-read-only-source",
+      "suite": "generated-read-only-code",
+      "source": "app/src/code/editor_management_tests.rs",
+      "name": "generated_documents_are_pathless_read_only_and_not_restorable"
+    },
+    {
+      "id": "generated-read-only-header",
+      "suite": "generated-read-only-code",
+      "source": "app/src/code/view_tests.rs",
+      "name": "generated_header_uses_its_source_title"
+    },
+    {
+      "id": "generated-read-only-no-merge",
+      "suite": "generated-read-only-code",
+      "source": "app/src/code/view_tests.rs",
+      "name": "generated_or_pathless_code_views_cannot_merge"
+    },
+    {
+      "id": "daemon-wire-all-providers",
+      "suite": "remote-daemon-app",
+      "source": "app/src/remote_server/agent_session_tests.rs",
+      "name": "providers_map_both_directions"
+    },
+    {
+      "id": "daemon-route-dimensions",
+      "suite": "remote-daemon-app",
+      "source": "app/src/remote_server/agent_session_tests.rs",
+      "name": "agent_row_attach_identity_keeps_all_routing_dimensions"
+    },
+    {
+      "id": "daemon-default-account",
+      "suite": "remote-daemon-app",
+      "source": "app/src/remote_server/agent_session_tests.rs",
+      "name": "a_default_account_session_has_an_identity_but_no_pin"
+    },
+    {
+      "id": "daemon-binding-lifecycle",
+      "suite": "remote-daemon-app",
+      "source": "app/src/remote_server/server_model_tests.rs",
+      "name": "daemon_bind_and_unbind_preserve_historical_agent"
+    },
+    {
+      "id": "daemon-rejects-cross-boundary-bindings",
+      "suite": "remote-daemon-app",
+      "source": "app/src/remote_server/server_model_tests.rs",
+      "name": "daemon_rejects_foreign_host_identity_and_undiscovered_agent_tuple"
+    },
+    {
+      "id": "daemon-account-id-opaque",
+      "suite": "remote-daemon-app",
+      "source": "app/src/remote_server/agent_account_tests.rs",
+      "name": "stable_account_id_is_opaque_and_does_not_embed_a_config_path"
+    },
+    {
+      "id": "daemon-rejects-direct-account-path",
+      "suite": "remote-daemon-app",
+      "source": "app/src/remote_server/agent_account_tests.rs",
+      "name": "direct_provider_paths_and_unknown_ids_fail_closed"
+    },
+    {
+      "id": "remote-claude-transcript-projection",
+      "suite": "remote-daemon-app",
+      "source": "app/src/remote_server/transcript_rpc_tests.rs",
+      "name": "claude_snapshot_contains_only_the_display_projection"
+    },
+    {
+      "id": "remote-codex-transcript-projection",
+      "suite": "remote-daemon-app",
+      "source": "app/src/remote_server/transcript_rpc_tests.rs",
+      "name": "codex_snapshot_contains_only_the_display_projection"
+    },
+    {
+      "id": "remote-transcript-revision",
+      "suite": "remote-daemon-app",
+      "source": "app/src/remote_server/transcript_rpc_tests.rs",
+      "name": "unchanged_revision_avoids_retransmitting_turns"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "claude-default-local-live-launch",
+      "dimensions": {
+        "provider": ["claude"],
+        "account": ["default"],
+        "location": ["local"],
+        "state": ["live"]
+      },
+      "capabilities": ["api", "launch", "lifecycle"],
+      "evidence": ["claude-default-account", "claude-live", "exact-launch-account-binding", "cockpit-json-runtime", "cockpit-json-degraded", "cockpit-ipc-auth"]
+    },
+    {
+      "id": "claude-pinned-local-waiting",
+      "dimensions": {
+        "provider": ["claude"],
+        "account": ["pinned"],
+        "location": ["local"],
+        "state": ["waiting"]
+      },
+      "capabilities": ["transcript", "usage", "attention"],
+      "evidence": ["claude-pinned-account", "claude-waiting", "claude-usage", "waiting-row-attention", "waiting-pulse"]
+    },
+    {
+      "id": "claude-multiple-local-dormant",
+      "dimensions": {
+        "provider": ["claude"],
+        "account": ["multiple"],
+        "location": ["local"],
+        "state": ["dormant"]
+      },
+      "capabilities": ["reattach", "transcript", "lifecycle"],
+      "evidence": ["claude-multiple-accounts", "claude-dormant", "exact-reattach-boundary"]
+    },
+    {
+      "id": "codex-default-local-waiting",
+      "dimensions": {
+        "provider": ["codex"],
+        "account": ["default"],
+        "location": ["local"],
+        "state": ["waiting"]
+      },
+      "capabilities": ["transcript", "usage", "attention"],
+      "evidence": ["codex-default-account", "codex-waiting", "codex-transcript", "codex-transcript-ui-states", "codex-transcript-ui-error-states", "codex-usage", "waiting-row-attention", "generated-read-only-source", "generated-read-only-header", "generated-read-only-no-merge"]
+    },
+    {
+      "id": "codex-pinned-local-idle",
+      "dimensions": {
+        "provider": ["codex"],
+        "account": ["pinned"],
+        "location": ["local"],
+        "state": ["idle"]
+      },
+      "capabilities": ["launch", "lifecycle"],
+      "evidence": ["codex-pinned-account", "codex-dormant", "exact-launch-account-binding"]
+    },
+    {
+      "id": "codex-multiple-local-dormant",
+      "dimensions": {
+        "provider": ["codex"],
+        "account": ["multiple"],
+        "location": ["local"],
+        "state": ["dormant"]
+      },
+      "capabilities": ["reattach", "transcript"],
+      "evidence": ["codex-multiple-accounts", "codex-dormant", "codex-transcript", "codex-transcript-ui-states", "codex-transcript-ui-error-states", "exact-reattach-boundary", "generated-read-only-source", "generated-read-only-header", "generated-read-only-no-merge"]
+    },
+    {
+      "id": "remote-claude-live-lifecycle",
+      "dimensions": {
+        "provider": ["claude"],
+        "account": ["default"],
+        "location": ["remote"],
+        "state": ["live"]
+      },
+      "capabilities": ["launch", "reattach", "transcript", "lifecycle"],
+      "evidence": ["remote-first-session", "remote-last-session", "exact-reattach-boundary", "daemon-default-account", "daemon-route-dimensions", "daemon-binding-lifecycle", "daemon-account-id-opaque", "remote-claude-transcript-projection", "remote-transcript-ui-gate", "remote-transcript-ui-current", "remote-transcript-ui-projection", "remote-transcript-ui-statuses", "remote-transcript-ui-fail-closed", "generated-read-only-source", "generated-read-only-header", "generated-read-only-no-merge"]
+    },
+    {
+      "id": "remote-codex-waiting-attention",
+      "dimensions": {
+        "provider": ["codex"],
+        "account": ["pinned"],
+        "location": ["remote"],
+        "state": ["waiting"]
+      },
+      "capabilities": ["attention", "transcript", "lifecycle"],
+      "evidence": ["remote-first-session", "waiting-row-attention", "reduced-motion", "daemon-wire-all-states", "daemon-wire-all-providers", "daemon-route-dimensions", "remote-codex-transcript-projection", "remote-transcript-revision", "remote-transcript-ui-gate", "remote-transcript-ui-current", "remote-transcript-ui-projection", "remote-transcript-ui-statuses", "remote-transcript-ui-fail-closed", "generated-read-only-source", "generated-read-only-header", "generated-read-only-no-merge"]
+    },
+    {
+      "id": "remote-multi-provider-idle",
+      "dimensions": {
+        "provider": ["claude", "codex"],
+        "account": ["multiple"],
+        "location": ["remote"],
+        "state": ["idle"]
+      },
+      "capabilities": ["usage", "lifecycle"],
+      "evidence": ["remote-provider-boundary", "provider-account-boundary", "remote-last-session", "daemon-wire-all-providers", "daemon-rejects-cross-boundary-bindings", "daemon-rejects-direct-account-path"]
+    }
+  ],
+  "ui_contract": [
+    {
+      "id": "normal",
+      "path": "docs/ui/cockpit-sidebar-connections.html",
+      "required_regex": [
+        "id=[\"']cockpit-desktop[\"']",
+        "Host → Projekt → PTY-Session → Agent"
+      ]
+    },
+    {
+      "id": "narrow",
+      "path": "docs/ui/cockpit-sidebar-connections.html",
+      "required_regex": [
+        "id=[\"']cockpit-narrow[\"']",
+        "narrow-viewport"
+      ]
+    },
+    {
+      "id": "reduced-motion",
+      "path": "docs/ui/cockpit-sidebar-connections.html",
+      "required_regex": [
+        "prefers-reduced-motion: reduce",
+        "animation: none"
+      ]
+    }
+  ],
+  "manual_runtime": {
+    "path": "specs/parity/COCKPIT_RUNTIME_SMOKE.md",
+    "required_regex": [
+      "Local Claude",
+      "Local Codex",
+      "Remote host",
+      "two-host"
+    ]
+  },
+  "screenshot_contract": {
+    "path": "specs/parity/cockpit-screenshots.spec.ts",
+    "required_regex": [
+      "cockpit-desktop",
+      "cockpit-narrow",
+      "reducedMotion: [\"']reduce[\"']",
+      "cockpit-reduced-motion\\.png"
+    ]
+  }
+}

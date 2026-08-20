@@ -39,6 +39,9 @@ pub struct OpenSessionParams {
     /// The host's saved startup command, run once after the session opens
     /// (mirrors the local-PTY SSH path). `None`/empty → nothing is run.
     pub startup_command: Option<String>,
+    /// Opaque account identity returned by this daemon's account inventory.
+    /// Local config paths must never be translated into this field.
+    pub agent_launch_route: Option<remote_server::proto::AgentLaunchRoute>,
 }
 
 /// A request to back a newly created terminal with a daemon-hosted session on an

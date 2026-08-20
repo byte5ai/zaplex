@@ -43,6 +43,140 @@ fn missing_auth_json_yields_no_accounts() {
 }
 
 #[test]
+fn discovers_default_and_pinned_roots_with_distinct_routing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let default_root = home.join(".codex");
+    let pinned_root = tmp.path().join("accounts/work");
+    write(
+        &default_root.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"default-account"}}"#,
+    );
+    write(
+        &pinned_root.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"work-account"}}"#,
+    );
+
+    let discovery = discover_account_roots(&home, Some(&pinned_root));
+    assert!(discovery.issues.is_empty());
+    assert_eq!(discovery.accounts.len(), 2);
+    let default = discovery
+        .accounts
+        .iter()
+        .find(|account| account.is_default)
+        .unwrap();
+    assert_eq!(default.key, "codex:default");
+    assert_eq!(default.config_dir_pin(), None);
+    let pinned = discovery
+        .accounts
+        .iter()
+        .find(|account| !account.is_default)
+        .unwrap();
+    assert_eq!(pinned.key, "codex:work");
+    assert_eq!(
+        pinned.config_dir_pin(),
+        Some(
+            fs::canonicalize(pinned_root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        )
+    );
+}
+
+#[test]
+fn duplicate_stable_codex_identity_is_emitted_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let default_root = home.join(".codex");
+    let pinned_root = tmp.path().join("accounts/work");
+    for root in [&default_root, &pinned_root] {
+        write(
+            &root.join("auth.json"),
+            r#"{"auth_mode":"chatgpt","tokens":{"account_id":"same-account"}}"#,
+        );
+    }
+
+    let discovery = discover_account_roots(&home, Some(&pinned_root));
+    assert!(discovery.issues.is_empty());
+    assert_eq!(discovery.accounts.len(), 1);
+    assert!(discovery.accounts[0].is_default);
+}
+
+#[cfg(unix)]
+#[test]
+fn canonical_codex_root_alias_is_emitted_once() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let default_root = home.join(".codex");
+    write(
+        &default_root.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"account-1"}}"#,
+    );
+    let alias = tmp.path().join("codex-link");
+    symlink(&default_root, &alias).unwrap();
+
+    let discovery = discover_account_roots(&home, Some(&alias));
+    assert!(discovery.issues.is_empty());
+    assert_eq!(discovery.accounts.len(), 1);
+    assert_eq!(
+        discovery.accounts[0].config_dir,
+        fs::canonicalize(default_root).unwrap()
+    );
+}
+
+#[test]
+fn malformed_sign_in_file_is_degraded_without_inventing_an_account() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    write(&home.join(".codex/auth.json"), "{not valid json");
+
+    let discovery = discover_account_roots(home, None);
+    assert!(discovery.accounts.is_empty());
+    assert_eq!(
+        discovery.issues,
+        vec!["Codex account sign-in file is malformed"]
+    );
+}
+
+#[test]
+fn unreadable_sign_in_source_is_degraded_without_inventing_an_account() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    fs::create_dir_all(home.join(".codex/auth.json")).unwrap();
+
+    let discovery = discover_account_roots(home, None);
+    assert!(discovery.accounts.is_empty());
+    assert_eq!(
+        discovery.issues,
+        vec!["Codex account sign-in file is unreadable"]
+    );
+}
+
+#[test]
+fn unavailable_pinned_codex_root_is_degraded_not_successfully_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let missing = home.join("outside/missing");
+
+    let discovery = discover_account_roots(home, Some(&missing));
+    assert!(discovery.accounts.is_empty());
+    assert_eq!(
+        discovery.issues,
+        vec!["Codex pinned account root is unavailable"]
+    );
+
+    let default_root = home.join(".codex");
+    let default_discovery = discover_account_roots(home, Some(&default_root));
+    assert_eq!(
+        default_discovery.issues,
+        vec!["Codex pinned account root is unavailable"]
+    );
+}
+
+#[test]
 fn parse_transcript_sums_per_turn_and_ignores_cumulative_envelope() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("rollout-x.jsonl");

@@ -1,7 +1,7 @@
 //! Fleet aggregation + Conductor tree (audit (d)#6 + #8).
 //!
-//! Given the CLI sessions discovered on each host, build a **Host ▸ Project ▸
-//! AgentSession** tree — this IS the Agent-Inventory: the native hierarchy of
+//! Given the CLI sessions discovered on each host, build the data backing a
+//! **Host ▸ Project ▸ Session ▸ Agent** tree — this IS the Agent-Inventory:
 //! the cockpit. The *needs-me* count — sessions in [`SessionState::Waiting`],
 //! i.e. the agent handed control back to you — bubbles up from session to
 //! project to host. This is the "conductor" leit-view over the unified
@@ -21,7 +21,7 @@ use crate::types::{SessionSnapshot, SessionState};
 use std::collections::BTreeMap;
 
 /// An agent-session in the inventory. Alias for the snapshot the spine already
-/// produces — the leaf of the Host ▸ Project ▸ AgentSession tree.
+/// produces — the leaf of the Host ▸ Project ▸ Session ▸ Agent tree.
 pub type AgentSession = SessionSnapshot;
 
 /// One host's contribution to the fleet: its label + the sessions found on it,
@@ -47,8 +47,8 @@ pub struct HostSessions {
     /// host-local `pid` signal to the wrong machine.
     pub host_id: Option<String>,
     /// SSH-registry node that established this daemon connection, when any.
-    /// The registry merge validates that the node still exists before treating
-    /// the daemon as available.
+    /// Registry reconciliation validates that the node still exists before
+    /// treating the daemon as available.
     pub registry_node_id: Option<String>,
     pub sessions: Vec<SessionSnapshot>,
 }
@@ -69,6 +69,21 @@ pub struct RemoteHost {
     /// registry row in the daemon manager, so the merge must validate it
     /// against the current registry before exposing routes.
     pub registry_node_id: Option<String>,
+    /// Outcome of querying this connected host's agent inventory. Connection
+    /// presence and inventory availability are deliberately separate: an open
+    /// host stays visible when its daemon is old or temporarily unreachable.
+    pub inventory_status: AgentInventoryStatus,
+}
+
+/// Availability of the AI-agent inventory on an otherwise connected host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentInventoryStatus {
+    /// The inventory request completed, including an honest empty result.
+    Ready,
+    /// The connected daemon did not negotiate the inventory capability.
+    Unsupported,
+    /// The daemon negotiated inventory, but the current request failed.
+    Unavailable,
 }
 
 /// Whether a host can currently be used as a navigation/routing target.
@@ -84,11 +99,11 @@ pub enum HostAvailability {
 
 /// One SSH-registry host and its optional live daemon association.
 ///
-/// `node_id` and `label` come from the registry, which remains the source of
-/// truth for navigation. `live_host_id` is present only when a currently
-/// connected daemon session was opened through this exact registry node. It is
-/// the sole join key between the registry and live inventory; display labels
-/// are never identities.
+/// `node_id` and `label` come from the registry. `live_host_id` is present only
+/// when a currently connected daemon session was opened through this exact
+/// registry node. It is the sole join key used to validate and relabel a live
+/// root; display labels are never identities, and offline registry entries are
+/// never appended to the Cockpit tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredHost {
     pub node_id: String,
@@ -133,12 +148,12 @@ pub struct HostNode {
     /// Explicit routing state. Consumers must not infer availability from the
     /// label or from the presence of a daemon/registry id.
     pub availability: HostAvailability,
-    /// The SSH-registry `node.id` for this host, when it maps to a registered
-    /// SSH host. Set for registry-only hosts merged into the tree (so the
-    /// Conductor is the full host navigator — every registered host is a root,
-    /// even with no live agent) and lets a host row act (open a terminal / scope
-    /// a launch / manage) via the registry. `None` for the local host and for a
-    /// daemon host not backed by a registry entry.
+    /// AI-inventory state, independent from connection/routing availability.
+    pub inventory_status: AgentInventoryStatus,
+    /// The SSH-registry `node.id` for this connected host, when its daemon maps
+    /// to a registered SSH host. It validates the route and preserves the
+    /// registry label without turning offline registry entries into Cockpit
+    /// roots. `None` for the local host and for an unscoped daemon connection.
     pub registry_node_id: Option<String>,
     /// Sum of the projects' needs-me counts.
     pub needs_me: usize,
@@ -163,20 +178,19 @@ fn is_waiting(s: &SessionSnapshot) -> bool {
     matches!(s.state, SessionState::Waiting)
 }
 
-/// Build the Host ▸ Project ▸ Session tree with needs-me bubbling.
+/// Build the Host ▸ Project ▸ Session ▸ Agent tree with needs-me bubbling.
 ///
 /// Ordering makes the things that want you rise to the top:
 /// - hosts by needs-me **descending**, then host name;
 /// - projects within a host by needs-me descending, then name;
 /// - sessions within a project: **waiting first**, then most-recent activity.
 ///
-/// Empty remote contributions are dropped. The local host is retained even
-/// without sessions because it is a root of the navigation spine, not merely a
-/// live-work bucket.
+/// Every supplied contribution is retained. The local host is always supplied;
+/// remote inputs represent actually connected hosts, so dropping an empty one
+/// would falsely make an open connection look disconnected.
 pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
     let mut hosts: Vec<HostNode> = inputs
         .into_iter()
-        .filter(|h| h.is_local || !h.sessions.is_empty())
         .map(|h| {
             // Group by the REPO, not by each session's own tree (stable order
             // via BTreeMap on the key). Three worktrees of one repo are one
@@ -229,8 +243,9 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
                 is_local: h.is_local,
                 host_id: h.host_id,
                 availability: HostAvailability::Available,
+                inventory_status: AgentInventoryStatus::Ready,
                 // For a daemon contribution this is the registry node that
-                // established the connection. The merge below validates it
+                // established the connection. Reconciliation validates it
                 // against the current registry before leaving the host usable.
                 registry_node_id: h.registry_node_id,
                 needs_me,
@@ -255,24 +270,13 @@ fn sort_hosts(hosts: &mut [HostNode]) {
     });
 }
 
-/// Merge registered SSH hosts into the fleet by stable identity.
+/// Reconcile connected hosts with the current SSH registry by stable identity.
 ///
-/// The registry is authoritative: every registered host is rendered exactly
-/// once, including offline hosts. A live daemon enriches its registered root
-/// only when [`RegisteredHost::live_host_id`] equals the daemon's stable
-/// [`HostNode::host_id`]. Labels are display-only and never participate in the
-/// join. Re-running with a smaller registry removes stale registry-only roots
-/// and clears stale routing ids from live hosts.
-pub fn merge_registered_hosts(tree: &mut FleetTree, registered: &[RegisteredHost]) {
-    // Start from live/local roots. Registry-only roots from a previous merge are
-    // reconstructed below from the current registry, which makes deletion
-    // converge immediately and prevents stale node ids from remaining routable.
-    tree.hosts.retain(|host| {
-        host.is_local
-            || host.host_id.is_some()
-            || !host.projects.is_empty()
-            || host.registry_node_id.is_none()
-    });
+/// The live inventory, not the registry, defines which roots exist. The
+/// registry may validate and relabel a connected root, but it never appends an
+/// offline host. A daemon opened through a deleted registry node stays visible
+/// as observed state and fails closed until its last connection disappears.
+pub fn reconcile_connected_hosts(tree: &mut FleetTree, registered: &[RegisteredHost]) {
     for host in &mut tree.hosts {
         if host.is_local {
             host.availability = HostAvailability::Available;
@@ -299,34 +303,17 @@ pub fn merge_registered_hosts(tree: &mut FleetTree, registered: &[RegisteredHost
         host.registry_node_id = None;
     }
 
-    let mut registered = registered.to_vec();
-    registered.sort_by(|a, b| {
-        a.label
-            .cmp(&b.label)
-            .then_with(|| a.node_id.cmp(&b.node_id))
-    });
-
     for registered_host in registered {
-        if let Some(live_host_id) = registered_host.live_host_id.as_deref() {
-            if let Some(live) = tree.hosts.iter_mut().find(|host| {
-                host.host_id.as_deref() == Some(live_host_id) && host.registry_node_id.is_none()
-            }) {
-                live.host = registered_host.label;
-                live.availability = HostAvailability::Available;
-                live.registry_node_id = Some(registered_host.node_id);
-                continue;
-            }
+        let Some(live_host_id) = registered_host.live_host_id.as_deref() else {
+            continue;
+        };
+        if let Some(live) = tree.hosts.iter_mut().find(|host| {
+            host.host_id.as_deref() == Some(live_host_id) && host.registry_node_id.is_none()
+        }) {
+            live.host.clone_from(&registered_host.label);
+            live.availability = HostAvailability::Available;
+            live.registry_node_id = Some(registered_host.node_id.clone());
         }
-
-        tree.hosts.push(HostNode {
-            host: registered_host.label,
-            is_local: false,
-            host_id: None,
-            availability: HostAvailability::Available,
-            registry_node_id: Some(registered_host.node_id),
-            needs_me: 0,
-            projects: Vec::new(),
-        });
     }
 
     sort_hosts(&mut tree.hosts);
@@ -344,22 +331,20 @@ pub fn merge_registered_hosts(tree: &mut FleetTree, registered: &[RegisteredHost
 ///
 /// `local_label` names the local host (the machine hostname, or `"local"` when
 /// that is unavailable); `local` are its sessions. `remotes` is one
-/// `(RemoteHost, sessions)` entry per connected daemon that advertised the
-/// agent-inventory capability — a daemon without it (or one that errored)
-/// simply contributes no entry, so a single unreachable host never fails the
-/// whole fold. Each [`RemoteHost`] carries the daemon's display label **and**
-/// its stable `host_id`, so guardrail routing can resolve the exact daemon by
-/// id even when two remotes advertise the same label.
+/// `(RemoteHost, sessions)` entry per connected daemon. A daemon without the
+/// inventory capability, or one whose request failed, still contributes an
+/// empty root with an honest [`AgentInventoryStatus`]. Each [`RemoteHost`]
+/// carries the daemon's display label and stable `host_id`, so guardrail routing
+/// resolves the exact daemon even when labels collide.
 ///
 /// **Host namespacing.** Every host — local and each remote — becomes its own
 /// [`HostSessions`], so two hosts that happen to share an absolute path (e.g.
 /// `/home/me/proj` on both `local` and `devhost`) land in *separate* host
 /// nodes and never collapse into one project. [`build_fleet_tree`] groups
-/// sessions by `project_root` **within** a host only; identity is therefore
-/// `(host, session_id)`, and a host-local `pid` is never assumed globally
-/// unique. Empty hosts are dropped by `build_fleet_tree` (a host with no
-/// sessions is not listed), so `fold_inventory` with an empty `remotes` list
-/// yields exactly the local tree.
+/// sessions by repository identity **within** a host only; agent identity is
+/// therefore host-scoped, and a host-local `pid` is never assumed globally
+/// unique. `fold_inventory` with an empty `remotes` list yields exactly the
+/// local tree; each remote entry yields exactly one connected root.
 ///
 /// Pure — no IO, no remote calls. The live fetch that produces `remotes` lives
 /// in the app's `CockpitModel`.
@@ -369,6 +354,7 @@ pub fn fold_inventory(
     remotes: Vec<(RemoteHost, Vec<SessionSnapshot>)>,
 ) -> FleetTree {
     let mut inputs = Vec::with_capacity(1 + remotes.len());
+    let mut remote_statuses = BTreeMap::new();
     // The local contribution is the ONLY one marked local — this is where the
     // authoritative local/remote bit is set. Every remote daemon's entry is
     // `is_local: false`, even if its label happens to equal `local_label`, so a
@@ -382,6 +368,7 @@ pub fn fold_inventory(
         sessions: local,
     });
     for (remote, sessions) in remotes {
+        remote_statuses.insert(remote.host_id.clone(), remote.inventory_status);
         inputs.push(HostSessions {
             host: remote.label,
             is_local: false,
@@ -390,7 +377,15 @@ pub fn fold_inventory(
             sessions,
         });
     }
-    build_fleet_tree(inputs)
+    let mut tree = build_fleet_tree(inputs);
+    for host in &mut tree.hosts {
+        if let Some(host_id) = host.host_id.as_deref() {
+            if let Some(status) = remote_statuses.get(host_id) {
+                host.inventory_status = *status;
+            }
+        }
+    }
+    tree
 }
 
 /// One of an account's sessions, wherever in the fleet it runs.

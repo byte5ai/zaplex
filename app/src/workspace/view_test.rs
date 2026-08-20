@@ -1,5 +1,4 @@
 use super::*;
-use crate::ai::AIRequestUsageModel;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -7,6 +6,7 @@ use crate::ai::facts::manager::AIFactManager;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
+use crate::ai::AIRequestUsageModel;
 use crate::auth::UserUid;
 use crate::cloud_object::model::persistence::ObjectStoreModel;
 use crate::cloud_object::model::view::ObjectStoreViewModel;
@@ -23,10 +23,10 @@ use crate::terminal::shared_session::protocol::SessionSourceType;
 use crate::terminal::shared_session::protocol::{ParticipantId, ParticipantList};
 #[cfg(feature = "local_fs")]
 use crate::user_config::tab_configs_dir;
-#[cfg(feature = "local_fs")]
-use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
+#[cfg(feature = "local_fs")]
+use repo_metadata::RepoMetadataModel;
 use std::collections::HashMap;
 use std::sync::Arc;
 use watcher::HomeDirectoryWatcher;
@@ -35,8 +35,8 @@ use crate::cloud_object::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
 
 use crate::settings::PrivacySettings;
-use crate::settings_view::DisplayCount;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::settings_view::DisplayCount;
 use crate::system::SystemStats;
 use crate::tab_configs::tab_config::{TabConfigPaneNode, TabConfigPaneType};
 use crate::terminal::history::History;
@@ -49,12 +49,11 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::shared_session::{SharedSessionScrollbackType, SharedSessionStatus};
 
-use crate::ObjectActions;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::mcp::{
-    FileBasedMCPManager, FileMCPWatcher, gallery::MCPGalleryManager,
-    templatable_manager::TemplatableMCPServerManager,
+    gallery::MCPGalleryManager, templatable_manager::TemplatableMCPServerManager,
+    FileBasedMCPManager, FileMCPWatcher,
 };
 use crate::resource_center::Tip;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -62,7 +61,8 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseSettings;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 use crate::workflows::local_workflows::LocalWorkflows;
-use crate::{GlobalResourceHandlesProvider, experiments, workspace};
+use crate::ObjectActions;
+use crate::{experiments, workspace, GlobalResourceHandlesProvider};
 
 // Zaplex(localization, Phase 5): `PreferencesSyncer` has been physically deleted.
 
@@ -71,7 +71,7 @@ use ai::project_context::model::ProjectContextModel;
 use pane_group::{NotebookPane, PaneState, SplitPaneState, TerminalPaneId};
 use terminal::view::ActiveSessionState;
 use warpui::AddSingletonModel;
-use warpui::{App, ViewHandle, platform::WindowStyle};
+use warpui::{platform::WindowStyle, App, ViewHandle};
 
 #[test]
 fn launch_request_never_interpolates_remote_path_into_shell_source() {
@@ -799,6 +799,7 @@ fn favorite_host_submenu() -> MenuItem<WorkspaceAction> {
         &zaplex_cockpit::Favorite::new(zaplex_cockpit::FavoriteKind::Host, "node-dev", "devhost"),
         &[("node-dev".to_string(), "devhost".to_string())],
     )
+    .expect("registered favorite host")
 }
 
 #[test]
@@ -834,124 +835,39 @@ fn new_agent_submenu_opens_spawn_card_without_launching() {
 }
 
 #[test]
-fn stale_favorite_is_disabled_and_removable() {
+fn stale_favorite_is_absent_from_launch_menu() {
     let favorite = zaplex_cockpit::Favorite::new(
         zaplex_cockpit::FavoriteKind::Host,
         "deleted-node",
         "old-devhost",
     );
-    let item = super::favorite_host_menu_item(&favorite, &[]);
-    let MenuItem::Submenu { fields, menu } = &item else {
-        panic!("a stale favorite must expose a removal submenu");
-    };
-
-    assert!(fields.on_select_action().is_none());
-    assert!(fields
-        .label()
-        .contains(&crate::t!("workspace-favorite-unavailable")));
-    assert_eq!(menu.items().len(), 2);
-    let MenuItem::Item(status) = &menu.items()[0] else {
-        panic!("a stale favorite must show a disabled status row");
-    };
-    assert!(status.is_disabled());
-    assert!(!menu.items()[0].selectable());
-    assert!(status.on_select_action().is_none());
-    assert!(matches!(
-        menu.items()[1].item_on_select_action(),
-        Some(WorkspaceAction::RemoveFavorite { kind, target })
-            if *kind == zaplex_cockpit::FavoriteKind::Host && target == "deleted-node"
-    ));
-    assert!(menu.items()[1].selectable());
+    assert!(super::favorite_host_menu_item(&favorite, &[]).is_none());
 }
 
 #[test]
-fn removed_favorite_host_is_disabled_and_never_routed() {
+fn removed_favorite_host_is_never_routed() {
     let favorite = zaplex_cockpit::Favorite::new(
         zaplex_cockpit::FavoriteKind::Host,
         "removed-node",
         "removed-host",
     );
-    let item = super::favorite_host_menu_item(&favorite, &[]);
-    let MenuItem::Submenu { fields, menu } = &item else {
-        panic!("a removed host must expose a removal submenu instead of a live host submenu");
-    };
-
-    assert!(fields.on_select_action().is_none());
-    let MenuItem::Item(status) = &menu.items()[0] else {
-        panic!("a removed host must show a disabled status row");
-    };
-    assert!(status.is_disabled());
-    assert!(!menu.items()[0].selectable());
-    assert!(status.on_select_action().is_none());
-    assert!(matches!(
-        menu.items()[1].item_on_select_action(),
-        Some(WorkspaceAction::RemoveFavorite { kind, target })
-            if *kind == zaplex_cockpit::FavoriteKind::Host && target == "removed-node"
-    ));
-    assert!(menu.items().iter().all(|item| !matches!(
-        item.item_on_select_action(),
-        Some(WorkspaceAction::OpenSshTerminalByNode { .. } | WorkspaceAction::OpenSpawnCard { .. })
-    )));
+    assert!(super::favorite_host_menu_item(&favorite, &[]).is_none());
 }
 
 #[test]
-fn add_favorite_menu_lists_only_unfavorited_registered_hosts() {
-    let favorites = vec![zaplex_cockpit::Favorite::new(
-        zaplex_cockpit::FavoriteKind::Host,
-        "node-a",
-        "alpha",
-    )];
-    let hosts = vec![
-        ("node-b".to_string(), "beta".to_string()),
-        ("node-a".to_string(), "alpha".to_string()),
-    ];
-
-    let Some(MenuItem::Submenu { menu, .. }) =
-        super::add_favorite_hosts_menu_item(&hosts, &favorites)
-    else {
-        panic!("an unfavorited registered host must be available for curation");
-    };
-    assert_eq!(menu.items().len(), 1);
-    assert!(matches!(
-        menu.items()[0].item_on_select_action(),
-        Some(WorkspaceAction::ToggleFavorite {
-            kind: zaplex_cockpit::FavoriteKind::Host,
-            target,
-            label,
-        }) if target == "node-b" && label == "beta"
-    ));
-}
-
-#[test]
-fn automatic_host_registration_never_adds_menu_favorite() {
-    let favorites = Vec::new();
-    let hosts = vec![("node-dev".to_string(), "devhost".to_string())];
-
-    let item = super::add_favorite_hosts_menu_item(&hosts, &favorites);
-
-    assert!(
-        item.is_some(),
-        "the host is available only in the curation submenu"
-    );
-    assert!(
-        favorites.is_empty(),
-        "registering a host must not silently curate it as a favorite"
-    );
-}
-
-#[test]
-fn primary_sidebar_has_exactly_one_host_project_session_tree() {
+fn primary_sidebar_keeps_cockpit_and_connections_separate() {
     assert_eq!(
         super::primary_host_navigation_views(true),
-        vec![ToolPanelView::Cockpit]
+        vec![ToolPanelView::Cockpit, ToolPanelView::SshManager]
     );
 }
 
 #[test]
-fn parallel_ssh_and_cockpit_primary_roots_are_absent() {
+fn connections_remains_available_when_cockpit_is_enabled() {
     let views = super::primary_host_navigation_views(true);
-    assert!(!views.contains(&ToolPanelView::SshManager));
-    assert_eq!(views.len(), 1);
+    assert!(views.contains(&ToolPanelView::SshManager));
+    assert!(views.contains(&ToolPanelView::Cockpit));
+    assert_eq!(views.len(), 2);
 }
 
 #[test]
@@ -1192,11 +1108,9 @@ fn test_workspace_sessions_retrieves_tabs() {
                 .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(0).unwrap()))
                 .expect("WindowId was not retrieved.");
 
-            assert!(
-                workspace
-                    .workspace_sessions(ctx.window_id(), ctx)
-                    .any(|x| { x.pane_view_locator().pane_id == pane_id })
-            );
+            assert!(workspace
+                .workspace_sessions(ctx.window_id(), ctx)
+                .any(|x| { x.pane_view_locator().pane_id == pane_id }));
 
             // Add a tab and check if workspace_sessions finds the second session from the new tab.
             workspace.add_terminal_tab(false, ctx);
@@ -1205,11 +1119,9 @@ fn test_workspace_sessions_retrieves_tabs() {
                 .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(0).unwrap()))
                 .expect("WindowId was not retrieved.");
 
-            assert!(
-                workspace
-                    .workspace_sessions(ctx.window_id(), ctx)
-                    .any(|x| { x.pane_view_locator().pane_id == new_pane_id })
-            );
+            assert!(workspace
+                .workspace_sessions(ctx.window_id(), ctx)
+                .any(|x| { x.pane_view_locator().pane_id == new_pane_id }));
         });
     });
 }
@@ -1234,11 +1146,9 @@ fn test_workspace_sessions_retrieves_panes() {
                 .get_pane_group_view(0)
                 .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(1).unwrap()))
                 .expect("WindowId was not retrieved.");
-            assert!(
-                workspace
-                    .workspace_sessions(ctx.window_id(), ctx)
-                    .any(|x| { x.pane_view_locator().pane_id == new_pane_id })
-            );
+            assert!(workspace
+                .workspace_sessions(ctx.window_id(), ctx)
+                .any(|x| { x.pane_view_locator().pane_id == new_pane_id }));
         });
     });
 }
@@ -2596,11 +2506,9 @@ fn test_vertical_tabs_panel_restored_open_when_show_in_restored_windows_enabled(
         app.update(|ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
                 report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
-                report_if_error!(
-                    settings
-                        .show_vertical_tab_panel_in_restored_windows
-                        .set_value(true, ctx)
-                );
+                report_if_error!(settings
+                    .show_vertical_tab_panel_in_restored_windows
+                    .set_value(true, ctx));
             });
         });
 
@@ -2989,11 +2897,9 @@ fn test_vertical_tabs_context_menu_does_not_show_hover_only_tab_bar() {
 
         workspace.update(&mut app, |workspace, ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(
-                    settings
-                        .workspace_decoration_visibility
-                        .set_value(WorkspaceDecorationVisibility::OnHover, ctx)
-                );
+                report_if_error!(settings
+                    .workspace_decoration_visibility
+                    .set_value(WorkspaceDecorationVisibility::OnHover, ctx));
                 report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
             });
             workspace.should_show_ai_assistant_warm_welcome = false;
@@ -3018,11 +2924,9 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
 
         workspace.update(&mut app, |workspace, ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(
-                    settings
-                        .workspace_decoration_visibility
-                        .set_value(WorkspaceDecorationVisibility::OnHover, ctx)
-                );
+                report_if_error!(settings
+                    .workspace_decoration_visibility
+                    .set_value(WorkspaceDecorationVisibility::OnHover, ctx));
             });
             workspace.should_show_ai_assistant_warm_welcome = false;
 
@@ -3116,6 +3020,7 @@ fn pty_dedupe_uses_current_authoritative_agent_after_handoff() {
         provider: "codex".to_string(),
         account_email: "agent@example.com".to_string(),
         config_dir: "/home/agent/.codex".to_string(),
+        account_id: String::new(),
         session_id: session_id.to_string(),
     };
     let agent_a = identity("agent-a");

@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use warp_util::path::LineAndColumnArg;
 
-use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::auth::LoginGatedFeature;
-use crate::drive::ObjectTypeAndId;
 use crate::drive::items::WarpDriveItemId;
+use crate::drive::ObjectTypeAndId;
 use crate::palette::PaletteMode;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search;
@@ -20,9 +20,9 @@ use crate::server::telemetry::{AddTabWithShellSource, AgentModeEntrypoint, Palet
 use crate::settings_view::{SettingsAction as SettingsTabAction, SettingsSection};
 use crate::tab::{NewSessionMenuItem, SelectedTabColor};
 use crate::tab_configs::TabConfig;
-use crate::terminal::CLIAgent;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
+use crate::terminal::CLIAgent;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
@@ -716,6 +716,8 @@ pub enum WorkspaceAction {
         /// Stable account identity. Unlike `config_dir`, this also distinguishes
         /// a known default account from an unknown manually started session.
         account_email: Option<String>,
+        /// Opaque daemon-local account identity for exact remote routing.
+        account_id: Option<String>,
         /// Isolate the fork's file effects in a fresh sibling worktree.
         into_worktree: bool,
         /// The source session's host (the inventory's Host column label), for a
@@ -763,6 +765,8 @@ pub enum WorkspaceAction {
         config_dir: Option<PathBuf>,
         /// Stable account identity for exact terminal reuse.
         account_email: Option<String>,
+        /// Opaque daemon-local account identity for exact remote routing.
+        account_id: Option<String>,
         /// The literal slash command to prefill (e.g. `/compact`, `/clear`).
         command: String,
         /// The source session's host label (for an unreachable-host toast).
@@ -875,6 +879,11 @@ pub enum WorkspaceAction {
         node_id: String,
         path: PathBuf,
     },
+    /// Open a generated, non-persistent, selectable document in a code pane.
+    OpenReadOnlyTextInEditor {
+        title: String,
+        contents: String,
+    },
     FixSettingsWithOz {
         error_description: String,
     },
@@ -895,6 +904,8 @@ pub enum WorkspaceAction {
         config_dir: Option<String>,
         /// Stable account identity; session ids are not unique across accounts.
         account_email: Option<String>,
+        /// Opaque daemon-local account identity for exact remote routing.
+        account_id: Option<String>,
         /// Whether `host` is *this* machine, taken from the inventory's explicit
         /// [`zaplex_cockpit::HostNode::is_local`] marker — never re-derived from
         /// `host` label equality. Drives local adopt-in-place vs. the remote
@@ -1223,6 +1234,7 @@ impl WorkspaceAction {
             | LaunchAgent { .. }
             | OpenSpawnCard { .. }
             | OpenFileInEditor { .. }
+            | OpenReadOnlyTextInEditor { .. }
             | AttachFleetSession { .. }
             | JumpToNextWaiting
             | StopAgent { .. }

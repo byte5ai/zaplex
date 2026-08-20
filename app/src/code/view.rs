@@ -237,6 +237,23 @@ impl TabData {
     }
 }
 
+fn header_title(source: &CodeSource, fallback: String) -> String {
+    match source {
+        CodeSource::GeneratedReadOnly { title } => title.clone(),
+        _ => fallback,
+    }
+}
+
+fn can_merge_code_views(
+    target_source: &CodeSource,
+    source_source: &CodeSource,
+    source_tabs_have_locations: bool,
+) -> bool {
+    !target_source.is_generated_read_only()
+        && !source_source.is_generated_read_only()
+        && source_tabs_have_locations
+}
+
 pub struct CodeView {
     tab_group: Vec<TabData>,
     active_tab_index: usize,
@@ -285,6 +302,33 @@ impl CodeView {
             view.update_markdown_mode_segmented_control(ctx);
         }
         view
+    }
+
+    /// Build a selectable in-memory document without creating or restoring a
+    /// filesystem-backed buffer.
+    pub fn new_generated_read_only(
+        title: String,
+        contents: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        let mut view = Self::new_internal(CodeSource::GeneratedReadOnly { title }, ctx);
+        view.open_or_focus_existing(None, None, ctx);
+        if let Some(tab) = view.tab_at(view.active_tab_index) {
+            let editor = tab.editor_view.as_ref(ctx).editor().clone();
+            editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text_ignoring_undo(contents, ctx);
+                editor.set_interaction_state(InteractionState::Selectable, ctx);
+            });
+        }
+        view.set_title(false, ctx);
+        view
+    }
+
+    /// Generated documents are fixed single-document panes. Mixing file-backed
+    /// tabs into them would apply the generated pane's read-only/save policy to
+    /// otherwise editable files.
+    pub fn allows_tab_merging(&self) -> bool {
+        !self.source.is_generated_read_only()
     }
 
     #[cfg(feature = "local_fs")]
@@ -585,6 +629,7 @@ impl CodeView {
                 // new file or if the project rules file doesn't exist yet.
                 if let CodeSource::AIAction { .. }
                 | CodeSource::New { .. }
+                | CodeSource::GeneratedReadOnly { .. }
                 | CodeSource::ProjectRules { .. } = me.source
                 {
                     return;
@@ -736,6 +781,10 @@ impl CodeView {
         location: BufferLocation,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !self.allows_tab_merging() {
+            return;
+        }
+
         // If the file already is open, set the active tab to the existing tab and return.
         if let Some(existing_index) = self
             .tab_group
@@ -794,6 +843,10 @@ impl CodeView {
         line_col: Option<LineAndColumnArg>,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !self.allows_tab_merging() && !self.tab_group.is_empty() {
+            return;
+        }
+
         // If the tab already exists, focus it (and optionally jump) without re-opening from disk.
         if let Some(existing_index) = self.focus_existing_tab_if_present(&location, ctx) {
             self.promote_if_preview(ctx);
@@ -892,6 +945,8 @@ impl CodeView {
         // the display name derived from `location` to avoid remote tabs showing as "Untitled".
         let title = if let Some(file) = self.local_path(ctx) {
             file.display().to_string()
+        } else if let CodeSource::GeneratedReadOnly { title } = &self.source {
+            title.clone()
         } else if let Some(name) = active_tab.map(|t| t.display_name()) {
             name
         } else {
@@ -2028,11 +2083,12 @@ impl CodeView {
         header_ctx: &view::HeaderRenderContext<'_>,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let title = self
+        let fallback = self
             .tab_group
             .first()
             .map(|tab| tab.display_name())
             .unwrap_or_else(|| "Untitled".to_string());
+        let title = header_title(&self.source, fallback);
 
         let appearance = Appearance::as_ref(app);
         let is_pane_dragging = header_ctx.draggable_state.is_dragging();
@@ -2161,7 +2217,19 @@ impl CodeView {
     }
 
     /// Merges tabs from another `CodeView`, avoiding duplicates and updating the active tab index.
-    pub fn merge_tabs(&mut self, source_code_view: &CodeView, ctx: &mut ViewContext<Self>) {
+    pub fn merge_tabs(&mut self, source_code_view: &CodeView, ctx: &mut ViewContext<Self>) -> bool {
+        let source_tabs_have_locations = source_code_view
+            .tab_group
+            .iter()
+            .all(|tab| tab.location().is_some());
+        if !can_merge_code_views(
+            &self.source,
+            &source_code_view.source,
+            source_tabs_have_locations,
+        ) {
+            return false;
+        }
+
         let existing_locations_to_idx: HashMap<BufferLocation, usize> = self
             .tab_group
             .iter()
@@ -2186,7 +2254,6 @@ impl CodeView {
 
                     to_extend.push(new_data);
                     // If the newly added tab is the active tab in the source CodeView, update the active tab index to point to it.
-                    // `existing_locations_to_idx` missed tabs without a location; use tab_group length instead.
                     if i == source_code_view.active_tab_index() {
                         active_tab_index = self.tab_group.len() + to_extend.len() - 1;
                     }
@@ -2196,6 +2263,7 @@ impl CodeView {
 
         self.tab_group.extend(to_extend);
         self.set_active_tab_index(active_tab_index, ctx);
+        true
     }
 }
 
@@ -2234,9 +2302,15 @@ impl TypedActionView for CodeView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             CodeViewAction::SaveFile => {
+                if self.source.is_generated_read_only() {
+                    return;
+                }
                 self.save_local(self.active_tab_index, None, ctx);
             }
             CodeViewAction::SaveFileAs => {
+                if self.source.is_generated_read_only() {
+                    return;
+                }
                 self.save_as(self.active_tab_index, None, ctx);
             }
             CodeViewAction::AcceptPendingDiffsAndSave => {
@@ -2464,3 +2538,7 @@ fn render_unsaved_changes_icon(color: ColorU) -> Box<dyn Element> {
     .with_height(8.)
     .finish()
 }
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod tests;

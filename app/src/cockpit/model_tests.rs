@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn codex_home_uses_pinned_root_and_falls_back_to_default() {
+    let home = Path::new("/test/home");
+    assert_eq!(codex_home(home, None), home.join(".codex"));
+    assert_eq!(
+        codex_home(home, Some(std::ffi::OsString::from("/test/codex-work"))),
+        PathBuf::from("/test/codex-work")
+    );
+    assert_eq!(
+        codex_home(home, Some(std::ffi::OsString::new())),
+        home.join(".codex")
+    );
+}
+
+#[test]
 fn initial_scan_state_is_loading_not_empty() {
     let snapshot = initial_snapshot();
     assert!(snapshot.accounts.is_empty());
@@ -8,12 +22,43 @@ fn initial_scan_state_is_loading_not_empty() {
 }
 
 #[test]
-fn older_scan_completion_cannot_replace_newer_snapshot() {
+fn stale_inventory_cannot_readd_disconnected_host() {
     assert!(should_apply_refresh_result(2, 2));
     assert!(
         !should_apply_refresh_result(2, 1),
         "a scan requested before the current generation must be ignored"
     );
+
+    let local = HostNode {
+        host: "local".to_string(),
+        is_local: true,
+        host_id: None,
+        availability: zaplex_cockpit::HostAvailability::Available,
+        inventory_status: zaplex_cockpit::AgentInventoryStatus::Ready,
+        registry_node_id: None,
+        projects: Vec::new(),
+        needs_me: 0,
+    };
+    let remote = remote_host(
+        "devhost",
+        "host-dev",
+        session("dev-session", zaplex_cockpit::SessionState::Active),
+    );
+    let stale_result = FleetTree {
+        hosts: vec![local, remote],
+        needs_me: 0,
+    };
+    let mut visible = stale_result.clone();
+
+    assert!(remove_disconnected_host(&mut visible, "host-dev"));
+    let current_generation = 2;
+    let stale_generation = 1;
+    if should_apply_refresh_result(current_generation, stale_generation) {
+        visible = stale_result;
+    }
+
+    assert_eq!(visible.hosts.len(), 1);
+    assert!(visible.hosts[0].is_local);
 }
 
 fn empty_snapshot() -> CockpitSnapshot {
@@ -54,11 +99,52 @@ fn nonempty_hosts_is_not_blank() {
         is_local: true,
         host_id: None,
         availability: zaplex_cockpit::HostAvailability::Available,
+        inventory_status: zaplex_cockpit::AgentInventoryStatus::Ready,
         registry_node_id: None,
         projects: Vec::new(),
         needs_me: 0,
     });
     assert!(!is_blank(&empty_snapshot(), &inventory));
+}
+
+#[test]
+fn last_open_remote_session_removes_host_root() {
+    let local = HostNode {
+        host: "local".to_string(),
+        is_local: true,
+        host_id: None,
+        availability: zaplex_cockpit::HostAvailability::Available,
+        inventory_status: zaplex_cockpit::AgentInventoryStatus::Ready,
+        registry_node_id: None,
+        projects: Vec::new(),
+        needs_me: 0,
+    };
+    let mut devhost = remote_host(
+        "devhost",
+        "host-dev",
+        session("dev-session", zaplex_cockpit::SessionState::Waiting),
+    );
+    devhost.needs_me = 2;
+    let mut buildhost = remote_host(
+        "buildhost",
+        "host-build",
+        session("build-session", zaplex_cockpit::SessionState::Waiting),
+    );
+    buildhost.needs_me = 1;
+    let mut inventory = FleetTree {
+        hosts: vec![local, devhost, buildhost],
+        needs_me: 3,
+    };
+
+    assert!(remove_disconnected_host(&mut inventory, "host-dev"));
+    assert_eq!(inventory.hosts.len(), 2);
+    assert!(inventory.hosts.iter().any(|host| host.is_local));
+    assert!(inventory
+        .hosts
+        .iter()
+        .any(|host| host.host_id.as_deref() == Some("host-build")));
+    assert_eq!(inventory.needs_me, 1);
+    assert!(!remove_disconnected_host(&mut inventory, "host-dev"));
 }
 
 fn session(id: &str, state: zaplex_cockpit::SessionState) -> SessionSnapshot {
@@ -78,6 +164,7 @@ fn session(id: &str, state: zaplex_cockpit::SessionState) -> SessionSnapshot {
         worktree: None,
         config_dir: None,
         account_email: None,
+        account_id: None,
         process_fingerprint: None,
         pty_session_id: None,
         pty_session_generation: None,
@@ -142,6 +229,7 @@ fn remote_host(label: &str, host_id: &str, session: SessionSnapshot) -> HostNode
         is_local: false,
         host_id: Some(host_id.into()),
         availability: zaplex_cockpit::HostAvailability::Available,
+        inventory_status: zaplex_cockpit::AgentInventoryStatus::Ready,
         registry_node_id: None,
         projects: vec![zaplex_cockpit::ProjectNode {
             root: "/w".into(),
@@ -237,6 +325,7 @@ fn same_host_and_session_id_in_different_accounts_do_not_mask_waiting_transition
         is_local: false,
         host_id: Some("host-A".to_string()),
         availability: zaplex_cockpit::HostAvailability::Available,
+        inventory_status: zaplex_cockpit::AgentInventoryStatus::Ready,
         registry_node_id: None,
         projects: vec![zaplex_cockpit::ProjectNode {
             root: "/w".to_string(),

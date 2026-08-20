@@ -21,8 +21,8 @@ pub(crate) mod zap_launch_modal;
 
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
-    VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID, VerticalTabsPanelState, render_detail_sidecar,
-    render_settings_popup,
+    render_detail_sidecar, render_settings_popup, VerticalTabsPanelState,
+    VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
 };
 use crate::workspace::cross_window_tab_drag::{
     AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState,
@@ -32,8 +32,8 @@ pub(crate) use onboarding::OnboardingTutorial;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::agent_conversations_model::ConversationOrTask;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::{
     SuggestedRuleAndId, SuggestedRuleModal, SuggestedRuleModalEvent,
@@ -42,15 +42,15 @@ use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::{
-    agent::{EntrypointType, api::ServerConversationToken, conversation::AIConversationId},
+    agent::{api::ServerConversationToken, conversation::AIConversationId, EntrypointType},
     blocklist::{
-        SlashCommandRequest,
         inline_action::code_diff_view::CodeDiffView,
         suggested_agent_mode_workflow_modal::{
             SuggestedAgentModeWorkflowModal, SuggestedAgentModeWorkflowModalEvent,
         },
+        SlashCommandRequest,
     },
-    facts::{AIFactManager, AIFactView, AIFactViewEvent, view::AIFactPage},
+    facts::{view::AIFactPage, AIFactManager, AIFactView, AIFactViewEvent},
 };
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::app_state::{
@@ -58,10 +58,10 @@ use crate::app_state::{
     PaneNodeSnapshot, PaneUuid, RightPanelSnapshot, SettingsPaneSnapshot, TabSnapshot,
     TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
+use crate::code_review::diff_state::DiffStateModel;
 #[cfg(feature = "local_fs")]
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::code_review::GlobalCodeReviewModel;
-use crate::code_review::diff_state::DiffStateModel;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::default_terminal::DefaultTerminal;
 use crate::notebooks::NotebookObject;
@@ -97,16 +97,15 @@ use crate::util::file::external_editor::Editor;
 use crate::util::file::external_editor::EditorSettings;
 use crate::util::openable_file_type::FileTarget;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{EditorLayout, resolve_file_target_with_editor_choice};
+use crate::util::openable_file_type::{resolve_file_target_with_editor_choice, EditorLayout};
 
-use crate::BlocklistAIHistoryModel;
-use crate::ai::blocklist::FORK_PREFIX;
 use crate::ai::blocklist::history_model::LoadedConversationData;
-use crate::terminal::CLIAgent;
+use crate::ai::blocklist::FORK_PREFIX;
 use crate::terminal::cli_agent::{CLIAgentInstallEvent, CLIAgentInstallModel, RoutedAgentLaunch};
 #[cfg(not(target_family = "wasm"))]
-use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
+use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
+use crate::terminal::CLIAgent;
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabCloseButtonPosition;
@@ -115,16 +114,17 @@ use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
 use crate::workspace::view::spawn_card::{SpawnCard, SpawnCardEvent};
 use crate::workspace::view::zap_launch_modal::{ZaplexLaunchModal, ZaplexLaunchModalEvent};
 use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
+use crate::BlocklistAIHistoryModel;
 
 use serde_json;
 use warpui::notification::NotificationSendError;
 
-use super::WorkspaceRegistry;
 use super::hoa_onboarding::{
-    HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep, mark_hoa_onboarding_completed,
+    mark_hoa_onboarding_completed, HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep,
 };
 use super::lightbox_view::{LightboxParams, LightboxView, LightboxViewEvent};
 use super::util;
+use super::WorkspaceRegistry;
 use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
 use crate::auth::AuthState;
@@ -187,15 +187,15 @@ use crate::wasm_nux_dialog::WasmNUXDialog;
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::settings::WarpDriveSettingsChangedEvent;
 use crate::env_vars::{
-    EnvVarCollectionObject,
     manager::{EnvVarCollectionManager, EnvVarCollectionSource},
+    EnvVarCollectionObject,
 };
 use crate::settings::cloud_preferences::PreferencesSettings;
 
 use crate::appearance::{Appearance, AppearanceManager};
 use crate::auth::AuthStateProvider;
 use crate::autoupdate::{
-    AutoupdateState, AutoupdateStateEvent, RelaunchModel, is_incoming_version_past_current,
+    is_incoming_version_past_current, AutoupdateState, AutoupdateStateEvent, RelaunchModel,
 };
 use crate::banner::BannerState;
 use crate::changelog_model::{ChangelogModel, ChangelogRequestType, Event as ChangelogEvent};
@@ -213,8 +213,8 @@ use crate::drive::{
 };
 use crate::experiments::{BlockOnboarding, Experiment};
 use crate::menu::{
-    DEFAULT_WIDTH as MENU_DEFAULT_WIDTH, Event as MenuEvent, Menu, MenuItem, MenuItemFields,
-    MenuSelectionSource, SubMenu,
+    Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource, SubMenu,
+    DEFAULT_WIDTH as MENU_DEFAULT_WIDTH,
 };
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
@@ -241,8 +241,8 @@ use crate::prompt::editor_modal::{
 };
 use crate::report_if_error;
 use crate::resource_center::{
-    ResourceCenterEvent, ResourceCenterPage, ResourceCenterView, Tip, TipAction, TipsCompleted,
     mark_feature_used_and_write_to_user_defaults, skip_tips_and_write_to_user_defaults,
+    ResourceCenterEvent, ResourceCenterPage, ResourceCenterView, Tip, TipAction, TipsCompleted,
 };
 use crate::root_view::{NewWorkspaceSource, OpenLaunchConfigArg};
 use crate::search::command_search::searcher::{
@@ -258,10 +258,10 @@ use crate::server::telemetry::{
 use crate::server_time::ServerTime;
 use crate::session_management::{SessionNavigationData, SessionSource};
 use crate::settings::{
-    AccessibilitySettings, AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings,
-    CursorBlink, DebugSettings, FontSettings, GPUSettings, InputSettings, MonospaceFontSize,
-    PaneSettings, PrivacySettings, SelectionSettings, SshSettings, ThemeSettings,
-    active_theme_kind, respect_system_theme,
+    active_theme_kind, respect_system_theme, AccessibilitySettings, AliasExpansionSettings,
+    AppEditorSettings, BlockVisibilitySettings, CursorBlink, DebugSettings, FontSettings,
+    GPUSettings, InputSettings, MonospaceFontSize, PaneSettings, PrivacySettings,
+    SelectionSettings, SshSettings, ThemeSettings,
 };
 use crate::settings_view::flags;
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
@@ -275,7 +275,7 @@ use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::session::Session;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::resizable_data::{
-    DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH, ModalSizes, ModalType, ResizableData,
+    ModalSizes, ModalType, ResizableData, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH,
 };
 use crate::terminal::safe_mode_settings::SafeModeSettings;
 use crate::terminal::session_settings::{
@@ -303,27 +303,27 @@ use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModal
 use crate::tips::{TipsEvent, TipsView};
 use crate::ui_components::buttons::{combo_inner_button, icon_button_with_color};
 use crate::undo_close::UndoCloseStack;
-use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 #[cfg(feature = "local_fs")]
 use crate::user_config::{
     ensure_default_worktree_config, find_unused_tab_config_path, find_unused_toml_path,
     find_unused_worktree_config_path, materialize_default_worktree_config, sanitize_toml_base_name,
     tab_configs_dir,
 };
+use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::util::bindings::{keybinding_name_to_display_string, keybinding_name_to_keystroke};
 use crate::util::links;
-use crate::util::traffic_lights::{TrafficLightMouseStates, TrafficLightSide, traffic_light_data};
+use crate::util::traffic_lights::{traffic_light_data, TrafficLightMouseStates, TrafficLightSide};
 use crate::util::truncation::truncate_from_end;
 #[cfg(target_family = "wasm")]
 use crate::view_components::action_button::ActionButton;
 use crate::view_components::callout_bubble::{
-    CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig, render_callout_bubble,
+    render_callout_bubble, CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig,
 };
 use crate::view_components::{AgentToastStack, DismissibleToast, DismissibleToastStack, ToastLink};
 use crate::window_settings::{WindowSettings, WindowSettingsChangedEvent, ZoomLevel};
 use crate::workflows::{
-    AIWorkflowOrigin, WorkflowObject, WorkflowSelectionSource, WorkflowSource, WorkflowType,
-    WorkflowViewMode, manager::WorkflowOpenSource,
+    manager::WorkflowOpenSource, AIWorkflowOrigin, WorkflowObject, WorkflowSelectionSource,
+    WorkflowSource, WorkflowType, WorkflowViewMode,
 };
 use crate::workspace::action::CommandSearchOptions;
 use crate::workspace::one_time_modal_model::OneTimeModalModel;
@@ -331,15 +331,15 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::toast_stack::{
     ToastStack as WorkspaceToastStack, ToastStackEvent as WorkspaceToastStackEvent,
 };
-use crate::{GlobalResourceHandles, send_telemetry_from_ctx};
 use crate::{
     ai_assistant::{
-        AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR, AskAIType,
         panel::{AIAssistantPanelEvent, AIAssistantPanelView},
+        AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR,
     },
     settings,
     ui_components::blended_colors,
 };
+use crate::{send_telemetry_from_ctx, GlobalResourceHandles};
 
 use futures::Future;
 use itertools::Itertools;
@@ -352,10 +352,10 @@ use std::convert::TryFrom;
 use std::time::Duration;
 #[cfg(target_os = "macos")]
 use std::time::{SystemTime, UNIX_EPOCH};
-use warp_core::HostId;
 use warp_core::context_flag::ContextFlag;
 use warp_core::semantic_selection::SemanticSelection;
-use warp_util::path::{LineAndColumnArg, user_friendly_path};
+use warp_core::HostId;
+use warp_util::path::{user_friendly_path, LineAndColumnArg};
 use warpui::fonts::Weight;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
 
@@ -425,17 +425,17 @@ use crate::tab_configs::{
     NewWorktreeModal, NewWorktreeModalEvent, TabConfigParamsModal, TabConfigParamsModalEvent,
 };
 
-use crate::TelemetryEvent;
 use crate::code::editor::{add_color, remove_color};
 use crate::palette::PaletteMode;
 use crate::search::command_palette::view::{Event as CommandPaletteEvent, View as CommandPalette};
 use crate::server::telemetry::{NotificationsTurnedOnSource, PaletteSource, TabRenameEvent};
 use crate::tab::{
-    NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT, TabBarState,
-    TabComponent, TabData, TabTelemetryAction, tab_position_id, uses_vertical_tabs,
+    tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
+    TabBarState, TabComponent, TabData, TabTelemetryAction, TAB_BAR_BORDER_HEIGHT,
 };
 use crate::terminal::view::ssh_file_upload::FileUploadId;
 use crate::ui_components::icons;
+use crate::TelemetryEvent;
 use autoupdate::AutoupdateStage;
 #[cfg(target_os = "macos")]
 use command::blocking::Command;
@@ -450,10 +450,10 @@ use std::path::Path;
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::process;
-use std::sync::{Mutex, mpsc};
+use std::sync::{mpsc, Mutex};
 use std::{cmp::Ordering, sync::Arc};
-use warp_core::ui::theme::{Fill, color::internal_colors, phenomenon::PhenomenonStyle};
-use warp_core::ui::{Icon, color::coloru_with_opacity};
+use warp_core::ui::theme::{color::internal_colors, phenomenon::PhenomenonStyle, Fill};
+use warp_core::ui::{color::coloru_with_opacity, Icon};
 use warp_editor::editor::NavigationKey;
 use warpui::keymap::Context;
 use warpui::notification::{RequestPermissionsOutcome, UserNotification};
@@ -463,7 +463,6 @@ use warpui::platform::{
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    AppContext, Entity, TypedActionView, UpdateView, View, ViewContext, ViewHandle,
     accessibility::{
         AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
     },
@@ -475,7 +474,8 @@ use warpui::{
         PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable,
         Stack, Text,
     },
-    geometry::vector::{Vector2F, vec2f},
+    geometry::vector::{vec2f, Vector2F},
+    AppContext, Entity, TypedActionView, UpdateView, View, ViewContext, ViewHandle,
 };
 use warpui::{
     EntityId, FocusContext, ModelHandle, SingletonEntity, UpdateModel, ViewAsRef, WeakViewHandle,
@@ -1201,6 +1201,7 @@ fn agent_inventory_confirms_binding(
             && session.provider == expected.provider
             && session.account_email == expected.account_email
             && session.config_dir == expected.config_dir
+            && session.account_id == expected.account_id
             && session.session_id == expected.session_id
     })
 }
@@ -1477,13 +1478,12 @@ pub struct Workspace {
 fn favorite_host_menu_item(
     favorite: &zaplex_cockpit::Favorite,
     host_nodes: &[(String, String)],
-) -> MenuItem<WorkspaceAction> {
-    match host_nodes
+) -> Option<MenuItem<WorkspaceAction>> {
+    host_nodes
         .iter()
         .find(|(node_id, _)| node_id == &favorite.target)
-    {
-        Some((node_id, name)) => MenuItem::Submenu {
-            fields: MenuItemFields::new_submenu(name.clone()).with_icon(icons::Icon::Key),
+        .map(|(node_id, name)| MenuItem::Submenu {
+            fields: MenuItemFields::new_submenu(name.clone()).with_icon(icons::Icon::StarFilled),
             menu: SubMenu::new(vec![
                 MenuItemFields::new(crate::t!("workspace-new-session-terminal"))
                     .with_on_select_action(WorkspaceAction::OpenSshTerminalByNode {
@@ -1501,72 +1501,12 @@ fn favorite_host_menu_item(
                     .with_icon(icons::Icon::LayoutAlt01)
                     .into_item(),
             ]),
-        },
-        None => MenuItem::Submenu {
-            fields: MenuItemFields::new_submenu(format!(
-                "{} — {}",
-                favorite.display_label(),
-                crate::t!("workspace-favorite-unavailable")
-            ))
-            .with_icon(icons::Icon::AlertTriangle),
-            menu: SubMenu::new(vec![
-                MenuItemFields::new(crate::t!("workspace-favorite-unavailable"))
-                    .with_disabled(true)
-                    .with_icon(icons::Icon::AlertTriangle)
-                    .into_item(),
-                MenuItemFields::new(crate::t!("cockpit-tt-favorite-remove"))
-                    .with_on_select_action(WorkspaceAction::RemoveFavorite {
-                        kind: favorite.kind,
-                        target: favorite.target.clone(),
-                    })
-                    .with_icon(icons::Icon::Trash)
-                    .into_item(),
-            ]),
-        },
-    }
-}
-
-fn add_favorite_hosts_menu_item(
-    host_nodes: &[(String, String)],
-    favorites: &[zaplex_cockpit::Favorite],
-) -> Option<MenuItem<WorkspaceAction>> {
-    let mut addable_hosts: Vec<&(String, String)> = host_nodes
-        .iter()
-        .filter(|(node_id, _)| {
-            !favorites
-                .iter()
-                .any(|favorite| favorite.same_target(zaplex_cockpit::FavoriteKind::Host, node_id))
         })
-        .collect();
-    addable_hosts.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-
-    let items = addable_hosts
-        .into_iter()
-        .map(|(node_id, name)| {
-            MenuItemFields::new(name.clone())
-                .with_on_select_action(WorkspaceAction::ToggleFavorite {
-                    kind: zaplex_cockpit::FavoriteKind::Host,
-                    target: node_id.clone(),
-                    label: name.clone(),
-                })
-                .with_icon(icons::Icon::Key)
-                .into_item()
-        })
-        .collect::<Vec<_>>();
-    if items.is_empty() {
-        None
-    } else {
-        Some(MenuItem::Submenu {
-            fields: MenuItemFields::new_submenu(crate::t!("workspace-favorites-add-header"))
-                .with_icon(icons::Icon::Plus),
-            menu: SubMenu::new(items),
-        })
-    }
 }
 
 fn primary_host_navigation_views(cockpit_enabled: bool) -> Vec<ToolPanelView> {
     if cockpit_enabled {
-        vec![ToolPanelView::Cockpit]
+        vec![ToolPanelView::Cockpit, ToolPanelView::SshManager]
     } else {
         vec![ToolPanelView::SshManager]
     }
@@ -2431,16 +2371,12 @@ impl Workspace {
                     && ai_settings.default_tab_config_path() == path.to_string_lossy();
                 if is_removed_default {
                     AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                        report_if_error!(
-                            settings
-                                .default_session_mode_internal
-                                .set_value(DefaultSessionMode::Terminal, ctx)
-                        );
-                        report_if_error!(
-                            settings
-                                .default_tab_config_path
-                                .set_value(String::new(), ctx)
-                        );
+                        report_if_error!(settings
+                            .default_session_mode_internal
+                            .set_value(DefaultSessionMode::Terminal, ctx));
+                        report_if_error!(settings
+                            .default_tab_config_path
+                            .set_value(String::new(), ctx));
                     });
                 }
                 if let Err(e) = std::fs::remove_file(path) {
@@ -3845,6 +3781,28 @@ impl Workspace {
                 | CLIAgentSessionsModelEvent::SessionUpdated { .. }
         ) && self.workspace_contains_terminal_view(event.terminal_view_id(), ctx)
         {
+            let terminal_view_id = event.terminal_view_id();
+            if matches!(event, CLIAgentSessionsModelEvent::Ended { .. }) {
+                if CLIAgentSessionsModel::as_ref(ctx)
+                    .session(terminal_view_id)
+                    .is_some()
+                {
+                    crate::cockpit::launch_registry::clear_terminal_session_binding(
+                        terminal_view_id,
+                    );
+                } else {
+                    crate::cockpit::launch_registry::forget_terminal(terminal_view_id);
+                }
+            }
+            if let Some(session_id) = CLIAgentSessionsModel::as_ref(ctx)
+                .session(terminal_view_id)
+                .and_then(|session| session.session_context.session_id.as_deref())
+            {
+                crate::cockpit::launch_registry::bind_terminal_session(
+                    terminal_view_id,
+                    session_id,
+                );
+            }
             ctx.notify();
         }
     }
@@ -4718,21 +4676,54 @@ impl Workspace {
         account_email: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.bind_active_terminal_account_with_id(agent, config_dir, account_email, None, ctx);
+    }
+
+    fn bind_active_terminal_account_with_id(
+        &mut self,
+        agent: CLIAgent,
+        config_dir: Option<&Path>,
+        account_email: Option<&str>,
+        account_id: Option<&str>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let config_dir = config_dir.map(|dir| dir.to_string_lossy().into_owned());
         let account_email = account_email.map(str::to_owned);
+        let account_id = account_id.map(str::to_owned);
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                 let terminal_view_id = terminal_view.as_ref(ctx).view_id();
                 CLIAgentSessionsModel::handle(ctx).update(ctx, |model, _| {
-                    model.bind_account_identity(
+                    model.bind_account_identity_with_id(
                         terminal_view_id,
                         agent,
                         config_dir.clone(),
                         account_email.clone(),
+                        account_id.clone(),
                     );
                 });
             }
         });
+    }
+
+    /// Attaches pre-recorded launch intent to the terminal that will execute it.
+    /// The hook bridge may complete the binding before or after this call.
+    fn attach_active_terminal_launch_intent(
+        &self,
+        launch_id: crate::cockpit::launch_registry::LaunchId,
+        ctx: &AppContext,
+    ) {
+        let Some(terminal_view) = self
+            .active_tab_pane_group()
+            .as_ref(ctx)
+            .active_session_view(ctx)
+        else {
+            return;
+        };
+        crate::cockpit::launch_registry::attach_terminal(
+            launch_id,
+            terminal_view.as_ref(ctx).view_id(),
+        );
     }
 
     /// Fork an agent conversation into a NEW session (fork/worktree design §2):
@@ -4749,17 +4740,13 @@ impl Workspace {
         cwd: &Path,
         config_dir: Option<&Path>,
         account_email: Option<&str>,
+        account_id: Option<&str>,
         into_worktree: bool,
         host: &str,
         host_id: Option<&str>,
         is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some(fork_cmd) = agent.fork_command_pinned(session_id, config_dir) else {
-            // Surfaces for agents without a fork mechanism stay disabled; this
-            // is the belt-and-braces guard (no fake fork).
-            return;
-        };
         if !is_local {
             // The source session runs on a remote host, so the fork must too —
             // running it locally would open a tab at the *remote* cwd on this
@@ -4771,14 +4758,20 @@ impl Workspace {
             #[cfg(all(unix, feature = "local_tty"))]
             {
                 let _ = into_worktree;
+                let Some(fork_cmd) = agent.fork_command_pinned(session_id, None) else {
+                    return;
+                };
+                let legacy_fork_cmd = agent.fork_command_pinned(session_id, config_dir);
                 self.run_agent_command_on_remote_host(
                     host,
                     host_id,
                     cwd,
                     &fork_cmd,
+                    legacy_fork_cmd.as_deref(),
                     agent,
                     config_dir,
                     account_email,
+                    account_id,
                     ctx,
                 );
             }
@@ -4786,12 +4779,15 @@ impl Workspace {
             {
                 // No daemon transport on this build — surface it instead of a
                 // silent no-op (and never fall through to the wrong local path).
-                let _ = (into_worktree, host_id, cwd, fork_cmd);
+                let _ = (into_worktree, host_id, cwd, agent, session_id);
                 self.remote_agent_action_unavailable_toast(host, ctx);
             }
             return;
         }
         let _ = (host, host_id);
+        let Some(fork_cmd) = agent.fork_command_pinned(session_id, config_dir) else {
+            return;
+        };
         #[cfg(feature = "local_fs")]
         if into_worktree {
             self.fork_into_worktree(&fork_cmd, cwd, agent, config_dir, account_email, ctx);
@@ -4803,8 +4799,10 @@ impl Workspace {
 
     /// Run `command` on a *remote* agent session's own host: resolve the daemon
     /// `host_id` to its live SSH node and open a terminal there that runs the
-    /// command in `cwd` (the host's own CLI login, so remote account routing is
-    /// the host's, not a local config dir). The command is prepended with the
+    /// command in `cwd`. Routing-capable Claude/Codex daemons require the
+    /// session row's opaque account id; only a negotiated legacy daemon retains
+    /// its historical config-path command. Other agents retain their accountless
+    /// launch. The command is prepended with the
     /// host's own startup command, exactly like [`Self::attach_fleet_session`]'s
     /// remote resume. Returns `true` when a remote tab was opened; on a host with
     /// no live daemon (or no matching server row) it shows an honest toast and
@@ -4817,9 +4815,11 @@ impl Workspace {
         host_id: Option<&str>,
         cwd: &Path,
         command: &str,
+        legacy_command: Option<&str>,
         agent: CLIAgent,
         config_dir: Option<&Path>,
         account_email: Option<&str>,
+        account_id: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let node_id = host_id.and_then(|hid| self.node_for_daemon_host(hid, &*ctx));
@@ -4835,6 +4835,55 @@ impl Workspace {
             });
             return false;
         };
+        let daemon_supports_account_routing = host_id
+            .and_then(|host_id| {
+                RemoteServerManager::as_ref(ctx)
+                    .connected_daemons()
+                    .into_iter()
+                    .find(|daemon| daemon.host_id == host_id)
+            })
+            .is_some_and(|daemon| {
+                zaplex_remote_session::types::has_feature(
+                    &daemon.features,
+                    zaplex_remote_session::types::FEATURE_AGENT_ACCOUNT_ROUTING_V1,
+                )
+            });
+        let account_agent = matches!(agent, CLIAgent::Claude | CLIAgent::Codex);
+        if account_agent
+            && ((daemon_supports_account_routing && account_id.is_none())
+                || (!daemon_supports_account_routing && account_id.is_some()))
+        {
+            self.toast_stack.update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::error(format!(
+                        "Can't route this session on {host}: its daemon account identity is stale \
+                         or unavailable. Refresh the Cockpit and try again."
+                    )),
+                    ctx,
+                );
+            });
+            return false;
+        }
+        let account_routed = account_agent
+            .then_some(account_id)
+            .flatten()
+            .filter(|_| daemon_supports_account_routing);
+        let command = if account_agent && account_routed.is_none() {
+            let Some(legacy_command) = legacy_command else {
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::error(format!(
+                            "Can't route this session on {host}: its account identity is missing."
+                        )),
+                        ctx,
+                    );
+                });
+                return false;
+            };
+            legacy_command
+        } else {
+            command
+        };
         let full = format!(
             "cd {} && {command}",
             shell_words::quote(&cwd.to_string_lossy())
@@ -4848,9 +4897,36 @@ impl Workspace {
                     Some(existing) if !existing.trim().is_empty() => format!("{existing}; {full}"),
                     _ => full,
                 });
-                self.open_ssh_terminal(node_id, server, false, ctx);
-                self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
-                true
+                let opened = if let Some(account_id) = account_routed {
+                    let provider = match agent {
+                        CLIAgent::Claude => "claude",
+                        CLIAgent::Codex => "codex",
+                        _ => unreachable!("only account-routed agents reach this branch"),
+                    };
+                    self.open_ssh_terminal_for_agent_account(
+                        node_id.clone(),
+                        server,
+                        remote_server::proto::AgentLaunchRoute {
+                            schema_version: 1,
+                            provider: provider.to_string(),
+                            account_id: account_id.to_string(),
+                        },
+                        ctx,
+                    )
+                } else {
+                    self.open_ssh_terminal(node_id, server, false, ctx);
+                    true
+                };
+                if opened {
+                    self.bind_active_terminal_account_with_id(
+                        agent,
+                        account_routed.is_none().then_some(config_dir).flatten(),
+                        account_email,
+                        account_routed,
+                        ctx,
+                    );
+                }
+                opened
             }
             _ => {
                 self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -4913,16 +4989,18 @@ impl Workspace {
         provider: zaplex_cockpit::Provider,
         config_dir: Option<&str>,
         account_email: Option<&str>,
+        account_id: Option<&str>,
         is_local: bool,
         ctx: &AppContext,
     ) -> Option<zaplex_cockpit::SessionSnapshot> {
         let model = crate::cockpit::CockpitModel::as_ref(ctx);
-        let expected_key = zaplex_cockpit::session_identity_key(
+        let expected_key = zaplex_cockpit::session_identity_key_with_account_id(
             is_local,
             host_id,
             provider,
             config_dir,
             account_email,
+            account_id,
             session_id,
         );
         let mut live = model
@@ -4981,13 +5059,14 @@ impl Workspace {
         cwd: &Path,
         config_dir: Option<&Path>,
         account_email: Option<&str>,
+        account_id: Option<&str>,
         command: &str,
         host: &str,
         host_id: Option<&str>,
         is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::cockpit::capabilities::{SessionOpenPlan, plan_session_open};
+        use crate::cockpit::capabilities::{plan_session_open, SessionOpenPlan};
 
         let agent = crate::cockpit::agent_of(provider);
         let config_identity = config_dir.map(|dir| dir.to_string_lossy().into_owned());
@@ -4997,6 +5076,7 @@ impl Workspace {
             provider,
             config_identity.as_deref(),
             account_email,
+            account_id,
             is_local,
             &*ctx,
         ) else {
@@ -5008,6 +5088,7 @@ impl Workspace {
             session_id,
             config_identity.as_deref(),
             account_email,
+            account_id,
             host_id,
             is_local,
             &*ctx,
@@ -5034,11 +5115,6 @@ impl Workspace {
             }
         }
 
-        let Some(resume_cmd) = agent.resume_command_pinned(session_id, config_dir) else {
-            // No resume mechanism → no way to reach the session's PTY honestly;
-            // the surface stays disabled, this is the belt-and-braces guard.
-            return;
-        };
         if !is_local {
             // Remote session: resume it *on its own host* (not locally at the
             // remote cwd). We do NOT prefill the new tab's input as the local path
@@ -5050,14 +5126,20 @@ impl Workspace {
             // command, so it survives a fallback too.
             #[cfg(all(unix, feature = "local_tty"))]
             {
+                let Some(resume_cmd) = agent.resume_command_pinned(session_id, None) else {
+                    return;
+                };
+                let legacy_resume_cmd = agent.resume_command_pinned(session_id, config_dir);
                 if self.run_agent_command_on_remote_host(
                     host,
                     host_id,
                     cwd,
                     &resume_cmd,
+                    legacy_resume_cmd.as_deref(),
                     agent,
                     config_dir,
                     account_email,
+                    account_id,
                     ctx,
                 ) {
                     let command = command.to_string();
@@ -5074,12 +5156,15 @@ impl Workspace {
             #[cfg(not(all(unix, feature = "local_tty")))]
             {
                 // No daemon transport on this build — surface it, don't no-op.
-                let _ = (host_id, cwd, resume_cmd, command);
+                let _ = (host_id, cwd, agent, session_id, command);
                 self.remote_agent_action_unavailable_toast(host, ctx);
             }
             return;
         }
         let _ = (host, host_id);
+        let Some(resume_cmd) = agent.resume_command_pinned(session_id, config_dir) else {
+            return;
+        };
         // Local: resume the session into a fresh local tab (owns the PTY) …
         self.fork_agent_session_in_place(&resume_cmd, cwd, agent, config_dir, account_email, ctx);
         // … then prefill the slash command, ready for the human to send.
@@ -5126,17 +5211,19 @@ impl Workspace {
         session_id: &str,
         config_dir: Option<&str>,
         account_email: Option<&str>,
+        account_id: Option<&str>,
         host_id: Option<&str>,
         is_local: bool,
         ctx: &AppContext,
     ) -> Option<EntityId> {
         use crate::cockpit::capabilities::session_host_matches;
 
-        CLIAgentSessionsModel::as_ref(ctx).terminal_view_id_for_agent_session_matching(
+        CLIAgentSessionsModel::as_ref(ctx).terminal_view_id_for_agent_session_matching_with_id(
             agent,
             session_id,
             config_dir,
             account_email,
+            account_id,
             |terminal_view_id, session| {
                 if (is_local && session.is_remote()) || (!is_local && !session.is_remote()) {
                     return false;
@@ -5244,10 +5331,11 @@ impl Workspace {
         provider: zaplex_cockpit::Provider,
         config_dir: Option<&str>,
         account_email: Option<&str>,
+        account_id: Option<&str>,
         is_local: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::cockpit::capabilities::{SessionOpenPlan, plan_session_open};
+        use crate::cockpit::capabilities::{plan_session_open, SessionOpenPlan};
 
         // Resolve everything up front, then drop model borrows before focusing,
         // resuming, or showing a toast.
@@ -5257,6 +5345,7 @@ impl Workspace {
             provider,
             config_dir,
             account_email,
+            account_id,
             is_local,
             &*ctx,
         );
@@ -5272,6 +5361,7 @@ impl Workspace {
             session_id,
             config_dir,
             account_email,
+            account_id,
             host_id,
             is_local,
             &*ctx,
@@ -5328,76 +5418,30 @@ impl Workspace {
                 ctx,
             );
         } else {
-            // Remote dormant-session resume: start the same conversation on its host.
-            // Resolve the inventory host to a live SSH node, build the agent's
-            // resume command, and open a remote terminal that runs it in the
-            // session's cwd (the host's own CLI login — remote account routing is
-            // the host's, not a local config dir).
-            let place = Self::session_display_name(&session);
-            // Inventory host id (daemon `HostId`) → the SSH `node_id` whose live
-            // daemon carries it. `None` when the host has no live connection.
-            let node_id: Option<String> = {
-                #[cfg(all(unix, feature = "local_tty"))]
-                {
-                    host_id.and_then(|hid| self.node_for_daemon_host(hid, &*ctx))
-                }
-                #[cfg(not(all(unix, feature = "local_tty")))]
-                {
-                    let _ = host_id;
-                    None
-                }
-            };
-            let Some(node_id) = node_id else {
-                self.toast_stack.update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        DismissibleToast::default(format!(
-                            "“{place}” is a remote agent on {host}, which isn't connected right \
-                             now — open that host to resume it."
-                        )),
-                        ctx,
-                    );
-                });
+            let Some(resume_cmd) = agent.resume_command_pinned(session_id, None) else {
                 return;
             };
-            // Pin the session's account on the resume so a plexed remote agent
-            // (a non-default CODEX_HOME / CLAUDE_CONFIG_DIR on the host) is found
-            // — the daemon reported the host-side config dir with the session.
-            // Without this, `codex resume <id>` ran under the host's *default*
-            // login and silently found nothing (the reported dead pane). The path
-            // is the host's; it's replayed verbatim inside the daemon's
-            // `startup_command`, so it must not be canonicalized against the local
-            // filesystem.
-            let pinned_dir = session.config_dir.as_deref().map(Path::new);
-            let Some(resume_cmd) = agent.resume_command_pinned(session_id, pinned_dir) else {
-                // No resume mechanism for this agent → nothing honest to do.
-                return;
-            };
-            let full = format!("cd {} && {resume_cmd}", shell_words::quote(&session.cwd));
-            let server = warp_ssh_manager::with_conn(|conn| {
-                Ok(warp_ssh_manager::SshRepository::get_server(conn, &node_id)?)
-            });
-            match server {
-                Ok(Some(mut server)) => {
-                    // Prepend the host's own startup command (if any), then resume.
-                    server.startup_command = Some(match server.startup_command {
-                        Some(existing) if !existing.trim().is_empty() => {
-                            format!("{existing}; {full}")
-                        }
-                        _ => full,
-                    });
-                    self.open_ssh_terminal(node_id, server, false, ctx);
-                    self.bind_active_terminal_account(agent, pinned_dir, account_email, ctx);
-                }
-                _ => {
-                    self.toast_stack.update(ctx, |toast_stack, ctx| {
-                        toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(format!(
-                                "Couldn't find host '{host}' to resume “{place}” on."
-                            )),
-                            ctx,
-                        );
-                    });
-                }
+            let legacy_resume_cmd =
+                agent.resume_command_pinned(session_id, config_dir.map(Path::new));
+            #[cfg(all(unix, feature = "local_tty"))]
+            {
+                self.run_agent_command_on_remote_host(
+                    host,
+                    host_id,
+                    Path::new(&session.cwd),
+                    &resume_cmd,
+                    legacy_resume_cmd.as_deref(),
+                    agent,
+                    config_dir.map(Path::new),
+                    account_email,
+                    account_id,
+                    ctx,
+                );
+            }
+            #[cfg(not(all(unix, feature = "local_tty")))]
+            {
+                let _ = (host_id, resume_cmd);
+                self.remote_agent_action_unavailable_toast(host, ctx);
             }
         }
     }
@@ -5425,6 +5469,7 @@ impl Workspace {
                     target.provider,
                     target.config_dir.as_deref(),
                     target.account_email.as_deref(),
+                    target.account_id.as_deref(),
                     target.is_local,
                     ctx,
                 );
@@ -5778,24 +5823,24 @@ impl Workspace {
     /// runs `agent.launch_command_routed(config_dir)` — the account pin + API-key
     /// scrub. `node_id = None` opens a local tab in `cwd` (or the default dir);
     /// `Some(host)` opens that host and runs the command via its session's
-    /// startup command. A remote launch uses the host's own default account
-    /// (config dirs are local paths), still API-key-scrubbed.
+    /// startup command. A selected remote account is routed by an opaque daemon
+    /// id; `route = None` keeps the existing default-login launch compatible.
     #[allow(clippy::too_many_arguments)]
     fn launch_routed_agent(
         &mut self,
         agent: CLIAgent,
         config_dir: Option<&Path>,
         account_email: Option<&str>,
+        agent_launch_route: Option<&remote_server::proto::AgentLaunchRoute>,
         cwd: Option<&Path>,
         node_id: Option<&str>,
         model: Option<&str>,
         effort: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Record the chosen (model, effort) at launch so the Conductor can show
-        // what a session was started with — effort is in no transcript, so this
-        // registry is its only source. Keyed by (host, cwd, agent); see
-        // `crate::cockpit::launch_registry` for the honest binding caveat.
+        // Record the chosen (model, effort) against the new terminal so the
+        // first native hook event can bind it to the exact provider session id.
+        // Effort is in no transcript, so this registry is its only source.
         //
         // The `host` key must be the SAME stable identity the cross-host
         // Agent-Inventory carries for this host — the daemon's `host_id` — so the
@@ -5839,13 +5884,6 @@ impl Workspace {
             None if node_id.is_none() => dirs::home_dir(),
             None => None,
         };
-        crate::cockpit::launch_registry::record(
-            agent,
-            registry_host.as_deref(),
-            record_cwd.as_deref(),
-            model.map(str::to_owned),
-            effort.map(str::to_owned),
-        );
         if let Some(node_id) = node_id {
             let launch =
                 RemoteAgentLaunchRequest::new(cwd, agent.routed_launch(None, model, effort));
@@ -5855,6 +5893,16 @@ impl Workspace {
             });
             match server {
                 Ok(Some(mut server)) => {
+                    let launch_id = crate::cockpit::launch_registry::begin_launch_with_account_id(
+                        agent,
+                        registry_host.as_deref(),
+                        record_cwd.as_deref(),
+                        None,
+                        account_email,
+                        agent_launch_route.map(|route| route.account_id.as_str()),
+                        model.map(str::to_owned),
+                        effort.map(str::to_owned),
+                    );
                     // Prepend the host's own startup command (if any) so host
                     // setup still runs, then the routed agent launch.
                     server.startup_command = Some(match server.startup_command {
@@ -5863,10 +5911,27 @@ impl Workspace {
                         }
                         _ => launch_command,
                     });
-                    self.open_ssh_terminal(node_id.to_string(), server, false, ctx);
-                    // Remote launches intentionally use that host's own default
-                    // login; no local account identity can be asserted here.
-                    self.bind_active_terminal_account(agent, None, None, ctx);
+                    let opened = if let Some(route) = agent_launch_route {
+                        self.open_ssh_terminal_for_agent_account(
+                            node_id.to_string(),
+                            server,
+                            route.clone(),
+                            ctx,
+                        )
+                    } else {
+                        self.open_ssh_terminal(node_id.to_string(), server, false, ctx);
+                        true
+                    };
+                    if opened {
+                        self.bind_active_terminal_account_with_id(
+                            agent,
+                            None,
+                            account_email,
+                            agent_launch_route.map(|route| route.account_id.as_str()),
+                            ctx,
+                        );
+                        self.attach_active_terminal_launch_intent(launch_id, ctx);
+                    }
                 }
                 _ => {
                     self.toast_stack.update(ctx, |view, ctx| {
@@ -5884,6 +5949,15 @@ impl Workspace {
         }
 
         let cmd = agent.launch_command_routed_with(config_dir, model, effort);
+        let launch_id = crate::cockpit::launch_registry::begin_launch(
+            agent,
+            None,
+            record_cwd.as_deref(),
+            config_dir,
+            account_email,
+            model.map(str::to_owned),
+            effort.map(str::to_owned),
+        );
         let mut options = NewTerminalOptions::default();
         if let Some(dir) = cwd {
             options = options.with_initial_directory(dir.to_path_buf());
@@ -5895,6 +5969,7 @@ impl Workspace {
             ctx,
         );
         self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
+        self.attach_active_terminal_launch_intent(launch_id, ctx);
         self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
             if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                 terminal_view.update(ctx, |view, ctx| {
@@ -6976,6 +7051,7 @@ impl Workspace {
                                 session.provider,
                                 session.config_dir.clone(),
                                 session.account_email.clone(),
+                                session.account_id.clone(),
                                 candidate.is_local,
                             )
                         })
@@ -6987,7 +7063,7 @@ impl Workspace {
         if matches.next().is_some() {
             return false;
         }
-        let (host, host_id, provider, config_dir, account_email, is_local) = target;
+        let (host, host_id, provider, config_dir, account_email, account_id, is_local) = target;
         self.attach_fleet_session(
             &host,
             host_id.as_deref(),
@@ -6995,6 +7071,7 @@ impl Workspace {
             provider,
             config_dir.as_deref(),
             account_email.as_deref(),
+            account_id.as_deref(),
             is_local,
             ctx,
         );
@@ -7124,11 +7201,9 @@ impl Workspace {
             right,
         };
         TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(
-                settings
-                    .header_toolbar_chip_selection
-                    .set_value(selection, ctx)
-            );
+            report_if_error!(settings
+                .header_toolbar_chip_selection
+                .set_value(selection, ctx));
         });
     }
 
@@ -8173,7 +8248,51 @@ impl Workspace {
         force_classic: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.open_ssh_terminal_command(node_id, server, force_classic, None, ctx);
+        self.open_ssh_terminal_command(node_id, server, force_classic, None, None, ctx);
+    }
+
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn open_ssh_terminal_for_agent_account(
+        &mut self,
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+        route: remote_server::proto::AgentLaunchRoute,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !server.session_resilience.is_enabled()
+            || !crate::remote_server::headless_connect::is_headless_capable(&server)
+        {
+            self.toast_stack.update(ctx, |view, ctx| {
+                view.add_ephemeral_toast(
+                    DismissibleToast::error(
+                        "Remote AI-account routing requires a persistent host with headless key authentication.",
+                    ),
+                    ctx,
+                );
+            });
+            return false;
+        }
+        self.open_ssh_terminal_command(node_id, server, false, None, Some(route), ctx);
+        true
+    }
+
+    #[cfg(not(all(unix, feature = "local_tty")))]
+    fn open_ssh_terminal_for_agent_account(
+        &mut self,
+        _node_id: String,
+        _server: warp_ssh_manager::SshServerInfo,
+        _route: remote_server::proto::AgentLaunchRoute,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        self.toast_stack.update(ctx, |view, ctx| {
+            view.add_ephemeral_toast(
+                DismissibleToast::error(
+                    "Remote AI-account routing requires the native daemon transport.",
+                ),
+                ctx,
+            );
+        });
+        false
     }
 
     fn open_multiplexer_ssh_terminal(
@@ -8189,6 +8308,7 @@ impl Workspace {
             server,
             true,
             Some((mode, target.to_string())),
+            None,
             ctx,
         );
     }
@@ -8199,6 +8319,7 @@ impl Workspace {
         server: warp_ssh_manager::SshServerInfo,
         force_classic: bool,
         multiplexer: Option<(warp_ssh_manager::MultiplexerAttachMode, String)>,
+        agent_launch_route: Option<remote_server::proto::AgentLaunchRoute>,
         ctx: &mut ViewContext<Self>,
     ) {
         use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshRepository, SshSecretStore};
@@ -8234,9 +8355,25 @@ impl Workspace {
         // if the host isn't resilient or the auth isn't headless-capable.
         #[cfg(unix)]
         if !force_classic {
-            if self.try_open_daemon_ssh_terminal(&node_id, &server_for_connection, ctx) {
+            if self.try_open_daemon_ssh_terminal(
+                &node_id,
+                &server_for_connection,
+                agent_launch_route.clone(),
+                ctx,
+            ) {
                 return;
             }
+        }
+        if agent_launch_route.is_some() {
+            self.toast_stack.update(ctx, |view, ctx| {
+                view.add_ephemeral_toast(
+                    DismissibleToast::error(
+                        "Remote AI-account routing requires a connected persistent host session.",
+                    ),
+                    ctx,
+                );
+            });
+            return;
         }
 
         let cmd = match multiplexer.as_ref() {
@@ -8378,15 +8515,27 @@ impl Workspace {
         &mut self,
         node_id: &str,
         server: &warp_ssh_manager::SshServerInfo,
+        agent_launch_route: Option<remote_server::proto::AgentLaunchRoute>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         use crate::remote_server::auth_context::server_api_auth_context;
         use crate::remote_server::headless_connect::{
-            self, DAEMON_BINARY_MISSING, DaemonPreflight,
+            self, DaemonPreflight, DAEMON_BINARY_MISSING,
         };
         use crate::remote_server::ssh_transport::{InstallProgress, SshTransport};
 
         if !server.session_resilience.is_enabled() {
+            if agent_launch_route.is_some() {
+                self.toast_stack.update(ctx, |view, ctx| {
+                    view.add_ephemeral_toast(
+                        DismissibleToast::error(
+                            "Enable persistent sessions for this host before routing an AI account.",
+                        ),
+                        ctx,
+                    );
+                });
+                return true;
+            }
             return false;
         }
         if !headless_connect::is_headless_capable(server) {
@@ -8395,6 +8544,17 @@ impl Workspace {
                  headless-capable (v1: key auth only); using the normal SSH path",
                 server.host
             );
+            if agent_launch_route.is_some() {
+                self.toast_stack.update(ctx, |view, ctx| {
+                    view.add_ephemeral_toast(
+                        DismissibleToast::error(
+                            "Remote AI-account routing requires headless key authentication.",
+                        ),
+                        ctx,
+                    );
+                });
+                return true;
+            }
             return false;
         }
 
@@ -8424,6 +8584,7 @@ impl Workspace {
                 // Honor the host's saved startup command on the daemon path too,
                 // matching the local-PTY SSH path (run once after the session opens).
                 startup_command: server.startup_command.clone(),
+                agent_launch_route: agent_launch_route.clone(),
                 ..Default::default()
             },
             adopt_pty_session_id: None,
@@ -8506,6 +8667,12 @@ impl Workspace {
                         log::warn!(
                             "daemon connect [{host}] unavailable; falling back to classic SSH: {e}"
                         );
+                        if agent_launch_route.is_some() {
+                            let _ = progress_tx.try_send(format!(
+                                "Remote account routing could not start on {host}: {e}"
+                            ));
+                            return;
+                        }
                         if let Some(pane_group_id) = pending_pane_group {
                             workspace.ssh_tab_nodes.remove(&pane_group_id);
                         }
@@ -8564,6 +8731,7 @@ impl Workspace {
                             session_id,
                             socket_path,
                             auth_context,
+                            agent_launch_route.is_none(),
                             ctx,
                         );
                     }
@@ -8622,6 +8790,7 @@ impl Workspace {
                                         session_id,
                                         socket_path,
                                         auth_context,
+                                        agent_launch_route.is_none(),
                                         ctx,
                                     );
                                 }
@@ -8644,6 +8813,9 @@ impl Workspace {
                                         host = host.clone(),
                                         error = e.to_string()
                                     );
+                                    if agent_launch_route.is_some() {
+                                        return;
+                                    }
                                     workspace.fall_back_to_classic_ssh(
                                         node_id_owned,
                                         server_owned,
@@ -8671,6 +8843,7 @@ impl Workspace {
         session_id: SessionId,
         socket_path: std::path::PathBuf,
         auth_context: std::sync::Arc<remote_server::auth::RemoteServerAuthContext>,
+        allow_classic_fallback: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::remote_server::manager::RemoteServerManager;
@@ -8680,8 +8853,10 @@ impl Workspace {
             .insert(session_id, server.host.clone());
         // Remembered so a handshake failure (e.g. version mismatch) can fall back
         // to classic SSH instead of leaving a dead daemon tab.
-        self.daemon_session_servers
-            .insert(session_id, server.clone());
+        if allow_classic_fallback {
+            self.daemon_session_servers
+                .insert(session_id, server.clone());
+        }
         let host_label = server.host.clone();
         let registry_node_id = server.node_id.clone();
         let transport = SshTransport::new(socket_path, auth_context.clone()).with_self_heal(server);
@@ -9411,7 +9586,11 @@ impl Workspace {
                     .with_icon(icons::Icon::AlertTriangle)
                     .into_item(),
             );
-        } else if favorites.is_empty() {
+        } else if favorites.is_empty()
+            || !favorites
+                .iter()
+                .any(|favorite| favorite_host_menu_item(favorite, &host_nodes).is_some())
+        {
             items.push(
                 MenuItemFields::new(crate::t!("workspace-favorites-empty"))
                     .with_disabled(true)
@@ -9419,15 +9598,8 @@ impl Workspace {
             );
         }
         for fav in &favorites {
-            items.push(favorite_host_menu_item(fav, &host_nodes));
-        }
-
-        // The curation submenu is a deliberate second level, not an automatic
-        // flat host list. It exposes only registered hosts not already present,
-        // while the first level remains the user's favorite hosts.
-        if !persistence_is_protected {
-            if let Some(add_item) = add_favorite_hosts_menu_item(&host_nodes, &favorites) {
-                items.push(add_item);
+            if let Some(item) = favorite_host_menu_item(fav, &host_nodes) {
+                items.push(item);
             }
         }
         items
@@ -10760,11 +10932,12 @@ impl Workspace {
                 .active_tab_pane_group()
                 .as_ref(ctx)
                 .code_panes(ctx)
-                .find(|(pane_id, _)| {
+                .find(|(pane_id, view)| {
                     !self
                         .active_tab_pane_group()
                         .as_ref(ctx)
                         .is_pane_hidden_for_close(*pane_id)
+                        && view.as_ref(ctx).allows_tab_merging()
                 });
             // If the tabbed editor view is enabled and there is an existing CodeView, we should group the newly opened file into this view.
             if let (Some(location), Some((pane_id, code_view))) = (source.location(), code_view) {
@@ -10875,11 +11048,12 @@ impl Workspace {
                 .active_tab_pane_group()
                 .as_ref(ctx)
                 .code_panes(ctx)
-                .find(|(pane_id, _)| {
+                .find(|(pane_id, view)| {
                     !self
                         .active_tab_pane_group()
                         .as_ref(ctx)
                         .is_pane_hidden_for_close(*pane_id)
+                        && view.as_ref(ctx).allows_tab_merging()
                 })
                 .map(|(_, view)| view);
             if let Some(code_view) = code_view_handle {
@@ -11122,21 +11296,17 @@ impl Workspace {
 
     fn toggle_recording_mode(&self, ctx: &mut ViewContext<Self>) {
         DebugSettings::handle(ctx).update(ctx, |debug_settings, settings_ctx| {
-            report_if_error!(
-                debug_settings
-                    .recording_mode
-                    .toggle_and_save_value(settings_ctx)
-            );
+            report_if_error!(debug_settings
+                .recording_mode
+                .toggle_and_save_value(settings_ctx));
         });
     }
 
     fn toggle_in_band_generators(&self, ctx: &mut ViewContext<Self>) {
         DebugSettings::handle(ctx).update(ctx, |debug_settings, settings_ctx| {
-            report_if_error!(
-                debug_settings
-                    .are_in_band_generators_for_all_sessions_enabled
-                    .toggle_and_save_value(settings_ctx)
-            );
+            report_if_error!(debug_settings
+                .are_in_band_generators_for_all_sessions_enabled
+                .toggle_and_save_value(settings_ctx));
         });
     }
 
@@ -11299,11 +11469,9 @@ impl Workspace {
 
         // Mark that we've done the one-time auto-open
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(
-                settings
-                    .has_auto_opened_conversation_list
-                    .set_value(true, ctx)
-            );
+            report_if_error!(settings
+                .has_auto_opened_conversation_list
+                .set_value(true, ctx));
         });
     }
 
@@ -13359,11 +13527,9 @@ impl Workspace {
 
     pub fn toggle_block_snackbar(&mut self, ctx: &mut ViewContext<Self>) {
         BlockListSettings::handle(ctx).update(ctx, |blocklist_settings, ctx| {
-            report_if_error!(
-                blocklist_settings
-                    .snackbar_enabled
-                    .toggle_and_save_value(ctx)
-            );
+            report_if_error!(blocklist_settings
+                .snackbar_enabled
+                .toggle_and_save_value(ctx));
         });
     }
 
@@ -13375,11 +13541,9 @@ impl Workspace {
 
     pub fn toggle_syntax_highlighting(&mut self, ctx: &mut ViewContext<Self>) {
         InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-            report_if_error!(
-                input_settings
-                    .syntax_highlighting
-                    .toggle_and_save_value(ctx)
-            );
+            report_if_error!(input_settings
+                .syntax_highlighting
+                .toggle_and_save_value(ctx));
         });
     }
 
@@ -13394,11 +13558,9 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         AccessibilitySettings::handle(ctx).update(ctx, |accessibility_settings, ctx| {
-            report_if_error!(
-                accessibility_settings
-                    .a11y_verbosity
-                    .set_value(verbosity, ctx)
-            );
+            report_if_error!(accessibility_settings
+                .a11y_verbosity
+                .set_value(verbosity, ctx));
         });
     }
 
@@ -14605,6 +14767,23 @@ impl Workspace {
         self.add_tab_from_existing_pane(Box::new(pane), new_idx, ctx);
     }
 
+    /// Add a non-persistent, selectable in-memory document.
+    pub fn add_tab_for_read_only_text(
+        &mut self,
+        title: String,
+        contents: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let pane = CodePane::new_generated_read_only(title, contents, ctx);
+
+        let new_tab_placement_setting = TabSettings::as_ref(ctx).new_tab_placement;
+        let new_idx = match new_tab_placement_setting {
+            NewTabPlacement::AfterAllTabs => self.tab_count(),
+            NewTabPlacement::AfterCurrentTab => self.active_tab_index + 1,
+        };
+        self.add_tab_from_existing_pane(Box::new(pane), new_idx, ctx);
+    }
+
     pub fn add_tab_for_new_code_file(&mut self, ctx: &mut ViewContext<Self>) {
         #[cfg(feature = "local_fs")]
         {
@@ -14629,11 +14808,12 @@ impl Workspace {
                     .active_tab_pane_group()
                     .as_ref(ctx)
                     .code_panes(ctx)
-                    .find(|(pane_id, _)| {
+                    .find(|(pane_id, view)| {
                         !self
                             .active_tab_pane_group()
                             .as_ref(ctx)
                             .is_pane_hidden_for_close(*pane_id)
+                            && view.as_ref(ctx).allows_tab_merging()
                     });
 
                 if let Some((pane_id, code_view)) = code_view {
@@ -16907,6 +17087,9 @@ impl Workspace {
                                 if let ActionOrigin::EditorTab(editor_tab_index) = origin {
                                     // If the target pane group has an existing editor view, we want to open the dragged file as a tab in it.
                                     if let Some(target_code_view) = target_code_view {
+                                        if !target_code_view.as_ref(ctx).allows_tab_merging() {
+                                            return;
+                                        }
                                         // If an editor tab is dropped onto its originating workspace tab, ensure that tab becomes the active editor within that workspace tab.
                                         if self.active_tab_index() == workspace_tab_index {
                                             target_code_view.update(ctx, |view, ctx| {
@@ -16995,7 +17178,7 @@ impl Workspace {
                                         pane_group.update(ctx, |pane_group, ctx| {
                                             if let Some(pane) = pane_group.code_pane_by_id(*pane_id)
                                             {
-                                                pane.file_view(ctx).update(
+                                                let all_tabs_merged = pane.file_view(ctx).update(
                                                     ctx,
                                                     |source_file_view, ctx| {
                                                         target_code_view.update(
@@ -17004,12 +17187,14 @@ impl Workspace {
                                                                 target_code_view.merge_tabs(
                                                                     source_file_view,
                                                                     ctx,
-                                                                );
+                                                                )
                                                             },
-                                                        );
+                                                        )
                                                     },
                                                 );
-                                                pane_group.remove_pane_for_move(pane_id, ctx);
+                                                if all_tabs_merged {
+                                                    pane_group.remove_pane_for_move(pane_id, ctx);
+                                                }
                                             }
                                         });
                                     }
@@ -18956,11 +19141,9 @@ impl Workspace {
 
     fn reset_zoom(&mut self, ctx: &mut ViewContext<Self>) {
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(
-                window_settings
-                    .zoom_level
-                    .set_value(ZoomLevel::default_value(), ctx)
-            );
+            report_if_error!(window_settings
+                .zoom_level
+                .set_value(ZoomLevel::default_value(), ctx));
         });
     }
 
@@ -18980,11 +19163,9 @@ impl Workspace {
         };
 
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(
-                window_settings
-                    .zoom_level
-                    .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx)
-            );
+            report_if_error!(window_settings
+                .zoom_level
+                .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx));
         });
     }
 
@@ -18997,11 +19178,9 @@ impl Workspace {
 
     fn set_terminal_font_size(&mut self, new_font_size: f32, ctx: &mut ViewContext<Self>) {
         FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-            report_if_error!(
-                font_settings
-                    .monospace_font_size
-                    .set_value(new_font_size, ctx)
-            );
+            report_if_error!(font_settings
+                .monospace_font_size
+                .set_value(new_font_size, ctx));
         });
     }
 
@@ -19186,8 +19365,8 @@ impl Workspace {
     }
 
     fn handle_codex_modal_event(&mut self, event: &CodexModalEvent, ctx: &mut ViewContext<Self>) {
-        use crate::AIExecutionProfilesModel;
         use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+        use crate::AIExecutionProfilesModel;
 
         match event {
             CodexModalEvent::Close => {
@@ -19455,6 +19634,81 @@ impl Workspace {
     fn handle_spawn_card_event(&mut self, event: &SpawnCardEvent, ctx: &mut ViewContext<Self>) {
         match event {
             #[cfg(not(target_family = "wasm"))]
+            SpawnCardEvent::DiscoverRemoteAccounts {
+                generation,
+                agent,
+                node_id,
+            } => {
+                let generation = *generation;
+                let agent = *agent;
+                let node_id = node_id.clone();
+                let daemon = RemoteServerManager::as_ref(ctx)
+                    .connected_daemons()
+                    .into_iter()
+                    .find(|daemon| daemon.registry_node_id.as_deref() == Some(node_id.as_str()));
+                let Some(daemon) = daemon else {
+                    self.spawn_card.update(ctx, |card, ctx| {
+                        card.apply_remote_accounts(
+                            agent,
+                            &node_id,
+                            generation,
+                            Err("Connect this host to choose one of its AI accounts.".to_string()),
+                            ctx,
+                        );
+                    });
+                    return;
+                };
+                if !zaplex_remote_session::types::has_feature(
+                    &daemon.features,
+                    zaplex_remote_session::types::FEATURE_AGENT_ACCOUNT_ROUTING_V1,
+                ) {
+                    self.spawn_card.update(ctx, |card, ctx| {
+                        card.apply_remote_accounts(
+                            agent,
+                            &node_id,
+                            generation,
+                            Err(
+                                "Update this host's zaplex daemon to choose remote AI accounts."
+                                    .to_string(),
+                            ),
+                            ctx,
+                        );
+                    });
+                    return;
+                }
+                let client = daemon.client;
+                ctx.spawn(
+                    async move { client.list_agent_accounts().await },
+                    move |workspace, result, ctx| {
+                        workspace.spawn_card.update(ctx, |card, ctx| {
+                            card.apply_remote_accounts(
+                                agent,
+                                &node_id,
+                                generation,
+                                result.map_err(|error| error.to_string()),
+                                ctx,
+                            );
+                        });
+                    },
+                );
+            }
+            #[cfg(target_family = "wasm")]
+            SpawnCardEvent::DiscoverRemoteAccounts {
+                generation,
+                agent,
+                node_id,
+            } => {
+                self.spawn_card.update(ctx, |card, ctx| {
+                    card.apply_remote_accounts(
+                        *agent,
+                        node_id,
+                        *generation,
+                        Err("Remote AI-account discovery requires the native app.".to_string()),
+                        ctx,
+                    );
+                });
+            }
+            #[cfg(not(target_family = "wasm"))]
             SpawnCardEvent::DiscoverModels {
                 generation,
                 agent,
@@ -19558,11 +19812,10 @@ impl Workspace {
                         location.clone(),
                     )
                     .await?;
-                    let installation =
-                        crate::ai::subscription_agent::InstallationIdentity {
-                            version,
-                            ..installation
-                        };
+                    let installation = crate::ai::subscription_agent::InstallationIdentity {
+                        version,
+                        ..installation
+                    };
                     crate::ai::subscription_agent::discover_capabilities(
                         installation,
                         working_directory,
@@ -19579,9 +19832,9 @@ impl Workspace {
                     .await
                     {
                         futures_util::future::Either::Left((result, _)) => result,
-                        futures_util::future::Either::Right((_, _)) => {
-                            Err(anyhow::anyhow!("Model discovery timed out after 15 seconds"))
-                        }
+                        futures_util::future::Either::Right((_, _)) => Err(anyhow::anyhow!(
+                            "Model discovery timed out after 15 seconds"
+                        )),
                     }
                 };
                 ctx.spawn(discovery_with_timeout, move |workspace, result, ctx| {
@@ -19628,6 +19881,8 @@ impl Workspace {
             SpawnCardEvent::Launch {
                 agent,
                 config_dir,
+                agent_launch_route,
+                remote_account_email,
                 cwd,
                 node_id,
                 model,
@@ -19635,15 +19890,19 @@ impl Workspace {
                 prompt,
             } => {
                 self.current_workspace_state.is_spawn_card_open = false;
-                let account_email = if node_id.is_none() {
+                let local_account_email = if node_id.is_none() {
                     Self::account_email_for_route(*agent, config_dir.as_deref(), &*ctx)
                 } else {
                     None
                 };
+                let account_email = remote_account_email
+                    .as_ref()
+                    .or(local_account_email.as_ref());
                 self.launch_routed_agent(
                     *agent,
                     config_dir.as_deref(),
-                    account_email.as_deref(),
+                    account_email.map(String::as_str),
+                    agent_launch_route.as_ref(),
                     cwd.as_deref(),
                     node_id.as_deref(),
                     model.as_deref(),
@@ -23046,10 +23305,9 @@ impl Workspace {
 
     /// Computes the list of available left panel views based on current AI settings and feature flags.
     fn compute_left_panel_views(ctx: &AppContext) -> Vec<ToolPanelView> {
-        // The Cockpit is the single Host ▸ Project ▸ Session navigation root.
-        // The legacy SSH manager remains reachable as a secondary management
-        // action from that tree; it is a primary toolbelt fallback only when the
-        // Cockpit is disabled.
+        // Cockpit and Connections are independent projections in the existing
+        // left-panel toolbelt: live sessions vs. the registered SSH host editor.
+        // When Cockpit is disabled, Connections remains the host fallback.
         let mut views =
             primary_host_navigation_views(*crate::cockpit::CockpitSettings::as_ref(ctx).enabled);
 
@@ -23230,16 +23488,12 @@ impl TypedActionView for Workspace {
                         } else {
                             // Config missing or deleted — clear and fall through to Terminal.
                             AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                                report_if_error!(
-                                    settings
-                                        .default_session_mode_internal
-                                        .set_value(DefaultSessionMode::Terminal, ctx)
-                                );
-                                report_if_error!(
-                                    settings
-                                        .default_tab_config_path
-                                        .set_value(String::new(), ctx)
-                                );
+                                report_if_error!(settings
+                                    .default_session_mode_internal
+                                    .set_value(DefaultSessionMode::Terminal, ctx));
+                                report_if_error!(settings
+                                    .default_tab_config_path
+                                    .set_value(String::new(), ctx));
                             });
                             self.add_terminal_tab(false, ctx);
                         }
@@ -23577,11 +23831,9 @@ impl TypedActionView for Workspace {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.default_session_mode_internal.set_value(*mode, ctx));
                     if let Some(path) = tab_config_path {
-                        report_if_error!(
-                            settings
-                                .default_tab_config_path
-                                .set_value(path.to_string_lossy().into_owned(), ctx)
-                        );
+                        report_if_error!(settings
+                            .default_tab_config_path
+                            .set_value(path.to_string_lossy().into_owned(), ctx));
                     }
                 });
                 #[cfg(feature = "local_tty")]
@@ -23649,6 +23901,7 @@ impl TypedActionView for Workspace {
                 cwd,
                 config_dir,
                 account_email,
+                account_id,
                 into_worktree,
                 host,
                 host_id,
@@ -23660,6 +23913,7 @@ impl TypedActionView for Workspace {
                     cwd,
                     config_dir.as_deref(),
                     account_email.as_deref(),
+                    account_id.as_deref(),
                     *into_worktree,
                     host,
                     host_id.as_deref(),
@@ -23692,6 +23946,7 @@ impl TypedActionView for Workspace {
                 cwd,
                 config_dir,
                 account_email,
+                account_id,
                 command,
                 host,
                 host_id,
@@ -23703,6 +23958,7 @@ impl TypedActionView for Workspace {
                     cwd,
                     config_dir.as_deref(),
                     account_email.as_deref(),
+                    account_id.as_deref(),
                     command,
                     host,
                     host_id.as_deref(),
@@ -23717,6 +23973,7 @@ impl TypedActionView for Workspace {
                 provider,
                 config_dir,
                 account_email,
+                account_id,
                 is_local,
             } => {
                 // Jumping to an agent clears the "Offene Punkte" inbox surface
@@ -23729,6 +23986,7 @@ impl TypedActionView for Workspace {
                     *provider,
                     config_dir.as_deref(),
                     account_email.as_deref(),
+                    account_id.as_deref(),
                     *is_local,
                     ctx,
                 );
@@ -23843,6 +24101,7 @@ impl TypedActionView for Workspace {
                     *agent,
                     config_dir.as_deref(),
                     account_email.as_deref(),
+                    None,
                     cwd.as_deref(),
                     node_id.as_deref(),
                     model.as_deref(),
@@ -23875,6 +24134,9 @@ impl TypedActionView for Workspace {
                     // save-back), honest fallback on classic SSH-only hosts.
                     self.open_file_in_editor_remote(node_id.clone(), path.clone(), ctx);
                 }
+            }
+            OpenReadOnlyTextInEditor { title, contents } => {
+                self.add_tab_for_read_only_text(title.clone(), contents.clone(), ctx);
             }
             FixSettingsWithOz { error_description } => {
                 // Repurposed (Oz-repurpose P1): the fix goes to the USER's own

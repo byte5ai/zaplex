@@ -11,13 +11,15 @@ use async_channel::Receiver;
 use parking_lot::FairMutex;
 use remote_server::{
     client::{ClientError, RemoteServerClient},
-    proto::{AgentPtyBindingStatus, AgentSessionIdentity, SessionAttached},
+    proto::{AgentLaunchRoute, AgentPtyBindingStatus, AgentSessionIdentity, SessionAttached},
 };
 use std::io;
 use std::sync::Arc;
 use warp_core::SessionId;
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
-use zaplex_remote_session::types::{FEATURE_AGENT_PTY_BINDING_V2, FEATURE_STARTUP_COMMAND_ACK};
+use zaplex_remote_session::types::{
+    FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PTY_BINDING_V2, FEATURE_STARTUP_COMMAND_ACK,
+};
 
 use super::terminal_manager::OpenSessionParams;
 
@@ -34,6 +36,13 @@ const MAX_PENDING_INPUT_BYTES: usize = 256 * 1024;
 /// burst; past it we stop buffering (the early bootstrap prefix is preserved)
 /// rather than grow without bound if an open hangs on a chatty session.
 const MAX_PENDING_OUTPUT_BYTES: usize = 1024 * 1024;
+
+fn account_route_is_compatible(
+    route: Option<&AgentLaunchRoute>,
+    supports_account_routing: bool,
+) -> bool {
+    route.is_none() || supports_account_routing
+}
 
 /// Drives a terminal backed by a *daemon-hosted* PTY session.
 ///
@@ -450,13 +459,15 @@ impl EventLoop {
                             _ => None,
                         };
                         if let Some(agent) = agent {
-                            sessions.bind_account_identity(
+                            sessions.bind_account_identity_with_id(
                                 terminal_view_id,
                                 agent,
                                 (!identity.config_dir.is_empty())
                                     .then(|| identity.config_dir.clone()),
                                 (!identity.account_email.is_empty())
                                     .then(|| identity.account_email.clone()),
+                                (!identity.account_id.is_empty())
+                                    .then(|| identity.account_id.clone()),
                             );
                         } else {
                             sessions.unbind_account_identity(terminal_view_id);
@@ -509,7 +520,13 @@ impl EventLoop {
                 session_id: session.session_context.session_id.clone()?,
                 provider: provider.to_string(),
                 account_email: account.account_email.clone().unwrap_or_default(),
-                config_dir: account.config_dir.clone().unwrap_or_default(),
+                config_dir: account
+                    .account_id
+                    .is_none()
+                    .then(|| account.config_dir.clone())
+                    .flatten()
+                    .unwrap_or_default(),
+                account_id: account.account_id.clone().unwrap_or_default(),
             })
         });
         if !self.awaiting_attach_snapshot {
@@ -872,6 +889,21 @@ impl EventLoop {
         })
     }
 
+    fn open_client(&self, ctx: &mut ModelContext<Self>) -> Option<(Arc<RemoteServerClient>, bool)> {
+        let session_id = self.connection_session_id;
+        let manager = RemoteServerManager::handle(ctx);
+        manager.read(ctx, |manager, _ctx| {
+            manager
+                .client_for_session(session_id)
+                .cloned()
+                .map(|client| {
+                    let supports_account_routing = manager
+                        .session_supports_feature(session_id, FEATURE_AGENT_ACCOUNT_ROUTING_V1);
+                    (client, supports_account_routing)
+                })
+        })
+    }
+
     /// Resolves both the live client and the negotiated retry-safe startup
     /// capability from the same manager state snapshot.
     fn startup_client(
@@ -900,14 +932,20 @@ impl EventLoop {
         if self.pty_session_id.is_some() || self.pending_open.is_none() {
             return;
         }
-        let Some(client) = self.client(ctx) else {
+        let Some((client, supports_account_routing)) = self.open_client(ctx) else {
             return; // Not connected yet; wait for `SessionConnected`.
         };
         let (open_params, size_info) = self
             .pending_open
             .take()
             .expect("pending_open is Some (checked above)");
-        self.open_session(client, open_params, size_info, ctx);
+        self.open_session(
+            client,
+            supports_account_routing,
+            open_params,
+            size_info,
+            ctx,
+        );
     }
 
     /// Issues the `OpenSession` request over a connected client. The initial
@@ -916,6 +954,7 @@ impl EventLoop {
     fn open_session(
         &mut self,
         client: Arc<RemoteServerClient>,
+        supports_account_routing: bool,
         open_params: OpenSessionParams,
         size_info: SizeInfo,
         ctx: &mut ModelContext<Self>,
@@ -926,7 +965,15 @@ impl EventLoop {
             env,
             ring_ceiling_bytes,
             startup_command,
+            agent_launch_route,
         } = open_params;
+        if !account_route_is_compatible(agent_launch_route.as_ref(), supports_account_routing) {
+            self.write_notice(
+                "this host daemon is too old for remote AI-account routing; update it and reconnect",
+            );
+            self.pending_open = None;
+            return;
+        }
         // Run once after this shell reaches the real bootstrap boundary (see
         // `maybe_dispatch_startup_command`).
         self.startup_command = startup_command.filter(|command| !command.is_empty());
@@ -938,9 +985,26 @@ impl EventLoop {
         let cols = size_info.columns as u32;
         log::info!("daemon_tty: issuing OpenSession (cwd={cwd:?}, shell={shell:?}, {rows}x{cols}, ring_ceiling={ring_ceiling_bytes:?})");
         let future = async move {
-            client
-                .open_session(cwd, shell, env, rows, cols, ring_ceiling_bytes)
-                .await
+            match agent_launch_route {
+                Some(route) => {
+                    client
+                        .open_session_for_agent_account(
+                            cwd,
+                            shell,
+                            env,
+                            rows,
+                            cols,
+                            ring_ceiling_bytes,
+                            route,
+                        )
+                        .await
+                }
+                None => {
+                    client
+                        .open_session(cwd, shell, env, rows, cols, ring_ceiling_bytes)
+                        .await
+                }
+            }
         };
         ctx.spawn(future, |me, result, ctx| match result {
             Ok(opened) => me.on_session_opened(opened.session_id, opened.generation, ctx),

@@ -1,4 +1,4 @@
-//! Live-session detection for Codex accounts (Agent-Cockpit Step 8 — parity).
+//! Session discovery and local transcript history for Codex accounts.
 //!
 //! Codex has **no process registry** (there is no `sessions/*.json` busy/pid
 //! store like Claude Code's), only append-only rollout transcripts under
@@ -26,17 +26,27 @@
 //! Model, effort, context tokens, cwd and session id all come straight from the
 //! rollout (Codex, unlike Claude, records the reasoning **effort** in
 //! `turn_context`, so effort here is real rather than launch-registry-derived).
-//! Privacy invariant holds: no conversational message text, token strings, or
-//! credentials are surfaced. The structured titles deliberately emitted by
-//! `update_plan` are the sole task-progress projection.
+//! The background discovery path never surfaces conversational text, token
+//! strings, or credentials. [`load_transcript`] is the explicit viewer path;
+//! it projects conversation text while excluding tool payloads, encrypted
+//! content, session metadata, and credential stores. The structured titles
+//! deliberately emitted by `update_plan` remain the sole background
+//! task-progress projection.
 
 use std::collections::HashMap;
+use std::fmt;
+use std::fs::{File, Metadata, OpenOptions};
+use std::io::Read;
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use walkdir::WalkDir;
 
+use crate::transcript::{ToolCall, TranscriptTurn, TurnRole};
 use crate::types::{Provider, SessionSnapshot, SessionState, TaskState};
 
 /// A rollout whose last activity is older than this is not treated as live
@@ -44,6 +54,95 @@ use crate::types::{Provider, SessionSnapshot, SessionState, TaskState};
 /// activity). Matches the spirit of the Claude background-job active window.
 const CODEX_LIVE_WINDOW: Duration = Duration::minutes(15);
 const ROLLOUT_CACHE_LIMIT: usize = 512;
+const TRANSCRIPT_HEADER_MAX_BYTES: u64 = 64 * 1024;
+const TRANSCRIPT_HEADER_SCAN_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const TRANSCRIPT_HISTORY_MAX_FILES: usize = 32_768;
+
+/// Maximum Codex rollout size accepted by [`load_transcript`].
+///
+/// Rollouts are append-only and can become large. The viewer must fail
+/// explicitly instead of allocating in proportion to an untrusted file.
+pub const TRANSCRIPT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// A failure while resolving or parsing a local Codex rollout transcript.
+#[derive(Debug)]
+pub enum TranscriptError {
+    InvalidSessionId,
+    HistoryLimitExceeded { max_files: usize },
+    TranscriptLookupLimitExceeded { max_bytes: u64 },
+    AmbiguousSessionId { session_id: String },
+    TranscriptTooLarge { max_bytes: u64 },
+    MalformedTranscript,
+    UnsupportedTranscript,
+    Io(std::io::Error),
+    Walk(walkdir::Error),
+}
+
+impl fmt::Display for TranscriptError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidSessionId => formatter.write_str("invalid Codex session id"),
+            Self::HistoryLimitExceeded { max_files } => {
+                write!(
+                    formatter,
+                    "Codex history exceeds the {max_files}-file limit"
+                )
+            }
+            Self::TranscriptLookupLimitExceeded { max_bytes } => {
+                write!(
+                    formatter,
+                    "Codex transcript lookup exceeds the {max_bytes}-byte scan limit"
+                )
+            }
+            Self::AmbiguousSessionId { session_id } => {
+                write!(
+                    formatter,
+                    "multiple Codex rollouts match session {session_id}"
+                )
+            }
+            Self::TranscriptTooLarge { max_bytes } => {
+                write!(
+                    formatter,
+                    "Codex transcript exceeds the {max_bytes}-byte limit"
+                )
+            }
+            Self::MalformedTranscript => formatter.write_str("malformed Codex transcript"),
+            Self::UnsupportedTranscript => {
+                formatter.write_str("unsupported Codex transcript format")
+            }
+            Self::Io(error) => write!(formatter, "Codex transcript I/O failed: {error}"),
+            Self::Walk(error) => write!(formatter, "Codex history traversal failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for TranscriptError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Walk(error) => Some(error),
+            Self::InvalidSessionId
+            | Self::HistoryLimitExceeded { .. }
+            | Self::TranscriptLookupLimitExceeded { .. }
+            | Self::AmbiguousSessionId { .. }
+            | Self::TranscriptTooLarge { .. }
+            | Self::MalformedTranscript
+            | Self::UnsupportedTranscript => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for TranscriptError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<walkdir::Error> for TranscriptError {
+    fn from(error: walkdir::Error) -> Self {
+        Self::Walk(error)
+    }
+}
 
 /// Recursively find the first sub-value under `key` anywhere in `v` (rollout
 /// lines wrap their payload, and the token-usage object nests under `info`).
@@ -177,6 +276,531 @@ pub(crate) fn session_id_from_path(path: &Path) -> String {
 
 /// A uuid is five dash-separated groups (`8-4-4-4-12`).
 const UUID_GROUPS: usize = 5;
+
+fn valid_session_id(session_id: &str) -> bool {
+    !session_id.is_empty()
+        && session_id.len() <= 128
+        && session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn uuid_session_id(session_id: &str) -> bool {
+    let expected_lengths = [8usize, 4, 4, 4, 12];
+    let mut groups = session_id.split('-');
+    expected_lengths.iter().all(|expected_length| {
+        groups.next().is_some_and(|group| {
+            group.len() == *expected_length && group.bytes().all(|b| b.is_ascii_hexdigit())
+        })
+    }) && groups.next().is_none()
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TranscriptFileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(not(unix))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TranscriptFileIdentity {
+    length: u64,
+    modified: std::time::SystemTime,
+}
+
+impl TranscriptFileIdentity {
+    #[cfg(unix)]
+    fn from_metadata(metadata: &Metadata) -> Result<Self, TranscriptError> {
+        Ok(Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn from_metadata(metadata: &Metadata) -> Result<Self, TranscriptError> {
+        Ok(Self {
+            length: metadata.len(),
+            modified: metadata.modified()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TranscriptCandidate {
+    path: PathBuf,
+    identity: TranscriptFileIdentity,
+}
+
+struct OpenedTranscript {
+    file: File,
+    metadata: Metadata,
+    bytes: Vec<u8>,
+}
+
+struct ResolvedTranscript {
+    candidate: TranscriptCandidate,
+    opened: Option<OpenedTranscript>,
+}
+
+fn transcript_history_candidates(
+    codex_home: &Path,
+) -> Result<Vec<TranscriptCandidate>, TranscriptError> {
+    let roots = [
+        (codex_home.join("sessions"), 4usize),
+        (codex_home.join("archived_sessions"), 1usize),
+    ];
+    let mut candidates = Vec::new();
+    for (root, max_depth) in roots {
+        if !root.try_exists()? {
+            continue;
+        }
+        for entry in WalkDir::new(root).max_depth(max_depth).follow_links(false) {
+            let entry = entry?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_str().unwrap_or("");
+            if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
+                continue;
+            }
+            if candidates.len() == TRANSCRIPT_HISTORY_MAX_FILES {
+                return Err(TranscriptError::HistoryLimitExceeded {
+                    max_files: TRANSCRIPT_HISTORY_MAX_FILES,
+                });
+            }
+            let metadata = std::fs::symlink_metadata(entry.path())?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                continue;
+            }
+            candidates.push(TranscriptCandidate {
+                path: entry.into_path(),
+                identity: TranscriptFileIdentity::from_metadata(&metadata)?,
+            });
+        }
+    }
+    candidates.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(candidates)
+}
+
+fn open_transcript(candidate: &TranscriptCandidate) -> Result<OpenedTranscript, TranscriptError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let file = options.open(&candidate.path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || TranscriptFileIdentity::from_metadata(&metadata)? != candidate.identity
+    {
+        return Err(TranscriptError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Codex transcript changed after resolution",
+        )));
+    }
+    Ok(OpenedTranscript {
+        file,
+        metadata,
+        bytes: Vec::new(),
+    })
+}
+
+fn session_id_from_header(
+    mut opened: OpenedTranscript,
+    max_bytes: u64,
+) -> Result<(Option<String>, u64, OpenedTranscript), TranscriptError> {
+    let read_limit = opened.metadata.len().min(TRANSCRIPT_HEADER_MAX_BYTES);
+    if read_limit > max_bytes {
+        return Err(TranscriptError::TranscriptLookupLimitExceeded {
+            max_bytes: TRANSCRIPT_HEADER_SCAN_MAX_BYTES,
+        });
+    }
+    (&mut opened.file)
+        .take(read_limit)
+        .read_to_end(&mut opened.bytes)?;
+    let bytes_read = opened.bytes.len() as u64;
+    let Ok(header) = std::str::from_utf8(&opened.bytes) else {
+        return Ok((None, bytes_read, opened));
+    };
+    let mut session_id = None;
+    for line in header.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(object) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if object.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        session_id = find(&object, "id")
+            .or_else(|| find(&object, "session_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        break;
+    }
+    Ok((session_id, bytes_read, opened))
+}
+
+fn unique_transcript_match(
+    session_id: &str,
+    mut matches: Vec<TranscriptCandidate>,
+) -> Result<Option<TranscriptCandidate>, TranscriptError> {
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.pop()),
+        _ => Err(TranscriptError::AmbiguousSessionId {
+            session_id: session_id.to_string(),
+        }),
+    }
+}
+
+fn resolve_transcript(
+    codex_home: &Path,
+    session_id: &str,
+) -> Result<Option<ResolvedTranscript>, TranscriptError> {
+    if !valid_session_id(session_id) {
+        return Err(TranscriptError::InvalidSessionId);
+    }
+
+    let candidates = transcript_history_candidates(codex_home)?;
+    let file_name_matches: Vec<TranscriptCandidate> = candidates
+        .iter()
+        .filter(|candidate| {
+            let candidate_session_id = session_id_from_path(&candidate.path);
+            uuid_session_id(&candidate_session_id) && candidate_session_id == session_id
+        })
+        .cloned()
+        .collect();
+    if !file_name_matches.is_empty() {
+        return unique_transcript_match(session_id, file_name_matches).map(|candidate| {
+            candidate.map(|candidate| ResolvedTranscript {
+                candidate,
+                opened: None,
+            })
+        });
+    }
+
+    let mut header_match = None;
+    let mut header_bytes_read = 0u64;
+    for candidate in candidates {
+        let remaining_bytes = TRANSCRIPT_HEADER_SCAN_MAX_BYTES.saturating_sub(header_bytes_read);
+        if remaining_bytes == 0 {
+            return Err(TranscriptError::TranscriptLookupLimitExceeded {
+                max_bytes: TRANSCRIPT_HEADER_SCAN_MAX_BYTES,
+            });
+        }
+        let opened = open_transcript(&candidate)?;
+        let (header_session_id, bytes_read, opened) =
+            session_id_from_header(opened, remaining_bytes)?;
+        header_bytes_read = header_bytes_read.saturating_add(bytes_read);
+        if header_session_id.as_deref() != Some(session_id) {
+            continue;
+        }
+        if header_match.is_some() {
+            return Err(TranscriptError::AmbiguousSessionId {
+                session_id: session_id.to_string(),
+            });
+        }
+        header_match = Some(ResolvedTranscript {
+            candidate,
+            opened: Some(opened),
+        });
+    }
+    Ok(header_match)
+}
+
+/// Resolve a stable Codex session id in the two local rollout layouts.
+///
+/// Current sessions live below `sessions/YYYY/MM/DD`, while archived sessions
+/// are moved into `archived_sessions`. Symlinks are not followed, the number of
+/// rollout candidates is capped, and the caller-supplied id is never used as a
+/// path component. The file name carries the stable id in current Codex
+/// versions; a bounded `session_meta` probe supports older/nonstandard names.
+pub fn transcript_path(
+    codex_home: &Path,
+    session_id: &str,
+) -> Result<Option<PathBuf>, TranscriptError> {
+    resolve_transcript(codex_home, session_id)
+        .map(|resolved| resolved.map(|resolved| resolved.candidate.path))
+}
+
+fn read_transcript(mut opened: OpenedTranscript) -> Result<String, TranscriptError> {
+    if opened.metadata.len() > TRANSCRIPT_MAX_BYTES {
+        return Err(TranscriptError::TranscriptTooLarge {
+            max_bytes: TRANSCRIPT_MAX_BYTES,
+        });
+    }
+
+    let remaining_bytes = (TRANSCRIPT_MAX_BYTES + 1).saturating_sub(opened.bytes.len() as u64);
+    (&mut opened.file)
+        .take(remaining_bytes)
+        .read_to_end(&mut opened.bytes)?;
+    if opened.bytes.len() as u64 > TRANSCRIPT_MAX_BYTES {
+        return Err(TranscriptError::TranscriptTooLarge {
+            max_bytes: TRANSCRIPT_MAX_BYTES,
+        });
+    }
+    String::from_utf8(opened.bytes).map_err(|_| TranscriptError::MalformedTranscript)
+}
+
+fn read_resolved_transcript(resolved: ResolvedTranscript) -> Result<String, TranscriptError> {
+    let opened = match resolved.opened {
+        Some(opened) => opened,
+        None => open_transcript(&resolved.candidate)?,
+    };
+    read_transcript(opened)
+}
+
+fn append_text(target: &mut String, text: &str) {
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+    if !target.is_empty() {
+        target.push_str("\n\n");
+    }
+    target.push_str(text);
+}
+
+fn content_text(content: Option<&Value>, item_type: &str) -> String {
+    let mut text = String::new();
+    let Some(content) = content.and_then(Value::as_array) else {
+        return text;
+    };
+    for item in content {
+        if item.get("type").and_then(Value::as_str) != Some(item_type) {
+            continue;
+        }
+        if let Some(part) = item.get("text").and_then(Value::as_str) {
+            append_text(&mut text, part);
+        }
+    }
+    text
+}
+
+fn rollout_timestamp(object: &Value) -> Option<DateTime<Utc>> {
+    object
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+}
+
+#[derive(Default)]
+struct TranscriptAccumulator {
+    turns: Vec<TranscriptTurn>,
+    model: Option<String>,
+    thinking: String,
+    tools: Vec<ToolCall>,
+    pending_timestamp: Option<DateTime<Utc>>,
+    saw_message: bool,
+}
+
+impl TranscriptAccumulator {
+    fn set_model(&mut self, model: Option<&str>) {
+        if let Some(model) = model.filter(|model| !model.trim().is_empty()) {
+            self.model = Some(model.to_string());
+        }
+    }
+
+    fn add_thinking(&mut self, thinking: &str, timestamp: Option<DateTime<Utc>>) {
+        append_text(&mut self.thinking, thinking);
+        if self.pending_timestamp.is_none() {
+            self.pending_timestamp = timestamp;
+        }
+    }
+
+    fn add_tool(&mut self, name: &str, timestamp: Option<DateTime<Utc>>) {
+        if name.trim().is_empty() {
+            return;
+        }
+        self.tools.push(ToolCall {
+            name: name.to_string(),
+        });
+        if self.pending_timestamp.is_none() {
+            self.pending_timestamp = timestamp;
+        }
+    }
+
+    fn push_user(&mut self, text: String, timestamp: Option<DateTime<Utc>>) {
+        self.saw_message = true;
+        self.flush_pending();
+        if text.trim().is_empty() {
+            return;
+        }
+        self.turns.push(TranscriptTurn {
+            role: TurnRole::User,
+            text,
+            thinking: String::new(),
+            tools: Vec::new(),
+            model: None,
+            usage: None,
+            timestamp,
+        });
+    }
+
+    fn push_assistant(&mut self, text: String, timestamp: Option<DateTime<Utc>>) {
+        self.saw_message = true;
+        if text.trim().is_empty() && self.thinking.is_empty() && self.tools.is_empty() {
+            return;
+        }
+        self.turns.push(TranscriptTurn {
+            role: TurnRole::Assistant,
+            text,
+            thinking: std::mem::take(&mut self.thinking),
+            tools: std::mem::take(&mut self.tools),
+            model: self.model.clone(),
+            usage: None,
+            timestamp: timestamp.or(self.pending_timestamp.take()),
+        });
+        self.pending_timestamp = None;
+    }
+
+    fn flush_pending(&mut self) {
+        if self.thinking.is_empty() && self.tools.is_empty() {
+            self.pending_timestamp = None;
+            return;
+        }
+        self.turns.push(TranscriptTurn {
+            role: TurnRole::Assistant,
+            text: String::new(),
+            thinking: std::mem::take(&mut self.thinking),
+            tools: std::mem::take(&mut self.tools),
+            model: self.model.clone(),
+            usage: None,
+            timestamp: self.pending_timestamp.take(),
+        });
+    }
+
+    fn finish(mut self) -> Self {
+        self.flush_pending();
+        self
+    }
+}
+
+/// Project an already bounded Codex rollout into provider-neutral turns.
+///
+/// This parser performs no filesystem access. Callers that accept untrusted
+/// input must enforce their byte and line limits before invoking it.
+pub fn parse_transcript_content(content: &str) -> Result<Vec<TranscriptTurn>, TranscriptError> {
+    let mut canonical = TranscriptAccumulator::default();
+    let mut fallback = TranscriptAccumulator::default();
+    let mut valid_objects = 0usize;
+    let mut malformed_lines = 0usize;
+
+    for line in content.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(object) = serde_json::from_str::<Value>(line) else {
+            malformed_lines += 1;
+            continue;
+        };
+        valid_objects += 1;
+        let timestamp = rollout_timestamp(&object);
+        match object.get("type").and_then(Value::as_str) {
+            Some("turn_context") => {
+                let model = object
+                    .get("payload")
+                    .and_then(|payload| payload.get("model"))
+                    .and_then(Value::as_str);
+                canonical.set_model(model);
+                fallback.set_model(model);
+            }
+            Some("response_item") => {
+                let Some(payload) = object.get("payload") else {
+                    continue;
+                };
+                match payload.get("type").and_then(Value::as_str) {
+                    Some("message") => match payload.get("role").and_then(Value::as_str) {
+                        Some("user") => canonical.push_user(
+                            content_text(payload.get("content"), "input_text"),
+                            timestamp,
+                        ),
+                        Some("assistant") => canonical.push_assistant(
+                            content_text(payload.get("content"), "output_text"),
+                            timestamp,
+                        ),
+                        Some("developer") | Some(_) | None => {}
+                    },
+                    Some("reasoning") => {
+                        let thinking = content_text(payload.get("summary"), "summary_text");
+                        canonical.add_thinking(&thinking, timestamp);
+                    }
+                    Some("function_call") | Some("custom_tool_call") => {
+                        if let Some(name) = payload.get("name").and_then(Value::as_str) {
+                            canonical.add_tool(name, timestamp);
+                        }
+                    }
+                    Some("function_call_output")
+                    | Some("custom_tool_call_output")
+                    | Some("agent_message")
+                    | Some(_)
+                    | None => {}
+                }
+            }
+            Some("event_msg") => {
+                let Some(payload) = object.get("payload") else {
+                    continue;
+                };
+                match payload.get("type").and_then(Value::as_str) {
+                    Some("user_message") => fallback.push_user(
+                        payload
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        timestamp,
+                    ),
+                    Some("agent_message") => fallback.push_assistant(
+                        payload
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        timestamp,
+                    ),
+                    Some("agent_reasoning") => fallback.add_thinking(
+                        payload.get("text").and_then(Value::as_str).unwrap_or(""),
+                        timestamp,
+                    ),
+                    Some(_) | None => {}
+                }
+            }
+            Some(_) | None => {}
+        }
+    }
+
+    if valid_objects == 0 {
+        return Err(TranscriptError::MalformedTranscript);
+    }
+    let canonical = canonical.finish();
+    let fallback = fallback.finish();
+    if canonical.saw_message {
+        return Ok(canonical.turns);
+    }
+    if fallback.saw_message {
+        return Ok(fallback.turns);
+    }
+    if malformed_lines > 0 {
+        return Err(TranscriptError::MalformedTranscript);
+    }
+    Err(TranscriptError::UnsupportedTranscript)
+}
+
+/// Load one local Codex rollout as provider-neutral transcript turns.
+///
+/// Conversation text, reasoning summaries, and tool names are projected.
+/// Tool arguments/results, session metadata, encrypted payloads, and credential
+/// stores are deliberately excluded. `Ok(None)` means the stable session id is
+/// not present in local history; unsupported or malformed files return an
+/// explicit error.
+pub fn load_transcript(
+    codex_home: &Path,
+    session_id: &str,
+) -> Result<Option<Vec<TranscriptTurn>>, TranscriptError> {
+    let Some(resolved) = resolve_transcript(codex_home, session_id)? else {
+        return Ok(None);
+    };
+    let content = read_resolved_transcript(resolved)?;
+    parse_transcript_content(&content).map(Some)
+}
 
 /// Distil one rollout transcript's live-session signals. Best-effort and
 /// defensive: each line is an independent JSON object, malformed lines are
@@ -328,6 +952,7 @@ fn snapshot_of(
         // reads a transcript, which knows nothing about the account above it.
         config_dir: None,
         account_email: None,
+        account_id: None,
         process_fingerprint: None,
         pty_session_id: None,
         pty_session_generation: None,

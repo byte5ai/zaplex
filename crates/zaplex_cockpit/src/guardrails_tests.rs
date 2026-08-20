@@ -19,6 +19,7 @@ fn session(name: &str, cwd: &str, pid: u32) -> SessionSnapshot {
         worktree: None,
         config_dir: None,
         account_email: None,
+        account_id: None,
         process_fingerprint: None,
         pty_session_id: None,
         pty_session_generation: None,
