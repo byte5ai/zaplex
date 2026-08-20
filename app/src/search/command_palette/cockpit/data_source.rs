@@ -39,6 +39,7 @@ fn search_records(
             } else {
                 [
                     match_indices_case_insensitive(&record.search_text, query),
+                    match_indices_case_insensitive(record.primary.trim(), query),
                     match_indices_case_insensitive(class_label(record.kind), query),
                 ]
                 .into_iter()

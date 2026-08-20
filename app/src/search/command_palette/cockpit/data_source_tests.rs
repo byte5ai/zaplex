@@ -93,7 +93,12 @@ fn result_bound_keeps_the_best_match_even_when_it_was_indexed_last() {
             )
         })
         .collect::<Vec<_>>();
-    records.push(record("exact", "Needle", "needle", false));
+    records.push(record(
+        "exact",
+        "Needle",
+        "Claude local zaplex needle",
+        false,
+    ));
 
     let results = search_records(records, "needle");
     assert_eq!(results.len(), MAX_COCKPIT_RESULTS);
