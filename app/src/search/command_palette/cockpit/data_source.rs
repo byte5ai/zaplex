@@ -5,7 +5,7 @@ use warpui::{AppContext, Entity, SingletonEntity};
 use super::search_item::SearchItem;
 use crate::cockpit::github_flows::RepositoryContext;
 use crate::cockpit::model::CockpitModel;
-use crate::cockpit::palette::build_palette_index;
+use crate::cockpit::palette::{build_palette_index, CockpitPaletteKind};
 use crate::cockpit::settings::CockpitSettings;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::data_source::{Query, QueryResult};
@@ -14,6 +14,17 @@ use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
 use crate::terminal::cli_agent::CLIAgentInstallModel;
 
 const MAX_COCKPIT_RESULTS: usize = 200;
+const EXACT_CLASS_OR_LABEL_BONUS: i64 = 2;
+
+fn class_label(kind: CockpitPaletteKind) -> &'static str {
+    match kind {
+        CockpitPaletteKind::Account => "account",
+        CockpitPaletteKind::Session => "session",
+        CockpitPaletteKind::Host => "host",
+        CockpitPaletteKind::Project => "project",
+        CockpitPaletteKind::GitHubFlow => "github workflow",
+    }
+}
 
 fn search_records(
     records: Vec<crate::cockpit::palette::CockpitPaletteRecord>,
@@ -23,11 +34,25 @@ fn search_records(
     let mut matches = records
         .into_iter()
         .filter_map(|record| {
-            let match_result = if query.is_empty() {
+            let mut match_result = if query.is_empty() {
                 FuzzyMatchResult::no_match()
             } else {
-                match_indices_case_insensitive(&record.search_text, query)?
+                [
+                    match_indices_case_insensitive(&record.search_text, query),
+                    match_indices_case_insensitive(class_label(record.kind), query),
+                ]
+                .into_iter()
+                .flatten()
+                .max_by_key(|result| result.score)?
             };
+            if !query.is_empty()
+                && (record.primary.trim().eq_ignore_ascii_case(query)
+                    || class_label(record.kind).eq_ignore_ascii_case(query))
+            {
+                match_result.score = match_result
+                    .score
+                    .saturating_add(EXACT_CLASS_OR_LABEL_BONUS);
+            }
             let score = match_result.score as f64 + if record.waiting { 1. } else { 0. };
             Some((score, record, match_result))
         })

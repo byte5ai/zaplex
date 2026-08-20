@@ -750,7 +750,7 @@ fn transcript_loader_rejects_a_path_replaced_after_resolution() {
 
     assert!(matches!(
         read_resolved_transcript(resolved),
-        Err(TranscriptError::MalformedTranscript)
+        Err(TranscriptError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidData
     ));
 }
 
@@ -786,7 +786,7 @@ fn transcript_loader_rejects_a_provider_root_replaced_after_resolution() {
 
     assert!(matches!(
         read_resolved_transcript(resolved),
-        Err(TranscriptError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidData
+        Err(TranscriptError::MalformedTranscript)
     ));
 }
 

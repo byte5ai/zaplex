@@ -160,7 +160,7 @@ fn recent_managed_exit_records_are_deduplicated_ttl_pruned_and_bounded() {
 
     push_recent_managed_exit(
         &mut records,
-        make_record(100, 10_000 + RECENT_MANAGED_EXIT_TTL_MILLIS + 1),
+        make_record(100, 11_000 + RECENT_MANAGED_EXIT_TTL_MILLIS + 1),
     );
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].session_id, "session-100");
