@@ -3133,6 +3133,8 @@ impl ServerModel {
         exec.spawn(super::session_host::run_session_writer(
             async_leader,
             input_rx,
+            crate::terminal::local_tty::shell::supported_shell_path_and_type(&shell)
+                .map(|(_, shell_type)| shell_type),
         ))
         .detach();
         // Advisory probe: did the user's profile auto-attach tmux/screen into

@@ -662,13 +662,14 @@ fn exchange_refuses_a_replaced_destination_identity() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("source.bin");
     let destination = directory.path().join("destination.bin");
+    let retained_destination = directory.path().join("retained-destination.bin");
     fs::write(&source, b"source").unwrap();
     fs::write(&destination, b"old target").unwrap();
     let owner = ConnectionId::new_v4();
     let mut server = SafeFileServer::new_for_test(directory.path().join("journal"));
     let opened = open_regular(&mut server, owner, &source);
     let expected_target = identity_for_path(&destination).unwrap();
-    fs::remove_file(&destination).unwrap();
+    fs::rename(&destination, &retained_destination).unwrap();
     fs::write(&destination, b"new target").unwrap();
 
     assert!(matches!(
@@ -688,6 +689,7 @@ fn exchange_refuses_a_replaced_destination_identity() {
     ));
     assert_eq!(fs::read(source).unwrap(), b"source");
     assert_eq!(fs::read(destination).unwrap(), b"new target");
+    assert_eq!(fs::read(retained_destination).unwrap(), b"old target");
 }
 
 #[test]

@@ -12,9 +12,12 @@
 
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::Write as _;
 use std::os::fd::AsRawFd;
+use std::path::Path;
 use std::sync::Arc;
 
+use crate::terminal::shell::ShellType;
 use async_io::Async;
 use futures::io::{AsyncReadExt, AsyncWriteExt};
 use nix::sys::termios::{self, LocalFlags, SetArg};
@@ -542,8 +545,13 @@ fn multiplexer_on_session_tty(child_pid: u32) -> Option<String> {
 pub(super) async fn run_session_writer(
     leader: Arc<Async<File>>,
     input_rx: async_channel::Receiver<PtyInput>,
+    shell_type: Option<ShellType>,
 ) {
     let mut writer: &Async<File> = &leader;
+    // Keep the cleanup guards alive until the session writer ends. The sourced
+    // file normally unlinks itself immediately; an aborted shell or write still
+    // gets deterministic cleanup when its input channel closes.
+    let mut staged_startup_files = Vec::new();
     while let Ok(input) = input_rx.recv().await {
         match input {
             PtyInput::Visible(bytes) | PtyInput::Bootstrap(bytes) => {
@@ -552,11 +560,9 @@ pub(super) async fn run_session_writer(
                 }
             }
             PtyInput::Startup(bytes) => {
-                if write_startup_without_echo(&mut writer, &bytes)
-                    .await
-                    .is_err()
-                {
-                    return;
+                match write_startup_via_private_file(&mut writer, &bytes, shell_type).await {
+                    Ok(staged_file) => staged_startup_files.push(staged_file),
+                    Err(_) => return,
                 }
             }
         }
@@ -580,7 +586,66 @@ async fn write_all(writer: &mut &Async<File>, mut bytes: &[u8]) -> std::io::Resu
     Ok(())
 }
 
-/// Writes startup text with ECHO disabled, restores the prior echo mode, then
+async fn write_startup_via_private_file(
+    writer: &mut &Async<File>,
+    bytes: &[u8],
+    shell_type: Option<ShellType>,
+) -> std::io::Result<tempfile::TempPath> {
+    let Some(text) = bytes.strip_suffix(b"\n").filter(|text| !text.is_empty()) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "startup input must be one non-empty line terminated by LF",
+        ));
+    };
+    if text.contains(&b'\r') || text.contains(&b'\n') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "startup input must not contain embedded line breaks",
+        ));
+    }
+
+    // Readline can render injected characters itself after bootstrap, even
+    // while the kernel ECHO flag is disabled. Keep the source bytes out of the
+    // PTY entirely; the private file unlinks itself before running the command.
+    let mut staged = tempfile::Builder::new()
+        .prefix("zaplex-startup-")
+        .tempfile()?;
+    let quoted_path = quote_startup_path(staged.path(), shell_type);
+    let cleanup = match shell_type {
+        Some(ShellType::PowerShell) => {
+            format!("Remove-Item -LiteralPath {quoted_path} -Force\n")
+        }
+        Some(ShellType::Bash | ShellType::Zsh | ShellType::Fish) | None => {
+            format!("command rm -f -- {quoted_path}\n")
+        }
+    };
+    staged.write_all(cleanup.as_bytes())?;
+    staged.write_all(text)?;
+    staged.write_all(b"\n")?;
+    staged.flush()?;
+    let staged_path = staged.into_temp_path();
+
+    let source_command = match shell_type {
+        Some(ShellType::Fish) => format!("source {quoted_path}\n"),
+        Some(ShellType::Bash | ShellType::Zsh | ShellType::PowerShell) | None => {
+            format!(". {quoted_path}\n")
+        }
+    };
+    write_startup_without_echo(writer, source_command.as_bytes()).await?;
+    Ok(staged_path)
+}
+
+fn quote_startup_path(path: &Path, shell_type: Option<ShellType>) -> String {
+    let path = path.to_string_lossy();
+    let escaped = match shell_type {
+        Some(ShellType::Fish) => path.replace('\'', r"\'"),
+        Some(ShellType::PowerShell) => path.replace('\'', "''"),
+        Some(ShellType::Bash | ShellType::Zsh) | None => path.replace('\'', r#"'"'"'"#),
+    };
+    format!("'{escaped}'")
+}
+
+/// Writes one PTY command with ECHO disabled, restores the prior echo mode, then
 /// sends the final execution newline. The shell cannot execute the command
 /// before that newline, so it cannot race the restoration by switching its own
 /// terminal mode (for example when `codex` immediately enters raw mode).
