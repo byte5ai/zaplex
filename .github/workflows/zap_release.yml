@@ -167,6 +167,54 @@ jobs:
           echo "---- release-body.md ----"
           cat release-body.md
 
+      - name: Enforce GitHub release body limit
+        shell: bash
+        env:
+          PREV_TAG: ${{ steps.prev_tag.outputs.prev }}
+          THIS_TAG: ${{ steps.compute_tag.outputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path("release-body.md")
+          character_limit = 120_000
+          byte_limit = 120_000
+          repository = os.environ["GITHUB_REPOSITORY"]
+          previous_tag = os.environ.get("PREV_TAG", "")
+          current_tag = os.environ["THIS_TAG"]
+          if previous_tag:
+              history_url = (
+                  f"https://github.com/{repository}/compare/"
+                  f"{previous_tag}...{current_tag}"
+              )
+          else:
+              history_url = f"https://github.com/{repository}/commits/{current_tag}"
+
+          suffix = (
+              "\n\n---\n\n"
+              "_Release notes were shortened to fit GitHub's description limit. "
+              f"[View the complete change history]({history_url})._\n"
+          )
+          body = path.read_text(encoding="utf-8")
+          if len(body) > character_limit or len(body.encode("utf-8")) > byte_limit:
+              prefix = body[: character_limit - len(suffix)]
+              encoded_prefix = prefix.encode("utf-8")
+              encoded_prefix = encoded_prefix[: byte_limit - len(suffix.encode("utf-8"))]
+              prefix = encoded_prefix.decode("utf-8", errors="ignore").rstrip()
+              body = prefix + suffix
+              path.write_text(body, encoding="utf-8")
+              print(
+                  "Release body shortened to "
+                  f"{len(body)} characters / {len(body.encode('utf-8'))} bytes"
+              )
+          else:
+              print(
+                  "Release body contains "
+                  f"{len(body)} characters / {len(body.encode('utf-8'))} bytes"
+              )
+          PY
+
       - name: Upload release body artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
